@@ -343,3 +343,91 @@ cuisine, where annotator 1 held a stricter "must be a cuisine label, not
 a dish" line — adjudicated toward annotator 1's reading for all 14, since
 specific dishes are already the concern of the separate "cooking
 techniques and recipes" / "seafood dishes" cues.
+
+## Offline consolidator v0 + τ_merge sweep (FRE-842)
+
+ADR-0114 D5 — the anti-snowflake engine, arm C's canonicalization half.
+Two ops only, per the ADR's v0 stub: (1) two-stage category canonicalization
+(alias-merges only), (2) decay+prune of the derived `MEMBER_OF` layer
+(evidence retained).
+
+**Scope note (mirrors FRE-840's precedent on AC-4).** This ticket builds and
+live-verifies the consolidator + sweep **mechanism** and reports real
+computed numbers for AC-3's objectively-computable sub-parts — (a) plateau,
+(d) distinctness, (e) non-collapse floor, (f) stochastic stability — against
+the real sandbox. It does **not** deliver AC-3(b)/(c) legibility (needs 2
+independent human/LLM judges per the ADR) or an AC-3 pass/fail verdict —
+FRE-843 (v0 synthesis) selects τ_merge\* and owns that judgment call.
+
+**Consolidator** (`scripts/study/consolidator.py`): Stage 1 candidate
+generation — `generate_candidates_gds` (the ADR's designated mechanism: GDS
+Node Similarity over a `Category`-`Concept` bipartite projection, orientation
+reversed so similarity is computed between categories by shared members;
+live-verified against the real sandbox) or `generate_candidates_pairwise`
+(a pure-Python Jaccard fallback, the ADR's explicit v0 sandbox-scale
+allowance, and what the sweep uses by default — one Neo4j/GDS round trip
+per sweep config would be slow and unnecessary). Both optionally blend in
+cosine similarity on category-name embeddings
+(`embed_category_names`, via `personal_agent.memory.embeddings`) — computed
+once per snapshot, reused across an entire τ_merge grid. Stage 2
+(`decide_candidate_type`) labels each candidate `alias`/`subsumed_by`/
+`related`/`distinct`/`uncertain`; the containment/size-ratio check runs
+BEFORE the τ_merge alias gate and wins regardless of score — the ADR's named
+correctness guard against merging a broader parent into a narrower one.
+`canonicalize` unions only `alias` decisions via union-find, then picks each
+group's canonical representative in a separate, deterministic pass
+(largest member-set, then name) so the result never depends on candidate
+order. `apply_canonicalization_to_graph` is the real single-τ_merge\*
+write-back primitive (FRE-843's job to invoke, at one operating point) —
+never rewrites `MembershipAssertion`s (immutable evidence); it records
+`(:Category)-[:CANONICALIZED_AS]->(:Category)` for audit and recomputes
+`MEMBER_OF` **from assertions grouped by canonical identity**, so a concept
+already belonging to both merge-side categories is aggregated once, never
+double-counted. `decay_and_prune` is dry-run by default (`apply=True` to
+actually mutate), touching only the derived `MEMBER_OF` edge.
+
+**Sweep** (`scripts/study/sweep.py`): freezes each seed's `MembershipAssertion`
+ledger, replays it — chronological order plus ≥2 deterministic pre-registered
+permutations (ADR AC-3) — through the consolidator at every τ_merge in a
+grid, **entirely in memory** (no Neo4j write, no per-config round trip) so
+many `(seed × ordering × τ_merge)` configs run against the SAME frozen
+ledgers without one config's state leaking into another's. Computes the
+category-count-vs-conversations curve (the free "no-consolidator" raw-count
+control curve comes from the same data at zero extra cost) and the AC-3(a)/
+(d)/(e)/(f) checks, plus top-20/tail category tables ready for a rating pass.
+
+```
+uv run python -m scripts.study.sweep
+uv run python -m scripts.study.sweep --seeds 0,1 --tau-merge-grid 0.3,0.5,0.7 \
+  --checkpoint-every 5 --n-permutations 2
+```
+
+writes `scripts/study/snapshots/consolidator-sweep-<run-id>.json` (gitignored)
+and prints a per-config summary to stdout. Refuses to run (a preflight,
+before any read) unless the resolved Neo4j URI matches the study sandbox.
+
+**Live run against the real (partial) sandbox, 2026-07-11.** Against the
+46-episode seed-0 ledger currently loaded (a partial `run_ingest` sample —
+the full 102-session `--execute-full` run is still an owner-gated,
+cost-incurring action, not run by this ticket): none of τ_merge ∈
+{0.1, 0.15, 0.2, 0.3, 0.5, 0.7} achieve AC-3(a) plateau on this data slice
+(final-tertile rate stays ~68% of the first-tertile rate at τ_merge=0.5, well
+above the 25% ceiling) — the member-overlap-only Stage-1 signal the sweep
+uses by default finds few candidate pairs because most categories at this
+partial scale have only 1-3 members, so Jaccard overlap between random pairs
+is rare. AC-3(e) non-collapse and AC-3(d) distinctness both pass at every
+τ_merge tested. AC-3(f) stochastic stability is reported honestly as
+`n_seeds=1, passes=None` (insufficient seeds) — the sandbox's seed-1 ledger
+only has 6 episodes, too small to be a meaningful second data point; a real
+stability verdict needs the N-seed full-corpus sweep runbook below. This is
+a genuine, reported-not-hidden finding for FRE-843 to investigate (wider
+τ_merge range, wire in name-cosine, or wait for the fuller corpus) — not a
+mechanism bug: the two-stage pipeline, curve computation, and all four
+computed checks run correctly end-to-end against real live data.
+
+**Runbook — a real N-seed full-corpus sweep (not run by this ticket):**
+requires N `run_ingest --execute-full` passes at distinct seeds (real, paid
+LLM cost — N× the $5/day study budget cap) plus an explicit owner
+go-ahead, same posture as `run_ingest.py`'s own `--execute-full`. Once
+those seeded ledgers exist, `sweep.py`'s CLI runs unchanged — it discovers
+whatever seeds are present via `discover_seeds`.

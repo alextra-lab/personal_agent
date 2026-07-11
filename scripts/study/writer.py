@@ -46,6 +46,22 @@ _ALLCAPS_RE = re.compile(r"^[A-Z][A-Z0-9_]+$")
 
 _VECTOR_SEARCH_TOP_K = 5
 
+#: Shared Cypher fragments for deriving `MEMBER_OF` edge properties from
+#: backing `MembershipAssertion`s — the one place this formula lives, so
+#: `consolidator.apply_canonicalization_to_graph` (FRE-842) reuses it exactly
+#: rather than risking drift on a formula this module's own docstring calls
+#: "deliberately unsophisticated for v0" and flags for future tuning
+#: (code-review finding, FRE-842).
+MEMBER_OF_AGGREGATION_CLAUSE = (
+    "avg(a.proposed_confidence) AS membership_confidence, "
+    "count(DISTINCT ep) AS support_count, max(a.when) AS last_supported_at"
+)
+MEMBER_OF_SET_CLAUSE = (
+    "SET m.membership_confidence = membership_confidence, "
+    "    m.support_count = support_count, "
+    "    m.last_supported_at = last_supported_at"
+)
+
 
 def _normalize(name: str) -> str:
     """The shared case-fold/trim key used for `Surface`/`Category` lookups."""
@@ -346,12 +362,9 @@ async def recompute_member_of_batch(session: Neo4jSession, *, pairs: list[tuple[
         "MATCH (c:Concept {id: pair.concept_id})<-[:ABOUT]-(a:MembershipAssertion)"
         "-[:PROPOSES]->(cat:Category {normalized_name: pair.category_normalized_name}) "
         "MATCH (a)<-[:PRODUCED]-(:Mention)<-[:HAS_MENTION]-(ep:Episode) "
-        "WITH c, cat, avg(a.proposed_confidence) AS membership_confidence, "
-        "     count(DISTINCT ep) AS support_count, max(a.when) AS last_supported_at "
+        f"WITH c, cat, {MEMBER_OF_AGGREGATION_CLAUSE} "
         "MERGE (c)-[m:MEMBER_OF]->(cat) "
-        "SET m.membership_confidence = membership_confidence, "
-        "    m.support_count = support_count, "
-        "    m.last_supported_at = last_supported_at",
+        f"{MEMBER_OF_SET_CLAUSE}",
         {
             "pairs": [
                 {"concept_id": concept_id, "category_normalized_name": category_normalized_name}

@@ -15,10 +15,14 @@ later ticket populates them):
   GDS Leiden proposer (FRE-855, arm F).
 - ``RelationAssertion`` — a separate directional-relation-typing arm with
   its own gold set (FRE-840+), not part of the core category hypothesis.
-- The alias/subsumes/uncertain decision-type slot on category-pair
-  candidates — the offline consolidator's candidate pairs (FRE-842); this
-  schema only needs the future edge type to require no migration when
-  FRE-842 lands.
+- ``(:Category)-[:CANONICALIZED_AS {tau_merge, decided_at}]->(:Category)`` —
+  the offline consolidator's (FRE-842) alias-merge write-back
+  (``consolidator.apply_canonicalization_to_graph``): an absorbed category
+  points at its canonical representative, kept (never deleted) so evidence
+  assertions' ``PROPOSES`` links stay inspectable. No uniqueness constraint
+  needed — it is a derived, recomputable edge, not an identity. FRE-842's
+  own sweep computes canonicalizations read-only in memory and never writes
+  this edge; only a real single-τ_merge* run (FRE-843) does.
 
 Usage:
     uv run python -m scripts.study.schema

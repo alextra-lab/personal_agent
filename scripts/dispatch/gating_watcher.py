@@ -153,14 +153,17 @@ _ACTIVE_REGION_LINES = 30
 DEFAULT_MASTER_TTL_S: float = 21600.0  # 6 h
 DEFAULT_WORKER_TTL_S: float = 900.0  # 15 min
 
-# Context-pressure nudge (FRE-848): master checkpoint alert threshold + the
-# dedup TTL for it. Reuses the master TTL -- one nudge per pressure episode,
-# self-heals after 6h if master is still over threshold.
+# Context-pressure nudge (FRE-848): a master context-pressure HEADS-UP (informational),
+# plus the dedup TTL. Reuses the master TTL -- one nudge per pressure episode, self-heals
+# after 6h if master is still over threshold. The nudge is deliberately phrased as
+# surface-to-owner, NOT as an imperative to master: the reset/checkpoint decision is the
+# owner's alone (a watcher nudge must never read as an instruction to auto-run prepare-reset).
 DEFAULT_CONTEXT_PRESSURE_THRESHOLD: float = 70.0
 DEFAULT_CONTEXT_PRESSURE_TTL_S: float = DEFAULT_MASTER_TTL_S
 _CONTEXT_PRESSURE_NUDGE = (
-    "Context at {pct}% — checkpoint MASTER_PLAN + run the prime-master pre-reset gate; "
-    "consider /clear at the next clean boundary."
+    "Context at {pct}% — informational, owner-gated: SURFACE this to the owner as a heads-up. "
+    "Do NOT run prepare-reset / checkpoint / /clear unless the owner explicitly instructs it — "
+    "the reset decision is the owner's alone, never auto-run on this nudge."
 )
 
 # Poll interval for the daemon loop. Cheap — the watcher holds no LLM context.

@@ -7,6 +7,12 @@ description: Use in the master session to integrate a ready PR — analyze (code
 
 Read `.claude/skills/lifecycle-rules.md` first. Argument: a PR number, or omitted (scan open PRs).
 
+**Offload deep-but-non-blocking questions to explore.** When a gate raises a judgment-heavy question
+that is NOT blocking the immediate merge/deploy decision — a methodology call, a strategic "should we",
+a corpus/eval-validity question — `send-keys` it to `cc-explore` (tagged `[from master, re …]`) for the
+owner to work through, rather than deliberating in-gate and bloating your context; the distilled result
+comes back to you. Full protocol: lifecycle-rules § Explore session.
+
 ## 1 — Pick the PR
 When the watcher triggers you (or you're handed a number), **lead your response with `Gating PR #X →`** so
 the owner always sees which PR is at the gate — the watcher's hand-off is otherwise invisible to them.

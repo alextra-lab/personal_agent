@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
-"""Deterministic, read-only delivery-board reconciler (FRE-680).
+"""Deterministic, read-only delivery-board reconciler (FRE-680, hardened FRE-861).
 
-Maps board *claims* to durable *evidence* and emits verdicts. No LLM. The three
+Maps board *claims* to durable *evidence* and emits verdicts. No LLM. The
 evidence sources are:
 
 * **Linear** ticket state (GraphQL API, stdlib ``urllib``),
 * **merged PRs** whose branch maps to a ticket (``gh`` CLI),
-* the **MASTER_PLAN.md** header narrative.
+* the **MASTER_PLAN.md** header blockquote plus the ``Current live-env &
+  standing state`` / ``Open threads (current)`` body sections,
+* injected **live-evidence probes**, one per ADR the plan claims is
+  Implemented or live.
 
 Each verdict has exactly four fields: ``claim``, ``status`` (one of ``PASS`` /
 ``FAIL`` / ``UNVERIFIABLE``), ``evidence`` (a list of citations), and ``note``.
 ``UNVERIFIABLE`` (no source to check) is a first-class outcome and is never
-silently treated as ``PASS``.
+silently treated as ``PASS``. An Implemented/live claim with no registered
+live-evidence probe is ``FAIL``, not ``UNVERIFIABLE`` — an ungrounded
+Implemented claim is a gap to close, not a shrug.
 
 Callable by hand, from prime-master, and from the master post-merge step::
 
     python scripts/reconcile_board.py            # human-readable table
     python scripts/reconcile_board.py --json      # machine-readable verdict list
 
-Exit code is ``1`` if any verdict is ``FAIL`` (drift detected), else ``0``.
+Exit code is ``1`` if any verdict is ``FAIL``, or if the parser extracted
+*zero* claims (parser drift reads as a false pass otherwise); else ``0``.
 
 See ``.claude/skills/lifecycle-rules.md`` § Evidence contract (proof of Done).
 """
@@ -31,9 +37,10 @@ import json
 import os
 import re
 import subprocess
+import sys
 import urllib.error
 import urllib.request
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -117,6 +124,65 @@ def extract_header(master_plan_text: str) -> str:
     return " ".join(collected)
 
 
+# Body sections that carry ticket/ADR narrative after the 2026-07 wind-down
+# moved it out of the header blockquote (FRE-861).
+_BODY_SECTION_HEADINGS: tuple[str, ...] = (
+    "## Current live-env & standing state",
+    "## Open threads (current)",
+)
+
+
+def extract_body_sections(
+    master_plan_text: str,
+    headings: Sequence[str] = _BODY_SECTION_HEADINGS,
+) -> str:
+    """Return the concatenated text of the named MASTER_PLAN body sections.
+
+    Each heading's section runs until the next ``## `` heading (the heading
+    line itself is not included). Used because ticket narrative that used to
+    live in the header blockquote now lives in these body sections.
+
+    Args:
+        master_plan_text: Full text of ``docs/plans/MASTER_PLAN.md``.
+        headings: Section headings (exact line match) to collect.
+
+    Returns:
+        The collected section bodies joined by newlines, or an empty string
+        if none of the headings are found.
+    """
+    lines = master_plan_text.splitlines()
+    collected: list[str] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() in headings:
+            i += 1
+            while i < len(lines) and not lines[i].startswith("## "):
+                collected.append(lines[i])
+                i += 1
+            continue
+        i += 1
+    return "\n".join(collected)
+
+
+def extract_claims_text(master_plan_text: str) -> str:
+    """Return the full claims-bearing text the reconciler parses.
+
+    Combines the legacy ``> **Last updated**`` header blockquote with the
+    body sections narrative moved into after the 2026-07 wind-down, so a
+    ticket/ADR claim is found regardless of which location currently holds
+    it (FRE-861).
+
+    Args:
+        master_plan_text: Full text of ``docs/plans/MASTER_PLAN.md``.
+
+    Returns:
+        Combined claims-bearing text.
+    """
+    header = extract_header(master_plan_text)
+    body = extract_body_sections(master_plan_text)
+    return f"{header}\n{body}"
+
+
 def _clause_binds_open(clause: str) -> bool:
     """Return True if the clause asserts a *current* open state.
 
@@ -163,6 +229,126 @@ def classify_header_claims(header_text: str) -> dict[str, str]:
             elif is_done and claims.get(fre) != "OPEN":
                 claims[fre] = "DONE"
     return claims
+
+
+_ADR_RE = re.compile(r"ADR-\d{4}")
+_IMPLEMENTED_OR_LIVE_RE = re.compile(r"\bImplemented\b|\blive\b", re.IGNORECASE)
+_NEGATION_RE = re.compile(r"\bNOT\b", re.IGNORECASE)
+
+
+@dataclasses.dataclass(frozen=True)
+class ImplementedClaim:
+    """A plan claim that some ADR is Implemented or live.
+
+    Attributes:
+        subject: The ADR id the claim is about (e.g. ``ADR-0104``).
+        clause: The source clause the claim was extracted from.
+    """
+
+    subject: str
+    clause: str
+
+
+def extract_implemented_claims(claims_text: str) -> list[ImplementedClaim]:
+    """Find ADR subjects the plan claims are Implemented or live.
+
+    Splits into the same clauses used for ticket-state classification. A
+    clause containing "Implemented" or "live" (case-insensitive) and an
+    ``ADR-XXXX`` id, with no "NOT" in the same clause, yields one claim per
+    ADR id (first matching clause wins; later mentions of the same ADR are
+    not duplicated).
+
+    Args:
+        claims_text: Combined header + body claims text (see
+            ``extract_claims_text``).
+
+    Returns:
+        One ``ImplementedClaim`` per distinct ADR id claimed Implemented/live.
+    """
+    claims: list[ImplementedClaim] = []
+    seen: set[str] = set()
+    for clause in _CLAUSE_SPLIT_RE.split(claims_text):
+        if not _IMPLEMENTED_OR_LIVE_RE.search(clause):
+            continue
+        if _NEGATION_RE.search(clause):
+            continue
+        for adr in _ADR_RE.findall(clause):
+            if adr in seen:
+                continue
+            seen.add(adr)
+            claims.append(ImplementedClaim(subject=adr, clause=clause.strip()))
+    return claims
+
+
+# A probe returns True (evidence confirms the claim), False (evidence
+# contradicts it), or None (probe could not be evaluated).
+LiveEvidenceProbe = Callable[[], bool | None]
+
+
+def check_live_evidence(
+    claim: ImplementedClaim,
+    probes: Mapping[str, LiveEvidenceProbe],
+) -> Verdict:
+    """Check an Implemented/live claim against a registered live-evidence probe.
+
+    An Implemented or live claim with no registered probe is a gap in the
+    evidence chain, not a pass — this is the exact class of drift that let
+    the ADR-0104 Implemented claim and the knowledge-class live implication
+    stand while the substrate contradicted them (FRE-861).
+
+    Args:
+        claim: The extracted Implemented/live claim.
+        probes: Mapping of ADR id to a callable that checks live substrate
+            evidence for that ADR. Injected so tests never touch a live
+            substrate.
+
+    Returns:
+        ``FAIL`` when no probe is registered or the probe contradicts the
+        claim, ``PASS`` when the probe confirms it, ``UNVERIFIABLE`` when the
+        probe could not be evaluated.
+    """
+    base_claim = f"MASTER_PLAN claims {claim.subject} is Implemented/live"
+    evidence = [f'MASTER_PLAN.md: "{claim.clause}"']
+    probe = probes.get(claim.subject)
+    if probe is None:
+        return Verdict(
+            claim=base_claim,
+            status="FAIL",
+            evidence=evidence,
+            note=(
+                f"no live-evidence probe registered for {claim.subject} — an "
+                "Implemented/live claim must map to a live substrate check"
+            ),
+        )
+    try:
+        result = probe()
+    except Exception as exc:  # noqa: BLE001 - probes are injected, arbitrary callables
+        return Verdict(
+            claim=base_claim,
+            status="UNVERIFIABLE",
+            evidence=evidence,
+            note=f"live-evidence probe for {claim.subject} raised: {exc}",
+        )
+    if result is None:
+        return Verdict(
+            claim=base_claim,
+            status="UNVERIFIABLE",
+            evidence=evidence,
+            note=f"live-evidence probe for {claim.subject} could not be evaluated",
+        )
+    if result:
+        return Verdict(
+            claim=base_claim,
+            status="PASS",
+            evidence=evidence,
+            note=f"live-evidence probe confirmed {claim.subject}",
+        )
+    return Verdict(
+        claim=base_claim,
+        status="FAIL",
+        evidence=evidence,
+        note=f"live-evidence probe contradicts the {claim.subject} claim",
+    )
 
 
 def reconcile_master_plan(
@@ -378,18 +564,25 @@ def _default_master_plan_path() -> Path:
     return Path(__file__).resolve().parent.parent / "docs" / "plans" / "MASTER_PLAN.md"
 
 
-def reconcile(master_plan_path: Path) -> list[Verdict]:
+def reconcile(
+    master_plan_path: Path,
+    live_evidence_probes: Mapping[str, LiveEvidenceProbe] | None = None,
+) -> list[Verdict]:
     """Run the full reconciliation and return all verdicts.
 
     Args:
         master_plan_path: Path to ``MASTER_PLAN.md``.
+        live_evidence_probes: ADR id -> live-evidence probe (Check C). Omit to
+            use an empty registry, which fails every Implemented/live claim
+            loud until a real probe is registered for that ADR.
 
     Returns:
-        Check-A (MASTER_PLAN ↔ Linear) verdicts followed by Check-B
-        (Done ↔ merged-PR) verdicts.
+        Check-A (MASTER_PLAN ↔ Linear) verdicts, then Check-B (Done ↔
+        merged-PR) verdicts, then Check-C (Implemented/live ↔ live-evidence
+        probe) verdicts.
     """
-    header = extract_header(master_plan_path.read_text())
-    claims = classify_header_claims(header)
+    claims_text = extract_claims_text(master_plan_path.read_text())
+    claims = classify_header_claims(claims_text)
     fre_ids = sorted(claims)
     linear_states = fetch_linear_states(fre_ids, load_linear_key())
     verdicts = reconcile_master_plan(claims, linear_states)
@@ -397,6 +590,9 @@ def reconcile(master_plan_path: Path) -> list[Verdict]:
         state = linear_states.get(fre)
         if claims.get(fre) == "DONE" or (state is not None and state.strip().lower() == "done"):
             verdicts.append(check_merged_pr(fre))
+    probes = live_evidence_probes if live_evidence_probes is not None else {}
+    for claim in extract_implemented_claims(claims_text):
+        verdicts.append(check_live_evidence(claim, probes))
     return verdicts
 
 
@@ -416,8 +612,27 @@ def _print_table(verdicts: Sequence[Verdict]) -> None:
     )
 
 
+def exit_code_for(verdicts: Sequence[Verdict]) -> int:
+    """Compute the process exit code for a set of verdicts.
+
+    Zero verdicts means the parser extracted no claims at all — an anomaly
+    (parser drift), not a pass — so it forces exit ``1`` same as a real
+    ``FAIL``, distinct from a non-empty verdict set that happens to be all
+    ``PASS``/``UNVERIFIABLE``.
+
+    Args:
+        verdicts: The full verdict list from ``reconcile``.
+
+    Returns:
+        ``1`` if verdicts is empty or any verdict is ``FAIL``, else ``0``.
+    """
+    if not verdicts:
+        return 1
+    return 1 if any(v.status == "FAIL" for v in verdicts) else 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Entry point. Returns ``1`` if any verdict is ``FAIL``, else ``0``."""
+    """Entry point. Returns ``1`` if any verdict is ``FAIL`` or none extracted."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -432,12 +647,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     verdicts = reconcile(args.master_plan)
 
-    if args.json:
+    if not verdicts:
+        print(
+            "ERROR: reconciler extracted zero claims from MASTER_PLAN — this reads as a "
+            "false pass. Parser drift suspected; refusing to exit clean.",
+            file=sys.stderr,
+        )
+    elif args.json:
         print(json.dumps([dataclasses.asdict(v) for v in verdicts], indent=2))
     else:
         _print_table(verdicts)
 
-    return 1 if any(v.status == "FAIL" for v in verdicts) else 0
+    return exit_code_for(verdicts)
 
 
 if __name__ == "__main__":

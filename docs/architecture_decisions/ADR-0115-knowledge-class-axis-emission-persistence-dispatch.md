@@ -1,6 +1,6 @@
 # ADR-0115: The Knowledge Class Axis — Two-Axis Emission, Entity Persistence, and Output-Kind Dispatch
 
-**Status:** Proposed
+**Status:** Accepted — 2026-07-11 (owner acceptance, master integration gate)
 **Date:** 2026-07-11
 **Deciders:** Owner (architect) · master (integration gate) · adr session (Opus)
 **Tags:** memory, knowledge-graph, extraction, taxonomy, dispatch
@@ -309,6 +309,10 @@ emission contract (subject `class` P/W/S + routing `output_kind`). Owner selecte
 isolation-by-absence-of-write) and the fail-open default in session. Emission gates persistence and
 dispatch (correcting the axis before writing avoids interim `System`-as-class data); class-aware
 ranking left as **unowned follow-up** (a ticket for the recall project), not handed to an existing ADR.
+
+### 2026-07-11 - Accepted
+**Changed By:** master (integration gate), on owner acceptance
+**Reason:** Owner accepted the consolidated two-axis design after 2 codex rounds (AC-5 rewritten to fail a half-built impl; class-ranking ownership corrected to an unowned follow-up). Supersession into force: ADR-0106 → Superseded; ADR-0098 §D1 + its query-time System recall filter → superseded (§D2/§D4/§D7 preserved); ADR-0097 class vocabulary refined to Personal/World/Stance (System moves to the `output_kind` axis). Implementation chain filed Needs-Approval (Entity class persistence · `output_kind` write-time dispatch, folding FRE-728 · corpus backfill · structural-arm wiring · class-aware ranking recall follow-up). ADR reaches *Implemented* only when the assembled seam — AC-1/AC-4 persistence + AC-2/AC-3/AC-5 dispatch + AC-6 consolidation — is proven live (master-held).
 
 ---
 

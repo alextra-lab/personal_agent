@@ -1,6 +1,6 @@
 # ADR-0106: The System/User Knowledge Boundary — Dispatch by Output Kind, Observe, and Ground (no reasoning cage)
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0115 — 2026-07-11 (its `output_kind` dispatch is subsumed into ADR-0115's two-axis emission/persistence/dispatch; the FRE-728 implementation is re-pointed to ADR-0115)
 **Date:** 2026-07-02
 **Deciders:** Project owner (adr session, Opus)
 **Tags:** memory, knowledge-graph, system-boundary, extraction, dispatch, observability, self-improvement, sysgraph, event-bus, grounding

@@ -1,6 +1,6 @@
 # ADR-0097: Ingested-Knowledge Taxonomy (a hypothesis)
 
-**Status**: Proposed — *hypothesis, held loosely*
+**Status**: Proposed — *hypothesis, held loosely* · **class vocabulary refined by ADR-0115 (2026-07-11) to Personal / World / Stance; `System` moved off the class axis onto the `output_kind` axis.**
 **Date**: 2026-06-27
 **Deciders**: Project owner
 **Supersedes**: ADR-0071 (in part — the taxonomy it never made explicit)

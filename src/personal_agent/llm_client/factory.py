@@ -71,6 +71,16 @@ def get_llm_client(role_name: str = "primary") -> Any:
     thinking budget, tool filtering). Any other value → :class:`LiteLLMClient`
     (all cloud providers via ``litellm.acompletion()``).
 
+    ``role_name`` must be a literal factory role name (``"primary"``,
+    ``"captains_log"``, etc.) — ``budget_role_for(role_name)`` derives the cost-gate
+    budget lane from it and only recognizes those names. A caller holding an
+    already-resolved model key (e.g. from
+    :func:`~personal_agent.config.model_loader.resolve_role_model_key`, the
+    ADR-0099 ``model_roles.yaml`` matrix) should use
+    :func:`get_llm_client_for_key` instead, which takes the budget role
+    explicitly and fails loudly on an unknown key rather than silently
+    defaulting the budget lane to ``"main_inference"`` (FRE-869).
+
     Args:
         role_name: The model role name to look up in ``models.yaml``
             (default: ``"primary"``).
@@ -119,6 +129,12 @@ def get_llm_client_for_key(model_key: str, budget_role: str = "skill_routing") -
     ExecutionProfile — e.g. the Phase C skill router, which must use a remote
     model even when the primary agent runs locally (the local SLM server is
     currently single-threaded; running routing on it would serialize calls).
+    Also the correct call for a caller holding a model key already resolved via
+    :func:`~personal_agent.config.model_loader.resolve_role_model_key` (the
+    ADR-0099 ``model_roles.yaml`` matrix, which already accounts for the active
+    profile) — passing that key to :func:`get_llm_client` instead would silently
+    mis-bill spend, since ``budget_role_for`` cannot map a resolved model key
+    back to its budget lane (FRE-869).
 
     Args:
         model_key: Key in ``models.yaml`` (e.g. ``"claude_haiku"``,

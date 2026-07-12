@@ -182,7 +182,7 @@ async def test_compress_turns_threads_session_id() -> None:
     mock_client.respond = AsyncMock(return_value={"content": "summary"})
 
     with patch(
-        "personal_agent.orchestrator.context_compressor.get_llm_client",
+        "personal_agent.orchestrator.context_compressor.get_llm_client_for_key",
         return_value=mock_client,
     ):
         await compress_turns(

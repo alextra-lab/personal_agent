@@ -22,7 +22,7 @@ from personal_agent.captains_log.suppression import (
     record_rejection_suppression,
 )
 from personal_agent.config import resolve_role_model_key, settings
-from personal_agent.llm_client.factory import get_llm_client
+from personal_agent.llm_client.factory import get_llm_client_for_key
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.trace import SystemTraceContext
@@ -120,9 +120,18 @@ def _parse_seen_count(description: str) -> int:
     return 0
 
 
-async def _feedback_llm_complete(role_key: str, system: str, user: str) -> str:
-    """Run a single-turn completion for feedback responses."""
-    client = get_llm_client(role_key)
+async def _feedback_llm_complete(role_key: str, system: str, user: str, *, budget_role: str) -> str:
+    """Run a single-turn completion for feedback responses.
+
+    Args:
+        role_key: Resolved model key from ``resolve_role_model_key``.
+        system: System prompt for the completion.
+        user: User prompt for the completion.
+        budget_role: Cost-gate budget role for ``role_key`` (FRE-869: passed
+            explicitly since ``role_key`` is a resolved model key, not a
+            budget-role name).
+    """
+    client = get_llm_client_for_key(role_key, budget_role=budget_role)
     ctx = SystemTraceContext.new("captains_log_feedback")
     try:
         resp = await client.respond(
@@ -262,7 +271,7 @@ async def handle_deepen(event: FeedbackEvent, client: LinearClient) -> None:
         "Produce a deeper analysis: root cause, evidence, specific file paths to touch, "
         "and a revised What/Why/How. Keep Markdown sections."
     )
-    analysis = await _feedback_llm_complete(role_key, system, user)
+    analysis = await _feedback_llm_complete(role_key, system, user, budget_role="insights")
     body = (
         "## Agent Re-evaluation\n\n"
         f"**Trigger**: Deepen label\n"
@@ -304,7 +313,7 @@ async def handle_too_vague(event: FeedbackEvent, client: LinearClient) -> None:
         "exact files, config keys, acceptance criteria."
     )
     user = f"Make this proposal concrete (Markdown):\n\n{desc}"
-    refined = await _feedback_llm_complete(role_key, system, user)
+    refined = await _feedback_llm_complete(role_key, system, user, budget_role="captains_log")
     body = (
         "## Agent refinement\n\n"
         "**Trigger**: Too Vague label\n\n"

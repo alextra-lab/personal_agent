@@ -40,11 +40,14 @@ def _make_capture(
 
 
 class _FakeCloudClient:
-    """Minimal stand-in for the cloud LLM client returned by ``get_llm_client``."""
+    """Minimal stand-in for the cloud LLM client returned by ``get_llm_client_for_key``."""
 
     def __init__(self, content: str) -> None:
         self.content = content
         self.calls: list[dict[str, Any]] = []
+        # Kwargs the factory (get_llm_client_for_key) was called with, captured by
+        # the fake_cloud_client fixture below — distinct from respond()'s self.calls.
+        self.get_llm_client_kwargs: dict[str, Any] = {}
 
     async def respond(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
@@ -83,7 +86,11 @@ def fake_cloud_client(monkeypatch: pytest.MonkeyPatch) -> _FakeCloudClient:
     # The factory import is inside generate_session_summary; patch the underlying module.
     import personal_agent.llm_client.factory as factory
 
-    monkeypatch.setattr(factory, "get_llm_client", lambda **kwargs: client)
+    def _get_llm_client_for_key(*args: Any, **kwargs: Any) -> _FakeCloudClient:
+        client.get_llm_client_kwargs = kwargs
+        return client
+
+    monkeypatch.setattr(factory, "get_llm_client_for_key", _get_llm_client_for_key)
     return client
 
 
@@ -107,6 +114,19 @@ async def test_returns_summary_on_happy_path(fake_cloud_client: _FakeCloudClient
 
 
 @pytest.mark.asyncio
+async def test_bills_captains_log_budget_role(fake_cloud_client: _FakeCloudClient) -> None:
+    """FRE-869: role_name is a resolved model key, not a factory role name —
+    get_llm_client_for_key must be used (not get_llm_client) so spend is billed
+    to the captains_log budget lane rather than being silently mis-billed to
+    main_inference.
+    """
+    captures = [_make_capture()]
+    await ss.generate_session_summary(captures, session_id="s1")
+
+    assert fake_cloud_client.get_llm_client_kwargs["budget_role"] == "captains_log"
+
+
+@pytest.mark.asyncio
 async def test_empty_captures_returns_none() -> None:
     """An empty capture list short-circuits to None without calling the LLM."""
     summary = await ss.generate_session_summary([], session_id="s1")
@@ -117,7 +137,7 @@ async def test_empty_captures_returns_none() -> None:
 async def test_budget_denied_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """BudgetDenied is swallowed — the summariser never blocks consolidation."""
 
-    def _denying_client(**_: Any) -> Any:
+    def _denying_client(*_args: Any, **_kwargs: Any) -> Any:
         class _C:
             async def respond(self, **kwargs: Any) -> Any:
                 raise BudgetDenied(
@@ -132,7 +152,7 @@ async def test_budget_denied_returns_none(monkeypatch: pytest.MonkeyPatch) -> No
 
     import personal_agent.llm_client.factory as factory
 
-    monkeypatch.setattr(factory, "get_llm_client", _denying_client)
+    monkeypatch.setattr(factory, "get_llm_client_for_key", _denying_client)
 
     captures = [_make_capture()]
     summary = await ss.generate_session_summary(captures, session_id="s1")
@@ -143,7 +163,7 @@ async def test_budget_denied_returns_none(monkeypatch: pytest.MonkeyPatch) -> No
 async def test_generic_exception_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """Any unexpected exception from the LLM client returns None without raising."""
 
-    def _raising_client(**_: Any) -> Any:
+    def _raising_client(*_args: Any, **_kwargs: Any) -> Any:
         class _C:
             async def respond(self, **kwargs: Any) -> Any:
                 raise RuntimeError("model down")
@@ -152,7 +172,7 @@ async def test_generic_exception_returns_none(monkeypatch: pytest.MonkeyPatch) -
 
     import personal_agent.llm_client.factory as factory
 
-    monkeypatch.setattr(factory, "get_llm_client", _raising_client)
+    monkeypatch.setattr(factory, "get_llm_client_for_key", _raising_client)
 
     captures = [_make_capture()]
     summary = await ss.generate_session_summary(captures, session_id="s1")
@@ -167,7 +187,7 @@ async def test_too_short_response_returns_none(
     short = _FakeCloudClient(content="ok")
     import personal_agent.llm_client.factory as factory
 
-    monkeypatch.setattr(factory, "get_llm_client", lambda **kwargs: short)
+    monkeypatch.setattr(factory, "get_llm_client_for_key", lambda *args, **kwargs: short)
 
     summary = await ss.generate_session_summary([_make_capture()], session_id="s1")
     assert summary is None
@@ -179,7 +199,7 @@ async def test_too_long_response_is_truncated(monkeypatch: pytest.MonkeyPatch) -
     huge = _FakeCloudClient(content="x" * (ss._MAX_SUMMARY_CHARS + 500))
     import personal_agent.llm_client.factory as factory
 
-    monkeypatch.setattr(factory, "get_llm_client", lambda **kwargs: huge)
+    monkeypatch.setattr(factory, "get_llm_client_for_key", lambda *args, **kwargs: huge)
 
     summary = await ss.generate_session_summary([_make_capture()], session_id="s1")
     assert summary is not None
@@ -193,7 +213,7 @@ async def test_quote_wrapped_response_is_unwrapped(monkeypatch: pytest.MonkeyPat
     quoted = _FakeCloudClient(content=f'"{inner}"')
     import personal_agent.llm_client.factory as factory
 
-    monkeypatch.setattr(factory, "get_llm_client", lambda **kwargs: quoted)
+    monkeypatch.setattr(factory, "get_llm_client_for_key", lambda *args, **kwargs: quoted)
 
     summary = await ss.generate_session_summary([_make_capture()], session_id="s1")
     assert summary == inner

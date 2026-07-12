@@ -746,9 +746,11 @@ async def extract_entities_and_relationships(
                     budget_role="entity_extraction",
                 )
             else:
-                from personal_agent.llm_client.factory import get_llm_client
+                from personal_agent.llm_client.factory import get_llm_client_for_key
 
-                cloud_client = get_llm_client(role_name=entity_extraction_role)
+                cloud_client = get_llm_client_for_key(
+                    entity_extraction_role, budget_role="entity_extraction"
+                )
             log.debug(
                 "entity_extraction_using_cloud",
                 model=eff_model_id,

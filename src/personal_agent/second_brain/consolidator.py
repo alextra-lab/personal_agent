@@ -33,6 +33,7 @@ from personal_agent.second_brain.attempts import (
 )
 from personal_agent.second_brain.entity_extraction import extract_entities_and_relationships
 from personal_agent.second_brain.session_summary import generate_session_summary
+from personal_agent.sysgraph import get_default_sysgraph_repo
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.trace import SystemTraceContext
 
@@ -204,6 +205,10 @@ class SecondBrainConsolidator:
         relationships_created = 0
         stances_created = 0
         claims_created = 0
+        entities_dispatched_ephemeral = 0
+        entities_dispatched_finding = 0
+        entities_dispatch_finding_failed = 0
+        relationships_dispatch_skipped = 0
         captures_skipped = 0
         sessions_with_new_turns: set[str] = set()
         all_entity_ids: list[str] = []
@@ -248,6 +253,12 @@ class SecondBrainConsolidator:
                 relationships_created += result.get("relationships_created", 0)
                 stances_created += result.get("stances_created", 0)
                 claims_created += result.get("claims_created", 0)
+                entities_dispatched_ephemeral += result.get("entities_dispatched_ephemeral", 0)
+                entities_dispatched_finding += result.get("entities_dispatched_finding", 0)
+                entities_dispatch_finding_failed += result.get(
+                    "entities_dispatch_finding_failed", 0
+                )
+                relationships_dispatch_skipped += result.get("relationships_dispatch_skipped", 0)
                 all_entity_ids.extend(result.get("entity_ids", []))
                 all_relationship_element_ids.extend(result.get("relationship_element_ids", []))
                 log.debug(
@@ -296,6 +307,10 @@ class SecondBrainConsolidator:
             "stances_created": stances_created,
             "claims_created": claims_created,
             "entities_promoted": entities_promoted,
+            "entities_dispatched_ephemeral": entities_dispatched_ephemeral,
+            "entities_dispatched_finding": entities_dispatched_finding,
+            "entities_dispatch_finding_failed": entities_dispatch_finding_failed,
+            "relationships_dispatch_skipped": relationships_dispatch_skipped,
         }
 
         log.info(
@@ -643,6 +658,21 @@ class SecondBrainConsolidator:
         # always produce "group"-visibility nodes (visible to all CF Access users).
         visibility = "group"
 
+        # ADR-0115 D1/D3: partition extracted entities by output_kind *before* the Turn
+        # is constructed. `create_conversation` MERGEs a bare :Entity node for every name
+        # in `key_entities` (memory/service.py), so `key_entities` itself must already
+        # exclude ephemeral/finding names — gating only `create_entity` below would leak
+        # them into Core through that earlier MERGE.
+        all_entities = extraction_result.get("entities", [])
+        knowledge_entities = [
+            e
+            for e in all_entities
+            if e.get("output_kind", "knowledge") not in ("ephemeral", "finding")
+        ]
+        ephemeral_entities = [e for e in all_entities if e.get("output_kind") == "ephemeral"]
+        finding_entities = [e for e in all_entities if e.get("output_kind") == "finding"]
+        knowledge_entity_names = [e.get("name", "") for e in knowledge_entities if e.get("name")]
+
         # Create Turn node
         turn = TurnNode(
             turn_id=capture.trace_id,
@@ -652,7 +682,7 @@ class SecondBrainConsolidator:
             summary=summary,
             user_message=capture.user_message,
             assistant_response=capture.assistant_response,
-            key_entities=extraction_result.get("entity_names", []),
+            key_entities=knowledge_entity_names,
             properties={
                 "tools_used": capture.tools_used,
                 "duration_ms": capture.duration_ms,
@@ -663,7 +693,7 @@ class SecondBrainConsolidator:
         )
         # Attach full entity data so create_conversation can set entity_type on inline nodes.
         # This is a transient attribute — not part of the Pydantic model — used only during write.
-        object.__setattr__(turn, "_entity_data", extraction_result.get("entities", []))
+        object.__setattr__(turn, "_entity_data", all_entities)
 
         await self.memory_service.create_conversation(
             turn, user_id=capture.user_id, visibility=visibility
@@ -676,10 +706,10 @@ class SecondBrainConsolidator:
             )
         )
 
-        # Create entity nodes
+        # Create entity nodes — knowledge items only (ADR-0115 D3 dispatch).
         entities_created = 0
         entity_ids: list[str] = []
-        for entity_data in extraction_result.get("entities", []):
+        for entity_data in knowledge_entities:
             entity = Entity(
                 name=entity_data.get("name", ""),
                 entity_type=entity_data.get("type", "Unknown"),
@@ -707,12 +737,72 @@ class SecondBrainConsolidator:
                 entities_created += 1
                 entity_ids.append(entity_id)
 
-        # Create relationships
+        # ephemeral items: no write anywhere -- already durably observed in Elasticsearch
+        # via the unconditional write_capture()/schedule_es_index() call at capture time,
+        # independent of consolidation (ADR-0115 D3).
+        entities_dispatched_ephemeral = len(ephemeral_entities)
+
+        # finding items: route to sysgraph (ADR-0115 D3), never Core. Best-effort against
+        # the process-level singleton -- a sysgraph hiccup must not abort the rest of this
+        # capture's knowledge/stance/claim writes -- but a failure is counted separately
+        # from a successful dispatch so it is never silently conflated with "landed".
+        entities_dispatched_finding = 0
+        entities_dispatch_finding_failed = 0
+        if finding_entities:
+            sysgraph_repo = get_default_sysgraph_repo()
+            for entity_data in finding_entities:
+                if sysgraph_repo is None:
+                    entities_dispatch_finding_failed += 1
+                    log.warning(
+                        "dispatch_finding_sysgraph_unavailable",
+                        trace_id=capture.trace_id,
+                        entity_name=entity_data.get("name", ""),
+                    )
+                    continue
+                try:
+                    await sysgraph_repo.record_finding(
+                        entity_name=entity_data.get("name", ""),
+                        entity_type=entity_data.get("type", "Unknown"),
+                        description=entity_data.get("description"),
+                        trace_id=capture.trace_id,
+                        session_id=capture.session_id,
+                    )
+                except Exception as e:
+                    entities_dispatch_finding_failed += 1
+                    log.warning(
+                        "dispatch_finding_sysgraph_write_failed",
+                        trace_id=capture.trace_id,
+                        entity_name=entity_data.get("name", ""),
+                        error=str(e),
+                    )
+                else:
+                    entities_dispatched_finding += 1
+
+        # Create relationships — skip any endpoint dispatched away from Core (ADR-0115
+        # D3): create_relationship's MATCH (memory/service.py) would otherwise either
+        # silently no-op (endpoint never written) or, worse, splice an edge onto an
+        # unrelated pre-existing Core entity that happens to share the dispatched-away
+        # entity's name from a prior turn.
+        dispatched_away_names = {e.get("name", "") for e in ephemeral_entities if e.get("name")} | {
+            e.get("name", "") for e in finding_entities if e.get("name")
+        }
         relationships_created = 0
+        relationships_dispatch_skipped = 0
         for rel_data in extraction_result.get("relationships", []):
+            source_name = rel_data.get("source", "")
+            target_name = rel_data.get("target", "")
+            if source_name in dispatched_away_names or target_name in dispatched_away_names:
+                relationships_dispatch_skipped += 1
+                log.warning(
+                    "dispatch_relationship_endpoint_skipped",
+                    trace_id=capture.trace_id,
+                    source=source_name,
+                    target=target_name,
+                )
+                continue
             relationship = Relationship(
-                source_id=rel_data.get("source", ""),
-                target_id=rel_data.get("target", ""),
+                source_id=source_name,
+                target_id=target_name,
                 relationship_type=rel_data.get("type", "RELATED_TO"),
                 weight=rel_data.get("weight", 1.0),
                 properties=rel_data.get("properties", {}),
@@ -763,4 +853,8 @@ class SecondBrainConsolidator:
             "claims_created": claims_created,
             "entity_ids": entity_ids,
             "relationship_element_ids": list(dict.fromkeys(relationship_element_ids)),
+            "entities_dispatched_ephemeral": entities_dispatched_ephemeral,
+            "entities_dispatched_finding": entities_dispatched_finding,
+            "entities_dispatch_finding_failed": entities_dispatch_finding_failed,
+            "relationships_dispatch_skipped": relationships_dispatch_skipped,
         }

@@ -104,14 +104,14 @@ _OPERATIONAL_MODEL_JSON: dict[str, Any] = {
         {
             "name": "Postgres",
             "type": "Technology",
-            "class": "System",
+            "output_kind": "finding",
             "description": "The agent's own database, referenced in a healthcheck",
             "properties": {},
         },
         {
             "name": "Elasticsearch",
             "type": "Technology",
-            "class": "System",
+            "output_kind": "finding",
             "description": "The agent's own log store, reported degraded in a healthcheck",
             "properties": {},
         },
@@ -210,29 +210,39 @@ class TestExtractionEmissionContract:
             assert "lease" not in desc, f"claim flattened into {entity['name']} description"
 
     async def test_every_entity_has_valid_class(self) -> None:
-        """Class axis: every entity carries a class in {World, Personal, System}."""
+        """ADR-0115 D1: every entity's class is in {World, Personal} — System left the class axis."""
         result = await _run_extractor(_CARBUY_MODEL_JSON, user_message=_CARBUY_USER_MSG)
 
         for entity in result["entities"]:
-            assert entity["class"] in {"World", "Personal", "System"}
+            assert entity["class"] in {"World", "Personal"}
 
-    async def test_stance_item_has_class_stance(self) -> None:
-        """D5 'class for every item': stances carry class=Stance (not array membership only)."""
+    async def test_stance_and_claim_have_class_and_output_kind(self) -> None:
+        """D5 'class for every item' + ADR-0115 D1 'output_kind for every item'.
+
+        Stances/claims are always user-authored, so Python stamps output_kind=knowledge
+        unconditionally (no LLM ambiguity to fail open on for these two item types).
+        """
         result = await _run_extractor(_CARBUY_MODEL_JSON, user_message=_CARBUY_USER_MSG)
 
         assert all(s["class"] == "Stance" for s in result["stances"])
+        assert all(s["output_kind"] == "knowledge" for s in result["stances"])
         assert all(c["class"] == "Personal" for c in result["claims"])
+        assert all(c["output_kind"] == "knowledge" for c in result["claims"])
 
-    async def test_operational_turn_emits_system_class(self) -> None:
-        """AC-4 (lays only): an operational turn's subjects are class=System.
+    async def test_operational_turn_emits_finding_output_kind(self) -> None:
+        """ADR-0115 D1 (emission proxy): an operational turn's subjects are output_kind=finding.
 
-        Single fixture proves determinability; the four-subject AC-4 breadth
-        (healthcheck / telemetry / harness / ping) is FRE-639's gate ticket.
+        System-ness is now expressed via output_kind, never as class=System. Single
+        fixture proves determinability; persisting/dispatching on this signal is the
+        separate Persistence/Dispatch tickets this ticket blocks.
         """
         result = await _run_extractor(_OPERATIONAL_MODEL_JSON, user_message=_OPERATIONAL_USER_MSG)
 
         assert result["entities"]
-        assert all(e["class"] == "System" for e in result["entities"])
+        assert all(e["output_kind"] == "finding" for e in result["entities"])
+        # class is not meaningful for finding items but must still fail open to World,
+        # never resurrect System.
+        assert all(e["class"] == "World" for e in result["entities"])
 
     async def test_python_stamps_provenance_overriding_llm(self) -> None:
         """Provenance is Python-stamped; a bogus model-emitted block is overridden."""
@@ -254,8 +264,8 @@ class TestExtractionEmissionContract:
         prov = result["claims"][0]["provenance"]
         assert prov["observed_at"]  # present (equals extracted_at on fallback)
 
-    async def test_supplemented_person_entity_gets_default_class(self) -> None:
-        """The regex-supplemented Person entity must carry a class (finalize runs after supplement)."""
+    async def test_supplemented_person_entity_gets_default_class_and_output_kind(self) -> None:
+        """The regex-supplemented Person entity carries a class + output_kind (finalize runs after supplement)."""
         model_json = {
             "summary": "Discussion of the project lead.",
             "entities": [],
@@ -266,7 +276,8 @@ class TestExtractionEmissionContract:
         result = await _run_extractor(model_json, user_message="The project lead is Jane Smith.")
         supplemented = [e for e in result["entities"] if e["name"] == "Jane Smith"]
         assert supplemented, "regex should supplement the Person entity"
-        assert supplemented[0]["class"] in {"World", "Personal", "System"}
+        assert supplemented[0]["class"] in {"World", "Personal"}
+        assert supplemented[0]["output_kind"] == "knowledge"
 
 
 @pytest.mark.asyncio
@@ -416,6 +427,94 @@ class TestDescriptionUpdateKind:
             )
             result = await _run_extractor(model_json, user_message="msg")
             assert result["entities"][0]["description_update_kind"] == "new"
+
+
+@pytest.mark.asyncio
+class TestOutputKindAxis:
+    """ADR-0115 D1/D4: output_kind is a fail-open axis orthogonal to class; System leaves
+    the class vocabulary entirely — a model still emitting class=System fails open to World.
+    """
+
+    async def test_output_kind_defaults_to_knowledge_when_absent(self) -> None:
+        model_json = _entity_model_json(
+            {"name": "Neo4j", "type": "Technology", "class": "World", "description": "A database"}
+        )
+        result = await _run_extractor(model_json, user_message="what is Neo4j")
+        assert result["entities"][0]["output_kind"] == "knowledge"
+
+    async def test_off_vocabulary_output_kind_fails_open_to_knowledge(self) -> None:
+        model_json = _entity_model_json(
+            {
+                "name": "Neo4j",
+                "type": "Technology",
+                "class": "World",
+                "output_kind": "background_noise",
+                "description": "A database",
+            }
+        )
+        result = await _run_extractor(model_json, user_message="what is Neo4j")
+        assert result["entities"][0]["output_kind"] == "knowledge"
+
+    async def test_finding_output_kind_is_preserved(self) -> None:
+        model_json = _entity_model_json(
+            {
+                "name": "cost_gate_reaper",
+                "type": "Technology",
+                "output_kind": "finding",
+                "description": "A harness maintenance job reviewed in a telemetry check.",
+            }
+        )
+        result = await _run_extractor(model_json, user_message="review the reaper telemetry")
+        assert result["entities"][0]["output_kind"] == "finding"
+
+    async def test_ephemeral_output_kind_is_preserved(self) -> None:
+        model_json = _entity_model_json(
+            {
+                "name": "connectivity ping",
+                "type": "Technology",
+                "output_kind": "ephemeral",
+                "description": "A bare connectivity check with no lasting content.",
+            }
+        )
+        result = await _run_extractor(model_json, user_message="ping")
+        assert result["entities"][0]["output_kind"] == "ephemeral"
+
+    async def test_system_class_fails_open_to_world_not_preserved(self) -> None:
+        """A model still emitting the retired 'System' class value fails open to World.
+
+        System is no longer in the class vocabulary (ADR-0115 D1) — an off-vocabulary
+        class value must not silently persist.
+        """
+        model_json = _entity_model_json(
+            {
+                "name": "Postgres",
+                "type": "Technology",
+                "class": "System",
+                "description": "The agent's own database",
+            }
+        )
+        result = await _run_extractor(model_json, user_message="healthcheck")
+        assert result["entities"][0]["class"] == "World"
+
+
+class TestTwoAxisPromptContract:
+    """ADR-0115 D1: the prompt instructs the model to emit output_kind + class as two axes."""
+
+    def test_prompt_advertises_output_kind_field(self) -> None:
+        """The JSON schema block advertises the output_kind enum on every entity."""
+        prompt = _build_extraction_prompt("u", "a")
+        assert '"output_kind": "knowledge|ephemeral|finding"' in prompt
+
+    def test_prompt_class_vocabulary_drops_system(self) -> None:
+        """The JSON schema's class enum is World|Personal only — System is gone."""
+        prompt = _build_extraction_prompt("u", "a")
+        assert '"class": "World|Personal"' in prompt
+        assert '"class": "World|Personal|System"' not in prompt
+
+    def test_system_prompt_describes_two_axes(self) -> None:
+        """The system prompt names OUTPUT KIND and drops the old three-value class framing."""
+        assert "OUTPUT KIND" in _EXTRACTION_SYSTEM_PROMPT
+        assert "World / Personal / System" not in _EXTRACTION_SYSTEM_PROMPT
 
 
 @pytest.mark.asyncio

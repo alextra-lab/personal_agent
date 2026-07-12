@@ -54,9 +54,10 @@ class ExtractionModelOverride:
 _EXTRACTION_SYSTEM_PROMPT = """\
 You are a knowledge graph extraction expert building a personal memory system.
 Reason carefully about (a) which entities and relationships have lasting knowledge value,
-(b) the KNOWLEDGE CLASS of each entity (World / Personal / System), and (c) the user's
-explicit STANCES and personal situational CLAIMS — which you must emit as structured items,
-never flatten into an entity's description.
+(b) the OUTPUT KIND of each entity (knowledge / ephemeral / finding) and, for knowledge
+items, the KNOWLEDGE CLASS (World / Personal), and (c) the user's explicit STANCES and
+personal situational CLAIMS — which you must emit as structured items, never flatten into
+an entity's description.
 Your final output must be valid JSON only — no markdown fences, no explanation text."""
 
 _EXTRACTION_PROMPT_TEMPLATE = """\
@@ -115,22 +116,33 @@ RELATIONSHIP TYPES — use EXACTLY one of these UPPER_SNAKE_CASE values, no othe
   CREATED_BY    — entity was created or authored by another
   LOCATED_IN    — entity is geographically within another
 
-KNOWLEDGE CLASS — every entity MUST carry a "class", EXACTLY one of these three:
+OUTPUT KIND — every entity MUST carry an "output_kind", EXACTLY one of these three
+  (ADR-0115 — the routing axis, orthogonal to "class" below):
+  knowledge  — durable user/world knowledge that belongs in the user's memory. This is the
+               default for real subject-matter content, whether about the world or the user.
+  finding    — the agent's OWN machinery discussed as a subject: infrastructure, tooling,
+               telemetry, operations. Examples: a database discussed as infra ("Postgres is
+               healthy"), healthchecks, log/telemetry review (sensor_poll,
+               cost_gate_reaper_swept, DEBUG counts), harness internals (executor.py,
+               ToolLoopGate, the consolidation job), connectivity pings. Judge by the SUBJECT
+               of the turn, not the word alone: "our graph store is up" → Postgres is
+               finding; "graph databases store nodes and edges" → Postgres is knowledge.
+  ephemeral  — a single item that is transient noise with no lasting value even as a system
+               observation. (A whole turn with no real content at all is handled by rule 8
+               below — return empty entities/relationships arrays for those; use this value
+               only for one item that is noise within an otherwise substantive turn.)
+
+KNOWLEDGE CLASS — for "knowledge" items ONLY, every such entity MUST also carry a "class",
+  EXACTLY one of these two (omit or ignore for finding/ephemeral items):
   World     — reusable, impersonal know-how: facts, concepts, products, techniques, and
               named people/orgs/places discussed as general knowledge. This is the default
               for real subject-matter content.
   Personal  — a named thing belonging to the USER'S OWN life: their doctor, employer, city of
               residence, their own project. (A first-person SITUATIONAL FACT such as
               "my lease ends in March" is NOT an entity — put it under "claims", below.)
-  System    — the agent's OWN machinery: infrastructure, tooling, telemetry, operations.
-              Examples: a database discussed as infra ("Postgres is healthy"), healthchecks,
-              log/telemetry review (sensor_poll, cost_gate_reaper_swept, DEBUG counts),
-              harness internals (executor.py, ToolLoopGate, the consolidation job),
-              connectivity pings. This is NOT user knowledge — label it System so it can be
-              kept out of the tutor. Judge by the SUBJECT of the turn, not the word alone:
-              "our graph store is up" → Neo4j is System; "graph databases store nodes and
-              edges" → Neo4j is World.
-  (There is NO "Stance" entity. A stance is a RELATION — emit it under "stances", below.)
+  (There is NO "Stance" or "System" entity class. A stance is a RELATION — emit it under
+  "stances", below. System-ness is expressed via output_kind=finding/ephemeral, above, never
+  as a class value.)
 
 STANCES — the user's explicit first-person affect toward, or mastery of, a World concept
   ("I love X", "I prefer X over Y", "I'm learning X", "I've basically mastered X").
@@ -189,12 +201,13 @@ EXTRACTION RULES (follow strictly):
    message", a bare ping with no substance), return empty entities and relationships arrays.
    BUT a real operational turn the user actually engaged in — a healthcheck they ran, a
    telemetry/log review, a harness explainer — is NOT empty: emit its subjects as entities
-   with class=System (see rule 11), do not drop them.
+   with output_kind=finding (see rule 11), do not drop them.
 9. Write summaries as one concrete sentence about what was accomplished or learned
 10. Descriptions should add context beyond the name — what makes this entity notable here?
-11. Assign every entity a "class" (World | Personal | System) per the definitions above. When
-    the turn's SUBJECT is the agent's own infra/tooling/telemetry/healthcheck, the entity is
-    System even if it names a general technology.
+11. Assign every entity an "output_kind" (knowledge | finding | ephemeral) and, for knowledge
+    items, a "class" (World | Personal) per the definitions above. When the turn's SUBJECT is
+    the agent's own infra/tooling/telemetry/healthcheck, the entity is output_kind=finding
+    even if it names a general technology.
 12. NEVER flatten a user stance into an entity description (no "a car the user loves",
     "central to the user's preference"). Emit it as a structured object in "stances".
 13. NEVER drop a first-person situational fact. If it is an assertion about the user's life
@@ -210,11 +223,11 @@ EXTRACTION RULES (follow strictly):
     stance or a claim.
 
 GOOD EXAMPLES:
-  ✓ {{"name": "Paris", "type": "Location", "class": "World", "description": "Capital of France, subject of weather inquiry"}}
-  ✓ {{"name": "Qwen3.5", "type": "TechnicalArtifact", "class": "World", "description": "Local reasoning LLM used for entity extraction"}}
-  ✓ {{"name": "Postgres", "type": "TechnicalArtifact", "class": "System", "description": "The agent's own database, referenced in a healthcheck"}}
-  ✓ {{"name": "GraphRAG", "type": "MethodOrConcept", "class": "World", "description": "Technique combining knowledge graphs with RAG retrieval"}}
-  ✓ {{"name": "Neo4j", "type": "TechnicalArtifact", "class": "World", "description": "A graph database management system storing data as nodes and typed relationships", "description_update_kind": "enrichment"}}  ← the turn substantively defines it
+  ✓ {{"name": "Paris", "type": "Location", "output_kind": "knowledge", "class": "World", "description": "Capital of France, subject of weather inquiry"}}
+  ✓ {{"name": "Qwen3.5", "type": "TechnicalArtifact", "output_kind": "knowledge", "class": "World", "description": "Local reasoning LLM used for entity extraction"}}
+  ✓ {{"name": "Postgres", "type": "TechnicalArtifact", "output_kind": "finding", "description": "The agent's own database, referenced in a healthcheck"}}  ← System-natured: finding, not a class value
+  ✓ {{"name": "GraphRAG", "type": "MethodOrConcept", "output_kind": "knowledge", "class": "World", "description": "Technique combining knowledge graphs with RAG retrieval"}}
+  ✓ {{"name": "Neo4j", "type": "TechnicalArtifact", "output_kind": "knowledge", "class": "World", "description": "A graph database management system storing data as nodes and typed relationships", "description_update_kind": "enrichment"}}  ← the turn substantively defines it
   ✓ stance: {{"subject": "owner", "target": "Toyota RAV4 Hybrid", "affect": "loves the hybrid powertrain", "mastery": null, "description": "User strongly prefers the RAV4 Hybrid's drivetrain"}}
   ✓ claim:  {{"subject": "owner", "content": "The user's current car lease ends in March.", "description": "Situational constraint driving purchase timing"}}
 
@@ -224,6 +237,7 @@ BAD EXAMPLES (never produce these):
   ✗ {{"name": "mcp_perplexity_ask", "type": "TechnicalArtifact", ...}}  ← use "Perplexity" instead
   ✗ {{"name": "mcp_docker", "type": "TechnicalArtifact", ...}}           ← use "Docker" instead
   ✗ {{"name": "search_memory", "type": "TechnicalArtifact", ...}}        ← internal tool, not an entity
+  ✗ {{"name": "Postgres", "type": "TechnicalArtifact", "class": "System", ...}}  ← System is not a class value; use output_kind=finding instead
   ✗ {{"name": "7°C", "type": "QuantityMeasure", ...}}                   ← ephemeral data value
   ✗ {{"name": "Météo-France", ...}}                               ← use "Météo France" (no hyphen)
   ✗ {{"name": "Test message", "type": "Message", ...}}
@@ -244,7 +258,8 @@ Return ONLY valid JSON (no markdown fences, no explanation):
     {{
       "name": "Canonical Entity Name",
       "type": "Person|Organization|Location|TechnicalArtifact|KnowledgeArtifact|MethodOrConcept|DomainOrTopic|Phenomenon|QuantityMeasure|Event",
-      "class": "World|Personal|System",
+      "output_kind": "knowledge|ephemeral|finding",
+      "class": "World|Personal",
       "description": "One sentence with useful context beyond the name",
       "description_update_kind": "new|enrichment|correction",
       "properties": {{}}
@@ -407,7 +422,10 @@ def _supplement_person_entities_from_user_message(
     return out
 
 
-_VALID_ENTITY_CLASSES = frozenset({"World", "Personal", "System"})
+_VALID_ENTITY_CLASSES = frozenset({"World", "Personal"})
+
+# ADR-0115 D1: the routing axis, orthogonal to class; off-vocabulary → "knowledge" (fail-open).
+_VALID_OUTPUT_KINDS = frozenset({"knowledge", "ephemeral", "finding"})
 
 # FRE-712: the extractor's contradiction signal per claim; off-vocabulary → "new".
 _VALID_UPDATE_KINDS = frozenset({"new", "correction", "evolution"})
@@ -519,22 +537,42 @@ def _coerce_mastery(value: Any) -> float | None:
 
 
 def _normalize_entity_class(entity: dict[str, Any]) -> str:
-    """Return a valid entity class, defaulting to World (fail-open, FRE-637).
+    """Return a valid entity class, defaulting to World (fail-open, ADR-0115 D4).
 
-    A missing or invalid class fails **open** to ``World`` (visible to the tutor)
-    rather than ``System`` so a hedging model never silently starves the tutor.
-    System-classification precision is FRE-639's concern.
+    A missing or invalid class fails **open** to ``World`` (visible to the tutor).
+    ``System`` is no longer a class value (ADR-0115 D1 — it left the class axis for
+    the ``output_kind`` routing axis, see :func:`_normalize_output_kind`), so a model
+    still emitting ``class="System"`` also falls open to ``World`` here.
 
     Args:
         entity: An extracted entity dict.
 
     Returns:
-        One of ``World`` / ``Personal`` / ``System``.
+        One of ``World`` / ``Personal``.
     """
     candidate = str(entity.get("class", "")).strip().capitalize()
     if candidate in _VALID_ENTITY_CLASSES:
         return candidate
     return "World"
+
+
+def _normalize_output_kind(entity: dict[str, Any]) -> str:
+    """Return a valid output_kind, defaulting to knowledge (fail-open, ADR-0115 D4).
+
+    A missing or invalid ``output_kind`` fails **open** to ``knowledge`` — an
+    uncertain item is kept visible to the tutor rather than silently routed to
+    ``ephemeral``/``finding`` on a hedging or malformed model response.
+
+    Args:
+        entity: An extracted entity dict.
+
+    Returns:
+        One of ``knowledge`` / ``ephemeral`` / ``finding``.
+    """
+    candidate = str(entity.get("output_kind", "")).strip().lower()
+    if candidate in _VALID_OUTPUT_KINDS:
+        return candidate
+    return "knowledge"
 
 
 def _finalize_extraction(
@@ -544,13 +582,16 @@ def _finalize_extraction(
     session_id: str | None,
     turn_timestamp: datetime | None,
 ) -> None:
-    """Normalize entity classes and stamp provenance on stances/claims, in place.
+    """Normalize entity class/output_kind and stamp provenance on stances/claims, in place.
 
-    This is the Python side of the ADR-0098 D5 contract: the LLM emits the
-    semantic content of stances/claims; Python owns the ``class`` defaulting and
-    the provenance + timestamp (the model cannot know real trace/session identity
-    or wall-clock time). Runs *after* Person supplementation so supplemented rows
-    also receive a class.
+    This is the Python side of the ADR-0098 D5 + ADR-0115 D1 contract: the LLM emits
+    the semantic content of stances/claims/entities; Python owns the ``class`` +
+    ``output_kind`` defaulting and the provenance + timestamp (the model cannot know
+    real trace/session identity or wall-clock time). Runs *after* Person
+    supplementation so supplemented rows also receive a class and output_kind.
+    Stances/claims are always user-authored, so their ``output_kind`` is
+    unconditionally ``knowledge`` — only entities can be System-natured and need the
+    fail-open normalize.
 
     Args:
         result: The parsed extraction dict (mutated in place).
@@ -568,6 +609,7 @@ def _finalize_extraction(
 
     for entity in result.get("entities", []):
         entity["class"] = _normalize_entity_class(entity)
+        entity["output_kind"] = _normalize_output_kind(entity)
         # FRE-725: validated per-entity description enrichment/correction signal (Python owns
         # defaulting, like class) so the correction gate keys on a stable, in-vocabulary value.
         entity["description_update_kind"] = _normalize_description_update_kind(
@@ -578,6 +620,7 @@ def _finalize_extraction(
     for stance in stances:
         stance["subject"] = "owner"
         stance["class"] = "Stance"
+        stance["output_kind"] = "knowledge"
         stance["mastery"] = _coerce_mastery(stance.get("mastery"))
         stance.setdefault("affect", "")
         stance.setdefault("description", "")
@@ -588,6 +631,7 @@ def _finalize_extraction(
     for claim in claims:
         claim["subject"] = "owner"
         claim["class"] = "Personal"
+        claim["output_kind"] = "knowledge"
         claim.setdefault("description", "")
         # FRE-712: normalized slot key + validated contradiction signal (Python owns
         # defaulting, like class) so supersession keys on a stable facet and labels
@@ -642,7 +686,9 @@ async def extract_entities_and_relationships(
     Returns:
         Dict with entities, relationships, entity_names, summary, and — new in
         FRE-637 — ``stances`` and ``claims`` (each provenance-stamped). Every
-        entity additionally carries a ``class`` (World/Personal/System).
+        entity additionally carries an ``output_kind`` (knowledge/ephemeral/finding,
+        ADR-0115 D1) and, meaningfully only when ``output_kind == "knowledge"``, a
+        ``class`` (World/Personal).
 
     Raises:
         BudgetDenied: Re-raised so the consolidator can write a
@@ -839,8 +885,9 @@ async def extract_entities_and_relationships(
         )
         result["entities"] = entities
 
-        # ADR-0098 D5: default entity classes and stamp provenance on stances/claims.
-        # Runs after Person supplementation so supplemented rows also get a class.
+        # ADR-0098 D5 + ADR-0115 D1: default entity class/output_kind and stamp
+        # provenance on stances/claims. Runs after Person supplementation so
+        # supplemented rows also get a class and output_kind.
         _finalize_extraction(
             result,
             trace_id=trace_id,

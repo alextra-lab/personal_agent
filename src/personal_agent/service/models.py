@@ -218,6 +218,10 @@ class SessionModel(Base):
     # ADR-0079 (FRE-416) — server-authoritative execution profile. Explicit
     # stored value ('local' | 'cloud'); never a silent request-time fallback.
     execution_profile = Column(String(50), nullable=False, default="local", server_default="local")
+    # ADR-0098 D4/D6 (FRE-860) — retention soft-prune tombstone. NULL = not yet
+    # purged; set by the scheduled retention sweep, cleared on resume (any
+    # write to messages via append_message/update).
+    purged_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class MetricModel(Base):

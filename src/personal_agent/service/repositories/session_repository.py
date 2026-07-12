@@ -117,6 +117,10 @@ class SessionRepository:
         if "metadata" in update_data:
             update_data["metadata_"] = update_data.pop("metadata")
         update_data["last_active_at"] = datetime.now(timezone.utc)
+        if "messages" in update_data:
+            # ADR-0098 D4/D6 (FRE-860) — writing messages reactivates a
+            # previously soft-pruned session; clear the tombstone.
+            update_data["purged_at"] = None
 
         stmt = (
             update(SessionModel).where(SessionModel.session_id == session_id).values(**update_data)
@@ -169,7 +173,13 @@ class SessionRepository:
         await self.db.execute(
             update(SessionModel)
             .where(SessionModel.session_id == session_id)
-            .values(messages=messages, last_active_at=datetime.now(timezone.utc))
+            .values(
+                messages=messages,
+                last_active_at=datetime.now(timezone.utc),
+                # ADR-0098 D4/D6 (FRE-860) — writing messages reactivates a
+                # previously soft-pruned session; clear the tombstone.
+                purged_at=None,
+            )
         )
         await self.db.commit()
         return await self.get(session_id)
@@ -191,6 +201,37 @@ class SessionRepository:
         )
         await self.db.commit()
         return bool(result.rowcount > 0)
+
+    async def prune_expired(self, retention_days: int) -> int:
+        """Soft-prune sessions inactive past the retention window (FRE-860 / ADR-0098 D4/D6).
+
+        Clears ``messages`` to ``[]`` and stamps ``purged_at`` for every
+        not-yet-purged session whose ``last_active_at`` is older than
+        ``retention_days``. A hard ``DELETE`` is not used: ``artifacts`` and
+        ``session_events`` both FK to ``sessions(session_id)`` with no
+        cascade. Resuming a pruned session (``append_message`` / ``update``)
+        clears ``purged_at`` again.
+
+        Args:
+            retention_days: Number of days of inactivity before pruning.
+
+        Returns:
+            Number of session rows pruned by this sweep.
+        """
+        result = cast(
+            CursorResult[Any],
+            await self.db.execute(
+                text(
+                    "UPDATE sessions "
+                    "SET messages = '[]'::jsonb, purged_at = NOW() "
+                    "WHERE purged_at IS NULL "
+                    "AND last_active_at < NOW() - make_interval(days => :days)"
+                ),
+                {"days": retention_days},
+            ),
+        )
+        await self.db.commit()
+        return int(result.rowcount)
 
     async def list_recent(self, limit: int = 50, user_id: UUID | None = None) -> list[SessionModel]:
         """List recent sessions, optionally scoped to user_id.

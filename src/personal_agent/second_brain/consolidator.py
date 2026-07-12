@@ -685,6 +685,9 @@ class SecondBrainConsolidator:
                 entity_type=entity_data.get("type", "Unknown"),
                 description=entity_data.get("description"),
                 properties=entity_data.get("properties", {}),
+                # ADR-0115 D2: the extractor's per-entity P/W class (fail-open to
+                # World, FRE-863) carried through to the Entity write.
+                knowledge_class=entity_data.get("class"),
             )
             entity_id = await self.memory_service.create_entity(
                 entity,

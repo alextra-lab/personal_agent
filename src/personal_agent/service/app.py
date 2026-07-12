@@ -650,6 +650,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 log.info("neo4j_fulltext_index_ensured")
             except Exception as ft_e:
                 log.warning("neo4j_fulltext_index_setup_failed", error=str(ft_e))
+            # Ensure Entity.class index (ADR-0115 D2 persistence seam / FRE-864).
+            # Idempotent; needed so recall can predicate on class once dispatch/ranking
+            # (FRE-728 / the ADR-0104 arm) consume it.
+            try:
+                await memory_service.ensure_entity_class_index()
+                log.info("neo4j_entity_class_index_ensured")
+            except Exception as cls_idx_e:
+                log.warning("neo4j_entity_class_index_setup_failed", error=str(cls_idx_e))
             # Bootstrap owner identity (FRE-213 / ADR-0052) — idempotent, no-op when empty
             if settings.owner_name and settings.agent_owner_email:
                 try:

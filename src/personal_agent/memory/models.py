@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -49,6 +49,10 @@ class Entity(BaseModel):
     weight: KnowledgeWeight = Field(default_factory=KnowledgeWeight)
     # FRE-229: visibility scope
     visibility: str = Visibility.PUBLIC
+    # ADR-0115 D2: subject/ownership class, written as the Neo4j property `class`
+    # (mirrors Claim.knowledge_class). None for callers outside the extraction
+    # pipeline (e.g. gateway store_fact) that never classify the fact.
+    knowledge_class: Literal["World", "Personal"] | None = None
 
 
 class Relationship(BaseModel):

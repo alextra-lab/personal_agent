@@ -1390,6 +1390,20 @@ class MemoryService:
                     set_clauses.append("e.geocoded = $geocoded")
                     params["geocoded"] = entity.geocoded
 
+                # ADR-0115 D2: first-write-wins e.class, mirroring entity_type/properties
+                # (FRE-375). Conditionally appended — a caller outside the extraction
+                # pipeline (e.g. gateway store_fact) that never classifies the fact writes
+                # no class param at all, rather than a stray null. Applied here (not only
+                # ON CREATE) because create_conversation's inline DISCUSSES-edge MERGE
+                # (below) can create this :Entity node first, without a class, before this
+                # call runs — first-write-wins still needs to land on that existing node.
+                if entity.knowledge_class is not None:
+                    set_clauses.append(
+                        "e.class = CASE WHEN e.class IS NULL OR e.class = '' "
+                        "THEN $class ELSE e.class END"
+                    )
+                    params["class"] = entity.knowledge_class
+
                 params["visibility"] = visibility
                 # ADR-0074 §I5: origination written ON CREATE SET so first-write
                 # semantics preserve the originating request even across merges.
@@ -2014,6 +2028,27 @@ class MemoryService:
             return True
         except Exception as e:
             log.error("fulltext_index_creation_failed", error=str(e), exc_info=True)
+            return False
+
+    async def ensure_entity_class_index(self) -> bool:
+        """Create the Entity.class index (ADR-0115 D2 persistence seam).
+
+        Idempotent (IF NOT EXISTS). Mirrors ensure_fulltext_index()'s pattern.
+
+        Returns:
+            True if the index exists or was created successfully.
+        """
+        if not self.connected or not self.driver:
+            return False
+        try:
+            async with self.driver.session() as session:
+                await session.run(
+                    "CREATE INDEX entity_class_index IF NOT EXISTS FOR (e:Entity) ON (e.class)"
+                )
+            log.info("entity_class_index_ensured", index_name="entity_class_index")
+            return True
+        except Exception as e:
+            log.error("entity_class_index_creation_failed", error=str(e), exc_info=True)
             return False
 
     async def bootstrap_owner_identity(

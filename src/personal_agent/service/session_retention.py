@@ -11,8 +11,9 @@ shutdown.
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
-from typing import Any
+from collections.abc import Callable
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.config.settings import get_settings
 from personal_agent.service.repositories.session_repository import SessionRepository
@@ -20,8 +21,10 @@ from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
 
+DbFactory = Callable[[], AsyncSession]
 
-async def prune_expired_sessions(db_factory: Any, retention_days: int | None = None) -> int:
+
+async def prune_expired_sessions(db_factory: DbFactory, retention_days: int | None = None) -> int:
     """Soft-prune sessions inactive past the retention window.
 
     Args:
@@ -43,12 +46,16 @@ async def prune_expired_sessions(db_factory: Any, retention_days: int | None = N
 
 
 async def run_session_retention_loop(
-    db_factory: Any,
+    db_factory: DbFactory,
     *,
     interval_seconds: float,
     retention_days: int | None = None,
 ) -> None:
     """Sweep expired sessions on a fixed cadence until cancelled.
+
+    Sweeps immediately on start, then on every subsequent tick — a service
+    that restarts more often than ``interval_seconds`` (the default is a full
+    day) would otherwise never run a single sweep.
 
     Args:
         db_factory: Callable that returns an async context manager yielding
@@ -58,19 +65,17 @@ async def run_session_retention_loop(
             ``settings.session_retention_days``.
 
     Cancellation:
-        Cancel the task at shutdown. The function suppresses
-        ``asyncio.CancelledError`` and exits cleanly.
+        Cancel the task at shutdown. ``CancelledError`` propagates after the
+        stop is logged, so the lifespan hook sees a genuinely cancelled task.
     """
     log.info("session_retention_loop_started", interval_seconds=interval_seconds)
     try:
         while True:
-            await asyncio.sleep(interval_seconds)
             try:
                 await prune_expired_sessions(db_factory, retention_days)
             except Exception as exc:  # noqa: BLE001 — log + continue is the right thing here
                 log.error("session_retention_sweep_failed", error=str(exc), exc_info=True)
+            await asyncio.sleep(interval_seconds)
     except asyncio.CancelledError:
         log.info("session_retention_loop_stopped")
-        # Re-raise so the lifespan hook sees clean cancellation
-        with suppress(asyncio.CancelledError):
-            raise
+        raise

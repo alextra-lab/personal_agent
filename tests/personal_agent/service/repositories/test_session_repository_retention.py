@@ -22,6 +22,7 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from personal_agent.service.database import AsyncSessionLocal, engine
+from personal_agent.service.models import SessionUpdate
 from personal_agent.service.repositories.session_repository import SessionRepository
 
 RETENTION_DAYS = 180
@@ -164,5 +165,40 @@ async def test_append_message_to_pruned_session_clears_tombstone() -> None:
             assert updated is not None
             assert updated.purged_at is None
             assert updated.messages == [new_message]
+        finally:
+            await _cleanup(db, user_id, [session_id])
+
+
+@pytest.mark.asyncio
+async def test_update_non_messages_field_on_pruned_session_clears_tombstone() -> None:
+    """A non-messages update() (e.g. mode) on a purged session also clears purged_at.
+
+    Regression guard: last_active_at is bumped unconditionally by update(), so
+    if purged_at were only cleared for a messages write, a mode/channel/
+    execution_profile update would make a purged session look freshly active
+    (last_active_at = now) while staying permanently excluded from future
+    retention re-evaluation (purged_at IS NULL is the scan/prune guard) with
+    messages stuck at '[]' forever.
+    """
+    if not _postgres_available():
+        pytest.skip("Test Postgres (port 5433) not reachable — run make test-infra-up")
+
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as db:
+        user_id = await _seed_user(db)
+        session_id = await _seed_session(db, user_id, last_active_at=now - timedelta(days=200))
+        try:
+            repo = SessionRepository(db)
+            assert await repo.prune_expired(retention_days=RETENTION_DAYS) >= 1
+
+            pruned = await repo.get(session_id)
+            assert pruned is not None
+            assert pruned.purged_at is not None
+
+            updated = await repo.update(session_id, SessionUpdate(mode="FOCUS"))
+
+            assert updated is not None
+            assert updated.mode == "FOCUS"
+            assert updated.purged_at is None
         finally:
             await _cleanup(db, user_id, [session_id])

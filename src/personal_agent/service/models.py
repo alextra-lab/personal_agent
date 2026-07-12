@@ -118,6 +118,10 @@ class SessionResponse(BaseModel):
     primary_model_at_creation: str | None = None
     model_config_path: str | None = None
     execution_profile: str = "local"
+    # ADR-0098 D4/D6 (FRE-860) — retention soft-prune tombstone. Non-null
+    # means messages were cleared by the retention sweep; without this a
+    # purged session is indistinguishable from a genuinely empty/new one.
+    purged_at: datetime | None = None
 
     class Config:  # noqa: D106
         """Pydantic configuration."""

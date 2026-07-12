@@ -117,10 +117,14 @@ class SessionRepository:
         if "metadata" in update_data:
             update_data["metadata_"] = update_data.pop("metadata")
         update_data["last_active_at"] = datetime.now(timezone.utc)
-        if "messages" in update_data:
-            # ADR-0098 D4/D6 (FRE-860) — writing messages reactivates a
-            # previously soft-pruned session; clear the tombstone.
-            update_data["purged_at"] = None
+        # ADR-0098 D4/D6 (FRE-860) — any write reactivates a previously
+        # soft-pruned session; clear the tombstone unconditionally (not just
+        # for a messages write) since last_active_at is bumped unconditionally
+        # too. Otherwise a non-messages field update (e.g. execution_profile)
+        # on a purged session would look freshly active while permanently
+        # excluded from future retention re-evaluation (purged_at IS NULL is
+        # the scan/prune guard) with messages stuck at '[]'.
+        update_data["purged_at"] = None
 
         stmt = (
             update(SessionModel).where(SessionModel.session_id == session_id).values(**update_data)

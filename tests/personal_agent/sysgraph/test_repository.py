@@ -375,6 +375,41 @@ async def test_record_maintenance_run_inserts_a_queryable_stat_row(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_record_finding_inserts_a_queryable_stat_row(
+    sysgraph_repo: SysgraphRepository, sysgraph_pool: asyncpg.Pool
+) -> None:
+    """FRE-728/ADR-0115 D3: a dispatched `finding` item lands as a queryable stat row."""
+    try:
+        await sysgraph_repo.record_finding(
+            entity_name="Postgres",
+            entity_type="TechnicalArtifact",
+            description="no connection pooling -- reaper exhausts connections",
+            trace_id="fre728-trace-1",
+            session_id="fre728-session-1",
+        )
+
+        async with sysgraph_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value, metadata FROM sysgraph.stat "
+                "WHERE name = 'dispatch_finding_observed' ORDER BY observed_at DESC LIMIT 1"
+            )
+        assert row is not None
+        assert row["value"] == 1.0
+        metadata = json.loads(row["metadata"])
+        assert metadata["entity_name"] == "Postgres"
+        assert metadata["entity_type"] == "TechnicalArtifact"
+        assert metadata["trace_id"] == "fre728-trace-1"
+        assert metadata["session_id"] == "fre728-session-1"
+    finally:
+        async with sysgraph_pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM sysgraph.stat WHERE name = 'dispatch_finding_observed' "
+                "AND metadata->>'trace_id' = 'fre728-trace-1'"
+            )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_connect_closes_the_pool_on_any_role_check_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

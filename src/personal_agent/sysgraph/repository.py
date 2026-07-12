@@ -264,6 +264,15 @@ INSERT INTO sysgraph.stat (name, value, metadata)
 VALUES ('sysgraph_maintenance_run', $1, $2::jsonb);
 """
 
+# ADR-0115 D3: the write-time dispatch home for an `output_kind=finding` item. A
+# generic, unconstrained `sysgraph.stat` row -- distinct from the richer, dedup-aware
+# `owner_diagnostic` Proposal + ticket-linkage pipeline (a separate ticket, FRE-729),
+# which may later cite this row as evidence via `sysgraph.derives_from`.
+_INSERT_FINDING_STAT = """
+INSERT INTO sysgraph.stat (name, value, metadata)
+VALUES ('dispatch_finding_observed', 1.0, $1::jsonb);
+"""
+
 
 class SysgraphRepository:
     """The only code path permitted to open a connection to the sysgraph schema.
@@ -740,3 +749,46 @@ class SysgraphRepository:
         metadata = json.dumps({"results": results, "table_count": len(results)})
         async with self.pool.acquire() as conn:
             await conn.execute(_INSERT_MAINTENANCE_STAT, float(successful), metadata)
+
+    async def record_finding(
+        self,
+        *,
+        entity_name: str,
+        entity_type: str,
+        description: str | None,
+        trace_id: str | None,
+        session_id: str | None,
+    ) -> None:
+        """Record a write-time-dispatched ``finding`` item (ADR-0115 D1/D3).
+
+        The minimal, always-available home for a per-item ``output_kind=finding``
+        entity: an append-only ``sysgraph.stat`` observation. Establishes the
+        isolation-by-construction invariant (the item never reaches Core and is
+        durably queryable in ``sysgraph``, not dropped) without pre-building the
+        richer, dedup-aware ``owner_diagnostic`` Proposal + ticket-linkage
+        pipeline (a separate ticket).
+
+        Args:
+            entity_name: The extracted entity's name.
+            entity_type: The extracted entity's type.
+            description: The extracted entity's description, if any.
+            trace_id: Originating capture's trace_id, for correlation.
+            session_id: Originating capture's session_id, for correlation.
+        """
+        assert self.pool is not None, "call connect() first"
+        metadata = json.dumps(
+            {
+                "entity_name": entity_name,
+                "entity_type": entity_type,
+                "description": description,
+                "trace_id": trace_id,
+                "session_id": session_id,
+            }
+        )
+        async with self.pool.acquire() as conn:
+            await conn.execute(_INSERT_FINDING_STAT, metadata)
+        log.info(
+            "sysgraph_finding_dispatched",
+            entity_name=entity_name,
+            trace_id=trace_id,
+        )

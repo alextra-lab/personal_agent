@@ -109,3 +109,25 @@
   no bigger box / no 2nd box / no GPU tier. ADR-0111 → Superseded; #404 GPU addendum closed moot. Infra
   tickets FRE-810–815 need reconciliation. Linear keys rotated to `pass`. FRE-620 KGQ quality-monitor fix
   deployed (false daily high-sev anomaly killed).
+
+---
+
+## 2026-07-12 — ADR-0115 knowledge-class axis shipped + proven live; FRE-858 triage (moved from MASTER_PLAN)
+
+**ADR-0115 (knowledge-class axis) — Accepted → Implemented + deployed live in one arc** (from the
+cc-explore memory-ADR drift audit). Chain: FRE-863 emission (two-axis output_kind + World/Personal
+class; Stance is a HAS_STANCE edge, not an entity class) → FRE-864 persistence (Literal-typed
+Entity.class + index) → FRE-728 dispatch (isolation by absence-of-write; System → sysgraph.stat) →
+FRE-865 backfill + FRE-868 eviction (test-substrate scripts; prod runs pending). Deployed SHA
+`c51a7486` (migration 0019 as admin role + gateway rebuild); proven live on a sanctioned owner turn
+(trace `2564b7c5`): 5 World entities classed vs 0/7992 pre-deploy, 4 System findings → sysgraph, 0
+leaked. Supersedes ADR-0106 + ADR-0098-§D1; refines ADR-0097. Also shipped: FRE-860 session retention
+(180d soft-prune), FRE-869 cost-attribution fix (entity_extraction was billing main_inference),
+PR #492 build-seat test-DB permission allowlist. Residual for the ADR-0114 de-confound of the EXISTING
+corpus = the FRE-865 + FRE-868 prod ops-runs (owner-gated).
+
+**FRE-858 Memory-Recall triage — EXECUTED (2026-07-11).** Owner's 2 strategic calls: ADR-0098 impl
+shelved (FRE-639/642 canceled, 640/641/713 parked); ADR-0106 W2 kept (dispatch after ADR-0114).
+Verify-6 dispositioned (FRE-776 canceled; 633/764/605/761 parked). ~4 cancels + ~13 parks total.
+FRE-768 shipped from the keep-set. The verified keep-bugs (632/733/751/762/760/805/850) remain parked
+Approved-unlabeled — still tracked in MASTER_PLAN.

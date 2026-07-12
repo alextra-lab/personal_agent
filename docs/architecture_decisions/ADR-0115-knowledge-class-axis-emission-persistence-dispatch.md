@@ -73,7 +73,10 @@ single owner.
 - **`output_kind ∈ {knowledge, ephemeral, finding}`** — the *nature / routing* decision: is this
   durable user knowledge, transient noise, or a system self-observation?
 - **`class ∈ {Personal, World, Stance}`** — the *subject / ownership* decision, meaningful **only**
-  for `output_kind = knowledge` items.
+  for `output_kind = knowledge` items. **On the Entity node the class is `{World, Personal}` only** —
+  a Stance is not an entity; it is the owner↔World `HAS_STANCE` edge (ADR-0098 §D2), emitted as a
+  separate stance item carrying `class = Stance` on the edge. So `{Personal, World, Stance}` is the
+  *overall* vocabulary; the *Entity* enum is `{World, Personal}`.
 - **`System` ceases to be a class value.** "System-ness" is expressed as
   `output_kind ∈ {ephemeral, finding}`. Nothing that reaches Core carries `class = System`. Harness-
   as-studied-*subject* durable content is `class = World` with an owner Stance edge (per ADR-0106),
@@ -81,8 +84,10 @@ single owner.
 
 ### D2 — Persistence seam (the gap this ADR closes)
 
-For `output_kind = knowledge` items, the P/W/S `class` is **written onto the Entity node**, bringing
-Entities to parity with the Claim/Stance substrate that already persists it:
+For `output_kind = knowledge` items, the entity `class ∈ {World, Personal}` is **written onto the
+Entity node**, bringing Entities to parity with the Claim/Stance substrate that already persists it
+(Stance itself lives on the `HAS_STANCE` edge, not the Entity — the FRE-863 emission contract restricts
+the Entity enum to `{World, Personal}`):
 
 - add a `class` field to the `Entity` model (`models.py`),
 - carry `entity_data["class"]` through the consolidator's `Entity(...)` construction
@@ -118,7 +123,8 @@ This ADR supersedes only the class-axis *decisions*, leaving unrelated ones auth
 - **ADR-0098 §D1** (class-as-stored-property) and its **query-time System filter** — superseded.
 - **ADR-0098 §D2/§D4/§D7** (Claims/bitemporal, class-aware lifecycle, world correlation) —
   **preserved, still Accepted.** Wholesale-superseding 0098 would reopen settled decisions.
-- **ADR-0097** — refined: the class vocabulary is now `{Personal, World, Stance}` only.
+- **ADR-0097** — refined: the class vocabulary is `{Personal, World, Stance}` only, of which the
+  **Entity** node carries `{World, Personal}` (Stance persists on the `HAS_STANCE` edge).
 
 ### D6 — Read-side invariant, and the scope boundary on ranking
 

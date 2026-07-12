@@ -22,12 +22,22 @@ CREATE TABLE IF NOT EXISTS sessions (
     model_config_path VARCHAR(255),
     -- Server-authoritative execution profile (ADR-0079 / FRE-416). Explicit
     -- stored value; never a silent request-time fallback.
-    execution_profile VARCHAR(50) NOT NULL DEFAULT 'local'
+    execution_profile VARCHAR(50) NOT NULL DEFAULT 'local',
+    -- Retention soft-prune tombstone (FRE-860 / ADR-0098 D4/D6). NULL = not
+    -- yet purged. Set (and messages cleared to '[]') by the scheduled
+    -- retention sweep once a session is inactive past the retention window;
+    -- cleared back to NULL if the session is resumed (SessionRepository
+    -- append_message / update). Mirrors
+    -- docker/postgres/migrations/0019_sessions_purged_at.sql.
+    purged_at TIMESTAMPTZ NULL
 );
 
 CREATE INDEX idx_sessions_last_active ON sessions(last_active_at DESC);
 -- ix_ name matches the prod/SQLAlchemy index so migration 0011 is a no-op there.
 CREATE INDEX IF NOT EXISTS ix_sessions_user_id ON sessions(user_id);
+-- Retention sweep scan index (FRE-860): only not-yet-purged rows.
+CREATE INDEX IF NOT EXISTS idx_sessions_retention_scan
+    ON sessions(last_active_at) WHERE purged_at IS NULL;
 
 -- Metrics table (time-series style)
 CREATE TABLE IF NOT EXISTS metrics (

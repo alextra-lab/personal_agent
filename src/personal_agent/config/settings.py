@@ -1446,6 +1446,21 @@ class AppConfig(BaseSettings):
         description="Enable automated retention, archive, and purge",
     )
 
+    # Session-store retention (FRE-860 / ADR-0098 D4/D6)
+    session_retention_days: int = Field(
+        default=180,
+        ge=1,
+        description=(
+            "Days of session inactivity (last_active_at) before a session is "
+            "soft-pruned: messages cleared to '[]' and purged_at stamped."
+        ),
+    )
+    session_retention_sweep_interval_seconds: int = Field(
+        default=86400,
+        ge=60,
+        description="Seconds between session-retention prune sweeps (default: daily)",
+    )
+
     # Consolidator retry cap (FRE-380, Stage 1 of Turn/extraction decoupling)
     consolidator_max_extraction_attempts: int = Field(
         default=5,

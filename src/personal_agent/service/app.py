@@ -1174,6 +1174,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     upload_expiry_task = asyncio.create_task(_upload_expiry_loop())
 
+    # Session-store retention sweep (FRE-860 / ADR-0098 D4/D6)
+    from personal_agent.service.session_retention import (  # noqa: PLC0415
+        run_session_retention_loop,
+    )
+
+    session_retention_task = asyncio.create_task(
+        run_session_retention_loop(
+            AsyncSessionLocal,
+            interval_seconds=settings.session_retention_sweep_interval_seconds,
+        )
+    )
+
     yield
 
     # Shutdown
@@ -1181,6 +1193,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ws_cleanup_task.cancel()
     dedup_cleanup_task.cancel()
     upload_expiry_task.cancel()
+    session_retention_task.cancel()
 
     # Stop event bus consumers first (before scheduler)
     if consumer_runner is not None:

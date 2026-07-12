@@ -465,11 +465,11 @@ def _build_llm_batch_classifier() -> tuple[BatchClassifier, str]:
         A ``(batch_classifier, model_id)`` pair.
     """
     from personal_agent.llm_client import ModelRole
-    from personal_agent.llm_client.factory import get_llm_client
+    from personal_agent.llm_client.factory import get_llm_client_for_key
     from personal_agent.telemetry.trace import SystemTraceContext
 
     role = resolve_role_model_key("entity_extraction")
-    client = get_llm_client(role_name=role)
+    client = get_llm_client_for_key(role, budget_role="entity_extraction")
 
     async def classify(nodes: Sequence[ConceptNode]) -> BatchClassifyResult:
         prompt = _build_batch_prompt(nodes)

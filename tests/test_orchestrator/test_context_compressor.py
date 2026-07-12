@@ -102,9 +102,9 @@ class TestCompressTurns:
         mock_client.respond.return_value = mock_response
 
         with patch(
-            "personal_agent.orchestrator.context_compressor.get_llm_client",
+            "personal_agent.orchestrator.context_compressor.get_llm_client_for_key",
             return_value=mock_client,
-        ):
+        ) as mock_get_client:
             result = await compress_turns(
                 [_msg("user", "Use PostgreSQL"), _msg("assistant", "OK")],
                 trace_id="test-trace",
@@ -112,6 +112,11 @@ class TestCompressTurns:
 
         assert "Conversation Summary" in result
         assert "PostgreSQL" in result
+        # FRE-869: compressor_role is a resolved model key, not a factory role name —
+        # get_llm_client_for_key takes budget_role explicitly (main_inference) rather
+        # than relying on get_llm_client's budget_role_for(role_name) lookup, which
+        # cannot map a resolved model key back to its budget lane.
+        assert mock_get_client.call_args.kwargs["budget_role"] == "main_inference"
 
     @pytest.mark.asyncio
     async def test_returns_fallback_on_empty_response(self) -> None:
@@ -128,7 +133,7 @@ class TestCompressTurns:
         mock_client.respond.return_value = mock_response
 
         with patch(
-            "personal_agent.orchestrator.context_compressor.get_llm_client",
+            "personal_agent.orchestrator.context_compressor.get_llm_client_for_key",
             return_value=mock_client,
         ):
             result = await compress_turns(
@@ -146,7 +151,7 @@ class TestCompressTurns:
         mock_client.respond.side_effect = LLMClientError("timeout")
 
         with patch(
-            "personal_agent.orchestrator.context_compressor.get_llm_client",
+            "personal_agent.orchestrator.context_compressor.get_llm_client_for_key",
             return_value=mock_client,
         ):
             result = await compress_turns(
@@ -162,7 +167,7 @@ class TestCompressTurns:
         mock_client.respond.side_effect = RuntimeError("unexpected")
 
         with patch(
-            "personal_agent.orchestrator.context_compressor.get_llm_client",
+            "personal_agent.orchestrator.context_compressor.get_llm_client_for_key",
             return_value=mock_client,
         ):
             result = await compress_turns(

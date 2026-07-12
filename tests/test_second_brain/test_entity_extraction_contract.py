@@ -522,7 +522,7 @@ class TestCloudPathTemperature:
     """FRE-758: the cloud extraction call must forward model_def.temperature.
 
     Unlike the local-path tests above, this exercises the ``provider is not None``
-    branch (entity_extraction.py) by mocking ``get_llm_client`` — proves the
+    branch (entity_extraction.py) by mocking ``get_llm_client_for_key`` — proves the
     configured temperature (near-0, pinned per FRE-758) actually reaches
     ``LiteLLMClient.respond`` instead of silently defaulting to the OpenAI
     provider default (~1.0), which was the FRE-630-observed non-determinism.
@@ -541,7 +541,7 @@ class TestCloudPathTemperature:
                 "personal_agent.second_brain.entity_extraction.resolve_role_model_key",
                 return_value="gpt-5.4-mini",
             ),
-            patch("personal_agent.llm_client.factory.get_llm_client") as mock_get_client,
+            patch("personal_agent.llm_client.factory.get_llm_client_for_key") as mock_get_client,
         ):
             mock_cfg.return_value.models = {"gpt-5.4-mini": mock_model_def}
             mock_client = mock_get_client.return_value
@@ -554,6 +554,11 @@ class TestCloudPathTemperature:
             await extract_entities_and_relationships(_OPERATIONAL_USER_MSG, "assistant reply")
 
             assert mock_client.respond.call_args.kwargs["temperature"] == 0.0
+            # FRE-869: entity_extraction_role is a resolved model key, not a factory
+            # role name — get_llm_client_for_key takes budget_role explicitly so spend
+            # lands in the entity_extraction budget lane rather than being silently
+            # mis-billed to main_inference.
+            mock_get_client.assert_called_once_with("gpt-5.4-mini", budget_role="entity_extraction")
 
 
 class TestFewshotExemplarFlag:
@@ -663,7 +668,7 @@ class TestModelOverrideAndCallStats:
                 "personal_agent.second_brain.entity_extraction.resolve_role_model_key",
                 return_value="gpt-5.4-mini",
             ),
-            patch("personal_agent.llm_client.factory.get_llm_client") as mock_get_client,
+            patch("personal_agent.llm_client.factory.get_llm_client_for_key") as mock_get_client,
         ):
             mock_cfg.return_value.models = {"gpt-5.4-mini": model_def}
             mock_client = mock_get_client.return_value

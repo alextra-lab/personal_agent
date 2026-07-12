@@ -147,9 +147,9 @@ async def generate_session_summary(
 
     try:
         if provider is not None:
-            from personal_agent.llm_client.factory import get_llm_client
+            from personal_agent.llm_client.factory import get_llm_client_for_key
 
-            cloud_client = get_llm_client(role_name=role_name)
+            cloud_client = get_llm_client_for_key(role_name, budget_role="captains_log")
             response: dict[str, Any] = await cloud_client.respond(
                 role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": prompt}],

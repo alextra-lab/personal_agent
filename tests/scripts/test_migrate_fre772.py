@@ -14,6 +14,7 @@ import argparse
 import sys
 from collections import Counter
 from collections.abc import Sequence
+from unittest.mock import patch
 
 import pytest
 from scripts.migrate_fre772_entity_type_v2 import (
@@ -23,6 +24,7 @@ from scripts.migrate_fre772_entity_type_v2 import (
     ConceptNode,
     MigrationReport,
     _build_batch_prompt,
+    _build_llm_batch_classifier,
     _map_speaks_v2,
     _parse_args,
     _parse_batch_classification,
@@ -376,6 +378,25 @@ async def test_rollback_restores_types_and_strips_markers(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 # FRE-801 Part 1/2 — batching, cache-stable prefix, metrics (AC1, AC2)
 # ---------------------------------------------------------------------------
+
+
+def test_build_llm_batch_classifier_bills_entity_extraction_budget_role() -> None:
+    """FRE-869: role is a resolved model key, not a factory role name —
+    get_llm_client_for_key must be used (not get_llm_client) with an explicit
+    budget_role="entity_extraction" so spend lands in that budget lane instead
+    of being silently mis-billed to main_inference.
+    """
+    with (
+        patch(
+            "scripts.migrate_fre772_entity_type_v2.resolve_role_model_key",
+            return_value="gpt-5.4-mini",
+        ),
+        patch("personal_agent.llm_client.factory.get_llm_client_for_key") as mock_get_client,
+    ):
+        _classify, role = _build_llm_batch_classifier()
+
+        assert role == "gpt-5.4-mini"
+        mock_get_client.assert_called_once_with("gpt-5.4-mini", budget_role="entity_extraction")
 
 
 def test_batch_prompt_prefix_is_stable() -> None:

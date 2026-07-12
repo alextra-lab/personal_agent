@@ -20,7 +20,7 @@ import time
 from typing import Any
 
 from personal_agent.config import ModelRoleError, resolve_role_model_key
-from personal_agent.llm_client.factory import get_llm_client
+from personal_agent.llm_client.factory import get_llm_client_for_key
 from personal_agent.llm_client.types import LLMClientError, ModelRole
 from personal_agent.orchestrator.context_window import estimate_message_tokens
 from personal_agent.telemetry import get_logger
@@ -173,7 +173,7 @@ async def compress_turns(
             if trace_id
             else SystemTraceContext.new("context_compressor", session_id=session_id)
         )
-        client = get_llm_client(role_name=compressor_role)
+        client = get_llm_client_for_key(compressor_role, budget_role="main_inference")
         response = await client.respond(
             role=ModelRole.COMPRESSOR,
             messages=[

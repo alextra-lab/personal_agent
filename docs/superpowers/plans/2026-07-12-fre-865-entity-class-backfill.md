@@ -6,8 +6,13 @@
 **Depends on (merged):** FRE-863 (two-axis emission contract), FRE-864 (Entity class persistence
 write — `create_entity`, `entity.knowledge_class`, `ensure_entity_class_index`)
 **Explicitly NOT in scope:** running this against prod Neo4j (post-deploy ops action, batched with
-the ADR-0115 seam deploy); the `output_kind` write-time dispatch consumer (FRE-728, separate
-ticket) — this script does not move entities between stores, it only marks System-natured ones.
+the ADR-0115 seam deploy). **FRE-728 merged during this build** (D3 write-time dispatch —
+`consolidator.py` routes each NEW extraction's entities/relationships by `output_kind` before any
+Core write: `ephemeral` → no write, `finding` → a `sysgraph.stat` row, never Core). Confirmed by
+reading its diff: FRE-728 is entirely a write-time gate on new consolidation — it has no sweep over
+already-existing Core nodes. So it does **not** consume this backfill's
+`class_backfill_output_kind` marker on pre-existing entities; a genuinely separate, not-yet-filed
+follow-up ticket owns actually moving/deleting the entities this backfill marks.
 
 ## Scope (from ticket + ADR)
 
@@ -16,9 +21,10 @@ ticket) — this script does not move entities between stores, it only marks Sys
 - Sets `class` to `World` or `Personal` for knowledge-natured entities; fails open to `World` on
   classifier uncertainty (never drops a candidate — mirrors FRE-637/D4).
 - System-natured entities are **routed out via `output_kind`, not classed** — i.e. never given a
-  `World`/`Personal` value; marked instead so a future cleanup (the FRE-728 dispatch project or a
-  follow-up ticket) can find and act on them. `output_kind` is not persisted anywhere on `:Entity`
-  today (grepped — zero hits), so this ticket introduces the marker property that records it.
+  `World`/`Personal` value; marked instead so a genuinely separate follow-up ticket (FRE-728 turned
+  out to be write-time-only, per the note above — it doesn't own this) can find and act on them.
+  `output_kind` is not persisted anywhere on `:Entity` today (grepped — zero hits), so this ticket
+  introduces the marker property that records it.
 - Reports before/after counts: how many moved no-class → World, no-class → Personal, and how many
   were routed out as System-natured (ephemeral/finding).
 - Proven on the **test substrate only** (Neo4j :7688) with a fixture corpus — no prod runs, no real
@@ -77,14 +83,16 @@ what changed and why.**
    - `class_backfill_fail_open` — `true` on nodes where the classifier response was unusable and the
      D4 default was applied (subset of classified nodes).
 6. **"Marked for later dispatch," not "routed out"** (renamed after review — the ADR's D3 invariant
-   is *physical absence from Core*, which this ticket cannot deliver since the mover, FRE-728, is a
-   separate unbuilt ticket). This backfill only **identifies** System-natured existing entities via
-   `class_backfill_output_kind` so a future pass (FRE-728's consumer, or a dedicated follow-up) can
-   act on them. **This ticket does NOT satisfy ADR-0115 AC-5 on its own** — AC-5 is the
-   assembled-seam criterion (persistence + dispatch + consolidation together) that master asserts at
-   the integration gate across FRE-863/864/728/865, not a per-ticket claim. The PR/ticket comment
-   must state this explicitly: marked nodes still have `class IS NULL` and still physically reside
-   in Core after this ticket ships.
+   is *physical absence from Core*, which this ticket cannot deliver). FRE-728 (D3, merged during
+   this build) turned out to be write-time-only — it gates NEW extractions before they reach Core,
+   with no sweep over already-existing nodes — so it does not consume this backfill's marker either.
+   This backfill only **identifies** System-natured existing entities via
+   `class_backfill_output_kind` so a genuinely separate, not-yet-filed follow-up ticket can act on
+   them. **This ticket does NOT satisfy ADR-0115 AC-5 on its own** — AC-5 is the assembled-seam
+   criterion (persistence + dispatch + consolidation together) that master asserts at the
+   integration gate across FRE-863/864/728/865, not a per-ticket claim. The PR/ticket comment must
+   state this explicitly: marked nodes still have `class IS NULL` and still physically reside in
+   Core after this ticket ships, and no existing consumer reads `class_backfill_output_kind` yet.
 7. **Rollback is run-id-based, not snapshot-file-based** (simpler than FRE-772's file snapshot):
    since every touched node started from `class IS NULL`, rollback = `REMOVE
    e.class, e.class_backfill_*` `WHERE e.class_backfill_run_id = $run_id`. **Concurrency limitation,
@@ -281,9 +289,10 @@ affected call sites.
 
 - Running against prod Neo4j (cloud-sim-*) — post-deploy ops action, gated behind the ADR-0115 seam
   deploy, master-authorized.
-- Building the `output_kind` write-time dispatch consumer that actually *moves* routed-out entities
-  out of Core (FRE-728) — this script only *marks* them; physically relocating/deleting them is
-  follow-up work once dispatch exists.
+- Building a consumer that actually *moves*/deletes the marked (System-natured) entities out of
+  Core — this script only *marks* them via `class_backfill_output_kind`. FRE-728 (merged during
+  this build) does not own this either, since it only gates new writes, not existing nodes; a
+  separate, not-yet-filed follow-up ticket owns physically relocating/deleting them.
 - Any change to `entity_extraction.py`, `consolidator.py`, or `create_entity` — those are FRE-863/
-  864's completed seam; this ticket only reads existing Entity nodes and writes the backfill-specific
-  properties.
+  864/728's completed seam; this ticket only reads existing Entity nodes and writes the
+  backfill-specific properties.

@@ -18,6 +18,17 @@ import crypto from 'node:crypto'
 export const LOCALHOST = '127.0.0.1'
 
 /**
+ * Max buffered request body size in bytes (FRE-872, ADR-0116 hardening).
+ *
+ * Comfortably above the structured JSON payload the gateway ever sends (a
+ * handful of checks x a few hundred bytes each) — this caps how much an
+ * authorized-but-hostile sender can force the process to buffer before the
+ * gate rejects it, on a system the ADR itself names as prompt-injection
+ * adjacent.
+ */
+export const MAX_BODY_BYTES = 64 * 1024
+
+/**
  * Read and validate the channel config from an environment mapping.
  *
  * Fails closed: a missing/invalid port or an absent secret throws rather than
@@ -74,6 +85,21 @@ export function secretMatches(provided, expected) {
  */
 export function createServer({ secret, onEvent }) {
   return http.createServer((req, res) => {
+    // Reject a malformed request shape before evaluating the secret at all
+    // (cheap, unauthenticated rejection — no reason to even buffer or compare
+    // a request that could never be a valid delivery).
+    if (req.method !== 'POST') {
+      res.writeHead(405)
+      res.end('method not allowed')
+      req.resume()
+      return
+    }
+    if ((req.url ?? '/') !== '/') {
+      res.writeHead(404)
+      res.end('not found')
+      req.resume()
+      return
+    }
     // Gate on the X-Sender header, which is available before the body — an
     // unauthorized request is rejected without buffering any of its payload.
     const header = req.headers['x-sender']
@@ -85,10 +111,22 @@ export function createServer({ secret, onEvent }) {
       return
     }
     let body = ''
+    let bytes = 0
+    let oversized = false
     req.on('data', (chunk) => {
+      if (oversized) return
+      bytes += chunk.length
+      if (bytes > MAX_BODY_BYTES) {
+        oversized = true
+        res.writeHead(413)
+        res.end('payload too large')
+        req.destroy() // stop buffering an authorized-but-hostile oversized body
+        return
+      }
       body += chunk
     })
     req.on('end', () => {
+      if (oversized) return
       Promise.resolve(onEvent(body, { path: req.url ?? '/', method: req.method ?? 'POST' }))
         .then(() => {
           res.writeHead(200)

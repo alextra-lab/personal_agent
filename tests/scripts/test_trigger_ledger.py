@@ -14,6 +14,7 @@ Also covers the FRE-832 CLI read surface `prime-master` shells out to
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 from typing import Literal
@@ -27,6 +28,7 @@ from scripts.dispatch.trigger_ledger import (
     mark_send_started,
     mark_sent,
     mark_surfaced,
+    mark_transport,
     prune_ledger,
     reconcile,
     record_pending,
@@ -132,6 +134,78 @@ def test_record_pending_allows_new_immediately_after_abandoned_consume() -> None
     ledger = mark_consumed(ledger, "master:412:abc123", 100.0)  # abandoned, sent_at=None
     ledger2, outcome = _record(ledger, now=101.0, ttl_s=600.0)
     assert outcome == "new"
+
+
+# --- transport (FRE-872, ADR-0116): default send_keys, flipped only on confirmed
+# channel delivery -- never written optimistically, never "corrected" on fallback.
+# See docs/superpowers/plans/2026-07-13-fre-872-channel-delivery-end-to-end.md.
+
+
+def test_record_pending_new_entry_defaults_transport_send_keys() -> None:
+    ledger, _ = _record({})
+    assert ledger["master:412:abc123"].transport == "send_keys"
+
+
+def test_mark_transport_flips_to_channel_and_only_that_field() -> None:
+    ledger, _ = _record({}, now=100.0)
+    before = ledger["master:412:abc123"]
+    after_ledger = mark_transport(ledger, "master:412:abc123", "channel")
+    after = after_ledger["master:412:abc123"]
+    assert after.transport == "channel"
+    # every other field is untouched
+    assert dataclasses.replace(after, transport=before.transport) == before
+
+
+def test_load_ledger_missing_transport_key_defaults_send_keys(tmp_path: Path) -> None:
+    path = tmp_path / "trigger_ledger.json"
+    path.write_text(
+        json.dumps(
+            {
+                "master:412:abc123": {
+                    "event_id": "master:412:abc123",
+                    "source": "master-ready",
+                    "target_pane": "cc-master",
+                    "ticket": "412",
+                    "command": "/master 412",
+                    "preconditions": {},
+                    "created_at": 100.0,
+                }
+            }
+        )
+    )
+    reloaded = load_ledger(path, _NullLogger())
+    assert reloaded["master:412:abc123"].transport == "send_keys"
+
+
+def test_load_ledger_garbage_transport_value_defaults_send_keys(tmp_path: Path) -> None:
+    path = tmp_path / "trigger_ledger.json"
+    path.write_text(
+        json.dumps(
+            {
+                "master:412:abc123": {
+                    "event_id": "master:412:abc123",
+                    "source": "master-ready",
+                    "target_pane": "cc-master",
+                    "ticket": "412",
+                    "command": "/master 412",
+                    "preconditions": {},
+                    "created_at": 100.0,
+                    "transport": "carrier-pigeon",
+                }
+            }
+        )
+    )
+    reloaded = load_ledger(path, _NullLogger())
+    assert reloaded["master:412:abc123"].transport == "send_keys"
+
+
+def test_save_load_round_trip_preserves_channel_transport(tmp_path: Path) -> None:
+    ledger, _ = _record({}, now=100.0)
+    ledger = mark_transport(ledger, "master:412:abc123", "channel")
+    path = tmp_path / "trigger_ledger.json"
+    save_ledger(path, ledger)
+    reloaded = load_ledger(path, _NullLogger())
+    assert reloaded["master:412:abc123"].transport == "channel"
 
 
 # --- reconcile: AC-4 crash scenarios ------------------------------------------

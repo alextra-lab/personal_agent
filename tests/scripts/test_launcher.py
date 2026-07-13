@@ -27,6 +27,7 @@ from scripts.dispatch.launcher import (
     main,
     plan_launch,
     session_id_for,
+    stream_for_tmux_session,
     topology_for,
 )
 
@@ -63,6 +64,25 @@ def test_topology_maps_each_stream() -> None:
     assert topology_for("build1").skill_command == "/build"
     assert topology_for("build2").tmux_session == "cc-build2"
     assert topology_for("adr").skill_command == "/adr"
+
+
+def test_topology_mode_defaults_send_keys_for_every_stream() -> None:
+    # FRE-872: this ticket ships no live cutover -- every real seat's per-seat
+    # mode flag must stay at the pre-channel-mode default. A future accidental
+    # flip here would silently change live dispatch behavior.
+    for stream in ("build1", "build2", "adr"):
+        assert topology_for(stream).mode == "send_keys"
+
+
+def test_stream_for_tmux_session_resolves_known_sessions() -> None:
+    assert stream_for_tmux_session("cc-build") == "build1"
+    assert stream_for_tmux_session("cc-build2") == "build2"
+    assert stream_for_tmux_session("cc-adrs") == "adr"
+
+
+def test_stream_for_tmux_session_unknown_returns_none() -> None:
+    assert stream_for_tmux_session("cc-master") is None
+    assert stream_for_tmux_session("nope") is None
 
 
 def test_seed_carries_resolved_ticket() -> None:

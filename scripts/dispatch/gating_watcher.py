@@ -55,6 +55,22 @@ live state and remain authoritative.
 — its presence halts all actuation. The watcher pokes local tmux, so it does not
 depend on Remote-Control reachability.
 
+**Channel-mode delivery (FRE-872, ADR-0116).** A worker trigger's target seat may
+be cut over to channel-mode delivery via its per-seat ``StreamTopology.mode``
+flag — the watcher then POSTs a structured PR-state payload
+(``build_channel_payload``) to the seat's ``seshat-dispatch`` channel instead of
+``tmux send-keys``, and the send-keys/idle-scrape path is skipped entirely for
+that delivery. A failed or unconfigured channel delivery falls back to send-keys
+for that event within the same tick. No seat is cut over by this module today —
+every ``StreamTopology`` defaults to ``send_keys`` mode (the actual per-seat
+cutover is a separate, ask-first deploy). A dependabot-authored PR is never a
+**worker** candidate (``classify_pr``'s boundary guard) — the gateway
+structurally cannot hand any seat an instruction whose natural completion is
+pushing to a branch it does not own. It can still be a **master-ready**
+candidate: that path is a pure notification (master's own gate re-reads live
+state and decides), so a CI-green, mergeable dependabot PR still surfaces to
+master exactly like any other PR.
+
 Callable by hand::
 
     python -m scripts.dispatch.gating_watcher --once            # one dry-run tick, prints decisions
@@ -76,13 +92,18 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import ContextManager, Literal, Protocol
 
 import structlog
 
 from scripts.dispatch import context_probe, trigger_ledger
-from scripts.dispatch.launcher import CommandRunner, subprocess_runner, topology_for
-from scripts.reconcile_board import load_linear_key
+from scripts.dispatch.launcher import (
+    CommandRunner,
+    stream_for_tmux_session,
+    subprocess_runner,
+    topology_for,
+)
+from scripts.reconcile_board import _git_toplevel, load_linear_key
 
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 
@@ -96,6 +117,9 @@ _CI_ACK_RE = re.compile(r"Ack: addressing red CI at ([0-9a-fA-F]{7,40})")
 
 # PR branch → ticket: worker branches are ``fre-<id>-<slug>``.
 _BRANCH_RE = re.compile(r"^fre-(\d+)", re.IGNORECASE)
+
+# The GitHub App login dependabot-authored PRs carry (FRE-872, ADR-0116 AC-6).
+_DEPENDABOT_LOGIN = "dependabot[bot]"
 
 # Stream label → dispatch stream key (maps to a launcher tmux session).
 _STREAM_FROM_LABEL: dict[str, str] = {
@@ -194,6 +218,29 @@ class Logger(Protocol):
 
 
 @dataclasses.dataclass(frozen=True)
+class CheckResult:
+    """One ``statusCheckRollup`` entry's identity + outcome (FRE-872, ADR-0116).
+
+    The per-check detail ``ci_status``'s aggregate discards — carried
+    separately so a channel-mode delivery's payload can name which check(s)
+    failed, not just the PR's overall CI state.
+
+    Attributes:
+        name: The check's name (``CheckRun.name`` or ``StatusContext.context``).
+        state: The same pass/fail/pending classification ``_check_state`` uses.
+        conclusion: The raw conclusion/state string (``CheckRun.conclusion`` or
+            ``StatusContext.state``), empty if absent.
+        details_url: A link to the check's details (``CheckRun.detailsUrl`` or
+            ``StatusContext.targetUrl``), empty if absent.
+    """
+
+    name: str
+    state: Literal["pass", "fail", "pending"]
+    conclusion: str
+    details_url: str
+
+
+@dataclasses.dataclass(frozen=True)
 class PullRequest:
     """The gating-relevant snapshot of one open PR (a single consistent read).
 
@@ -205,6 +252,10 @@ class PullRequest:
             ``UNKNOWN``).
         ci: Aggregate CI status over the whole check rollup.
         comment_bodies: PR comment bodies in chronological order.
+        checks: The per-check detail behind ``ci`` (FRE-872) — the structured
+            channel payload's proof surface (AC-3).
+        is_dependabot: Whether the PR's author is the dependabot GitHub App
+            (FRE-872, ADR-0116 AC-6 boundary guard).
     """
 
     number: int
@@ -213,6 +264,8 @@ class PullRequest:
     mergeable: str
     ci: CiStatus
     comment_bodies: tuple[str, ...]
+    checks: tuple[CheckResult, ...] = ()
+    is_dependabot: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -247,6 +300,14 @@ class Trigger:
         command: The command to inject (``/master <n>`` or ``/prime-worker``).
         dedup_key: The dedup key to record on a successful send.
         ttl_s: The suppression TTL for this trigger kind.
+        mode: The target seat's delivery mode (FRE-872, ADR-0116) —
+            ``"channel"`` or ``"send_keys"``. Always ``"send_keys"`` for a
+            master trigger (master has no ``StreamTopology`` entry in this
+            ticket) or an unroutable worker trigger.
+        channel_port: The target seat's channel port, only set when
+            ``mode == "channel"``.
+        channel_payload: The structured PR-state payload for a channel-mode
+            delivery, only set when ``mode == "channel"``.
     """
 
     kind: TriggerKind
@@ -257,6 +318,9 @@ class Trigger:
     command: str
     dedup_key: str
     ttl_s: float
+    mode: Literal["channel", "send_keys"] = "send_keys"
+    channel_port: int | None = None
+    channel_payload: Mapping[str, object] | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -321,6 +385,45 @@ def _check_state(check: Mapping[str, object]) -> Literal["pass", "fail", "pendin
     return "pending"
 
 
+def _check_result(check: Mapping[str, object]) -> CheckResult:
+    """Build a ``CheckResult`` from one ``statusCheckRollup`` entry (FRE-872).
+
+    Reads name/conclusion/details-url per the same ``__typename`` branch
+    ``_check_state`` already switches on — ``StatusContext`` uses
+    ``context``/``state``/``targetUrl``, ``CheckRun`` uses
+    ``name``/``conclusion``/``detailsUrl``.
+    """
+    typename = str(check.get("__typename") or "")
+    if typename == "StatusContext":
+        name = str(check.get("context") or "")
+        conclusion = str(check.get("state") or "")
+        details_url = str(check.get("targetUrl") or "")
+    else:
+        name = str(check.get("name") or "")
+        conclusion = str(check.get("conclusion") or "")
+        details_url = str(check.get("detailsUrl") or "")
+    return CheckResult(
+        name=name, state=_check_state(check), conclusion=conclusion, details_url=details_url
+    )
+
+
+def _aggregate_ci_status(states: Sequence[Literal["pass", "fail", "pending"]]) -> CiStatus:
+    """Aggregate per-check states into one PR-level CI status.
+
+    Factored out of ``ci_status`` so a caller that has already computed each
+    check's state (``_fetch_pr_detail``, building ``CheckResult`` entries)
+    reuses those states here instead of re-deriving them via a second
+    ``_check_state`` pass over the same rollup (FRE-872).
+    """
+    if not states:
+        return "pending"
+    if any(state == "fail" for state in states):
+        return "failure"
+    if any(state == "pending" for state in states):
+        return "pending"
+    return "success"
+
+
 def ci_status(rollup: Sequence[Mapping[str, object]]) -> CiStatus:
     """Aggregate a PR's ``statusCheckRollup`` into one status.
 
@@ -336,14 +439,7 @@ def ci_status(rollup: Sequence[Mapping[str, object]]) -> CiStatus:
     Returns:
         ``success`` / ``failure`` / ``pending``.
     """
-    if not rollup:
-        return "pending"
-    states = [_check_state(check) for check in rollup]
-    if any(state == "fail" for state in states):
-        return "failure"
-    if any(state == "pending" for state in states):
-        return "pending"
-    return "success"
+    return _aggregate_ci_status([_check_state(check) for check in rollup])
 
 
 def has_ci_red_ack(comment_bodies: Sequence[str], head_sha: str) -> bool:
@@ -366,6 +462,38 @@ def has_ci_red_ack(comment_bodies: Sequence[str], head_sha: str) -> bool:
             if head.startswith(match.group(1).lower()):
                 return True
     return False
+
+
+def build_channel_payload(pr: PullRequest) -> dict[str, object]:
+    """Build the structured, JSON-serializable channel payload (FRE-872, ADR-0116).
+
+    The AC-3 proof surface — the payload carries the PR's *live state*
+    (identity, mergeable/blocked, per-check CI results, dependabot status), not
+    a pre-baked imperative string, so a channel-mode seat reasons over the
+    actual failure rather than executing a generic instruction.
+
+    Args:
+        pr: The PR snapshot to encode.
+
+    Returns:
+        A JSON-serializable dict.
+    """
+    return {
+        "pr": pr.number,
+        "head_sha": pr.head_sha,
+        "head_ref": pr.head_ref,
+        "mergeable": pr.mergeable,
+        "checks": [
+            {
+                "name": check.name,
+                "state": check.state,
+                "conclusion": check.conclusion,
+                "details_url": check.details_url,
+            }
+            for check in pr.checks
+        ],
+        "dependabot": pr.is_dependabot,
+    }
 
 
 def _active_region(pane_text: str) -> str:
@@ -480,7 +608,22 @@ def classify_pr(
     """
     # Bounce is master-direct now (master send-keys the worker itself), so the
     # only watcher-owned worker trigger is a red CI on the head SHA.
-    if pr.ci == "failure" and not has_ci_red_ack(pr.comment_bodies, pr.head_sha):
+    #
+    # Boundary guard (FRE-872, ADR-0116 AC-6): a dependabot-authored PR is
+    # NEVER a worker candidate -- structural defense-in-depth so the gateway
+    # can never hand a seat an instruction whose natural completion is "push
+    # to the dependabot branch." Scoped to the worker path only: the
+    # master-ready path below is a pure, harmless notification (master's own
+    # gate re-reads live state and decides -- the watcher only actuates), so
+    # a CI-green, mergeable dependabot PR still surfaces to master exactly as
+    # any other PR does. Suppressing it too (an earlier draft did) removed a
+    # pre-existing capability with no replacement notification path -- caught
+    # by code review.
+    if (
+        pr.ci == "failure"
+        and not pr.is_dependabot
+        and not has_ci_red_ack(pr.comment_bodies, pr.head_sha)
+    ):
         key = f"worker:{pr.number}:{pr.head_sha}"
         if _suppressed(sent, key, now, worker_ttl_s):
             return None
@@ -528,12 +671,24 @@ def decide(
         )
         if candidate is None:
             continue
+        mode: Literal["channel", "send_keys"] = "send_keys"
+        channel_port: int | None = None
+        channel_payload: Mapping[str, object] | None = None
         if candidate.kind == "master":
             session: str | None = MASTER_SESSION
             command = f"/master {pr.number}"
         else:
             session = session_resolver(parse_ticket_from_branch(pr.head_ref))
             command = f"PR #{pr.number} failed CI checks - correct them"
+            # Per-seat mode is owned by the gateway topology (FRE-872,
+            # ADR-0116) -- resolved from the tmux session name so this stays
+            # independent of session_resolver's existing str | None signature.
+            stream = stream_for_tmux_session(session) if session is not None else None
+            topology = topology_for(stream) if stream is not None else None
+            if topology is not None and topology.mode == "channel":
+                mode = "channel"
+                channel_port = topology.channel_port
+                channel_payload = build_channel_payload(pr)
         triggers.append(
             Trigger(
                 kind=candidate.kind,
@@ -544,6 +699,9 @@ def decide(
                 command=command,
                 dedup_key=candidate.key,
                 ttl_s=candidate.ttl_s,
+                mode=mode,
+                channel_port=channel_port,
+                channel_payload=channel_payload,
             )
         )
     return triggers
@@ -598,7 +756,7 @@ def _fetch_pr_detail(number: int, runner: CommandRunner) -> PullRequest | None:
             "view",
             str(number),
             "--json",
-            "number,headRefName,headRefOid,mergeable,statusCheckRollup,comments",
+            "number,headRefName,headRefOid,mergeable,statusCheckRollup,comments,author",
         ]
     )
     if view.returncode != 0:
@@ -616,14 +774,22 @@ def _fetch_pr_detail(number: int, runner: CommandRunner) -> PullRequest | None:
     )
     bodies = tuple(str(c.get("body") or "") for c in ordered)
     rollup = data.get("statusCheckRollup")
-    checks = [c for c in rollup if isinstance(c, dict)] if isinstance(rollup, list) else []
+    raw_checks = [c for c in rollup if isinstance(c, dict)] if isinstance(rollup, list) else []
+    author = data.get("author")
+    login = str(author.get("login") or "") if isinstance(author, dict) else ""
+    # Compute each check's classification once (FRE-872) and derive the
+    # aggregate from those same results, rather than a second _check_state
+    # pass over raw_checks via ci_status.
+    checks = tuple(_check_result(c) for c in raw_checks)
     return PullRequest(
         number=int(data.get("number", number)),
         head_ref=str(data.get("headRefName") or ""),
         head_sha=str(data.get("headRefOid") or ""),
         mergeable=str(data.get("mergeable") or "UNKNOWN"),
-        ci=ci_status(checks),
+        ci=_aggregate_ci_status([c.state for c in checks]),
         comment_bodies=bodies,
+        checks=checks,
+        is_dependabot=login == _DEPENDABOT_LOGIN,
     )
 
 
@@ -700,6 +866,74 @@ def send_to_session(
     return "sent"
 
 
+ChannelOutcome = Literal["delivered", "unreachable"]
+
+
+def post_channel_event(
+    port: int,
+    secret: str,
+    payload_json: str,
+    *,
+    opener: Callable[..., ContextManager[object]] = urllib.request.urlopen,
+    timeout_s: float = 5.0,
+) -> ChannelOutcome:
+    """POST a structured event to a seat's ``seshat-dispatch`` channel (FRE-872).
+
+    Mirrors ``fetch_issue_labels``'s stdlib-``urllib`` style — no new
+    dependency. Never raises: any connection failure, timeout, or non-2xx
+    response is reported as ``"unreachable"`` so the caller can fall back to
+    send-keys for that event.
+
+    Args:
+        port: The seat's per-seat ``SESHAT_CHANNEL_PORT``.
+        secret: The shared secret sent as the ``X-Sender`` header.
+        payload_json: The JSON-encoded structured payload (see
+            ``build_channel_payload``).
+        opener: The HTTP opener seam (injectable for tests).
+        timeout_s: The request timeout in seconds.
+
+    Returns:
+        ``"delivered"`` on a 2xx response, else ``"unreachable"``.
+    """
+    request = urllib.request.Request(  # noqa: S310 - fixed http://127.0.0.1 channel endpoint
+        f"http://127.0.0.1:{port}/",
+        data=payload_json.encode(),
+        headers={"X-Sender": secret, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with opener(request, timeout=timeout_s) as response:  # noqa: S310
+            status = int(getattr(response, "status", 0))
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return "unreachable"
+    return "delivered" if 200 <= status < 300 else "unreachable"
+
+
+def load_channel_secret() -> str | None:
+    """Resolve the gateway-side channel shared secret (FRE-872, ADR-0116).
+
+    Prefers ``AGENT_SESHAT_CHANNEL_SECRET``; otherwise parses ``.env`` at the
+    git toplevel, mirroring ``load_linear_key``. Distinct from the seat-side
+    ``SESHAT_CHANNEL_SECRET`` the Node channel process reads (FRE-871,
+    unprefixed since it isn't ``personal_agent.config``-routed) — both must be
+    provisioned with the identical value.
+    """
+    key = os.environ.get("AGENT_SESHAT_CHANNEL_SECRET")
+    if key:
+        return key
+    root = _git_toplevel()
+    if root is None:
+        return None
+    env_path = root / ".env"
+    if not env_path.exists():
+        return None
+    for line in env_path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("AGENT_SESHAT_CHANNEL_SECRET="):
+            return stripped.split("=", 1)[1].strip().strip("'\"") or None
+    return None
+
+
 def load_state(path: Path) -> dict[str, float]:
     """Load the dedup store (key → last-sent epoch); empty if absent/invalid."""
     if not path.exists():
@@ -774,6 +1008,8 @@ def run_once(
     context_reader: Callable[[], Sequence[ContextReading]] = lambda: (),
     context_pressure_threshold: float = DEFAULT_CONTEXT_PRESSURE_THRESHOLD,
     context_pressure_ttl_s: float = DEFAULT_CONTEXT_PRESSURE_TTL_S,
+    channel_poster: Callable[[int, str, str], ChannelOutcome] = post_channel_event,
+    channel_secret: str | None = None,
 ) -> dict[str, float]:
     """Run one watcher tick, mutating and returning the dedup store.
 
@@ -803,6 +1039,12 @@ def run_once(
             no context-pressure behavior at all.
         context_pressure_threshold: Percent threshold for the master nudge.
         context_pressure_ttl_s: Suppression TTL for the context-pressure nudge.
+        channel_poster: Delivers a channel-mode worker trigger (FRE-872,
+            ADR-0116). Injectable for tests.
+        channel_secret: The gateway-side shared secret for channel delivery
+            (``load_channel_secret()`` in production). ``None`` falls back to
+            send-keys for every channel-mode trigger this tick, exactly like
+            an unreachable channel.
 
     Returns:
         The updated dedup store.
@@ -865,9 +1107,42 @@ def run_once(
             continue
         ledger = trigger_ledger.mark_send_started(ledger, trigger.dedup_key, now)
         ledger_persist(ledger)
-        outcome = send_to_session(
-            trigger.session, trigger.command, runner, require_idle=trigger.kind != "master"
-        )
+        outcome: Literal["sent", "absent", "busy"] | None = None
+        if trigger.mode == "channel":
+            if channel_secret is None:
+                logger.warning(
+                    "channel_secret_missing",
+                    trace_id=trace_id,
+                    pr=trigger.pr,
+                    session=trigger.session,
+                )
+                channel_result: ChannelOutcome = "unreachable"
+            else:
+                assert trigger.channel_port is not None
+                channel_result = channel_poster(
+                    trigger.channel_port, channel_secret, json.dumps(trigger.channel_payload)
+                )
+            if channel_result == "delivered":
+                # The ONLY place transport ever becomes "channel" -- called
+                # exactly once, only on confirmed delivery. See
+                # trigger_ledger.LedgerEntry.transport's docstring.
+                ledger = trigger_ledger.mark_transport(ledger, trigger.dedup_key, "channel")
+                ledger_persist(ledger)
+                outcome = "sent"
+            elif channel_secret is not None:
+                logger.warning(
+                    "channel_delivery_failed",
+                    trace_id=trace_id,
+                    pr=trigger.pr,
+                    session=trigger.session,
+                )
+        # Fallback (channel-down or unconfigured) and the non-channel path
+        # share this single call site -- transport stays at its untouched
+        # "send_keys" default in both cases; there is nothing to correct.
+        if outcome is None:
+            outcome = send_to_session(
+                trigger.session, trigger.command, runner, require_idle=trigger.kind != "master"
+            )
         if outcome == "sent":
             logger.info(
                 "gating_send",
@@ -1103,6 +1378,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     kill_switch_path = Path(args.kill_switch_file)
     resolver = _resolver(api_key, logger)
     ledger_retention_s = args.ledger_retention_days * 86400.0
+    channel_secret = load_channel_secret()
 
     def tick() -> None:
         state = load_state(state_path)
@@ -1133,6 +1409,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ledger_persist=lambda lg: trigger_ledger.save_ledger(ledger_path, lg),
             context_reader=_master_context_reader,
             context_pressure_threshold=args.context_pressure_threshold,
+            channel_secret=channel_secret,
         )
         if not board_fetched:
             return  # kill-switch halted the tick before the board was read

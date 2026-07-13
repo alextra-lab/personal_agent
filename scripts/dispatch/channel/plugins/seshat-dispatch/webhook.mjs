@@ -13,6 +13,11 @@
 // unit-tested by server.test.mjs). This file wires that gate to the real MCP
 // notification and fails closed on config (readConfig throws on a missing port or
 // secret) before ever binding the port.
+//
+// The runtime behavioral boundary named in `instructions` below is normatively
+// owned by .claude/skills/lifecycle-rules.md § Session boundary (per that file's
+// own single-source rule) — restated here only as the in-session reminder a
+// channel-triggered turn reads, not as a second source of truth.
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 

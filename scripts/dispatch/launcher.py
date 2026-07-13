@@ -116,6 +116,17 @@ class StreamTopology:
         channel_port: The per-seat localhost port the seat's ``seshat-dispatch``
             channel binds, so one channel-mode seat never collides with another
             (ADR-0116 "one channel per seat"). Only used when channel-mode is on.
+        mode: The seat's per-seat delivery mode (FRE-872, ADR-0116) —
+            ``"channel"`` or ``"send_keys"``, default ``"send_keys"``. This is
+            the flag ``gating_watcher.decide()`` consults to choose a worker
+            trigger's delivery transport. It is deliberately **independent**
+            of ``LauncherCapabilities.channels`` (the launcher's own
+            per-invocation ``--channels`` flag) today — flipping a real seat's
+            ``mode`` to ``"channel"`` is only correct done *together with*
+            actually launching that seat with ``--channels``, or the watcher
+            will POST to a port nothing is listening on. FRE-875 (the cutover
+            ticket) must derive one from the other, or otherwise guarantee
+            they cannot drift, before any real seat flips.
     """
 
     stream: str
@@ -123,6 +134,7 @@ class StreamTopology:
     tmux_session: str
     skill_command: str
     channel_port: int
+    mode: Literal["channel", "send_keys"] = "send_keys"
 
 
 _TOPOLOGY: dict[str, StreamTopology] = {
@@ -134,6 +146,27 @@ _TOPOLOGY: dict[str, StreamTopology] = {
     ),
     "adr": StreamTopology("adr", ".claude/worktrees/adrs", "cc-adrs", "/adr", channel_port=8792),
 }
+
+
+def stream_for_tmux_session(session: str) -> str | None:
+    """Reverse-map a tmux session name back to its dispatch stream key.
+
+    Lets a caller that only has the tmux session name (e.g. the resolved
+    target of a worker trigger) recover the full ``StreamTopology`` — its
+    ``mode``, ``channel_port``, etc. — via ``topology_for``, without changing
+    any existing ``str | None`` session-resolver signature.
+
+    Args:
+        session: A tmux session name (e.g. ``"cc-build2"``).
+
+    Returns:
+        The matching stream key (e.g. ``"build2"``), or ``None`` if no known
+        stream's topology uses that session name.
+    """
+    for stream, topology in _TOPOLOGY.items():
+        if topology.tmux_session == session:
+            return stream
+    return None
 
 
 def seed_command(topology: StreamTopology, ticket: str) -> str:

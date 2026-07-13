@@ -74,6 +74,12 @@ class ModelDefinition(BaseModel):
         supports_vision: Whether this model/deployment accepts image content blocks
             (ADR-0101 §5). A deployment property, not inferred — set explicitly per
             model definition. Defaults to False.
+        supports_pdf_document: Whether this model/deployment accepts a provider-side
+            native PDF document block (ADR-0102 §3). A deployment property, not
+            inferred — set explicitly per model definition. Composes with
+            supports_vision: a model may be vision-capable (rasterized image blocks)
+            without being PDF-document-capable (the local SLM case), and vice versa.
+            Defaults to False.
     """
 
     id: str = Field(..., description="Model identifier")
@@ -176,6 +182,15 @@ class ModelDefinition(BaseModel):
         description=(
             "Whether this model/deployment accepts image content blocks (ADR-0101 §5). "
             "A deployment property, not inferred — set explicitly per model definition."
+        ),
+    )
+    supports_pdf_document: bool = Field(
+        False,
+        description=(
+            "Whether this model/deployment accepts a provider-side native PDF document "
+            "block (ADR-0102 §3). A deployment property, not inferred — set explicitly "
+            "per model definition. Composes with supports_vision (rasterized image "
+            "blocks); the two flags are independent."
         ),
     )
     input_cost_per_token: float | None = Field(

@@ -114,6 +114,30 @@ def test_dated_response_model_still_commits_nonzero() -> None:
     assert cost > 0
 
 
+@pytest.mark.parametrize(
+    "config_path", [Path("config/models.yaml"), Path("config/models.cloud.yaml")]
+)
+@pytest.mark.parametrize("claude_key", ["claude_sonnet", "claude_haiku"])
+def test_claude_cloud_document_pricing_present(claude_key: str, config_path: Path) -> None:
+    """ADR-0102 T2 / AC-10 (pricing-present half): cloud Claude carries per-token pricing.
+
+    A document turn (native PDF block or scanned-page rasterization, ADR-0102 §3) bills
+    as ordinary input/output tokens on the same rate as a text/image turn — so the cost
+    gate can price it only if the cost matrix already carries pricing for these roles.
+    Red-before-green guard: asserts presence (not None), independent of whichever
+    litellm-shipped default happens to exist for the bare id.
+    """
+    config = load_model_config(config_path)
+    definition = config.models[claude_key]
+
+    assert definition.input_cost_per_token is not None, (
+        f"{claude_key} must carry config-owned input_cost_per_token in {config_path}"
+    )
+    assert definition.output_cost_per_token is not None, (
+        f"{claude_key} must carry config-owned output_cost_per_token in {config_path}"
+    )
+
+
 @pytest.mark.parametrize("gpt_key", ["gpt-5.4-nano", "gpt-5.4-mini"])
 def test_gpt_cloud_ids_reconcile_config_price(gpt_key: str) -> None:
     """FRE-742: the deployed gpt-5.4 entries commit our config price, not litellm's ship.

@@ -61,17 +61,20 @@ system-config change = master/owner deploy territory. Sequence:
    scripts/dispatch/channel/managed-settings.template.json /etc/claude-code/managed-settings.json`
    then strip the `//` comment key (JSON has no comments — the template's `//` is illustrative; write real
    JSON). `channelsEnabled: true` is additive/harmless to running seats.
-5. **Headless launch** an isolated test seat (NOT a live `cc-*` seat) via the launcher's channel-mode:
-   `python -m scripts.dispatch.launcher --stream build2 --model haiku --ticket <t> --channels --execute`
-   against a throwaway topology/tmux name, or mirror the emitted argv into an isolated `cc-test`.
+5. **Headless launch** an isolated test seat (NOT a live `cc-*` seat) with channel-mode wired. Since
+   FRE-875 there is no `--channels` flag: channel-wiring is derived from the seat's `StreamTopology.mode`
+   (single source of truth). To wire a channel launch, set the target seat's `mode` to `"channel"` in
+   `_TOPOLOGY` (against a throwaway topology/tmux name), then
+   `python -m scripts.dispatch.launcher --stream <seat> --model haiku --ticket <t> --execute`, or mirror
+   the emitted argv into an isolated `cc-test`.
 
 ### AC-2 pass criteria (the crux)
 - Startup notice shows **`Channels (experimental) messages from … seshat-dispatch … inject directly`**.
 - `/mcp` reports the `seshat-dispatch` server **connected**.
 - **Zero** interactive consent/trust prompt blocked startup.
 - A `curl -X POST http://127.0.0.1:<port>/ -H "X-Sender: <secret>" -d "…"` fires a turn in the idle seat.
-- **Argv-ordering live-check (`--channels` is variadic + undocumented):** the launcher places the seed
-  positional (`/build FRE-…`) BEFORE `--channels <ref>` so the flag cannot swallow it. Confirm the
+- **Argv-ordering live-check (the derived `--channels <ref>` is variadic + undocumented):** the launcher
+  places the seed positional (`/build FRE-…`) BEFORE `--channels <ref>` so the flag cannot swallow it. Confirm the
   channel-mode seat both (a) registers the channel AND (b) actually runs the seeded first turn. If the
   seed is dropped, the flag parse differs from the assumption — try `--channels=<ref>` or a `--`
   separator and record what the parser accepts.

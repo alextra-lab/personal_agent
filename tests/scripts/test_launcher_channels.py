@@ -1,21 +1,27 @@
 # ruff: noqa: D103
-"""Launcher channel-mode wiring tests (FRE-871, ADR-0116 Phase 1 / AC-2).
+"""Launcher channel-mode wiring tests (FRE-875, ADR-0116 Phase 1 seam).
 
-The launcher gains an opt-in channel-mode: when on, the RC seat argv carries the
+Channel-mode is derived from a **single source of truth** — the seat's
+``StreamTopology.mode`` (``"channel"`` | ``"send_keys"``). The launcher wires the
 approved ``--channels plugin:seshat-dispatch@seshat-dispatch`` allowlist reference
-and a per-seat ``SESHAT_CHANNEL_PORT``. Default OFF: a not-yet-cutover seat's argv
-is byte-for-byte what it was before (ADR-0116 §5, "one seat at a time"). The shared
-secret is never placed on the command line (it would leak via ``ps``/plan JSON); it
-is provisioned out-of-band into the seat's environment.
+and a per-seat ``SESHAT_CHANNEL_PORT`` **iff** that seat's ``mode == "channel"``;
+there is no independent per-invocation channel flag (FRE-875 removed it), so the
+launch shape can never drift from the mode the watcher reads to pick a transport.
+
+A not-yet-cutover seat (``mode == "send_keys"``, the default for every live seat
+in Phase A) is byte-for-byte its pre-channel shape (ADR-0116 §5, "one seat at a
+time"). The shared secret is never placed on the command line (it would leak via
+``ps``/plan JSON); it is provisioned out-of-band into the seat's environment.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
+import pytest
+from scripts.dispatch import launcher
 from scripts.dispatch.launcher import (
-    DEFAULT_CAPABILITIES,
-    LauncherCapabilities,
     main,
     plan_launch,
     topology_for,
@@ -30,30 +36,53 @@ def _inner(plan) -> str:  # type: ignore[no-untyped-def]
     return plan.command[-1]
 
 
-def test_channel_mode_off_by_default_argv_unchanged() -> None:
+def _flip_to_channel(monkeypatch: pytest.MonkeyPatch, stream: str) -> None:
+    """Flip one seat's topology to channel-mode — exactly what a cutover edits.
+
+    Mirrors the Phase-B cutover mutation (a one-field change to ``_TOPOLOGY``) so
+    the test proves the *binding* between mode and launch shape, not a synthetic
+    flag.
+    """
+    channel_topology = dataclasses.replace(topology_for(stream), mode="channel")
+    monkeypatch.setitem(launcher._TOPOLOGY, stream, channel_topology)
+
+
+def test_send_keys_seat_argv_unchanged_by_default() -> None:
+    # Every live seat is send_keys in Phase A → the pre-channel argv, untouched.
     plan = plan_launch("build2", "FRE-871", "haiku", context_keep=False)
-    assert DEFAULT_CAPABILITIES.channels is False
     inner = _inner(plan)
     assert "--channels" not in inner
     assert "SESHAT_CHANNEL_PORT" not in inner
-    # The exact pre-FRE-871 shape — a not-yet-cutover seat is untouched.
     assert inner.startswith("claude --remote-control cc-build2 --model haiku --session-id ")
     assert inner.endswith("'/build FRE-871'")  # seed is shlex-quoted (contains a space)
 
 
-def test_channel_mode_on_adds_allowlist_ref_and_per_seat_port() -> None:
-    caps = LauncherCapabilities(channels=True)
-    plan = plan_launch("build2", "FRE-871", "haiku", context_keep=False, capabilities=caps)
+def test_channel_mode_seat_adds_allowlist_ref_and_per_seat_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _flip_to_channel(monkeypatch, "adr")
+    plan = plan_launch("adr", "FRE-875", "opus", context_keep=False)
     inner = _inner(plan)
     assert f"--channels {_CHANNEL_REF}" in inner
-    port = topology_for("build2").channel_port
+    port = topology_for("adr").channel_port
     assert f"env SESHAT_CHANNEL_PORT={port}" in inner
     # The seat is still an RC seat at its model — the channel composes, not replaces.
-    assert "claude --remote-control cc-build2 --model haiku" in inner
+    assert "claude --remote-control cc-adrs --model opus" in inner
     # The seed must survive channel-mode AND precede the variadic --channels flag,
     # or --channels would swallow it as a second channel ref (never run the turn).
-    assert "'/build FRE-871'" in inner
-    assert inner.index("'/build FRE-871'") < inner.index("--channels")
+    assert "'/adr FRE-875'" in inner
+    assert inner.index("'/adr FRE-875'") < inner.index("--channels")
+
+
+def test_channel_wiring_is_derived_from_topology_mode_and_cannot_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The single-source invariant: for any seat, launch channel-wiring is
+    # exactly (topology.mode == "channel"). There is no other input that could
+    # make the two disagree — the drift class FRE-872 flagged is gone.
+    assert "--channels" not in _inner(plan_launch("adr", "FRE-875", "opus", context_keep=False))
+    _flip_to_channel(monkeypatch, "adr")
+    assert "--channels" in _inner(plan_launch("adr", "FRE-875", "opus", context_keep=False))
 
 
 def test_channel_ports_are_per_seat_distinct() -> None:
@@ -61,24 +90,29 @@ def test_channel_ports_are_per_seat_distinct() -> None:
     assert len(set(ports.values())) == 3
 
 
-def test_secret_is_never_on_the_command_line() -> None:
-    caps = LauncherCapabilities(channels=True)
-    plan = plan_launch("build1", "FRE-871", "opus", context_keep=False, capabilities=caps)
+def test_secret_is_never_on_the_command_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    _flip_to_channel(monkeypatch, "build1")
+    plan = plan_launch("build1", "FRE-875", "opus", context_keep=False)
     assert "SESHAT_CHANNEL_SECRET" not in _inner(plan)
 
 
-def test_main_channels_flag_enables_channel_mode(capsys) -> None:  # type: ignore[no-untyped-def]
-    rc = main(
-        ["--stream", "build2", "--model", "haiku", "--ticket", "FRE-871", "--channels", "--json"]
-    )
+def test_no_independent_channels_cli_flag() -> None:
+    # FRE-875 removed the per-invocation --channels flag; it is now a parse error,
+    # so an operator can never launch a seat in a shape that contradicts its mode.
+    with pytest.raises(SystemExit):
+        main(["--stream", "build2", "--model", "haiku", "--ticket", "FRE-875", "--channels"])
+
+
+def test_main_channel_seat_wires_channel(monkeypatch: pytest.MonkeyPatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    _flip_to_channel(monkeypatch, "build2")
+    rc = main(["--stream", "build2", "--model", "haiku", "--ticket", "FRE-875", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    inner = payload["command"][-1]
-    assert f"--channels {_CHANNEL_REF}" in inner
+    assert f"--channels {_CHANNEL_REF}" in payload["command"][-1]
 
 
-def test_main_without_channels_flag_stays_off(capsys) -> None:  # type: ignore[no-untyped-def]
-    rc = main(["--stream", "build2", "--model", "haiku", "--ticket", "FRE-871", "--json"])
+def test_main_send_keys_seat_has_no_channel(capsys) -> None:  # type: ignore[no-untyped-def]
+    rc = main(["--stream", "build2", "--model", "haiku", "--ticket", "FRE-875", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert "--channels" not in payload["command"][-1]

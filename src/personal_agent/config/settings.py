@@ -853,6 +853,63 @@ class AppConfig(BaseSettings):
             "Owner-tunable via AGENT_ATTACHMENT_COST_CONFIRMATION_THRESHOLD_USD."
         ),
     )
+    document_text_density_floor_per_page: int = Field(
+        default=100,
+        gt=0,
+        description=(
+            "Per-page character-count floor used to classify a PDF as Tier 1 (text "
+            "extraction) vs Tier 2 (vision) (ADR-0102 §1, FRE-683). Applied in "
+            "aggregate: a document is Tier 1 when its total extracted character count "
+            "is at or above floor_per_page * page_count. Config-tunable per the ADR's "
+            "own mitigation for the mis-classified-text-layer risk."
+        ),
+    )
+    document_max_pages_per_turn: int = Field(
+        default=40,
+        gt=0,
+        description=(
+            "Tier-2 (vision) page budget per turn (ADR-0102 §4, FRE-683). min()'d "
+            "against the Anthropic provider hard limit (100 pages) at call time; "
+            "pages beyond the budget are selected against by salience, not first-N."
+        ),
+    )
+    document_page_max_pixels: int = Field(
+        default=1568,
+        gt=0,
+        description=(
+            "Per-page rasterization long-edge pixel cap before encoding (ADR-0102 §5, "
+            "FRE-683), rasterize delivery only. Independent of "
+            "attachment_image_max_pixels — a PDF page is a distinct guardrail "
+            "dimension from an uploaded photo."
+        ),
+    )
+    document_page_max_bytes: int = Field(
+        default=5_242_880,  # 5 MiB
+        gt=0,
+        description=(
+            "Per-page encoded byte-size cap after downscale/base64-encode (ADR-0102 "
+            "§5, FRE-683), rasterize delivery only. A page still over this cap after "
+            "downscale is dropped with disclosure."
+        ),
+    )
+    document_max_total_payload_bytes: int = Field(
+        default=15_728_640,  # 15 MiB
+        gt=0,
+        description=(
+            "Total per-turn Tier-2 payload cap (ADR-0102 §5, FRE-683) across "
+            "rasterized pages or the native PDF block, independent of the per-page "
+            "cap. Rasterize delivery drops trailing pages with disclosure; native-PDF "
+            "delivery rejects the whole document with disclosure."
+        ),
+    )
+    document_max_extracted_text_chars: int = Field(
+        default=200_000,
+        gt=0,
+        description=(
+            "Tier-1 extracted-text character cap (ADR-0102 §5, FRE-683). Over-cap "
+            "text is trimmed to the cap with disclosure, never sent unbounded."
+        ),
+    )
 
     # Paths (for domain config loaders)
     governance_config_path: Path = Field(

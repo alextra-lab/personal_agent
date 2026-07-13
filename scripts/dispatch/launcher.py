@@ -116,17 +116,19 @@ class StreamTopology:
         channel_port: The per-seat localhost port the seat's ``seshat-dispatch``
             channel binds, so one channel-mode seat never collides with another
             (ADR-0116 "one channel per seat"). Only used when channel-mode is on.
-        mode: The seat's per-seat delivery mode (FRE-872, ADR-0116) —
+        mode: The seat's per-seat delivery mode (FRE-872/875, ADR-0116) —
             ``"channel"`` or ``"send_keys"``, default ``"send_keys"``. This is
-            the flag ``gating_watcher.decide()`` consults to choose a worker
-            trigger's delivery transport. It is deliberately **independent**
-            of ``LauncherCapabilities.channels`` (the launcher's own
-            per-invocation ``--channels`` flag) today — flipping a real seat's
-            ``mode`` to ``"channel"`` is only correct done *together with*
-            actually launching that seat with ``--channels``, or the watcher
-            will POST to a port nothing is listening on. FRE-875 (the cutover
-            ticket) must derive one from the other, or otherwise guarantee
-            they cannot drift, before any real seat flips.
+            the **single source of truth** for the seat's channel state: it is
+            both what ``gating_watcher.decide()`` consults to choose a worker
+            trigger's delivery transport AND what the launcher derives its
+            channel-wiring from (``plan_launch`` wires ``--channels`` + the
+            per-seat port iff ``mode == "channel"``). Because both the watcher
+            and the launcher read this one field, the launch shape can never
+            drift from the delivery mode (FRE-875 removed the independent
+            per-invocation ``--channels`` flag that made drift possible). To cut
+            a seat over, flip this one field to ``"channel"``; every launch of
+            that seat is then channel-wired and the watcher channel-delivers to
+            it — atomically, by construction.
     """
 
     stream: str
@@ -196,20 +198,17 @@ class LauncherCapabilities:
     Both default on — proven live in FRE-786 Part 1. Forced off to exercise the
     ADR §4 fallbacks (and AC-7a).
 
+    Channel-mode is **not** a capability here: whether a seat is channel-wired is
+    derived from its ``StreamTopology.mode`` (the single source of truth), not
+    from a per-invocation flag — see ``StreamTopology.mode`` (FRE-875).
+
     Attributes:
         auto_seed: Whether a launch can seed a slash command as the first turn.
         model_set: Whether the model tier can be set programmatically at launch.
-        channels: Whether this seat is cut over to channel-mode delivery
-            (ADR-0116). Default ``False`` — a not-yet-cutover seat's argv is
-            byte-for-byte unchanged. When ``True`` the RC seat argv carries the
-            approved ``--channels`` allowlist reference and a per-seat channel
-            port. Seats flip one at a time; ``send-keys`` stays the fallback for
-            the rest until the last seat cuts over.
     """
 
     auto_seed: bool = True
     model_set: bool = True
-    channels: bool = False
 
 
 DEFAULT_CAPABILITIES = LauncherCapabilities()
@@ -480,7 +479,12 @@ def plan_launch(
     # CLEAR + model-set available: launch (seeded) or prepare (owner sends the command).
     session_id = session_id_for(stream, ticket, model, "clear")
     seed = dispatch if capabilities.auto_seed else None
-    command = _build_tmux_command(topology, model, session_id, seed, channels=capabilities.channels)
+    # Channel-wiring is derived from the seat's mode (single source of truth,
+    # FRE-875) — never an independent flag, so the launch shape cannot drift
+    # from the delivery mode the watcher reads.
+    command = _build_tmux_command(
+        topology, model, session_id, seed, channels=topology.mode == "channel"
+    )
     if capabilities.auto_seed:
         outcome: PlanOutcome = "launch"
         card = _launch_card(topology, model, session_id, dispatch)
@@ -664,12 +668,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--no-model-set", action="store_true", help="Force programmatic model-set off."
     )
     parser.add_argument(
-        "--channels",
-        action="store_true",
-        help="Cut this seat over to channel-mode delivery (ADR-0116): add the "
-        "approved --channels allowlist ref + per-seat port to the launch. Default off.",
-    )
-    parser.add_argument(
         "--execute", action="store_true", help="Perform the launch (default: dry-run)."
     )
     parser.add_argument("--json", action="store_true", help="Emit the plan as JSON.")
@@ -678,7 +676,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     capabilities = LauncherCapabilities(
         auto_seed=not args.no_auto_seed,
         model_set=not args.no_model_set,
-        channels=args.channels,
     )
     warm_session_id = find_warm_session(args.stream) if (args.keep and args.execute) else None
 

@@ -98,6 +98,7 @@
         "trace_id":           { "type": "keyword" },
         "span_id":            { "type": "keyword" },
         "session_id":         { "type": "keyword" },
+        "user_id":            { "type": "keyword" },
         "component":          { "type": "keyword" },
         "level":              { "type": "keyword" },
         "message":            { "type": "text" },

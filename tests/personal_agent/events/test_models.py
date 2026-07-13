@@ -1,5 +1,6 @@
 """Tests for event models (ADR-0041, ADR-0054)."""
 
+import uuid
 from datetime import datetime, timezone
 
 import pytest
@@ -171,6 +172,37 @@ class TestRequestCompletedEvent:
         data = event.model_dump(mode="json")
         restored = RequestCompletedEvent.model_validate(data)
         assert restored == event
+
+    def test_user_id_roundtrips_through_redis_serialization(self) -> None:
+        """ADR-0107 D5: user_id must survive the Redis Streams JSON round-trip
+        so the cg:es-indexer consumer (a separate task from the originating
+        request) can thread it into the request_trace ES doc.
+        """
+        user_id = uuid.uuid4()
+        event = RequestCompletedEvent(
+            trace_id="t1",
+            session_id="s1",
+            assistant_response="reply",
+            trace_summary={},
+            trace_breakdown=[],
+            source_component="test",
+            user_id=user_id,
+        )
+        data = event.model_dump(mode="json")
+        assert data["user_id"] == str(user_id)
+        restored = RequestCompletedEvent.model_validate(data)
+        assert restored.user_id == user_id
+
+    def test_user_id_defaults_to_none(self) -> None:
+        event = RequestCompletedEvent(
+            trace_id="t1",
+            session_id="s1",
+            assistant_response="reply",
+            trace_summary={},
+            trace_breakdown=[],
+            source_component="test",
+        )
+        assert event.user_id is None
 
 
 class TestParseStreamEvent:

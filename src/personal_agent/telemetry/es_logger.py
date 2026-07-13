@@ -281,6 +281,7 @@ class ElasticsearchLogger:
         trace_id: str,
         timer: object,
         session_id: str | None = None,
+        user_id: UUID | str | None = None,
     ) -> str | None:
         """Index request trace summary and per-step documents for Kibana.
 
@@ -293,6 +294,10 @@ class ElasticsearchLogger:
             timer: RequestTimer after request completion (to_trace_summary
                 and spans used).
             session_id: Optional session ID for filtering.
+            user_id: Authenticated user UUID for the request (ADR-0107 D5).
+                This dict-based indexing path bypasses structlog entirely, so
+                it does not inherit ``structlog.contextvars`` bindings and
+                needs ``user_id`` threaded explicitly, same as ``session_id``.
 
         Returns:
             Document ID of the request_trace doc if successful, None otherwise.
@@ -313,6 +318,7 @@ class ElasticsearchLogger:
             trace_summary=summary,
             trace_breakdown=breakdown,
             session_id=session_id,
+            user_id=user_id,
         )
 
     async def index_request_trace_from_snapshot(
@@ -321,6 +327,7 @@ class ElasticsearchLogger:
         trace_summary: dict[str, Any],
         trace_breakdown: list[dict[str, Any]],
         session_id: str | None = None,
+        user_id: UUID | str | None = None,
     ) -> str | None:
         """Index request trace from a timer snapshot (Redis event consumer path).
 
@@ -332,6 +339,8 @@ class ElasticsearchLogger:
             trace_summary: Dict from ``RequestTimer.to_trace_summary()``.
             trace_breakdown: List from ``RequestTimer.to_breakdown()``.
             session_id: Optional session ID for filtering.
+            user_id: Authenticated user UUID for the request (ADR-0107 D5),
+                threaded from ``RequestCompletedEvent.user_id``.
 
         Returns:
             Document ID of the request_trace summary doc if successful, else None.
@@ -344,12 +353,14 @@ class ElasticsearchLogger:
             total_duration_ms = 0.0
         ts = datetime.utcnow().isoformat()
         index_name = self._get_index_name()
+        user_id_str = str(user_id) if user_id else None
 
         trace_doc: dict[str, Any] = {
             "@timestamp": ts,
             "event_type": "request_trace",
             "trace_id": trace_id,
             "session_id": session_id,
+            "user_id": user_id_str,
             "total_duration_ms": total_duration_ms,
             "total_steps": trace_summary.get("total_steps", 0),
             "phases_summary": trace_summary.get("phases_summary") or {},
@@ -371,6 +382,7 @@ class ElasticsearchLogger:
                     "event_type": "request_trace_step",
                     "trace_id": trace_id,
                     "session_id": session_id,
+                    "user_id": user_id_str,
                     "sequence": entry.get("sequence", 0),
                     "phase": entry.get("phase", ""),
                     "name": entry.get("name", ""),

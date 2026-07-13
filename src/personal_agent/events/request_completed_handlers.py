@@ -33,6 +33,7 @@ def build_request_trace_es_handler(es_handler: ElasticsearchHandler | None) -> A
             trace_summary=event.trace_summary,
             trace_breakdown=event.trace_breakdown,
             session_id=event.session_id,
+            user_id=event.user_id,
         )
 
     return handler

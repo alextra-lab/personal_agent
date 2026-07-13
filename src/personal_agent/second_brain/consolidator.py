@@ -11,6 +11,8 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import structlog
+
 from personal_agent.captains_log.capture import TaskCapture, read_captures
 from personal_agent.config import resolve_role_model_key
 from personal_agent.config.settings import get_settings
@@ -225,58 +227,70 @@ class SecondBrainConsolidator:
                 while should_pause():
                     await asyncio.sleep(1.0)
                 log.info("consolidation_resumed", capture_num=i, trace_id=run_trace_id)
-            try:
-                if await self.memory_service.turn_exists(
-                    capture.trace_id, trace_id=capture.trace_id
-                ):
-                    captures_skipped += 1
+            # ADR-0107 D5: this loop processes captures from many users in one
+            # background pass, so each capture's own identity must be (re)bound
+            # per-iteration — bound_contextvars restores the prior value on exit
+            # rather than a blanket clear, so it cannot leak capture N's user_id
+            # into capture N+1's log lines.
+            with structlog.contextvars.bound_contextvars(
+                trace_id=capture.trace_id,
+                session_id=capture.session_id,
+                user_id=str(capture.user_id),
+            ):
+                try:
+                    if await self.memory_service.turn_exists(
+                        capture.trace_id, trace_id=capture.trace_id
+                    ):
+                        captures_skipped += 1
+                        log.debug(
+                            "consolidation_skipped_already_consolidated",
+                            capture_num=i,
+                            trace_id=capture.trace_id,
+                        )
+                        continue
                     log.debug(
-                        "consolidation_skipped_already_consolidated",
+                        "consolidation_processing_capture",
                         capture_num=i,
+                        total=len(captures),
                         trace_id=capture.trace_id,
                     )
-                    continue
-                log.debug(
-                    "consolidation_processing_capture",
-                    capture_num=i,
-                    total=len(captures),
-                    trace_id=capture.trace_id,
-                )
-                result = await self._process_capture(
-                    capture, extractor_model=entity_extraction_role
-                )
-                if result.get("turns_created"):
-                    turns_created += result["turns_created"]
-                    if capture.session_id:
-                        sessions_with_new_turns.add(capture.session_id)
-                entities_created += result.get("entities_created", 0)
-                relationships_created += result.get("relationships_created", 0)
-                stances_created += result.get("stances_created", 0)
-                claims_created += result.get("claims_created", 0)
-                entities_dispatched_ephemeral += result.get("entities_dispatched_ephemeral", 0)
-                entities_dispatched_finding += result.get("entities_dispatched_finding", 0)
-                entities_dispatch_finding_failed += result.get(
-                    "entities_dispatch_finding_failed", 0
-                )
-                relationships_dispatch_skipped += result.get("relationships_dispatch_skipped", 0)
-                all_entity_ids.extend(result.get("entity_ids", []))
-                all_relationship_element_ids.extend(result.get("relationship_element_ids", []))
-                log.debug(
-                    "consolidation_capture_done",
-                    capture_num=i,
-                    entities=result.get("entities_created", 0),
-                    relationships=result.get("relationships_created", 0),
-                    trace_id=capture.trace_id,
-                )
-            except Exception as e:
-                log.error(
-                    "capture_processing_failed",
-                    capture_num=i,
-                    trace_id=capture.trace_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                    exc_info=True,
-                )
+                    result = await self._process_capture(
+                        capture, extractor_model=entity_extraction_role
+                    )
+                    if result.get("turns_created"):
+                        turns_created += result["turns_created"]
+                        if capture.session_id:
+                            sessions_with_new_turns.add(capture.session_id)
+                    entities_created += result.get("entities_created", 0)
+                    relationships_created += result.get("relationships_created", 0)
+                    stances_created += result.get("stances_created", 0)
+                    claims_created += result.get("claims_created", 0)
+                    entities_dispatched_ephemeral += result.get("entities_dispatched_ephemeral", 0)
+                    entities_dispatched_finding += result.get("entities_dispatched_finding", 0)
+                    entities_dispatch_finding_failed += result.get(
+                        "entities_dispatch_finding_failed", 0
+                    )
+                    relationships_dispatch_skipped += result.get(
+                        "relationships_dispatch_skipped", 0
+                    )
+                    all_entity_ids.extend(result.get("entity_ids", []))
+                    all_relationship_element_ids.extend(result.get("relationship_element_ids", []))
+                    log.debug(
+                        "consolidation_capture_done",
+                        capture_num=i,
+                        entities=result.get("entities_created", 0),
+                        relationships=result.get("relationships_created", 0),
+                        trace_id=capture.trace_id,
+                    )
+                except Exception as e:
+                    log.error(
+                        "capture_processing_failed",
+                        capture_num=i,
+                        trace_id=capture.trace_id,
+                        error=str(e),
+                        error_type=type(e).__name__,
+                        exc_info=True,
+                    )
 
         # Build Session nodes for every session that received new turns this run
         sessions_created = await self._consolidate_sessions(

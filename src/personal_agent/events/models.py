@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -246,6 +246,11 @@ class RequestCompletedEvent(EventBase):
         assistant_response: Assistant reply text to persist.
         trace_summary: Output of ``RequestTimer.to_trace_summary()`` at publish time.
         trace_breakdown: Output of ``RequestTimer.to_breakdown()`` at publish time.
+        user_id: Authenticated user UUID for the request (ADR-0107 D5). The
+            ``cg:es-indexer`` consumer runs in its own long-lived task, not the
+            originating request's, so it cannot inherit a ``structlog.contextvars``
+            binding — this field is how ``user_id`` reaches the request_trace
+            docs it indexes.
     """
 
     event_type: Literal["request.completed"] = "request.completed"
@@ -255,6 +260,7 @@ class RequestCompletedEvent(EventBase):
     trace_summary: dict[str, Any]
     trace_breakdown: list[dict[str, Any]]
     eval_mode: bool = False
+    user_id: UUID | None = None
 
 
 # ---------------------------------------------------------------------------

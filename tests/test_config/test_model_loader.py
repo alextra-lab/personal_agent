@@ -184,6 +184,45 @@ models:
 
         assert config.models["vision_model"].supports_vision is True
 
+    def test_supports_pdf_document_defaults_false(self, tmp_path: Path) -> None:
+        """ModelDefinition.supports_pdf_document defaults to False when omitted (ADR-0102 §3)."""
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text(
+            """
+models:
+  router:
+    id: "test-router"
+    context_length: 8192
+    quantization: "8bit"
+    max_concurrency: 4
+    default_timeout: 5
+"""
+        )
+
+        config = load_model_config(config_file)
+
+        assert config.models["router"].supports_pdf_document is False
+
+    def test_supports_pdf_document_explicit_true(self, tmp_path: Path) -> None:
+        """ModelDefinition.supports_pdf_document is set from config when declared true."""
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text(
+            """
+models:
+  document_model:
+    id: "test-document"
+    context_length: 8192
+    quantization: "8bit"
+    max_concurrency: 4
+    default_timeout: 5
+    supports_pdf_document: true
+"""
+        )
+
+        config = load_model_config(config_file)
+
+        assert config.models["document_model"].supports_pdf_document is True
+
     def test_load_uses_cache_for_same_path(self, tmp_path: Path) -> None:
         """Test repeated loads for same path only parse YAML once."""
         config_file = tmp_path / "models.yaml"
@@ -240,6 +279,53 @@ class TestSupportsVisionDeployedConfig:
         for key in self._VISION_ROLES:
             assert config.models[key].supports_vision is True, (
                 f"{key} must support vision in {config_path}"
+            )
+
+
+class TestSupportsPdfDocumentDeployedConfig:
+    """ADR-0102 §3: the deployed cloud Claude models declare supports_pdf_document.
+
+    FRE-682: mirrors the FRE-734 vision-parity guard (``TestSupportsVisionDeployedConfig``
+    above) so the document capability flag can't independently drift between
+    ``config/models.yaml`` and ``config/models.cloud.yaml`` the way ``supports_vision``
+    once did. ``primary``/``sub_agent`` are vision-capable but NOT document-capable
+    (they have no native-PDF-block equivalent) — asserted False here to lock in that
+    composition per ADR-0102's Implementation Notes.
+    """
+
+    _PDF_CAPABLE_ROLES = ("claude_sonnet", "claude_haiku")
+    _PDF_INCAPABLE_ROLES = ("primary", "sub_agent")
+
+    @pytest.mark.parametrize(
+        "config_path",
+        [
+            Path("config/models.yaml"),
+            Path("config/models.cloud.yaml"),
+        ],
+    )
+    def test_deployed_pdf_document_capable_models_flagged(self, config_path: Path) -> None:
+        """claude_sonnet and claude_haiku declare supports_pdf_document=True."""
+        config = load_model_config(config_path)
+
+        for key in self._PDF_CAPABLE_ROLES:
+            assert config.models[key].supports_pdf_document is True, (
+                f"{key} must support the native PDF document block in {config_path}"
+            )
+
+    @pytest.mark.parametrize(
+        "config_path",
+        [
+            Path("config/models.yaml"),
+            Path("config/models.cloud.yaml"),
+        ],
+    )
+    def test_deployed_pdf_document_incapable_models_unflagged(self, config_path: Path) -> None:
+        """Primary and sub_agent declare supports_pdf_document=False."""
+        config = load_model_config(config_path)
+
+        for key in self._PDF_INCAPABLE_ROLES:
+            assert config.models[key].supports_pdf_document is False, (
+                f"{key} must not claim the native PDF document block in {config_path}"
             )
 
 

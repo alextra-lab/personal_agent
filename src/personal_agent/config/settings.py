@@ -647,6 +647,17 @@ class AppConfig(BaseSettings):
             "Config-driven per ADR-0031."
         ),
     )
+    structural_class_predicate_enabled: bool = Field(
+        default=False,
+        description=(
+            "ADR-0115 D6 / FRE-866: gates the entity-class (World/Personal) "
+            "sub-predicate of the structural arm, now that Entity.class is "
+            "persisted (FRE-864) and backfilled (FRE-865). Off by default. When "
+            "on, the class predicate is SAFE by construction — it narrows to the "
+            "requested class(es) but never drops rows whose class is NULL, so an "
+            "unclassified entity is never silently lost."
+        ),
+    )
 
     # --- Multi-path recall seam (ADR-0104 AC-1/AC-3/AC-5/AC-6 / FRE-724) ---
     multipath_recall_enabled: bool = Field(

@@ -41,8 +41,13 @@ async def _seed_entity(
     entity_type: str,
     last_seen: str,
     visibility: str = "public",
+    entity_class: str | None = None,
 ) -> None:
-    """MERGE an Entity node with exact type/recency/visibility control."""
+    """MERGE an Entity node with exact type/recency/visibility/class control.
+
+    ``entity_class`` is left unset (Cypher NULL) when None, matching an
+    unclassified pre-ADR-0115 entity (FRE-866).
+    """
     async with service.driver.session() as session:
         await session.run(
             """
@@ -52,11 +57,13 @@ async def _seed_entity(
                 e.first_seen = $last_seen,
                 e.mention_count = 1,
                 e.visibility = $visibility
-            """,
+            """
+            + (" , e.class = $entity_class" if entity_class is not None else ""),
             name=name,
             entity_type=entity_type,
             last_seen=last_seen,
             visibility=visibility,
+            **({"entity_class": entity_class} if entity_class is not None else {}),
         )
 
 
@@ -149,6 +156,40 @@ async def test_type_scoped_recall_keeps_unenforced_entities(memory_service, monk
         # The predicate still narrows: an entity with a *different* enforced type
         # is excluded (proves it is not a no-op).
         assert location not in names
+    finally:
+        await _purge(memory_service, prefix)
+
+
+@pytest.mark.asyncio
+async def test_class_scoped_recall_keeps_unclassified_entities(memory_service, monkeypatch):
+    """ADR-0115 D6 / FRE-866: a class predicate keeps unclassified rows but still narrows."""
+    prefix = f"fre866-{uuid.uuid4()}"
+    now = _now_iso()
+    world = f"{prefix}-world"
+    unclassified = f"{prefix}-unclassified"
+    personal = f"{prefix}-personal"
+    await _seed_entity(
+        memory_service, name=world, entity_type="Concept", last_seen=now, entity_class="World"
+    )
+    await _seed_entity(memory_service, name=unclassified, entity_type="Concept", last_seen=now)
+    await _seed_entity(
+        memory_service,
+        name=personal,
+        entity_type="Concept",
+        last_seen=now,
+        entity_class="Personal",
+    )
+
+    monkeypatch.setattr(get_settings(), "structural_arm_enabled", True, raising=False)
+    monkeypatch.setattr(get_settings(), "structural_class_predicate_enabled", True, raising=False)
+    try:
+        result = await memory_service.structural_recall_arm(entity_classes=["World"])
+        names = {e.name for e in result}
+        # The requested class AND the unclassified row survive (ADR-0115 D4 fail-open).
+        assert world in names
+        assert unclassified in names
+        # The predicate still narrows: a differently-classed entity is excluded.
+        assert personal not in names
     finally:
         await _purge(memory_service, prefix)
 

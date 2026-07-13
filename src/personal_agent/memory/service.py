@@ -233,6 +233,8 @@ def _build_structural_arm_query(
     type_predicate_enabled: bool,
     recency_days: int | None,
     anchor_names: Sequence[str] | None,
+    entity_classes: Sequence[str] | None = None,
+    class_predicate_enabled: bool = False,
     top_k: int,
     vis_fragment_e: str,
     vis_fragment_t: str,
@@ -241,15 +243,20 @@ def _build_structural_arm_query(
     """Build the closed-axis structural arm's Cypher and params (ADR-0104 AC-4).
 
     Pure function (no substrate) so the safe type predicate and the open-axis
-    exclusion are unit-testable. Composes three optional closed-axis predicates —
-    entity type (safe), recency-as-predicate, relationship hops — over entities.
-    Never filters on the open axis (name/description): AC-4c.
+    exclusion are unit-testable. Composes optional closed-axis predicates —
+    entity type (safe), entity class (safe, ADR-0115 D6/FRE-866), recency-as-
+    predicate, relationship hops — over entities. Never filters on the open axis
+    (name/description): AC-4c.
 
     Args:
         entity_types: Requested entity types for the type predicate, or None.
         type_predicate_enabled: Whether the type sub-predicate is active (AC-4a).
         recency_days: Recency window in days for last_seen, or None for no window.
         anchor_names: Entity names to seed 1-hop co-occurrence traversal, or None.
+        entity_classes: Requested entity classes (World/Personal) for the class
+            predicate, or None.
+        class_predicate_enabled: Whether the class sub-predicate is active
+            (ADR-0115 D6 / FRE-866).
         top_k: Maximum entities to return.
         vis_fragment_e: Visibility WHERE fragment for the entity alias ``e`` (FRE-229).
         vis_fragment_t: Visibility fragment for the intermediate Turn alias ``t``.
@@ -274,6 +281,15 @@ def _build_structural_arm_query(
         )
         params["entity_types"] = list(entity_types)
 
+    if class_predicate_enabled and entity_classes:
+        # SAFE class predicate (ADR-0115 D6 / FRE-866): narrow to the requested
+        # classes but keep unclassified rows. Unlike entity_type, class has no
+        # ''/'Unknown' placeholder history — its only writers are the classifier
+        # (World/Personal, fail-open per ADR-0115 D4) and "never set" (NULL), so
+        # only the NULL branch is needed to avoid silently dropping a row.
+        e_where.append("(e.class IN $entity_classes OR e.class IS NULL)")
+        params["entity_classes"] = list(entity_classes)
+
     if recency_days is not None:
         # last_seen is heterogeneous (ISO string on the mention path, Neo4j
         # datetime() on the create/access path); normalise both sides with
@@ -296,7 +312,7 @@ def _build_structural_arm_query(
         WHERE a.name IN $anchor_names AND e.name <> a.name
           AND {vis_fragment_a} AND {vis_fragment_t} AND {e_where_clause}
         WITH e, count(DISTINCT a) AS cooccur
-        RETURN e AS e
+        RETURN e AS e, elementId(e) AS item_id
         ORDER BY cooccur DESC, toString(e.last_seen) DESC, e.name
         LIMIT $top_k
         """
@@ -304,7 +320,7 @@ def _build_structural_arm_query(
         cypher = f"""
         MATCH (e:Entity)
         WHERE {e_where_clause}
-        RETURN e AS e
+        RETURN e AS e, elementId(e) AS item_id
         ORDER BY toString(e.last_seen) DESC, e.name
         LIMIT $top_k
         """
@@ -3070,12 +3086,103 @@ class MemoryService:
         rows: list[dict[str, Any]] = await result.data()
         return rows
 
+    async def _run_structural_arm_query(
+        self,
+        *,
+        entity_types: Sequence[str] | None,
+        recency_days: int | None,
+        anchor_names: Sequence[str] | None,
+        entity_classes: Sequence[str] | None,
+        limit: int | None,
+        trace_id: str | None,
+        session_id: str | None,
+        user_id: UUID | None,
+        authenticated: bool,
+    ) -> list[dict[str, Any]] | None:
+        """Shared execution core for the structural recall arm (ADR-0104 AC-4 / FRE-707, FRE-866).
+
+        Gate check, visibility scoping, query build, and Neo4j execution shared by
+        the arm's two thin wrappers — ``structural_recall_arm`` (EntityNode, FRE-707)
+        and ``structural_recall_arm_ranked`` (RankedResult, the multi-path fusion
+        core's contract) — so neither duplicates the substrate plumbing.
+
+        Args:
+            entity_types: Closed-axis type filter; applied only when the type
+                sub-predicate is enabled. Unenforced-type rows are never dropped.
+            recency_days: Recency window for last_seen; None = no window.
+            anchor_names: Seeds for 1-hop co-occurrence traversal; None = plain scan.
+            entity_classes: Closed-axis class filter (World/Personal); applied
+                only when the class sub-predicate is enabled (ADR-0115 D6 /
+                FRE-866). Unclassified rows are never dropped.
+            limit: Max entities; defaults to ``structural_arm_top_k``.
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity (FRE-229).
+
+        Returns:
+            Raw Neo4j records (each carrying ``e`` and ``item_id``), or ``None``
+            when the arm is gated off, the service is disconnected, or the query
+            failed — distinct from an empty list, which means the arm ran and
+            found nothing.
+        """
+        current_settings = get_settings()
+        if not current_settings.structural_arm_enabled:
+            return None
+        if not self.connected or not self.driver:
+            return None
+
+        top_k = limit if limit is not None else current_settings.structural_arm_top_k
+        vis_e, vis_params = _build_visibility_filter("e", user_id, authenticated)
+        vis_t, _ = _build_visibility_filter("t", user_id, authenticated)
+        vis_a, _ = _build_visibility_filter("a", user_id, authenticated)
+        cypher, params = _build_structural_arm_query(
+            entity_types=entity_types,
+            type_predicate_enabled=current_settings.structural_type_predicate_enabled,
+            recency_days=recency_days,
+            anchor_names=anchor_names,
+            entity_classes=entity_classes,
+            class_predicate_enabled=current_settings.structural_class_predicate_enabled,
+            top_k=top_k,
+            vis_fragment_e=vis_e,
+            vis_fragment_t=vis_t,
+            vis_fragment_a=vis_a,
+        )
+        params.update(vis_params)
+
+        try:
+            async with self.driver.session() as db_session:
+                result = await db_session.run(cypher, parameters=params)
+                records: list[dict[str, Any]] = await result.data()
+        except Exception as e:
+            log.error(
+                "structural_recall_arm_failed",
+                error=str(e),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return None
+
+        log.info(
+            "structural_recall_arm_completed",
+            arm="structural",
+            entity_count=len(records),
+            type_predicate_enabled=current_settings.structural_type_predicate_enabled,
+            class_predicate_enabled=current_settings.structural_class_predicate_enabled,
+            has_recency=recency_days is not None,
+            has_anchors=bool(anchor_names),
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return records
+
     async def structural_recall_arm(
         self,
         *,
         entity_types: Sequence[str] | None = None,
         recency_days: int | None = None,
         anchor_names: Sequence[str] | None = None,
+        entity_classes: Sequence[str] | None = None,
         limit: int | None = None,
         access_context: AccessContext = AccessContext.SEARCH,
         trace_id: str | None = None,
@@ -3087,16 +3194,22 @@ class MemoryService:
 
         Returns a ranked list of entities narrowed by the closed axes — entity
         type (safe predicate, gated by ``structural_type_predicate_enabled``),
-        recency, and 1-hop relationship co-occurrence. Feature-gated OFF
-        (``structural_arm_enabled``); flag-dark until the multi-path fusion core
-        (FRE-722/724) wires it in. Never filters on the open axis
-        (name/description) — that stays semantic (AC-4c).
+        entity class (safe predicate, gated by ``structural_class_predicate_enabled``
+        — ADR-0115 D6 / FRE-866), recency, and 1-hop relationship co-occurrence.
+        Feature-gated OFF (``structural_arm_enabled``); wired into the multi-path
+        fusion core via ``structural_recall_arm_ranked`` (FRE-866), but this
+        EntityNode-returning form stays off by default until the flag is
+        explicitly enabled (FRE-433 rollout discipline). Never filters on the
+        open axis (name/description) — that stays semantic (AC-4c).
 
         Args:
             entity_types: Closed-axis type filter; applied only when the type
                 sub-predicate is enabled. Unenforced-type rows are never dropped.
             recency_days: Recency window for last_seen; None = no window.
             anchor_names: Seeds for 1-hop co-occurrence traversal; None = plain scan.
+            entity_classes: Closed-axis class filter (World/Personal); applied
+                only when the class sub-predicate is enabled. Unclassified rows
+                are never dropped.
             limit: Max entities; defaults to ``structural_arm_top_k``.
             access_context: Typed access context (ADR-0042).
             trace_id: Request trace id for event correlation.
@@ -3106,55 +3219,80 @@ class MemoryService:
 
         Returns:
             Ranked list of EntityNode (best-first). Empty when the arm is gated
-            off, the service is disconnected, or nothing matches.
+            off, the service is disconnected, the query failed, or nothing matches.
         """
-        current_settings = get_settings()
-        if not current_settings.structural_arm_enabled:
-            return []
-        if not self.connected or not self.driver:
-            return []
-
-        top_k = limit if limit is not None else current_settings.structural_arm_top_k
-        vis_e, vis_params = _build_visibility_filter("e", user_id, authenticated)
-        vis_t, _ = _build_visibility_filter("t", user_id, authenticated)
-        vis_a, _ = _build_visibility_filter("a", user_id, authenticated)
-        cypher, params = _build_structural_arm_query(
+        records = await self._run_structural_arm_query(
             entity_types=entity_types,
-            type_predicate_enabled=current_settings.structural_type_predicate_enabled,
             recency_days=recency_days,
             anchor_names=anchor_names,
-            top_k=top_k,
-            vis_fragment_e=vis_e,
-            vis_fragment_t=vis_t,
-            vis_fragment_a=vis_a,
-        )
-        params.update(vis_params)
-
-        try:
-            async with self.driver.session() as db_session:
-                result = await db_session.run(cypher, parameters=params)
-                records = await result.data()
-        except Exception as e:
-            log.error(
-                "structural_recall_arm_failed",
-                error=str(e),
-                trace_id=trace_id,
-                session_id=session_id,
-            )
-            return []
-
-        entities = [_entity_node_from_record(r["e"]) for r in records]
-        log.info(
-            "structural_recall_arm_completed",
-            arm="structural",
-            entity_count=len(entities),
-            type_predicate_enabled=current_settings.structural_type_predicate_enabled,
-            has_recency=recency_days is not None,
-            has_anchors=bool(anchor_names),
+            entity_classes=entity_classes,
+            limit=limit,
             trace_id=trace_id,
             session_id=session_id,
+            user_id=user_id,
+            authenticated=authenticated,
         )
-        return entities
+        if records is None:
+            return []
+        return [_entity_node_from_record(r["e"]) for r in records]
+
+    async def structural_recall_arm_ranked(
+        self,
+        *,
+        entity_types: Sequence[str] | None = None,
+        recency_days: int | None = None,
+        anchor_names: Sequence[str] | None = None,
+        entity_classes: Sequence[str] | None = None,
+        limit: int | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[RankedResult]:
+        """Closed-axis structural recall arm, RankedResult form (ADR-0104 / FRE-866).
+
+        The multi-path fusion core's contract for the structural arm — same
+        substrate query as ``structural_recall_arm``, mapped to ``RankedResult``
+        with ``item_id = elementId(e)`` so downstream fused-set resolution
+        (``_resolve_item_texts`` / ``_multipath_broad_entities`` /
+        ``_resolve_fused_turns``) works without special-casing this arm.
+
+        Args:
+            entity_types: Closed-axis type filter; applied only when the type
+                sub-predicate is enabled. Unenforced-type rows are never dropped.
+            recency_days: Recency window for last_seen; None = no window.
+            anchor_names: Seeds for 1-hop co-occurrence traversal; None = plain scan.
+            entity_classes: Closed-axis class filter (World/Personal); applied
+                only when the class sub-predicate is enabled. Unclassified rows
+                are never dropped.
+            limit: Max entities; defaults to ``structural_arm_top_k``.
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity (FRE-229).
+
+        Returns:
+            Ranked list of RankedResult (best-first, 1-based rank, entity kind).
+            Empty when the arm is gated off, the service is disconnected, the
+            query failed, or nothing matches.
+        """
+        records = await self._run_structural_arm_query(
+            entity_types=entity_types,
+            recency_days=recency_days,
+            anchor_names=anchor_names,
+            entity_classes=entity_classes,
+            limit=limit,
+            trace_id=trace_id,
+            session_id=session_id,
+            user_id=user_id,
+            authenticated=authenticated,
+        )
+        if records is None:
+            return []
+        return [
+            RankedResult(item_id=r["item_id"], rank=i + 1, kind="entity")
+            for i, r in enumerate(records)
+        ]
 
     async def lexical_recall_arm(
         self,
@@ -3371,12 +3509,16 @@ class MemoryService:
         one core (behind ``multipath_recall_enabled``); each adapts the returned
         ``MultiPathRecallResult`` to its own shape.
 
-        The v1 arm set is dense + lexical + multi-query (design spec §2). The
-        multi-query arm subsumes the original-query dense pass, so the standalone
-        dense arm runs only when multi-query is off — never double-counting the
-        original query's agreement. The noise-guard floor lives inside the dense
-        arm (ADR-0103 §4); this core never applies a score threshold to the fused
-        or reranked set — the reranker orders, it does not gate (AC-5).
+        The v1 arm set is dense + lexical + multi-query (design spec §2), plus the
+        optional structural arm (ADR-0104 AC-4 / FRE-707, wired in FRE-866) — a
+        plain closed-axis (recency-ordered) scan with no caller-supplied predicate,
+        since this core has no source for type/class/anchor filters from a raw
+        ``query_text``. The multi-query arm subsumes the original-query dense pass,
+        so the standalone dense arm runs only when multi-query is off — never
+        double-counting the original query's agreement. The noise-guard floor
+        lives inside the dense arm (ADR-0103 §4); this core never applies a score
+        threshold to the fused or reranked set — the reranker orders, it does not
+        gate (AC-5).
 
         Args:
             query_text: Free-text recall query.
@@ -3412,6 +3554,9 @@ class MemoryService:
         if current_settings.lexical_arm_enabled:
             arm_names.append("lexical")
             arm_coros.append(self.lexical_recall_arm(query_text, **arm_kwargs))
+        if current_settings.structural_arm_enabled:
+            arm_names.append("structural")
+            arm_coros.append(self.structural_recall_arm_ranked(**arm_kwargs))
 
         arm_results = await asyncio.gather(*arm_coros, return_exceptions=True)
 

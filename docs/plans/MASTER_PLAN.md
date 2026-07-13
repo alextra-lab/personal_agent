@@ -3,7 +3,7 @@
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest) — per-ticket state.
 > **Source of truth for priorities**: this file (sequencing only; do not re-enumerate Linear here) — keep it *concise*.
 > **This file is UNIQUELY the plan**: current live-env / standing state + active priorities + sequencing + Needs-Approval. **Completed / superseded narrative does NOT live here** — it moves to [`MASTER_PLAN_HISTORY.md`](MASTER_PLAN_HISTORY.md) (grepable, NOT auto-loaded). `/prepare-reset` performs the move each reset; this session's *decisions* live in [`LAST_SESSION.md`](LAST_SESSION.md).
-> **Last updated**: 2026-07-12
+> **Last updated**: 2026-07-13
 
 ## Current live-env & standing state
 
@@ -23,7 +23,7 @@
 - **FRE-858 keep-bugs (parked Approved-unlabeled, parked-until-sized):** FRE-632 (owner-identity dup-merge), 733 (Neo4j test-pw), 751 (recency-0 coercion), 762 (temp fallback), 760 (V2 rel-gate), 805/850 (trivial). _(Triage execution 2026-07-11 → MASTER_PLAN_HISTORY.)_
 - **build2/adr: DRY. build1: ADR-0102 vision dispatched** (2026-07-12, owner-directed) — documents/PDF chain T2–T9 (FRE-682–689) Approved, head **FRE-682** on build1, chain fed in T-order, seam FRE-689 master-run. Dispatchable-when-owner-sizes: the FRE-858 keep-bugs · **FRE-739** (ADR-0107 assembled seam, Approved-unlabeled) · **FRE-866** (recall structural arm, Low) · **FRE-867** (watcher permission-surfacing) · **FRE-807** parked.
 - **cc-explore (5th seat) — NEW.** Deliberation session: all of master's vision, none of its hands; worktree-isolated at `.claude/worktrees/explore`. Owner-hubbed injection (lifecycle-rules § Explore). Inaugural topic queued: the FRE-843 corpus-adequacy verdict.
-- **adr:** idle. **FRE-852** (event-driven dispatch actuation ADR — MCP Channels; evidence `docs/research/2026-07-10-event-driven-dispatch-actuation-capability-assessment.md`) is Needs-Approval, no stream — **owner drives `/adr` in cc-adrs.** ADR-0113/FRE-828 canceled (history).
+- **adr:** idle. **ADR-0116 Accepted 2026-07-13** (event-driven dispatch actuation — capability-gateway + per-seat MCP-channel push replaces poll + send-keys + idle-scrape; Phase-1 delivery-swap-only, actuation-only boundary, master-alone-merge preserved, spike-proven H1/H2/H3 on the real RC substrate; FRE-852 **Done**). **Impl chain FRE-871→875 Needs-Approval** (871 head; T1–T4 code/tests, **T5/875 = seam cutover + idle-scrape deletion, ask-first deploy** — the scrape is retired only after the last seat cuts over). ADR-0113/FRE-828 canceled (history).
 - **FRE-717 held** at Awaiting Deploy — ADR-0105 T4 code+schema live, but AC-6 outcome-ingestion has zero organic input yet; live proof pends a promoted proposal reaching a terminal state.
 - **Infra ticket reconciliation PENDING** — FRE-810–815 (filed under the superseded ADR-0111) need cancel/reshape + new ADR-0112 impl tickets.
 - **Pending hygiene (to file):** (a) `load_linear_key` → prefer `pass show CC_LINEAR_API_KEY`; (b) switch `/build`+`/adr` Linear to direct `tools/linear.py`, drop `mcpServers.linear`.

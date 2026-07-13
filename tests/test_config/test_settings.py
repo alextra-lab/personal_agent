@@ -227,6 +227,19 @@ class TestAttachmentGuardrailCaps:
         assert config.attachment_max_total_payload_bytes == 15_728_640
 
 
+class TestDocumentGuardrailCaps:
+    """FRE-683 / ADR-0102 §1, §4, §5 — document resolution guardrail defaults."""
+
+    def test_defaults(self) -> None:
+        config = AppConfig()
+        assert config.document_text_density_floor_per_page == 100
+        assert config.document_max_pages_per_turn == 40
+        assert config.document_page_max_pixels == 1568
+        assert config.document_page_max_bytes == 5_242_880
+        assert config.document_max_total_payload_bytes == 15_728_640
+        assert config.document_max_extracted_text_chars == 200_000
+
+
 class TestEntityExtractionFewshotFlag:
     """FRE-759 — the flag gating the few-shot exemplar block (default OFF)."""
 

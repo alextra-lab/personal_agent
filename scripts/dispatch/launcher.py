@@ -63,6 +63,13 @@ from typing import Literal, Protocol
 # free-form value ever reaches the tmux-parsed inner command (codex #4).
 _MODELS: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
 
+# The approved-allowlist channel reference the launcher passes to ``--channels``
+# when a seat is cut over to channel-mode delivery (ADR-0116). Resolves to the
+# in-repo ``seshat-dispatch`` plugin registered in the local ``seshat-dispatch``
+# marketplace; the plugin is loadable only once master has written the managed
+# ``channelsEnabled`` + ``allowedChannelPlugins`` policy (its deploy runbook).
+_CHANNEL_PLUGIN_REF: str = "plugin:seshat-dispatch@seshat-dispatch"
+
 # Fixed namespace for deterministic, addressable session ids. Derived once from
 # a stable URL string (no wall-clock / randomness), so a given dispatch always
 # maps to the same id.
@@ -106,18 +113,26 @@ class StreamTopology:
             resolved ticket id is appended to form the seed (FRE-806), so the
             worker builds the orchestrator-resolved ticket rather than
             re-deriving a stream's NEXT.
+        channel_port: The per-seat localhost port the seat's ``seshat-dispatch``
+            channel binds, so one channel-mode seat never collides with another
+            (ADR-0116 "one channel per seat"). Only used when channel-mode is on.
     """
 
     stream: str
     worktree: str
     tmux_session: str
     skill_command: str
+    channel_port: int
 
 
 _TOPOLOGY: dict[str, StreamTopology] = {
-    "build1": StreamTopology("build1", ".claude/worktrees/build", "cc-build", "/build"),
-    "build2": StreamTopology("build2", ".claude/worktrees/build2", "cc-build2", "/build"),
-    "adr": StreamTopology("adr", ".claude/worktrees/adrs", "cc-adrs", "/adr"),
+    "build1": StreamTopology(
+        "build1", ".claude/worktrees/build", "cc-build", "/build", channel_port=8790
+    ),
+    "build2": StreamTopology(
+        "build2", ".claude/worktrees/build2", "cc-build2", "/build", channel_port=8791
+    ),
+    "adr": StreamTopology("adr", ".claude/worktrees/adrs", "cc-adrs", "/adr", channel_port=8792),
 }
 
 
@@ -151,10 +166,17 @@ class LauncherCapabilities:
     Attributes:
         auto_seed: Whether a launch can seed a slash command as the first turn.
         model_set: Whether the model tier can be set programmatically at launch.
+        channels: Whether this seat is cut over to channel-mode delivery
+            (ADR-0116). Default ``False`` — a not-yet-cutover seat's argv is
+            byte-for-byte unchanged. When ``True`` the RC seat argv carries the
+            approved ``--channels`` allowlist reference and a per-seat channel
+            port. Seats flip one at a time; ``send-keys`` stays the fallback for
+            the rest until the last seat cuts over.
     """
 
     auto_seed: bool = True
     model_set: bool = True
+    channels: bool = False
 
 
 DEFAULT_CAPABILITIES = LauncherCapabilities()
@@ -248,7 +270,12 @@ def session_id_for(stream: str, ticket: str, model: str, context: str) -> str:
 
 
 def _build_tmux_command(
-    topology: StreamTopology, model: str, session_id: str, seed: str | None
+    topology: StreamTopology,
+    model: str,
+    session_id: str,
+    seed: str | None,
+    *,
+    channels: bool = False,
 ) -> tuple[str, ...]:
     """Build the detached tmux launch argv.
 
@@ -256,12 +283,22 @@ def _build_tmux_command(
     command — so it is assembled with ``shlex.join`` over a validated argv,
     never string-concatenated (codex #4), and never piped (PTY intact).
 
+    When ``channels`` is on, the inner command is prefixed with an ``env`` that
+    sets the seat's per-seat ``SESHAT_CHANNEL_PORT`` and suffixed with the
+    approved ``--channels`` allowlist reference (ADR-0116). The shared secret is
+    deliberately **not** placed on the command line — it would be visible in
+    ``ps``/the plan JSON; it is provisioned out-of-band into the seat's
+    environment (``SESHAT_CHANNEL_SECRET``) by the deploy runbook, and the
+    channel server reads it there (failing closed if absent). When ``channels``
+    is off the argv is byte-for-byte the pre-channel shape (ADR-0116 §5).
+
     Args:
         topology: The stream's launch coordinates.
         model: The validated model tier.
         session_id: The deterministic session id.
         seed: The skill command to seed as the first turn, or ``None`` to start
             without a seed (the ``prepare`` path).
+        channels: Whether to wire the approved channel-mode allowlist path.
 
     Returns:
         The ``tmux new-session`` argv.
@@ -275,8 +312,17 @@ def _build_tmux_command(
         "--session-id",
         session_id,
     ]
+    # The seed is a positional and must be appended BEFORE the channel flag:
+    # ``--channels`` is variadic (it accepts several space-separated plugin refs),
+    # so a seed placed after ``--channels <ref>`` would be swallowed as a second
+    # channel reference and never run as the first turn. Ordering here is the
+    # exact argv master live-verifies against the (undocumented) flag's parser.
     if seed is not None:
         inner_argv.append(seed)
+    if channels:
+        # env-prefix the per-seat port (non-secret); append the allowlist ref last.
+        inner_argv = ["env", f"SESHAT_CHANNEL_PORT={topology.channel_port}", *inner_argv]
+        inner_argv += ["--channels", _CHANNEL_PLUGIN_REF]
     inner = shlex.join(inner_argv)
     return (
         "tmux",
@@ -401,7 +447,7 @@ def plan_launch(
     # CLEAR + model-set available: launch (seeded) or prepare (owner sends the command).
     session_id = session_id_for(stream, ticket, model, "clear")
     seed = dispatch if capabilities.auto_seed else None
-    command = _build_tmux_command(topology, model, session_id, seed)
+    command = _build_tmux_command(topology, model, session_id, seed, channels=capabilities.channels)
     if capabilities.auto_seed:
         outcome: PlanOutcome = "launch"
         card = _launch_card(topology, model, session_id, dispatch)
@@ -585,13 +631,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--no-model-set", action="store_true", help="Force programmatic model-set off."
     )
     parser.add_argument(
+        "--channels",
+        action="store_true",
+        help="Cut this seat over to channel-mode delivery (ADR-0116): add the "
+        "approved --channels allowlist ref + per-seat port to the launch. Default off.",
+    )
+    parser.add_argument(
         "--execute", action="store_true", help="Perform the launch (default: dry-run)."
     )
     parser.add_argument("--json", action="store_true", help="Emit the plan as JSON.")
     args = parser.parse_args(argv)
 
     capabilities = LauncherCapabilities(
-        auto_seed=not args.no_auto_seed, model_set=not args.no_model_set
+        auto_seed=not args.no_auto_seed,
+        model_set=not args.no_model_set,
+        channels=args.channels,
     )
     warm_session_id = find_warm_session(args.stream) if (args.keep and args.execute) else None
 

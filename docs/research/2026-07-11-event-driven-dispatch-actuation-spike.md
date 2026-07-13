@@ -383,3 +383,22 @@ live seats intact).
 H1 + H2 + H3 (the minimum bar) all PASS → idle-seat push is real in our substrate → **scrape retirement
 is claimable**. ADR-0116 proceeds with a *proven* push path; the production `--channels` allowlist route
 is the one remaining thing to prove at build time (the dev flag is the documented proven fallback).
+
+---
+
+## BUILD OUTCOME — FRE-871 (build session, 2026-07-13)
+
+FRE-871 hardened the spike embryo into the production **`seshat-dispatch`** channel and wired the launcher,
+under the owner's **build-then-master-verifies** decision (build ships artifacts + runbook; master runs the
+sudo managed-settings write + live AC-2 verification at deploy). Delivered under
+`scripts/dispatch/channel/`: the SDK-free HTTP gate (`server.mjs`, fail-closed shared-secret `X-Sender` +
+localhost bind, `node --test` 8/8), the MCP entrypoint (`webhook.mjs`), the plugin + local marketplace
+package, the `channelsEnabled` + `allowedChannelPlugins` managed-settings template, and a
+`launcher.py` opt-in channel-mode (`--channels`, default OFF → not-yet-cutover seats byte-for-byte
+unchanged; ON → `env SESHAT_CHANNEL_PORT=<per-seat> claude … --channels plugin:seshat-dispatch@…`, secret
+kept off the command line). **Recon finding that reshapes the AC-2 proof:** `channelsEnabled` +
+`allowedChannelPlugins` are **managed-settings-only** (`/etc/claude-code/managed-settings.json`, sudo, all
+seats) — and it is genuinely **unverified** whether an individual-Max account honors a custom
+`allowedChannelPlugins` entry at all, or only ever accepts the Anthropic-curated allowlist. That crux (and
+the codex #5 `enabledPlugins` / #6 filesystem-vs-git-marketplace checks, and the dev-flag fallback) is the
+master live-verification runbook in `scripts/dispatch/channel/README.md § Deploy`.

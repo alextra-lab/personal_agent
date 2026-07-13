@@ -1,0 +1,7 @@
+{
+  "//": "TEMPLATE for /etc/claude-code/managed-settings.json — ADR-0116 / FRE-871. Master writes this (sudo) at deploy; see README.md § Deploy. channelsEnabled + allowedChannelPlugins are managed-settings-only; there is no user/project override. This file is highest, non-overridable precedence and is read by EVERY claude seat on the box, so validate JSON before writing and back up any existing file first. allowedChannelPlugins REPLACES the Anthropic default allowlist when set — list every channel the box needs, not just this one.",
+  "channelsEnabled": true,
+  "allowedChannelPlugins": [
+    { "marketplace": "seshat-dispatch", "plugin": "seshat-dispatch" }
+  ]
+}

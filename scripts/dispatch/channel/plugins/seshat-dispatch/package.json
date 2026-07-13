@@ -1,0 +1,17 @@
+{
+  "name": "seshat-dispatch-channel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Seshat dispatch actuation channel (ADR-0116 Phase 1).",
+  "main": "webhook.mjs",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}

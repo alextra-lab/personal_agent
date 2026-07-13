@@ -12,6 +12,16 @@
 
 ---
 
+## 2026-07-13 — heavy delivery: corpus de-noise, owner-identity, vision T2/T3, ADR-0116 channel AC-2 proven live
+
+- **ADR-0115 existing-corpus de-noise DONE (owner-authorized prod ops).** FRE-865 backfill classed all 7,992 `class=None` entities → 6,215 World + 410 Personal + 1,372 System-marked (fail-open 3.2%, ~$0.31, gpt-5.4-mini). FRE-868 eviction removed those 1,372 from Core (1,014 findings→`sysgraph.stat`, 358 ephemeral dropped; 126 MB snapshot retained). **Core 7,997→6,625, all World/Personal, 0 System** — ADR-0114 existing-corpus de-confound complete. Gotcha: sysgraph DSN uses docker host `postgres`; host-run scripts need an `@localhost` override (memory).
+- **FRE-632 owner-identity unified + deployed.** The two split "Alex" nodes (`:Entity` holding the knowledge, `:Person` holding `is_owner`) folded into one `:Person:Entity` via apoc mergeNodes (degree 478→432 dedup, 0 self-loops, node backup retained). Re-tiered **Opus** at dispatch (design decision + prod migration). Forward-fix held across gateway bootstrap (no re-fork).
+- **Gateway rebuilt to `7131c011`** (owner-authorized) — shipped FRE-632 forward-fix + **FRE-869** cost-attribution fix (entity_extraction/captains_log/insights now bill their own budget lanes, not `main_inference`).
+- **Vision docs/PDF chain (ADR-0102):** FRE-682 (T2 capability flag) + FRE-683 (T3 doc-resolution module) merged; T4/684 building. Owner-directed after "integrate files."
+- **FRE-739 (ADR-0107 user_id log propagation) merged** — bounced first for a mis-tier (Standard src, no codex plan-review, off the ticket's "mechanical" self-label); master ran codex itself (clean, no blocking) to close the gate rather than bounce-loop. Awaiting Deploy; ADR-0107 seam owner (needs FRE-740 + a live non-owner request).
+- **ADR-0116 channel / event-driven dispatch:** FRE-852 (ADR, spike-proven) merged. **FRE-871 AC-2 PROVEN LIVE** — master ran the headless-channel test: a localhost POST fired a turn in an idle RC seat; the individual Claude Max account DOES honor a custom channel allowlist (**Risk row 1 resolved**); the missing enablement step was `claude plugin install`; headless auto-dismisses new-MCP dialogs (cutover needs `enableAllProjectMcpServers`). Chain **consolidated** — FRE-873/874 canceled into FRE-872 (decompose-when-risky, collapse-when-proven); **FRE-875** = cutover (ask-first, retires the idle-scrape).
+- **Config enforcement (cc-explore handoff):** `Config guard` is now a **required** merge check (owner made the ruleset UI change — master's PAT lacks Administration scope). **FRE-876** (ADR-0099 D4 field-self-documentation check) filed Approved-parked.
+
 ## 2026-07-10 — multipath recall graduated (ADR-0104 Implemented)
 
 - **FRE-724 Done.** Added a permanent `latency_ms` float to the `multipath_recall` telemetry event

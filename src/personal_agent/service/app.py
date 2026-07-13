@@ -7,6 +7,7 @@ from typing import Any, AsyncGenerator, Literal, cast
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
+import structlog
 from fastapi import Depends, FastAPI, Form, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -86,6 +87,23 @@ def _resolve_active_model_attribution(
     from personal_agent.config.model_loader import resolve_active_attribution
 
     return resolve_active_attribution(trace_id=trace_id)
+
+
+def _bind_request_identity(*, trace_id: str, session_id: str | None, user_id: UUID) -> None:
+    """Bind trace_id/session_id/user_id to structlog.contextvars for one live request.
+
+    ADR-0107 D5: every structlog call made anywhere in the caller's task tree
+    (gateway pipeline, orchestrator, executor) inherits these until the caller
+    clears them with ``structlog.contextvars.clear_contextvars()``. Shared by
+    both live-request entry points (``chat`` and
+    ``_process_chat_stream_background``) so the binding shape can't drift
+    between them.
+    """
+    structlog.contextvars.bind_contextvars(
+        trace_id=trace_id,
+        session_id=session_id,
+        user_id=str(user_id),
+    )
 
 
 async def _append_assistant_message_background(
@@ -230,6 +248,12 @@ async def _process_chat_stream_background(
             carrier, separate from the message text (FRE-661 / ADR-0101 §2).
     """
     from personal_agent.config.profile import load_profile, set_current_profile
+
+    # ADR-0107 D5: bind once for the whole live request instead of threading
+    # trace_id/session_id/user_id as a kwarg at every log call site; every
+    # structlog call made anywhere in this task's call tree (gateway pipeline,
+    # orchestrator, executor) inherits these until the `finally` below clears them.
+    _bind_request_identity(trace_id=trace_id, session_id=session_id, user_id=user_id)
 
     try:
         # Wire execution profile so LLM factory dispatches to the correct model.
@@ -459,6 +483,7 @@ async def _process_chat_stream_background(
         # Release the dedup entry so the user can immediately retry on error
         # without waiting for TTL expiry (FRE-392).
         get_deduplicator().release(session_id, message, client_msg_id=client_msg_id)
+        structlog.contextvars.clear_contextvars()
 
 
 def _parse_db_host_port(database_url: str) -> tuple[str, int]:
@@ -1675,7 +1700,11 @@ async def chat(
 ) -> dict[str, str]:
     """Process a chat message.
 
-    This is the main entry point for user interactions.
+    This is the main entry point for user interactions. Thin wrapper around
+    ``_chat_impl`` that binds ``structlog.contextvars`` for the request's
+    lifetime (ADR-0107 D5) — every log call anywhere in ``_chat_impl``'s call
+    tree (gateway pipeline, orchestrator, executor) inherits trace_id/session_id/
+    user_id without needing them threaded as an explicit kwarg per call site.
 
     Args:
         message: User's message
@@ -1690,9 +1719,52 @@ async def chat(
     Returns:
         Response with assistant message and session_id
     """
+    trace_id = str(uuid4())
+    _bind_request_identity(trace_id=trace_id, session_id=session_id, user_id=request_user.user_id)
+    try:
+        return await _chat_impl(
+            trace_id=trace_id,
+            message=message,
+            session_id=session_id,
+            profile=profile,
+            skill_routing_mode=skill_routing_mode,
+            channel=channel,
+            request_user=request_user,
+            db=db,
+        )
+    finally:
+        structlog.contextvars.clear_contextvars()
+
+
+async def _chat_impl(
+    trace_id: str,
+    message: str,
+    session_id: str | None,
+    profile: str,
+    skill_routing_mode: str | None,
+    channel: str,
+    request_user: RequestUser,
+    db: AsyncSession,
+) -> dict[str, str]:
+    """Process a chat message (implementation body — see ``chat`` for the public entrypoint).
+
+    Args:
+        trace_id: Pre-generated trace ID from ``chat`` (bound to structlog
+            contextvars before this is called).
+        message: User's message
+        session_id: Optional existing session ID (creates new if not provided)
+        profile: Model profile to use (default: "local")
+        skill_routing_mode: Override skill routing mode if provided
+        channel: Request channel — pass "EVAL" from eval/benchmark harnesses to
+            prevent side-effecting tools (e.g. create_linear_issue) from executing.
+        request_user: Resolved user identity (injected by FastAPI)
+        db: Database session (injected by FastAPI)
+
+    Returns:
+        Response with assistant message and session_id
+    """
     from personal_agent.telemetry.events import REQUEST_RECEIVED, REQUEST_TIMING
 
-    trace_id = str(uuid4())
     timer = RequestTimer(trace_id=trace_id)
 
     log.info(
@@ -1743,6 +1815,10 @@ async def chat(
 
     # FRE-51: await prior turn's assistant append (NoOp: background task; Redis: session-writer).
     sid = str(cast(UUID, session.session_id))
+    # ADR-0107 D5: `chat()` bound session_id from the raw (possibly-None, for a
+    # new-session request) parameter before the session existed — re-bind now
+    # that the real id is known, so downstream logs never carry a null session_id.
+    structlog.contextvars.bind_contextvars(session_id=sid)
     from personal_agent.events.bus import get_event_bus
     from personal_agent.events.redis_backend import RedisStreamBus
     from personal_agent.events.session_write_waiter import await_previous_session_write
@@ -1938,6 +2014,7 @@ async def chat(
                     trace_breakdown=timer.to_breakdown(),
                     source_component="service.app",
                     eval_mode=(channel.upper() == "EVAL"),
+                    user_id=request_user.user_id,
                 ),
             )
         except Exception:
@@ -1950,6 +2027,7 @@ async def chat(
                     trace_id=trace_id,
                     timer=timer,
                     session_id=str(session.session_id),
+                    user_id=request_user.user_id,
                 )
             )
         session_uuid = cast(UUID, session.session_id)

@@ -163,6 +163,50 @@ class TestLoggerConfiguration:
             logger_module._get_log_dir = original_get_log_dir
             logger_module._get_log_level = original_get_log_level
 
+    def test_logger_merges_bound_contextvars(self, tmp_path: pathlib.Path) -> None:
+        """Verify bound contextvars are merged into emitted log records.
+
+        ADR-0107 D5: trace_id/session_id/user_id bound via
+        structlog.contextvars.bind_contextvars() must be merged into every
+        log call made while bound, without being passed as an explicit
+        kwarg — this is the mechanism the whole propagation fix depends on.
+        """
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+
+        import personal_agent.telemetry.logger as logger_module
+
+        original_get_log_dir = logger_module._get_log_dir
+        original_get_log_level = logger_module._get_log_level
+        logger_module._get_log_dir = lambda: log_dir
+        logger_module._get_log_level = lambda: "DEBUG"
+
+        try:
+            structlog.reset_defaults()
+            logging.root.handlers.clear()
+            configure_logging()
+
+            structlog.contextvars.bind_contextvars(
+                trace_id="trace-xyz", session_id="sess-xyz", user_id="user-xyz"
+            )
+            try:
+                log = get_logger("test.component")
+                log.info("test_event_with_bound_context")
+            finally:
+                structlog.contextvars.clear_contextvars()
+
+            log_file = log_dir / "current.jsonl"
+            with open(log_file, encoding="utf-8") as f:
+                lines = f.readlines()
+                log_entry = json.loads(lines[-1])
+                assert log_entry["event"] == "test_event_with_bound_context"
+                assert log_entry["trace_id"] == "trace-xyz"
+                assert log_entry["session_id"] == "sess-xyz"
+                assert log_entry["user_id"] == "user-xyz"
+        finally:
+            logger_module._get_log_dir = original_get_log_dir
+            logger_module._get_log_level = original_get_log_level
+
     def test_logger_creates_log_directory(self, tmp_path: pathlib.Path) -> None:
         """Test that logger creates log directory if it doesn't exist."""
         log_dir = tmp_path / "new_logs" / "subdir"

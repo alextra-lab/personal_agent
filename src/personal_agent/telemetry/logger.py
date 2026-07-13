@@ -231,6 +231,10 @@ def configure_logging() -> None:
     # Configure structlog
     structlog.configure(
         processors=[
+            # ADR-0107 D5: merges trace_id/session_id/user_id bound via
+            # structlog.contextvars.bind_contextvars() into every log call in
+            # scope, without needing them threaded as an explicit kwarg per site.
+            structlog.contextvars.merge_contextvars,
             structlog.stdlib.filter_by_level,
             structlog.stdlib.add_logger_name,
             structlog.stdlib.add_log_level,

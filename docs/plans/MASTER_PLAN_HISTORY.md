@@ -141,3 +141,26 @@ shelved (FRE-639/642 canceled, 640/641/713 parked); ADR-0106 W2 kept (dispatch a
 Verify-6 dispositioned (FRE-776 canceled; 633/764/605/761 parked). ~4 cancels + ~13 parks total.
 FRE-768 shipped from the keep-set. The verified keep-bugs (632/733/751/762/760/805/850) remain parked
 Approved-unlabeled — still tracked in MASTER_PLAN.
+
+---
+
+## 2026-07-13 (evening) — ADR-0116 channel delivery Done + cutover drift-guard (moved from MASTER_PLAN)
+
+**FRE-872 (ADR-0116 T2–T4 consolidated channel delivery) — Done.** PR #514, merged **dormant**
+(`topology.mode` stays send-keys for every seat → zero live behavior change; the AC-5 not-yet-cutover
+test proves byte-for-byte identical dispatch). Ledger transport tagging + per-seat mode + structured
+channel payload + send-keys fallback + dependabot boundary guard. Code-provable AC halves unit-proven
+(215/215 module + 12/12 node); live AC-1/3/6 halves owned by the FRE-875 seam. No deploy.
+
+**FRE-875 (ADR-0116 T5 cutover seam) — Phase A merged; master-driven.** PR #516: made
+`StreamTopology.mode` the **single source of truth** for a seat's channel state — the launcher derives
+channel-wiring from it (`--channels` iff `mode == "channel"`), and the independent `--channels` flag /
+`LauncherCapabilities.channels` was removed, so the launch shape can't drift from the delivery mode the
+watcher reads. Inert (all seats send-keys). Master authored + self-reviewed (workflow-backed high-effort
+code-review) rather than dispatching to build2, because 875 rewires the dispatch fabric the build seats
+run on (reflexive) — same posture as the FRE-871 AC-2 live proof. Self-review caught + fixed a docstring
+overclaim ("atomically, by construction" — the flip→relaunch window is covered by the FRE-872 fallback,
+not atomicity) and surfaced the Phase-B ordering (provision the channel secret before flipping a seat).
+**FRE-875 stays In Progress (multi-phase); Phase B = the live per-seat cutover** (adr→build2→build1→
+master, delete the idle-scrape last), ask-first deploy, deferred to a fresh master — runbook + prereqs
+on the ticket. 873/874 canceled (consolidated into 872). Gateway unchanged this session (`7131c011`).

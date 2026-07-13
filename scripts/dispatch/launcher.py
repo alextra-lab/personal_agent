@@ -122,13 +122,22 @@ class StreamTopology:
             both what ``gating_watcher.decide()`` consults to choose a worker
             trigger's delivery transport AND what the launcher derives its
             channel-wiring from (``plan_launch`` wires ``--channels`` + the
-            per-seat port iff ``mode == "channel"``). Because both the watcher
-            and the launcher read this one field, the launch shape can never
-            drift from the delivery mode (FRE-875 removed the independent
-            per-invocation ``--channels`` flag that made drift possible). To cut
-            a seat over, flip this one field to ``"channel"``; every launch of
-            that seat is then channel-wired and the watcher channel-delivers to
-            it — atomically, by construction.
+            per-seat port iff ``mode == "channel"``). Because both read this one
+            field, a *launch* of the seat can never be shaped inconsistently
+            with the mode the watcher delivers by (FRE-875 removed the
+            independent per-invocation ``--channels`` flag that made that drift
+            possible). The two reads are NOT simultaneous, though: the watcher
+            reads ``mode`` **live** each tick, whereas the launcher wires the
+            channel only at a seat's **next (re)launch**. So flipping ``mode`` to
+            ``"channel"`` starts channel-delivery immediately, while the seat
+            becomes channel-wired only when it is relaunched. The window between
+            is covered by the FRE-872 fallback — an unreachable channel POST
+            degrades to send-keys, never a dropped trigger — but it is a real
+            window. Cutover ordering (Phase B) therefore: provision the shared
+            ``SESHAT_CHANNEL_SECRET`` into the seat's environment BEFORE flipping
+            ``mode`` (an auto-relaunched channel seat missing the secret fails
+            closed and likewise degrades to send-keys), and relaunch the seat as
+            part of the flip so its channel goes live promptly.
     """
 
     stream: str

@@ -56,13 +56,14 @@
 # --- Dynamic Cypher false-positive: originating_trace_id/originating_session_id
 #     ARE set on this Entity MERGE via dynamically-joined on_create_clauses
 #     (ADR-0074 §I5); the static string-chunk analyzer cannot see the joined
-#     props. Line shifted 752 → 871 → 913 → 951 → 991 → 1125 → 1208 → 1414 → 1419 (FRE-369, FRE-672
+#     props. Line shifted 752 → 871 → 913 → 951 → 991 → 1125 → 1208 → 1414 → 1419 → 1433 (FRE-369, FRE-672
 #     selector helper, FRE-638 Claims imports + _parse_iso, FRE-711 living-description
 #     gate block, FRE-707 structural-arm builder + shared entity-parse helper, FRE-723
 #     lexical/multi-query arm imports + module-level helpers, FRE-725 description
-#     update-kind constants + create_entity signal param/docstring inserted above, then
-#     FRE-864 ADR-0115 D2 class SET-clause block inserted above). ---
+#     update-kind constants + create_entity signal param/docstring inserted above,
+#     FRE-864 ADR-0115 D2 class SET-clause block inserted above, then FRE-866 the
+#     structural arm's class predicate params/block inserted above). ---
 - path: src/personal_agent/memory/service.py
-  line: 1433  # FRE-864: +14 from the class SET-clause block inserted above (was 1419)
+  line: 1449  # FRE-866: +16 from the class predicate params/block inserted above (was 1433)
   pattern: cypher_merge
   reason: "dynamic on_create_clauses set origination; static analyzer can't see joined props (FP)"

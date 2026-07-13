@@ -28,6 +28,8 @@ def _build(**overrides: object) -> tuple[str, dict[str, object]]:
         "type_predicate_enabled": False,
         "recency_days": None,
         "anchor_names": None,
+        "entity_classes": None,
+        "class_predicate_enabled": False,
         "top_k": 50,
         "vis_fragment_e": _VIS_E,
         "vis_fragment_t": _VIS_T,
@@ -35,6 +37,43 @@ def _build(**overrides: object) -> tuple[str, dict[str, object]]:
     }
     kwargs.update(overrides)
     return _build_structural_arm_query(**kwargs)  # type: ignore[arg-type]
+
+
+def test_class_predicate_keeps_unclassified_rows() -> None:
+    """ADR-0115 D6 / FRE-866: an enabled class predicate keeps NULL-class rows."""
+    cypher, params = _build(entity_classes=["World"], class_predicate_enabled=True)
+    assert "e.class IN $entity_classes" in cypher
+    assert "e.class IS NULL" in cypher
+    assert params["entity_classes"] == ["World"]
+
+
+def test_class_predicate_absent_when_disabled() -> None:
+    """No class predicate when the sub-predicate is gated off."""
+    cypher, params = _build(entity_classes=["World"], class_predicate_enabled=False)
+    assert "e.class" not in cypher
+    assert "entity_classes" not in params
+
+
+def test_class_predicate_absent_without_classes() -> None:
+    """Enabled flag but entity_classes=None → no class predicate."""
+    cypher, params = _build(entity_classes=None, class_predicate_enabled=True)
+    assert "e.class" not in cypher
+    assert "entity_classes" not in params
+
+
+def test_class_predicate_absent_with_empty_list() -> None:
+    """Enabled flag but entity_classes=[] → no class predicate (falsy guard)."""
+    cypher, params = _build(entity_classes=[], class_predicate_enabled=True)
+    assert "e.class" not in cypher
+    assert "entity_classes" not in params
+
+
+def test_item_id_present_in_both_branches() -> None:
+    """FRE-866: elementId(e) is projected in the plain-scan and anchor-traversal Cypher."""
+    plain_cypher, _ = _build()
+    anchor_cypher, _ = _build(anchor_names=["Rafale"])
+    assert "elementId(e) AS item_id" in plain_cypher
+    assert "elementId(e) AS item_id" in anchor_cypher
 
 
 def test_type_predicate_keeps_unenforced_rows() -> None:

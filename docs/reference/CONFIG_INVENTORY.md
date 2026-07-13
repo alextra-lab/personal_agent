@@ -44,7 +44,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 
 <!-- AUTOGEN:AppConfig START — regenerate via scripts/audit/config_inventory.py generate -->
 
-**306 typed scalar/path parameters** live in `src/personal_agent/config/settings.py` (`AppConfig`, a pydantic `BaseSettings` with `env_prefix="AGENT_"`). Every field is read through the process-wide `from personal_agent.config import settings` singleton (`settings.<field>`), so the **reader** is uniformly that accessor; **validation** is pydantic type coercion at load (`AppConfig()` raises `ValidationError` on a bad value). The **Env var** column shows `AGENT_<FIELD>` (the prefix+name form, **always valid**); where a field also declares an `alias=`, that alias is shown after `·` as an **additional** accepted spelling — empirically both bind (e.g. `debug` accepts `AGENT_DEBUG` *and* `APP_DEBUG`). A field's default is overridable by either; the *profile-divergence* for scalars is the set of `docker-compose*.yml` `environment:` blocks that override it (see §8).
+**307 typed scalar/path parameters** live in `src/personal_agent/config/settings.py` (`AppConfig`, a pydantic `BaseSettings` with `env_prefix="AGENT_"`). Every field is read through the process-wide `from personal_agent.config import settings` singleton (`settings.<field>`), so the **reader** is uniformly that accessor; **validation** is pydantic type coercion at load (`AppConfig()` raises `ValidationError` on a bad value). The **Env var** column shows `AGENT_<FIELD>` (the prefix+name form, **always valid**); where a field also declares an `alias=`, that alias is shown after `·` as an **additional** accepted spelling — empirically both bind (e.g. `debug` accepts `AGENT_DEBUG` *and* `APP_DEBUG`). A field's default is overridable by either; the *profile-divergence* for scalars is the set of `docker-compose*.yml` `environment:` blocks that override it (see §8).
 
 | # | Field (`settings.X`) | Env var | Type | Default | Secret | In `.env.example` |
 |---|---|---|---|---|---|---|
@@ -310,50 +310,51 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 260 | `slm_queue_depth_degraded` | `AGENT_SLM_QUEUE_DEPTH_DEGRADED` | `int` | `4` |  | — |
 | 261 | `structural_arm_enabled` | `AGENT_STRUCTURAL_ARM_ENABLED` | `bool` | `False` |  | — |
 | 262 | `structural_arm_top_k` | `AGENT_STRUCTURAL_ARM_TOP_K` | `int` | `50` |  | — |
-| 263 | `structural_type_predicate_enabled` | `AGENT_STRUCTURAL_TYPE_PREDICATE_ENABLED` | `bool` | `False` |  | — |
-| 264 | `sub_agent_max_tokens` | `AGENT_SUB_AGENT_MAX_TOKENS` | `int` | `4096` |  | — |
-| 265 | `sub_agent_max_tool_iterations` | `AGENT_SUB_AGENT_MAX_TOOL_ITERATIONS` | `int` | `5` |  | — |
-| 266 | `sub_agent_summary_max_chars` | `AGENT_SUB_AGENT_SUMMARY_MAX_CHARS` | `int` | `8000` |  | — |
-| 267 | `sub_agent_timeout_seconds` | `AGENT_SUB_AGENT_TIMEOUT_SECONDS` | `float` | `120.0` |  | — |
-| 268 | `substrate_profile` | `AGENT_SUBSTRATE_PROFILE` | `str` | `'private'` |  | ✅ |
-| 269 | `synthesis_timeout_seconds` | `AGENT_SYNTHESIS_TIMEOUT_SECONDS` | `float` | `25.0` |  | — |
-| 270 | `sysgraph_database_url` | `AGENT_SYSGRAPH_DATABASE_URL` | `str` | `'postgresql+asyncpg://<redacted>@localhost:5432/personal_agent'` |  | ✅ |
-| 271 | `sysgraph_maintenance_enabled` | `AGENT_SYSGRAPH_MAINTENANCE_ENABLED` | `bool` | `True` |  | — |
-| 272 | `sysgraph_maintenance_hour_utc` | `AGENT_SYSGRAPH_MAINTENANCE_HOUR_UTC` | `int` | `9` |  | — |
-| 273 | `tool_result_compression_enabled` | `AGENT_TOOL_RESULT_COMPRESSION_ENABLED` | `bool` | `False` |  | — |
-| 274 | `tool_result_digest_exclude_tools` | `AGENT_TOOL_RESULT_DIGEST_EXCLUDE_TOOLS` | `list` | `[]` |  | — |
-| 275 | `tool_result_digest_head_lines` | `AGENT_TOOL_RESULT_DIGEST_HEAD_LINES` | `int` | `40` |  | — |
-| 276 | `tool_result_digest_keep` | `AGENT_TOOL_RESULT_DIGEST_KEEP` | `int` | `3` |  | — |
-| 277 | `tool_result_digest_max_expand_tokens` | `AGENT_TOOL_RESULT_DIGEST_MAX_EXPAND_TOKENS` | `int` | `8000` |  | — |
-| 278 | `tool_result_digest_min_savings_tokens` | `AGENT_TOOL_RESULT_DIGEST_MIN_SAVINGS_TOKENS` | `int` | `500` |  | — |
-| 279 | `tool_result_digest_pin_ttl_turns` | `AGENT_TOOL_RESULT_DIGEST_PIN_TTL_TURNS` | `int` | `4` |  | — |
-| 280 | `tool_result_digest_put_timeout_ms` | `AGENT_TOOL_RESULT_DIGEST_PUT_TIMEOUT_MS` | `int` | `2000` |  | — |
-| 281 | `tool_result_digest_tail_lines` | `AGENT_TOOL_RESULT_DIGEST_TAIL_LINES` | `int` | `20` |  | — |
-| 282 | `tool_result_digest_threshold_tokens` | `AGENT_TOOL_RESULT_DIGEST_THRESHOLD_TOKENS` | `int` | `1500` |  | — |
-| 283 | `turn_observed_stream_maxlen` | `AGENT_TURN_OBSERVED_STREAM_MAXLEN` | `int` | `10000` |  | — |
-| 284 | `turn_projector_enabled` | `AGENT_TURN_PROJECTOR_ENABLED` | `bool` | `True` |  | — |
-| 285 | `upload_max_size_bytes` | `AGENT_UPLOAD_MAX_SIZE_BYTES` | `int` | `52428800` |  | — |
-| 286 | `url_guard_allowlist` | `AGENT_URL_GUARD_ALLOWLIST` | `list` | `[]` |  | — |
-| 287 | `url_guard_cache_ttl_seconds` | `AGENT_URL_GUARD_CACHE_TTL_SECONDS` | `int` | `3600` |  | — |
-| 288 | `url_guard_enabled` | `AGENT_URL_GUARD_ENABLED` | `bool` | `True` |  | — |
-| 289 | `url_guard_mode` | `AGENT_URL_GUARD_MODE` | `str` | `'blocklist'` |  | — |
-| 290 | `use_service_mode` | `AGENT_USE_SERVICE_MODE` | `bool` | `True` |  | — |
-| 291 | `user_display_names_json` | `AGENT_USER_DISPLAY_NAMES_JSON` | `str` | `'{}'` |  | ✅ |
-| 292 | `version` | `AGENT_VERSION` | `str` | `'0.1.0'` |  | ✅ |
-| 293 | `voyage_api_key` | `AGENT_VOYAGE_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 294 | `within_session_compression_enabled` | `AGENT_WITHIN_SESSION_COMPRESSION_ENABLED` | `bool` | `True` |  | — |
-| 295 | `within_session_compression_refire_after_messages` | `AGENT_WITHIN_SESSION_COMPRESSION_REFIRE_AFTER_MESSAGES` | `int` | `4` |  | — |
-| 296 | `within_session_hard_threshold_ratio` | `AGENT_WITHIN_SESSION_HARD_THRESHOLD_RATIO` | `float` | `0.85` |  | — |
-| 297 | `within_session_min_tail_ratio` | `AGENT_WITHIN_SESSION_MIN_TAIL_RATIO` | `float` | `0.25` |  | — |
-| 298 | `within_session_pre_pass_threshold_tokens` | `AGENT_WITHIN_SESSION_PRE_PASS_THRESHOLD_TOKENS` | `int` | `800` |  | — |
-| 299 | `worker_global_timeout_seconds` | `AGENT_WORKER_GLOBAL_TIMEOUT_SECONDS` | `float` | `180.0` |  | — |
-| 300 | `worker_timeout_seconds` | `AGENT_WORKER_TIMEOUT_SECONDS` | `float` | `60.0` |  | — |
-| 301 | `ws_event_queue_size` | `AGENT_WS_EVENT_QUEUE_SIZE` | `int` | `500` |  | — |
-| 302 | `ws_event_ttl_hours` | `AGENT_WS_EVENT_TTL_HOURS` | `int` | `24` |  | — |
-| 303 | `ws_max_message_size` | `AGENT_WS_MAX_MESSAGE_SIZE` | `int` | `8192` |  | — |
-| 304 | `ws_ping_timeout_seconds` | `AGENT_WS_PING_TIMEOUT_SECONDS` | `int` | `60` |  | — |
-| 305 | `ws_rate_limit_per_second` | `AGENT_WS_RATE_LIMIT_PER_SECOND` | `int` | `20` |  | — |
-| 306 | `ws_ticket_ttl_seconds` | `AGENT_WS_TICKET_TTL_SECONDS` | `int` | `30` |  | — |
+| 263 | `structural_class_predicate_enabled` | `AGENT_STRUCTURAL_CLASS_PREDICATE_ENABLED` | `bool` | `False` |  | — |
+| 264 | `structural_type_predicate_enabled` | `AGENT_STRUCTURAL_TYPE_PREDICATE_ENABLED` | `bool` | `False` |  | — |
+| 265 | `sub_agent_max_tokens` | `AGENT_SUB_AGENT_MAX_TOKENS` | `int` | `4096` |  | — |
+| 266 | `sub_agent_max_tool_iterations` | `AGENT_SUB_AGENT_MAX_TOOL_ITERATIONS` | `int` | `5` |  | — |
+| 267 | `sub_agent_summary_max_chars` | `AGENT_SUB_AGENT_SUMMARY_MAX_CHARS` | `int` | `8000` |  | — |
+| 268 | `sub_agent_timeout_seconds` | `AGENT_SUB_AGENT_TIMEOUT_SECONDS` | `float` | `120.0` |  | — |
+| 269 | `substrate_profile` | `AGENT_SUBSTRATE_PROFILE` | `str` | `'private'` |  | ✅ |
+| 270 | `synthesis_timeout_seconds` | `AGENT_SYNTHESIS_TIMEOUT_SECONDS` | `float` | `25.0` |  | — |
+| 271 | `sysgraph_database_url` | `AGENT_SYSGRAPH_DATABASE_URL` | `str` | `'postgresql+asyncpg://<redacted>@localhost:5432/personal_agent'` |  | ✅ |
+| 272 | `sysgraph_maintenance_enabled` | `AGENT_SYSGRAPH_MAINTENANCE_ENABLED` | `bool` | `True` |  | — |
+| 273 | `sysgraph_maintenance_hour_utc` | `AGENT_SYSGRAPH_MAINTENANCE_HOUR_UTC` | `int` | `9` |  | — |
+| 274 | `tool_result_compression_enabled` | `AGENT_TOOL_RESULT_COMPRESSION_ENABLED` | `bool` | `False` |  | — |
+| 275 | `tool_result_digest_exclude_tools` | `AGENT_TOOL_RESULT_DIGEST_EXCLUDE_TOOLS` | `list` | `[]` |  | — |
+| 276 | `tool_result_digest_head_lines` | `AGENT_TOOL_RESULT_DIGEST_HEAD_LINES` | `int` | `40` |  | — |
+| 277 | `tool_result_digest_keep` | `AGENT_TOOL_RESULT_DIGEST_KEEP` | `int` | `3` |  | — |
+| 278 | `tool_result_digest_max_expand_tokens` | `AGENT_TOOL_RESULT_DIGEST_MAX_EXPAND_TOKENS` | `int` | `8000` |  | — |
+| 279 | `tool_result_digest_min_savings_tokens` | `AGENT_TOOL_RESULT_DIGEST_MIN_SAVINGS_TOKENS` | `int` | `500` |  | — |
+| 280 | `tool_result_digest_pin_ttl_turns` | `AGENT_TOOL_RESULT_DIGEST_PIN_TTL_TURNS` | `int` | `4` |  | — |
+| 281 | `tool_result_digest_put_timeout_ms` | `AGENT_TOOL_RESULT_DIGEST_PUT_TIMEOUT_MS` | `int` | `2000` |  | — |
+| 282 | `tool_result_digest_tail_lines` | `AGENT_TOOL_RESULT_DIGEST_TAIL_LINES` | `int` | `20` |  | — |
+| 283 | `tool_result_digest_threshold_tokens` | `AGENT_TOOL_RESULT_DIGEST_THRESHOLD_TOKENS` | `int` | `1500` |  | — |
+| 284 | `turn_observed_stream_maxlen` | `AGENT_TURN_OBSERVED_STREAM_MAXLEN` | `int` | `10000` |  | — |
+| 285 | `turn_projector_enabled` | `AGENT_TURN_PROJECTOR_ENABLED` | `bool` | `True` |  | — |
+| 286 | `upload_max_size_bytes` | `AGENT_UPLOAD_MAX_SIZE_BYTES` | `int` | `52428800` |  | — |
+| 287 | `url_guard_allowlist` | `AGENT_URL_GUARD_ALLOWLIST` | `list` | `[]` |  | — |
+| 288 | `url_guard_cache_ttl_seconds` | `AGENT_URL_GUARD_CACHE_TTL_SECONDS` | `int` | `3600` |  | — |
+| 289 | `url_guard_enabled` | `AGENT_URL_GUARD_ENABLED` | `bool` | `True` |  | — |
+| 290 | `url_guard_mode` | `AGENT_URL_GUARD_MODE` | `str` | `'blocklist'` |  | — |
+| 291 | `use_service_mode` | `AGENT_USE_SERVICE_MODE` | `bool` | `True` |  | — |
+| 292 | `user_display_names_json` | `AGENT_USER_DISPLAY_NAMES_JSON` | `str` | `'{}'` |  | ✅ |
+| 293 | `version` | `AGENT_VERSION` | `str` | `'0.1.0'` |  | ✅ |
+| 294 | `voyage_api_key` | `AGENT_VOYAGE_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 295 | `within_session_compression_enabled` | `AGENT_WITHIN_SESSION_COMPRESSION_ENABLED` | `bool` | `True` |  | — |
+| 296 | `within_session_compression_refire_after_messages` | `AGENT_WITHIN_SESSION_COMPRESSION_REFIRE_AFTER_MESSAGES` | `int` | `4` |  | — |
+| 297 | `within_session_hard_threshold_ratio` | `AGENT_WITHIN_SESSION_HARD_THRESHOLD_RATIO` | `float` | `0.85` |  | — |
+| 298 | `within_session_min_tail_ratio` | `AGENT_WITHIN_SESSION_MIN_TAIL_RATIO` | `float` | `0.25` |  | — |
+| 299 | `within_session_pre_pass_threshold_tokens` | `AGENT_WITHIN_SESSION_PRE_PASS_THRESHOLD_TOKENS` | `int` | `800` |  | — |
+| 300 | `worker_global_timeout_seconds` | `AGENT_WORKER_GLOBAL_TIMEOUT_SECONDS` | `float` | `180.0` |  | — |
+| 301 | `worker_timeout_seconds` | `AGENT_WORKER_TIMEOUT_SECONDS` | `float` | `60.0` |  | — |
+| 302 | `ws_event_queue_size` | `AGENT_WS_EVENT_QUEUE_SIZE` | `int` | `500` |  | — |
+| 303 | `ws_event_ttl_hours` | `AGENT_WS_EVENT_TTL_HOURS` | `int` | `24` |  | — |
+| 304 | `ws_max_message_size` | `AGENT_WS_MAX_MESSAGE_SIZE` | `int` | `8192` |  | — |
+| 305 | `ws_ping_timeout_seconds` | `AGENT_WS_PING_TIMEOUT_SECONDS` | `int` | `60` |  | — |
+| 306 | `ws_rate_limit_per_second` | `AGENT_WS_RATE_LIMIT_PER_SECOND` | `int` | `20` |  | — |
+| 307 | `ws_ticket_ttl_seconds` | `AGENT_WS_TICKET_TTL_SECONDS` | `int` | `30` |  | — |
 
 ### Orphan `AGENT_*` keys in `.env.example` (0)
 
@@ -361,11 +362,11 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 
 _None — every documented `AGENT_*` key either binds a field (`AGENT_<FIELD>` or alias) or is a known consumed-elsewhere key._
 
-### AppConfig fields not documented in `.env.example` (117)
+### AppConfig fields not documented in `.env.example` (118)
 
 Fields with no matching env-var line in `.env.example` — the coverage gap ADR-0099 D4 flags as a *policy* finding (undocumented config surface):
 
-<details><summary>117 undocumented fields</summary>
+<details><summary>118 undocumented fields</summary>
 
 - `allowed_ws_origins`
 - `artifact_decomposition_enabled`
@@ -445,6 +446,7 @@ Fields with no matching env-var line in `.env.example` — the coverage gap ADR-
 - `slm_queue_depth_degraded`
 - `structural_arm_enabled`
 - `structural_arm_top_k`
+- `structural_class_predicate_enabled`
 - `structural_type_predicate_enabled`
 - `sub_agent_max_tokens`
 - `sub_agent_max_tool_iterations`

@@ -29,10 +29,18 @@ def _service() -> MemoryService:
     return service
 
 
-def _enable(monkeypatch, *, multiquery: bool, lexical: bool, reranker: bool = False) -> None:
+def _enable(
+    monkeypatch,
+    *,
+    multiquery: bool,
+    lexical: bool,
+    structural: bool = False,
+    reranker: bool = False,
+) -> None:
     s = get_settings()
     monkeypatch.setattr(s, "multiquery_arm_enabled", multiquery, raising=False)
     monkeypatch.setattr(s, "lexical_arm_enabled", lexical, raising=False)
+    monkeypatch.setattr(s, "structural_arm_enabled", structural, raising=False)
     monkeypatch.setattr(s, "reranker_enabled", reranker, raising=False)
 
 
@@ -90,6 +98,84 @@ class TestArmAssembly:
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
         assert "lexical" in result.arms_failed
         assert result.per_arm_counts["lexical"] == 0
+        assert result.items[0].item_id == "e1"
+
+
+class TestStructuralArm:
+    """FRE-866: the structural arm is wired into the fusion core, flag-gated.
+
+    ADR-0115 D6 follow-up — the arm is coded (FRE-707) but was never assembled
+    by ``_multipath_fused_recall``. These prove it is now a live, flag-gated
+    fusion participant that behaves like every other arm: included/excluded by
+    its own flag, meets AC-1's arm-count floor, earns RRF agreement, and
+    isolates its own failures.
+    """
+
+    @pytest.mark.asyncio
+    async def test_structural_arm_included_when_enabled(self, monkeypatch) -> None:
+        """Flag on: structural runs and its RankedResult identity is preserved."""
+        _enable(monkeypatch, multiquery=True, lexical=False, structural=True)
+        service = _service()
+        service.multi_query_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service.structural_recall_arm_ranked = AsyncMock(
+            return_value=[RankedResult("e2", 1, kind="entity")]
+        )
+        result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
+        assert "structural" in result.arms_executed
+        item = next(i for i in result.items if i.item_id == "e2")
+        assert item.kind == "entity"
+
+    @pytest.mark.asyncio
+    async def test_structural_arm_excluded_when_disabled(self, monkeypatch) -> None:
+        """The shipped default (structural_arm_enabled=False): no behavior change."""
+        _enable(monkeypatch, multiquery=True, lexical=True, structural=False)
+        service = _service()
+        service.multi_query_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service.lexical_recall_arm = AsyncMock(return_value=[])
+        service.structural_recall_arm_ranked = AsyncMock(
+            return_value=[RankedResult("e2", 1, kind="entity")]
+        )
+        result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
+        assert "structural" not in result.arms_executed
+        service.structural_recall_arm_ranked.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_structural_plus_dense_meets_ac1_floor(self, monkeypatch) -> None:
+        """ADR-0104 AC-1: ≥2 independent arms run, even with only dense + structural."""
+        _enable(monkeypatch, multiquery=False, lexical=False, structural=True)
+        service = _service()
+        service.dense_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service.structural_recall_arm_ranked = AsyncMock(
+            return_value=[RankedResult("e2", 1, kind="entity")]
+        )
+        result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
+        assert len(result.arms_executed) >= 2
+        assert set(result.arms_executed) == {"dense", "structural"}
+
+    @pytest.mark.asyncio
+    async def test_structural_lexical_agreement_ranks_first(self, monkeypatch) -> None:
+        """RRF agreement: an item surfaced by structural + lexical outranks a lone hit."""
+        _enable(monkeypatch, multiquery=False, lexical=True, structural=True)
+        service = _service()
+        service.dense_recall_arm = AsyncMock(return_value=[RankedResult("solo", 1)])
+        service.lexical_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service.structural_recall_arm_ranked = AsyncMock(
+            return_value=[RankedResult("e1", 2, kind="entity")]
+        )
+        result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
+        assert result.items[0].item_id == "e1"
+        assert result.items[0].arm_count == 2
+
+    @pytest.mark.asyncio
+    async def test_structural_arm_exception_recorded_not_raised(self, monkeypatch) -> None:
+        """A raising structural arm falls to arms_failed; other arms still return."""
+        _enable(monkeypatch, multiquery=True, lexical=False, structural=True)
+        service = _service()
+        service.multi_query_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service.structural_recall_arm_ranked = AsyncMock(side_effect=RuntimeError("boom"))
+        result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
+        assert "structural" in result.arms_failed
+        assert result.per_arm_counts["structural"] == 0
         assert result.items[0].item_id == "e1"
 
 

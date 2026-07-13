@@ -1,0 +1,8 @@
+{
+  "name": "seshat-dispatch",
+  "version": "1.0.0",
+  "description": "Seshat dispatch actuation channel — pushes PR/CI gating events into a worker seat (ADR-0116, one-way, localhost + shared-secret gated).",
+  "author": {
+    "name": "FrenchForest / Seshat"
+  }
+}

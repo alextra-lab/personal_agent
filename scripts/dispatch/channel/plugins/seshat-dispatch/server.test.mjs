@@ -1,0 +1,106 @@
+// Unit tests for the seshat-dispatch channel HTTP gate (FRE-871, ADR-0116 Phase 1).
+//
+// Run: `node --test server.test.mjs` (no npm install — server.mjs is SDK-free).
+// These prove the fail-closed sender gate and localhost-only bind that stand
+// between an arbitrary local POST and text injected into a live Claude session.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+
+import { LOCALHOST, readConfig, secretMatches, createServer, listen } from './server.mjs'
+
+function post(port, body, headers = {}) {
+  return fetch(`http://${LOCALHOST}:${port}/`, { method: 'POST', body, headers })
+}
+
+test('readConfig requires a valid port (no insecure default)', () => {
+  assert.throws(() => readConfig({ SESHAT_CHANNEL_SECRET: 's' }), /SESHAT_CHANNEL_PORT/)
+  assert.throws(
+    () => readConfig({ SESHAT_CHANNEL_PORT: '0', SESHAT_CHANNEL_SECRET: 's' }),
+    /SESHAT_CHANNEL_PORT/,
+  )
+  assert.throws(
+    () => readConfig({ SESHAT_CHANNEL_PORT: 'nope', SESHAT_CHANNEL_SECRET: 's' }),
+    /SESHAT_CHANNEL_PORT/,
+  )
+})
+
+test('readConfig requires a secret (fail closed)', () => {
+  assert.throws(() => readConfig({ SESHAT_CHANNEL_PORT: '8791' }), /SESHAT_CHANNEL_SECRET/)
+  assert.throws(
+    () => readConfig({ SESHAT_CHANNEL_PORT: '8791', SESHAT_CHANNEL_SECRET: '' }),
+    /SESHAT_CHANNEL_SECRET/,
+  )
+})
+
+test('readConfig accepts a valid port + secret', () => {
+  assert.deepEqual(readConfig({ SESHAT_CHANNEL_PORT: '8791', SESHAT_CHANNEL_SECRET: 'sekret' }), {
+    port: 8791,
+    secret: 'sekret',
+  })
+})
+
+test('secretMatches is exact and length-safe', () => {
+  assert.equal(secretMatches('abc', 'abc'), true)
+  assert.equal(secretMatches('abc', 'abd'), false)
+  assert.equal(secretMatches('ab', 'abc'), false)
+  assert.equal(secretMatches('abcd', 'abc'), false)
+  assert.equal(secretMatches(undefined, 'abc'), false)
+  assert.equal(secretMatches(123, 'abc'), false)
+})
+
+test('http gate: authorized POST invokes onEvent and returns 200', async () => {
+  const events = []
+  const server = createServer({
+    secret: 'topsecret',
+    onEvent: (body, meta) => events.push({ body, meta }),
+  })
+  await listen(server, 0)
+  const { port } = server.address()
+  try {
+    const res = await post(port, 'ci failed on PR #7', { 'X-Sender': 'topsecret' })
+    assert.equal(res.status, 200)
+    assert.equal(events.length, 1)
+    assert.equal(events[0].body, 'ci failed on PR #7')
+    assert.equal(events[0].meta.method, 'POST')
+  } finally {
+    server.close()
+  }
+})
+
+test('http gate: wrong secret returns 403 and drops (no event)', async () => {
+  const events = []
+  const server = createServer({ secret: 'topsecret', onEvent: () => events.push(1) })
+  await listen(server, 0)
+  const { port } = server.address()
+  try {
+    const res = await post(port, 'injected', { 'X-Sender': 'guess' })
+    assert.equal(res.status, 403)
+    assert.equal(events.length, 0)
+  } finally {
+    server.close()
+  }
+})
+
+test('http gate: missing X-Sender returns 403 and drops (no event)', async () => {
+  const events = []
+  const server = createServer({ secret: 'topsecret', onEvent: () => events.push(1) })
+  await listen(server, 0)
+  const { port } = server.address()
+  try {
+    const res = await post(port, 'injected')
+    assert.equal(res.status, 403)
+    assert.equal(events.length, 0)
+  } finally {
+    server.close()
+  }
+})
+
+test('server binds localhost only', async () => {
+  const server = createServer({ secret: 's', onEvent: () => {} })
+  await listen(server, 0)
+  try {
+    assert.equal(server.address().address, LOCALHOST)
+  } finally {
+    server.close()
+  }
+})

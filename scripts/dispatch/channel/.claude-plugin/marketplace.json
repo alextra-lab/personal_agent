@@ -1,0 +1,21 @@
+{
+  "name": "seshat-dispatch",
+  "owner": {
+    "name": "FrenchForest / Seshat"
+  },
+  "metadata": {
+    "description": "Seshat internal dispatch channels (ADR-0116 event-driven dispatch actuation).",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "seshat-dispatch",
+      "description": "Dispatch actuation channel — pushes PR/CI gating events into a worker seat (one-way, localhost + shared-secret gated).",
+      "version": "1.0.0",
+      "author": {
+        "name": "FrenchForest / Seshat"
+      },
+      "source": "./plugins/seshat-dispatch"
+    }
+  ]
+}

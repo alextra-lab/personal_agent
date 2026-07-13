@@ -46,6 +46,25 @@ class TestConsolidationQualityMonitor:
         assert "Turn" in turn_count_query
         assert "Conversation" not in turn_count_query
 
+    async def test_entity_extraction_quality_excludes_owner_node(self) -> None:
+        """FRE-632: the owner is now :Person:Entity — it must be excluded (user_id IS NULL) from
+        the third-party *extraction*-quality counts so it doesn't skew entity/duplicate rates.
+        """
+        telemetry_queries = AsyncMock()
+        telemetry_queries.get_event_count.side_effect = [100, 2]
+        monitor = ConsolidationQualityMonitor(telemetry_queries=telemetry_queries)
+        monitor._run_scalar_query = AsyncMock(side_effect=[20, 30, 3])  # type: ignore[method-assign]
+        monitor._run_list_query = AsyncMock(return_value=[4, 6, 8, 10])  # type: ignore[method-assign]
+
+        await monitor.check_entity_extraction_quality(days=7)
+
+        entity_count_query = monitor._run_scalar_query.call_args_list[1].args[0]
+        duplicate_query = monitor._run_scalar_query.call_args_list[2].args[0]
+        name_length_query = monitor._run_list_query.call_args_list[0].args[0]
+        assert "user_id IS NULL" in entity_count_query
+        assert "user_id IS NULL" in duplicate_query
+        assert "user_id IS NULL" in name_length_query
+
     async def test_check_graph_health_calculates_density_and_gaps(self) -> None:
         """Graph health report computes density and temporal gap metrics."""
         monitor = ConsolidationQualityMonitor(telemetry_queries=AsyncMock())
@@ -92,6 +111,29 @@ class TestConsolidationQualityMonitor:
         conversation_nodes_query = monitor._run_scalar_query.call_args_list[2].args[0]
         assert "Turn" in conversation_nodes_query
         assert "Conversation" not in conversation_nodes_query
+
+    async def test_graph_health_excludes_owner_from_entity_population(self) -> None:
+        """FRE-632: check_graph_health must exclude the owner :Person:Entity (user_id IS NULL) from
+        the :Entity node-population metrics, consistently with check_entity_extraction_quality.
+        """
+        monitor = ConsolidationQualityMonitor(telemetry_queries=AsyncMock())
+        monitor._run_scalar_query = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[50, 20, 30, 40, 2, 0.6, 3, 5, 100]
+        )
+        monitor._run_list_query = AsyncMock(  # type: ignore[method-assign]
+            return_value=["2026-02-20T00:00:00+00:00"]
+        )
+
+        await monitor.check_graph_health()
+
+        calls = monitor._run_scalar_query.call_args_list
+        # [1] entity_nodes, [4] orphaned, [5] clustered, [6] empty_description,
+        # [7] redundant_pairs, [8] relationship_bearing — all :Entity population metrics.
+        for idx in (1, 4, 5, 6, 7, 8):
+            assert "user_id IS NULL" in calls[idx].args[0], f"query {idx} missing owner exclusion"
+        # total_nodes ([0]) and relationship_count ([3]) are intentionally NOT filtered.
+        assert "user_id IS NULL" not in calls[0].args[0]
+        assert "user_id IS NULL" not in calls[3].args[0]
 
         timestamps_query = monitor._run_list_query.call_args_list[0].args[0]
         assert "Turn" in timestamps_query

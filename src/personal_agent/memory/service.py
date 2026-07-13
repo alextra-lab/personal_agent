@@ -2105,16 +2105,27 @@ class MemoryService:
                     "FOR (p:Person) REQUIRE p.user_id IS UNIQUE"
                 )
                 # Bootstrap :Agent and owner :Person, anchored on user_id.
+                # FRE-632 (ADR-0052 amendment 2026-07-13): the owner node also carries the
+                # :Entity label so it *occupies* the `MERGE (:Entity {name})` slot that
+                # extraction writes to (service.py create_entity / DISCUSSES). This makes the
+                # owner's named self-references resolve onto the owner node instead of forking a
+                # separate name-keyed :Entity — structurally, on fresh graphs, re-asserted every
+                # startup. The identity anchor stays user_id (never adopted by name); this is the
+                # one, narrow, configured-owner-name exception to "anchor by user_id, never by
+                # name" (dedup still excludes user_id nodes, so third-party entities can't collide
+                # via similarity — only the owner's own exact name resolves here).
                 await session.run(
                     """
                     MERGE (agent:Agent {id: $agent_id})
                     MERGE (person:Person {user_id: $user_id})
-                      ON CREATE SET person.is_owner   = true,
+                      ON CREATE SET person:Entity,
+                                    person.is_owner   = true,
                                     person.name       = $name,
                                     person.email      = $email,
                                     person.created_at = datetime(),
                                     person.source     = "config_bootstrap"
-                      ON MATCH  SET person.is_owner   = true,
+                      ON MATCH  SET person:Entity,
+                                    person.is_owner   = true,
                                     person.email      = coalesce(person.email, $email),
                                     person.name       = coalesce(person.name,  $name)
                     MERGE (agent)-[:OPERATED_BY]->(person)

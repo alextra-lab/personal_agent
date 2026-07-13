@@ -191,13 +191,19 @@ class ConsolidationQualityMonitor:
         conversation_count = int(
             await self._run_scalar_query("MATCH (t:Turn) RETURN count(t) AS value")
         )
+        # FRE-632: the owner node is now :Person:Entity (ADR-0052 amendment) — exclude it
+        # (user_id IS NOT NULL) from third-party *extraction*-quality metrics; it is the owner
+        # identity anchor, not an extracted entity, so counting it would skew these rates.
         entity_count = int(
-            await self._run_scalar_query("MATCH (e:Entity) RETURN count(e) AS value")
+            await self._run_scalar_query(
+                "MATCH (e:Entity) WHERE e.user_id IS NULL RETURN count(e) AS value"
+            )
         )
         duplicate_count = int(
             await self._run_scalar_query(
                 """
                 MATCH (e:Entity)
+                WHERE e.user_id IS NULL
                 WITH toLower(trim(e.name)) AS normalized_name, count(*) AS cnt
                 WHERE normalized_name <> "" AND cnt > 1
                 RETURN COALESCE(sum(cnt - 1), 0) AS value
@@ -205,7 +211,8 @@ class ConsolidationQualityMonitor:
             )
         )
         name_lengths = await self._run_list_query(
-            "MATCH (e:Entity) WHERE e.name IS NOT NULL RETURN size(trim(e.name)) AS value"
+            "MATCH (e:Entity) WHERE e.name IS NOT NULL AND e.user_id IS NULL "
+            "RETURN size(trim(e.name)) AS value"
         )
         extraction_started = await self._queries.get_event_count("entity_extraction_started", days)
         extraction_failed = await self._queries.get_event_count("entity_extraction_failed", days)
@@ -249,9 +256,15 @@ class ConsolidationQualityMonitor:
             Graph health report.
         """
         trace_id = trace_id or _new_qm_trace_id()
+        # FRE-632: the owner is now :Person:Entity — exclude it (user_id IS NULL) from the
+        # :Entity node-population metrics, consistently with check_entity_extraction_quality, so
+        # the identity anchor doesn't skew entity counts / empty-description / clustering rates
+        # (e.g. the owner has no description → a false empty-description alarm on a sparse graph).
         total_nodes = int(await self._run_scalar_query("MATCH (n) RETURN count(n) AS value"))
         entity_nodes = int(
-            await self._run_scalar_query("MATCH (e:Entity) RETURN count(e) AS value")
+            await self._run_scalar_query(
+                "MATCH (e:Entity) WHERE e.user_id IS NULL RETURN count(e) AS value"
+            )
         )
         conversation_nodes = int(
             await self._run_scalar_query("MATCH (t:Turn) RETURN count(t) AS value")
@@ -267,13 +280,14 @@ class ConsolidationQualityMonitor:
         )
         orphaned_entities = int(
             await self._run_scalar_query(
-                "MATCH (e:Entity) WHERE NOT (e)--() RETURN count(e) AS value"
+                "MATCH (e:Entity) WHERE e.user_id IS NULL AND NOT (e)--() RETURN count(e) AS value"
             )
         )
         clustered_ratio = float(
             await self._run_scalar_query(
                 """
                 MATCH (e:Entity)
+                WHERE e.user_id IS NULL
                 OPTIONAL MATCH (e)-[:RELATIONSHIP]-(:Entity)
                 WITH e, count(*) AS degree
                 RETURN COALESCE(avg(CASE WHEN degree >= 2 THEN 1.0 ELSE 0.0 END), 0.0) AS value
@@ -294,7 +308,7 @@ class ConsolidationQualityMonitor:
             await self._run_scalar_query(
                 """
                 MATCH (e:Entity)
-                WHERE e.description IS NULL OR trim(e.description) = ''
+                WHERE e.user_id IS NULL AND (e.description IS NULL OR trim(e.description) = '')
                 RETURN count(e) AS value
                 """
             )
@@ -303,7 +317,7 @@ class ConsolidationQualityMonitor:
             await self._run_scalar_query(
                 """
                 MATCH (a:Entity)-[r]-(b:Entity)
-                WHERE id(a) < id(b)
+                WHERE id(a) < id(b) AND a.user_id IS NULL AND b.user_id IS NULL
                 WITH a, b, collect(distinct type(r)) AS types
                 WHERE size(types) > 1
                 RETURN count(*) AS value
@@ -314,7 +328,7 @@ class ConsolidationQualityMonitor:
             await self._run_scalar_query(
                 """
                 MATCH (a:Entity)-[r]-(b:Entity)
-                WHERE id(a) < id(b)
+                WHERE id(a) < id(b) AND a.user_id IS NULL AND b.user_id IS NULL
                 WITH a, b, count(*) AS cnt
                 RETURN count(*) AS value
                 """

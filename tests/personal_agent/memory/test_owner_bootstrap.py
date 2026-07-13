@@ -74,7 +74,8 @@ class TestBootstrapOwnerIdentity:
     @pytest.mark.asyncio
     async def test_bootstrap_does_not_adopt_by_name(self) -> None:
         """Bootstrap anchors on user_id — the Cypher MERGE (person:Person {user_id: …})
-        never touches a same-named node that lacks user_id."""
+        never touches a same-named node that lacks user_id.
+        """
         svc = _make_service(connected=True)
         uid = uuid4()
         session_mock = _make_session_mock()
@@ -94,9 +95,37 @@ class TestBootstrapOwnerIdentity:
         name_anchor_calls = [
             call
             for call in run_mock.call_args_list
-            if "toLower" in str(call.args[0]) or "name: $name" in str(call.args[0]).replace(" ", "").lower()
+            if "toLower" in str(call.args[0])
+            or "name: $name" in str(call.args[0]).replace(" ", "").lower()
         ]
         assert len(name_anchor_calls) == 0, "Bootstrap must not anchor by name"
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_labels_owner_entity(self) -> None:
+        """FRE-632: the owner MERGE must SET the :Entity label (on create AND on match) so the
+        owner node occupies the `MERGE (:Entity {name})` slot and the split cannot recur.
+        """
+        svc = _make_service(connected=True)
+        session_mock = _make_session_mock()
+        svc.driver.session = MagicMock(return_value=session_mock)
+
+        await svc.bootstrap_owner_identity("seshat-local", uuid4(), "alex@x.com", "Alex")
+
+        run_mock: AsyncMock = session_mock.__aenter__.return_value.run
+        merge_calls = [
+            str(call.args[0])
+            for call in run_mock.call_args_list
+            if "MERGE (person" in str(call.args[0])
+        ]
+        assert len(merge_calls) == 1, "Expected the owner-identity MERGE"
+        cypher = merge_calls[0]
+        # The :Entity label is set on both branches so a fresh graph and an existing owner both
+        # end up :Person:Entity (idempotent re-assertion every startup).
+        assert cypher.count("person:Entity") == 2, (
+            "owner must be labelled :Entity on create + match"
+        )
+        # Identity anchor is still user_id, never adopted by name.
+        assert "MERGE (person:Person {user_id: $user_id})" in cypher
 
     @pytest.mark.asyncio
     async def test_bootstrap_returns_false_on_neo4j_error(self) -> None:
@@ -106,9 +135,7 @@ class TestBootstrapOwnerIdentity:
         session_mock.__aexit__ = AsyncMock(return_value=None)
         svc.driver.session = MagicMock(return_value=session_mock)
 
-        result = await svc.bootstrap_owner_identity(
-            "seshat-local", uuid4(), "a@b.com", "Alex"
-        )
+        result = await svc.bootstrap_owner_identity("seshat-local", uuid4(), "a@b.com", "Alex")
         assert result is False
 
 

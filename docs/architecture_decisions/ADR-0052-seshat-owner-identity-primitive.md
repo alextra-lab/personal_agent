@@ -307,3 +307,60 @@ One-shot script `scripts/backfill_participated_in.py` (run via `make backfill-pa
 - Research: `docs/research/2026-05-09-graph-identity-multi-user-patterns.md` §6
 - Skill doc: `docs/skills/personal-history-recall.md` (XML-pilot in body)
 - Linear: [FRE-343](https://linear.app/frenchforest/issue/FRE-343)
+
+---
+
+## Amendment — 2026-07-13 (FRE-632): unify the owner Person and its extraction Entity
+
+### The split this fixes
+
+ADR-0052 anchored the owner `:Person` by `user_id` (§ Amendment 2026-05-09) while entity extraction
+MERGEs `:Entity {name}` (`memory/service.py` `create_entity` / the `DISCUSSES` MERGE). The owner's
+own **named self-references** therefore accumulated on a *separate* name-keyed `:Entity {name:'Alex',
+is_owner:NULL}` node — the extraction node held the `embedding`, `USES`/`RELATED_TO`, and
+`DISCUSSES` provenance, while the `is_owner` anchor stayed a pure identity node. The two never
+merged (different MERGE keys), and dedup deliberately keeps them apart (`dedup.py` excludes
+`user_id`-bearing nodes so a same-named *third party* can't collide into the owner). Live-verified
+2026-07-13: `:Entity{name:'Alex'}` (embedding + `USES ×15` + `DISCUSSES ×77`) disjoint from
+`:Person{name:'Alex', is_owner:true}`.
+
+### Decision: the owner is `:Person:Entity`, resolved by the configured owner name
+
+The owner node now carries **both** the `:Person` and `:Entity` labels. `bootstrap_owner_identity`
+sets `person:Entity` on create and on match (idempotent, re-asserted every startup, holds on fresh
+graphs). Because the owner node now *occupies* the `MERGE (:Entity {name})` slot, the owner's named
+self-references resolve **onto the owner node** instead of forking — structurally, with no per-call
+name-matching in the extraction paths. The identity anchor is still `user_id` (bootstrap never
+adopts by name); `dedup` still excludes `user_id` nodes, so similarity-dedup cannot pull a
+third-party entity into the owner — **only the owner's own exact name** resolves onto it.
+
+The existing split is folded by a one-shot, idempotent migration
+(`scripts/migrate_fre632_unify_owner_identity.py`): copy the entity-substrate properties the owner
+lacks (never overwriting an identity property), then `apoc.refactor.mergeNodes`
+(`produceSelfRel:false`) to move + de-dupe relationships and union labels. Test-substrate- and
+codex-verified; run on prod by master.
+
+**Deploy ordering (required):** run the migration **before** the gateway rebuild that ships the
+`bootstrap :Entity` label. If the relabel deploys first, there is a transient window where the
+owner (now `:Person:Entity`) and the still-present split `:Entity` share the name, so an extraction
+`MERGE (:Entity {name})` would match *both*. Migration-first collapses the two into one before the
+new bootstrap ever runs, closing the window (the old gateway keeps writing to the single unified
+node, which is correct).
+
+### The narrow, deliberate exception to "never by name"
+
+This is the **one** documented exception to the amendment's "anchor by `user_id`, never by name":
+the configured owner name resolves onto the owner node. Accepted, bounded residual risk — in the
+shared multi-user graph, any user's mention of the owner's *exact* name globally MERGEs onto the
+owner node (already true for the pre-unification `:Entity {name}` node; unification **consolidates**
+this rather than widening it). Entity extraction writes only non-identity properties
+(description/`USES`/…), and broad recall returns only `name`/`entity_type`/`description` — never
+`email` or Claims — so no new identity field is exposed. Known limitations, not fixed here: a
+*renamed* owner keeps the old name on the `:Entity` slot (`coalesce(person.name,…)`); exact-name
+MERGE is case/whitespace-sensitive (a general property of name-keying).
+
+### See also
+
+- Plan: `docs/superpowers/plans/2026-07-13-fre-632-unify-owner-identity-node.md`
+- Migration: `scripts/migrate_fre632_unify_owner_identity.py`
+- Linear: [FRE-632](https://linear.app/frenchforest/issue/FRE-632)

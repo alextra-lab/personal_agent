@@ -46,6 +46,25 @@ class TestConsolidationQualityMonitor:
         assert "Turn" in turn_count_query
         assert "Conversation" not in turn_count_query
 
+    async def test_entity_extraction_quality_excludes_owner_node(self) -> None:
+        """FRE-632: the owner is now :Person:Entity — it must be excluded (user_id IS NULL) from
+        the third-party *extraction*-quality counts so it doesn't skew entity/duplicate rates.
+        """
+        telemetry_queries = AsyncMock()
+        telemetry_queries.get_event_count.side_effect = [100, 2]
+        monitor = ConsolidationQualityMonitor(telemetry_queries=telemetry_queries)
+        monitor._run_scalar_query = AsyncMock(side_effect=[20, 30, 3])  # type: ignore[method-assign]
+        monitor._run_list_query = AsyncMock(return_value=[4, 6, 8, 10])  # type: ignore[method-assign]
+
+        await monitor.check_entity_extraction_quality(days=7)
+
+        entity_count_query = monitor._run_scalar_query.call_args_list[1].args[0]
+        duplicate_query = monitor._run_scalar_query.call_args_list[2].args[0]
+        name_length_query = monitor._run_list_query.call_args_list[0].args[0]
+        assert "user_id IS NULL" in entity_count_query
+        assert "user_id IS NULL" in duplicate_query
+        assert "user_id IS NULL" in name_length_query
+
     async def test_check_graph_health_calculates_density_and_gaps(self) -> None:
         """Graph health report computes density and temporal gap metrics."""
         monitor = ConsolidationQualityMonitor(telemetry_queries=AsyncMock())

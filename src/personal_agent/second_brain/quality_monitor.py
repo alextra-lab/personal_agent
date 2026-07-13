@@ -191,13 +191,19 @@ class ConsolidationQualityMonitor:
         conversation_count = int(
             await self._run_scalar_query("MATCH (t:Turn) RETURN count(t) AS value")
         )
+        # FRE-632: the owner node is now :Person:Entity (ADR-0052 amendment) — exclude it
+        # (user_id IS NOT NULL) from third-party *extraction*-quality metrics; it is the owner
+        # identity anchor, not an extracted entity, so counting it would skew these rates.
         entity_count = int(
-            await self._run_scalar_query("MATCH (e:Entity) RETURN count(e) AS value")
+            await self._run_scalar_query(
+                "MATCH (e:Entity) WHERE e.user_id IS NULL RETURN count(e) AS value"
+            )
         )
         duplicate_count = int(
             await self._run_scalar_query(
                 """
                 MATCH (e:Entity)
+                WHERE e.user_id IS NULL
                 WITH toLower(trim(e.name)) AS normalized_name, count(*) AS cnt
                 WHERE normalized_name <> "" AND cnt > 1
                 RETURN COALESCE(sum(cnt - 1), 0) AS value
@@ -205,7 +211,8 @@ class ConsolidationQualityMonitor:
             )
         )
         name_lengths = await self._run_list_query(
-            "MATCH (e:Entity) WHERE e.name IS NOT NULL RETURN size(trim(e.name)) AS value"
+            "MATCH (e:Entity) WHERE e.name IS NOT NULL AND e.user_id IS NULL "
+            "RETURN size(trim(e.name)) AS value"
         )
         extraction_started = await self._queries.get_event_count("entity_extraction_started", days)
         extraction_failed = await self._queries.get_event_count("entity_extraction_failed", days)

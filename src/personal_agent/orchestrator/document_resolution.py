@@ -40,7 +40,7 @@ from personal_agent.documents.pdf_utils import (
 )
 from personal_agent.exceptions import AttachmentUnsupportedError
 from personal_agent.orchestrator.types import AttachmentRef
-from personal_agent.storage import get_artifact_store
+from personal_agent.storage import ArtifactStoreError, get_artifact_store
 
 log = structlog.get_logger(__name__)
 
@@ -112,6 +112,10 @@ def _open_pdf(raw: bytes, *, title: str) -> pdfium.PdfDocument:
     if len(pdf) == 0:
         raise AttachmentUnsupportedError(f"Document '{title}' has no pages.")
     return pdf
+
+
+def _extract_all_page_texts(pdf: pdfium.PdfDocument) -> list[str]:
+    return [extract_page_text(page) for page in pdf]
 
 
 def _classify_tier(page_texts: Sequence[str]) -> Literal["text", "vision"]:
@@ -206,28 +210,53 @@ async def _resolve_one_document(
     *,
     tier2_delivery: Literal["native_pdf", "rasterize"],
     running_total_bytes: int,
+    remaining_page_budget: int,
     store: Any,
     trace_id: str | None,
     session_id: str | None,
     task_id: str | None,
-) -> tuple[list[dict[str, Any]], list[str], int]:
-    raw = await store.get(
-        attachment.r2_key, trace_id=trace_id, session_id=session_id, task_id=task_id
-    )
+) -> tuple[list[dict[str, Any]], list[str], int, int]:
+    """Resolve one PDF attachment.
+
+    Returns ``(blocks, disclosures, running_total_bytes, remaining_page_budget)``
+    — both running values threaded across documents in the turn by the caller,
+    mirroring the total-payload-byte accounting (ADR-0102 §4: the page budget
+    is per-turn, not per-document).
+    """
+    try:
+        raw = await store.get(
+            attachment.r2_key, trace_id=trace_id, session_id=session_id, task_id=task_id
+        )
+    except ArtifactStoreError as exc:
+        raise AttachmentUnsupportedError(
+            f"Document '{attachment.title}' could not be fetched from storage: {exc}."
+        ) from exc
+
     pdf = await asyncio.to_thread(_open_pdf, raw, title=attachment.title)
-    page_texts = [extract_page_text(page) for page in pdf]
+    page_texts = await asyncio.to_thread(_extract_all_page_texts, pdf)
     tier = _classify_tier(page_texts)
 
     if tier == "text":
         full_text = "\n\n".join(page_texts)
         text_block, text_disclosure = _build_text_block(full_text, title=attachment.title)
         text_disclosures = [text_disclosure] if text_disclosure else []
-        return [text_block], text_disclosures, running_total_bytes
+        return [text_block], text_disclosures, running_total_bytes, remaining_page_budget
+
+    if remaining_page_budget <= 0:
+        return (
+            [],
+            [
+                f"Document '{attachment.title}' was not included: the per-turn page "
+                "budget was already used by earlier attachments."
+            ],
+            running_total_bytes,
+            remaining_page_budget,
+        )
 
     scores = await asyncio.to_thread(compute_page_scores, pdf)
     outline = get_outline_page_indices(pdf)
-    budget = min(settings.document_max_pages_per_turn, _PROVIDER_MAX_PAGES)
-    selected_pages = _select_pages(scores, budget, outline)
+    selected_pages = _select_pages(scores, remaining_page_budget, outline)
+    new_remaining_page_budget = remaining_page_budget - len(selected_pages)
 
     budget_disclosures: list[str] = []
     if len(scores) > len(selected_pages):
@@ -238,7 +267,8 @@ async def _resolve_one_document(
         )
 
     if tier2_delivery == "native_pdf":
-        native_block, reject_disclosure = _build_native_pdf_block(
+        native_block, reject_disclosure = await asyncio.to_thread(
+            _build_native_pdf_block,
             raw,
             selected_pages,
             title=attachment.title,
@@ -251,17 +281,29 @@ async def _resolve_one_document(
                 if reject_disclosure
                 else budget_disclosures,
                 running_total_bytes,
+                new_remaining_page_budget,
             )
         encoded_len = len(native_block["source"]["data"])
-        return [native_block], budget_disclosures, running_total_bytes + encoded_len
+        return (
+            [native_block],
+            budget_disclosures,
+            running_total_bytes + encoded_len,
+            new_remaining_page_budget,
+        )
 
-    page_blocks, page_disclosures, new_total = _rasterize_pages(
+    page_blocks, page_disclosures, new_total = await asyncio.to_thread(
+        _rasterize_pages,
         pdf,
         selected_pages,
         title=attachment.title,
         running_total_bytes=running_total_bytes,
     )
-    return page_blocks, [*budget_disclosures, *page_disclosures], new_total
+    return (
+        page_blocks,
+        [*budget_disclosures, *page_disclosures],
+        new_total,
+        new_remaining_page_budget,
+    )
 
 
 async def resolve_documents(
@@ -330,13 +372,20 @@ async def resolve_documents(
     blocks: list[dict[str, Any]] = []
     disclosures: list[str] = []
     running_total_bytes = 0
+    remaining_page_budget = min(settings.document_max_pages_per_turn, _PROVIDER_MAX_PAGES)
 
     for attachment in documents:
         try:
-            doc_blocks, doc_disclosures, running_total_bytes = await _resolve_one_document(
+            (
+                doc_blocks,
+                doc_disclosures,
+                running_total_bytes,
+                remaining_page_budget,
+            ) = await _resolve_one_document(
                 attachment,
                 tier2_delivery=tier2_delivery,
                 running_total_bytes=running_total_bytes,
+                remaining_page_budget=remaining_page_budget,
                 store=store,
                 trace_id=trace_id,
                 session_id=session_id,

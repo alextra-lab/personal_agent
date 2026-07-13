@@ -321,6 +321,63 @@ class TestPageBudgetSelection:
         assert len(sub_doc) == 2
 
     @pytest.mark.asyncio
+    async def test_budget_is_shared_across_multiple_documents_in_one_turn(self) -> None:
+        """The page budget is per-turn, not per-document.
+
+        Two 3-page scanned PDFs with a budget of 4 must select 4 pages total
+        across both documents, not 3+3=6 (each document independently getting
+        the full budget).
+        """
+        pdf_a = _make_pdf([None, None, None])
+        pdf_b = _make_pdf([None, None, None])
+        attachment_a = _make_attachment(
+            artifact_id="doc-a", title="a.pdf", r2_key="upload/u/g/a.pdf"
+        )
+        attachment_b = _make_attachment(
+            artifact_id="doc-b", title="b.pdf", r2_key="upload/u/g/b.pdf"
+        )
+        store = _mock_store({"upload/u/g/a.pdf": pdf_a, "upload/u/g/b.pdf": pdf_b})
+
+        with (
+            patch(_STORE_PATCH_TARGET, return_value=store),
+            patch(
+                "personal_agent.orchestrator.document_resolution.settings.document_max_pages_per_turn",
+                4,
+            ),
+        ):
+            result = await resolve_documents(
+                [attachment_a, attachment_b], tier2_delivery="rasterize"
+            )
+
+        assert len(result.blocks) == 4
+
+    @pytest.mark.asyncio
+    async def test_second_document_rejected_once_budget_fully_used(self) -> None:
+        pdf_a = _make_pdf([None, None, None])
+        pdf_b = _make_pdf([None, None, None])
+        attachment_a = _make_attachment(
+            artifact_id="doc-a", title="a.pdf", r2_key="upload/u/g/a.pdf"
+        )
+        attachment_b = _make_attachment(
+            artifact_id="doc-b", title="b.pdf", r2_key="upload/u/g/b.pdf"
+        )
+        store = _mock_store({"upload/u/g/a.pdf": pdf_a, "upload/u/g/b.pdf": pdf_b})
+
+        with (
+            patch(_STORE_PATCH_TARGET, return_value=store),
+            patch(
+                "personal_agent.orchestrator.document_resolution.settings.document_max_pages_per_turn",
+                3,
+            ),
+        ):
+            result = await resolve_documents(
+                [attachment_a, attachment_b], tier2_delivery="rasterize"
+            )
+
+        assert len(result.blocks) == 3
+        assert any("b.pdf" in d for d in result.disclosures)
+
+    @pytest.mark.asyncio
     async def test_salience_selection_prefers_visual_page_over_blank(self) -> None:
         """Mirrors T1's AC-5: a naive first-N selector would keep the blank page.
 
@@ -530,6 +587,25 @@ class TestStoreUnconfigured:
     async def test_store_unconfigured_raises(self) -> None:
         attachment = _make_attachment()
         with patch(_STORE_PATCH_TARGET, return_value=None):
+            with pytest.raises(AttachmentUnsupportedError):
+                await resolve_documents([attachment], tier2_delivery="rasterize")
+
+
+class TestArtifactStoreFetchFailure:
+    @pytest.mark.asyncio
+    async def test_artifact_store_error_becomes_attachment_unsupported(self) -> None:
+        """A failed R2 fetch must surface as AttachmentUnsupportedError, not leak
+
+        the storage-layer ArtifactStoreError past this module's documented
+        fail-closed contract.
+        """
+        from personal_agent.storage import ArtifactStoreError
+
+        attachment = _make_attachment()
+        store = AsyncMock()
+        store.get.side_effect = ArtifactStoreError("R2 get failed: network error")
+
+        with patch(_STORE_PATCH_TARGET, return_value=store):
             with pytest.raises(AttachmentUnsupportedError):
                 await resolve_documents([attachment], tier2_delivery="rasterize")
 

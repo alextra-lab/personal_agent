@@ -333,5 +333,53 @@ rm -rf /tmp/claude-1000/chan-spike
 - `scripts/dispatch/gating_watcher.py` (poll + send-keys + idle-scrape; seat topology) ·
   `scripts/dispatch/launcher.py` / `rc_server.py` (RC server-mode seat launch argv)
 - FRE-825 / FRE-845 (idle-scrape bugs — the prize) · FRE-846 / FRE-844 (settled inputs)
-</content>
-</invoke>
+
+---
+
+## RESULTS — executed 2026-07-13 (adr session, CC 2.1.207, Claude Max)
+
+**All three load-bearing hypotheses PASS.** Spike greenlights ADR-0116. Isolation held throughout
+(throwaway `cc-test` seat outside `gating_watcher`'s label→seat map · localhost bind · `/tmp` cwd ·
+no live seat or config touched); full teardown verified (seat killed, port 8788 free, spike dir removed,
+live seats intact).
+
+### Verdicts
+
+- **H1 (entitlement) — PASS.** Launch banner read `Haiku 4.5 · Claude Max`; the dev channel loaded; no
+  "blocked by org policy". Claude Max is an individual plan → Channels enabled, no admin toggle.
+- **H2 (primitive, vanilla interactive) — PASS.** Seat: `claude --permission-mode acceptEdits --add-dir
+  /tmp --dangerously-load-development-channels server:seshat-webhook`, idle at the prompt. A separate
+  shell's `curl -X POST localhost:8788 -d 'Write /tmp/spike_r1_ok …'` produced the file with **no TTY
+  input**. Pane rendered the inbound tag and the turn: `← seshat-webhook: Write …` → `● Write(/tmp/spike_r1_ok)`
+  → `● Done`.
+- **H3 (substrate, RC + `--model`) — PASS [load-bearing].** Seat launched mirroring `launcher.py`:
+  `claude --remote-control cc-test --model haiku --permission-mode acceptEdits --add-dir /tmp
+  --dangerously-load-development-channels server:seshat-webhook`. It **co-started** — `/remote-control is
+  active` (with a claude.ai/code session URL), `Haiku 4.5 · Claude Max`, channel loaded — and went idle.
+  A separate-shell `curl POST` wrote `/tmp/spike_r2_ok`, no TTY input. **push→react ≈ 2.2 s.** Pane:
+  `← seshat-webhook: Write … /tmp/spike_r2_ok …` → `● Write` → `● Done`. A seat is thus simultaneously
+  RC-steerable and channel-pushable, at its assigned model tier, with no conflict.
+
+### Implementation findings (feed ADR-0116 + build tickets)
+
+- **The channel flags are real but HIDDEN from `--help` in 2.1.207.** Present in the binary:
+  `--channels <servers…>` (approved-allowlist path) and `--dangerously-load-development-channels
+  <servers…>` (local dev, non-allowlisted). The binary states: "server: entries need
+  --dangerously-load-development-channels".
+- **Channel reference syntax is `server:<mcp-server-name>`**, resolving to the MCP server defined in
+  `.mcp.json`.
+- **Two consent gates on first launch in a project dir:** (1) folder-trust — once per dir, remembered;
+  (2) a dev-channel confirmation ("I am using this for local development") — appears **each launch** under
+  `--dangerously-load-development-channels`. **`.claude/settings.json` `enableAllProjectMcpServers: true`
+  suppressed the MCP-server "New MCP server found" consent, but NOT the dev-channel consent.** A
+  non-interactive `launcher.py` start would BLOCK on it → the production path must use the approved
+  `--channels` route (`channelsEnabled: true` + `allowedChannelPlugins`), i.e. package the channel as an
+  allowlisted plugin. This is ADR-0116's first-ticket gate.
+- **Delivery is fire-and-forget** (per docs): notifications are dropped silently if the session isn't
+  listening → build tickets need an ack/dedup story (`trigger_ledger` exactly-once + send-keys fallback).
+
+### Verdict for the ADR
+
+H1 + H2 + H3 (the minimum bar) all PASS → idle-seat push is real in our substrate → **scrape retirement
+is claimable**. ADR-0116 proceeds with a *proven* push path; the production `--channels` allowlist route
+is the one remaining thing to prove at build time (the dev flag is the documented proven fallback).

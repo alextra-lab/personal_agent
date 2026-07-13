@@ -112,6 +112,29 @@ class TestConsolidationQualityMonitor:
         assert "Turn" in conversation_nodes_query
         assert "Conversation" not in conversation_nodes_query
 
+    async def test_graph_health_excludes_owner_from_entity_population(self) -> None:
+        """FRE-632: check_graph_health must exclude the owner :Person:Entity (user_id IS NULL) from
+        the :Entity node-population metrics, consistently with check_entity_extraction_quality.
+        """
+        monitor = ConsolidationQualityMonitor(telemetry_queries=AsyncMock())
+        monitor._run_scalar_query = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[50, 20, 30, 40, 2, 0.6, 3, 5, 100]
+        )
+        monitor._run_list_query = AsyncMock(  # type: ignore[method-assign]
+            return_value=["2026-02-20T00:00:00+00:00"]
+        )
+
+        await monitor.check_graph_health()
+
+        calls = monitor._run_scalar_query.call_args_list
+        # [1] entity_nodes, [4] orphaned, [5] clustered, [6] empty_description,
+        # [7] redundant_pairs, [8] relationship_bearing — all :Entity population metrics.
+        for idx in (1, 4, 5, 6, 7, 8):
+            assert "user_id IS NULL" in calls[idx].args[0], f"query {idx} missing owner exclusion"
+        # total_nodes ([0]) and relationship_count ([3]) are intentionally NOT filtered.
+        assert "user_id IS NULL" not in calls[0].args[0]
+        assert "user_id IS NULL" not in calls[3].args[0]
+
         timestamps_query = monitor._run_list_query.call_args_list[0].args[0]
         assert "Turn" in timestamps_query
         assert "Conversation" not in timestamps_query

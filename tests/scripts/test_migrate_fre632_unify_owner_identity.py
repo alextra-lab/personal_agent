@@ -199,11 +199,27 @@ async def test_noop_flags_bare_owner_missing_entity_label() -> None:
 
 def test_is_unified_predicate() -> None:
     ok = NodeSnapshot("x", ["Person", "Entity"], "Alex", True, "uid", True, {})
-    assert _is_unified(ok, 1) is True
-    assert _is_unified(ok, 2) is False  # a second same-named node still exists
+    assert _is_unified(ok) is True
     bare = NodeSnapshot("x", ["Person"], "Alex", True, "uid", False, {})
-    assert _is_unified(bare, 1) is False  # missing :Entity label
-    assert _is_unified(None, 1) is False
+    assert _is_unified(bare) is False  # missing :Entity label
+    not_owner = NodeSnapshot("x", ["Person", "Entity"], "Alex", None, "uid", True, {})
+    assert _is_unified(not_owner) is False  # not flagged is_owner
+    assert _is_unified(None) is False
+
+
+@pytest.mark.asyncio
+async def test_unrelated_same_named_node_does_not_flip_success() -> None:
+    """F3 regression: a legitimately-distinct node sharing the owner's name (a contact :Person,
+    not a foldable split) must NOT make a correct merge report failure.
+    """
+    contact = FakeNode("contact", ["Person"], "Alex", is_owner=None, user_id=None)
+    graph = FakeGraph([_owner(labels=["Person"]), _split_entity(), contact])
+    report = await run_unify(graph, dry_run=False)
+
+    assert report.success is True  # merged despite the same-named contact still existing
+    assert report.named_count_after == 2  # owner + contact — count is informational, not gating
+    # the contact was never touched (not a user_id-NULL :Entity match... it lacks :Entity)
+    assert await graph.count_named("Alex") == 2
 
 
 def test_print_summary_smoke(capsys: pytest.CaptureFixture[str]) -> None:

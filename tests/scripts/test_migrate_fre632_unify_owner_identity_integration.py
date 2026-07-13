@@ -179,3 +179,45 @@ async def test_migration_merge_is_lossless_and_idempotent(service) -> None:
                 "n.name STARTS WITH 'PyFRE632IT-' OR n.name STARTS WITH 'FaFRE632IT-' "
                 "OR n.turn_id STARTS WITH 'tFRE632IT-' DETACH DELETE n"
             )
+
+
+@pytest.mark.asyncio
+async def test_merge_owner_to_split_edge_makes_no_self_loop(service) -> None:
+    """F5: an edge FROM the owner TO the split node must not become a self-loop on merge
+    (produceSelfRel:false). Verifies the migration hardening, not just the no-edge happy path.
+    """
+    name = f"LoopFRE632IT-{uuid4().hex[:8]}"
+    uid = f"uid-{uuid4().hex[:8]}"
+    graph = _Neo4jGraph(service.driver)
+    try:
+        async with service.driver.session() as s:
+            await s.run(
+                """
+                CREATE (keep:Person {name:$name, user_id:$uid, is_owner:true})
+                CREATE (drop:Entity {name:$name})
+                CREATE (keep)-[:RELATED_TO]->(drop)
+                """,
+                name=name,
+                uid=uid,
+            )
+            rec = await (
+                await s.run(
+                    "MATCH (o:Person {name:$name, is_owner:true}) RETURN elementId(o) AS eid",
+                    name=name,
+                )
+            ).single()
+        owner_eid = rec["eid"]
+        drop_ids = await graph.find_split_entity_ids(name, owner_eid)
+        merged_eid = await graph.merge_one(owner_eid, drop_ids[0])
+
+        async with service.driver.session() as s:
+            rec = await (
+                await s.run(
+                    "MATCH (n)-[r]->(n) WHERE elementId(n)=$eid RETURN count(r) AS c",
+                    eid=merged_eid,
+                )
+            ).single()
+        assert rec["c"] == 0, "owner→split edge must be dropped, not turned into a self-loop"
+    finally:
+        async with service.driver.session() as s:
+            await s.run("MATCH (n) WHERE n.name STARTS WITH 'LoopFRE632IT-' DETACH DELETE n")

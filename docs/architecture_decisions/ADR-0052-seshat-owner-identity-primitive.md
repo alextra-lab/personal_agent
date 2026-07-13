@@ -336,8 +336,16 @@ third-party entity into the owner — **only the owner's own exact name** resolv
 
 The existing split is folded by a one-shot, idempotent migration
 (`scripts/migrate_fre632_unify_owner_identity.py`): copy the entity-substrate properties the owner
-lacks (never overwriting an identity property), then `apoc.refactor.mergeNodes` to move + de-dupe
-relationships and union labels. Test-substrate- and codex-verified; run on prod by master.
+lacks (never overwriting an identity property), then `apoc.refactor.mergeNodes`
+(`produceSelfRel:false`) to move + de-dupe relationships and union labels. Test-substrate- and
+codex-verified; run on prod by master.
+
+**Deploy ordering (required):** run the migration **before** the gateway rebuild that ships the
+`bootstrap :Entity` label. If the relabel deploys first, there is a transient window where the
+owner (now `:Person:Entity`) and the still-present split `:Entity` share the name, so an extraction
+`MERGE (:Entity {name})` would match *both*. Migration-first collapses the two into one before the
+new bootstrap ever runs, closing the window (the old gateway keeps writing to the single unified
+node, which is correct).
 
 ### The narrow, deliberate exception to "never by name"
 

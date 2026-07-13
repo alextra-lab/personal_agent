@@ -176,7 +176,7 @@ class _Neo4jGraph:
                 SET keep += apoc.map.removeKeys(properties(drop), keys(keep))
                 WITH keep, drop
                 CALL apoc.refactor.mergeNodes([keep, drop],
-                    {properties: 'discard', mergeRels: true}) YIELD node
+                    {properties: 'discard', mergeRels: true, produceSelfRel: false}) YIELD node
                 RETURN elementId(node) AS eid
                 """,
                 keep_eid=keep_eid,
@@ -200,8 +200,9 @@ async def run_unify(graph: GraphProtocol, *, dry_run: bool = False) -> UnifyRepo
 
     Returns:
         A populated :class:`UnifyReport`. ``success`` is True when the graph ends unified (or was
-        already unified): exactly one node of the owner name, labelled ``:Person:Entity`` with
-        ``is_owner=true``.
+        already unified): the owner node is a ``:Person:Entity`` flagged ``is_owner`` and no
+        foldable split ``:Entity`` remains. A legitimately-distinct node that merely shares the
+        owner's name (a contact ``:Person``, a ``:Topic``) does not affect success.
     """
     report = UnifyReport(dry_run=dry_run)
 
@@ -228,7 +229,7 @@ async def run_unify(graph: GraphProtocol, *, dry_run: bool = False) -> UnifyRepo
         report.merged_element_id = owner_eid
         report.unified = report.owner_before
         report.named_count_after = report.named_count_before
-        report.success = _is_unified(report.owner_before, report.named_count_after)
+        report.success = _is_unified(report.owner_before)
         report.note = (
             "already unified (no split :Entity found)"
             if report.success
@@ -252,20 +253,23 @@ async def run_unify(graph: GraphProtocol, *, dry_run: bool = False) -> UnifyRepo
     report.merged_element_id = merged_eid
     report.unified = await graph.snapshot(merged_eid)
     report.named_count_after = await graph.count_named(owner_name)
-    report.success = _is_unified(report.unified, report.named_count_after)
+    # Success = the owner is a unified :Person:Entity AND no foldable split remains. Deliberately
+    # NOT keyed on named_count (a legitimately-distinct node sharing the owner's name — a contact
+    # :Person, a Topic — is not a split and must not flip a correct merge to "failed").
+    remaining = await graph.find_split_entity_ids(owner_name, merged_eid)
+    report.success = _is_unified(report.unified) and not remaining
     report.note = (
         f"merged {len(drop_ids)} node(s) into owner '{owner_name}'"
         if report.success
-        else "merge ran but post-state is not a single unified :Person:Entity owner node"
+        else f"merge ran but owner not unified :Person:Entity or {len(remaining)} split(s) remain"
     )
     return report
 
 
-def _is_unified(node: NodeSnapshot | None, named_count: int) -> bool:
-    """Return True when exactly one owner-named node exists and it is a flagged ``:Person:Entity``."""
+def _is_unified(node: NodeSnapshot | None) -> bool:
+    """Return True when the owner node is a flagged ``:Person:Entity`` (identity + entity in one)."""
     return (
         node is not None
-        and named_count == 1
         and "Person" in node.labels
         and "Entity" in node.labels
         and node.is_owner is True

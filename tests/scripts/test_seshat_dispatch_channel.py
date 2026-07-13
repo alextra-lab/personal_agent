@@ -85,3 +85,18 @@ def test_mcp_json_registers_the_channel_server() -> None:
     server = mcp["mcpServers"]["seshat-dispatch"]
     assert server["command"] == "node"
     assert any("webhook.mjs" in arg for arg in server["args"])
+
+
+def test_webhook_cross_references_lifecycle_rules_session_boundary() -> None:
+    """FRE-872: the boundary language has one traceable normative source.
+
+    ``webhook.mjs``'s MCP instructions already state the boundary ("act within
+    THIS session only... never push to, merge, approve, close, or deploy a
+    branch/PR you do not own") but didn't name where that invariant is owned.
+    This regression-guards the explicit cross-reference to
+    ``.claude/skills/lifecycle-rules.md`` § Session boundary (the ADR's cited
+    normative source, per that file's own single-source rule).
+    """
+    text = (_CHANNEL_DIR / "webhook.mjs").read_text()
+    assert "lifecycle-rules.md" in text
+    assert "Session boundary" in text

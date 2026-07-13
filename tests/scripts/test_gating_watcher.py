@@ -22,23 +22,30 @@ where a ledger entry is written, abandoned, or left untouched.
 from __future__ import annotations
 
 import ast
+import dataclasses
+import json
 from collections.abc import Sequence
 from pathlib import Path
 
+from scripts.dispatch import launcher
 from scripts.dispatch.gating_watcher import (
     DEFAULT_CONTEXT_PRESSURE_THRESHOLD,
     MASTER_SESSION,
     Candidate,
+    CheckResult,
     ContextReading,
     PullRequest,
     _context_pressure_threshold_default,
+    build_channel_payload,
     ci_status,
     classify_pr,
     context_pressure,
     decide,
     fetch_open_prs,
     has_ci_red_ack,
+    load_channel_secret,
     parse_ticket_from_branch,
+    post_channel_event,
     prune_state,
     run_once,
     send_to_session,
@@ -87,6 +94,8 @@ def _pr(
     mergeable: str = "MERGEABLE",
     ci: str = "success",
     comment_bodies: tuple[str, ...] = (),
+    checks: tuple[CheckResult, ...] = (),
+    is_dependabot: bool = False,
 ) -> PullRequest:
     return PullRequest(
         number=number,
@@ -95,6 +104,8 @@ def _pr(
         mergeable=mergeable,
         ci=ci,  # type: ignore[arg-type]
         comment_bodies=comment_bodies,
+        checks=checks,
+        is_dependabot=is_dependabot,
     )
 
 
@@ -336,6 +347,58 @@ def test_worker_ci_red_routes_to_stream_session_with_message() -> None:
     assert triggers[0].command == "PR #412 failed CI checks - correct them"
 
 
+def test_decide_worker_trigger_defaults_send_keys_mode() -> None:
+    # The real, un-monkeypatched topology default (FRE-872: no live cutover).
+    pr = _pr(ci="failure")
+    triggers = decide(
+        [pr],
+        session_resolver=lambda t: "cc-build2" if t == "FRE-823" else None,
+        now=100.0,
+        sent={},
+        master_ttl_s=600,
+        worker_ttl_s=60,
+    )
+    assert triggers[0].mode == "send_keys"
+    assert triggers[0].channel_port is None
+    assert triggers[0].channel_payload is None
+
+
+def test_decide_worker_trigger_channel_mode_carries_port_and_payload(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setitem(
+        launcher._TOPOLOGY,
+        "build2",
+        dataclasses.replace(launcher._TOPOLOGY["build2"], mode="channel"),
+    )
+    pr = _pr(ci="failure", checks=(CheckResult("pytest", "fail", "FAILURE", "https://ci/1"),))
+    triggers = decide(
+        [pr],
+        session_resolver=lambda t: "cc-build2" if t == "FRE-823" else None,
+        now=100.0,
+        sent={},
+        master_ttl_s=600,
+        worker_ttl_s=60,
+    )
+    assert triggers[0].mode == "channel"
+    assert triggers[0].channel_port == launcher.topology_for("build2").channel_port
+    assert triggers[0].channel_payload == build_channel_payload(pr)
+
+
+def test_decide_master_trigger_always_send_keys_mode(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Master has no StreamTopology entry -- unaffected even if a worker stream
+    # is cut over to channel mode.
+    monkeypatch.setitem(
+        launcher._TOPOLOGY,
+        "build2",
+        dataclasses.replace(launcher._TOPOLOGY["build2"], mode="channel"),
+    )
+    triggers = decide(
+        [_pr()], session_resolver=_no_session, now=100.0, sent={}, master_ttl_s=600, worker_ttl_s=60
+    )
+    assert triggers[0].mode == "send_keys"
+    assert triggers[0].channel_port is None
+    assert triggers[0].channel_payload is None
+
+
 def test_worker_ci_red_triggers() -> None:
     pr = _pr(ci="failure")
     cand = classify_pr(pr, now=100.0, sent={}, master_ttl_s=600, worker_ttl_s=60)
@@ -353,6 +416,165 @@ def test_worker_ci_red_ack_for_old_sha_still_triggers_new_sha() -> None:
     )
     cand = classify_pr(pr, now=100.0, sent={}, master_ttl_s=600, worker_ttl_s=60)
     assert cand is not None and cand.reason == "worker-ci-red"
+
+
+# --- classify_pr: dependabot boundary guard (FRE-872, ADR-0116 AC-6) --------
+# A dependabot-authored PR is NEVER a worker candidate -- structural
+# defense-in-depth (the gateway can never hand a seat an instruction whose
+# natural completion is "push to the dependabot branch"). Scoped to the
+# worker path only: the master-ready path is a pure, harmless notification
+# (master's own gate re-reads live state and decides), so a CI-green,
+# mergeable dependabot PR still surfaces to master exactly like any other PR
+# -- suppressing it too was a code-review-caught regression (removed a
+# pre-existing capability with no replacement notification path).
+
+
+def test_classify_pr_dependabot_ci_red_never_routes_to_worker() -> None:
+    pr = _pr(ci="failure", is_dependabot=True)
+    assert classify_pr(pr, now=100.0, sent={}, master_ttl_s=600, worker_ttl_s=60) is None
+
+
+def test_classify_pr_dependabot_ci_green_still_routes_to_master() -> None:
+    # The watcher is master's sole automated detector -- suppressing this
+    # notification would leave a green dependabot PR unnoticed indefinitely.
+    pr = _pr(ci="success", mergeable="MERGEABLE", is_dependabot=True)
+    cand = classify_pr(pr, now=100.0, sent={}, master_ttl_s=600, worker_ttl_s=60)
+    assert cand is not None and cand.kind == "master"
+
+
+def test_classify_pr_non_dependabot_unaffected_by_guard() -> None:
+    # Regression: the guard must not accidentally suppress an ordinary PR.
+    pr = _pr(ci="failure", is_dependabot=False)
+    cand = classify_pr(pr, now=100.0, sent={}, master_ttl_s=600, worker_ttl_s=60)
+    assert cand is not None and cand.kind == "worker"
+
+
+# --- build_channel_payload (FRE-872, ADR-0116 AC-3 code-layer proof) -------
+
+
+def test_build_channel_payload_reflects_pr_identity_and_checks() -> None:
+    pr = _pr(
+        number=412,
+        head_sha="abc1234def5678",
+        head_ref="fre-823-x",
+        mergeable="MERGEABLE",
+        checks=(
+            CheckResult(
+                name="pytest", state="fail", conclusion="FAILURE", details_url="https://ci/1"
+            ),
+        ),
+        is_dependabot=False,
+    )
+    payload = build_channel_payload(pr)
+    assert payload["pr"] == 412
+    assert payload["head_sha"] == "abc1234def5678"
+    assert payload["head_ref"] == "fre-823-x"
+    assert payload["mergeable"] == "MERGEABLE"
+    assert payload["dependabot"] is False
+    assert payload["checks"] == [
+        {"name": "pytest", "state": "fail", "conclusion": "FAILURE", "details_url": "https://ci/1"}
+    ]
+
+
+def test_build_channel_payload_distinguishes_different_fixtures() -> None:
+    # AC-3's code-layer proof: distinct inputs must produce distinguishably
+    # different payloads, so a downstream reader (the seat) can act on the
+    # exact delivered state, not a canned response.
+    pr_a = _pr(
+        head_sha="aaa111",
+        checks=(CheckResult("mypy", "fail", "FAILURE", "https://ci/a"),),
+        is_dependabot=False,
+    )
+    pr_b = _pr(
+        head_sha="bbb222",
+        checks=(CheckResult("ruff", "fail", "FAILURE", "https://ci/b"),),
+        is_dependabot=True,
+    )
+    payload_a = build_channel_payload(pr_a)
+    payload_b = build_channel_payload(pr_b)
+    assert payload_a != payload_b
+    assert payload_a["head_sha"] != payload_b["head_sha"]
+    assert payload_a["checks"] != payload_b["checks"]
+    assert payload_a["dependabot"] != payload_b["dependabot"]
+
+
+def test_build_channel_payload_json_serializable() -> None:
+    payload = build_channel_payload(_pr(checks=(CheckResult("pytest", "pass", "SUCCESS", ""),)))
+    json.dumps(payload)  # must not raise
+
+
+# --- fetch_open_prs: author/checks parsing (FRE-872) ------------------------
+
+
+def test_fetch_open_prs_detects_dependabot_author() -> None:
+    list_json = '[{"number": 500}]'
+    view_json = (
+        '{"number": 500, "headRefName": "dependabot/npm_and_yarn/x", "headRefOid": "def456",'
+        ' "mergeable": "MERGEABLE", "author": {"login": "dependabot[bot]"},'
+        ' "statusCheckRollup": [], "comments": []}'
+    )
+    runner = _RecordingRunner(
+        {
+            ("gh", "pr", "list"): _FakeRunResult(returncode=0, stdout=list_json),
+            ("gh", "pr", "view"): _FakeRunResult(returncode=0, stdout=view_json),
+        }
+    )
+    prs = fetch_open_prs(runner)
+    assert prs[0].is_dependabot is True
+
+
+def test_fetch_open_prs_non_dependabot_author_is_false() -> None:
+    list_json = '[{"number": 412}]'
+    view_json = (
+        '{"number": 412, "headRefName": "fre-823-x", "headRefOid": "abc123",'
+        ' "mergeable": "MERGEABLE", "author": {"login": "lextra"},'
+        ' "statusCheckRollup": [], "comments": []}'
+    )
+    runner = _RecordingRunner(
+        {
+            ("gh", "pr", "list"): _FakeRunResult(returncode=0, stdout=list_json),
+            ("gh", "pr", "view"): _FakeRunResult(returncode=0, stdout=view_json),
+        }
+    )
+    prs = fetch_open_prs(runner)
+    assert prs[0].is_dependabot is False
+
+
+def test_fetch_open_prs_missing_author_defaults_false() -> None:
+    list_json = '[{"number": 412}]'
+    view_json = (
+        '{"number": 412, "headRefName": "fre-823-x", "headRefOid": "abc123",'
+        ' "mergeable": "MERGEABLE", "statusCheckRollup": [], "comments": []}'
+    )
+    runner = _RecordingRunner(
+        {
+            ("gh", "pr", "list"): _FakeRunResult(returncode=0, stdout=list_json),
+            ("gh", "pr", "view"): _FakeRunResult(returncode=0, stdout=view_json),
+        }
+    )
+    prs = fetch_open_prs(runner)
+    assert prs[0].is_dependabot is False
+
+
+def test_fetch_open_prs_builds_checks_tuple_from_rollup() -> None:
+    list_json = '[{"number": 412}]'
+    view_json = (
+        '{"number": 412, "headRefName": "fre-823-x", "headRefOid": "abc123",'
+        ' "mergeable": "MERGEABLE", "author": {"login": "lextra"},'
+        ' "statusCheckRollup": [{"__typename": "CheckRun", "name": "pytest",'
+        ' "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://ci/1"}],'
+        ' "comments": []}'
+    )
+    runner = _RecordingRunner(
+        {
+            ("gh", "pr", "list"): _FakeRunResult(returncode=0, stdout=list_json),
+            ("gh", "pr", "view"): _FakeRunResult(returncode=0, stdout=view_json),
+        }
+    )
+    prs = fetch_open_prs(runner)
+    assert prs[0].checks == (
+        CheckResult(name="pytest", state="fail", conclusion="FAILURE", details_url="https://ci/1"),
+    )
 
 
 # --- prune_state -----------------------------------------------------------
@@ -732,6 +954,289 @@ def test_run_once_reconciles_pending_ledger_entry_before_new_decisions() -> None
     sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
     assert ("tmux", "send-keys", "-t", "cc-master", "-l", "/master 999") in sends
     assert ledger["master:999:deadbeef"].consumed_at is not None
+
+
+# --- FRE-872, ADR-0116: channel-mode delivery + fallback --------------------
+
+
+def _channel_worker_pr() -> PullRequest:
+    return _pr(ci="failure", checks=(CheckResult("pytest", "fail", "FAILURE", "https://ci/1"),))
+
+
+def _resolve_build2(ticket: str | None) -> str | None:
+    return "cc-build2" if ticket == "FRE-823" else None
+
+
+class _FakeChannelPoster:
+    """Records calls and returns a canned outcome."""
+
+    def __init__(self, outcome: str = "delivered") -> None:
+        self.calls: list[tuple[int, str, str]] = []
+        self._outcome = outcome
+
+    def __call__(self, port: int, secret: str, payload_json: str) -> str:
+        self.calls.append((port, secret, payload_json))
+        return self._outcome  # type: ignore[return-value]
+
+
+def test_run_once_channel_delivery_success_never_consults_scrape(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # AC-1: zero tmux capture-pane/send-keys calls for a channel-mode delivery
+    # that succeeds.
+    monkeypatch.setitem(
+        launcher._TOPOLOGY,
+        "build2",
+        dataclasses.replace(launcher._TOPOLOGY["build2"], mode="channel"),
+    )
+    ledger: dict = {}
+    runner = _idle_runner()
+    poster = _FakeChannelPoster(outcome="delivered")
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [_channel_worker_pr()],
+        session_resolver=_resolve_build2,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+        channel_poster=poster,
+        channel_secret="s3cret",
+    )
+    assert not any(call[:2] == ("tmux", "capture-pane") for call in runner.calls)
+    assert not any(call[:2] == ("tmux", "send-keys") for call in runner.calls)
+    assert len(poster.calls) == 1
+    port, secret, payload_json = poster.calls[0]
+    assert port == launcher.topology_for("build2").channel_port
+    assert secret == "s3cret"
+    assert json.loads(payload_json) == build_channel_payload(_channel_worker_pr())
+    entry = ledger["worker:412:abc1234def5678"]
+    assert entry.transport == "channel"
+    assert entry.sent_at is not None
+    assert entry.consumed_at is not None
+
+
+def test_run_once_channel_delivery_failure_falls_back_to_send_keys(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # AC-5 fallback: a channel-down delivery falls back to send-keys rather
+    # than silently dropping, and the ledger stays accurate (send_keys,
+    # untouched default -- never "corrected" from an optimistic channel tag).
+    monkeypatch.setitem(
+        launcher._TOPOLOGY,
+        "build2",
+        dataclasses.replace(launcher._TOPOLOGY["build2"], mode="channel"),
+    )
+    ledger: dict = {}
+    runner = _idle_runner()
+    poster = _FakeChannelPoster(outcome="unreachable")
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [_channel_worker_pr()],
+        session_resolver=_resolve_build2,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+        channel_poster=poster,
+        channel_secret="s3cret",
+    )
+    sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
+    assert sends  # fell back to tmux
+    entry = ledger["worker:412:abc1234def5678"]
+    assert entry.transport == "send_keys"
+    assert entry.sent_at is not None
+    assert entry.consumed_at is not None
+
+
+def test_run_once_channel_secret_missing_falls_back_without_calling_poster(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setitem(
+        launcher._TOPOLOGY,
+        "build2",
+        dataclasses.replace(launcher._TOPOLOGY["build2"], mode="channel"),
+    )
+    ledger: dict = {}
+    runner = _idle_runner()
+    poster = _FakeChannelPoster(outcome="delivered")
+    logger = _RecordingLogger()  # type: ignore[name-defined]
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [_channel_worker_pr()],
+        session_resolver=_resolve_build2,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=logger,
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+        channel_poster=poster,
+        channel_secret=None,
+    )
+    assert poster.calls == []
+    sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
+    assert sends
+    assert any(event == "channel_secret_missing" for event, _ in logger.events)
+    entry = ledger["worker:412:abc1234def5678"]
+    assert entry.transport == "send_keys"
+
+
+def test_run_once_send_keys_mode_seat_unaffected_by_channel_wiring() -> None:
+    # AC-5 first half: the real, un-monkeypatched default (send_keys mode)
+    # produces the exact same tmux call sequence as before this ticket.
+    ledger: dict = {}
+    runner = _idle_runner()
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [_channel_worker_pr()],
+        session_resolver=_resolve_build2,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
+    assert sends == [
+        ("tmux", "send-keys", "-t", "cc-build2", "-l", "PR #412 failed CI checks - correct them"),
+        ("tmux", "send-keys", "-t", "cc-build2", "Enter"),
+    ]
+    entry = ledger["worker:412:abc1234def5678"]
+    assert entry.transport == "send_keys"
+
+
+def test_run_once_channel_delivery_records_single_ledger_entry_no_double_fire(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # AC-4: transport lives on the single per-event-id entry, not a parallel
+    # key space -- a future refactor that reintroduces one would break this.
+    monkeypatch.setitem(
+        launcher._TOPOLOGY,
+        "build2",
+        dataclasses.replace(launcher._TOPOLOGY["build2"], mode="channel"),
+    )
+    ledger: dict = {}
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [_channel_worker_pr()],
+        session_resolver=_resolve_build2,
+        runner=_idle_runner(),
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+        channel_poster=_FakeChannelPoster(outcome="delivered"),
+        channel_secret="s3cret",
+    )
+    assert list(ledger.keys()) == ["worker:412:abc1234def5678"]
+    assert ledger["worker:412:abc1234def5678"].transport == "channel"
+
+
+def test_run_once_channel_crash_recovery_via_reconcile_is_accurately_send_keys(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Regression for codex's High findings: an entry left at
+    # send_started_at=None (crash before the send attempt) recovers via the
+    # EXISTING, unmodified reconcile() -> tmux retry path, with zero
+    # gating_watcher.py changes required. The recovered entry is correctly
+    # audited as send_keys -- that is genuinely how it was (re)delivered.
+    from scripts.dispatch.trigger_ledger import record_pending
+
+    seeded, _ = record_pending(
+        {},
+        event_id="worker:412:abc1234def5678",
+        source="worker-ci-red",
+        target_pane="cc-build2",
+        ticket="412",
+        command="PR #412 failed CI checks - correct them",
+        preconditions={"head_sha": "abc1234def5678"},
+        now=50.0,
+        ttl_s=60.0,
+    )
+    monkeypatch.setitem(
+        launcher._TOPOLOGY,
+        "build2",
+        dataclasses.replace(launcher._TOPOLOGY["build2"], mode="channel"),
+    )
+    runner = _idle_runner()
+    ledger = dict(seeded)
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [],  # nothing new -- only reconcile the seeded entry
+        session_resolver=_resolve_build2,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+        channel_poster=_FakeChannelPoster(outcome="delivered"),
+        channel_secret="s3cret",
+    )
+    sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
+    assert sends  # recovered via the universal tmux retry path
+    assert ledger["worker:412:abc1234def5678"].transport == "send_keys"
+    assert ledger["worker:412:abc1234def5678"].consumed_at is not None
+
+
+# --- post_channel_event / load_channel_secret (FRE-872) ---------------------
+
+
+class _FakeHttpResponse:
+    def __init__(self, status: int) -> None:
+        self.status = status
+
+    def __enter__(self) -> "_FakeHttpResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+def test_post_channel_event_200_is_delivered() -> None:
+    outcome = post_channel_event(
+        8791, "s3cret", "{}", opener=lambda *a, **k: _FakeHttpResponse(200)
+    )
+    assert outcome == "delivered"
+
+
+def test_post_channel_event_non_2xx_is_unreachable() -> None:
+    outcome = post_channel_event(
+        8791, "s3cret", "{}", opener=lambda *a, **k: _FakeHttpResponse(500)
+    )
+    assert outcome == "unreachable"
+
+
+def test_post_channel_event_connection_error_is_unreachable() -> None:
+    import urllib.error
+
+    def _raise(*a: object, **k: object) -> object:
+        raise urllib.error.URLError("connection refused")
+
+    outcome = post_channel_event(8791, "s3cret", "{}", opener=_raise)
+    assert outcome == "unreachable"
+
+
+def test_post_channel_event_timeout_is_unreachable() -> None:
+    def _raise(*a: object, **k: object) -> object:
+        raise TimeoutError("timed out")
+
+    outcome = post_channel_event(8791, "s3cret", "{}", opener=_raise)
+    assert outcome == "unreachable"
+
+
+def test_load_channel_secret_reads_env(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("AGENT_SESHAT_CHANNEL_SECRET", "from-env")
+    assert load_channel_secret() == "from-env"
+
+
+def test_load_channel_secret_absent_returns_none(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.delenv("AGENT_SESHAT_CHANNEL_SECRET", raising=False)
+    monkeypatch.chdir("/tmp")
+    assert load_channel_secret() is None
 
 
 # --- _context_pressure_threshold_default (code-review finding, malformed env) ---

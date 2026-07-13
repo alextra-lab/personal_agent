@@ -37,6 +37,11 @@ busy/absent, not a crash) carries no such window: it is immediately
 re-attemptable, matching the existing watcher's behaviour of retrying a
 busy/absent skip on the very next tick.
 
+**Transport tag (FRE-872, ADR-0116).** Each entry also carries which transport actually delivered
+it (``channel`` | ``send_keys``, default ``send_keys``). ``record_pending``'s existing per-``event_id``
+dedup is what delivers exactly-once, transport-aware behavior — a single entry per event id, tagged
+post-hoc via ``mark_transport`` only once a channel delivery is confirmed, never optimistically.
+
 Callable by hand::
 
     python -m scripts.dispatch.trigger_ledger --unconsumed --json
@@ -54,6 +59,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 SendOutcome = Literal["sent", "busy", "absent"]
+Transport = Literal["channel", "send_keys"]
 
 
 class Logger(Protocol):
@@ -88,6 +94,16 @@ class LedgerEntry:
         consumed_at: Set once bookkeeping is fully closed (sent or abandoned).
         surfaced_at: Set when reconciliation cannot safely resolve the entry —
             terminal-pending, requires owner intervention, never auto-retried.
+        transport: Which transport actually delivered this event (FRE-872,
+            ADR-0116). Always created ``"send_keys"`` — there is no
+            "optimistic" write. The *only* place this ever becomes
+            ``"channel"`` is a caller's ``mark_transport`` call made after a
+            channel POST is confirmed delivered; a same-tick fallback to
+            send-keys simply never calls it, so the default stays accurate.
+            This keeps the three-state crash model intact: a never-confirmed
+            entry recovered by ``reconcile()`` is retried via the existing
+            universal tmux path and is *correctly* audited as ``send_keys``,
+            because that is genuinely how it was (re)delivered.
     """
 
     event_id: str
@@ -101,6 +117,7 @@ class LedgerEntry:
     sent_at: float | None = None
     consumed_at: float | None = None
     surfaced_at: float | None = None
+    transport: Transport = "send_keys"
 
 
 Ledger = dict[str, LedgerEntry]
@@ -181,6 +198,20 @@ def mark_surfaced(ledger: Ledger, event_id: str, now: float) -> Ledger:
     """Flag an entry as unresolvable automatically — owner intervention required."""
     updated = dict(ledger)
     updated[event_id] = dataclasses.replace(updated[event_id], surfaced_at=now)
+    return updated
+
+
+def mark_transport(ledger: Ledger, event_id: str, transport: Transport) -> Ledger:
+    """Record which transport actually delivered an entry (FRE-872, ADR-0116).
+
+    Call this exactly once, only after a channel delivery is confirmed
+    (never optimistically, never as a same-tick "correction" on fallback —
+    see ``LedgerEntry.transport``'s docstring). Every entry is created at the
+    ``"send_keys"`` default; this is the only way it ever becomes
+    ``"channel"``.
+    """
+    updated = dict(ledger)
+    updated[event_id] = dataclasses.replace(updated[event_id], transport=transport)
     return updated
 
 
@@ -286,6 +317,9 @@ def load_ledger(path: Path, logger: Logger) -> Ledger:
     for event_id, fields in raw.items():
         if not isinstance(fields, dict):
             continue
+        transport = fields.get("transport", "send_keys")
+        if transport not in ("channel", "send_keys"):
+            transport = "send_keys"
         entries[event_id] = LedgerEntry(
             event_id=event_id,
             source=str(fields.get("source", "")),
@@ -298,6 +332,7 @@ def load_ledger(path: Path, logger: Logger) -> Ledger:
             sent_at=fields.get("sent_at"),
             consumed_at=fields.get("consumed_at"),
             surfaced_at=fields.get("surfaced_at"),
+            transport=transport,
         )
     return entries
 
@@ -372,6 +407,7 @@ def _entry_to_json(entry: LedgerEntry) -> dict[str, object]:
         "send_started_at": entry.send_started_at,
         "sent_at": entry.sent_at,
         "surfaced_at": entry.surfaced_at,
+        "transport": entry.transport,
     }
 
 

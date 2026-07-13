@@ -1,6 +1,6 @@
 # ADR-0110: External Dispatch Orchestrator for build/adr Worker Sessions
 
-**Status:** Proposed (dispatch/poll half superseded by ADR-0113 self-driving delivery loop; the Remote Control execution substrate and the Linear-native dispatch contract are retained)
+**Status:** Proposed (dispatch/transport half superseded by ADR-0116 event-driven actuation — poll + send-keys + idle-scrape → capability-gateway + MCP-channel push; the Remote Control execution substrate and the Linear-native dispatch contract are retained)
 **Date:** 2026-07-04
 **Deciders:** Owner (dispatch/autonomy posture), adr session (Opus, design)
 **Tags:** dev-process, orchestration, claude-code, remote-control, dispatch, FRE-783

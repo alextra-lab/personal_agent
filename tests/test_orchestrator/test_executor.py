@@ -1320,13 +1320,20 @@ class TestStepInitDocumentResolution:
                 "personal_agent.orchestrator.document_resolution.resolve_documents",
                 new=AsyncMock(
                     return_value=SimpleNamespace(
-                        blocks=(doc_block,), disclosures=(), used_tier2=True
+                        blocks=(doc_block,),
+                        disclosures=(),
+                        used_tier2=True,
+                        native_pdf_page_count=3,
                     )
                 ),
             ),
             patch(
                 "personal_agent.orchestrator.executor._resolve_document_routing_key",
                 return_value=("primary", "native_pdf"),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._maybe_confirm_attachment_cost",
+                new=AsyncMock(return_value=True),
             ),
         ):
             await step_init(ctx, SessionManager(), trace_ctx)
@@ -1348,7 +1355,10 @@ class TestStepInitDocumentResolution:
                 "personal_agent.orchestrator.document_resolution.resolve_documents",
                 new=AsyncMock(
                     return_value=SimpleNamespace(
-                        blocks=(text_block,), disclosures=(), used_tier2=False
+                        blocks=(text_block,),
+                        disclosures=(),
+                        used_tier2=False,
+                        native_pdf_page_count=0,
                     )
                 ),
             ),
@@ -1376,13 +1386,20 @@ class TestStepInitDocumentResolution:
                 "personal_agent.orchestrator.document_resolution.resolve_documents",
                 new=AsyncMock(
                     return_value=SimpleNamespace(
-                        blocks=(doc_block,), disclosures=(), used_tier2=True
+                        blocks=(doc_block,),
+                        disclosures=(),
+                        used_tier2=True,
+                        native_pdf_page_count=0,
                     )
                 ),
             ),
             patch(
                 "personal_agent.orchestrator.executor._resolve_document_routing_key",
                 return_value=("claude_sonnet", "rasterize"),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._maybe_confirm_attachment_cost",
+                new=AsyncMock(return_value=True),
             ),
         ):
             await step_init(ctx, SessionManager(), trace_ctx)
@@ -1412,6 +1429,7 @@ class TestStepInitDocumentResolution:
                         blocks=(),
                         disclosures=("Document 'report.pdf' was not included: too large.",),
                         used_tier2=True,
+                        native_pdf_page_count=0,
                     )
                 ),
             ),
@@ -1440,6 +1458,7 @@ class TestStepInitDocumentResolution:
                         blocks=(),
                         disclosures=("2 of 5 page(s) of 'report.pdf' were not included.",),
                         used_tier2=True,
+                        native_pdf_page_count=0,
                     )
                 ),
             ),
@@ -1473,12 +1492,14 @@ class TestStepInitDocumentResolution:
                 await step_init(ctx, SessionManager(), trace_ctx)
 
     @pytest.mark.asyncio
-    async def test_document_blocks_do_not_reach_maybe_confirm_attachment_cost(self) -> None:
-        """Document-only turn (no raster images) — the pre-flight cost-confirm
+    async def test_native_pdf_document_reaches_maybe_confirm_attachment_cost(self) -> None:
+        """A native-PDF document-only turn (no raster images) now reaches the
 
-        UX stays image-only (T5/FRE-686 scope); it must not be called at all
-        for a document-only turn, matching the real ``if resolved_blocks and
-        not await ...`` gating.
+        pre-flight cost-confirm gate with its page count (FRE-686 / ADR-0102
+        §7b closes the interim gap FRE-684 documented and explicitly deferred
+        — this test used to assert the opposite, that the gate was never
+        called for a document-only turn; inverted here to prove the gap is
+        closed).
         """
         attachment = self._pdf_attachment()
         ctx = self._make_ctx("Look at this", attachments=(attachment,))
@@ -1493,7 +1514,10 @@ class TestStepInitDocumentResolution:
                 "personal_agent.orchestrator.document_resolution.resolve_documents",
                 new=AsyncMock(
                     return_value=SimpleNamespace(
-                        blocks=(doc_block,), disclosures=(), used_tier2=True
+                        blocks=(doc_block,),
+                        disclosures=(),
+                        used_tier2=True,
+                        native_pdf_page_count=5,
                     )
                 ),
             ),
@@ -1508,7 +1532,47 @@ class TestStepInitDocumentResolution:
         ):
             await step_init(ctx, SessionManager(), trace_ctx)
 
-        mock_confirm.assert_not_called()
+        mock_confirm.assert_called_once()
+        assert mock_confirm.call_args.kwargs["native_pdf_page_count"] == 5
+
+    @pytest.mark.asyncio
+    async def test_rasterize_document_pages_fold_into_image_cost_gate(self) -> None:
+        """Rasterize-delivery document pages (image_url blocks, no raw image
+
+        attachments) reach the cost gate folded into the image-like block
+        bucket, not silently skipped (FRE-686).
+        """
+        attachment = self._pdf_attachment()
+        ctx = self._make_ctx("Look at this", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-684", session_id="sess-684")
+
+        page_block = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+        with (
+            patch(
+                "personal_agent.orchestrator.document_resolution.resolve_documents",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        blocks=(page_block,),
+                        disclosures=(),
+                        used_tier2=True,
+                        native_pdf_page_count=0,
+                    )
+                ),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._resolve_document_routing_key",
+                return_value=("claude_sonnet", "rasterize"),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._maybe_confirm_attachment_cost",
+                new=AsyncMock(return_value=True),
+            ) as mock_confirm,
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        mock_confirm.assert_called_once()
+        assert page_block in mock_confirm.call_args.args[1]
+        assert mock_confirm.call_args.kwargs["native_pdf_page_count"] == 0
 
 
 class TestMaybeConfirmAttachmentCostDocumentConsistency:

@@ -20,6 +20,16 @@ MessageContent = str | list[dict[str, Any]]
 # ticket may replace this with provider-reported usage once resolution lands.
 IMAGE_BLOCK_TOKEN_ESTIMATE = 1600
 
+# Per-page token estimate for the native PDF document block (ADR-0102 §4 cost
+# note: "per page you pay both ~1.5-3k text tokens and image tokens" — provider
+# extracts text AND rasterizes each page). Upper-bound text (3000) + one image
+# tile (IMAGE_BLOCK_TOKEN_ESTIMATE, 1600) = 4600. Deliberately upper-bound, not
+# midpoint: this gates a user-facing spend-confirmation threshold, so erring
+# toward asking for confirmation is the safe direction (ADR-0102 "the user is
+# never surprised by an expensive PDF"). Approximate by construction (ADR-0102
+# §"Pre-flight estimate is approximate"); reconciled at commit via real usage.
+DOCUMENT_NATIVE_PAGE_TOKEN_ESTIMATE = 4600
+
 
 def get_text_content(content: Any) -> str:
     """Extract the text portion of a message ``content`` field.

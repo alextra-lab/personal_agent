@@ -165,6 +165,7 @@ class TestAC1NativeTextPath:
         block = result.blocks[0]
         assert block["type"] == "text"
         assert "Sentinel Marker Alpha" in block["text"]
+        assert result.native_pdf_page_count == 0
 
     @pytest.mark.asyncio
     async def test_native_text_pdf_produces_no_image_or_document_block(self) -> None:
@@ -276,6 +277,7 @@ class TestTier2DeliverySelection:
         block = result.blocks[0]
         assert block["type"] == "document"
         assert block["source"]["media_type"] == "application/pdf"
+        assert result.native_pdf_page_count == 1
 
     @pytest.mark.asyncio
     async def test_rasterize_delivery_produces_image_url_blocks(self) -> None:
@@ -292,6 +294,7 @@ class TestTier2DeliverySelection:
         block = result.blocks[0]
         assert block["type"] == "image_url"
         assert block["image_url"]["url"].startswith("data:image/png;base64,")
+        assert result.native_pdf_page_count == 0
 
 
 class TestClassificationBoundary:
@@ -400,6 +403,7 @@ class TestPageBudgetSelection:
             io.BytesIO(base64.b64decode(result.blocks[0]["source"]["data"]))
         )
         assert len(sub_doc) == 2
+        assert result.native_pdf_page_count == 2
 
     @pytest.mark.asyncio
     async def test_budget_is_shared_across_multiple_documents_in_one_turn(self) -> None:
@@ -625,6 +629,7 @@ class TestNativeOversizeRejectsWholeDocument:
 
         assert result.blocks == ()
         assert any("huge-scan.pdf" in d for d in result.disclosures)
+        assert result.native_pdf_page_count == 0
 
 
 class TestAC7ExtractedTextGuardrail:
@@ -781,9 +786,14 @@ class TestAC12CleanTaskText:
             )
 
         assert "OnlyInThePdfNotInUserMessage" in result.blocks[0]["text"]
-        # ResolvedDocuments carries only blocks/disclosures — no field a caller
-        # could mistake for (or accidentally merge into) task/user-message text.
-        assert set(vars(result).keys()) <= {"blocks", "disclosures", "used_tier2"}
+        # ResolvedDocuments carries only blocks/disclosures/counts — no field a
+        # caller could mistake for (or accidentally merge into) task/user-message text.
+        assert set(vars(result).keys()) <= {
+            "blocks",
+            "disclosures",
+            "used_tier2",
+            "native_pdf_page_count",
+        }
 
 
 # ---------------------------------------------------------------------------

@@ -41,3 +41,20 @@ def test_zero_price_yields_zero() -> None:
         block_count=8, per_block_tokens=1600, input_price_per_token=Decimal("0")
     )
     assert cost == Decimal("0")
+
+
+def test_document_native_page_estimate_math() -> None:
+    """10 native-PDF pages × DOCUMENT_NATIVE_PAGE_TOKEN_ESTIMATE × $3/MTok (FRE-686).
+
+    Confirms the attachment-agnostic promise actually holds for the real
+    per-page constant T5 introduces, not just a synthetic 1600*10 stand-in.
+    """
+    from personal_agent.llm_client.message_content import DOCUMENT_NATIVE_PAGE_TOKEN_ESTIMATE
+
+    cost = estimate_attachment_cloud_cost_usd(
+        block_count=10,
+        per_block_tokens=DOCUMENT_NATIVE_PAGE_TOKEN_ESTIMATE,
+        input_price_per_token=_SONNET_INPUT_PRICE,
+    )
+    expected = Decimal(10) * Decimal(DOCUMENT_NATIVE_PAGE_TOKEN_ESTIMATE) * _SONNET_INPUT_PRICE
+    assert cost == pytest.approx(expected, rel=1e-6)

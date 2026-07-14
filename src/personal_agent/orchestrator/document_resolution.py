@@ -74,11 +74,19 @@ class ResolvedDocuments:
             document-driven capability/routing decision actually happened —
             ``False`` means every document resolved via Tier 1 (text), so no
             model-capability requirement was introduced this turn.
+        native_pdf_page_count: Total selected pages actually delivered via a
+            native-PDF ``document`` block this turn (ADR-0102 §7b / FRE-686).
+            One ``document`` block can represent many pages, so callers that
+            need a page-multiplied cost estimate cannot derive this from
+            ``len(blocks)`` alone. ``0`` for text-only or rasterize-only
+            turns — rasterized pages are already one ``image_url`` block
+            each, so their count is ``len(blocks)``, not this field.
     """
 
     blocks: tuple[dict[str, Any], ...]
     disclosures: tuple[str, ...]
     used_tier2: bool
+    native_pdf_page_count: int = 0
 
 
 def _select_pages(
@@ -226,15 +234,19 @@ async def _resolve_one_document(
     trace_id: str | None,
     session_id: str | None,
     task_id: str | None,
-) -> tuple[list[dict[str, Any]], list[str], int, int, bool]:
+) -> tuple[list[dict[str, Any]], list[str], int, int, bool, int]:
     """Resolve one PDF attachment.
 
     Returns ``(blocks, disclosures, running_total_bytes, remaining_page_budget,
-    used_tier2)`` — the running values threaded across documents in the turn by
-    the caller, mirroring the total-payload-byte accounting (ADR-0102 §4: the
-    page budget is per-turn, not per-document). ``resolve_tier2_delivery`` is
-    invoked at most once, only if this document classifies Tier 2 — a Tier-1
-    (text) document never calls it (ADR-0102 §1: Tier 1 works on any model).
+    used_tier2, native_pdf_pages)`` — the running values threaded across
+    documents in the turn by the caller, mirroring the total-payload-byte
+    accounting (ADR-0102 §4: the page budget is per-turn, not per-document).
+    ``resolve_tier2_delivery`` is invoked at most once, only if this document
+    classifies Tier 2 — a Tier-1 (text) document never calls it (ADR-0102 §1:
+    Tier 1 works on any model). ``native_pdf_pages`` is the count of pages
+    actually delivered via a native-PDF ``document`` block for this document
+    (0 for text/rasterize/rejected — ADR-0102 §7b / FRE-686, threaded up so
+    the caller can price a page-multiplied cost estimate).
     """
     try:
         raw = await store.get(
@@ -253,7 +265,14 @@ async def _resolve_one_document(
         full_text = "\n\n".join(page_texts)
         text_block, text_disclosure = _build_text_block(full_text, title=attachment.title)
         text_disclosures = [text_disclosure] if text_disclosure else []
-        return [text_block], text_disclosures, running_total_bytes, remaining_page_budget, False
+        return (
+            [text_block],
+            text_disclosures,
+            running_total_bytes,
+            remaining_page_budget,
+            False,
+            0,
+        )
 
     if remaining_page_budget <= 0:
         return (
@@ -265,6 +284,7 @@ async def _resolve_one_document(
             running_total_bytes,
             remaining_page_budget,
             False,
+            0,
         )
 
     scores = await asyncio.to_thread(compute_page_scores, pdf)
@@ -299,6 +319,7 @@ async def _resolve_one_document(
                 running_total_bytes,
                 new_remaining_page_budget,
                 True,
+                0,
             )
         encoded_len = len(native_block["source"]["data"])
         return (
@@ -307,6 +328,7 @@ async def _resolve_one_document(
             running_total_bytes + encoded_len,
             new_remaining_page_budget,
             True,
+            len(selected_pages),
         )
 
     page_blocks, page_disclosures, new_total = await asyncio.to_thread(
@@ -322,6 +344,7 @@ async def _resolve_one_document(
         new_total,
         new_remaining_page_budget,
         True,
+        0,
     )
 
 
@@ -379,7 +402,9 @@ async def resolve_documents(
             resolved_count=0,
             disclosure_count=0,
         )
-        return ResolvedDocuments(blocks=(), disclosures=(), used_tier2=False)
+        return ResolvedDocuments(
+            blocks=(), disclosures=(), used_tier2=False, native_pdf_page_count=0
+        )
 
     store = get_artifact_store()
     if store is None:
@@ -400,6 +425,7 @@ async def resolve_documents(
     running_total_bytes = 0
     remaining_page_budget = min(settings.document_max_pages_per_turn, _PROVIDER_MAX_PAGES)
     used_tier2 = False
+    native_pdf_page_count = 0
 
     for attachment in documents:
         try:
@@ -409,6 +435,7 @@ async def resolve_documents(
                 running_total_bytes,
                 remaining_page_budget,
                 doc_used_tier2,
+                doc_native_pdf_pages,
             ) = await _resolve_one_document(
                 attachment,
                 resolve_tier2_delivery=resolve_tier2_delivery,
@@ -420,6 +447,7 @@ async def resolve_documents(
                 task_id=task_id,
             )
             used_tier2 = used_tier2 or doc_used_tier2
+            native_pdf_page_count += doc_native_pdf_pages
         except AttachmentUnsupportedError:
             log.warning(
                 "document_resolution_failed",
@@ -443,5 +471,8 @@ async def resolve_documents(
         disclosure_count=len(disclosures),
     )
     return ResolvedDocuments(
-        blocks=tuple(blocks), disclosures=tuple(disclosures), used_tier2=used_tier2
+        blocks=tuple(blocks),
+        disclosures=tuple(disclosures),
+        used_tier2=used_tier2,
+        native_pdf_page_count=native_pdf_page_count,
     )

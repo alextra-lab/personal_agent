@@ -197,3 +197,57 @@ def test_estimate_for_call_pricing_truly_unknown_returns_zero() -> None:
         )
     # No pricing → 100 × 0 + 128 × 0 × 1.2 = 0
     assert reservation == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# AC-10 (ADR-0102 §7b, FRE-686): the commit-side cost basis is not text-only
+# for a document turn.
+# ---------------------------------------------------------------------------
+
+
+def test_actual_cost_for_response_reflects_document_page_tokens() -> None:
+    """The commit-side cost must scale with the image/page-token component of
+
+    real provider-reported ``usage``, not just text tokens — the property
+    AC-10 requires ("token basis includes image/page tokens, not text-only").
+    Uses the real (unmocked) ``litellm.completion_cost`` against a known
+    Claude model id so this exercises litellm's actual pricing math; only
+    ``usage.prompt_tokens`` is fabricated to stand in for what a real scanned
+    PDF call would report (per-page text+image charging, ADR-0102 §4).
+    """
+    from litellm import ModelResponse
+
+    from personal_agent.llm_client.cost_estimator import actual_cost_for_response
+    from personal_agent.llm_client.message_content import DOCUMENT_NATIVE_PAGE_TOKEN_ESTIMATE
+
+    def _response(prompt_tokens: int) -> ModelResponse:
+        return ModelResponse(
+            id="msg_test_fre686",
+            choices=[
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {"content": "ok", "role": "assistant", "tool_calls": None},
+                }
+            ],
+            usage={
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": 50,
+                "total_tokens": prompt_tokens + 50,
+            },
+            model="claude-sonnet-4-6",
+            object="chat.completion",
+        )
+
+    text_only_baseline = _response(prompt_tokens=50)
+    scanned_pdf = _response(prompt_tokens=50 + 5 * DOCUMENT_NATIVE_PAGE_TOKEN_ESTIMATE)
+
+    baseline_cost = actual_cost_for_response(response=text_only_baseline, model="claude-sonnet-4-6")
+    scanned_cost = actual_cost_for_response(response=scanned_pdf, model="claude-sonnet-4-6")
+
+    assert baseline_cost > 0
+    assert scanned_cost > 0
+    # 5 pages of page tokens dwarf the 50-token text baseline (~460×), so a
+    # text-only-basis bug (scanned_cost == baseline_cost) is unambiguously
+    # distinguishable from the correct page-inclusive basis.
+    assert scanned_cost > baseline_cost * 10

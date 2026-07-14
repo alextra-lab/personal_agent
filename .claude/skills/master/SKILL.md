@@ -49,8 +49,14 @@ Does this change require updates to MASTER_PLAN, `CLAUDE.md` "Current status", o
 field? Flag drift before merging. (Documentation-drift sensitivity is a core guardian duty.)
 
 ## 4 — Gate checks
+**Collect the determinable signals first (ADR-0117):** run `python -m scripts.pr_gate <PR#>` — it
+surfaces the raw external facts (each required-CI check's state, raw mergeability fields,
+`is_dependabot_author`) in one read. It renders **no** verdict and **never** blocks (exit 0 always);
+it saves the legwork so your judgment goes to everything else. Read those facts, then gate:
 Ticket is `In Progress`/`In Review` (In Review = PR open, set by the integration); PR hygiene holds
-(REJECT if post-deploy items are in the checklist); CI green.
+(REJECT if post-deploy items are in the checklist); CI green. **The collector reports; you decide** —
+codex adequacy, handoff completeness, AC proof, drift, seam, and the merge call all stay yours
+(lifecycle-rules § Signal trust boundary).
 
 **Acceptance-criteria gate — the binding bar. "Done" means *provably delivered against the backing
 ADR*, not merged-and-runs.** A feature / ADR-implementation ticket passes ONLY if all three hold:

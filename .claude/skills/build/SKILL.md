@@ -143,6 +143,9 @@ in the PR's pre-merge checklist:
   queued ticket is a direct follow-on — same files/feature, multi-phase, regression test for what you
   just built, depends on a fresh discovery) or **cleared** (`/clear` — different area; you know your own
   context best). State it plainly, e.g. "FRE-X next: keep — shares this refactor" / "clear before next".
-Master reads this comment by default at the gate, so it is the handoff channel.
+Master reads this comment by default at the gate, so it is the handoff channel. **These fields are
+the handoff contract** master trusts without re-deriving (lifecycle-rules § Signal trust boundary) —
+fill every one; a real-logic diff whose handoff is missing per-AC evidence or the self-review summary
+is bounced, not reconstructed by master.
 
 **STOP. Do not merge, deploy, close the ticket, or edit MASTER_PLAN** — that is master's role.

@@ -58,6 +58,43 @@ Two comment channels, split by message **type** — never mixed:
 Principle: **PR = do-this-to-merge (transient); ticket = this-is-what-happened (durable).** Master
 never puts an actionable instruction on the ticket, nor a durable record on the PR.
 
+## Signal trust boundary (how master processes a PR without re-doing the build)
+
+Master is the executive, not a second builder. The delivery machinery emits signals **so master does
+not re-derive the work** — trust them at the stated altitude, and spend the freed effort on the four
+master jobs: **sequence · deploy · schedule · correlate.** Re-reading the implementation to re-confirm
+what a signal already asserts is the failure mode (memory `feedback_master_reads_signals_not_redoes_work`).
+
+**Trust without re-deriving** (do NOT re-run or re-read the code to confirm these):
+- **CI green = a fixed guarantee-set.** Each required check guarantees one thing: *Backend unit +
+  integration tests* → behaviour asserted; *Lint (mypy + ruff)* → types + style; *CodeQL* → no flagged
+  security pattern; *Config guard* → role/secret/orphan-env integrity; *Telemetry surface
+  reconciliation* → emit↔mapping consistent. Green ⟹ those hold; look deeper only when a *specific*
+  risk isn't covered by a *specific* check.
+- **codex plan-review ran + its verdict** → the design was adversarially reviewed at its tier. A
+  Standard/Complex src/schema/security/cost/memory diff with **no** codex review is mis-tiered → bounce
+  (master SKILL Step 2 backstop), don't re-review it yourself.
+- **security-review verdict** → the named boundary (egress, auth, injection, secret) was traced.
+- **The handoff contract** = the fixed fields every close-out fills (build SKILL Step 9 / adr SKILL
+  Step 6): per-AC evidence · self-review summary (code-review effort + findings fixed/deferred +
+  security-review verdict) · deploy class · post-deploy runbook · seam ownership · context disposition.
+  This is the gate's executive input. A real-logic diff whose handoff is **missing per-AC evidence or
+  the self-review summary → bounce** (do not reconstruct it by reading the diff).
+
+**Master's own thin check** (the layer no signal covers — where master's judgment actually lives, one
+pass): does the delivered thing meet the **backing ADR's objective** (not merely pass its tests) ·
+**doc-drift** (MASTER_PLAN / CLAUDE.md / ADR status) · **seam ownership** (a child closing ≠ the ADR
+closing) · **fold-ins** genuinely support the ticket. Then merge / deploy / schedule.
+
+**Dependabot** — analyze-only, never push to its branch (ADR-0116 boundary). Green patch/minor →
+glance-and-merge; a major bump or red CI → attention, never auto. The watcher structurally excludes
+dependabot from the worker-fix path.
+
+**Master's own PRs have no safety net.** The watcher's red-CI → self-fix loop is **worker-only** (it
+routes by stream label to the owning seat); a master-authored PR — reflexive-infra (mode-flips), a
+MASTER_PLAN docs PR — has no owning worker and gets **no red-CI notification**. Master must watch its
+own pushed PRs' CI **directly**; auto-merge lands on green but is silent on red, so it is not monitoring.
+
 ## Session boundary
 - build & adr sessions stop at "push branch + open PR". They never merge, deploy,
   close tickets, or edit MASTER_PLAN.

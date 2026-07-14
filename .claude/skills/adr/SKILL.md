@@ -148,7 +148,8 @@ does NOT belong in the ADR PR's pre-merge checklist:
 - the **implementation tickets filed + sequence/dependencies** (so master can track the chain);
 - any **doc-drift** master should reconcile (related ADRs, MASTER_PLAN, CLAUDE.md status);
 - **your context disposition for the next ADR** — kept or cleared (`/clear`), and why.
-Master reads this comment by default at the gate, so it is the handoff channel.
+Master reads this comment by default at the gate, so it is the handoff channel. **These fields are the
+handoff contract** master trusts without re-deriving (lifecycle-rules § Signal trust boundary).
 
 **STOP. Never edit `src/`, never merge, never deploy, never edit MASTER_PLAN** — that is master's role.
 

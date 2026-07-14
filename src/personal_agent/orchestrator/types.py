@@ -337,6 +337,18 @@ class ExecutionContext:
     # while the per-call ADR-0065 reservation still caps every call.
     attachment_cost_confirmed: bool = False
 
+    # --- FRE-684 / ADR-0102 T4 document-driven routing ---
+    # Set during turn-assembly iff a PDF attachment actually classified Tier 2
+    # (vision) and a capability/routing decision was made for it. ``None``
+    # means no document forced a routing decision this turn (either no PDF
+    # attachment, or every PDF resolved via Tier 1 text — ADR-0102 §1: Tier 1
+    # must work on any model, so it never sets this). When set, both
+    # ``_maybe_confirm_attachment_cost`` and ``step_llm_call`` use this key
+    # instead of independently recomputing image-only vision routing, so a
+    # document-driven escalation doesn't leave the image cost-gate checking a
+    # stale (pre-escalation) model key.
+    document_effective_model_key: str | None = None
+
 
 class OrchestratorStep(TypedDict):
     """Step metadata for observability.

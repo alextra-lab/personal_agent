@@ -260,8 +260,11 @@ build-time user surface.
 - `config/model_roles.yaml` — new matrix role `artifact_builder` (default `claude_haiku`) **and** a
   new `artifact_builder_candidates` block (vetted keys + onboarding metadata incl. large-output).
   Pinned writer roles unchanged.
-- `config/models.yaml` / `config/models.cloud.yaml` — ensure each candidate carries max-output /
-  large-output metadata.
+- Large-output capability lives in the new `artifact_builder_candidates` registry as onboarding
+  metadata — **not** on `ModelDefinition`, which carries only `max_tokens` and no capability field
+  (`llm_client/models.py`). The loader validates each candidate's `ModelDefinition.max_tokens` clears
+  the artifact-draft output threshold. (If a typed capability field on `ModelDefinition` is preferred
+  instead, add it and list `llm_client/models.py` as affected.)
 - `src/personal_agent/config/model_loader.py` — `resolve_role_model_key` already resolves matrix
   roles; add candidate-registry load + onboarding validation.
 - `src/personal_agent/cost_gate/__init__.py` — add `artifact_builder` to
@@ -342,11 +345,14 @@ a non-default pick.
 - **AC-5 — A standing default pre-resolves silently *and the chosen model actually builds*;
   `always_pause` shows the card.** *Check:* with a stored `artifact_builder` preference set to a
   **non-Haiku** builder, `constraint_preference_applied` is logged, **no** `ConstraintPauseEvent` is
-  emitted, **and** the resulting `artifact_draft` build runs on that preferred model
-  (`MODEL_CALL_COMPLETED.model` == the preference, per AC-1 instrumentation); with the preference set
-  to `always_pause`, a `ConstraintPauseEvent` **is** emitted. *Fails if* the card shows despite a set
-  default, never shows under `always_pause`, **or** the preference is logged-and-swallowed while the
-  build silently falls back to Haiku (preference resolved but never threaded to the tool).
+  emitted, **and** the resulting `artifact_draft` build runs on that preferred builder —
+  `MODEL_CALL_COMPLETED.model` equals the **resolved provider/model id** of the stored preference.
+  (The stored preference is an action-id / config key, not a provider/model string, so the check maps
+  it through the registry to its `ModelDefinition.id` before comparing — comparing the raw key to the
+  emitted `model` would be a dimension error.) With the preference set to `always_pause`, a
+  `ConstraintPauseEvent` **is** emitted. *Fails if* the card shows despite a set default, never shows
+  under `always_pause`, **or** the preference is logged-and-swallowed while the build silently falls
+  back to Haiku (preference resolved but never threaded to the tool).
 - **AC-6 — No answer never means no artifact.** *Check:* simulate no-WS / timeout on a build; the
   artifact still renders, produced by the default builder (`resolution` is `connection_lost` or
   `timeout_default`, `model="claude_haiku"`). *Fails if* the build stalls or yields zero artifact
@@ -398,4 +404,8 @@ cost lane vs the `respond(role=…)`/`model_role` telemetry field — both must 
 silently); corrected the §1 claim that the resolver excludes `primary`/`sub_agent` (it doesn't —
 they're intent-only by convention only); tightened AC-4 to set-equality against the availability-
 filtered registry; tightened AC-5 to assert the preferred model actually builds, not just that the
-card is suppressed.
+card is suppressed. Round 3 (final): fixed AC-5's identifier dimension (stored preference is a config
+key; compare its *resolved* `ModelDefinition.id` to the emitted `MODEL_CALL_COMPLETED.model`, not the
+raw key); relocated large-output capability to the candidate-registry onboarding schema
+(`ModelDefinition` has only `max_tokens`, no capability field). Codex verified rounds 1–2 findings
+resolved and AC-1..AC-7 non-gameable against current instrumentation.

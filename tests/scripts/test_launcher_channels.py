@@ -8,9 +8,12 @@ and a per-seat ``SESHAT_CHANNEL_PORT`` **iff** that seat's ``mode == "channel"``
 there is no independent per-invocation channel flag (FRE-875 removed it), so the
 launch shape can never drift from the mode the watcher reads to pick a transport.
 
-A not-yet-cutover seat (``mode == "send_keys"``, the default for every live seat
-in Phase A) is byte-for-byte its pre-channel shape (ADR-0116 §5, "one seat at a
-time"). The shared secret is never placed on the command line (it would leak via
+A ``send_keys``-mode seat is byte-for-byte its pre-channel shape (ADR-0116 §5,
+"one seat at a time"). All three live worker seats are now cut over to channel
+(FRE-875 Phase B complete), so ``send_keys`` is no longer any live seat's default
+— it remains the ``StreamTopology`` dataclass default and the channel-down
+fallback target, and these tests construct it explicitly via ``_flip_to_send_keys``.
+The shared secret is never placed on the command line (it would leak via
 ``ps``/plan JSON); it is provisioned out-of-band into the seat's environment.
 """
 
@@ -47,8 +50,21 @@ def _flip_to_channel(monkeypatch: pytest.MonkeyPatch, stream: str) -> None:
     monkeypatch.setitem(launcher._TOPOLOGY, stream, channel_topology)
 
 
-def test_send_keys_seat_argv_unchanged_by_default() -> None:
-    # Every live seat is send_keys in Phase A → the pre-channel argv, untouched.
+def _flip_to_send_keys(monkeypatch: pytest.MonkeyPatch, stream: str) -> None:
+    """Flip one seat's topology to send_keys-mode — the pre-cutover shape.
+
+    All live worker seats are channel-mode now (Phase B complete), so a test that
+    proves the send_keys argv shape must construct that mode explicitly.
+    """
+    send_keys_topology = dataclasses.replace(topology_for(stream), mode="send_keys")
+    monkeypatch.setitem(launcher._TOPOLOGY, stream, send_keys_topology)
+
+
+def test_send_keys_seat_argv_unchanged_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A send_keys-mode seat → the pre-channel argv, untouched (the dataclass
+    # default and the channel-down fallback shape; constructed explicitly now
+    # that every live worker seat is channel-mode).
+    _flip_to_send_keys(monkeypatch, "build2")
     plan = plan_launch("build2", "FRE-871", "haiku", context_keep=False)
     inner = _inner(plan)
     assert "--channels" not in inner
@@ -80,6 +96,7 @@ def test_channel_wiring_is_derived_from_topology_mode_and_cannot_drift(
     # The single-source invariant: for any seat, launch channel-wiring is
     # exactly (topology.mode == "channel"). There is no other input that could
     # make the two disagree — the drift class FRE-872 flagged is gone.
+    _flip_to_send_keys(monkeypatch, "adr")
     assert "--channels" not in _inner(plan_launch("adr", "FRE-875", "opus", context_keep=False))
     _flip_to_channel(monkeypatch, "adr")
     assert "--channels" in _inner(plan_launch("adr", "FRE-875", "opus", context_keep=False))
@@ -111,7 +128,8 @@ def test_main_channel_seat_wires_channel(monkeypatch: pytest.MonkeyPatch, capsys
     assert f"--channels {_CHANNEL_REF}" in payload["command"][-1]
 
 
-def test_main_send_keys_seat_has_no_channel(capsys) -> None:  # type: ignore[no-untyped-def]
+def test_main_send_keys_seat_has_no_channel(monkeypatch: pytest.MonkeyPatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    _flip_to_send_keys(monkeypatch, "build2")
     rc = main(["--stream", "build2", "--model", "haiku", "--ticket", "FRE-875", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)

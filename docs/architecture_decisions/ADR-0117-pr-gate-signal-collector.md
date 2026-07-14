@@ -1,6 +1,6 @@
 # ADR-0117: Deterministic signal collector for the PR gate — mechanize the mechanical, never the judgment
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-14
 **Deciders:** Owner (scope + the anti-caging constraint), master session (design, reflexive-infra author)
 **Tags:** dev-process, master-gate, tooling, determinism, anti-caging, FRE-877
@@ -192,12 +192,15 @@ handoff template land together and are verified against real PRs before this ADR
 
 ## Status Updates
 
-### 2026-07-14 — Proposed
+### 2026-07-14 — Proposed → Accepted
 **Changed By:** Owner + master session
 **Reason:** Master's gating job lacks the deterministic backbone its scheduling job has. The owner set the
 binding constraint — the script may assert only determinable external signals; all evaluation stays
-master's, uncaged — walking back the opinionated first-pass spec. Proposed for a minimal signal collector
-on that basis.
+master's, uncaged — walking back the opinionated first-pass spec. The owner co-designed each decision
+(master-run collector · determinable-signals-only · codex left to master's evaluation · the hard/advisory
+split collapsed into "facts only") and authorized rollout, so it is Accepted on merge. Codex-reviewed
+before merge (6 findings applied, all closing spots the draft still permitted implementation-time
+judgment). Implemented by FRE-877 (PR #525).
 
 ---
 

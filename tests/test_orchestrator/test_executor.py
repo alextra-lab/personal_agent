@@ -20,6 +20,7 @@ from personal_agent.orchestrator.executor import (
     _build_assistant_tool_calls,
     _extract_entity_type_hints,
     _format_broad_recall,
+    _maybe_confirm_attachment_cost,
     _validate_and_fix_conversation_roles,
     execute_task_safe,
     step_init,
@@ -1276,6 +1277,303 @@ class TestStepInitAttachmentResolution:
         assert ctx.attachment_disclosures == [
             "Image 'photo.png' was downscaled to fit the size limit."
         ]
+
+
+class TestStepInitDocumentResolution:
+    """FRE-684 / ADR-0102 T4 — turn-assembly document-block injection + routing."""
+
+    @staticmethod
+    def _make_ctx(message: str, attachments: tuple[AttachmentRef, ...] = ()) -> ExecutionContext:
+        return ExecutionContext(
+            session_id="sess-684",
+            trace_id="trace-684",
+            user_message=message,
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=None,
+            attachments=attachments,
+        )
+
+    @staticmethod
+    def _pdf_attachment(**overrides: object) -> AttachmentRef:
+        defaults: dict[str, object] = {
+            "artifact_id": "doc-1",
+            "content_type": "application/pdf",
+            "title": "report.pdf",
+            "r2_key": "upload/u/g/report.pdf",
+        }
+        defaults.update(overrides)
+        return AttachmentRef(**defaults)  # type: ignore[arg-type]
+
+    @pytest.mark.asyncio
+    async def test_document_attachment_injects_document_block(self) -> None:
+        attachment = self._pdf_attachment()
+        ctx = self._make_ctx("Look at this", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-684", session_id="sess-684")
+
+        doc_block = {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+        }
+        with (
+            patch(
+                "personal_agent.orchestrator.document_resolution.resolve_documents",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        blocks=(doc_block,), disclosures=(), used_tier2=True
+                    )
+                ),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._resolve_document_routing_key",
+                return_value=("primary", "native_pdf"),
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        content = ctx.messages[-1]["content"]
+        assert isinstance(content, list)
+        types = {block["type"] for block in content}
+        assert types == {"text", "document"}
+
+    @pytest.mark.asyncio
+    async def test_tier1_document_does_not_set_document_effective_model_key(self) -> None:
+        attachment = self._pdf_attachment()
+        ctx = self._make_ctx("Look at this", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-684", session_id="sess-684")
+
+        text_block = {"type": "text", "text": "extracted text"}
+        with (
+            patch(
+                "personal_agent.orchestrator.document_resolution.resolve_documents",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        blocks=(text_block,), disclosures=(), used_tier2=False
+                    )
+                ),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._resolve_document_routing_key",
+                side_effect=AssertionError("must not be called for a Tier-1-only turn"),
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.document_effective_model_key is None
+
+    @pytest.mark.asyncio
+    async def test_tier2_document_sets_document_effective_model_key(self) -> None:
+        attachment = self._pdf_attachment()
+        ctx = self._make_ctx("Look at this", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-684", session_id="sess-684")
+
+        doc_block = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,AAAA"},
+        }
+        with (
+            patch(
+                "personal_agent.orchestrator.document_resolution.resolve_documents",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        blocks=(doc_block,), disclosures=(), used_tier2=True
+                    )
+                ),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._resolve_document_routing_key",
+                return_value=("claude_sonnet", "rasterize"),
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.document_effective_model_key == "claude_sonnet"
+
+    @pytest.mark.asyncio
+    async def test_rejected_oversized_document_does_not_force_document_effective_model_key(
+        self,
+    ) -> None:
+        """A native-PDF block rejected for exceeding the payload cap (used_tier2=True,
+
+        blocks=()) must not force the rest of the turn — including a plain-text
+        question with no surviving document content — onto the escalated/cloud
+        model (code-review finding: a rejected document was still dragging the
+        whole turn onto cloud with no visible reason).
+        """
+        attachment = self._pdf_attachment()
+        ctx = self._make_ctx("Just a question, no document content survived", (attachment,))
+        trace_ctx = TraceContext(trace_id="trace-684", session_id="sess-684")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.document_resolution.resolve_documents",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        blocks=(),
+                        disclosures=("Document 'report.pdf' was not included: too large.",),
+                        used_tier2=True,
+                    )
+                ),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._resolve_document_routing_key",
+                return_value=("claude_sonnet", "native_pdf"),
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.document_effective_model_key is None
+        # The turn's content stays plain text — no empty/dangling block list.
+        assert ctx.messages[-1]["content"] == "Just a question, no document content survived"
+
+    @pytest.mark.asyncio
+    async def test_document_disclosures_merged_onto_ctx(self) -> None:
+        attachment = self._pdf_attachment()
+        ctx = self._make_ctx("Look at this", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-684", session_id="sess-684")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.document_resolution.resolve_documents",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        blocks=(),
+                        disclosures=("2 of 5 page(s) of 'report.pdf' were not included.",),
+                        used_tier2=True,
+                    )
+                ),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._resolve_document_routing_key",
+                return_value=("primary", "native_pdf"),
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.attachment_disclosures == ["2 of 5 page(s) of 'report.pdf' were not included."]
+
+    @pytest.mark.asyncio
+    async def test_document_routing_failure_propagates_as_attachment_unsupported(self) -> None:
+        from personal_agent.exceptions import AttachmentUnsupportedError
+
+        attachment = self._pdf_attachment()
+        ctx = self._make_ctx("Look at this", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-684", session_id="sess-684")
+
+        with patch(
+            "personal_agent.orchestrator.document_resolution.resolve_documents",
+            new=AsyncMock(
+                side_effect=AttachmentUnsupportedError(
+                    "This turn includes a document, but the model serving this "
+                    "conversation does not support it."
+                )
+            ),
+        ):
+            with pytest.raises(AttachmentUnsupportedError):
+                await step_init(ctx, SessionManager(), trace_ctx)
+
+    @pytest.mark.asyncio
+    async def test_document_blocks_do_not_reach_maybe_confirm_attachment_cost(self) -> None:
+        """Document-only turn (no raster images) — the pre-flight cost-confirm
+
+        UX stays image-only (T5/FRE-686 scope); it must not be called at all
+        for a document-only turn, matching the real ``if resolved_blocks and
+        not await ...`` gating.
+        """
+        attachment = self._pdf_attachment()
+        ctx = self._make_ctx("Look at this", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-684", session_id="sess-684")
+
+        doc_block = {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+        }
+        with (
+            patch(
+                "personal_agent.orchestrator.document_resolution.resolve_documents",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        blocks=(doc_block,), disclosures=(), used_tier2=True
+                    )
+                ),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._resolve_document_routing_key",
+                return_value=("primary", "native_pdf"),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._maybe_confirm_attachment_cost",
+                new=AsyncMock(return_value=True),
+            ) as mock_confirm,
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        mock_confirm.assert_not_called()
+
+
+class TestMaybeConfirmAttachmentCostDocumentConsistency:
+    """FRE-684 — the image cost-gate must check the document-driven effective
+
+    key when one was set at turn assembly, not silently recompute a stale
+    image-only key.
+    """
+
+    @pytest.mark.asyncio
+    async def test_uses_document_effective_model_key_when_set(self) -> None:
+        from personal_agent.llm_client.models import ModelDefinition
+
+        ctx = ExecutionContext(
+            session_id="s1",
+            trace_id="t1",
+            user_message="hi",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            attachments=(
+                AttachmentRef(
+                    artifact_id="img-1",
+                    content_type="image/png",
+                    title="photo.png",
+                    r2_key="upload/u/g/photo.png",
+                ),
+            ),
+            document_effective_model_key="claude_sonnet",
+        )
+        image_block = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+
+        mock_config = MagicMock()
+        mock_config.models = {
+            "claude_sonnet": ModelDefinition(
+                id="claude-sonnet",
+                context_length=200000,
+                max_concurrency=4,
+                default_timeout=60,
+                provider_type="cloud",
+                supports_vision=True,
+                input_cost_per_token=0.000003,
+            )
+        }
+
+        with (
+            patch(
+                "personal_agent.config.model_loader.load_model_config",
+                return_value=mock_config,
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._resolve_vision_routing_key",
+                side_effect=AssertionError(
+                    "must not recompute image-only routing when "
+                    "document_effective_model_key is already set"
+                ),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._maybe_pause_for_constraint",
+                new=AsyncMock(return_value="proceed_cloud"),
+            ),
+        ):
+            await _maybe_confirm_attachment_cost(ctx, (image_block,))
+
+        # No assertion error raised above confirms _resolve_vision_routing_key
+        # was never called — the document-driven key was used instead.
 
 
 class TestStepSynthesisAttachmentDisclosure:

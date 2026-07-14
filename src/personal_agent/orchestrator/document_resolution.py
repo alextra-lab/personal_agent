@@ -8,11 +8,15 @@ path. Page budget + salience selection (§4) and the four guardrail dimensions
 (§5) are enforced fail-closed, mirroring ``attachment_resolution.py``'s
 transform-or-reject-with-disclosure pattern.
 
-**Scope boundary:** ``tier2_delivery`` is caller-supplied, not computed here.
-Routing/delivery selection — reading ``ModelDefinition.supports_pdf_document``
-/ ``supports_vision`` and deciding which mode to request, with fail-closed
+**Scope boundary:** the Tier-2 delivery mode is resolved by a caller-supplied
+``resolve_tier2_delivery`` callback, not computed here. Routing/delivery
+selection — reading ``ModelDefinition.supports_pdf_document`` /
+``supports_vision`` and deciding which mode to request, with fail-closed
 escalation — is T4 (FRE-684), wired into the ``executor.py`` routing seam.
-This module never touches ``ExecutionContext`` or ``user_message``.
+The callback is invoked lazily, only once a specific document is actually
+classified Tier 2 (ADR-0102 §1: Tier 1 must work on **any** model, no
+capability check should ever fire for a document that resolves to plain
+text). This module never touches ``ExecutionContext`` or ``user_message``.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -64,10 +68,17 @@ class ResolvedDocuments:
             surviving document/page, in submitted order.
         disclosures: User-facing strings describing any trim/drop/reject
             applied by a guardrail (ADR-0102 §5, disclose-on-alter).
+        used_tier2: ``True`` iff at least one document in this turn was
+            classified Tier 2 and the caller's ``resolve_tier2_delivery``
+            callback was invoked. Callers use this to know whether a
+            document-driven capability/routing decision actually happened —
+            ``False`` means every document resolved via Tier 1 (text), so no
+            model-capability requirement was introduced this turn.
     """
 
     blocks: tuple[dict[str, Any], ...]
     disclosures: tuple[str, ...]
+    used_tier2: bool
 
 
 def _select_pages(
@@ -208,20 +219,22 @@ def _rasterize_pages(
 async def _resolve_one_document(
     attachment: AttachmentRef,
     *,
-    tier2_delivery: Literal["native_pdf", "rasterize"],
+    resolve_tier2_delivery: Callable[[], Literal["native_pdf", "rasterize"]],
     running_total_bytes: int,
     remaining_page_budget: int,
     store: Any,
     trace_id: str | None,
     session_id: str | None,
     task_id: str | None,
-) -> tuple[list[dict[str, Any]], list[str], int, int]:
+) -> tuple[list[dict[str, Any]], list[str], int, int, bool]:
     """Resolve one PDF attachment.
 
-    Returns ``(blocks, disclosures, running_total_bytes, remaining_page_budget)``
-    — both running values threaded across documents in the turn by the caller,
-    mirroring the total-payload-byte accounting (ADR-0102 §4: the page budget
-    is per-turn, not per-document).
+    Returns ``(blocks, disclosures, running_total_bytes, remaining_page_budget,
+    used_tier2)`` — the running values threaded across documents in the turn by
+    the caller, mirroring the total-payload-byte accounting (ADR-0102 §4: the
+    page budget is per-turn, not per-document). ``resolve_tier2_delivery`` is
+    invoked at most once, only if this document classifies Tier 2 — a Tier-1
+    (text) document never calls it (ADR-0102 §1: Tier 1 works on any model).
     """
     try:
         raw = await store.get(
@@ -240,7 +253,7 @@ async def _resolve_one_document(
         full_text = "\n\n".join(page_texts)
         text_block, text_disclosure = _build_text_block(full_text, title=attachment.title)
         text_disclosures = [text_disclosure] if text_disclosure else []
-        return [text_block], text_disclosures, running_total_bytes, remaining_page_budget
+        return [text_block], text_disclosures, running_total_bytes, remaining_page_budget, False
 
     if remaining_page_budget <= 0:
         return (
@@ -251,6 +264,7 @@ async def _resolve_one_document(
             ],
             running_total_bytes,
             remaining_page_budget,
+            False,
         )
 
     scores = await asyncio.to_thread(compute_page_scores, pdf)
@@ -265,6 +279,8 @@ async def _resolve_one_document(
             f"{skipped} of {len(scores)} page(s) of '{attachment.title}' were not "
             "included (per-turn page budget)."
         )
+
+    tier2_delivery = resolve_tier2_delivery()
 
     if tier2_delivery == "native_pdf":
         native_block, reject_disclosure = await asyncio.to_thread(
@@ -282,6 +298,7 @@ async def _resolve_one_document(
                 else budget_disclosures,
                 running_total_bytes,
                 new_remaining_page_budget,
+                True,
             )
         encoded_len = len(native_block["source"]["data"])
         return (
@@ -289,6 +306,7 @@ async def _resolve_one_document(
             budget_disclosures,
             running_total_bytes + encoded_len,
             new_remaining_page_budget,
+            True,
         )
 
     page_blocks, page_disclosures, new_total = await asyncio.to_thread(
@@ -303,13 +321,14 @@ async def _resolve_one_document(
         [*budget_disclosures, *page_disclosures],
         new_total,
         new_remaining_page_budget,
+        True,
     )
 
 
 async def resolve_documents(
     attachments: Sequence[AttachmentRef],
     *,
-    tier2_delivery: Literal["native_pdf", "rasterize"],
+    resolve_tier2_delivery: Callable[[], Literal["native_pdf", "rasterize"]],
     trace_id: str | None = None,
     session_id: str | None = None,
     task_id: str | None = None,
@@ -324,9 +343,14 @@ async def resolve_documents(
 
     Args:
         attachments: The turn's structured attachment carrier (FRE-661).
-        tier2_delivery: Which Tier-2 content-block shape to build when a
-            document classifies as vision. Caller-supplied (T4 computes this
-            from model capability) — this module never decides it.
+        resolve_tier2_delivery: Callback returning which Tier-2 content-block
+            shape to build (``"native_pdf"`` or ``"rasterize"``). Invoked
+            lazily, at most once per document that actually classifies Tier 2
+            — never for a Tier-1 (text) document (ADR-0102 §1: Tier 1 must
+            work on any model, so no capability check may fire for it). T4
+            (FRE-684) supplies this, reading model capability from the
+            executor's routing seam — this module never decides it and never
+            calls it speculatively.
         trace_id: Originating request trace_id, threaded onto ``store.get``
             and resolution/failure logs (ADR-0074 identity threading).
         session_id: Originating session id, threaded onto ``store.get`` and
@@ -335,12 +359,14 @@ async def resolve_documents(
             resolution/failure logs — ``None`` at the turn level.
 
     Returns:
-        ``ResolvedDocuments`` with the surviving blocks and any disclosure
-        strings for trimmed/dropped/rejected content.
+        ``ResolvedDocuments`` with the surviving blocks, any disclosure
+        strings for trimmed/dropped/rejected content, and ``used_tier2``
+        recording whether ``resolve_tier2_delivery`` was ever invoked.
 
     Raises:
         AttachmentUnsupportedError: R2 storage is not configured, a PDF fails
-            to open, or a PDF has zero pages.
+            to open, a PDF has zero pages, or ``resolve_tier2_delivery``
+            itself raises it (a capability/routing fail-closed decision).
     """
     documents = [a for a in attachments if a.content_type in PDF_CONTENT_TYPES]
     if not documents:
@@ -353,7 +379,7 @@ async def resolve_documents(
             resolved_count=0,
             disclosure_count=0,
         )
-        return ResolvedDocuments(blocks=(), disclosures=())
+        return ResolvedDocuments(blocks=(), disclosures=(), used_tier2=False)
 
     store = get_artifact_store()
     if store is None:
@@ -373,6 +399,7 @@ async def resolve_documents(
     disclosures: list[str] = []
     running_total_bytes = 0
     remaining_page_budget = min(settings.document_max_pages_per_turn, _PROVIDER_MAX_PAGES)
+    used_tier2 = False
 
     for attachment in documents:
         try:
@@ -381,9 +408,10 @@ async def resolve_documents(
                 doc_disclosures,
                 running_total_bytes,
                 remaining_page_budget,
+                doc_used_tier2,
             ) = await _resolve_one_document(
                 attachment,
-                tier2_delivery=tier2_delivery,
+                resolve_tier2_delivery=resolve_tier2_delivery,
                 running_total_bytes=running_total_bytes,
                 remaining_page_budget=remaining_page_budget,
                 store=store,
@@ -391,6 +419,7 @@ async def resolve_documents(
                 session_id=session_id,
                 task_id=task_id,
             )
+            used_tier2 = used_tier2 or doc_used_tier2
         except AttachmentUnsupportedError:
             log.warning(
                 "document_resolution_failed",
@@ -413,4 +442,6 @@ async def resolve_documents(
         resolved_count=len(blocks),
         disclosure_count=len(disclosures),
     )
-    return ResolvedDocuments(blocks=tuple(blocks), disclosures=tuple(disclosures))
+    return ResolvedDocuments(
+        blocks=tuple(blocks), disclosures=tuple(disclosures), used_tier2=used_tier2
+    )

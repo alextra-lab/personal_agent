@@ -400,3 +400,67 @@ async def test_vision_routing_decision_log_absent_for_no_attachments(
 
     routed = [e for e in logs if e.get("event") == "vision_routing_decision"]
     assert routed == []
+
+
+@pytest.mark.asyncio
+async def test_vision_routing_decision_log_absent_for_tier1_pdf_attachment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-684 regression: a Tier-1 (text) PDF never triggers a routing decision
+
+    (ADR-0102 §1 — it works on any model), so no ``vision_routing_decision``
+    should be logged for it — logging a no-op decision on every plain-text PDF
+    turn would dilute the ADR-0074 §8c signal (code-review finding).
+    """
+    import structlog
+
+    from personal_agent.config import settings
+    from personal_agent.orchestrator.types import AttachmentRef
+    from personal_agent.telemetry.trace import TraceContext
+
+    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
+    monkeypatch.setattr(settings, "skill_routing_model_key", "")
+
+    ctx = _make_minimal_ctx_with_block_content()
+    ctx.attachments = (
+        AttachmentRef(
+            artifact_id="doc-123",
+            content_type="application/pdf",
+            title="report.pdf",
+            r2_key="upload/user/GLOBAL/report.pdf",
+        ),
+    )
+    # Simulates step_init having classified this PDF Tier 1 (text) — no
+    # document-driven routing decision was ever made, so this stays None.
+    ctx.document_effective_model_key = None
+    trace_ctx = TraceContext.new_trace()
+    mock_llm = _make_mock_llm_client(_make_minimal_response())
+    mock_session = MagicMock()
+    mock_session.add_message = AsyncMock()
+    mock_session.get_messages = AsyncMock(return_value=[])
+
+    with (
+        patch("personal_agent.orchestrator.skills.get_skill_block", return_value=""),
+        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
+        patch(
+            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
+            return_value="",
+        ),
+        patch(
+            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
+            return_value="",
+        ),
+        patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+        patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm),
+        patch(
+            "personal_agent.orchestrator.executor.get_default_registry",
+            return_value=MagicMock(get_tool_definitions_for_llm=MagicMock(return_value=[])),
+        ),
+        structlog.testing.capture_logs() as logs,
+    ):
+        from personal_agent.orchestrator.executor import step_llm_call
+
+        await step_llm_call(ctx, mock_session, trace_ctx)  # type: ignore[arg-type]
+
+    routed = [e for e in logs if e.get("event") == "vision_routing_decision"]
+    assert routed == []

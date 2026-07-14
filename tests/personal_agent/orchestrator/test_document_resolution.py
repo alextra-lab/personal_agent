@@ -157,7 +157,9 @@ class TestAC1NativeTextPath:
         store = _mock_store({attachment.r2_key: pdf_bytes})
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
-            result = await resolve_documents([attachment], tier2_delivery="rasterize")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
 
         assert len(result.blocks) == 1
         block = result.blocks[0]
@@ -171,7 +173,9 @@ class TestAC1NativeTextPath:
         store = _mock_store({attachment.r2_key: pdf_bytes})
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
-            result = await resolve_documents([attachment], tier2_delivery="native_pdf")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "native_pdf"
+            )
 
         types = {b["type"] for b in result.blocks}
         assert types == {"text"}
@@ -186,11 +190,74 @@ class TestAC2ScannedVisionPath:
         store = _mock_store({attachment.r2_key: pdf_bytes})
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
-            result = await resolve_documents([attachment], tier2_delivery=delivery)
+            result = await resolve_documents([attachment], resolve_tier2_delivery=lambda: delivery)
 
         assert result.blocks
         types = {b["type"] for b in result.blocks}
         assert "text" not in types
+
+
+class TestTier2DeliveryCallbackGating:
+    """FRE-684 regression guard (ADR-0102 §1): the Tier-2 delivery callback must
+
+    be invoked lazily, only for documents that actually classify Tier 2 — never
+    for a Tier-1 (text) document, which must work on any model. This is the
+    exact case a round-1 FRE-684 plan-review design would have gotten wrong by
+    computing capability requirements eagerly, before classification.
+    """
+
+    @pytest.mark.asyncio
+    async def test_text_dense_pdf_never_invokes_callback(self) -> None:
+        def _boom() -> str:
+            raise AssertionError("resolve_tier2_delivery must not be called for a Tier-1 document")
+
+        pdf_bytes = _make_pdf(["Native text content, well above the density floor. " * 10])
+        attachment = _make_attachment()
+        store = _mock_store({attachment.r2_key: pdf_bytes})
+
+        with patch(_STORE_PATCH_TARGET, return_value=store):
+            result = await resolve_documents([attachment], resolve_tier2_delivery=_boom)
+
+        assert result.blocks[0]["type"] == "text"
+        assert result.used_tier2 is False
+
+    @pytest.mark.asyncio
+    async def test_scanned_pdf_invokes_callback_exactly_once(self) -> None:
+        calls = 0
+
+        def _count() -> str:
+            nonlocal calls
+            calls += 1
+            return "rasterize"
+
+        pdf_bytes = _make_pdf([None, None, None])  # multiple Tier-2 pages, one document
+        attachment = _make_attachment()
+        store = _mock_store({attachment.r2_key: pdf_bytes})
+
+        with patch(_STORE_PATCH_TARGET, return_value=store):
+            result = await resolve_documents([attachment], resolve_tier2_delivery=_count)
+
+        assert calls == 1
+        assert result.used_tier2 is True
+
+    @pytest.mark.asyncio
+    async def test_mixed_turn_used_tier2_true_if_any_document_needs_it(self) -> None:
+        text_pdf = _make_pdf(["Native text content, well above the floor. " * 10])
+        scanned_pdf = _make_pdf([None])
+        attachment_a = _make_attachment(
+            artifact_id="doc-a", title="a.pdf", r2_key="upload/u/g/a.pdf"
+        )
+        attachment_b = _make_attachment(
+            artifact_id="doc-b", title="b.pdf", r2_key="upload/u/g/b.pdf"
+        )
+        store = _mock_store({"upload/u/g/a.pdf": text_pdf, "upload/u/g/b.pdf": scanned_pdf})
+
+        with patch(_STORE_PATCH_TARGET, return_value=store):
+            result = await resolve_documents(
+                [attachment_a, attachment_b], resolve_tier2_delivery=lambda: "rasterize"
+            )
+
+        assert result.used_tier2 is True
 
 
 class TestTier2DeliverySelection:
@@ -201,7 +268,9 @@ class TestTier2DeliverySelection:
         store = _mock_store({attachment.r2_key: pdf_bytes})
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
-            result = await resolve_documents([attachment], tier2_delivery="native_pdf")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "native_pdf"
+            )
 
         assert len(result.blocks) == 1
         block = result.blocks[0]
@@ -215,7 +284,9 @@ class TestTier2DeliverySelection:
         store = _mock_store({attachment.r2_key: pdf_bytes})
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
-            result = await resolve_documents([attachment], tier2_delivery="rasterize")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
 
         assert len(result.blocks) == 1
         block = result.blocks[0]
@@ -234,7 +305,9 @@ class TestClassificationBoundary:
         store = _mock_store({attachment.r2_key: pdf_bytes})
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
-            result = await resolve_documents([attachment], tier2_delivery="rasterize")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
 
         assert result.blocks[0]["type"] == "text"
 
@@ -246,7 +319,9 @@ class TestClassificationBoundary:
         store = _mock_store({attachment.r2_key: pdf_bytes})
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
-            result = await resolve_documents([attachment], tier2_delivery="rasterize")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
 
         assert result.blocks[0]["type"] != "text"
 
@@ -266,7 +341,9 @@ class TestClassificationMixedDocument:
         store = _mock_store({attachment.r2_key: pdf_bytes})
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
-            result = await resolve_documents([attachment], tier2_delivery="rasterize")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
 
         # floor = 100 * 10 pages = 1000; ~1000 dense chars vs a 10-page floor
         # is right at the edge — assert the module classified deterministically
@@ -294,7 +371,9 @@ class TestPageBudgetSelection:
                 2,
             ),
         ):
-            result = await resolve_documents([attachment], tier2_delivery="rasterize")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
 
         assert len(result.blocks) == 2
         assert any("budget" in d.lower() for d in result.disclosures)
@@ -312,7 +391,9 @@ class TestPageBudgetSelection:
                 2,
             ),
         ):
-            result = await resolve_documents([attachment], tier2_delivery="native_pdf")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "native_pdf"
+            )
 
         assert len(result.blocks) == 1
         sub_doc = pdfium.PdfDocument(
@@ -346,7 +427,7 @@ class TestPageBudgetSelection:
             ),
         ):
             result = await resolve_documents(
-                [attachment_a, attachment_b], tier2_delivery="rasterize"
+                [attachment_a, attachment_b], resolve_tier2_delivery=lambda: "rasterize"
             )
 
         assert len(result.blocks) == 4
@@ -371,7 +452,7 @@ class TestPageBudgetSelection:
             ),
         ):
             result = await resolve_documents(
-                [attachment_a, attachment_b], tier2_delivery="rasterize"
+                [attachment_a, attachment_b], resolve_tier2_delivery=lambda: "rasterize"
             )
 
         assert len(result.blocks) == 3
@@ -395,7 +476,9 @@ class TestPageBudgetSelection:
                 1,
             ),
         ):
-            result = await resolve_documents([attachment], tier2_delivery="native_pdf")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "native_pdf"
+            )
 
         sub_doc = pdfium.PdfDocument(
             io.BytesIO(base64.b64decode(result.blocks[0]["source"]["data"]))
@@ -461,7 +544,9 @@ class TestAC7PixelCapGuardrail:
                 100,
             ),
         ):
-            result = await resolve_documents([attachment], tier2_delivery="rasterize")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
 
         url = result.blocks[0]["image_url"]["url"]
         encoded = url.split(",", 1)[1]
@@ -483,7 +568,9 @@ class TestAC7ByteCapGuardrail:
                 1,
             ),
         ):
-            result = await resolve_documents([attachment], tier2_delivery="rasterize")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
 
         assert result.blocks == ()
         assert any("scan.pdf" in d for d in result.disclosures)
@@ -497,7 +584,9 @@ class TestAC7TotalPayloadGuardrail:
         store = _mock_store({attachment.r2_key: pdf_bytes})
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
-            baseline = await resolve_documents([attachment], tier2_delivery="rasterize")
+            baseline = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
         one_page_bytes = len(baseline.blocks[0]["image_url"]["url"])
         cap = int(one_page_bytes * 1.5)  # room for exactly one page
 
@@ -508,7 +597,9 @@ class TestAC7TotalPayloadGuardrail:
                 cap,
             ),
         ):
-            result = await resolve_documents([attachment], tier2_delivery="rasterize")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
 
         assert len(result.blocks) == 1
         assert any("dropped" in d or "payload" in d for d in result.disclosures)
@@ -528,7 +619,9 @@ class TestNativeOversizeRejectsWholeDocument:
                 1,
             ),
         ):
-            result = await resolve_documents([attachment], tier2_delivery="native_pdf")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "native_pdf"
+            )
 
         assert result.blocks == ()
         assert any("huge-scan.pdf" in d for d in result.disclosures)
@@ -548,7 +641,9 @@ class TestAC7ExtractedTextGuardrail:
                 50,
             ),
         ):
-            result = await resolve_documents([attachment], tier2_delivery="rasterize")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
 
         assert len(result.blocks[0]["text"]) <= 50
         assert any("long.pdf" in d for d in result.disclosures)
@@ -568,7 +663,7 @@ class TestZeroPagePdfFailsClosed:
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
             with pytest.raises(AttachmentUnsupportedError):
-                await resolve_documents([attachment], tier2_delivery="rasterize")
+                await resolve_documents([attachment], resolve_tier2_delivery=lambda: "rasterize")
 
 
 class TestCorruptPdfFailsClosed:
@@ -579,7 +674,7 @@ class TestCorruptPdfFailsClosed:
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
             with pytest.raises(AttachmentUnsupportedError):
-                await resolve_documents([attachment], tier2_delivery="rasterize")
+                await resolve_documents([attachment], resolve_tier2_delivery=lambda: "rasterize")
 
 
 class TestStoreUnconfigured:
@@ -588,7 +683,7 @@ class TestStoreUnconfigured:
         attachment = _make_attachment()
         with patch(_STORE_PATCH_TARGET, return_value=None):
             with pytest.raises(AttachmentUnsupportedError):
-                await resolve_documents([attachment], tier2_delivery="rasterize")
+                await resolve_documents([attachment], resolve_tier2_delivery=lambda: "rasterize")
 
 
 class TestArtifactStoreFetchFailure:
@@ -607,7 +702,7 @@ class TestArtifactStoreFetchFailure:
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
             with pytest.raises(AttachmentUnsupportedError):
-                await resolve_documents([attachment], tier2_delivery="rasterize")
+                await resolve_documents([attachment], resolve_tier2_delivery=lambda: "rasterize")
 
 
 class TestNonPdfAttachmentsIgnored:
@@ -616,7 +711,9 @@ class TestNonPdfAttachmentsIgnored:
         attachment = _make_attachment(content_type="image/png", title="photo.png")
 
         with patch(_STORE_PATCH_TARGET) as mock_get_store:
-            result = await resolve_documents([attachment], tier2_delivery="rasterize")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
 
         assert result.blocks == ()
         assert result.disclosures == ()
@@ -624,7 +721,7 @@ class TestNonPdfAttachmentsIgnored:
 
     @pytest.mark.asyncio
     async def test_empty_attachments_produce_no_blocks(self) -> None:
-        result = await resolve_documents([], tier2_delivery="rasterize")
+        result = await resolve_documents([], resolve_tier2_delivery=lambda: "rasterize")
         assert result.blocks == ()
         assert result.disclosures == ()
 
@@ -644,7 +741,7 @@ class TestCredentialedFetch:
         with patch(_STORE_PATCH_TARGET, return_value=store):
             await resolve_documents(
                 [attachment],
-                tier2_delivery="rasterize",
+                resolve_tier2_delivery=lambda: "rasterize",
                 trace_id="trace-1",
                 session_id="sess-1",
                 task_id="task-1",
@@ -679,12 +776,14 @@ class TestAC12CleanTaskText:
         store = _mock_store({attachment.r2_key: pdf_bytes})
 
         with patch(_STORE_PATCH_TARGET, return_value=store):
-            result = await resolve_documents([attachment], tier2_delivery="rasterize")
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
 
         assert "OnlyInThePdfNotInUserMessage" in result.blocks[0]["text"]
         # ResolvedDocuments carries only blocks/disclosures — no field a caller
         # could mistake for (or accidentally merge into) task/user-message text.
-        assert set(vars(result).keys()) <= {"blocks", "disclosures"}
+        assert set(vars(result).keys()) <= {"blocks", "disclosures", "used_tier2"}
 
 
 # ---------------------------------------------------------------------------
@@ -705,7 +804,7 @@ class TestResolutionTelemetry:
         ):
             await resolve_documents(
                 [attachment],
-                tier2_delivery="rasterize",
+                resolve_tier2_delivery=lambda: "rasterize",
                 trace_id="trace-1",
                 session_id="sess-1",
                 task_id="task-1",

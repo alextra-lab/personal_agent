@@ -10,7 +10,7 @@ import time
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from personal_agent.config import settings
@@ -778,6 +778,7 @@ _tool_execution_layer: ToolExecutionLayer | None = None
 
 if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.error_classification import ClassifiedError
+    from personal_agent.llm_client.models import ModelDefinition
     from personal_agent.mcp.gateway import MCPGatewayAdapter
 
 _mcp_adapter: "MCPGatewayAdapter | None" = None
@@ -1602,6 +1603,134 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
     )
 
 
+def _resolve_document_routing_key(
+    ctx: ExecutionContext, role_name: str
+) -> tuple[str, Literal["native_pdf", "rasterize"]]:
+    """Resolve the model config key + Tier-2 delivery mode for a document turn.
+
+    Called only when a PDF attachment has already been classified Tier 2
+    (ADR-0102 §1) — never eagerly for a turn whose documents may resolve to
+    Tier 1 (text), which must work on any model. Mirrors
+    ``_resolve_vision_routing_key``'s exact override precedence (local / cloud
+    / profile-default-then-escalate, "local wins" on conflict), but with a
+    combined capability predicate: any raster image also present in this turn
+    requires ``supports_vision`` regardless of the document's own
+    ``supports_pdf_document`` capability (ADR-0102 §3).
+
+    Args:
+        ctx: Execution context carrying ``attachments`` (FRE-661).
+        role_name: The model role string (e.g. "primary").
+
+    Returns:
+        ``(model_config_key, tier2_delivery)``.
+
+    Raises:
+        AttachmentUnsupportedError: No reachable model can serve the document
+            (and any co-present image) at the required capability.
+    """
+    from personal_agent.config.model_loader import load_model_config
+    from personal_agent.config.profile import get_current_profile, resolve_model_key
+    from personal_agent.exceptions import AttachmentUnsupportedError
+    from personal_agent.orchestrator.attachment_resolution import RASTER_CONTENT_TYPES
+    from personal_agent.orchestrator.document_resolution import PDF_CONTENT_TYPES
+
+    needs_vision = any(a.content_type in RASTER_CONTENT_TYPES for a in ctx.attachments)
+    relevant = [
+        a
+        for a in ctx.attachments
+        if a.content_type in RASTER_CONTENT_TYPES or a.content_type in PDF_CONTENT_TYPES
+    ]
+
+    def _capable(model_def: "ModelDefinition | None") -> Literal["native_pdf", "rasterize"] | None:
+        if model_def is None:
+            return None
+        if needs_vision and not model_def.supports_vision:
+            return None
+        if model_def.supports_pdf_document:
+            return "native_pdf"
+        if model_def.supports_vision:
+            return "rasterize"
+        return None
+
+    targets = {a.processing_target for a in relevant if a.processing_target}
+    effective_target: str | None = "local" if "local" in targets else next(iter(targets), None)
+
+    models = load_model_config().models
+    profile = get_current_profile()
+
+    if effective_target == "local":
+        model_def = models.get(role_name)
+        mode = (
+            _capable(model_def)
+            if model_def is not None and model_def.provider_type == "local"
+            else None
+        )
+        if mode is not None:
+            return role_name, mode
+        raise AttachmentUnsupportedError(
+            "This document is pinned to local-only processing, but the local "
+            "model does not support it. It will not be escalated to cloud."
+        )
+
+    if effective_target == "cloud":
+        esc_key = profile.delegation.escalation_model if profile else None
+        esc_def = models.get(esc_key) if esc_key else None
+        mode = (
+            _capable(esc_def)
+            if esc_key is not None and esc_def is not None and esc_def.provider_type != "local"
+            else None
+        )
+        if mode is not None and esc_key is not None:
+            return esc_key, mode
+        raise AttachmentUnsupportedError(
+            "This document is marked for cloud processing, but no capable "
+            "cloud model is configured for the active profile."
+        )
+
+    # No override — follow the profile default.
+    key = resolve_model_key(role_name)
+    model_def = models.get(key)
+    mode = _capable(model_def)
+    if mode is not None:
+        return key, mode
+
+    if profile is not None and profile.delegation.allow_cloud_escalation:
+        esc_key = profile.delegation.escalation_model
+        esc_def = models.get(esc_key) if esc_key else None
+        mode = _capable(esc_def)
+        if mode is not None and esc_key is not None:
+            return esc_key, mode
+
+    raise AttachmentUnsupportedError(
+        "This turn includes a document, but the model serving this "
+        "conversation does not support it and no cloud escalation is available."
+    )
+
+
+def _effective_attachment_routing_key(ctx: ExecutionContext, role_name: str) -> str:
+    """Resolve the single effective model key for this turn's attachments.
+
+    Prefers a document-driven routing decision already made at turn assembly
+    (``ctx.document_effective_model_key``, set only when a PDF actually
+    classified Tier 2 — FRE-684) over independently recomputing image-only
+    vision routing, so a document-forced escalation doesn't leave an
+    image-only routing check looking at a stale (pre-escalation) key.
+
+    Args:
+        ctx: Execution context.
+        role_name: The model role string (e.g. "primary").
+
+    Returns:
+        The model config key to use for this call.
+
+    Raises:
+        AttachmentUnsupportedError: No reachable model can serve the turn's
+            attachments (only possible via the image-only fallback path —
+            a document-driven failure already raised during turn assembly).
+    """
+    return ctx.document_effective_model_key or _resolve_vision_routing_key(ctx, role_name)
+
+
 async def _maybe_confirm_attachment_cost(
     ctx: ExecutionContext,
     resolved_blocks: Sequence[dict[str, Any]],
@@ -1639,7 +1768,7 @@ async def _maybe_confirm_attachment_cost(
         return True
 
     try:
-        effective_key = _resolve_vision_routing_key(ctx, ModelRole.PRIMARY.value)
+        effective_key = _effective_attachment_routing_key(ctx, ModelRole.PRIMARY.value)
     except AttachmentUnsupportedError:
         # Routing can't serve this attachment — let step_llm_call raise it as today.
         return True
@@ -2270,10 +2399,15 @@ async def step_init(
     await _maybe_reinject_pending_cloud_attachment(ctx)
 
     # Add new user message — resolve current-turn raster attachments to image
-    # blocks first (ADR-0101 §3/§4/§6, FRE-666); widens content to a block list
-    # only when there is something to inject (FRE-664 MessageContent).
+    # blocks first (ADR-0101 §3/§4/§6, FRE-666), then PDF document attachments
+    # (ADR-0102 §1/§3/§4/§5, FRE-684); widens content to a block list only when
+    # there is something to inject (FRE-664 MessageContent).
     content: MessageContent = ctx.user_message
-    resolved_blocks: tuple[dict[str, Any], ...] = ()
+    resolved_blocks: tuple[
+        dict[str, Any], ...
+    ] = ()  # image-only; feeds the cost gate below unchanged
+    document_blocks: tuple[dict[str, Any], ...] = ()
+    document_disclosures: tuple[str, ...] = ()
     if ctx.attachments:
         from personal_agent.orchestrator.attachment_resolution import resolve_attachments
 
@@ -2285,13 +2419,49 @@ async def step_init(
             # (mirrors the route_traces convention: task_id NULL = turn-level).
             task_id=None,
         )
-        ctx.attachment_disclosures = list(resolved.disclosures)
         resolved_blocks = resolved.blocks
-        if resolved.blocks:
+
+        from personal_agent.orchestrator.document_resolution import (
+            PDF_CONTENT_TYPES,
+            resolve_documents,
+        )
+
+        if any(a.content_type in PDF_CONTENT_TYPES for a in ctx.attachments):
+            doc_resolved = await resolve_documents(
+                ctx.attachments,
+                # Lazy — invoked by resolve_documents only if a document
+                # actually classifies Tier 2 (ADR-0102 §1: Tier 1 must work
+                # on any model, so this must never fire speculatively).
+                resolve_tier2_delivery=lambda: _resolve_document_routing_key(
+                    ctx, ModelRole.PRIMARY.value
+                )[1],
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                task_id=None,
+            )
+            document_blocks = doc_resolved.blocks
+            document_disclosures = doc_resolved.disclosures
+            # Only force the whole turn onto the document-capable model if a
+            # Tier-2 block actually survived into the message — a rejected
+            # oversized native-PDF (used_tier2=True, blocks=()) must not drag
+            # an otherwise document-free turn onto an escalated/cloud model
+            # for no visible reason (code-review finding).
+            if doc_resolved.used_tier2 and document_blocks:
+                ctx.document_effective_model_key, _ = _resolve_document_routing_key(
+                    ctx, ModelRole.PRIMARY.value
+                )
+                # Recomputed rather than captured off the closure above: the
+                # callback's actual contract is to return only the delivery
+                # mode to resolve_documents; this second call is cheap and
+                # pure (config/profile lookups only, no I/O).
+
+        ctx.attachment_disclosures = list(resolved.disclosures) + list(document_disclosures)
+        all_blocks = resolved_blocks + document_blocks
+        if all_blocks:
             content = (
-                [{"type": "text", "text": ctx.user_message}, *resolved.blocks]
+                [{"type": "text", "text": ctx.user_message}, *all_blocks]
                 if ctx.user_message
-                else list(resolved.blocks)
+                else list(all_blocks)
             )
     ctx.messages.append({"role": "user", "content": content})
 
@@ -3036,19 +3206,25 @@ async def step_llm_call(
         from personal_agent.llm_client.factory import get_llm_client
         from personal_agent.orchestrator.attachment_resolution import RASTER_CONTENT_TYPES
 
-        # ADR-0101 §5/§8a: an image attachment may require a different model than
-        # the role's plain profile-resolved key (escalation or an explicit
-        # processing_target override) — resolved here, inside the try block, so a
-        # fail-closed AttachmentUnsupportedError is caught by the except below
-        # rather than propagating uncaught above the state machine.
+        # ADR-0101 §5/§8a + ADR-0102 §3: an image or document attachment may
+        # require a different model than the role's plain profile-resolved key
+        # (escalation or an explicit processing_target override) — resolved
+        # here, inside the try block, so a fail-closed AttachmentUnsupportedError
+        # is caught by the except below rather than propagating uncaught above
+        # the state machine.
         role_key = resolve_model_key(model_role.value)
-        effective_model_key = _resolve_vision_routing_key(ctx, model_role.value)
+        effective_model_key = _effective_attachment_routing_key(ctx, model_role.value)
 
         # ADR-0074 §8c / FRE-693: log the routing decision only when this turn
-        # carries a raster image attachment — otherwise this call was a no-op
-        # (effective_model_key == role_key always) and there is no vision
-        # routing decision to report.
-        if any(a.content_type in RASTER_CONTENT_TYPES for a in ctx.attachments):
+        # carries a raster image (always evaluated by _resolve_vision_routing_key,
+        # a real decision point even if it's a no-op) or a document actually
+        # forced a routing decision (ctx.document_effective_model_key set — a
+        # Tier-1-only PDF never reaches this, so it must not be logged as a
+        # routing decision that never happened; code-review finding).
+        if (
+            any(a.content_type in RASTER_CONTENT_TYPES for a in ctx.attachments)
+            or ctx.document_effective_model_key is not None
+        ):
             log.info(
                 "vision_routing_decision",
                 trace_id=ctx.trace_id,

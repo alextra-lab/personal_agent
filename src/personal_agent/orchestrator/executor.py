@@ -1734,8 +1734,9 @@ def _effective_attachment_routing_key(ctx: ExecutionContext, role_name: str) -> 
 async def _maybe_confirm_attachment_cost(
     ctx: ExecutionContext,
     resolved_blocks: Sequence[dict[str, Any]],
+    native_pdf_page_count: int = 0,
 ) -> bool:
-    """Pre-flight cloud-attachment cost gate (ADR-0101 §8b / FRE-691).
+    """Pre-flight cloud-attachment cost gate (ADR-0101 §8b / FRE-691, ADR-0102 §7b / FRE-686).
 
     When a turn's resolved attachment blocks route to a *priced cloud* model and the
     pre-flight estimate exceeds ``attachment_cost_confirmation_threshold_usd``, ask the
@@ -1750,7 +1751,14 @@ async def _maybe_confirm_attachment_cost(
 
     Args:
         ctx: Execution context (carries attachments, session/trace identity, reply).
-        resolved_blocks: The turn's resolved attachment content blocks.
+        resolved_blocks: The turn's resolved image-like content blocks (raw image
+            attachments plus any rasterized document pages — both are ``image_url``
+            blocks priced identically).
+        native_pdf_page_count: Total pages delivered via a native-PDF ``document``
+            block this turn (ADR-0102 §7b / FRE-686). A single ``document`` block
+            can represent many pages, so this is priced separately from
+            ``resolved_blocks`` rather than by block count. ``0`` for turns with no
+            native-PDF delivery.
 
     Returns:
         ``True`` to proceed with the turn; ``False`` to stop with no model call
@@ -1760,7 +1768,10 @@ async def _maybe_confirm_attachment_cost(
 
     from personal_agent.config.model_loader import load_model_config
     from personal_agent.exceptions import AttachmentUnsupportedError
-    from personal_agent.llm_client.message_content import IMAGE_BLOCK_TOKEN_ESTIMATE
+    from personal_agent.llm_client.message_content import (
+        DOCUMENT_NATIVE_PAGE_TOKEN_ESTIMATE,
+        IMAGE_BLOCK_TOKEN_ESTIMATE,
+    )
     from personal_agent.orchestrator.attachment_cost import estimate_attachment_cloud_cost_usd
 
     # FRE-749: Early guard — if cost already confirmed (pending re-injection), skip gate entirely
@@ -1780,16 +1791,30 @@ async def _maybe_confirm_attachment_cost(
         ctx.attachment_cost_confirmed = True
         return True
 
+    price = Decimal(str(input_price))
     estimate = estimate_attachment_cloud_cost_usd(
         block_count=len(resolved_blocks),
         per_block_tokens=IMAGE_BLOCK_TOKEN_ESTIMATE,
-        input_price_per_token=Decimal(str(input_price)),
+        input_price_per_token=price,
     )
+    if native_pdf_page_count:
+        estimate += estimate_attachment_cloud_cost_usd(
+            block_count=native_pdf_page_count,
+            per_block_tokens=DOCUMENT_NATIVE_PAGE_TOKEN_ESTIMATE,
+            input_price_per_token=price,
+        )
     threshold = Decimal(str(settings.attachment_cost_confirmation_threshold_usd))
 
     if estimate <= threshold:
         ctx.attachment_cost_confirmed = True
         return True
+
+    description_parts = []
+    if resolved_blocks:
+        description_parts.append(f"{len(resolved_blocks)} attachment(s)")
+    if native_pdf_page_count:
+        description_parts.append(f"{native_pdf_page_count} document page(s)")
+    description = " and ".join(description_parts)
 
     decision = await _maybe_pause_for_constraint(
         session_id=ctx.session_id,
@@ -1797,8 +1822,8 @@ async def _maybe_confirm_attachment_cost(
         user_id=ctx.user_id,
         constraint="attachment_cost",
         context=(
-            f"This turn sends {len(resolved_blocks)} attachment(s) to the cloud vision "
-            f"model, estimated ${estimate:.4f}. Proceed on cloud, or keep it local and free?"
+            f"This turn sends {description} to the cloud model, estimated "
+            f"${estimate:.4f}. Proceed on cloud, or keep it local and free?"
         ),
         allow_preference=False,
     )
@@ -1807,6 +1832,7 @@ async def _maybe_confirm_attachment_cost(
         trace_id=ctx.trace_id,
         session_id=ctx.session_id,
         block_count=len(resolved_blocks),
+        native_pdf_page_count=native_pdf_page_count,
         estimate_usd=float(estimate),
         threshold_usd=float(threshold),
         model=effective_key,
@@ -1842,8 +1868,8 @@ async def _maybe_confirm_attachment_cost(
     )
 
     ctx.final_reply = (
-        f"This turn's {len(resolved_blocks)} attachment(s) would cost about "
-        f"${estimate:.4f} on the cloud vision model — above your "
+        f"This turn's {description} would cost about "
+        f"${estimate:.4f} on the cloud model — above your "
         f"${float(threshold):.2f} confirmation threshold — so I didn't send anything. "
         "Reply to confirm if you'd like me to proceed on the cloud, or keep it local "
         "and free."
@@ -2403,11 +2429,10 @@ async def step_init(
     # (ADR-0102 §1/§3/§4/§5, FRE-684); widens content to a block list only when
     # there is something to inject (FRE-664 MessageContent).
     content: MessageContent = ctx.user_message
-    resolved_blocks: tuple[
-        dict[str, Any], ...
-    ] = ()  # image-only; feeds the cost gate below unchanged
+    resolved_blocks: tuple[dict[str, Any], ...] = ()  # image-only
     document_blocks: tuple[dict[str, Any], ...] = ()
     document_disclosures: tuple[str, ...] = ()
+    native_pdf_page_count = 0
     if ctx.attachments:
         from personal_agent.orchestrator.attachment_resolution import resolve_attachments
 
@@ -2441,6 +2466,7 @@ async def step_init(
             )
             document_blocks = doc_resolved.blocks
             document_disclosures = doc_resolved.disclosures
+            native_pdf_page_count = doc_resolved.native_pdf_page_count
             # Only force the whole turn onto the document-capable model if a
             # Tier-2 block actually survived into the message — a rejected
             # oversized native-PDF (used_tier2=True, blocks=()) must not drag
@@ -2465,10 +2491,19 @@ async def step_init(
             )
     ctx.messages.append({"role": "user", "content": content})
 
-    # ADR-0101 §8b / FRE-691: pre-flight cloud-attachment cost confirmation. An
-    # over-threshold cloud turn stops here with the estimate + proceed/keep-local
-    # prompt and makes no model call until the user confirms (AC-10).
-    if resolved_blocks and not await _maybe_confirm_attachment_cost(ctx, resolved_blocks):
+    # ADR-0101 §8b / FRE-691 + ADR-0102 §7b / FRE-686: pre-flight cloud-attachment
+    # cost confirmation. An over-threshold cloud turn stops here with the estimate
+    # + proceed/keep-local prompt and makes no model call until the user confirms
+    # (AC-9/AC-10). Rasterized document pages are image_url blocks — cost-shape
+    # identical to attachment images — so they fold into the same bucket; a native
+    # PDF block is priced separately via native_pdf_page_count (one block can
+    # represent many pages).
+    cost_gate_blocks = resolved_blocks + tuple(
+        b for b in document_blocks if b.get("type") == "image_url"
+    )
+    if (cost_gate_blocks or native_pdf_page_count) and not await _maybe_confirm_attachment_cost(
+        ctx, cost_gate_blocks, native_pdf_page_count=native_pdf_page_count
+    ):
         return TaskState.SYNTHESIS
 
     # --- Gateway-driven path: skip inline routing and memory ---

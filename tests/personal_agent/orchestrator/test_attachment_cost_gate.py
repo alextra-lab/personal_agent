@@ -1,10 +1,12 @@
-"""FRE-691 / ADR-0101 §8b AC-10: pre-flight cloud-attachment cost gate.
+"""FRE-691 / ADR-0101 §8b AC-10 + FRE-686 / ADR-0102 §7b AC-9/AC-10: pre-flight
+cloud-attachment cost gate.
 
 Proves the over-threshold turn makes no model call until confirmed, the confirmed
 turn proceeds, the under-threshold turn proceeds silently, and — per the codex plan
 review — a multi-call turn is confirmed once, a stored "always proceed" preference is
 ignored for this cost constraint, and the ADR-0065 reservation for an image turn
-covers the image estimate before the call.
+covers the image estimate before the call. Extended by FRE-686 to also cover the
+native-PDF-page-count dimension of the same gate.
 """
 
 from __future__ import annotations
@@ -63,6 +65,18 @@ def _patch_routing(
     monkeypatch: pytest.MonkeyPatch, model_def: ModelDefinition, key: str = "claude_sonnet"
 ) -> None:
     monkeypatch.setattr(executor_mod, "_resolve_vision_routing_key", lambda ctx, role: key)
+    cfg = ModelConfig(models={key: model_def})
+    monkeypatch.setattr("personal_agent.config.model_loader.load_model_config", lambda *a, **k: cfg)
+
+
+def _patch_document_routing(
+    monkeypatch: pytest.MonkeyPatch, model_def: ModelDefinition, key: str = "claude_sonnet"
+) -> None:
+    """Patch the single seam ``_maybe_confirm_attachment_cost`` actually reads for
+    routing (FRE-686): ``_effective_attachment_routing_key`` directly, rather than
+    the two-level document routing key resolution it wraps.
+    """
+    monkeypatch.setattr(executor_mod, "_effective_attachment_routing_key", lambda ctx, role: key)
     cfg = ModelConfig(models={key: model_def})
     monkeypatch.setattr("personal_agent.config.model_loader.load_model_config", lambda *a, **k: cfg)
 
@@ -253,3 +267,136 @@ async def test_reservation_covers_image_estimate() -> None:
     )
     assert reservation > 0
     assert reservation >= image_estimate
+
+
+# ---------------------------------------------------------------------------
+# FRE-686 / ADR-0102 §7b AC-9/AC-10: the document (native-PDF-page) dimension
+# of the same gate.
+# ---------------------------------------------------------------------------
+
+
+async def test_document_only_over_threshold_stops_with_prompt_and_no_model_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-9(a): an over-threshold cloud document → no model call, $ + prompt disclosed."""
+    sm = SessionManager()
+    ctx = _ctx(sm)
+    # 1 page * 4600 tokens * $0.001 = $4.60 >> $0.50 default threshold.
+    _patch_document_routing(monkeypatch, _cloud_def(input_price=0.001))
+    monkeypatch.setattr(
+        executor_mod, "_maybe_pause_for_constraint", AsyncMock(return_value="keep_local")
+    )
+    monkeypatch.setattr(executor_mod, "_save_pending_cloud_confirmation", AsyncMock())
+
+    proceed = await executor_mod._maybe_confirm_attachment_cost(ctx, (), native_pdf_page_count=1)
+
+    assert proceed is False
+    assert ctx.attachment_cost_confirmed is False
+    assert "4.6" in ctx.final_reply
+    assert "document page" in ctx.final_reply.lower()
+    assert "proceed" in ctx.final_reply.lower() and "local" in ctx.final_reply.lower()
+
+
+async def test_document_confirm_proceeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-9(b): a proceed_cloud decision continues the turn and marks it confirmed."""
+    sm = SessionManager()
+    ctx = _ctx(sm)
+    _patch_document_routing(monkeypatch, _cloud_def(input_price=0.001))
+    monkeypatch.setattr(
+        executor_mod, "_maybe_pause_for_constraint", AsyncMock(return_value="proceed_cloud")
+    )
+
+    proceed = await executor_mod._maybe_confirm_attachment_cost(ctx, (), native_pdf_page_count=1)
+
+    assert proceed is True
+    assert ctx.attachment_cost_confirmed is True
+
+
+async def test_document_under_threshold_proceeds_without_pausing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-9(c) precondition: a cheap document turn proceeds silently (no confirm)."""
+    sm = SessionManager()
+    ctx = _ctx(sm)
+    # 1 page * 4600 tokens * $0.000003 ≈ $0.0138 < $0.50.
+    _patch_document_routing(monkeypatch, _cloud_def(input_price=0.000003))
+    pause = AsyncMock(return_value="keep_local")
+    monkeypatch.setattr(executor_mod, "_maybe_pause_for_constraint", pause)
+
+    proceed = await executor_mod._maybe_confirm_attachment_cost(ctx, (), native_pdf_page_count=1)
+
+    assert proceed is True
+    assert ctx.attachment_cost_confirmed is True
+    pause.assert_not_awaited()
+
+
+async def test_combined_image_and_document_estimate_sums(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The image bucket and the native-PDF-page bucket combine, not overwrite.
+
+    Priced so each bucket alone is under the $0.50 threshold (image: $0.16,
+    document: $0.46) but the sum ($0.62) is over — this only trips the gate
+    if both buckets are actually added together.
+    """
+    sm = SessionManager()
+    ctx = _ctx(sm)
+    _patch_document_routing(monkeypatch, _cloud_def(input_price=0.0001))
+    monkeypatch.setattr(
+        executor_mod, "_maybe_pause_for_constraint", AsyncMock(return_value="keep_local")
+    )
+    monkeypatch.setattr(executor_mod, "_save_pending_cloud_confirmation", AsyncMock())
+
+    proceed = await executor_mod._maybe_confirm_attachment_cost(
+        ctx, [_IMAGE_BLOCK], native_pdf_page_count=1
+    )
+
+    assert proceed is False
+    assert "0.6200" in ctx.final_reply
+
+
+async def test_reservation_covers_document_estimate() -> None:
+    """AC-9(c): the ADR-0065 reservation for a document turn is non-zero.
+
+    Documents the actual behaviour of ``litellm.token_counter`` against a
+    ``document``-type content block rather than assuming it — see the FRE-686
+    plan's open question 2.
+    """
+    register_model_pricing(
+        ModelConfig(
+            models={"claude_sonnet": _cloud_def(input_price=0.000003)},
+        )
+    )
+    budget = BudgetConfig(
+        version=1,
+        roles={
+            "main_inference": RoleConfig(
+                default_output_tokens=1024,
+                safety_factor=1.2,
+                on_denial=OnDenialBehaviour.RAISE,
+            )
+        },
+        caps=[CapEntry(time_window="weekly", role="_total", cap_usd=Decimal("25.00"))],
+    )
+    document_message = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "summarize this document"},
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjQK",
+                    },
+                },
+            ],
+        }
+    ]
+    reservation = estimate_reservation_for_call(
+        role="main_inference",
+        model="anthropic/claude-sonnet-4-6",
+        messages=document_message,
+        max_tokens=1024,
+        config=budget,
+    )
+    assert reservation > 0

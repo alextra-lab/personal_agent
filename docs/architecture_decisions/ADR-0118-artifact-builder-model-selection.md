@@ -1,4 +1,4 @@
-# ADR-0117: Model-selection layer for open roles — user-selectable artifact builder (Phase 1)
+# ADR-0118: Model-selection layer for open roles — user-selectable artifact builder (Phase 1)
 
 **Status:** Proposed
 **Date:** 2026-07-14

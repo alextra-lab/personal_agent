@@ -1344,6 +1344,37 @@ class TestStepInitDocumentResolution:
         assert types == {"text", "document"}
 
     @pytest.mark.asyncio
+    async def test_resolve_documents_called_with_turn_identity(self) -> None:
+        """FRE-688 (ADR-0074 joinability): the byte-fetch/resolution-telemetry
+
+        identity threaded through ``resolve_documents`` must be the turn's own
+        trace_id/session_id, with task_id=None (turn-level, mirrors the
+        route_traces convention) — not left to the callee's defaults.
+        """
+        attachment = self._pdf_attachment()
+        ctx = self._make_ctx("Look at this", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-684", session_id="sess-684")
+
+        doc_block = {"type": "text", "text": "extracted text"}
+        with patch(
+            "personal_agent.orchestrator.document_resolution.resolve_documents",
+            new=AsyncMock(
+                return_value=SimpleNamespace(
+                    blocks=(doc_block,),
+                    disclosures=(),
+                    used_tier2=False,
+                    native_pdf_page_count=0,
+                )
+            ),
+        ) as mock_resolve:
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        mock_resolve.assert_awaited_once()
+        assert mock_resolve.call_args.kwargs["trace_id"] == "trace-684"
+        assert mock_resolve.call_args.kwargs["session_id"] == "sess-684"
+        assert mock_resolve.call_args.kwargs["task_id"] is None
+
+    @pytest.mark.asyncio
     async def test_tier1_document_does_not_set_document_effective_model_key(self) -> None:
         attachment = self._pdf_attachment()
         ctx = self._make_ctx("Look at this", attachments=(attachment,))

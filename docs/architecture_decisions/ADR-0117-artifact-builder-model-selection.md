@@ -57,12 +57,16 @@ and adding a **registry-backed decision type** on top of it. Six parts:
 **1. Extract a first-class `artifact_builder` open role.** Add `ModelRole.ARTIFACT_BUILDER`
 (`llm_client/types.py`) and an `artifact_builder` role in the ADR-0099 matrix
 (`config/model_roles.yaml`) with a **default binding of `claude_haiku`** — Haiku stays the default
-because it is proven good and grounded on real artifacts and is cheap. Unlike the `primary`/
-`sub_agent` intent-only rows (which the matrix comment explicitly excludes from resolution — they
-stay on the ExecutionProfile mechanism), `artifact_builder` is a **real, matrix-resolved role**
-like `entity_extraction`: `resolve_role_model_key("artifact_builder")` returns its default key. The
-role gets its **own cost lane** (`_BUDGET_ROLE_BY_FACTORY_NAME`: `artifact_builder →
-artifact_builder`, not `main_inference`) and its own telemetry `role`. This alone dissolves the
+because it is proven good and grounded on real artifacts and is cheap. `primary`/`sub_agent` appear
+in the matrix as intent-only rows *by convention* (the file comment; at runtime they resolve through
+the ExecutionProfile, not this matrix) — but `resolve_role_model_key` itself has no special-case
+exclusion, it resolves any declared row. `artifact_builder` is added as a real declared row like
+`entity_extraction`, so `resolve_role_model_key("artifact_builder")` returns its default key
+directly. The role gets its **own cost lane** — a new `roles.artifact_builder` policy in
+`config/governance/budget.yaml` (with no policy there, no `budget_counters` row is ever created for
+it) plus `_BUDGET_ROLE_BY_FACTORY_NAME`: `artifact_builder → artifact_builder`, not `main_inference`.
+The cap *value* is an owner decision (that file's confirmed-values convention: ask before setting);
+as a user-facing build it likely mirrors `main_inference`'s `on_denial: raise`. This dissolves the
 tier-conflation: the builder stops being hostage to the `sub_agent` binding.
 
 **2. A vetted candidate registry — new config, not a single binding.** The matrix binds a role to
@@ -116,6 +120,12 @@ mechanism):
 correct call for a caller holding an already-resolved key; `get_llm_client` would mis-bill it,
 FRE-869). The key comes from the card decision when present, else from
 `resolve_role_model_key("artifact_builder")` (the default) for headless / no-WS / timeout paths.
+**Two identities, two edits — do not conflate them:** `budget_role="artifact_builder"` sets only the
+*cost lane*. The *telemetry* `role` on `MODEL_CALL_COMPLETED` is populated from the `respond(role=…)`
+argument, which `artifact_draft` currently passes as `ModelRole.SUB_AGENT`
+(`artifact_tools.py:1468-1470`), alongside a `model_role` field on its `artifact_draft_sub_agent_start`
+log. Both must switch to `ModelRole.ARTIFACT_BUILDER` — wiring only the client factory would still emit
+`role="sub_agent"` and silently fail AC-1.
 
 **5. Guardrail: writer bindings are immutable under selection, plus a fail-closed backstop.** The
 real invariant is not "no writer *role name* in the candidate list" (writer roles resolve to model
@@ -256,6 +266,8 @@ build-time user surface.
   roles; add candidate-registry load + onboarding validation.
 - `src/personal_agent/cost_gate/__init__.py` — add `artifact_builder` to
   `_BUDGET_ROLE_BY_FACTORY_NAME` (own lane).
+- `config/governance/budget.yaml` — new `roles.artifact_builder` policy (cap value = owner decision;
+  without it no `budget_counters` row exists and AC-2 cannot hold).
 - `src/personal_agent/orchestrator/constraint_options.py` — registry-backed, availability-filtered
   options provider for `artifact_builder` (alongside the static `CONSTRAINT_OPTIONS`).
 - `src/personal_agent/orchestrator/executor.py` — `_maybe_pause_for_constraint` accepts the
@@ -265,7 +277,8 @@ build-time user surface.
 - `src/personal_agent/service/app.py` — settings API validates `artifact_builder` actions against
   the candidate registry, not the static option set.
 - `src/personal_agent/tools/artifact_tools.py:1436-1437` — resolve builder key →
-  `get_llm_client_for_key(builder_key, budget_role="artifact_builder")`; fail-closed allow-list check.
+  `get_llm_client_for_key(builder_key, budget_role="artifact_builder")`; fail-closed allow-list check;
+  **and** switch `respond(role=…)` + the `model_role` log field (`:1468-1470`) to `ARTIFACT_BUILDER`.
 - PWA settings surface — write default-builder + ask-each-time via the widened settings API +
   `service/repositories/constraint_preferences_repository.py` (reused store).
 
@@ -281,8 +294,9 @@ availability filter, settings-API rejection of a non-candidate action, preferenc
 a non-default pick.
 
 **Sequencing (Phase 1 tickets, one PR each):**
-1. `artifact_builder` role + cost lane + telemetry identity (default Haiku) — resolves to Haiku via
-   its own role/lane; no user-visible behaviour change yet.
+1. `artifact_builder` role + cost lane (`budget.yaml` policy + `_BUDGET_ROLE_BY_FACTORY_NAME`) +
+   telemetry identity (the `respond(role=…)`/`model_role` switch, default Haiku) — resolves to Haiku
+   via its own role/lane; no user-visible behaviour change, but AC-1/AC-2 already provable here.
 2. Vetted candidate registry + onboarding metadata (incl. large-output capability) + loader
    validation.
 3. Widen the ADR-0076 decision surface (options provider, executor guard, event Literal, settings
@@ -316,15 +330,23 @@ a non-default pick.
   builder selection. *(This replaces a naive candidate∩writer-role-name check, which is
   mis-dimensioned — writers resolve to model keys, so a name intersection can pass while the wrong
   model is still selected.)*
-- **AC-4 — The card offers only currently-servable builders.** *Check:* on the cloud profile with
-  the local SLM server unservable, the emitted `ConstraintPauseEvent.options` **exclude** local-only
-  candidates (assert on the event payload in an integration test). *Fails if* a dead local builder
-  appears as selectable (it would then fail the build).
-- **AC-5 — A standing default pre-resolves silently; `always_pause` shows the card.** *Check:* with
-  a stored `artifact_builder` preference set to a builder, `constraint_preference_applied` is logged
-  and **no** `ConstraintPauseEvent` is emitted for the build; with the preference set to
-  `always_pause`, a `ConstraintPauseEvent` **is** emitted. *Fails if* the card shows despite a set
-  default, or never shows under `always_pause`.
+- **AC-4 — The card offers exactly the vetted, currently-servable builders — no more, no less.**
+  *Check:* assert `set(ConstraintPauseEvent.options)` **equals** the availability-filtered candidate
+  registry for the active context — i.e. (a) every option is a registry key (**no** non-registry
+  leakage), (b) with the local SLM server unservable on the cloud profile, local-only candidates are
+  **absent**, and (c) a candidate whose required secret/endpoint is missing is **absent** while a
+  known-servable one is **present**. *Fails if* the option set differs from the availability-filtered
+  registry in any direction — a leaked non-registry key, a retained dead candidate, or a dropped live
+  one. (A one-scenario "local excluded" check would pass a filter that still leaks dead cloud
+  candidates; set-equality closes that.)
+- **AC-5 — A standing default pre-resolves silently *and the chosen model actually builds*;
+  `always_pause` shows the card.** *Check:* with a stored `artifact_builder` preference set to a
+  **non-Haiku** builder, `constraint_preference_applied` is logged, **no** `ConstraintPauseEvent` is
+  emitted, **and** the resulting `artifact_draft` build runs on that preferred model
+  (`MODEL_CALL_COMPLETED.model` == the preference, per AC-1 instrumentation); with the preference set
+  to `always_pause`, a `ConstraintPauseEvent` **is** emitted. *Fails if* the card shows despite a set
+  default, never shows under `always_pause`, **or** the preference is logged-and-swallowed while the
+  build silently falls back to Haiku (preference resolved but never threaded to the tool).
 - **AC-6 — No answer never means no artifact.** *Check:* simulate no-WS / timeout on a build; the
   artifact still renders, produced by the default builder (`resolution` is `connection_lost` or
   `timeout_default`, `model="claude_haiku"`). *Fails if* the build stalls or yields zero artifact
@@ -370,4 +392,10 @@ Revised after codex review round 1: honest enumeration of the full set of contra
 (options source, executor guard, event Literal, settings-API validation); AC-2 re-based on cost_gate
 `budget_counters` (`api_costs` has no `budget_role` column); AC-3 re-framed as writer-binding
 immutability (a candidate∩role-name check was mis-dimensioned); role name corrected to `embedding`;
-Option 4 (governance gating) added.
+Option 4 (governance gating) added. Round 2: added the `config/governance/budget.yaml` policy
+dependency (no policy → no counter → AC-2 can't hold); separated the two identities (`budget_role` =
+cost lane vs the `respond(role=…)`/`model_role` telemetry field — both must switch or AC-1 fails
+silently); corrected the §1 claim that the resolver excludes `primary`/`sub_agent` (it doesn't —
+they're intent-only by convention only); tightened AC-4 to set-equality against the availability-
+filtered registry; tightened AC-5 to assert the preferred model actually builds, not just that the
+card is suppressed.

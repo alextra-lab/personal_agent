@@ -403,6 +403,81 @@ async def test_vision_routing_decision_log_absent_for_no_attachments(
 
 
 @pytest.mark.asyncio
+async def test_vision_routing_decision_log_fires_for_document_forced_routing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-688 (ADR-0074 §8c, AC-11): a Tier-2 PDF that forces a routing decision.
+
+    ``ctx.document_effective_model_key`` set at turn assembly (FRE-684) must
+    log ``vision_routing_decision`` with the turn's identity — the
+    routing-telemetry leg of document-path joinability.
+    """
+    import structlog
+
+    from personal_agent.config import settings
+    from personal_agent.orchestrator.types import AttachmentRef
+    from personal_agent.telemetry.trace import TraceContext
+
+    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
+    monkeypatch.setattr(settings, "skill_routing_model_key", "")
+
+    ctx = _make_minimal_ctx_with_block_content()
+    ctx.attachments = (
+        AttachmentRef(
+            artifact_id="doc-456",
+            content_type="application/pdf",
+            title="scan.pdf",
+            r2_key="upload/user/GLOBAL/scan.pdf",
+        ),
+    )
+    # Simulates step_init having classified this PDF Tier 2 and resolved a
+    # forced routing decision (FRE-684) — the document-driven leg of the
+    # condition at executor.py's vision_routing_decision log site.
+    ctx.document_effective_model_key = "claude_sonnet"
+    trace_ctx = TraceContext.new_trace()
+    mock_llm = _make_mock_llm_client(_make_minimal_response())
+    mock_session = MagicMock()
+    mock_session.add_message = AsyncMock()
+    mock_session.get_messages = AsyncMock(return_value=[])
+
+    with (
+        patch("personal_agent.orchestrator.skills.get_skill_block", return_value=""),
+        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
+        patch(
+            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
+            return_value="",
+        ),
+        patch(
+            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
+            return_value="",
+        ),
+        patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+        patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm),
+        patch(
+            "personal_agent.llm_client.factory.get_llm_client_for_key",
+            return_value=mock_llm,
+        ),
+        patch(
+            "personal_agent.orchestrator.executor.get_default_registry",
+            return_value=MagicMock(get_tool_definitions_for_llm=MagicMock(return_value=[])),
+        ),
+        structlog.testing.capture_logs() as logs,
+    ):
+        from personal_agent.orchestrator.executor import step_llm_call
+
+        await step_llm_call(ctx, mock_session, trace_ctx)  # type: ignore[arg-type]
+
+    routed = [e for e in logs if e.get("event") == "vision_routing_decision"]
+    assert routed, f"vision_routing_decision not found in: {logs}"
+    entry = routed[0]
+    assert entry["trace_id"] == "test-trace"
+    assert entry["session_id"] == "test-session"
+    assert entry["task_id"] is None
+    assert entry["effective_model_key"] == "claude_sonnet"
+    assert entry["escalated"] is True
+
+
+@pytest.mark.asyncio
 async def test_vision_routing_decision_log_absent_for_tier1_pdf_attachment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

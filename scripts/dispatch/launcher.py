@@ -150,7 +150,7 @@ class StreamTopology:
 
 _TOPOLOGY: dict[str, StreamTopology] = {
     "build1": StreamTopology(
-        "build1", ".claude/worktrees/build", "cc-build", "/build", channel_port=8790
+        "build1", ".claude/worktrees/build", "cc-build", "/build", channel_port=8790, mode="channel"
     ),
     "build2": StreamTopology(
         "build2",

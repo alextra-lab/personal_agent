@@ -347,8 +347,15 @@ def test_worker_ci_red_routes_to_stream_session_with_message() -> None:
     assert triggers[0].command == "PR #412 failed CI checks - correct them"
 
 
-def test_decide_worker_trigger_defaults_send_keys_mode() -> None:
-    # The real, un-monkeypatched topology default (FRE-872: no live cutover).
+def test_decide_worker_trigger_send_keys_mode_for_non_cutover_seat(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # All three live worker seats are channel-mode now (FRE-875 Phase B), so the
+    # send_keys delivery path — still the dataclass default and the channel-down
+    # fallback — is constructed explicitly here.
+    monkeypatch.setitem(
+        launcher._TOPOLOGY,
+        "build2",
+        dataclasses.replace(launcher._TOPOLOGY["build2"], mode="send_keys"),
+    )
     pr = _pr(ci="failure")
     triggers = decide(
         [pr],

@@ -92,6 +92,13 @@ stale Status line) comes **directly from master**; a red docs check comes from t
 poke: read it, fix on this branch, push, go idle again. *(This is the old `/prime-worker`, folded in.)*
 
 ## 2 — Write the ADR
+**Number it authoritatively — never eyeball `ls`** (that caused the ADR-0117 double-number,
+2026-07-14): `git fetch origin && python scripts/next_adr.py --next` prints the next free number, read
+from `origin/main` so a stale worktree can't re-pick a just-merged number. **After writing the ADR, add
+its row to the `docs/architecture_decisions/README.md` index in the same commit** — the
+`check-adr-index` pre-commit hook fails a commit where a file has no index row (or an index row has no
+file).
+
 Start from **`docs/architecture_decisions/ADR_TEMPLATE.md`** — the project ADR format (mirrors the
 `alextra-lab/ai_operations` canonical). Author the best, complete ADR under
 `docs/architecture_decisions/`. **Two structural rules history kept drifting from:** the **References**

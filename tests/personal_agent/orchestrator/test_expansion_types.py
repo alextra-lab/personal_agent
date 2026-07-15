@@ -12,7 +12,6 @@ from personal_agent.orchestrator.expansion_types import (
 class TestSubAgentMode:
     def test_modes_defined(self) -> None:
         assert SubAgentMode.PARALLEL_INFERENCE.value == "parallel_inference"
-        assert SubAgentMode.TOOLED_SEQUENTIAL.value == "tooled_sequential"
 
 
 class TestExpansionPhase:

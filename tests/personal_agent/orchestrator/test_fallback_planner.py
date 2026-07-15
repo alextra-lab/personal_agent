@@ -88,17 +88,13 @@ class TestDecomposeFallback:
 
 
 class TestToolAssignment:
-    def test_research_tasks_get_tools(self) -> None:
-        """Tasks with research/search goals should get TOOLED_SEQUENTIAL mode."""
+    def test_research_tasks_default_to_parallel_inference(self) -> None:
+        """The fallback planner never assigns a tooled mode — always PARALLEL_INFERENCE."""
         plan = generate_fallback_plan(
             query="Research and compare Redis vs Memcached performance benchmarks",
             strategy="HYBRID",
         )
-        # At least one task should have research-oriented mode
-        research_tasks = [t for t in plan.tasks if t.mode == SubAgentMode.TOOLED_SEQUENTIAL]
-        # Not required — fallback planner defaults to PARALLEL_INFERENCE
-        # This test documents the behavior
-        assert isinstance(research_tasks, list)
+        assert all(t.mode == SubAgentMode.PARALLEL_INFERENCE for t in plan.tasks)
 
 
 class TestEdgeCases:

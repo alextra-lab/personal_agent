@@ -1,6 +1,27 @@
 # ADR-0086 — HYBRID/DECOMPOSE Routing for High-Complexity Artifact Builds (Unpin `TOOL_USE` Complexity + Tool-Using Discovery Sub-Agents)
 
-**Status:** Proposed — 2026-06-04
+**Status:** Retired — 2026-07-15 (FRE-884) — superseded by ADR-0118's user-selectable
+artifact-builder direction; never cleared its own rollout gate (deployed live via a `.env`
+override ahead of the FRE-433/434 measure→flag→verify→enable sequence this ADR itself
+prescribes; telemetry showed ~once/90-days firing, low measured value for the standing cost).
+Originally: Proposed — 2026-06-04.
+
+## Retirement note (2026-07-15)
+
+FRE-884 deleted the code this ADR describes: the `artifact_decomposition_enabled` rollout flag,
+the `TOOL_USE` complexity bias (D1), the decomposition-matrix branch (D2), the
+`TOOLED_SEQUENTIAL` discovery sub-agent loop (D3/D4), and the flag-gated planner-prompt
+augmentation (D7). The rest of this document is kept as historical record of the design and the
+2026-06-06 live rollout.
+
+**Known gap:** this ADR's own scope note says its retirement is "the flip side" of a
+"Stream-1 routing-fork-collapse" decision — but that ADR does not exist yet (referenced only as
+a future ADR inside ADR-0118). This retirement proceeded on the owner's explicit call despite
+that gap; sequencing with the eventual Stream-1 ADR is master's / the adr session's to track.
+
+**Deploy action outstanding:** the live `.env` override (`AGENT_ARTIFACT_DECOMPOSITION_ENABLED`)
+still needs to be unset/removed from the deployed environment and the gateway rebuilt — that is
+an ask-first deploy action, out of scope for the build session that authored this retirement.
 **Related:** ADR-0085 (intra-turn tool-result compression — **composes inside each discovery sub-agent's own tail; this ADR owns the parallelism/context-isolation axis, ADR-0085 owns the tail-digest axis**), ADR-0082 (tier-aware model selection — decomposed sub-agents run on the `sub_agent` non-thinking tier; verify interaction), ADR-0084 (partially supersedes ADR-0082 for the pedagogical routing question), ADR-0077 (`artifact_draft` plan/generate split — the generation path this ADR deliberately leaves intact), ADR-0063 (primitive tools & action-boundary governance — owns the Stage 5 decomposition matrix), ADR-0036 (expansion controller — the plan→dispatch→synthesize machinery extended here), ADR-0074 (identity / joinability — emit-site discipline new events inherit), FRE-468/FRE-473 (cache_control ≤4 clamp — the cost context this sits beside)
 **Implements:** FRE-476 (project: *Turn Cost & Latency Optimization (artifact builds)*)
 **Evidence:** `docs/research/2026-06-04-artifact-turn-cost-latency-forensics.md` (trace `a0a07227`), code audit of the live expansion/sub-agent substrate (see §"What already exists")

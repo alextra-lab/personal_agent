@@ -89,8 +89,12 @@ class TestValidatePlanJson:
         assert len(plan.tasks) <= 5
 
 
-class TestPlannerDiscoverySlices:
-    """ADR-0086 D3 — flag-gated tooled discovery slices from the planner."""
+class TestPlannerDiscoveryRetired:
+    """FRE-884 — ADR-0086's tooled discovery-slice parsing is retired.
+
+    A raw plan carrying a ``mode``/``tools`` field (the old discovery-slice
+    shape) is always ignored: every task parses as plain PARALLEL_INFERENCE.
+    """
 
     @staticmethod
     def _tooled_plan(tools: list[str]) -> str:
@@ -108,45 +112,18 @@ class TestPlannerDiscoverySlices:
             }
         )
 
-    def test_parses_tooled_mode_when_flag_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from personal_agent.config import settings
+    def test_mode_and_tools_fields_are_ignored(self) -> None:
         from personal_agent.orchestrator.expansion_types import SubAgentMode
 
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
         plan = _validate_plan_json(self._tooled_plan(["bash", "read"]))
         assert plan is not None
-        assert plan.tasks[0].mode == SubAgentMode.TOOLED_SEQUENTIAL
-        assert plan.tasks[0].tools == ["bash", "read"]
-
-    def test_drops_mutating_tools_when_flag_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from personal_agent.config import settings
-
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
-        plan = _validate_plan_json(self._tooled_plan(["read", "write", "artifact_write"]))
-        assert plan is not None
-        # Only the read-only allowlisted tool survives.
-        assert plan.tasks[0].tools == ["read"]
-
-    def test_ignores_mode_tools_when_flag_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from personal_agent.config import settings
-        from personal_agent.orchestrator.expansion_types import SubAgentMode
-
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", False)
-        plan = _validate_plan_json(self._tooled_plan(["bash", "read"]))
-        assert plan is not None
-        # Inert: no tooled mode, no tools — existing HYBRID turns are unchanged.
         assert plan.tasks[0].mode == SubAgentMode.PARALLEL_INFERENCE
         assert plan.tasks[0].tools == []
 
-    def test_planner_prompt_flag_gated(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from personal_agent.config import settings
-        from personal_agent.orchestrator.expansion_controller import _build_planner_system_prompt
+    def test_planner_prompt_never_mentions_tooled_sequential(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import _PLANNER_SYSTEM_PROMPT
 
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", False)
-        assert "tooled_sequential" not in _build_planner_system_prompt()
-
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
-        assert "tooled_sequential" in _build_planner_system_prompt()
+        assert "tooled_sequential" not in _PLANNER_SYSTEM_PROMPT
 
 
 class TestExpansionControllerExecute:

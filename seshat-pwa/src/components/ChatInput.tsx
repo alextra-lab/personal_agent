@@ -32,6 +32,15 @@ const ACCEPTED_TYPES =
 const ACCEPTED_TYPE_SET = new Set(ACCEPTED_TYPES.split(','));
 
 /**
+ * Whether a completed attachment of this content type carries the per-attachment
+ * Auto/Cloud/Local processing-target override (ADR-0101 §8a images / ADR-0102 §7a
+ * documents). v1 document scope is `application/pdf` only.
+ */
+function canOverrideProcessingTarget(fileType: string): boolean {
+  return fileType.startsWith('image/') || fileType === 'application/pdf';
+}
+
+/**
  * Chat input bar with textarea, inline model toggle, send button, and
  * user-upload support (FRE-369): file picker, drag-drop, paste-image.
  *
@@ -41,8 +50,9 @@ const ACCEPTED_TYPE_SET = new Set(ACCEPTED_TYPES.split(','));
  * - The textarea auto-grows up to 5 lines.
  * - Footer padding accounts for iOS home-indicator via safe-area-inset-bottom.
  * - Send is blocked while any upload is in-progress (status !== 'complete').
- * - Completed image attachments carry an Auto/Cloud/Local cycle button (ADR-0101 §8a,
- *   FRE-692); the chosen value (or 'none' if untouched) is sent as `processing_target`.
+ * - Completed image (ADR-0101 §8a, FRE-692) and PDF (ADR-0102 §7a, FRE-687) attachments
+ *   carry an Auto/Cloud/Local cycle button; the chosen value (or 'none' if untouched) is
+ *   sent as `processing_target`.
  */
 export function ChatInput({
   onSend,
@@ -113,7 +123,7 @@ export function ChatInput({
     setUploads((prev) => prev.filter((u) => u.id !== id));
   };
 
-  /** Cycle an image attachment's processing-target override: Auto → Cloud → Local → Auto. */
+  /** Cycle an attachment's processing-target override: Auto → Cloud → Local → Auto. */
   const cycleProcessingTarget = (id: string) => {
     setUploads((prev) =>
       prev.map((u) => {
@@ -284,7 +294,7 @@ export function ChatInput({
               {u.status === 'complete' && <span>✓</span>}
               {u.status === 'error' && <span>✗</span>}
               <span className="max-w-[120px] truncate">{u.file.name}</span>
-              {u.status === 'complete' && u.file.type.startsWith('image/') && (
+              {u.status === 'complete' && canOverrideProcessingTarget(u.file.type) && (
                 <button
                   type="button"
                   onClick={() => cycleProcessingTarget(u.id)}

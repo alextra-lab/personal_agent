@@ -130,7 +130,7 @@ describe('ChatInput — path unavailable gating (FRE-421)', () => {
   });
 });
 
-describe('ChatInput — per-attachment processing-target override (FRE-692, ADR-0101 §8a)', () => {
+describe('ChatInput — per-attachment processing-target override (FRE-692/FRE-687, ADR-0101 §8a / ADR-0102 §7a)', () => {
   function sendWithText(container: HTMLElement) {
     const textarea = screen.getByPlaceholderText('Message Seshat...');
     fireEvent.change(textarea, { target: { value: 'look at this' } });
@@ -182,7 +182,7 @@ describe('ChatInput — per-attachment processing-target override (FRE-692, ADR-
     ]);
   });
 
-  it('does not render the override control for a non-image attachment, and sends "none"', async () => {
+  it('does not render the override control for a non-eligible (non-image, non-PDF) attachment, and sends "none"', async () => {
     const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
     const file = new File(['x'], 'notes.txt', { type: 'text/plain' });
     await attachFile(container, file, 'a2');
@@ -193,6 +193,53 @@ describe('ChatInput — per-attachment processing-target override (FRE-692, ADR-
 
     expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('look at this', [
       { artifact_id: 'a2', content_type: 'text/plain', title: 'notes.txt', processing_target: 'none' },
+    ]);
+  });
+
+  it('sends processing_target "none" for a PDF attachment with no override chosen (FRE-687)', async () => {
+    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
+    const file = new File(['x'], 'report.pdf', { type: 'application/pdf' });
+    await attachFile(container, file, 'a3');
+
+    expect(screen.getByLabelText(/Set processing target for report\.pdf, currently Auto/)).toBeDefined();
+
+    sendWithText(container);
+
+    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('look at this', [
+      { artifact_id: 'a3', content_type: 'application/pdf', title: 'report.pdf', processing_target: 'none' },
+    ]);
+  });
+
+  it('cycles Auto -> Cloud and sends processing_target "cloud" for a PDF attachment (FRE-687)', async () => {
+    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
+    const file = new File(['x'], 'report.pdf', { type: 'application/pdf' });
+    await attachFile(container, file, 'a3');
+
+    const toggle = screen.getByLabelText(/Set processing target for report\.pdf, currently Auto/);
+    fireEvent.click(toggle);
+    expect(screen.getByLabelText(/currently Cloud/)).toBeDefined();
+
+    sendWithText(container);
+
+    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('look at this', [
+      { artifact_id: 'a3', content_type: 'application/pdf', title: 'report.pdf', processing_target: 'cloud' },
+    ]);
+  });
+
+  it('cycles Auto -> Cloud -> Local and sends processing_target "local" for a PDF attachment (FRE-687)', async () => {
+    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
+    const file = new File(['x'], 'report.pdf', { type: 'application/pdf' });
+    await attachFile(container, file, 'a3');
+
+    const toggle = screen.getByLabelText(/Set processing target for report\.pdf/);
+    fireEvent.click(toggle); // -> Cloud
+    fireEvent.click(screen.getByLabelText(/currently Cloud/)); // -> Local
+    expect(screen.getByLabelText(/currently Local/)).toBeDefined();
+
+    sendWithText(container);
+
+    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('look at this', [
+      { artifact_id: 'a3', content_type: 'application/pdf', title: 'report.pdf', processing_target: 'local' },
     ]);
   });
 });

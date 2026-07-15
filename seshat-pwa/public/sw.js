@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v30-rating-chips';
+const CACHE_NAME = 'seshat-v31-doc-vision';
 
 const PRECACHE_URLS = [
   '/',

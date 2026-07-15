@@ -4,6 +4,7 @@ This module provides the AppConfig class and settings singleton.
 """
 
 from pathlib import Path
+from typing import Literal
 
 import structlog
 from pydantic import Field, field_validator, model_validator
@@ -851,6 +852,21 @@ class AppConfig(BaseSettings):
             "FRE-691). A single image (~1600 tokens ≈ $0.005) is far below this, so the "
             "gate mainly bounds multi-image turns and the pricier ADR-0102 PDF path. "
             "Owner-tunable via AGENT_ATTACHMENT_COST_CONFIRMATION_THRESHOLD_USD."
+        ),
+    )
+    attachment_default_processing_target: Literal["cloud", "local"] = Field(
+        default="cloud",
+        alias="AGENT_ATTACHMENT_DEFAULT_PROCESSING_TARGET",
+        description=(
+            "Effective processing_target for an attachment with no per-attachment "
+            "override ('Auto') — images (ADR-0101 §8a) and PDFs (ADR-0102 §7a). "
+            "'cloud' (default, FRE-886): Auto routes straight to the profile's cloud "
+            "escalation model, same as an explicit 'cloud' override (cost-gated) — "
+            "the local Qwen vision path produced a materially worse read than cloud "
+            "Sonnet on a live scanned-page test. 'local' restores the pre-FRE-886 "
+            "default: resolve the profile's own model, escalating only if the "
+            "profile's allow_cloud_escalation permits. "
+            "Env var: AGENT_ATTACHMENT_DEFAULT_PROCESSING_TARGET"
         ),
     )
     document_text_density_floor_per_page: int = Field(

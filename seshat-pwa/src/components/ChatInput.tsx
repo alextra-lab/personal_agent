@@ -52,7 +52,8 @@ function canOverrideProcessingTarget(fileType: string): boolean {
  * - Send is blocked while any upload is in-progress (status !== 'complete').
  * - Completed image (ADR-0101 §8a, FRE-692) and PDF (ADR-0102 §7a, FRE-687) attachments
  *   carry an Auto/Cloud/Local cycle button; the chosen value (or 'none' if untouched) is
- *   sent as `processing_target`.
+ *   sent as `processing_target`. Auto now defaults to the cloud path server-side
+ *   (FRE-886), so the chip labels the Auto state "Auto (Cloud)" to stay honest.
  */
 export function ChatInput({
   onSend,
@@ -306,11 +307,19 @@ export function ChatInput({
                         : 'text-slate-400'
                   }`}
                   aria-label={`Set processing target for ${u.file.name}, currently ${
-                    u.processingTarget === 'cloud' ? 'Cloud' : u.processingTarget === 'local' ? 'Local' : 'Auto'
+                    u.processingTarget === 'cloud'
+                      ? 'Cloud'
+                      : u.processingTarget === 'local'
+                        ? 'Local'
+                        : 'Auto (routes to Cloud)'
                   }`}
-                  title="Cycle per-attachment processing target (Auto / Cloud / Local)"
+                  title="Cycle per-attachment processing target (Auto → Cloud by default / Cloud / Local)"
                 >
-                  {u.processingTarget === 'cloud' ? 'Cloud' : u.processingTarget === 'local' ? 'Local' : 'Auto'}
+                  {u.processingTarget === 'cloud'
+                    ? 'Cloud'
+                    : u.processingTarget === 'local'
+                      ? 'Local'
+                      : 'Auto (Cloud)'}
                 </button>
               )}
               <button

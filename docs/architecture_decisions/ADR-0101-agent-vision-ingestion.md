@@ -645,6 +645,17 @@ isolation.
 
 ## Status Updates
 
+### 2026-07-15 - §8a Auto default changed to cloud (FRE-886)
+**Changed By:** lextra (owner)
+**Reason:** During the live AC-SEAM run, local Qwen produced a materially worse read of a scanned page
+than cloud Sonnet. §8a's documented default ("`None` → follow the conversation's bound
+ExecutionProfile") is superseded: Auto (no per-attachment override) now routes straight to the
+profile's cloud escalation model by default, config-driven via
+`attachment_default_processing_target` (`config/settings.py`, default `"cloud"`) so it can be flipped
+back to the original profile-following behavior (`"local"`). The explicit `"local"`/`"cloud"`
+per-attachment overrides are unchanged. Applies identically to ADR-0102 §7a (documents) via the same
+setting.
+
 ### 2026-06-30 - Accepted
 **Changed By:** lextra (owner; recorded by master)
 **Reason:** Owner accepted ADR-0101 (images) and approved the underlying implementation chain. The image

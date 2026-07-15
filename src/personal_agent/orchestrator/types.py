@@ -162,6 +162,12 @@ class AttachmentRef:
         r2_key: Object key for the credentialed ``store.get(r2_key)`` byte fetch (§3).
         processing_target: Optional per-attachment cloud/local override (§8a).
             ``None`` follows the conversation's bound ExecutionProfile.
+        requested_pages: Optional 1-indexed page numbers to force-select for a
+            Tier-2 PDF, bypassing salience auto-selection (ADR-0102 §4 /
+            FRE-685). A resolution directive, not upload metadata — set only
+            when re-resolving an already-stored document for a continuation
+            request (the offered-and-honored follow-up for pages dropped by
+            the per-turn page budget). ``None`` for a normal upload.
     """
 
     artifact_id: str
@@ -169,6 +175,7 @@ class AttachmentRef:
     title: str
     r2_key: str
     processing_target: Literal["cloud", "local"] | None = None
+    requested_pages: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -193,6 +200,59 @@ class PendingCloudAttachmentConfirmation:
     attachments: tuple[AttachmentRef, ...]
     cloud_vision_model_key: str
     estimate_usd: float
+    created_at: float  # Unix timestamp
+    ttl_seconds: int
+    original_trace_id: str
+
+
+@dataclass(frozen=True)
+class DocumentContinuationOffer:
+    """Facts needed to offer/serve a continuation for one budget-dropped PDF (ADR-0102 §4, FRE-685).
+
+    Emitted by ``document_resolution.resolve_documents`` whenever a Tier-2
+    document has pages the per-turn page budget did not include — either the
+    initial auto-selection or a further-truncated continuation request.
+    Carries no session/turn identity; the caller (``executor.py``) wraps this
+    into the durable ``PendingDocumentContinuation`` record.
+
+    Attributes:
+        artifact_id: Postgres ``artifacts.id`` of the document.
+        content_type: MIME type (``application/pdf`` for this record).
+        title: Display filename, echoed in disclosures.
+        r2_key: Object key for the credentialed ``store.get(r2_key)`` re-fetch.
+        processing_target: The original attachment's cloud/local override.
+        dropped_pages: 1-indexed page numbers not included this turn.
+    """
+
+    artifact_id: str
+    content_type: str
+    title: str
+    r2_key: str
+    processing_target: Literal["cloud", "local"] | None
+    dropped_pages: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class PendingDocumentContinuation:
+    """Durable session state offering to deliver previously budget-dropped PDF pages (ADR-0102 §4, FRE-685).
+
+    Saved when ``resolve_documents`` drops Tier-2 pages under the per-turn
+    page budget (the disclose-and-offer-to-continue behaviour). Holds every
+    offer from the offering turn, not just one — a turn can have more than
+    one over-budget document sharing the same page budget. On a later turn,
+    if the user's message names a page range (or a broad affirmative), the
+    matching artifact(s) are re-resolved with ``AttachmentRef.requested_pages``
+    set to exactly the requested/dropped intersection — no re-upload needed,
+    since the artifact is already in R2 under ``r2_key``.
+
+    Attributes:
+        offers: One offer per over-budget document from the turn that made it.
+        created_at: Unix timestamp when the offer(s) were saved.
+        ttl_seconds: Seconds before this pending state expires.
+        original_trace_id: Trace ID of the turn that made the offer.
+    """
+
+    offers: tuple[DocumentContinuationOffer, ...]
     created_at: float  # Unix timestamp
     ttl_seconds: int
     original_trace_id: str

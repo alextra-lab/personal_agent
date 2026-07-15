@@ -25,6 +25,7 @@ from __future__ import annotations
 import io
 import time
 from dataclasses import asdict
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -36,12 +37,15 @@ from personal_agent.governance.models import Mode
 from personal_agent.orchestrator import executor as executor_mod
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.document_resolution import resolve_documents
+from personal_agent.orchestrator.executor import step_init
+from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import (
     AttachmentRef,
     DocumentContinuationOffer,
     ExecutionContext,
     PendingDocumentContinuation,
 )
+from personal_agent.telemetry.trace import TraceContext
 
 
 def _make_pdf(page_count: int) -> bytes:
@@ -118,6 +122,22 @@ class TestParseRequestedPageRange:
     )
     def test_parses_range(self, message: str, expected: tuple[int, int]) -> None:
         assert executor_mod._parse_requested_page_range(message) == expected
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "we're meeting 3-5pm, can I see the rest of that PDF?",
+            "call me at extension 24-40",
+            "it's been 3 to 5 days",
+        ],
+    )
+    def test_incidental_number_range_not_mistaken_for_page_request(self, message: str) -> None:
+        """A bare N-M elsewhere in an unrelated sentence must not misfire —
+
+        only a "page(s)"-anchored range, or a bare range that IS the whole
+        message, counts (code-review finding).
+        """
+        assert executor_mod._parse_requested_page_range(message) is None
 
     @pytest.mark.parametrize(
         "message",
@@ -277,6 +297,62 @@ class TestReinjectionTopology:
         await executor_mod._maybe_reinject_pending_document_continuation(ctx2)
 
         assert ctx2.attachments[0].requested_pages == (24, 25, 26)
+        # The un-requested remainder (27-40) must survive as a still-pending
+        # offer, not be silently discarded (code-review finding).
+        assert session_id in durable_store
+        remaining = durable_store[session_id]["offers"]
+        assert len(remaining) == 1
+        assert remaining[0]["dropped_pages"] == [
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+        ]
+
+    async def test_reinject_resets_attachment_cost_confirmed(
+        self, durable_store: dict[str, dict[str, Any]]
+    ) -> None:
+        """A re-injected continuation must never ride on a cost confirmation
+
+        that was set for unrelated content moments earlier in the same turn
+        (code-review finding: a shared "yes" gate could otherwise let a
+        re-injected priced document skip the pre-flight cost gate).
+        """
+        session_id = "sess-B2"
+        await executor_mod._save_pending_document_continuation(
+            session_id, _pending(), trace_id="trace-1"
+        )
+
+        ctx2 = _turn2_ctx(session_id, "pages 24-26")
+        ctx2.attachment_cost_confirmed = True  # set by an unrelated prior gate this turn
+        await executor_mod._maybe_reinject_pending_document_continuation(ctx2)
+
+        assert len(ctx2.attachments) == 1
+        assert ctx2.attachment_cost_confirmed is False
+
+    async def test_no_match_leaves_attachment_cost_confirmed_untouched(
+        self, durable_store: dict[str, dict[str, Any]]
+    ) -> None:
+        session_id = "sess-B3"
+        await executor_mod._save_pending_document_continuation(
+            session_id, _pending(), trace_id="trace-1"
+        )
+
+        ctx2 = _turn2_ctx(session_id, "what's the weather?")
+        ctx2.attachment_cost_confirmed = True
+        await executor_mod._maybe_reinject_pending_document_continuation(ctx2)
+
+        assert ctx2.attachment_cost_confirmed is True
 
     async def test_broad_affirmative_reinjects_all_dropped_pages(
         self, durable_store: dict[str, dict[str, Any]]
@@ -455,3 +531,184 @@ class TestAC4EndToEndContinuation:
             io.BytesIO(__import__("base64").b64decode(turn2.blocks[0]["source"]["data"]))
         )
         assert len(sub_doc) == 4
+
+
+# ---------------------------------------------------------------------------
+# step_init final save: merge-by-artifact-id, not overwrite (code-review [5])
+# ---------------------------------------------------------------------------
+
+
+class TestStepInitMergesContinuationOffers:
+    @staticmethod
+    def _make_ctx(message: str, attachments: tuple[AttachmentRef, ...] = ()) -> ExecutionContext:
+        return ExecutionContext(
+            session_id="sess-merge",
+            trace_id="trace-merge",
+            user_message=message,
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=None,
+            attachments=attachments,
+        )
+
+    @pytest.mark.asyncio
+    async def test_fresh_offer_merges_with_untouched_prior_offer(self) -> None:
+        """A still-pending offer for a document not touched this turn (e.g.
+
+        saved by a re-injection earlier in the same step_init call) must
+        survive alongside this turn's own fresh offer, not be clobbered by
+        an unconditional overwrite.
+        """
+        attachment = AttachmentRef(
+            artifact_id="doc-a",
+            content_type="application/pdf",
+            title="a.pdf",
+            r2_key="upload/u/g/a.pdf",
+        )
+        ctx = self._make_ctx("Look at this", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-merge", session_id="sess-merge")
+
+        fresh_offer = DocumentContinuationOffer(
+            artifact_id="doc-a",
+            content_type="application/pdf",
+            title="a.pdf",
+            r2_key="upload/u/g/a.pdf",
+            processing_target=None,
+            dropped_pages=(10, 11, 12),
+        )
+        existing_pending = {
+            "offers": [
+                {
+                    "artifact_id": "doc-b",
+                    "content_type": "application/pdf",
+                    "title": "b.pdf",
+                    "r2_key": "upload/u/g/b.pdf",
+                    "processing_target": None,
+                    "dropped_pages": [50, 51, 52],
+                }
+            ],
+            "created_at": time.time(),
+            "ttl_seconds": 600,
+            "original_trace_id": "trace-prior",
+        }
+
+        doc_block = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+        save_mock = AsyncMock()
+        with (
+            patch(
+                "personal_agent.orchestrator.document_resolution.resolve_documents",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        blocks=(doc_block,),
+                        disclosures=(),
+                        used_tier2=True,
+                        native_pdf_page_count=0,
+                        continuation_offers=(fresh_offer,),
+                    )
+                ),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._resolve_document_routing_key",
+                return_value=("primary", "rasterize"),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._maybe_confirm_attachment_cost",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._load_pending_document_continuation",
+                new=AsyncMock(return_value=existing_pending),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._save_pending_document_continuation",
+                new=save_mock,
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        save_mock.assert_awaited_once()
+        saved_payload = save_mock.await_args.args[1]
+        offers_by_artifact = {o["artifact_id"]: o for o in saved_payload["offers"]}
+        assert offers_by_artifact.keys() == {"doc-a", "doc-b"}
+        assert list(offers_by_artifact["doc-a"]["dropped_pages"]) == [10, 11, 12]
+        assert list(offers_by_artifact["doc-b"]["dropped_pages"]) == [50, 51, 52]
+
+    @pytest.mark.asyncio
+    async def test_same_artifact_unions_dropped_pages(self) -> None:
+        """A fresh offer for the SAME artifact as an existing pending offer
+
+        (e.g. leftover un-requested pages from a partial-range continuation
+        plus a newly budget-blocked remainder) unions the dropped pages
+        rather than one silently replacing the other.
+        """
+        attachment = AttachmentRef(
+            artifact_id="doc-a",
+            content_type="application/pdf",
+            title="a.pdf",
+            r2_key="upload/u/g/a.pdf",
+            requested_pages=(10, 11, 12),
+        )
+        ctx = self._make_ctx("Look at this", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-merge2", session_id="sess-merge")
+
+        fresh_offer = DocumentContinuationOffer(
+            artifact_id="doc-a",
+            content_type="application/pdf",
+            title="a.pdf",
+            r2_key="upload/u/g/a.pdf",
+            processing_target=None,
+            dropped_pages=(10, 11, 12),
+        )
+        existing_pending = {
+            "offers": [
+                {
+                    "artifact_id": "doc-a",
+                    "content_type": "application/pdf",
+                    "title": "a.pdf",
+                    "r2_key": "upload/u/g/a.pdf",
+                    "processing_target": None,
+                    "dropped_pages": [13, 14, 15],  # leftover from a partial match
+                }
+            ],
+            "created_at": time.time(),
+            "ttl_seconds": 600,
+            "original_trace_id": "trace-prior",
+        }
+
+        doc_block = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+        save_mock = AsyncMock()
+        with (
+            patch(
+                "personal_agent.orchestrator.document_resolution.resolve_documents",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        blocks=(doc_block,),
+                        disclosures=(),
+                        used_tier2=True,
+                        native_pdf_page_count=0,
+                        continuation_offers=(fresh_offer,),
+                    )
+                ),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._resolve_document_routing_key",
+                return_value=("primary", "rasterize"),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._maybe_confirm_attachment_cost",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._load_pending_document_continuation",
+                new=AsyncMock(return_value=existing_pending),
+            ),
+            patch(
+                "personal_agent.orchestrator.executor._save_pending_document_continuation",
+                new=save_mock,
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        saved_payload = save_mock.await_args.args[1]
+        assert len(saved_payload["offers"]) == 1
+        assert saved_payload["offers"][0]["dropped_pages"] == [10, 11, 12, 13, 14, 15]

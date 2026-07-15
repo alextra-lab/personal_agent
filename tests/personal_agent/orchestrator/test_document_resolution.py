@@ -730,6 +730,71 @@ class TestRequestedPagesContinuation:
 
         assert result.blocks[0]["type"] == "text"
 
+    @pytest.mark.asyncio
+    async def test_requested_pages_mixed_valid_invalid_discloses_invalid_subset(self) -> None:
+        """A mixed valid/invalid request must not silently drop the invalid
+
+        tail — only the fully-out-of-bounds case previously disclosed
+        anything (code-review finding).
+        """
+        pdf_bytes = _make_pdf([None] * 10)
+        attachment = _make_attachment(title="scan.pdf", requested_pages=(8, 9, 10, 11, 12))
+        store = _mock_store({attachment.r2_key: pdf_bytes})
+
+        with patch(_STORE_PATCH_TARGET, return_value=store):
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
+
+        assert len(result.blocks) == 3  # pages 8, 9, 10 delivered
+        combined = " ".join(result.disclosures)
+        assert "11-12" in combined
+        assert "do not exist" in combined
+
+    @pytest.mark.asyncio
+    async def test_requested_pages_budget_exhausted_by_earlier_document_reoffers_all(
+        self,
+    ) -> None:
+        """A continuation request that gets zero budget (exhausted by an
+
+        earlier document in the same turn) must re-emit its full offer, not
+        silently lose the pages it was re-offered (code-review finding).
+        """
+        auto_select_pdf = _make_pdf([None] * 5)
+        continuation_attachment = _make_attachment(
+            artifact_id="doc-cont",
+            title="continuation.pdf",
+            r2_key="upload/u/g/continuation.pdf",
+            requested_pages=(1, 2, 3),
+        )
+        auto_select_attachment = _make_attachment(
+            artifact_id="doc-auto", title="auto.pdf", r2_key="upload/u/g/auto.pdf"
+        )
+        store = _mock_store(
+            {
+                "upload/u/g/auto.pdf": auto_select_pdf,
+                continuation_attachment.r2_key: _make_pdf([None] * 3),
+            }
+        )
+
+        with (
+            patch(_STORE_PATCH_TARGET, return_value=store),
+            patch(
+                "personal_agent.orchestrator.document_resolution.settings.document_max_pages_per_turn",
+                5,
+            ),
+        ):
+            result = await resolve_documents(
+                [auto_select_attachment, continuation_attachment],
+                resolve_tier2_delivery=lambda: "rasterize",
+            )
+
+        # The auto-select document consumed the entire 5-page budget first.
+        assert len(result.blocks) == 5
+        offers_by_artifact = {o.artifact_id: o for o in result.continuation_offers}
+        assert "doc-cont" in offers_by_artifact
+        assert offers_by_artifact["doc-cont"].dropped_pages == (1, 2, 3)
+
 
 # ---------------------------------------------------------------------------
 # AC-7: guardrail dimensions

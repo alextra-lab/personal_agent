@@ -321,6 +321,25 @@ async def _resolve_one_document(
         )
 
     if remaining_page_budget <= 0:
+        # A continuation request that arrives here with zero budget left
+        # (exhausted by other documents earlier in this same turn) must not
+        # silently lose the pages it was re-offered — re-emit the offer so
+        # the pending record is refreshed rather than dropped (code-review
+        # finding: previously this returned no offer, and the caller had
+        # already removed the matched pages from durable storage on the
+        # assumption delivery would succeed).
+        exhausted_offer = (
+            DocumentContinuationOffer(
+                artifact_id=attachment.artifact_id,
+                content_type=attachment.content_type,
+                title=attachment.title,
+                r2_key=attachment.r2_key,
+                processing_target=attachment.processing_target,
+                dropped_pages=tuple(sorted(set(attachment.requested_pages))),
+            )
+            if attachment.requested_pages
+            else None
+        )
         return (
             [],
             [
@@ -331,7 +350,7 @@ async def _resolve_one_document(
             remaining_page_budget,
             False,
             0,
-            None,
+            exhausted_offer,
         )
 
     budget_disclosures: list[str] = []
@@ -339,9 +358,9 @@ async def _resolve_one_document(
 
     if attachment.requested_pages:
         total_page_count = len(pdf)
-        requested_0idx = sorted(
-            {p - 1 for p in attachment.requested_pages if 1 <= p <= total_page_count}
-        )
+        requested_pages_set = set(attachment.requested_pages)
+        invalid_1idx = sorted(p for p in requested_pages_set if not (1 <= p <= total_page_count))
+        requested_0idx = sorted({p - 1 for p in requested_pages_set if 1 <= p <= total_page_count})
         if not requested_0idx:
             return (
                 [],
@@ -357,6 +376,16 @@ async def _resolve_one_document(
             )
         selected_pages = requested_0idx[:remaining_page_budget]
         new_remaining_page_budget = remaining_page_budget - len(selected_pages)
+
+        if invalid_1idx:
+            # A mixed valid/invalid request (e.g. "pages 8-12" on a 10-page
+            # document) must not silently drop the invalid tail — only the
+            # fully-out-of-bounds case above previously disclosed anything
+            # (code-review finding).
+            budget_disclosures.append(
+                f"'{attachment.title}': pp. {_format_page_ranges(invalid_1idx)} do not "
+                f"exist in this {total_page_count}-page document."
+            )
 
         delivered_1idx = [p + 1 for p in selected_pages]
         budget_disclosures.append(

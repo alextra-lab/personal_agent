@@ -7,7 +7,7 @@ The executor coordinates task execution through explicit state transitions.
 import asyncio
 import json
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -350,24 +350,31 @@ def _pending_is_expired(pending: dict[str, Any], now: float) -> bool:
     return (now - float(created_at)) >= float(ttl_seconds)
 
 
-async def _save_pending_cloud_confirmation(
-    session_id: str, pending: dict[str, Any], *, trace_id: str
+async def _save_pending_state(
+    session_id: str,
+    pending: dict[str, Any],
+    *,
+    trace_id: str,
+    save_repo_method: Callable[["SessionRepository", UUID, dict[str, Any]], Awaitable[int]],
+    log_prefix: str,
 ) -> None:
-    """Durably persist a paused turn's pending cloud-attachment confirmation.
+    """Durably persist a pending-state payload via ``save_repo_method`` (FRE-749 / FRE-685).
+
+    Shared body for the cloud-attachment-confirmation and document-continuation
+    pending-state trios — they differ only in which ``SessionRepository``
+    method they call and which log-event prefix they use.
 
     Args:
         session_id: Active session identifier (UUID string).
-        pending: JSON-serializable pending-confirmation payload.
+        pending: JSON-serializable pending-state payload.
         trace_id: Trace context identifier for telemetry correlation.
+        save_repo_method: The ``SessionRepository`` save method to invoke.
+        log_prefix: Event-name prefix for this pending-state kind's logs.
     """
     try:
         sid = UUID(session_id)
     except (ValueError, AttributeError):
-        log.warning(
-            "pending_cloud_confirmation_save_bad_session",
-            trace_id=trace_id,
-            session_id=session_id,
-        )
+        log.warning(f"{log_prefix}_save_bad_session", trace_id=trace_id, session_id=session_id)
         return
 
     from personal_agent.service.database import AsyncSessionLocal
@@ -376,196 +383,172 @@ async def _save_pending_cloud_confirmation(
     try:
         async with AsyncSessionLocal() as db:
             repo = SessionRepository(db)
-            rows = await repo.save_pending_confirmation(sid, pending)
+            rows = await save_repo_method(repo, sid, pending)
         if rows == 0:
-            log.warning(
-                "pending_cloud_confirmation_save_no_row",
-                trace_id=trace_id,
-                session_id=session_id,
-            )
+            log.warning(f"{log_prefix}_save_no_row", trace_id=trace_id, session_id=session_id)
     except Exception:
-        log.exception(
-            "pending_cloud_confirmation_save_failed",
-            trace_id=trace_id,
-            session_id=session_id,
-        )
+        log.exception(f"{log_prefix}_save_failed", trace_id=trace_id, session_id=session_id)
+
+
+async def _load_pending_state(
+    session_id: str,
+    *,
+    trace_id: str,
+    load_repo_method: Callable[["SessionRepository", UUID], Awaitable[dict[str, Any] | None]],
+    log_prefix: str,
+    clear_fn: Callable[..., Awaitable[None]],
+) -> dict[str, Any] | None:
+    """Load a durable pending-state payload via ``load_repo_method``, applying TTL.
+
+    Args:
+        session_id: Active session identifier (UUID string).
+        trace_id: Trace context identifier for telemetry correlation.
+        load_repo_method: The ``SessionRepository`` load method to invoke.
+        log_prefix: Event-name prefix for this pending-state kind's logs.
+        clear_fn: This pending-state kind's own clear function, invoked on
+            an expired record.
+
+    Returns:
+        The pending payload when present and unexpired; None otherwise. An
+        expired record is cleared as a side effect before returning None.
+    """
+    try:
+        sid = UUID(session_id)
+    except (ValueError, AttributeError):
+        return None
+
+    from personal_agent.service.database import AsyncSessionLocal
+    from personal_agent.service.repositories.session_repository import SessionRepository
+
+    try:
+        async with AsyncSessionLocal() as db:
+            repo = SessionRepository(db)
+            pending = await load_repo_method(repo, sid)
+    except Exception:
+        log.exception(f"{log_prefix}_load_failed", trace_id=trace_id, session_id=session_id)
+        return None
+
+    if pending is None:
+        return None
+    if _pending_is_expired(pending, time.time()):
+        await clear_fn(session_id, trace_id=trace_id)
+        return None
+    return pending
+
+
+async def _clear_pending_state(
+    session_id: str,
+    *,
+    trace_id: str,
+    clear_repo_method: Callable[["SessionRepository", UUID], Awaitable[None]],
+    log_prefix: str,
+) -> None:
+    """Clear a durable pending-state record via ``clear_repo_method``.
+
+    Args:
+        session_id: Active session identifier (UUID string).
+        trace_id: Trace context identifier for telemetry correlation.
+        clear_repo_method: The ``SessionRepository`` clear method to invoke.
+        log_prefix: Event-name prefix for this pending-state kind's logs.
+    """
+    try:
+        sid = UUID(session_id)
+    except (ValueError, AttributeError):
+        return
+
+    from personal_agent.service.database import AsyncSessionLocal
+    from personal_agent.service.repositories.session_repository import SessionRepository
+
+    try:
+        async with AsyncSessionLocal() as db:
+            repo = SessionRepository(db)
+            await clear_repo_method(repo, sid)
+    except Exception:
+        log.exception(f"{log_prefix}_clear_failed", trace_id=trace_id, session_id=session_id)
+
+
+async def _save_pending_cloud_confirmation(
+    session_id: str, pending: dict[str, Any], *, trace_id: str
+) -> None:
+    """Durably persist a paused turn's pending cloud-attachment confirmation."""
+    from personal_agent.service.repositories.session_repository import SessionRepository
+
+    await _save_pending_state(
+        session_id,
+        pending,
+        trace_id=trace_id,
+        save_repo_method=SessionRepository.save_pending_confirmation,
+        log_prefix="pending_cloud_confirmation",
+    )
 
 
 async def _load_pending_cloud_confirmation(
     session_id: str, *, trace_id: str
 ) -> dict[str, Any] | None:
-    """Load a durable pending cloud-attachment confirmation, applying TTL.
-
-    Args:
-        session_id: Active session identifier (UUID string).
-        trace_id: Trace context identifier for telemetry correlation.
-
-    Returns:
-        The pending payload when present and unexpired; None otherwise. An
-        expired record is cleared as a side effect before returning None.
-    """
-    try:
-        sid = UUID(session_id)
-    except (ValueError, AttributeError):
-        return None
-
-    from personal_agent.service.database import AsyncSessionLocal
+    """Load a durable pending cloud-attachment confirmation, applying TTL."""
     from personal_agent.service.repositories.session_repository import SessionRepository
 
-    try:
-        async with AsyncSessionLocal() as db:
-            repo = SessionRepository(db)
-            pending = await repo.load_pending_confirmation(sid)
-    except Exception:
-        log.exception(
-            "pending_cloud_confirmation_load_failed",
-            trace_id=trace_id,
-            session_id=session_id,
-        )
-        return None
-
-    if pending is None:
-        return None
-    if _pending_is_expired(pending, time.time()):
-        await _clear_pending_cloud_confirmation(session_id, trace_id=trace_id)
-        return None
-    return pending
+    return await _load_pending_state(
+        session_id,
+        trace_id=trace_id,
+        load_repo_method=SessionRepository.load_pending_confirmation,
+        log_prefix="pending_cloud_confirmation",
+        clear_fn=_clear_pending_cloud_confirmation,
+    )
 
 
 async def _clear_pending_cloud_confirmation(session_id: str, *, trace_id: str) -> None:
-    """Clear the durable pending cloud-attachment confirmation for a session.
-
-    Args:
-        session_id: Active session identifier (UUID string).
-        trace_id: Trace context identifier for telemetry correlation.
-    """
-    try:
-        sid = UUID(session_id)
-    except (ValueError, AttributeError):
-        return
-
-    from personal_agent.service.database import AsyncSessionLocal
+    """Clear the durable pending cloud-attachment confirmation for a session."""
     from personal_agent.service.repositories.session_repository import SessionRepository
 
-    try:
-        async with AsyncSessionLocal() as db:
-            repo = SessionRepository(db)
-            await repo.clear_pending_confirmation(sid)
-    except Exception:
-        log.exception(
-            "pending_cloud_confirmation_clear_failed",
-            trace_id=trace_id,
-            session_id=session_id,
-        )
+    await _clear_pending_state(
+        session_id,
+        trace_id=trace_id,
+        clear_repo_method=SessionRepository.clear_pending_confirmation,
+        log_prefix="pending_cloud_confirmation",
+    )
 
 
 async def _save_pending_document_continuation(
     session_id: str, pending: dict[str, Any], *, trace_id: str
 ) -> None:
-    """Durably persist a turn's PDF page-budget continuation offer(s) (ADR-0102 §4 / FRE-685).
-
-    Args:
-        session_id: Active session identifier (UUID string).
-        pending: JSON-serializable pending-continuation payload.
-        trace_id: Trace context identifier for telemetry correlation.
-    """
-    try:
-        sid = UUID(session_id)
-    except (ValueError, AttributeError):
-        log.warning(
-            "pending_document_continuation_save_bad_session",
-            trace_id=trace_id,
-            session_id=session_id,
-        )
-        return
-
-    from personal_agent.service.database import AsyncSessionLocal
+    """Durably persist a turn's PDF page-budget continuation offer(s) (ADR-0102 §4 / FRE-685)."""
     from personal_agent.service.repositories.session_repository import SessionRepository
 
-    try:
-        async with AsyncSessionLocal() as db:
-            repo = SessionRepository(db)
-            rows = await repo.save_pending_document_continuation(sid, pending)
-        if rows == 0:
-            log.warning(
-                "pending_document_continuation_save_no_row",
-                trace_id=trace_id,
-                session_id=session_id,
-            )
-    except Exception:
-        log.exception(
-            "pending_document_continuation_save_failed",
-            trace_id=trace_id,
-            session_id=session_id,
-        )
+    await _save_pending_state(
+        session_id,
+        pending,
+        trace_id=trace_id,
+        save_repo_method=SessionRepository.save_pending_document_continuation,
+        log_prefix="pending_document_continuation",
+    )
 
 
 async def _load_pending_document_continuation(
     session_id: str, *, trace_id: str
 ) -> dict[str, Any] | None:
-    """Load a durable pending PDF page-budget continuation, applying TTL (ADR-0102 §4 / FRE-685).
-
-    Args:
-        session_id: Active session identifier (UUID string).
-        trace_id: Trace context identifier for telemetry correlation.
-
-    Returns:
-        The pending payload when present and unexpired; None otherwise. An
-        expired record is cleared as a side effect before returning None.
-    """
-    try:
-        sid = UUID(session_id)
-    except (ValueError, AttributeError):
-        return None
-
-    from personal_agent.service.database import AsyncSessionLocal
+    """Load a durable pending PDF page-budget continuation, applying TTL (ADR-0102 §4 / FRE-685)."""
     from personal_agent.service.repositories.session_repository import SessionRepository
 
-    try:
-        async with AsyncSessionLocal() as db:
-            repo = SessionRepository(db)
-            pending = await repo.load_pending_document_continuation(sid)
-    except Exception:
-        log.exception(
-            "pending_document_continuation_load_failed",
-            trace_id=trace_id,
-            session_id=session_id,
-        )
-        return None
-
-    if pending is None:
-        return None
-    if _pending_is_expired(pending, time.time()):
-        await _clear_pending_document_continuation(session_id, trace_id=trace_id)
-        return None
-    return pending
+    return await _load_pending_state(
+        session_id,
+        trace_id=trace_id,
+        load_repo_method=SessionRepository.load_pending_document_continuation,
+        log_prefix="pending_document_continuation",
+        clear_fn=_clear_pending_document_continuation,
+    )
 
 
 async def _clear_pending_document_continuation(session_id: str, *, trace_id: str) -> None:
-    """Clear the durable pending document-continuation record for a session.
-
-    Args:
-        session_id: Active session identifier (UUID string).
-        trace_id: Trace context identifier for telemetry correlation.
-    """
-    try:
-        sid = UUID(session_id)
-    except (ValueError, AttributeError):
-        return
-
-    from personal_agent.service.database import AsyncSessionLocal
+    """Clear the durable pending document-continuation record for a session."""
     from personal_agent.service.repositories.session_repository import SessionRepository
 
-    try:
-        async with AsyncSessionLocal() as db:
-            repo = SessionRepository(db)
-            await repo.clear_pending_document_continuation(sid)
-    except Exception:
-        log.exception(
-            "pending_document_continuation_clear_failed",
-            trace_id=trace_id,
-            session_id=session_id,
-        )
+    await _clear_pending_state(
+        session_id,
+        trace_id=trace_id,
+        clear_repo_method=SessionRepository.clear_pending_document_continuation,
+        log_prefix="pending_document_continuation",
+    )
 
 
 async def _maybe_pause_for_constraint(
@@ -889,6 +872,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.error_classification import ClassifiedError
     from personal_agent.llm_client.models import ModelDefinition
     from personal_agent.mcp.gateway import MCPGatewayAdapter
+    from personal_agent.service.repositories.session_repository import SessionRepository
 
 _mcp_adapter: "MCPGatewayAdapter | None" = None
 
@@ -2497,9 +2481,13 @@ async def _maybe_reinject_pending_cloud_attachment(ctx: ExecutionContext) -> Non
 def _parse_requested_page_range(message: str) -> tuple[int, int] | None:
     """Parse a 1-indexed page range from a document-continuation follow-up (ADR-0102 §4 / FRE-685).
 
-    Recognizes "pages 24-40", "page 24 to 40", "24-40" (bare, so a terse reply
-    to the disclosed offer works), and a single "page 5". Returns the range in
-    ascending order regardless of how it was written.
+    Recognizes "pages 24-40", "page 24 to 40", and a single "page 5" — all
+    anchored to a "page(s)" keyword so incidental "N-M" text elsewhere in the
+    message (a time like "3-5pm", a phone extension) is never mistaken for a
+    page range. A bare "24-40" with no keyword is accepted only when it is the
+    *entire* message (a terse reply to the disclosed offer) — not merely a
+    substring, for the same reason. Returns the range in ascending order
+    regardless of how it was written.
 
     Args:
         message: The user's message text.
@@ -2510,14 +2498,20 @@ def _parse_requested_page_range(message: str) -> tuple[int, int] | None:
     """
     import re
 
-    range_match = re.search(
-        r"(?:pages?\s*)?(\d+)\s*(?:-|–|to|through)\s*(\d+)", message, re.IGNORECASE
-    )
-    if range_match:
-        start, end = int(range_match.group(1)), int(range_match.group(2))
+    def _ordered(start: int, end: int) -> tuple[int, int] | None:
         if start <= 0 or end <= 0:
             return None
         return (start, end) if start <= end else (end, start)
+
+    range_match = re.search(r"pages?\s*(\d+)\s*(?:-|–|to|through)\s*(\d+)", message, re.IGNORECASE)
+    if range_match:
+        return _ordered(int(range_match.group(1)), int(range_match.group(2)))
+
+    bare_match = re.fullmatch(
+        r"\s*(\d+)\s*(?:-|–|to|through)\s*(\d+)\s*[.!?]?\s*", message, re.IGNORECASE
+    )
+    if bare_match:
+        return _ordered(int(bare_match.group(1)), int(bare_match.group(2)))
 
     single_match = re.search(r"pages?\s*(\d+)\b", message, re.IGNORECASE)
     if single_match:
@@ -2544,9 +2538,25 @@ async def _maybe_reinject_pending_document_continuation(ctx: ExecutionContext) -
     entire interaction), an unrelated turn in between must not destroy a
     legitimate offer: a message that neither parses as a range nor reads as
     affirmative leaves the pending record untouched — only the TTL (not
-    turn-adjacency) bounds its staleness. Offers that overlap the request are
-    consumed; any other pending offers (e.g. a second over-budget document in
-    the same turn) are kept for a later follow-up.
+    turn-adjacency) bounds its staleness. Only the *requested* pages of an
+    offer are consumed; any pages of that same offer the request did not
+    cover, plus any other pending offers (e.g. a second over-budget document
+    in the same turn), are kept — as a trimmed remainder offer — for a later
+    follow-up (code-review finding: a partial-range request used to discard
+    the un-requested remainder entirely).
+
+    A cost-gate note: this function may append a newly re-resolved,
+    potentially-priced document to ``ctx.attachments`` for a turn that
+    already has ``ctx.attachment_cost_confirmed = True`` from an *unrelated*
+    prior pending confirmation re-injected moments earlier in the same
+    ``step_init`` call (FRE-749's cloud-attachment gate — both flows key off
+    the same generic "yes"/affirmative detector). That flag must never carry
+    over to content it was never actually about, so re-injecting here always
+    resets it to ``False``, forcing ``_maybe_confirm_attachment_cost`` to
+    re-evaluate this turn's full block set fresh (code-review finding: a
+    single ambiguous "yes" could otherwise resolve both pending states and
+    let a re-injected native-PDF page range skip the pre-flight cost gate
+    entirely).
 
     Args:
         ctx: Execution context (modified in-place if a continuation is re-injected).
@@ -2580,8 +2590,11 @@ async def _maybe_reinject_pending_document_continuation(ctx: ExecutionContext) -
     for offer in offers_data:
         dropped = list(offer.get("dropped_pages") or [])
         overlap = dropped if wanted is None else [p for p in dropped if p in wanted]
+        leftover = [] if wanted is None else [p for p in dropped if p not in wanted]
         if overlap:
             matched.append((offer, overlap))
+            if leftover:
+                remaining_offers.append({**offer, "dropped_pages": leftover})
         else:
             remaining_offers.append(offer)
 
@@ -2613,6 +2626,10 @@ async def _maybe_reinject_pending_document_continuation(ctx: ExecutionContext) -
         return
 
     ctx.attachments = (*ctx.attachments, *injected)
+    # This turn is re-resolving previously-dropped (possibly priced) document
+    # pages the user never explicitly confirmed a cost for — never trust a
+    # confirmation flag set moments earlier for unrelated content.
+    ctx.attachment_cost_confirmed = False
     log.info(
         "pending_document_continuation_reinjected",
         trace_id=ctx.trace_id,
@@ -2722,20 +2739,41 @@ async def step_init(
 
             if doc_resolved.continuation_offers:
                 # ADR-0102 §4 / FRE-685: this turn's page-budget-dropped
-                # offer(s), superseding (not merging with) any prior pending
-                # record — a fresh turn's own drops are the current truth.
+                # offer(s). MERGED into (not overwriting) whatever is already
+                # pending — e.g. a second over-budget document from an
+                # earlier turn that this turn never touched, or the trimmed
+                # remainder _maybe_reinject_pending_document_continuation just
+                # saved moments earlier in this same step_init call. A blind
+                # overwrite here would silently clobber that still-live state
+                # with only this turn's own offers (code-review finding).
+                # Same artifact_id in both: union the dropped pages — this
+                # turn's fresh assessment plus any not-yet-requested remainder.
                 from dataclasses import asdict as _asdict
 
-                from personal_agent.orchestrator.types import PendingDocumentContinuation
-
-                pending_continuation = PendingDocumentContinuation(
-                    offers=doc_resolved.continuation_offers,
-                    created_at=time.time(),
-                    ttl_seconds=600,  # matches the cloud-confirmation pending TTL
-                    original_trace_id=ctx.trace_id,
+                existing_pending = await _load_pending_document_continuation(
+                    ctx.session_id, trace_id=ctx.trace_id
                 )
+                merged_by_artifact: dict[str, dict[str, Any]] = {
+                    o["artifact_id"]: o for o in (existing_pending or {}).get("offers") or []
+                }
+                for offer in doc_resolved.continuation_offers:
+                    fresh = _asdict(offer)
+                    prior = merged_by_artifact.get(offer.artifact_id)
+                    if prior is not None:
+                        fresh["dropped_pages"] = sorted(
+                            set(prior.get("dropped_pages") or ()) | set(fresh["dropped_pages"])
+                        )
+                    merged_by_artifact[offer.artifact_id] = fresh
+
                 await _save_pending_document_continuation(
-                    ctx.session_id, _asdict(pending_continuation), trace_id=ctx.trace_id
+                    ctx.session_id,
+                    {
+                        "offers": list(merged_by_artifact.values()),
+                        "created_at": time.time(),
+                        "ttl_seconds": 600,  # matches the cloud-confirmation pending TTL
+                        "original_trace_id": ctx.trace_id,
+                    },
+                    trace_id=ctx.trace_id,
                 )
 
             # Only force the whole turn onto the document-capable model if a

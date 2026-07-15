@@ -339,3 +339,88 @@ class SessionRepository:
         )
         await self.db.execute(stmt, {"sid": str(session_id)})
         await self.db.commit()
+
+    # ------------------------------------------------------------------
+    # Pending document-page-budget continuation (ADR-0102 §4 / FRE-685)
+    #
+    # Same key-scoped JSONB pattern as pending_cloud_confirmation above, under
+    # its own ``pending_document_continuation`` key so the two pending states
+    # (a paused cloud-cost gate vs. an offered PDF page continuation) never
+    # collide or clobber each other in the same ``sessions.metadata`` column.
+    # ------------------------------------------------------------------
+
+    async def save_pending_document_continuation(
+        self, session_id: UUID, pending: dict[str, Any]
+    ) -> int:
+        """Durably store pending document-continuation offer(s) for a session.
+
+        Writes ``pending`` under the ``pending_document_continuation`` key of
+        the session row's ``metadata`` JSONB via ``jsonb_set`` (key-scoped;
+        other metadata keys, including ``pending_cloud_confirmation``, are
+        preserved).
+
+        Args:
+            session_id: UUID of the session to annotate.
+            pending: JSON-serializable pending-continuation payload.
+
+        Returns:
+            Number of rows updated (0 when the session row does not exist).
+        """
+        stmt = text(
+            "UPDATE sessions "
+            "SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), "
+            "'{pending_document_continuation}', CAST(:payload AS jsonb)), "
+            "last_active_at = now() "
+            "WHERE session_id = :sid"
+        )
+        result = cast(
+            CursorResult[Any],
+            await self.db.execute(stmt, {"payload": json.dumps(pending), "sid": str(session_id)}),
+        )
+        await self.db.commit()
+        return int(result.rowcount)
+
+    async def load_pending_document_continuation(self, session_id: UUID) -> dict[str, Any] | None:
+        """Load the raw pending document-continuation offer(s) for a session.
+
+        TTL is NOT applied here — the caller decides expiry so the repository
+        stays free of business policy.
+
+        Args:
+            session_id: UUID of the session to read.
+
+        Returns:
+            The stored payload dict, or None when absent / no such session.
+        """
+        stmt = text(
+            "SELECT metadata -> 'pending_document_continuation' AS pending "
+            "FROM sessions WHERE session_id = :sid"
+        )
+        row = (await self.db.execute(stmt, {"sid": str(session_id)})).first()
+        if row is None:
+            return None
+        pending = row[0]
+        if pending is None:
+            return None
+        if isinstance(pending, str):
+            pending = json.loads(pending)
+        return cast("dict[str, Any]", pending)
+
+    async def clear_pending_document_continuation(self, session_id: UUID) -> None:
+        """Remove the pending document-continuation key for a session.
+
+        Deletes only the ``pending_document_continuation`` key (other
+        metadata is preserved). A no-op when the session row or key is
+        absent.
+
+        Args:
+            session_id: UUID of the session to clear.
+        """
+        stmt = text(
+            "UPDATE sessions "
+            "SET metadata = metadata - 'pending_document_continuation', "
+            "last_active_at = now() "
+            "WHERE session_id = :sid"
+        )
+        await self.db.execute(stmt, {"sid": str(session_id)})
+        await self.db.commit()

@@ -43,7 +43,7 @@ from personal_agent.documents.pdf_utils import (
     select_pages_by_salience,
 )
 from personal_agent.exceptions import AttachmentUnsupportedError
-from personal_agent.orchestrator.types import AttachmentRef
+from personal_agent.orchestrator.types import AttachmentRef, DocumentContinuationOffer
 from personal_agent.storage import ArtifactStoreError, get_artifact_store
 
 log = structlog.get_logger(__name__)
@@ -81,12 +81,19 @@ class ResolvedDocuments:
             ``len(blocks)`` alone. ``0`` for text-only or rasterize-only
             turns — rasterized pages are already one ``image_url`` block
             each, so their count is ``len(blocks)``, not this field.
+        continuation_offers: One ``DocumentContinuationOffer`` per Tier-2
+            document that still has pages the per-turn page budget did not
+            include (ADR-0102 §4 / FRE-685) — empty when every Tier-2
+            document in the turn was fully delivered. Callers persist these
+            as durable pending state so a follow-up turn can serve the
+            dropped pages without a re-upload.
     """
 
     blocks: tuple[dict[str, Any], ...]
     disclosures: tuple[str, ...]
     used_tier2: bool
     native_pdf_page_count: int = 0
+    continuation_offers: tuple[DocumentContinuationOffer, ...] = ()
 
 
 def _select_pages(
@@ -107,6 +114,34 @@ def _select_pages(
         for s in scores
     ]
     return select_pages_by_salience(boosted, budget)
+
+
+def _format_page_ranges(one_indexed_pages: Sequence[int]) -> str:
+    """Compress a 1-indexed page-number list into human-readable range notation.
+
+    E.g. ``[1, 2, 3, 7, 9, 10]`` -> ``"1-3, 7, 9-10"`` (ADR-0102 §4: the
+    disclosure must name specific ranges, not just counts).
+
+    Args:
+        one_indexed_pages: 1-indexed page numbers, any order, may contain
+            duplicates.
+
+    Returns:
+        Comma-separated ranges in ascending order, or ``""`` if empty.
+    """
+    pages = sorted(set(one_indexed_pages))
+    if not pages:
+        return ""
+    ranges: list[str] = []
+    start = prev = pages[0]
+    for page in pages[1:]:
+        if page == prev + 1:
+            prev = page
+            continue
+        ranges.append(str(start) if start == prev else f"{start}-{prev}")
+        start = prev = page
+    ranges.append(str(start) if start == prev else f"{start}-{prev}")
+    return ", ".join(ranges)
 
 
 def _downscale_page_if_needed(image: Image.Image) -> tuple[Image.Image, bool]:
@@ -234,19 +269,29 @@ async def _resolve_one_document(
     trace_id: str | None,
     session_id: str | None,
     task_id: str | None,
-) -> tuple[list[dict[str, Any]], list[str], int, int, bool, int]:
+) -> tuple[list[dict[str, Any]], list[str], int, int, bool, int, DocumentContinuationOffer | None]:
     """Resolve one PDF attachment.
 
     Returns ``(blocks, disclosures, running_total_bytes, remaining_page_budget,
-    used_tier2, native_pdf_pages)`` — the running values threaded across
-    documents in the turn by the caller, mirroring the total-payload-byte
-    accounting (ADR-0102 §4: the page budget is per-turn, not per-document).
-    ``resolve_tier2_delivery`` is invoked at most once, only if this document
-    classifies Tier 2 — a Tier-1 (text) document never calls it (ADR-0102 §1:
-    Tier 1 works on any model). ``native_pdf_pages`` is the count of pages
-    actually delivered via a native-PDF ``document`` block for this document
-    (0 for text/rasterize/rejected — ADR-0102 §7b / FRE-686, threaded up so
-    the caller can price a page-multiplied cost estimate).
+    used_tier2, native_pdf_pages, continuation_offer)`` — the running values
+    threaded across documents in the turn by the caller, mirroring the
+    total-payload-byte accounting (ADR-0102 §4: the page budget is per-turn,
+    not per-document). ``resolve_tier2_delivery`` is invoked at most once,
+    only if this document classifies Tier 2 — a Tier-1 (text) document never
+    calls it (ADR-0102 §1: Tier 1 works on any model). ``native_pdf_pages``
+    is the count of pages actually delivered via a native-PDF ``document``
+    block for this document (0 for text/rasterize/rejected — ADR-0102 §7b /
+    FRE-686, threaded up so the caller can price a page-multiplied cost
+    estimate). ``continuation_offer`` is non-``None`` whenever this document
+    still has Tier-2 pages the per-turn budget did not include (ADR-0102 §4 /
+    FRE-685) — set from either the salience auto-selection's dropped pages or
+    a continuation request's own further-truncated remainder.
+
+    If ``attachment.requested_pages`` is set (a continuation request for an
+    already-stored document — ADR-0102 §4 / FRE-685), those exact 1-indexed
+    pages are selected (clipped to the document's actual page count and the
+    remaining budget) instead of running the salience selector — a
+    continuation already knows exactly which pages it wants.
     """
     try:
         raw = await store.get(
@@ -272,6 +317,7 @@ async def _resolve_one_document(
             remaining_page_budget,
             False,
             0,
+            None,
         )
 
     if remaining_page_budget <= 0:
@@ -285,20 +331,74 @@ async def _resolve_one_document(
             remaining_page_budget,
             False,
             0,
+            None,
         )
-
-    scores = await asyncio.to_thread(compute_page_scores, pdf)
-    outline = get_outline_page_indices(pdf)
-    selected_pages = _select_pages(scores, remaining_page_budget, outline)
-    new_remaining_page_budget = remaining_page_budget - len(selected_pages)
 
     budget_disclosures: list[str] = []
-    if len(scores) > len(selected_pages):
-        skipped = len(scores) - len(selected_pages)
-        budget_disclosures.append(
-            f"{skipped} of {len(scores)} page(s) of '{attachment.title}' were not "
-            "included (per-turn page budget)."
+    continuation_offer: DocumentContinuationOffer | None = None
+
+    if attachment.requested_pages:
+        total_page_count = len(pdf)
+        requested_0idx = sorted(
+            {p - 1 for p in attachment.requested_pages if 1 <= p <= total_page_count}
         )
+        if not requested_0idx:
+            return (
+                [],
+                [
+                    f"Document '{attachment.title}': the requested page range is out "
+                    "of bounds; no pages included."
+                ],
+                running_total_bytes,
+                remaining_page_budget,
+                False,
+                0,
+                None,
+            )
+        selected_pages = requested_0idx[:remaining_page_budget]
+        new_remaining_page_budget = remaining_page_budget - len(selected_pages)
+
+        delivered_1idx = [p + 1 for p in selected_pages]
+        budget_disclosures.append(
+            f"'{attachment.title}': delivered pp. {_format_page_ranges(delivered_1idx)} "
+            "(continuation)."
+        )
+        still_dropped_1idx = sorted({p + 1 for p in requested_0idx} - set(delivered_1idx))
+        if still_dropped_1idx:
+            budget_disclosures.append(
+                f"'{attachment.title}': pp. {_format_page_ranges(still_dropped_1idx)} "
+                "still not included (per-turn page budget) — ask again for that range."
+            )
+            continuation_offer = DocumentContinuationOffer(
+                artifact_id=attachment.artifact_id,
+                content_type=attachment.content_type,
+                title=attachment.title,
+                r2_key=attachment.r2_key,
+                processing_target=attachment.processing_target,
+                dropped_pages=tuple(still_dropped_1idx),
+            )
+    else:
+        scores = await asyncio.to_thread(compute_page_scores, pdf)
+        outline = get_outline_page_indices(pdf)
+        selected_pages = _select_pages(scores, remaining_page_budget, outline)
+        new_remaining_page_budget = remaining_page_budget - len(selected_pages)
+
+        if len(scores) > len(selected_pages):
+            included_1idx = [p + 1 for p in selected_pages]
+            dropped_1idx = sorted(set(range(1, len(scores) + 1)) - set(included_1idx))
+            budget_disclosures.append(
+                f"'{attachment.title}': included pp. {_format_page_ranges(included_1idx)}; "
+                f"pp. {_format_page_ranges(dropped_1idx)} not included (per-turn page "
+                "budget) — ask for that page range to see it next."
+            )
+            continuation_offer = DocumentContinuationOffer(
+                artifact_id=attachment.artifact_id,
+                content_type=attachment.content_type,
+                title=attachment.title,
+                r2_key=attachment.r2_key,
+                processing_target=attachment.processing_target,
+                dropped_pages=tuple(dropped_1idx),
+            )
 
     tier2_delivery = resolve_tier2_delivery()
 
@@ -320,6 +420,7 @@ async def _resolve_one_document(
                 new_remaining_page_budget,
                 True,
                 0,
+                continuation_offer,
             )
         encoded_len = len(native_block["source"]["data"])
         return (
@@ -329,6 +430,7 @@ async def _resolve_one_document(
             new_remaining_page_budget,
             True,
             len(selected_pages),
+            continuation_offer,
         )
 
     page_blocks, page_disclosures, new_total = await asyncio.to_thread(
@@ -345,6 +447,7 @@ async def _resolve_one_document(
         new_remaining_page_budget,
         True,
         0,
+        continuation_offer,
     )
 
 
@@ -403,7 +506,11 @@ async def resolve_documents(
             disclosure_count=0,
         )
         return ResolvedDocuments(
-            blocks=(), disclosures=(), used_tier2=False, native_pdf_page_count=0
+            blocks=(),
+            disclosures=(),
+            used_tier2=False,
+            native_pdf_page_count=0,
+            continuation_offers=(),
         )
 
     store = get_artifact_store()
@@ -426,6 +533,7 @@ async def resolve_documents(
     remaining_page_budget = min(settings.document_max_pages_per_turn, _PROVIDER_MAX_PAGES)
     used_tier2 = False
     native_pdf_page_count = 0
+    continuation_offers: list[DocumentContinuationOffer] = []
 
     for attachment in documents:
         try:
@@ -436,6 +544,7 @@ async def resolve_documents(
                 remaining_page_budget,
                 doc_used_tier2,
                 doc_native_pdf_pages,
+                doc_continuation_offer,
             ) = await _resolve_one_document(
                 attachment,
                 resolve_tier2_delivery=resolve_tier2_delivery,
@@ -448,6 +557,8 @@ async def resolve_documents(
             )
             used_tier2 = used_tier2 or doc_used_tier2
             native_pdf_page_count += doc_native_pdf_pages
+            if doc_continuation_offer is not None:
+                continuation_offers.append(doc_continuation_offer)
         except AttachmentUnsupportedError:
             log.warning(
                 "document_resolution_failed",
@@ -475,4 +586,5 @@ async def resolve_documents(
         disclosures=tuple(disclosures),
         used_tier2=used_tier2,
         native_pdf_page_count=native_pdf_page_count,
+        continuation_offers=tuple(continuation_offers),
     )

@@ -1324,6 +1324,7 @@ class TestStepInitDocumentResolution:
                         disclosures=(),
                         used_tier2=True,
                         native_pdf_page_count=3,
+                        continuation_offers=(),
                     )
                 ),
             ),
@@ -1364,6 +1365,7 @@ class TestStepInitDocumentResolution:
                     disclosures=(),
                     used_tier2=False,
                     native_pdf_page_count=0,
+                    continuation_offers=(),
                 )
             ),
         ) as mock_resolve:
@@ -1390,6 +1392,7 @@ class TestStepInitDocumentResolution:
                         disclosures=(),
                         used_tier2=False,
                         native_pdf_page_count=0,
+                        continuation_offers=(),
                     )
                 ),
             ),
@@ -1421,6 +1424,7 @@ class TestStepInitDocumentResolution:
                         disclosures=(),
                         used_tier2=True,
                         native_pdf_page_count=0,
+                        continuation_offers=(),
                     )
                 ),
             ),
@@ -1461,6 +1465,7 @@ class TestStepInitDocumentResolution:
                         disclosures=("Document 'report.pdf' was not included: too large.",),
                         used_tier2=True,
                         native_pdf_page_count=0,
+                        continuation_offers=(),
                     )
                 ),
             ),
@@ -1490,6 +1495,7 @@ class TestStepInitDocumentResolution:
                         disclosures=("2 of 5 page(s) of 'report.pdf' were not included.",),
                         used_tier2=True,
                         native_pdf_page_count=0,
+                        continuation_offers=(),
                     )
                 ),
             ),
@@ -1549,6 +1555,7 @@ class TestStepInitDocumentResolution:
                         disclosures=(),
                         used_tier2=True,
                         native_pdf_page_count=5,
+                        continuation_offers=(),
                     )
                 ),
             ),
@@ -1587,6 +1594,7 @@ class TestStepInitDocumentResolution:
                         disclosures=(),
                         used_tier2=True,
                         native_pdf_page_count=0,
+                        continuation_offers=(),
                     )
                 ),
             ),

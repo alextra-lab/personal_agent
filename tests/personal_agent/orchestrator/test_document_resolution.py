@@ -530,6 +530,208 @@ class TestOutlineBoost:
 
 
 # ---------------------------------------------------------------------------
+# AC-4 (T7 / FRE-685): disclose included/dropped page ranges + working continuation
+# ---------------------------------------------------------------------------
+
+
+class TestFormatPageRanges:
+    def test_empty_input(self) -> None:
+        from personal_agent.orchestrator.document_resolution import _format_page_ranges
+
+        assert _format_page_ranges([]) == ""
+
+    def test_single_page(self) -> None:
+        from personal_agent.orchestrator.document_resolution import _format_page_ranges
+
+        assert _format_page_ranges([5]) == "5"
+
+    def test_contiguous_range_compresses(self) -> None:
+        from personal_agent.orchestrator.document_resolution import _format_page_ranges
+
+        assert _format_page_ranges([1, 2, 3, 4, 5]) == "1-5"
+
+    def test_mixed_singles_and_ranges(self) -> None:
+        from personal_agent.orchestrator.document_resolution import _format_page_ranges
+
+        assert _format_page_ranges([1, 2, 3, 7, 9, 10]) == "1-3, 7, 9-10"
+
+    def test_unsorted_input_is_sorted(self) -> None:
+        from personal_agent.orchestrator.document_resolution import _format_page_ranges
+
+        assert _format_page_ranges([3, 1, 2]) == "1-3"
+
+    def test_duplicate_pages_deduplicated(self) -> None:
+        from personal_agent.orchestrator.document_resolution import _format_page_ranges
+
+        assert _format_page_ranges([1, 1, 2]) == "1-2"
+
+
+class TestIncludedDroppedRangeDisclosure:
+    @pytest.mark.asyncio
+    async def test_auto_select_discloses_included_and_dropped_ranges(self) -> None:
+        pdf_bytes = _make_pdf([None] * 5)
+        attachment = _make_attachment(title="scan.pdf")
+        store = _mock_store({attachment.r2_key: pdf_bytes})
+
+        with (
+            patch(_STORE_PATCH_TARGET, return_value=store),
+            patch(
+                "personal_agent.orchestrator.document_resolution.settings.document_max_pages_per_turn",
+                2,
+            ),
+        ):
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
+
+        combined = " ".join(result.disclosures)
+        assert "scan.pdf" in combined
+        # Salience selection over 5 identical blank pages keeps the first two in
+        # document order; the disclosure must name specific ranges, not just counts.
+        assert "1-2" in combined
+        assert "3-5" in combined
+
+    @pytest.mark.asyncio
+    async def test_no_continuation_offer_when_nothing_dropped(self) -> None:
+        pdf_bytes = _make_pdf([None, None])
+        attachment = _make_attachment()
+        store = _mock_store({attachment.r2_key: pdf_bytes})
+
+        with patch(_STORE_PATCH_TARGET, return_value=store):
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
+
+        assert result.continuation_offers == ()
+
+    @pytest.mark.asyncio
+    async def test_continuation_offer_carries_dropped_pages_and_identity(self) -> None:
+        pdf_bytes = _make_pdf([None] * 5)
+        attachment = _make_attachment(
+            artifact_id="doc-xyz",
+            title="scan.pdf",
+            r2_key="upload/u/g/scan.pdf",
+            processing_target="cloud",
+        )
+        store = _mock_store({attachment.r2_key: pdf_bytes})
+
+        with (
+            patch(_STORE_PATCH_TARGET, return_value=store),
+            patch(
+                "personal_agent.orchestrator.document_resolution.settings.document_max_pages_per_turn",
+                2,
+            ),
+        ):
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
+
+        assert len(result.continuation_offers) == 1
+        offer = result.continuation_offers[0]
+        assert offer.artifact_id == "doc-xyz"
+        assert offer.title == "scan.pdf"
+        assert offer.r2_key == "upload/u/g/scan.pdf"
+        assert offer.processing_target == "cloud"
+        assert offer.dropped_pages == (3, 4, 5)
+
+
+class TestRequestedPagesContinuation:
+    @pytest.mark.asyncio
+    async def test_requested_pages_selects_exactly_those_pages(self) -> None:
+        pdf_bytes = _make_pdf([None] * 5)
+        attachment = _make_attachment(requested_pages=(3, 4, 5))
+        store = _mock_store({attachment.r2_key: pdf_bytes})
+
+        with patch(_STORE_PATCH_TARGET, return_value=store):
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "native_pdf"
+            )
+
+        assert len(result.blocks) == 1
+        sub_doc = pdfium.PdfDocument(
+            io.BytesIO(base64.b64decode(result.blocks[0]["source"]["data"]))
+        )
+        assert len(sub_doc) == 3
+        assert result.native_pdf_page_count == 3
+        assert result.continuation_offers == ()
+
+    @pytest.mark.asyncio
+    async def test_requested_pages_clipped_to_remaining_budget_reoffers_rest(self) -> None:
+        pdf_bytes = _make_pdf([None] * 5)
+        attachment = _make_attachment(title="scan.pdf", requested_pages=(2, 3, 4, 5))
+        store = _mock_store({attachment.r2_key: pdf_bytes})
+
+        with (
+            patch(_STORE_PATCH_TARGET, return_value=store),
+            patch(
+                "personal_agent.orchestrator.document_resolution.settings.document_max_pages_per_turn",
+                2,
+            ),
+        ):
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
+
+        assert len(result.blocks) == 2
+        assert len(result.continuation_offers) == 1
+        assert result.continuation_offers[0].dropped_pages == (4, 5)
+
+    @pytest.mark.asyncio
+    async def test_requested_pages_out_of_bounds_discloses_no_crash(self) -> None:
+        pdf_bytes = _make_pdf([None] * 3)
+        attachment = _make_attachment(title="scan.pdf", requested_pages=(99, 100))
+        store = _mock_store({attachment.r2_key: pdf_bytes})
+
+        with patch(_STORE_PATCH_TARGET, return_value=store):
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
+
+        assert result.blocks == ()
+        assert any("scan.pdf" in d for d in result.disclosures)
+        assert result.continuation_offers == ()
+
+    @pytest.mark.asyncio
+    async def test_requested_pages_never_invokes_selector(self) -> None:
+        """A continuation request must not re-run the salience selector — it
+
+        already knows exactly which pages it wants.
+        """
+        pdf_bytes = _make_pdf([None] * 3)
+        attachment = _make_attachment(requested_pages=(1,))
+        store = _mock_store({attachment.r2_key: pdf_bytes})
+
+        with (
+            patch(_STORE_PATCH_TARGET, return_value=store),
+            patch(
+                "personal_agent.orchestrator.document_resolution.compute_page_scores"
+            ) as mock_scores,
+        ):
+            await resolve_documents([attachment], resolve_tier2_delivery=lambda: "rasterize")
+
+        mock_scores.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_requested_pages_ignored_for_tier1_text_document(self) -> None:
+        """Tier 1 always sends full text regardless of requested_pages — a
+
+        continuation request only makes sense for a Tier-2 (budget-bound)
+        document in the first place.
+        """
+        sentinel = "Sentinel Marker Alpha " * 20
+        pdf_bytes = _make_pdf([sentinel])
+        attachment = _make_attachment(requested_pages=(1,))
+        store = _mock_store({attachment.r2_key: pdf_bytes})
+
+        with patch(_STORE_PATCH_TARGET, return_value=store):
+            result = await resolve_documents(
+                [attachment], resolve_tier2_delivery=lambda: "rasterize"
+            )
+
+        assert result.blocks[0]["type"] == "text"
+
+
+# ---------------------------------------------------------------------------
 # AC-7: guardrail dimensions
 # ---------------------------------------------------------------------------
 
@@ -793,6 +995,7 @@ class TestAC12CleanTaskText:
             "disclosures",
             "used_tier2",
             "native_pdf_page_count",
+            "continuation_offers",
         }
 
 

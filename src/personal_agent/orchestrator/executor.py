@@ -459,6 +459,115 @@ async def _clear_pending_cloud_confirmation(session_id: str, *, trace_id: str) -
         )
 
 
+async def _save_pending_document_continuation(
+    session_id: str, pending: dict[str, Any], *, trace_id: str
+) -> None:
+    """Durably persist a turn's PDF page-budget continuation offer(s) (ADR-0102 §4 / FRE-685).
+
+    Args:
+        session_id: Active session identifier (UUID string).
+        pending: JSON-serializable pending-continuation payload.
+        trace_id: Trace context identifier for telemetry correlation.
+    """
+    try:
+        sid = UUID(session_id)
+    except (ValueError, AttributeError):
+        log.warning(
+            "pending_document_continuation_save_bad_session",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return
+
+    from personal_agent.service.database import AsyncSessionLocal
+    from personal_agent.service.repositories.session_repository import SessionRepository
+
+    try:
+        async with AsyncSessionLocal() as db:
+            repo = SessionRepository(db)
+            rows = await repo.save_pending_document_continuation(sid, pending)
+        if rows == 0:
+            log.warning(
+                "pending_document_continuation_save_no_row",
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+    except Exception:
+        log.exception(
+            "pending_document_continuation_save_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
+
+async def _load_pending_document_continuation(
+    session_id: str, *, trace_id: str
+) -> dict[str, Any] | None:
+    """Load a durable pending PDF page-budget continuation, applying TTL (ADR-0102 §4 / FRE-685).
+
+    Args:
+        session_id: Active session identifier (UUID string).
+        trace_id: Trace context identifier for telemetry correlation.
+
+    Returns:
+        The pending payload when present and unexpired; None otherwise. An
+        expired record is cleared as a side effect before returning None.
+    """
+    try:
+        sid = UUID(session_id)
+    except (ValueError, AttributeError):
+        return None
+
+    from personal_agent.service.database import AsyncSessionLocal
+    from personal_agent.service.repositories.session_repository import SessionRepository
+
+    try:
+        async with AsyncSessionLocal() as db:
+            repo = SessionRepository(db)
+            pending = await repo.load_pending_document_continuation(sid)
+    except Exception:
+        log.exception(
+            "pending_document_continuation_load_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return None
+
+    if pending is None:
+        return None
+    if _pending_is_expired(pending, time.time()):
+        await _clear_pending_document_continuation(session_id, trace_id=trace_id)
+        return None
+    return pending
+
+
+async def _clear_pending_document_continuation(session_id: str, *, trace_id: str) -> None:
+    """Clear the durable pending document-continuation record for a session.
+
+    Args:
+        session_id: Active session identifier (UUID string).
+        trace_id: Trace context identifier for telemetry correlation.
+    """
+    try:
+        sid = UUID(session_id)
+    except (ValueError, AttributeError):
+        return
+
+    from personal_agent.service.database import AsyncSessionLocal
+    from personal_agent.service.repositories.session_repository import SessionRepository
+
+    try:
+        async with AsyncSessionLocal() as db:
+            repo = SessionRepository(db)
+            await repo.clear_pending_document_continuation(sid)
+    except Exception:
+        log.exception(
+            "pending_document_continuation_clear_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
+
 async def _maybe_pause_for_constraint(
     *,
     session_id: str,
@@ -2385,6 +2494,142 @@ async def _maybe_reinject_pending_cloud_attachment(ctx: ExecutionContext) -> Non
     await _clear_pending_cloud_confirmation(ctx.session_id, trace_id=ctx.trace_id)
 
 
+def _parse_requested_page_range(message: str) -> tuple[int, int] | None:
+    """Parse a 1-indexed page range from a document-continuation follow-up (ADR-0102 §4 / FRE-685).
+
+    Recognizes "pages 24-40", "page 24 to 40", "24-40" (bare, so a terse reply
+    to the disclosed offer works), and a single "page 5". Returns the range in
+    ascending order regardless of how it was written.
+
+    Args:
+        message: The user's message text.
+
+    Returns:
+        ``(start, end)`` inclusive 1-indexed page numbers, or None if no range
+        or single page is named.
+    """
+    import re
+
+    range_match = re.search(
+        r"(?:pages?\s*)?(\d+)\s*(?:-|–|to|through)\s*(\d+)", message, re.IGNORECASE
+    )
+    if range_match:
+        start, end = int(range_match.group(1)), int(range_match.group(2))
+        if start <= 0 or end <= 0:
+            return None
+        return (start, end) if start <= end else (end, start)
+
+    single_match = re.search(r"pages?\s*(\d+)\b", message, re.IGNORECASE)
+    if single_match:
+        page = int(single_match.group(1))
+        return (page, page) if page > 0 else None
+
+    return None
+
+
+async def _maybe_reinject_pending_document_continuation(ctx: ExecutionContext) -> None:
+    """Re-inject a pending PDF page-budget continuation offer on a matching follow-up.
+
+    ADR-0102 §4 / FRE-685: when ``resolve_documents`` drops Tier-2 pages under
+    the per-turn page budget, the dropped-page offer(s) are saved to durable
+    session storage. On a later turn, if the user's message names a page
+    range (``_parse_requested_page_range``) or is a broad affirmative
+    (``_is_affirmative_confirmation`` — "yes", "continue", etc., meaning "all
+    of it"), the matching artifact(s) are re-resolved with
+    ``AttachmentRef.requested_pages`` set to exactly the requested/dropped
+    intersection — no re-upload needed, since the bytes are already in R2
+    under ``r2_key``.
+
+    Unlike the cloud-cost confirmation gate (where a narrow yes/no *is* the
+    entire interaction), an unrelated turn in between must not destroy a
+    legitimate offer: a message that neither parses as a range nor reads as
+    affirmative leaves the pending record untouched — only the TTL (not
+    turn-adjacency) bounds its staleness. Offers that overlap the request are
+    consumed; any other pending offers (e.g. a second over-budget document in
+    the same turn) are kept for a later follow-up.
+
+    Args:
+        ctx: Execution context (modified in-place if a continuation is re-injected).
+    """
+    pending_dict = await _load_pending_document_continuation(ctx.session_id, trace_id=ctx.trace_id)
+    if not pending_dict:
+        return
+
+    offers_data = pending_dict.get("offers") or []
+    if not offers_data:
+        await _clear_pending_document_continuation(ctx.session_id, trace_id=ctx.trace_id)
+        return
+
+    requested_range = _parse_requested_page_range(ctx.user_message)
+    if requested_range is not None:
+        start, end = requested_range
+        wanted = set(range(start, end + 1))
+    elif _is_affirmative_confirmation(ctx.user_message):
+        wanted = None  # sentinel: take every dropped page from every offer
+    else:
+        log.info(
+            "pending_document_continuation_not_matched",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            message_preview=ctx.user_message[:50],
+        )
+        return
+
+    matched: list[tuple[dict[str, Any], list[int]]] = []
+    remaining_offers: list[dict[str, Any]] = []
+    for offer in offers_data:
+        dropped = list(offer.get("dropped_pages") or [])
+        overlap = dropped if wanted is None else [p for p in dropped if p in wanted]
+        if overlap:
+            matched.append((offer, overlap))
+        else:
+            remaining_offers.append(offer)
+
+    if not matched:
+        return
+
+    from personal_agent.orchestrator.types import AttachmentRef
+
+    try:
+        injected = tuple(
+            AttachmentRef(
+                artifact_id=offer["artifact_id"],
+                content_type=offer["content_type"],
+                title=offer["title"],
+                r2_key=offer["r2_key"],
+                processing_target=offer.get("processing_target"),
+                requested_pages=tuple(pages),
+            )
+            for offer, pages in matched
+        )
+    except (KeyError, TypeError) as e:
+        log.warning(
+            "pending_document_continuation_reinject_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            error=str(e),
+        )
+        await _clear_pending_document_continuation(ctx.session_id, trace_id=ctx.trace_id)
+        return
+
+    ctx.attachments = (*ctx.attachments, *injected)
+    log.info(
+        "pending_document_continuation_reinjected",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        artifact_ids=[a.artifact_id for a in injected],
+    )
+
+    if remaining_offers:
+        await _save_pending_document_continuation(
+            ctx.session_id,
+            {**pending_dict, "offers": remaining_offers},
+            trace_id=ctx.trace_id,
+        )
+    else:
+        await _clear_pending_document_continuation(ctx.session_id, trace_id=ctx.trace_id)
+
+
 async def step_init(
     ctx: ExecutionContext, session_manager: SessionManager, trace_ctx: TraceContext
 ) -> TaskState:
@@ -2423,6 +2668,13 @@ async def step_init(
     # FRE-749: Check for pending cloud-attachment confirmation from a previous paused turn
     # and re-inject attachments if the user's message is affirmative.
     await _maybe_reinject_pending_cloud_attachment(ctx)
+
+    # ADR-0102 §4 / FRE-685: check for a pending PDF page-budget continuation
+    # offer from a previous over-budget document turn and re-inject the
+    # requested pages if the user's message names a range (or affirms "all
+    # of it") — appends onto whatever cloud-confirmation re-injection above
+    # already placed on ctx.attachments.
+    await _maybe_reinject_pending_document_continuation(ctx)
 
     # Add new user message — resolve current-turn raster attachments to image
     # blocks first (ADR-0101 §3/§4/§6, FRE-666), then PDF document attachments
@@ -2467,6 +2719,25 @@ async def step_init(
             document_blocks = doc_resolved.blocks
             document_disclosures = doc_resolved.disclosures
             native_pdf_page_count = doc_resolved.native_pdf_page_count
+
+            if doc_resolved.continuation_offers:
+                # ADR-0102 §4 / FRE-685: this turn's page-budget-dropped
+                # offer(s), superseding (not merging with) any prior pending
+                # record — a fresh turn's own drops are the current truth.
+                from dataclasses import asdict as _asdict
+
+                from personal_agent.orchestrator.types import PendingDocumentContinuation
+
+                pending_continuation = PendingDocumentContinuation(
+                    offers=doc_resolved.continuation_offers,
+                    created_at=time.time(),
+                    ttl_seconds=600,  # matches the cloud-confirmation pending TTL
+                    original_trace_id=ctx.trace_id,
+                )
+                await _save_pending_document_continuation(
+                    ctx.session_id, _asdict(pending_continuation), trace_id=ctx.trace_id
+                )
+
             # Only force the whole turn onto the document-capable model if a
             # Tier-2 block actually survived into the message — a rejected
             # oversized native-PDF (used_tier2=True, blocks=()) must not drag

@@ -297,7 +297,13 @@ async def test_ac3_assembled_request_messages_preserve_image_block(
 async def test_vision_routing_decision_log_fires_for_raster_attachment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """FRE-693 (ADR-0074 §8c): step_llm_call logs the routing decision with identity."""
+    """FRE-693 (ADR-0074 §8c): step_llm_call logs the routing decision with identity.
+
+    No profile is bound here — the FRE-886 default-cloud fold-in requires a bound
+    profile (there is no "profile's escalation model" to route to otherwise), so
+    this exercises the pre-FRE-886 profile-independent resolution path regardless
+    of attachment_default_processing_target.
+    """
     import structlog
 
     from personal_agent.config import settings

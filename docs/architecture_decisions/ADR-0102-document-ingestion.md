@@ -586,6 +586,16 @@ gate:
 
 ## Status Updates
 
+### 2026-07-15 - §7a Auto default changed to cloud (FRE-886)
+**Changed By:** lextra (owner)
+**Reason:** During the live AC-SEAM run, local Qwen produced a materially worse read of a scanned PDF
+page than cloud Sonnet. §7a's documented Auto default (follow the bound ExecutionProfile) is
+superseded: Auto (no per-attachment override) now routes straight to the profile's cloud escalation
+model by default, config-driven via `attachment_default_processing_target`
+(`config/settings.py`, default `"cloud"`, shared with ADR-0101 §8a) so it can be flipped back to the
+original profile-following behavior (`"local"`). The explicit `"local"`/`"cloud"` per-attachment
+overrides are unchanged.
+
 ### 2026-06-29 - Accepted
 **Changed By:** lextra (owner; recorded by master at the merge gate)
 **Reason:** Owner accepted after the master gate merged PR #280. Implementation chain FRE-681→689

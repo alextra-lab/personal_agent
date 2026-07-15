@@ -155,6 +155,9 @@ describe('ChatInput — per-attachment processing-target override (FRE-692/FRE-6
     await attachFile(container, file, 'a1');
 
     const toggle = screen.getByLabelText(/Set processing target for photo\.png, currently Auto/);
+    // FRE-886: the Auto chip communicates that Auto now routes to the cloud path.
+    expect(toggle).toHaveTextContent(/Auto.*Cloud/);
+
     fireEvent.click(toggle);
     expect(screen.getByLabelText(/currently Cloud/)).toBeDefined();
 

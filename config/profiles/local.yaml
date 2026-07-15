@@ -6,8 +6,14 @@ provider_type: local
 cost_limit_per_session: null  # No cost limit for local
 delegation:
   allow_cloud_escalation: false
-  # escalation_model is used only by the explicit per-attachment "cloud"
-  # processing_target override (ADR-0101 §8a) — allow_cloud_escalation stays
-  # false, so no implicit/default escalation happens.
+  # escalation_model is used by: (1) the explicit per-attachment "cloud"
+  # processing_target override (ADR-0101 §8a), and (2) as of FRE-886, the
+  # Auto/no-override default too — attachment_default_processing_target
+  # defaults to "cloud" (settings.py), which deliberately supersedes
+  # allow_cloud_escalation for attachments specifically (the local Qwen vision
+  # path read scanned pages worse than cloud Sonnet). allow_cloud_escalation
+  # only still matters if attachment_default_processing_target is flipped
+  # back to "local" (then it gates escalation for an incapable local model,
+  # same as before FRE-886).
   escalation_provider: anthropic
   escalation_model: claude_sonnet

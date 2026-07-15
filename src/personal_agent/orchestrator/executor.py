@@ -869,6 +869,7 @@ _tool_registry: ToolRegistry | None = None
 _tool_execution_layer: ToolExecutionLayer | None = None
 
 if TYPE_CHECKING:  # pragma: no cover
+    from personal_agent.config.profile import ExecutionProfile
     from personal_agent.error_classification import ClassifiedError
     from personal_agent.llm_client.models import ModelDefinition
     from personal_agent.mcp.gateway import MCPGatewayAdapter
@@ -1612,6 +1613,48 @@ def _determine_initial_model_role(ctx: ExecutionContext) -> ModelRole:
     return ModelRole.PRIMARY
 
 
+def _apply_default_processing_target(
+    effective_target: str | None, profile: "ExecutionProfile | None"
+) -> str | None:
+    """Fold Auto (no per-attachment override) into the cloud escalation path.
+
+    Shared by ``_resolve_vision_routing_key`` and ``_resolve_document_routing_key``
+    so the default-target rule can't drift between images and documents (FRE-886
+    code-review finding). When ``effective_target`` is already set (an explicit
+    per-attachment override) this is a no-op.
+
+    Requires a bound ``profile`` — with no active ``ExecutionProfile``
+    (``get_current_profile()`` returned ``None``, e.g. ``load_profile`` failed in
+    ``service/app.py``), there is no "profile's escalation model" to route to, so
+    this falls through unchanged to the profile-independent legacy resolution path
+    rather than failing a turn that previously succeeded (FRE-886 code-review
+    finding — a regression versus the pre-FRE-886 fallback).
+
+    When a profile IS bound and ``attachment_default_processing_target ==
+    "cloud"`` (the default), this deliberately supersedes
+    ``profile.delegation.allow_cloud_escalation`` for attachments specifically
+    (owner-authorized: local Qwen vision read scanned pages materially worse than
+    cloud Sonnet on a live test) — a local profile's ``escalation_model`` is now
+    reached by default, not only via an explicit per-attachment override.
+
+    Args:
+        effective_target: The per-attachment override already resolved from
+            ``processing_target`` values ("local" wins on conflict), or ``None``.
+        profile: The active ``ExecutionProfile``, or ``None`` if unbound.
+
+    Returns:
+        ``"cloud"`` when Auto should default to the cloud escalation path;
+        otherwise ``effective_target`` unchanged.
+    """
+    if (
+        effective_target is None
+        and profile is not None
+        and settings.attachment_default_processing_target == "cloud"
+    ):
+        return "cloud"
+    return effective_target
+
+
 def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
     """Resolve the model config key for this role, enforcing vision capability.
 
@@ -1644,6 +1687,7 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
 
     models = load_model_config().models
     profile = get_current_profile()
+    effective_target = _apply_default_processing_target(effective_target, profile)
 
     if effective_target == "local":
         # Bypass profile resolution deliberately: "local" must mean role_name's
@@ -1678,7 +1722,9 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
             "cloud model is configured for the active profile."
         )
 
-    # No override — follow the profile default (§5).
+    # No override, and _apply_default_processing_target left it unfolded (FRE-886)
+    # — either attachment_default_processing_target == "local", or no profile is
+    # bound — follow the profile default (§5).
     key = resolve_model_key(role_name)
     model_def = models.get(key)
     if model_def is not None and model_def.supports_vision:
@@ -1750,6 +1796,7 @@ def _resolve_document_routing_key(
 
     models = load_model_config().models
     profile = get_current_profile()
+    effective_target = _apply_default_processing_target(effective_target, profile)
 
     if effective_target == "local":
         model_def = models.get(role_name)
@@ -1780,7 +1827,9 @@ def _resolve_document_routing_key(
             "cloud model is configured for the active profile."
         )
 
-    # No override — follow the profile default.
+    # No override, and _apply_default_processing_target left it unfolded (FRE-886)
+    # — either attachment_default_processing_target == "local", or no profile is
+    # bound — follow the profile default.
     key = resolve_model_key(role_name)
     model_def = models.get(key)
     mode = _capable(model_def)

@@ -231,10 +231,81 @@ class TestVisionRouting:
         ctx = self._make_ctx((self._make_attachment(content_type="application/pdf"),))
         assert _resolve_vision_routing_key(ctx, "primary") == "primary"
 
-    def test_ac4_capable_primary_no_override_proceeds(self) -> None:
-        """Real deployed config: primary already supports vision — no escalation needed."""
+    def test_ac4_capable_primary_no_override_proceeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC5 flip-back: with attachment_default_processing_target='local', Auto restores
+        the pre-FRE-886 behavior — primary already supports vision, no escalation needed.
+        """
+        monkeypatch.setattr(settings, "attachment_default_processing_target", "local")
         ctx = self._make_ctx((self._make_attachment(),))
         assert _resolve_vision_routing_key(ctx, "primary") == "primary"
+
+    def test_default_cloud_no_override_routes_to_escalation_model_image(self) -> None:
+        """FRE-886 AC1: default config ('cloud') routes Auto straight to the escalation
+        model even though the local primary is perfectly vision-capable.
+        """
+        ctx = self._make_ctx((self._make_attachment(),))
+        models = {
+            "primary": self._model_def(supports_vision=True, provider_type="local"),
+            "claude_sonnet": self._model_def(supports_vision=True, provider_type="cloud"),
+        }
+        profile = ExecutionProfile(
+            name="local",
+            primary_model="primary",
+            sub_agent_model="sub_agent",
+            provider_type="local",
+            delegation=DelegationConfig(
+                allow_cloud_escalation=False,
+                escalation_provider="anthropic",
+                escalation_model="claude_sonnet",
+            ),
+        )
+        token = set_current_profile(profile)
+        try:
+            with self._patch_models(models):
+                assert _resolve_vision_routing_key(ctx, "primary") == "claude_sonnet"
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)
+
+    def test_default_cloud_no_override_fails_closed_without_escalation_model(self) -> None:
+        """FRE-886: default config ('cloud') with no escalation_model configured fails
+        closed rather than silently falling back to a capable local model.
+        """
+        ctx = self._make_ctx((self._make_attachment(),))
+        models = {"primary": self._model_def(supports_vision=True, provider_type="local")}
+        profile = ExecutionProfile(
+            name="local",
+            primary_model="primary",
+            sub_agent_model="sub_agent",
+            provider_type="local",
+            delegation=DelegationConfig(allow_cloud_escalation=False),
+        )
+        token = set_current_profile(profile)
+        try:
+            with self._patch_models(models):
+                with pytest.raises(AttachmentUnsupportedError):
+                    _resolve_vision_routing_key(ctx, "primary")
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)
+
+    def test_default_cloud_no_profile_bound_falls_back_to_profile_independent_resolution(
+        self,
+    ) -> None:
+        """FRE-886 code-review fix: with no ExecutionProfile bound at all (e.g. a
+        failed load_profile in service/app.py), Auto must NOT hard-fail — there is
+        no "profile's escalation model" to route to, so it falls through to the
+        pre-FRE-886 profile-independent resolution instead of regressing a turn
+        that previously succeeded.
+        """
+        ctx = self._make_ctx((self._make_attachment(),))
+        models = {"primary": self._model_def(supports_vision=True, provider_type="local")}
+        with self._patch_models(models):
+            assert _resolve_vision_routing_key(ctx, "primary") == "primary"
 
     def test_ac4_incapable_primary_escalation_permitted_escalates(self) -> None:
         """Non-vision primary + escalation-permitted profile → escalates to the capable model."""
@@ -491,7 +562,11 @@ class TestDocumentRouting:
 
     # --- AC-6: fail-closed by capability, escalation target included ---
 
-    def test_ac6_native_pdf_capable_primary_no_override_proceeds(self) -> None:
+    def test_ac6_native_pdf_capable_primary_no_override_proceeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC5 flip-back: with attachment_default_processing_target='local'."""
+        monkeypatch.setattr(settings, "attachment_default_processing_target", "local")
         ctx = self._make_ctx((self._make_attachment(),))
         models = {"primary": self._model_def(supports_pdf_document=True, provider_type="local")}
         profile = ExecutionProfile(
@@ -511,7 +586,11 @@ class TestDocumentRouting:
 
             _current_profile.reset(token)
 
-    def test_ac6_vision_only_primary_falls_back_to_rasterize(self) -> None:
+    def test_ac6_vision_only_primary_falls_back_to_rasterize(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC5 flip-back: with attachment_default_processing_target='local'."""
+        monkeypatch.setattr(settings, "attachment_default_processing_target", "local")
         ctx = self._make_ctx((self._make_attachment(),))
         models = {"primary": self._model_def(supports_vision=True, provider_type="local")}
         profile = ExecutionProfile(
@@ -526,6 +605,90 @@ class TestDocumentRouting:
                 key, mode = _resolve_document_routing_key(ctx, "primary")
             assert key == "primary"
             assert mode == "rasterize"
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)
+
+    def test_default_cloud_no_override_routes_to_escalation_model_native_pdf(self) -> None:
+        """FRE-886 AC2: default config ('cloud') routes an Auto PDF straight to the
+        escalation model via the native PDF document block, even though the local
+        primary is perfectly capable.
+        """
+        ctx = self._make_ctx((self._make_attachment(),))
+        models = {
+            "primary": self._model_def(supports_pdf_document=True, provider_type="local"),
+            "claude_sonnet": self._model_def(supports_pdf_document=True, provider_type="cloud"),
+        }
+        profile = ExecutionProfile(
+            name="local",
+            primary_model="primary",
+            sub_agent_model="sub_agent",
+            provider_type="local",
+            delegation=DelegationConfig(
+                allow_cloud_escalation=False,
+                escalation_provider="anthropic",
+                escalation_model="claude_sonnet",
+            ),
+        )
+        token = set_current_profile(profile)
+        try:
+            with self._patch_models(models):
+                key, mode = _resolve_document_routing_key(ctx, "primary")
+            assert key == "claude_sonnet"
+            assert mode == "native_pdf"
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)
+
+    def test_default_cloud_no_profile_bound_falls_back_to_profile_independent_resolution(
+        self,
+    ) -> None:
+        """FRE-886 code-review fix: with no ExecutionProfile bound, an Auto PDF must
+        NOT hard-fail — falls through to the pre-FRE-886 profile-independent
+        resolution instead of regressing a turn that previously succeeded.
+        """
+        ctx = self._make_ctx((self._make_attachment(),))
+        models = {"primary": self._model_def(supports_pdf_document=True, provider_type="local")}
+        with self._patch_models(models):
+            key, mode = _resolve_document_routing_key(ctx, "primary")
+        assert key == "primary"
+        assert mode == "native_pdf"
+
+    def test_default_cloud_no_override_mixed_image_and_document_routes_to_escalation_model(
+        self,
+    ) -> None:
+        """FRE-886: default config ('cloud') routes an Auto turn carrying both a PDF and
+        an image to the escalation model, honoring the combined vision+native-PDF
+        capability predicate.
+        """
+        ctx = self._make_ctx((self._make_attachment(), self._make_image_attachment()))
+        models = {
+            "primary": self._model_def(
+                supports_pdf_document=True, supports_vision=True, provider_type="local"
+            ),
+            "claude_sonnet": self._model_def(
+                supports_pdf_document=True, supports_vision=True, provider_type="cloud"
+            ),
+        }
+        profile = ExecutionProfile(
+            name="local",
+            primary_model="primary",
+            sub_agent_model="sub_agent",
+            provider_type="local",
+            delegation=DelegationConfig(
+                allow_cloud_escalation=False,
+                escalation_provider="anthropic",
+                escalation_model="claude_sonnet",
+            ),
+        )
+        token = set_current_profile(profile)
+        try:
+            with self._patch_models(models):
+                key, mode = _resolve_document_routing_key(ctx, "primary")
+            assert key == "claude_sonnet"
+            assert mode == "native_pdf"
         finally:
             from personal_agent.config.profile import _current_profile
 
@@ -702,7 +865,11 @@ class TestDocumentRouting:
 
             _current_profile.reset(token)
 
-    def test_mixed_image_and_document_prefers_native_pdf_when_both_supported(self) -> None:
+    def test_mixed_image_and_document_prefers_native_pdf_when_both_supported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC5 flip-back: with attachment_default_processing_target='local'."""
+        monkeypatch.setattr(settings, "attachment_default_processing_target", "local")
         ctx = self._make_ctx((self._make_attachment(), self._make_image_attachment()))
         models = {
             "primary": self._model_def(

@@ -3,7 +3,7 @@
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest) — per-ticket state.
 > **Source of truth for priorities**: this file (sequencing only; do not re-enumerate Linear here) — keep it *concise*.
 > **This file is UNIQUELY the plan**: current live-env / standing state + active priorities + sequencing + Needs-Approval. **Completed / superseded narrative does NOT live here** — it moves to [`MASTER_PLAN_HISTORY.md`](MASTER_PLAN_HISTORY.md) (grepable, NOT auto-loaded). `/prepare-reset` performs the move each reset; this session's *decisions* live in [`LAST_SESSION.md`](LAST_SESSION.md).
-> **Last updated**: 2026-07-16
+> **Last updated**: 2026-07-16 (FRE-893 config-audit redo Done, PR #548)
 
 ## Current live-env & standing state
 
@@ -41,7 +41,7 @@ Dispatch lives in **Linear** (process v2 — contract in `.claude/skills/lifecyc
 priority-ordered. This file carries **why the sequence is what it is** — priorities, waves,
 dependency rationale — never per-ticket board state (it drifts).
 
-**Sequencing rationale (current):** ADR-0102 vision chain + FRE-886 + FRE-884 all SHIPPED (2026-07-15). **The active epic — config-management interface (ADR-0119) — is BLOCKED at step-0** (FRE-879/880 parked on the ExecutionProfile/`artifact_builder` regression; ADR-0119 amendment being raised in adr). Nothing new dispatches on that stream until the amendment merges + 879/880 re-approve. **build2 = FRE-893 config-audit REDO** (first attempt invalidated — missed the deployed `.env`; gate the redo hard). Parked-Approved when a stream frees: FRE-858 recall keep-bugs + FRE-876. FRE-739 (Awaiting Deploy, ADR-0107 seam — assembled verify needs FRE-740 + a live non-owner request). FRE-717 held at Awaiting Deploy for organic outcome input.
+**Sequencing rationale (current):** ADR-0102 vision chain + FRE-886 + FRE-884 all SHIPPED (2026-07-15). **The active epic — config-management interface (ADR-0119) — is BLOCKED at step-0** (FRE-879/880 parked on the ExecutionProfile/`artifact_builder` regression; ADR-0119 amendment being raised in adr). Nothing new dispatches on that stream until the amendment merges + 879/880 re-approve. **FRE-893 config-audit REDO — DONE (PR #548, 2026-07-16):** the audit now reads the deployed `/opt/seshat/.env` keys-only as an authoritative override source; master independently verified reads-env + no-value-leak; report regenerated (65/43/186/17=311). **build2 idle** (blocked stream, no eligible work). Parked-Approved when a stream frees: FRE-858 recall keep-bugs + FRE-876. FRE-739 (Awaiting Deploy, ADR-0107 seam — assembled verify needs FRE-740 + a live non-owner request). FRE-717 held at Awaiting Deploy for organic outcome input.
 
 **Parked / held (rationale only — not dispatched, no stream label):** Inference ADR-0094/0095 trees
 FRE-600–604 / 607–611 (held pending FRE-432/516 measurement) · FRE-713 (trigger-gated, Backlog) ·

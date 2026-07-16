@@ -1,22 +1,21 @@
-"""Shared per-call tool dispatch boundary (ADR-0086 D3).
+"""Shared per-call tool dispatch boundary.
 
 `dispatch_tool_call` executes one validated, gate-allowed tool call and returns
-its result payload. It is the **single** dispatch path invoked by both the
-primary executor loop (`orchestrator.executor.step_tool_execution`) and the
-discovery sub-agent loop (`orchestrator.sub_agent._run_tooled_loop`) — "one
-dispatch path, two callers". Tool permissions, action-boundary governance
-(ADR-0063), and per-call telemetry/``trace_id`` threading (ADR-0074) are all
-inherited from `ToolExecutionLayer.execute_tool`; this function adds only
-parameter validation, known-bad-pattern pre-checks, skill-load dedup, and
-error formatting.
+its result payload. It is the single dispatch path invoked by the primary
+executor loop (`orchestrator.executor.step_tool_execution`), designed so any
+future caller (e.g. a sub-agent loop) can reuse it without re-implementing
+tool permissions, action-boundary governance (ADR-0063), and per-call
+telemetry/``trace_id`` threading (ADR-0074) — all inherited from
+`ToolExecutionLayer.execute_tool`; this function adds only parameter
+validation, known-bad-pattern pre-checks, skill-load dedup, and error
+formatting.
 
 The function takes the few request primitives it needs (``trace_id``,
-``session_id``, ``loaded_skills``) rather than an ``ExecutionContext`` so the
-sub-agent can call it without constructing a full primary context. The gate
-fields (``gate_result``, ``loop_policy``, ``args_hash``) are optional: the
-primary passes its real loop-gate state; the sub-agent omits them (it bounds
-itself with an iteration ceiling, not the loop-gate FSM) and they echo back as
-``None`` in the contract dict.
+``session_id``, ``loaded_skills``) rather than an ``ExecutionContext`` so a
+caller without a full primary context can still use it. The gate fields
+(``gate_result``, ``loop_policy``, ``args_hash``) are optional: the primary
+passes its real loop-gate state; a caller without a loop-gate FSM omits them
+and they echo back as ``None`` in the contract dict.
 """
 
 from __future__ import annotations

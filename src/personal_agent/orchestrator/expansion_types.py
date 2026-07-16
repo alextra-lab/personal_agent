@@ -18,12 +18,9 @@ class SubAgentMode(Enum):
 
     PARALLEL_INFERENCE: Fire-and-forget LLM call, no tool access.
         Used for analysis, comparison, and synthesis sub-tasks.
-    TOOLED_SEQUENTIAL: Mini tool-use loop with MCP tool access.
-        Used for research sub-tasks that need web search or other tools.
     """
 
     PARALLEL_INFERENCE = "parallel_inference"
-    TOOLED_SEQUENTIAL = "tooled_sequential"
 
 
 class ExpansionPhase(Enum):
@@ -46,8 +43,8 @@ class PlanTask:
         goal: What this sub-agent should answer or produce.
         constraints: Scope or focus limits for the sub-agent.
         expected_output: Output shape description ("text", "comparison table", etc.).
-        mode: Execution mode — inference-only or tool-enabled.
-        tools: Tool names available when mode is TOOLED_SEQUENTIAL.
+        mode: Execution mode (currently always PARALLEL_INFERENCE).
+        tools: Tool names available to the sub-agent (currently always empty).
     """
 
     name: str

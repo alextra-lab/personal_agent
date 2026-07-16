@@ -190,34 +190,16 @@ class TestArtifactBuild:
             "Make a visualization of the knowledge graph",
         ],
     )
-    def test_artifact_build_floors_at_moderate(self, message: str) -> None:
-        """ADR-0086 D1: artifact builds bias complexity to a MODERATE floor.
+    def test_artifact_build_no_longer_biases_complexity(self, message: str) -> None:
+        """FRE-884: ADR-0086's artifact-build complexity floor is retired.
 
-        These short prompts would estimate SIMPLE on word/verb heuristics; the
-        artifact_build sub-signal floors them at MODERATE so Stage 5 can route
-        them to HYBRID (when the rollout flag is enabled).
+        Artifact-build prompts still classify as TOOL_USE (FRE-469, untouched),
+        but no longer carry an "artifact_build" signal or a forced MODERATE
+        complexity floor — complexity is whatever the plain heuristics compute.
         """
         result = classify_intent(message)
         assert result.task_type == TaskType.TOOL_USE
-        assert result.complexity == Complexity.MODERATE, (
-            f"{message!r} → {result.complexity.value} (signals={result.signals})"
-        )
-        assert "artifact_build" in result.signals
-
-    def test_artifact_build_allows_complex(self) -> None:
-        """ADR-0086 D1: the MODERATE floor still allows COMPLEX when heuristics reach it.
-
-        For TOOL_USE, _estimate_complexity reaches COMPLEX only via question_count
-        >= 3, so this fixture combines an artifact-build match with three questions.
-        """
-        message = (
-            "Build an interactive HTML dashboard. What sections should it have? "
-            "How should I structure the data? Which charts work best?"
-        )
-        result = classify_intent(message)
-        assert result.task_type == TaskType.TOOL_USE
-        assert result.complexity == Complexity.COMPLEX
-        assert "artifact_build" in result.signals
+        assert "artifact_build" not in result.signals
 
 
 class TestSelfImprove:

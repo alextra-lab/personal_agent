@@ -73,11 +73,9 @@ _ANALYSIS_PATTERNS: re.Pattern[str] = re.compile(
 )
 
 # Artifact / build intent (FRE-469): "build me an interactive HTML guide",
-# "create a dashboard", "generate an HTML page". Factored into a shared regex
-# (ADR-0086 D1 / FRE-479) so it both (a) routes such requests to TOOL_USE via
-# _TOOL_INTENT_PATTERNS — without it they fall through to CONVERSATIONAL, whose
-# tool-iteration budget is capped at 6 vs 25 for tool_use — and (b) drives the
-# artifact-build complexity sub-signal in classify_intent.
+# "create a dashboard", "generate an HTML page". Routes such requests to
+# TOOL_USE via _TOOL_INTENT_PATTERNS below — without it they fall through to
+# CONVERSATIONAL, whose tool-iteration budget is capped at 6 vs 25 for tool_use.
 # Precedent: FRE-256 _TOOL_INTENT_PATTERNS extension.
 _ARTIFACT_BUILD_REGEX: str = (
     r"(?:(?:build|make|create|generate)\s+"
@@ -87,8 +85,6 @@ _ARTIFACT_BUILD_REGEX: str = (
     r"diagram|artifact|visuali[sz]ation|infographic|mock-?up|prototype|"
     r"widget|report|slide\s*show|presentation|app|html|svg|interactive))"
 )
-
-_ARTIFACT_BUILD_PATTERNS: re.Pattern[str] = re.compile(r"(?i)" + _ARTIFACT_BUILD_REGEX)
 
 _TOOL_INTENT_PATTERNS: re.Pattern[str] = re.compile(
     r"(?i)"
@@ -120,8 +116,7 @@ _TOOL_INTENT_PATTERNS: re.Pattern[str] = re.compile(
     # Bare-noun error/log observation — no leading verb (e.g. "errors in elasticsearch")
     r"|(?:\berrors?\s+(?:in|from|within)\s+(?:elasticsearch|kibana|the\s+logs?|telemetry|traces?))"
     r"|(?:what\s+errors?\s+(?:are\s+)?(?:in|from)\s+(?:the\s+)?(?:logs?|elasticsearch|telemetry))"
-    # Artifact / build intent (FRE-469) — shared with _ARTIFACT_BUILD_PATTERNS
-    # (ADR-0086 D1 / FRE-479). See _ARTIFACT_BUILD_REGEX above for rationale.
+    # Artifact / build intent (FRE-469). See _ARTIFACT_BUILD_REGEX above for rationale.
     r"|" + _ARTIFACT_BUILD_REGEX,
 )
 
@@ -316,20 +311,7 @@ def classify_intent(user_message: str) -> IntentResult:
         signals.append("tool_intent_pattern")
         task_type = TaskType.TOOL_USE
         confidence = 0.8
-        if _ARTIFACT_BUILD_PATTERNS.search(user_message):
-            # ADR-0086 D1: artifact builds bias complexity up to a MODERATE floor,
-            # allowing COMPLEX when the message's own heuristics already reach it.
-            # This targets the measured artifact-build class without re-tagging
-            # plain lookups. The downstream routing is gated by the rollout flag
-            # in Stage 5 (decomposition); here we only enrich the classification.
-            signals.append("artifact_build")
-            estimated = _estimate_complexity(user_message, task_type)
-            complexity = estimated if estimated is Complexity.COMPLEX else Complexity.MODERATE
-        else:
-            # Plain tool turns: short single-action lookups resolve to SIMPLE via
-            # the standard heuristics, preserving SINGLE routing (FRE-256/210/469
-            # no-regression guarantee).
-            complexity = _estimate_complexity(user_message, task_type)
+        complexity = _estimate_complexity(user_message, task_type)
         return IntentResult(
             task_type=task_type,
             complexity=complexity,

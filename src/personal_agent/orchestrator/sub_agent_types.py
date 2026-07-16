@@ -35,7 +35,7 @@ class SubAgentSpec:
         background: Background context injected into the sub-agent's system
             prompt (parent task summary, constraints, etc.).
         model_role: Model role to use for inference. Defaults to SUB_AGENT (ADR-0033).
-        mode: Execution mode — PARALLEL_INFERENCE or TOOLED_SEQUENTIAL (ADR-0036).
+        mode: Execution mode (ADR-0036); currently always PARALLEL_INFERENCE.
     """
 
     task: str

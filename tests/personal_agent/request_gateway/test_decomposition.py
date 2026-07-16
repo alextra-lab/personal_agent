@@ -2,7 +2,6 @@
 
 import pytest
 
-from personal_agent.config import settings
 from personal_agent.governance.models import Mode
 from personal_agent.request_gateway.decomposition import assess_decomposition
 from personal_agent.request_gateway.intent import classify_intent
@@ -111,64 +110,17 @@ class TestMemoryRecallAlwaysSingle:
 
 
 class TestToolUseMatrix:
-    """TOOL_USE routing (ADR-0086 D2), gated by artifact_decomposition_enabled.
-
-    Flag OFF (default): legacy unconditional SINGLE / "tool_use_single".
-    Flag ON: complexity branch mirroring ANALYSIS/PLANNING.
-    """
+    """TOOL_USE routing: unconditional SINGLE at every complexity (ADR-0086 retired FRE-884)."""
 
     @pytest.mark.parametrize(
         "complexity",
         [Complexity.SIMPLE, Complexity.MODERATE, Complexity.COMPLEX],
     )
-    def test_tool_use_flag_off_is_legacy_single(self, complexity: Complexity) -> None:
-        """Flag off (default): every TOOL_USE complexity → SINGLE / tool_use_single."""
+    def test_tool_use_is_always_single(self, complexity: Complexity) -> None:
+        """Every TOOL_USE complexity → SINGLE / tool_use_single, unconditionally."""
         result = assess_decomposition(_intent(TaskType.TOOL_USE, complexity), _governance())
         assert result.strategy == DecompositionStrategy.SINGLE
         assert result.reason == "tool_use_single"
-
-    def test_tool_use_simple_is_single(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
-        result = assess_decomposition(_intent(TaskType.TOOL_USE, Complexity.SIMPLE), _governance())
-        assert result.strategy == DecompositionStrategy.SINGLE
-        assert result.reason == "tool_use_simple_single"
-
-    def test_tool_use_moderate_is_hybrid(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
-        result = assess_decomposition(
-            _intent(TaskType.TOOL_USE, Complexity.MODERATE), _governance()
-        )
-        assert result.strategy == DecompositionStrategy.HYBRID
-        assert result.reason == "tool_use_moderate_hybrid"
-
-    def test_tool_use_complex_is_hybrid(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
-        result = assess_decomposition(_intent(TaskType.TOOL_USE, Complexity.COMPLEX), _governance())
-        assert result.strategy == DecompositionStrategy.HYBRID
-        assert result.reason == "tool_use_complex_hybrid"
-
-    def test_tool_use_complex_zero_budget_forces_single(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Resource-pressure guard precedes the matrix even with the flag on."""
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
-        result = assess_decomposition(
-            _intent(TaskType.TOOL_USE, Complexity.COMPLEX),
-            _governance(expansion_budget=0),
-        )
-        assert result.strategy == DecompositionStrategy.SINGLE
-        assert result.reason == "zero_budget"
-
-    def test_tool_use_complex_expansion_denied_forces_single(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
-        result = assess_decomposition(
-            _intent(TaskType.TOOL_USE, Complexity.COMPLEX),
-            _governance(expansion_permitted=False),
-        )
-        assert result.strategy == DecompositionStrategy.SINGLE
-        assert result.reason == "expansion_denied"
 
 
 class TestAnalysisMatrix:
@@ -269,58 +221,23 @@ class TestReturnType:
 _ARTIFACT_MSG = "Explain the internals of the gateway and build an interactive HTML guide."
 
 
-class TestArtifactBuildFlagAndGovernanceGuards:
-    """ADR-0086 Verification §5/§6 — end-to-end through the REAL classifier.
+class TestArtifactBuildRetired:
+    """FRE-884 — ADR-0086's artifact-build decomposition path is retired.
 
-    Unlike ``TestToolUseMatrix`` (which feeds synthetic complexity into the matrix),
-    these drive ``classify_intent`` on a real artifact-build message so the genuine
-    artifact-build complexity bias (intent.py D1) is exercised, then assert the
-    Stage-5 routing. This makes the off-by-default + governance-degradation
-    guarantees non-vacuous: the positive control proves the message really would
-    route to HYBRID when the flag is on and expansion is available.
+    End-to-end through the REAL classifier: a genuine artifact-build message
+    still routes to SINGLE, proving the retirement (no flag, no HYBRID, no
+    discovery dispatch) rather than asserting against synthetic complexity.
     """
 
-    def test_real_artifact_build_is_high_complexity(self) -> None:
-        """Control: the message is genuinely TOOL_USE + non-SIMPLE + artifact_build."""
-        intent = classify_intent(_ARTIFACT_MSG)
-        assert intent.task_type == TaskType.TOOL_USE
-        assert intent.complexity != Complexity.SIMPLE
-        assert "artifact_build" in intent.signals
-
-    def test_flag_off_high_complexity_artifact_routes_single(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Flag explicitly OFF: high-complexity artifact build still routes to SINGLE.
-
-        Explicit monkeypatch (not reliance on the default) so the off-by-default
-        rollback guarantee fails loudly if the default ever flips. Verification §5.
-        """
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", False)
+    def test_real_artifact_build_still_routes_single(self) -> None:
         result = assess_decomposition(classify_intent(_ARTIFACT_MSG), _governance())
         assert result.strategy == DecompositionStrategy.SINGLE
         assert result.reason == "tool_use_single"
 
-    def test_flag_on_expansion_denied_forces_single(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Flag ON but expansion withheld → graceful SINGLE fallback. Verification §6."""
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
+    def test_real_artifact_build_governance_denied_still_single(self) -> None:
+        """Resource-pressure guard still forces SINGLE (independent of the retirement)."""
         result = assess_decomposition(
             classify_intent(_ARTIFACT_MSG), _governance(expansion_permitted=False)
         )
         assert result.strategy == DecompositionStrategy.SINGLE
         assert result.reason == "expansion_denied"
-
-    def test_flag_on_zero_budget_forces_single(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Flag ON but zero expansion budget → SINGLE (homeostatic degradation)."""
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
-        result = assess_decomposition(
-            classify_intent(_ARTIFACT_MSG), _governance(expansion_budget=0)
-        )
-        assert result.strategy == DecompositionStrategy.SINGLE
-        assert result.reason == "zero_budget"
-
-    def test_flag_on_permitted_routes_hybrid(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Positive control: flag ON + expansion available → HYBRID (non-vacuous guard)."""
-        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
-        result = assess_decomposition(classify_intent(_ARTIFACT_MSG), _governance())
-        assert result.strategy == DecompositionStrategy.HYBRID
-        assert result.reason in {"tool_use_moderate_hybrid", "tool_use_complex_hybrid"}

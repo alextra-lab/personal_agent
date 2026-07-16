@@ -462,44 +462,12 @@ class AppConfig(BaseSettings):
         ge=500,
         description="Maximum tokens per sub-agent response",
     )
-    sub_agent_max_tool_iterations: int = Field(
-        default=5,
-        ge=1,
-        le=15,
-        description=(
-            "ADR-0086 D3. Max tool-use rounds a TOOLED_SEQUENTIAL discovery "
-            "sub-agent may run before a forced final synthesis pass. Bounds "
-            "worst-case sub-agent runtime against worker_timeout_seconds."
-        ),
-    )
-    sub_agent_summary_max_chars: int = Field(
-        default=8000,
-        ge=500,
-        description=(
-            "ADR-0086 D4. Upper bound on the SubAgentResult.summary that enters "
-            "the parent synthesis context. Deliberately generous in round 1 — we "
-            "observe real discovery output before tightening the digest (FRE-481 "
-            "A/B). full_output is always preserved uncapped for observability."
-        ),
-    )
-
     # --- Expansion controller (ADR-0036) ---
     orchestration_mode: str = Field(
         default="enforced",
         description="Expansion enforcement mode: 'enforced' (gateway binding) or 'autonomous' (LLM decides)",
     )
 
-    # --- Artifact-build decomposition rollout (ADR-0086) ---
-    artifact_decomposition_enabled: bool = Field(
-        default=False,
-        description=(
-            "ADR-0086 rollout flag. When False (default) TOOL_USE turns route to "
-            "SINGLE (legacy 'tool_use_single'). When True, MODERATE/COMPLEX "
-            "artifact builds route to HYBRID for tool-using discovery "
-            "decomposition. Off until FRE-480 (sub-agent tool loop) + FRE-481 "
-            "(telemetry/A/B) land. Rollback = set False."
-        ),
-    )
     planner_timeout_seconds: float = Field(
         default=30.0,
         description="Max time for LLM planner phase in expansion controller",

@@ -105,6 +105,38 @@ def test_getattr_pattern_catches_indirect_read() -> None:
     assert result.reads.get("src")
 
 
+def test_alias_reads_rescue_false_negative_clusters() -> None:
+    """AC1 (FRE-896): the three alias-read clusters are no longer false-flagged never-read.
+
+    `proactive_memory_*` (read via `cfg = settings; cfg.<field>`), `insights_wiring_enabled`
+    (read via `get_settings().<field>`), and `quality_monitor_*` (read via a multi-line
+    `getattr(settings, "<field>")`) each have production (`src`) read evidence under the
+    alias-aware AST scan, and none categorize as `never-read`.
+    """
+    for name in (
+        "proactive_memory_w_embedding",
+        "insights_wiring_enabled",
+        "quality_monitor_daily_run_hour_utc",
+    ):
+        result = categorize(name, AppConfig.model_fields[name])
+        assert result.reads.get("src"), name
+        assert result.category != "never-read", name
+
+
+def test_self_attribute_alias_read_detected() -> None:
+    """A field read only through a `self._settings` attribute alias is not never-read.
+
+    `second_brain_cpu_threshold` is read via `self._settings.second_brain_cpu_threshold`
+    in `brainstem/optimizer.py` — the codex-flagged wrong-deletion hole the AST resolver
+    closes.
+    """
+    result = categorize(
+        "second_brain_cpu_threshold", AppConfig.model_fields["second_brain_cpu_threshold"]
+    )
+    assert result.reads.get("src")
+    assert result.category != "never-read"
+
+
 def test_manifest_read_detected() -> None:
     """`llm_base_url` and `database_url` resolve via `config/substrate.yaml`'s `setting:` sources.
 

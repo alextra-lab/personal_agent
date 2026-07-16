@@ -17,6 +17,11 @@ per-profile model-definition YAMLs and the documented environment template
   tracked YAML or ``.env.example``.
 * **Orphan ``.env`` key** (policy) — a documented ``AGENT_*`` key in
   ``.env.example`` that binds no ``AppConfig`` field.
+* **Undocumented field** (policy) — an ``AppConfig`` field with no (or
+  whitespace-only) ``description`` (ADR-0099 D4).
+* **Secret field plaintext default** (policy) — a secret-marked field whose
+  Python default is a real (non-empty, unexempted) value, or a field carrying
+  the exemption key without the ``secret`` marker itself (metadata misuse).
 
 Severity classes follow the ADR-0099 D4 table: safety findings hard-fail both
 CI and (via the startup hook) process boot; policy findings hard-fail CI/
@@ -26,6 +31,7 @@ pre-commit but only warn-loud at startup.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -33,6 +39,8 @@ from typing import TYPE_CHECKING, Literal
 import yaml  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
+    from pydantic.fields import FieldInfo
+
     from personal_agent.config.settings import AppConfig
 
 # model_loader.py imports from this module (resolve_role_model_key, ADR-0099
@@ -110,11 +118,21 @@ def _strip_inline_comment(value: str) -> str:
     return value.strip().strip("'\"")
 
 
+def _is_secret_marked(field: FieldInfo) -> bool:
+    """A field is "secret" iff its ``json_schema_extra`` carries ``secret: True``.
+
+    ADR-0099 D2 — derived from AppConfig metadata, no separately-edited list.
+    The single predicate every secret-aware check (env-var mapping, plaintext-
+    default detection) shares, so the marking convention can never drift
+    out of sync between call sites.
+    """
+    extra = field.json_schema_extra
+    return isinstance(extra, dict) and bool(extra.get("secret"))
+
+
 def _secret_field_env_vars() -> dict[str, str]:
     """Map every accepted env-var spelling of a secret-marked field to its field name.
 
-    A field is "secret" iff its ``json_schema_extra`` carries ``secret: True``
-    (ADR-0099 D2 — derived from AppConfig metadata, no separately-edited list).
     Both the always-valid ``AGENT_<FIELD>`` spelling and a declared ``alias``
     (if any) are included, since either binds the field at runtime.
     """
@@ -122,8 +140,7 @@ def _secret_field_env_vars() -> dict[str, str]:
 
     mapping: dict[str, str] = {}
     for name, field in AppConfig.model_fields.items():
-        extra = field.json_schema_extra
-        if not (isinstance(extra, dict) and extra.get("secret")):
+        if not _is_secret_marked(field):
             continue
         mapping[f"AGENT_{name.upper()}"] = name
         if isinstance(field.alias, str) and field.alias:
@@ -620,6 +637,104 @@ def check_committed_secrets(root: Path) -> list[Finding]:
     return findings
 
 
+def check_field_descriptions(fields: Mapping[str, FieldInfo] | None = None) -> list[Finding]:
+    """ADR-0099 D4 — every AppConfig field must carry a non-empty description.
+
+    A regression ratchet, not a cleanup: every real field already complies.
+    Accepts an injected *fields* mapping so it is unit-testable against a
+    throwaway model without a filesystem fixture root (this check has no
+    YAML/root surface, unlike the matrix/manifest checks).
+    """
+    if fields is None:
+        from personal_agent.config.settings import AppConfig  # noqa: PLC0415 — avoid import cycle
+
+        fields = AppConfig.model_fields
+
+    findings: list[Finding] = []
+    for name, field in fields.items():
+        description = field.description
+        if not isinstance(description, str) or not description.strip():
+            findings.append(
+                Finding(
+                    "undocumented_field",
+                    "policy",
+                    f"AppConfig field '{name}' has no description (ADR-0099 D4)",
+                )
+            )
+    return findings
+
+
+def check_secret_field_plaintext_defaults(
+    fields: Mapping[str, FieldInfo] | None = None,
+) -> list[Finding]:
+    """FRE-876 — no secret-marked field defaults to a real plaintext value.
+
+    :func:`check_committed_secrets` (AC-8) only scans YAML/``.env`` text for a
+    *committed* secret value; it never looks at a secret field's own Python
+    default in ``settings.py``. A field may declare a documented, non-sensitive
+    default (e.g. a local-only dev-convenience value already public elsewhere,
+    such as a compose file's own hardcoded fallback) by adding
+    ``"secret_default_allow": "<reason>"`` to its ``json_schema_extra`` alongside
+    ``"secret": True`` — a considered exception, not a rubber stamp, mirroring
+    the ``# fre-649-allow: <reason>`` convention :func:`check_committed_secrets`
+    already uses. The exemption key on a field that is not itself secret-marked
+    is flagged as metadata misuse (dead/contradictory declaration).
+
+    A field declaring ``default_factory`` instead of a plain ``default`` is
+    flagged unexempted too: ``field.default`` is ``PydanticUndefined`` in that
+    case, so a hardcoded secret returned by the factory would otherwise pass
+    silently — this static check has no safe way to invoke an arbitrary
+    factory to inspect its return value.
+    """
+    if fields is None:
+        from personal_agent.config.settings import AppConfig  # noqa: PLC0415 — avoid import cycle
+
+        fields = AppConfig.model_fields
+
+    findings: list[Finding] = []
+    for name, field in fields.items():
+        extra = field.json_schema_extra
+        is_secret = _is_secret_marked(field)
+        allow_reason = extra.get("secret_default_allow") if isinstance(extra, dict) else None
+        is_exempted = isinstance(allow_reason, str) and bool(allow_reason.strip())
+
+        if not is_secret:
+            if allow_reason:
+                findings.append(
+                    Finding(
+                        "secret_default_allow_without_secret_marker",
+                        "policy",
+                        f"AppConfig field '{name}' declares 'secret_default_allow' but is not "
+                        "'secret'-marked — remove the unused exemption or add 'secret': True",
+                    )
+                )
+            continue
+
+        if is_exempted:
+            continue
+
+        default = field.default
+        has_plaintext_default = isinstance(default, str) and bool(default.strip())
+        has_factory = field.default_factory is not None
+        if has_plaintext_default or has_factory:
+            reason = (
+                "declares a non-empty plaintext default"
+                if has_plaintext_default
+                else "declares a default_factory, whose return value this static check cannot "
+                "introspect"
+            )
+            findings.append(
+                Finding(
+                    "secret_field_plaintext_default",
+                    "policy",
+                    f"AppConfig field '{name}' is secret-marked but {reason} in settings.py; "
+                    "secrets must default to None and be supplied via environment (or add a "
+                    "considered 'secret_default_allow' exemption)",
+                )
+            )
+    return findings
+
+
 def check_embedding_fallback_identity(settings: AppConfig | None = None) -> list[Finding]:
     """ADR-0112 AC-6 (FRE-821) — managed + local-fallback embedder configs pin the same revision.
 
@@ -901,6 +1016,8 @@ def run_all_checks(root: Path) -> list[Finding]:
     findings.extend(check_no_role_headers(root))
     findings.extend(check_orphan_env_keys(root))
     findings.extend(check_committed_secrets(root))
+    findings.extend(check_field_descriptions())
+    findings.extend(check_secret_field_plaintext_defaults())
     findings.extend(check_deployment_manifest_internal_consistency(manifest))
     findings.extend(check_deployment_manifest_matches_compose(root, manifest))
     findings.extend(check_substrate_manifest(root))

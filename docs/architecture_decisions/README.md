@@ -193,7 +193,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0108](ADR-0108-stored-artifact-vision-reprocessing.md) | Stored-Artifact Vision Re-processing (analyze-to-text, explicit tool) | Proposed |
 | [ADR-0109](ADR-0109-entity-taxonomy-redesign.md) | Entity & Relationship Taxonomy — V1 (inherited) → V2 (first principled derivation) | Accepted |
 
-### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0119)
+### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0120)
 
 | ADR | Title | Status |
 |-----|-------|--------|
@@ -207,6 +207,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0117](ADR-0117-pr-gate-signal-collector.md) | Deterministic Signal Collector for the PR Gate | Accepted |
 | [ADR-0118](ADR-0118-artifact-builder-model-selection.md) | Model-Selection Layer for Open Roles — User-Selectable Artifact Builder (Phase 1) | Proposed |
 | [ADR-0119](ADR-0119-config-management-interface.md) | Config-Management Interface (Phase 1) — Observe + Open-Role Model Selection | Proposed |
+| [ADR-0120](ADR-0120-cost-governance-visibility-consent.md) | Cost Governance — Visibility + Consent (supersedes ADR-0065) | Proposed |
 
 ### Supplementary
 

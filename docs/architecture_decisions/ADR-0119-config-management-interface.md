@@ -63,11 +63,28 @@ swappability principle is legible in the UI itself (you *see* that the KG-writer
 the open roles are selectable). "Observe-first" means *you can see the config instead of
 grepping YAML* — it does **not** mean editability is gated or phased.
 
-**2. Open-role model selection, frontier-flexible.** For every **open** role — `primary`
-(orchestrator), `sub_agent`, `artifact_builder` — a picker over that role's vetted,
-availability-filtered candidates; freely switchable, **effective on the next turn**. No phasing
-by stakes: the orchestrator is as editable as the artifact builder (picking your primary model
-is safe and normal — it orchestrates the turn, it does not write durable substrate).
+**2. Open-role model selection, frontier-flexible — resolved via the ExecutionProfile.** The
+**open** roles — `primary` (orchestrator), `sub_agent`, `artifact_builder` — all resolve their
+*default* through the session-scoped **ExecutionProfile** (ADR-0044): a local-profile session gets
+the local default, a cloud session the cloud default. This **corrects ADR-0118 §1**, which made
+`artifact_builder` a flat matrix row (`all: claude_haiku`) — that ignores the ExecutionProfile and
+silently routes a *local* build to cloud Haiku (a real regression, caught by code-review on
+FRE-879: a local session that used to build on the free local model now hits cloud, costing money
+or hard-failing with no `ANTHROPIC_API_KEY`). **Open roles belong on the profile, not the matrix.**
+Each open role gets a picker over its vetted, availability-filtered candidates; freely switchable,
+**effective on the next turn**. No phasing by stakes.
+
+**Role tiers — which mechanism owns which role (the organizing principle):**
+- **Open** (`primary`, `sub_agent`, `artifact_builder`): **ExecutionProfile-resolved** (session-scoped,
+  profile-aware default) + a user picker. You feel these in real time; they don't write durable substrate.
+- **Pinned-single** (KG writers — `entity_extraction`, `captains_log`, `insights`, `embedding`,
+  `reranker`, `reranker_fallback`): **matrix-resolved**, deployment-static, no picker. They corrupt
+  durable state silently, so they are pinned.
+- **Pinned-curated** (`vision` / attachment ingestion): **not** an open picker — the prompt and PDF
+  pipeline are *model-coupled* (ADR-0102 carries model-specific document handling), so a freely-swapped
+  model would break tuned quality and consistency. Its only knob is the existing **FRE-886 local/cloud
+  placement toggle** — a choice between two per-placement-*tuned* pipelines (already surfaced as the
+  attachment panel), not arbitrary model selection.
 
 **3. The FRE-886 attachment default.** Expose `attachment_default_processing_target` (the
 Auto/local-vs-cloud vision default) through the same surface — the second editable domain, and
@@ -75,14 +92,15 @@ the first thing that proves the expose→persist pattern replaces FRE-886's hard
 
 **4. One write mechanism — a thin override the resolvers prefer.** A small override store records
 two kinds of *selection state*, and the resolvers prefer it over the file/env default:
-- **role→model selections** for open roles, consulted by both resolution paths so the user never
-  sees which is behind a panel: matrix roles (`artifact_builder`, …) via `resolve_role_model_key`
-  (`src/personal_agent/config/model_loader.py:144`) and profile roles (`primary`/`sub_agent`) via
-  `resolve_model_key` (`src/personal_agent/config/profile.py:75`, ADR-0044). Note the two default
-  sources differ by path: `artifact_builder`'s file default is the matrix; `primary`/`sub_agent`'s
-  is the active ExecutionProfile (the resolver *can* read a `primary` matrix row if called
-  directly, but by convention those roles default through the profile — the override sits in front
-  of whichever path the role uses).
+- **role→model selections** for open roles. **All three open roles resolve their default through the
+  ExecutionProfile** (`resolve_model_key`, `src/personal_agent/config/profile.py:75`, ADR-0044) —
+  `artifact_builder` joins `primary`/`sub_agent` there (each profile declares a local and a cloud
+  binding), **not** the matrix. The override sits in front of that profile default. The matrix
+  (`resolve_role_model_key`) resolves only the **pinned** writer roles. **Override-vs-profile
+  crossing:** the *default* always respects the active profile — a local session never *silently*
+  crosses to cloud (the regression this ADR fixes); an *explicit* override **may** cross to cloud,
+  because it is the user's deliberate, surfaced choice (like FRE-886's cloud attachment override) and
+  is still cost-gated. One override per role.
 - **whitelisted setting overrides** — currently just the FRE-886 attachment default
   (`attachment_default_processing_target`, `src/personal_agent/config/settings.py:857`, read at
   `orchestrator/executor.py:1649`), which is env/AppConfig-backed today. The store holds the
@@ -176,10 +194,11 @@ gateway extension (Phase 2), not an LLM router.
 - It is the **config foundation** a deterministic Phase-2 router would consume — not a dead end.
 
 ### Negative Consequences
-- The override store + resolver shim must span **two** resolution paths (matrix + ExecutionProfile)
-  — modest but real plumbing. The profile path is a handful of source sites, not a sprawl
-  (`get_llm_client` ×4, `resolve_model_key` ×~8), and the override read is best injected inside the
-  two resolver functions so callers are unchanged.
+- The override read is injected into **both** resolver functions (`resolve_model_key` for the open
+  roles, `resolve_role_model_key` for the pinned-writer guardrail) — modest plumbing, a handful of
+  source sites (`get_llm_client` ×4, `resolve_model_key` ×~8), injected inside the functions so
+  callers are unchanged. Moving `artifact_builder` off the matrix onto the ExecutionProfile (the
+  regression fix) also adds an `artifact_builder` binding to `config/profiles/{local,cloud}.yaml`.
 - A read/write config API and a PWA surface are net-new (though small and bounded).
 - Per-candidate availability checking adds a liveness concern to the read path.
 
@@ -199,9 +218,11 @@ gateway extension (Phase 2), not an LLM router.
 **Files affected (Phase 1):**
 - `config/model_roles.yaml` — generalize the candidate registry beyond `artifact_builder`
   (open-role candidate lists + onboarding metadata); writer roles unchanged (no candidate list).
-- `src/personal_agent/config/model_loader.py` (`resolve_role_model_key`) and
-  `src/personal_agent/config/profile.py` (`resolve_model_key`) — consult the override store,
-  fail-closed to file default for non-candidate / pinned roles.
+- `src/personal_agent/config/profile.py` (`resolve_model_key`) — resolve `artifact_builder`
+  alongside `primary`/`sub_agent` from the ExecutionProfile; consult the override store for open
+  roles, fail-closed. `config/profiles/{local,cloud}.yaml` — add the `artifact_builder` local + cloud
+  bindings. `src/personal_agent/config/model_loader.py` (`resolve_role_model_key`) — pinned writers
+  only; the guardrail ignores overrides here.
 - **New:** override store — a small table + repository (role → selected key), mirroring
   `constraint_preferences_repository`. Migration in `docker/postgres/`.
 - `src/personal_agent/service/app.py` — config read + write endpoints (validate against the
@@ -224,10 +245,15 @@ selection, availability filtering, server-side rejection of a pinned/non-candida
 check that changing an open-role model takes effect on the next turn.
 
 **Sequencing (Phase 1 tickets, one PR each):**
-0. **(Absorbed from ADR-0118)** `artifact_builder` role extraction — `ModelRole.ARTIFACT_BUILDER`
-   + matrix role + cost lane + telemetry identity + wire `artifact_draft` off `sub_agent` (FRE-879);
-   vetted candidate registry for `artifact_builder` (FRE-880). Prerequisite — the role must exist
-   before it can be a panel.
+0. **(Absorbed from ADR-0118, corrected)** `artifact_builder` role extraction —
+   `ModelRole.ARTIFACT_BUILDER` + cost lane + telemetry identity + wire `artifact_draft` off
+   `sub_agent` (FRE-879); vetted candidate registry (FRE-880). **The default must resolve via the
+   ExecutionProfile** (an `artifact_builder` binding in `config/profiles/{local,cloud}.yaml`, handled
+   by `resolve_model_key`) — **not** a flat matrix row, so a local-profile build stays on the local
+   model. This corrects FRE-879's first cut (a matrix row that regressed local builds to cloud Haiku);
+   its cost-lane / telemetry / registry work is reusable, only the resolution seam changes. Shipping
+   the matrix version *alone* — before step 1's override store exists — **is** the regression, so step
+   0 must land profile-aware. (AC-8 guards this.)
 1. Override store (table + repo + migration) + the resolver-shim **inside** both
    `resolve_role_model_key` and `resolve_model_key` (fail-closed) + the attachment-setting override
    read. No UI yet; AC-1/AC-2/AC-6 provable at the API/resolver level.
@@ -266,14 +292,26 @@ check that changing an open-role model takes effect on the next turn.
   default to cloud via the surface → an Auto (no-override) image routes to Sonnet; set it back to
   local → the same image routes to Qwen (FRE-886's own AC, now driven from the UI). *Fails if* the
   setting doesn't change routing.
-- **AC-6 — Overrides persist and fall back to the *per-path* canonical default.** *Check:* an
-  override persists across turns/sessions; clearing it restores the resolver's canonical default —
-  the **matrix file default** for `artifact_builder`, the **active ExecutionProfile default** for
-  `primary`/`sub_agent` (they resolve via the profile, not the matrix). *Fails if* the override
-  doesn't persist, or clearing it restores the wrong source (e.g. a matrix lookup for `primary`).
+- **AC-6 — Overrides persist and fall back to the ExecutionProfile default.** *Check:* an override
+  persists across turns/sessions; clearing it restores the **active ExecutionProfile default** for
+  that open role — `primary`, `sub_agent`, **and** `artifact_builder` all resolve via the profile now
+  (not the matrix). *Fails if* the override doesn't persist, or clearing it restores a matrix/static
+  default instead of the profile's.
 - **AC-7 (assembled seam) — the whole loop.** *Check:* open the config view, change the
   orchestrator model, the next turn runs on it (AC-1 telemetry), the writer bindings are unchanged
   (AC-2), and the picker showed only available candidates (AC-4). *Fails if* any leg breaks.
+- **AC-8 — A local-profile build never silently crosses to cloud (the regression guard).** *Check:*
+  on the **local** ExecutionProfile with no override, an artifact build resolves `artifact_builder`
+  to the **local** model, not cloud Haiku; `MODEL_CALL_COMPLETED` shows the local model. *Fails if* a
+  local-profile build resolves to the cloud default — the exact FRE-879 regression this amendment fixes.
+- **AC-9 — The observe view shows the *effective* binding.** *Check:* the read payload's value for
+  each open role is the **profile-resolved, override-applied effective** model that will actually run
+  — not a raw matrix/static default. On a local session, `primary`/`artifact_builder` read as their
+  local models. *Fails if* the view shows a binding that differs from what the next turn uses.
+- **AC-10 — An explicit override crosses deliberately; the default does not.** *Check:* on a local
+  session, setting an override to a cloud candidate makes the next turn run on that cloud model
+  (deliberate cross, cost-gated); clearing it returns to the local profile default. *Fails if* the
+  default silently crosses to cloud, or an explicit cloud override is blocked/ignored.
 
 **Seam owner:** AC-7 is owned by the **PWA pickers ticket (step 5)** — the child where the
 assembled intent first holds. The ADR does not close when the observe view (step 4) merges; it
@@ -312,3 +350,22 @@ runnable guardrail check (inject a writer override → assert it is ignored); th
 covers the FRE-886 attachment setting (env-backed) as a whitelisted setting-override, not only
 role→model rows; and the ADR-0118 T1/T2 reconciliation corrected from "reuse as-is" to "absorb as
 step 0" (they are Needs-Approval, not shipped).
+
+### 2026-07-16 - Amended (ExecutionProfile gap + role tiers)
+**Changed By:** cc-adrs (Opus)
+**Reason:** Amendment after a real regression caught by code-review on FRE-879 (owner-directed via
+master). ADR-0118 §1 made `artifact_builder` a flat matrix row, which resolves off the
+deployment-static `model_config_path` and **ignores the session ExecutionProfile** — so a
+local-profile artifact build silently routed to cloud Haiku (cost / hard-fail with no
+`ANTHROPIC_API_KEY`). Corrected: **all open roles (`primary`, `sub_agent`, `artifact_builder`)
+resolve their default via the ExecutionProfile**; the matrix resolves only pinned writers. Added the
+**role-tier taxonomy** — open (profile + picker), pinned-single (writers, matrix), pinned-curated
+(`vision`: not an open picker because its prompt/PDF pipeline is model-coupled; its only knob is the
+FRE-886 local/cloud toggle). Owner decisions folded in: (1) open roles are ExecutionProfile-resolved;
+(2) an explicit override **may cross to cloud** (deliberate, surfaced, cost-gated) while the *default*
+never crosses silently; (3) vision stays pinned on prompt/process-coupling grounds (the FRE-886
+"garbled scan" quality anecdote was retracted by the owner as bad test data — not used). New AC-8
+(local-profile regression guard), AC-9 (observe view shows the effective, profile-resolved binding),
+AC-10 (explicit-cross vs silent-default). Sequencing step 0 (FRE-879) must land profile-aware; its
+matrix first cut is corrected, cost-lane/telemetry/registry work reusable. FRE-879/880 stay parked
+off Approved until this amendment settles.

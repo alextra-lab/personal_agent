@@ -12,11 +12,27 @@ import re
 
 from scripts.audit.config_inventory import (
     INVENTORY_DOC,
+    _is_secret,
+    _safe_default,
     find_coverage_gaps,
     generate,
 )
 
 from personal_agent.config.settings import AppConfig
+
+# The 7 fields FRE-897 fixes: schema-marked secret (`json_schema_extra={"secret": True}`)
+# but with `_url`/`_endpoint`/`_token` suffixes the name-regex heuristic doesn't match.
+_SCHEMA_MARKED_NAME_MISMATCHED_SECRETS = frozenset(
+    {
+        "managed_database_url",
+        "managed_neo4j_uri",
+        "managed_elasticsearch_url",
+        "managed_embedding_endpoint",
+        "managed_embedding_token",
+        "managed_reranker_endpoint",
+        "managed_slm_endpoint",
+    }
+)
 
 
 def test_inventory_doc_exists() -> None:
@@ -39,6 +55,37 @@ def test_inventory_covers_every_appconfig_field_and_env_key() -> None:
     missing_fields, missing_env = find_coverage_gaps()
     assert not missing_fields, f"AppConfig fields absent from inventory: {missing_fields}"
     assert not missing_env, f".env.example AGENT_ keys absent from inventory: {missing_env}"
+
+
+def test_is_secret_honors_schema_flag_for_name_mismatched_managed_fields() -> None:
+    """FRE-897: the schema flag is authoritative, not just the name-suffix regex.
+
+    The 7 `managed_*` fields carry `json_schema_extra={"secret": True}` but have
+    `_url`/`_endpoint`/`_token` suffixes the regex heuristic doesn't match. Without
+    the schema-flag OR, `_is_secret()` would wrongly return False for all of them.
+    """
+    assert _SCHEMA_MARKED_NAME_MISMATCHED_SECRETS  # sanity: the fixture set is non-empty
+    for name in _SCHEMA_MARKED_NAME_MISMATCHED_SECRETS:
+        field = AppConfig.model_fields[name]
+        assert isinstance(field.json_schema_extra, dict)
+        assert field.json_schema_extra.get("secret") is True
+        assert _is_secret(name, field), f"{name} should be classified secret via schema flag"
+
+
+def test_redaction_path_masks_name_mismatched_managed_fields() -> None:
+    """FRE-897: `_safe_default()` redacts the 7 fields, not their raw (`None`) default."""
+    for name in _SCHEMA_MARKED_NAME_MISMATCHED_SECRETS:
+        field = AppConfig.model_fields[name]
+        assert _safe_default(name, field) == "🔒 redacted (secret — `.env` only)"
+
+
+def test_generated_doc_marks_name_mismatched_managed_fields_as_secret() -> None:
+    """FRE-897: the generated table's Secret column shows 🔑 for each of the 7 fields."""
+    output = generate()
+    for line in output.splitlines():
+        for name in _SCHEMA_MARKED_NAME_MISMATCHED_SECRETS:
+            if f"`{name}`" in line:
+                assert "🔑" in line, f"{name} row missing secret marker: {line!r}"
 
 
 def test_generated_output_leaks_no_secret_value_or_dsn_credential() -> None:

@@ -42,6 +42,17 @@ ENV_EXAMPLE = REPO_ROOT / ".env.example"
 _SECRET_HINT = re.compile(r"(_api_key$|_password$|_secret$|secret_access_key$)")
 _SECRET_EXPLICIT: frozenset[str] = frozenset({"artifact_resolve_internal_token"})
 
+
+def _is_schema_marked_secret(field: FieldInfo) -> bool:
+    """A field's `json_schema_extra={"secret": True}` marker — the authoritative source.
+
+    Some fields (e.g. the `managed_*` substrate-profile endpoints/URIs/tokens, ADR-0112)
+    carry `_url`/`_endpoint`/`_token` suffixes the name regex below doesn't match.
+    """
+    extra = field.json_schema_extra
+    return isinstance(extra, dict) and bool(extra.get("secret"))
+
+
 # A documented env key is any `KEY=` assignment (commented or live) in .env.example.
 # Anchoring to the start of the (optionally #-prefixed) line captures the full token —
 # so PERSONAL_AGENT_EVAL is read whole, not as a spurious `AGENT_EVAL` substring.
@@ -63,8 +74,13 @@ _KNOWN_ENV_ONLY: frozenset[str] = frozenset(
 )
 
 
-def _is_secret(name: str) -> bool:
-    return name in _SECRET_EXPLICIT or bool(_SECRET_HINT.search(name))
+def _is_secret(name: str, field: FieldInfo) -> bool:
+    """Secret iff schema-marked (authoritative) or the name matches the regex fallback."""
+    return (
+        _is_schema_marked_secret(field)
+        or name in _SECRET_EXPLICIT
+        or bool(_SECRET_HINT.search(name))
+    )
 
 
 # Hosts safe to print verbatim in a public-repo doc: loopback/wildcard binds and
@@ -103,7 +119,7 @@ def _safe_default(name: str, field: FieldInfo) -> str:
     DSN case) and masks private deployment hosts. Together these sever the clear-text
     sensitive-data flow CodeQL flags at the ``print`` sink.
     """
-    if _is_secret(name):
+    if _is_secret(name, field):
         return "🔒 redacted (secret — `.env` only)"
     return _md_escape(_sanitize_urls(_default_repr(field)))
 
@@ -219,7 +235,7 @@ def generate() -> str:
             undocumented.append(name)
         lines.append(
             f"| {i} | `{name}` | {_env_cell(name, field)} | `{_md_escape(_type_str(field))}` "
-            f"| {_safe_default(name, field)} | {'🔑' if _is_secret(name) else ''} "
+            f"| {_safe_default(name, field)} | {'🔑' if _is_secret(name, field) else ''} "
             f"| {'✅' if documented else '—'} |"
         )
 
@@ -261,7 +277,7 @@ def generate() -> str:
     # Emit only the COUNT of secret-heuristic fields — never the filtered list of secret
     # names (that flow is what CodeQL taints as clear-text logging). The names appear
     # generically in the table above and are enumerated in §8 of the hand-written doc.
-    secret_count = sum(1 for n in fields if _is_secret(n))
+    secret_count = sum(1 for n, f in fields.items() if _is_secret(n, f))
     lines.append("")
     lines.append(f"### Secret fields ({secret_count})")
     lines.append("")

@@ -322,16 +322,8 @@ def override_locations(name: str, field: FieldInfo) -> list[tuple[str, str]]:
 
 
 def is_guardrail(name: str, field: FieldInfo) -> bool:
-    """Secret (regex heuristic OR authoritative schema flag) or the storage-allowlist guardrail.
-
-    The schema flag (`json_schema_extra={"secret": True}`) is authoritative and catches
-    fields the regex heuristic in `config_inventory.py` misses (the `managed_*` endpoint/
-    URI/token fields — a codex plan-review pass on this ticket found the mismatch).
-    """
-    schema_secret = isinstance(field.json_schema_extra, dict) and bool(
-        field.json_schema_extra.get("secret")
-    )
-    return _is_secret(name) or schema_secret or name in _GUARDRAIL_EXTRA
+    """Secret (`config_inventory._is_secret`, schema flag OR name regex) or the allowlist guardrail."""
+    return _is_secret(name, field) or name in _GUARDRAIL_EXTRA
 
 
 def categorize(name: str, field: FieldInfo) -> FieldUsage:
@@ -472,16 +464,16 @@ def generate_report(results: list[FieldUsage]) -> str:
     )
     lines.append("")
     lines.append(
-        "**Discovered finding (not fixed here — out of scope for an audit-only ticket): "
-        "`config_inventory.py`'s regex-based `_is_secret()` heuristic misses 7 fields "
+        "**Discovered finding (fixed by FRE-897, out of scope for this audit-only ticket): "
+        "`config_inventory.py`'s regex-based `_is_secret()` heuristic missed 7 fields "
         'that carry the authoritative `json_schema_extra={"secret": True}` marker** '
         "(`managed_database_url`, `managed_neo4j_uri`, `managed_elasticsearch_url`, "
         "`managed_embedding_endpoint`, `managed_embedding_token`, "
         "`managed_reranker_endpoint`, `managed_slm_endpoint` — the regex's "
-        "`_api_key$|_password$|_secret$|secret_access_key$` suffixes don't match "
-        "`_url`/`_endpoint`/`_token`). This audit's guardrail check ORs in the schema "
-        "flag so it is not affected, but `config_inventory.py`'s own secret redaction "
-        "relies on the regex alone — a candidate follow-up ticket."
+        "`_api_key$|_password$|_secret$|secret_access_key$` suffixes didn't match "
+        "`_url`/`_endpoint`/`_token`). This audit's guardrail check already ORed in the "
+        "schema flag so it was not affected; `config_inventory.py`'s own secret redaction "
+        "now ORs in the same schema flag."
     )
     lines.append("")
     lines.append("## Category counts")

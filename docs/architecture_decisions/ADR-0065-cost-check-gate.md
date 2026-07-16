@@ -1,6 +1,6 @@
 # ADR-0065: Cost Check Gate — Atomic Reservation, Layered Budgets, Retry Telemetry
 
-**Status**: Accepted
+**Status**: Superseded by [ADR-0120](ADR-0120-cost-governance-visibility-consent.md) (2026-07-16 — hard dollar caps replaced by forward-by-default + visibility + owner-consent; ADR-0065's reserve/commit/refund primitive is retained)
 **Date**: 2026-04-30
 **Accepted**: 2026-05-01
 **Deciders**: Project owner

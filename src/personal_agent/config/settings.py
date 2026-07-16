@@ -1621,24 +1621,12 @@ class AppConfig(BaseSettings):
         default=True,
         description="Enable proactive insights analysis and proposal generation",
     )
-    insights_daily_run_hour_utc: int = Field(
-        default=6,
-        ge=0,
-        le=23,
-        description="UTC hour for daily insights analysis",
-    )
-    insights_weekly_day: int = Field(
-        default=6,
-        ge=0,
-        le=6,
-        description="Weekday for weekly proposals (0=Monday, 6=Sunday)",
-    )
-    insights_weekly_run_hour_utc: int = Field(
-        default=9,
-        ge=0,
-        le=23,
-        description="UTC hour for weekly Captain's Log insight proposals",
-    )
+    # NOTE: the clock-based scheduling knobs (insights_daily_run_hour_utc,
+    # insights_weekly_day, insights_weekly_run_hour_utc) were removed in FRE-896 —
+    # ADR-0057 (Accepted/Implemented, FRE-247) replaced timed insights runs with
+    # event-driven reactive runs on consolidation.completed events (see
+    # brainstem/scheduler.py: "Insights and promotion run reactively via
+    # consolidation.completed events"), so those knobs had no consumer.
 
     # ADR-0057 — dual-write wiring enable flag (independent of insights_enabled so the
     # engine can produce insights without CL/bus wiring if needed during rollout).

@@ -10,15 +10,19 @@ Categorizes every ``AppConfig`` field into one of four buckets, backed by eviden
 * ``writer-pinned-guardrail`` — a secret or safety-critical field; never a removal
   candidate regardless of read/override evidence.
 
-Read evidence combines three sources: a ``git grep`` over ``settings.<field>`` /
-``getattr(settings, "<field>")`` usage (tagged by root — ``src``, ``scripts``, ``tests`` —
-so a field touched only by tests/tooling is not mistaken for production load-bearing);
-whether ``settings.py`` itself consults the field via ``self.<field>`` inside a
-cross-field validator; and whether ``config/substrate.yaml`` names the field via a
+Read evidence combines three sources: an **AST alias-aware scan** (FRE-896,
+``scripts/audit/settings_reads.py``) over ``src``, ``scripts``, ``tests`` (tagged by root
+so a field touched only by tests/tooling is not mistaken for production load-bearing) that
+resolves reads reaching a field through an alias — ``cfg = settings; cfg.<field>``,
+``get_settings().<field>``, a multi-line ``getattr(settings, "<field>")``, an
+``AppConfig``-typed param, or a ``self._settings`` attribute alias — which FRE-893's
+line-oriented ``git grep`` for ``settings.<field>`` systematically missed; whether
+``settings.py`` itself consults the field via ``self.<field>`` inside a cross-field
+validator; and whether ``config/substrate.yaml`` names the field via a
 ``source: "setting:<field>"`` reference (the one dynamic-``getattr`` resolution path in
 the codebase, resolved by reading the manifest directly rather than tracing the runtime
-call — a codex plan-review pass on this ticket found that a literal-string grep alone
-cannot see this path).
+call — a codex plan-review pass found that a literal-string grep alone cannot see this
+path).
 
 Override evidence combines three sources: the 5 ``docker-compose*.yml`` files' parsed
 ``services.*.environment`` blocks (a real deployment-config surface);
@@ -48,9 +52,9 @@ Run from the repo root::
 
 from __future__ import annotations
 
+import ast
 import os
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -69,6 +73,7 @@ from scripts.audit.config_inventory import (
     _accepted_env,
     _is_secret,
 )
+from scripts.audit.settings_reads import collect_field_reads
 
 SETTINGS_FILE = REPO_ROOT / "src" / "personal_agent" / "config" / "settings.py"
 SUBSTRATE_MANIFEST = REPO_ROOT / "config" / "substrate.yaml"
@@ -120,54 +125,42 @@ class FieldUsage:
     category: str = "never-read"
 
 
-def _git_grep(pattern: str, roots: tuple[str, ...]) -> list[str]:
-    """`git grep -n -P <pattern> -- <roots>`; [] on no matches or missing git."""
-    try:
-        result = subprocess.run(
-            ["git", "grep", "-n", "-P", pattern, "--", *roots],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return []
-    if result.returncode not in (0, 1):  # 1 == no matches, not an error
-        return []
-    return [line for line in result.stdout.splitlines() if line]
-
-
 @lru_cache(maxsize=1)
-def _all_settings_usage_lines() -> tuple[str, ...]:
-    """Every `settings.<x>` / `getattr(settings, "<x>")` line for ANY field name.
+def _ast_reads_by_field() -> dict[str, dict[str, list[str]]]:
+    """`field -> {root -> [file:line, ...]}` for every alias-aware read across the tree.
 
-    One `git grep` over the whole codebase instead of one per field — called once,
-    cached, then filtered per-field in Python. Replaces 311 subprocess spawns (one per
-    `AppConfig` field) with 1; a code-review pass on this ticket found the per-field
-    grep dominating `generate`'s runtime and flagged it as an efficiency defect.
+    One AST pass over every `*.py` under `src`, `scripts`, `tests` (excluding
+    `settings.py` itself — the field's own definition module), delegating alias
+    resolution to `scripts.audit.settings_reads.collect_field_reads` (FRE-896). Replaces
+    FRE-893's line-oriented `git grep`, which could not see reads through an alias
+    (`cfg = settings`, `get_settings().<field>`, a multi-line `getattr`, an
+    `AppConfig`-typed param, or a `self._settings` attribute alias). Cached — repo state
+    is fixed within a process. A file that fails to parse (e.g. a Python 2 fixture) is
+    skipped rather than aborting the whole audit.
     """
-    pattern = r'settings\.\w+\b|getattr\(settings,\s*["\']\w+["\']'
-    return tuple(_git_grep(pattern, SEARCH_ROOTS))
+    field_names = frozenset(AppConfig.model_fields)
+    settings_rel = str(SETTINGS_FILE.relative_to(REPO_ROOT))
+    by_field: dict[str, dict[str, list[str]]] = {}
+    for root in SEARCH_ROOTS:
+        for path in sorted((REPO_ROOT / root).rglob("*.py")):
+            rel = str(path.relative_to(REPO_ROOT))
+            if rel == settings_rel:
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (SyntaxError, ValueError, UnicodeDecodeError):
+                continue
+            for field_name, lineno in collect_field_reads(tree, field_names):
+                by_field.setdefault(field_name, {}).setdefault(root, []).append(f"{rel}:{lineno}")
+    return by_field
 
 
 def external_reads(name: str) -> dict[str, list[str]]:
-    """`settings.<name>` / `getattr(settings, "<name>")` hits, keyed by top-level root.
+    """Alias-aware reads of `settings.<name>`, keyed by top-level root (`src`/`scripts`/`tests`).
 
     Excludes hits inside `config/settings.py` itself (the field's own definition).
     """
-    field_pattern = re.compile(
-        rf'settings\.{re.escape(name)}\b|getattr\(settings,\s*["\']{re.escape(name)}["\']'
-    )
-    settings_rel = str(SETTINGS_FILE.relative_to(REPO_ROOT))
-    by_root: dict[str, list[str]] = {}
-    for line in _all_settings_usage_lines():
-        if line.startswith(settings_rel + ":"):
-            continue
-        if not field_pattern.search(line):
-            continue
-        root = line.split("/", 1)[0]
-        by_root.setdefault(root, []).append(line)
-    return by_root
+    return _ast_reads_by_field().get(name, {})
 
 
 @lru_cache(maxsize=1)
@@ -514,8 +507,12 @@ def generate_report(results: list[FieldUsage]) -> str:
     lines.append("")
     lines.append(
         "Zero read evidence anywhere (`src/`, self-referential validator, or the "
-        "substrate manifest). Candidates for removal — a separate, owner-gated "
-        "follow-up ticket, not this one."
+        "substrate manifest). Removal **candidates**, not a delete list — FRE-896's "
+        "origin-ADR provenance map "
+        "([2026-07-16-fre-896-config-provenance-map.md](2026-07-16-fre-896-config-provenance-map.md)) "
+        "classifies each as outgrown (deleted) vs forward-declaration / wiring-gap / "
+        "wiring-bug / cost-gov (kept): most never-read fields back a live or planned "
+        "feature whose knob is merely unwired, so deleting them would amputate a stream."
     )
     lines.append("")
     for result in dead:

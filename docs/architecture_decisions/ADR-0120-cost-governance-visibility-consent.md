@@ -19,7 +19,8 @@ Three further facts, verified against the code, drive the redesign:
 - **Three metered vendors are completely off the books.** OVH embedding (€, token-priced), Voyage
   reranker ($, token-priced — and recall fans it out over the whole candidate set, a silent
   multiplier), and **Perplexity** (`tools/perplexity.py` — a *direct* paid REST tool, not SearXNG;
-  registered and active; the API returns token `usage` so it is trivially instrumentable). None has
+  registered and active; the API returns token `usage`, but the executor currently *discards* it —
+  `src/personal_agent/tools/perplexity.py:190` — so instrumenting is feasible, not free). None has
   an `api_costs` row. **You cannot alert on, or gate, a vendor you don't measure.**
 - **Artifact building and vision ingestion bill invisibly** inside `main_inference`.
 - The model **conflates two orthogonal things**: *denial semantics* (who to protect from
@@ -56,10 +57,13 @@ rate", "N reservations for one trace in M seconds"), never on an absolute cap.
 
 **4. Pause is the safety primitive** that makes "no hard limit" safe at 3am with no human watching:
 it holds spend flat until a human answers, through whichever channel reaches them. It is safe
-because the pause boundary is **between items** and both datastores commit **per-item** (the
-consolidator already does this — `second_brain/consolidator.py:159,220`), so a pause never catches a
-half-written Neo4j/Postgres transaction; Redis Streams makes it cleaner (stop consuming → unacked
-messages redeliver).
+because the pause boundary is **between items**: the consolidator honors its pause *before* the
+multi-write item processing (`src/personal_agent/second_brain/consolidator.py:219`, ahead of
+`_process_capture`), so a pause never catches a half-written Neo4j/Postgres record. Two role
+mechanisms exist and the T1 pausability audit classifies each: a **cooperative between-items pause**
+(consolidator-style, its own loop — *not* itself a Redis consumer) and, for the event-bus stream
+consumers, **nack-redelivery** (stop consuming → the unacked Redis Streams message redelivers). Both
+hold spend flat without losing work.
 
 **5. Frontend = approval cards** (reuses the shipped `request_tool_approval` primitive,
 `transport/agui/transport.py:375` — the cost card is the same primitive with a different payload,
@@ -98,15 +102,19 @@ not per model call.**
 - **Section C — Discretionary heavy jobs** (artifact building, deep research, study/one-shot
   ingest, Perplexity): a human kicks off one unit that spawns many calls. **Gate at the job
   envelope (the "purchase-order" model):** reserve the whole *estimated* budget up front (one PO),
-  let sub-calls settle against it — the existing `reserve()`/`commit()`/`refund()` primitive at
-  *job* scope. **Ask-me-first** over the (bootstrap→adaptive) threshold: estimate → owner confirms →
+  let sub-calls **draw down** against it. This **extends** ADR-0065's `reserve()`/`commit()` (which is
+  one-reservation-one-amount with an immediate cap check — no envelope/accumulator today) with a new
+  job-scope envelope; it is **not** a free reuse (see AC-8). **Ask-me-first** over the
+  (bootstrap→adaptive) threshold: estimate → owner confirms →
   run. Determinism is what makes this honest — a fixed fan-out (K searches × M tokens) is
   pre-budgetable; an LLM-router deciding dynamically is not, which is why deep research must be a
   **deterministic workflow**, gated at the envelope.
 
 **9. Step zero (mandatory prerequisite).** Instrument **OVH embedding + Voyage reranker +
-Perplexity** into `api_costs`. *(Owner-ruled: onboard Perplexity — it's an active paid tool and its
-API returns usage, so onboarding is cheap; revisit retirement only when deep-research ships.)*
+Perplexity** into `api_costs`. *(Owner-ruled: onboard Perplexity — a direct paid tool; its API
+returns `usage`, but the executor currently **discards** it (`tools/perplexity.py:190`), so
+onboarding means capturing that usage — feasible, not free. Revisit retirement only when
+deep-research ships.)*
 Nothing else is real until spend is visible.
 
 **The honest accountant's caveat (owner accepted, eyes open):** "no hard limit" trades a small
@@ -182,22 +190,27 @@ a cost decision must be cheap, deterministic, and auditable.
 | A runaway spends unbounded before the owner responds | High | Pause bounds the *rate*; out-of-band Signal reaches the owner asleep; email fallback if the Signal bridge is down |
 | A false anomaly trip pauses real work | Medium | Pause is reversible + self-healing (nack-roles retry); bootstrap fixed floor + owner review; tuning is an explicit open question (§Open) |
 | A pause corrupts a half-written record | High | Pause boundary is *between items*, both datastores commit per-item, Redis redelivers unacked — asserted by AC-3; gated on the pausability audit (T1) |
-| Automation over-reaches to a hard stop | High | Two-verb split enforced in code: no automated resume/kill path exists (AC-4) |
-| Onboarding OVH mis-converts EUR→USD | Medium | Currency decision is part of T0 (conversion step vs native column); AC-1 asserts correct cost |
+| Automation over-reaches to a hard stop | High | Two-verb split: `resume`/`kill` transitions are owner-authenticated, the reflex can only `pause` (AC-4) |
+| Onboarding OVH mis-converts EUR→USD | Medium | T0 owns a concrete EUR→USD handling (conversion step vs native column — `api_costs` is `cost_usd`-only today); AC-1 checks a known-EUR→expected-USD row |
 
 ---
 
 ## Implementation Notes
 
 **Foundation-first sequencing (T0 is a hard prerequisite):**
-- **T0 — Instrument OVH + Voyage + Perplexity into `api_costs`** (+ the EUR/USD currency decision).
-  Parse token usage from each vendor's response (OVH/Voyage token-priced; Perplexity returns
-  OpenAI-compatible `usage`); record cost rows. *Nothing else is real until spend is visible.*
+- **T0 — Instrument OVH + Voyage + Perplexity into `api_costs`.** Parse token usage from each
+  vendor's response — OVH/Voyage token-priced; Perplexity returns OpenAI-compatible `usage` that the
+  executor currently **discards** (`tools/perplexity.py:190`), so capture it. **Concrete currency
+  requirement:** `api_costs` is `cost_usd`-only (`docker/postgres/init.sql:90`), so OVH's EUR needs an
+  explicit handling — a conversion step or a native-currency column — with a known-EUR→expected-USD
+  test. *Nothing else is real until spend is visible.*
 - **T1 — Pausability audit** across background consumers (entity_extraction, captains_log, insights,
   promotion, freshness): per-role safe between-items check-point + one shared pause signal (a Redis
   key per role); confirm each loop polls/honors it.
-- **T2 — Anomaly → pause reflex** on the VPS: wire the existing insights cost-spike signal
-  (FRE-870/629) — or a purpose-built rate detector — to the pause signal; owner-only resume/kill.
+- **T2 — Anomaly → pause reflex** on the VPS: wire the existing insights cost-anomaly signal
+  (`src/personal_agent/insights/engine.py:572` daily `api_costs` anomaly detector →
+  `stream:insights.cost_anomaly`, `src/personal_agent/events/pipeline_handlers.py:287`) — or a
+  purpose-built rate detector — to the pause signal; owner-only resume/kill.
 - **T3 — Out-of-band alerting:** `signal-cli` on the VPS + email fallback; an actionable payload
   (resume / keep-paused / kill) that actuates back to the pause-state. **(Assembled seam.)**
 - **T4 — Cost approval cards:** extend `request_tool_approval` to a cost-consent payload; the
@@ -211,8 +224,8 @@ a cost decision must be cheap, deterministic, and auditable.
 
 **Dependencies:** ADR-0065 (superseded — keep its reserve/commit/refund primitive), ADR-0075
 (WebSocket transport — the card channel), ADR-0111 (custody/privacy — Signal on-brand), ADR-0118/0119
-(artifact_builder extraction + the config cost surface), FRE-870/629 (cost-spike anomaly, already
-firing).
+(artifact_builder extraction + the config cost surface), the insights cost-anomaly detector
+(`insights/engine.py:572` → `stream:insights.cost_anomaly`, already firing — the signal to wire).
 
 **Testing:** vendor-cost instrumentation (T0) with a live recall turn + a `perplexity_query`;
 pause-safety (no partial write, resume without loss); the no-hard-cap replay of the ADR-0065
@@ -222,35 +235,59 @@ incident; the no-socket → Signal → reply-actuates round-trip.
 
 ## Verification / Acceptance Criteria
 
-- **AC-1 — Every metered vendor is on the books.** *Check:* after a recall-heavy turn (fires
-  embedding→OVH + reranker→Voyage) and a `perplexity_query`, `api_costs` has a row per vendor with a
-  **nonzero, correctly-converted** cost (OVH EUR→USD). *Fails if* any of the three still has no row.
-- **AC-2 — No dollar ceiling denies a normal turn.** *Check:* replay the ADR-0065 incident load (a
-  turn that tripped the old $10 weekly cap); it **forwards** — no `raise`, no empty PWA turn. *Fails
-  if* any call is denied on an absolute dollar cap.
-- **AC-3 — A pause is reversible and loses nothing.** *Check:* trigger a pause on a background role
-  mid-loop; assert no half-written Neo4j/Postgres record, the in-flight item is not lost (Redis
-  redelivers / resumes on the next item), and spend is flat while paused. *Fails if* a pause corrupts
-  or drops an item, or spend continues while paused.
-- **AC-4 — Automation pauses but never terminates.** *Check:* the reflex pauses a role; assert there
-  is **no** automated resume-or-kill code path — only an owner action (PWA/Signal) resumes or kills.
-  *Fails if* automation resumes or kills on its own.
+- **AC-1 — Every metered vendor is on the books, from *real* usage.** *Check:* after a recall-heavy
+  turn (fires embedding→OVH + reranker→Voyage) and a `perplexity_query`, `api_costs` has a row per
+  vendor whose cost is **derived from the actual token usage in that call's response** (not a
+  constant) — Perplexity's executor must capture the `usage` it currently **discards**
+  (`src/personal_agent/tools/perplexity.py:190`), and OVH's **EUR cost is converted to USD** (a known
+  EUR input yields the expected USD row). *Fails if* any of the three has no row, the cost is a fixed
+  constant decoupled from usage, or OVH's EUR isn't converted.
+- **AC-2 — No absolute-dollar denial exists anywhere (not just the incident replay).** *Check:*
+  assert **no spend path denies on a `cap_usd` breach** — the gate no longer raises `BudgetDenied` on
+  an absolute-dollar cap (`src/personal_agent/cost_gate/gate.py:160`), `config/governance/budget.yaml`
+  carries no denying `cap_usd` rows, and the `BudgetDenied` catch sites
+  (`src/personal_agent/second_brain/entity_extraction.py:922`, `session_summary.py:194`) are removed
+  or made non-denying. Replaying the incident load then forwards with no empty turn. *Fails if* any
+  absolute-dollar denial path survives (a half-removal passes a single replay but fails this).
+- **AC-3 — A pause is reversible and loses nothing — per the role's *actual* mechanism.** Two
+  mechanisms, tested separately (the T1 pausability audit classifies each role): (a) **cooperative
+  between-items pause** (consolidator-style): the pause is honored *before* the multi-write item
+  processing (`src/personal_agent/second_brain/consolidator.py:219`, ahead of `_process_capture` at
+  `:503`), so it never catches a half-written record and resumes on the next item; (b)
+  **stream-consumer nack**: an unacked Redis Streams message redelivers when consumption stops.
+  *Check:* for a consolidator-class role, pause mid-run → no partial Neo4j/PG write, work resumes; for
+  a stream-consumer role, pause → the unacked message redelivers. Spend is flat while paused. *Fails
+  if* a pause catches a partial write, drops an item, or spend continues. *(Corrects the earlier
+  conflation — the consolidator loop is not itself a Redis consumer.)*
+- **AC-4 — Resume/kill is owner-guarded (a positive invariant, not an absence).** The pause-state
+  machine exposes a `pause` transition (callable by the anomaly reflex) and `resume`/`kill`
+  transitions **guarded by an owner-authenticated identity**. *Check:* the reflex drives a role to
+  `paused`; a `resume`/`kill` request **without** owner authentication is **rejected** (a test injects
+  a non-owner / automated caller → transition refused); an owner-authenticated request succeeds.
+  *Fails if* a `resume`/`kill` transition accepts a non-owner caller. *(Falsifiable via the guard —
+  not by searching for the absence of a code path, which is not runnable.)*
 - **AC-5 — Out-of-band reaches the owner and actuates.** *Check:* a pause with **no active
   WebSocket** sends a Signal alert (email if the bridge is down); the owner's reply
   (resume/keep-paused/kill) drives the pause-state. *Fails if* the no-socket case sends nothing, or
   the reply does not actuate the state.
-- **AC-6 — Consent gates a heavy job; trivia forwards silently.** *Check:* a Section-C job over the
-  threshold shows an approval card and does **not** run until the owner approves; a below-threshold
-  call forwards with no card. *Fails if* a heavy job runs without consent, or a card fires on trivial
-  calls.
+- **AC-6 — A Section-C heavy job is ask-first; everything else forwards by default.** *Check:* a
+  Section-C job (artifact / deep-research / Perplexity) over the threshold shows an approval card and
+  **blocks until the owner approves** (ask-first); a below-threshold call — and any Section-B turn
+  under threshold — **forwards silently**, no card. The cost card reuses the **tool-approval** waiter
+  (which persists + pushes, `src/personal_agent/transport/agui/ws_endpoint.py:177`), not the
+  constraint-pause path (which returns `connection_lost` without pushing, `:257`). *Fails if* a heavy
+  job runs without consent, or a card fires on trivial calls.
 - **AC-7 — Section-A: per-vendor thresholds + per-role visibility (no per-role walls).** *Check:* a
   recall-heavy load raises the **Voyage pool** telemetry and the per-role breakdown is visible in the
   config UI; a **per-vendor** threshold breach alerts. *Fails if* a per-role wall denies/pauses on a
   per-role cap, or per-role telemetry is missing.
-- **AC-8 — Section-C jobs reserve at the envelope, not per call.** *Check:* an artifact/deep-research
-  job makes **one** up-front reservation for the estimated budget; sub-calls settle
-  (commit/refund) against that envelope. *Fails if* each sub-call takes its own reservation / hits a
-  separate cap.
+- **AC-8 — Section-C jobs reserve at the envelope (a NEW extension of the primitive).** ADR-0065's
+  `reserve()`/`commit()` is one-reservation-one-amount with an immediate cap check
+  (`src/personal_agent/cost_gate/gate.py:97,160,247`) — **no** envelope object or child-accumulator
+  exists, so the job-envelope is **new work**, not a reuse-as-is: a job makes one up-front reservation
+  and sub-calls **draw down against it** (a new accumulator). *Check:* a job reserves once for the
+  estimate; N sub-calls settle against that one envelope (total drawn ≤ envelope), not N separate
+  reservations. *Fails if* each sub-call takes its own reservation, or the envelope isn't drawn down.
 
 **Seam owner:** the **assembled safety loop** — anomaly → pause → out-of-band alert → owner
 resume/kill — holds only once T1+T2+T3 land together; owned by **T3** (the alerting round-trip is
@@ -269,7 +306,8 @@ the gate.
 - `docs/research/2026-07-16-cost-governance-rework-adr-0065.md` — the design note this ADR authors from
 - `docs/research/2026-07-16-model-routing-sota-survey.md` — why deep research is a deterministic workflow, not an LLM router
 - Code: `cost_gate/{gate,policy,types}.py` · `config/governance/budget.yaml` · `second_brain/consolidator.py:159,220` (pause pattern) · `transport/agui/transport.py:164,375` (approval card + connection_lost) · `service/ws_ticket.py` (session-scoped WS) · `memory/{embeddings,reranker}.py` + `tools/perplexity.py` (untracked vendors)
-- FRE-870, FRE-629 — cost-spike anomaly patterns already firing
+- `src/personal_agent/insights/engine.py:572` — daily `api_costs` anomaly detector →
+  `stream:insights.cost_anomaly` (`events/pipeline_handlers.py:287`); the cost-anomaly signal T2 wires to the reflex
 - Pricing: Voyage <https://docs.voyageai.com/docs/pricing> · OVH <https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/>
 
 ---
@@ -279,7 +317,8 @@ the gate.
 - **Pausability audit specifics (T1):** the safe between-items check-point per consumer and the one
   shared pause signal.
 - **Anomaly-detector tuning (T2):** what *shape* trips the reflex; reuse the insights cost-spike
-  pipeline (FRE-870/629) vs a purpose-built rate detector; false-trip vs missed-trip calibration.
+  detector (`insights/engine.py:572` / `stream:insights.cost_anomaly`) vs a purpose-built rate
+  detector; false-trip vs missed-trip calibration.
 - **Currency handling (T0):** a conversion step vs a native-currency ledger column for OVH's EUR.
 - **Signal resume/kill round-trip (T3):** delivery guarantee, dedupe, and how a phone reply
   actuates back into the VPS pause-state.
@@ -301,3 +340,16 @@ rulings folded in: Section-A = per-vendor thresholds + per-role visibility; Perp
 (verified a direct paid tool, not SearXNG, and cheaply instrumentable); approval-card threshold =
 anomaly-adaptive with a fixed bootstrap (anomaly-relative still needs a starting value). §7 open
 questions carried forward. On merge, master should flip ADR-0065 to Superseded.
+
+Revised after codex review round 1 (7 blocking, all code-verified): AC-4 reframed from an
+un-testable absence ("no automated kill path") to a positive owner-authenticated guard on the
+resume/kill transitions; AC-8/§8 corrected — the job-envelope is a NEW extension (ADR-0065's
+`reserve`/`commit` has no envelope/accumulator), not a free reuse; AC-2 broadened from a single
+incident replay to "no `cap_usd` denial path survives anywhere"; AC-3/§4 corrected the
+consolidator-vs-Redis conflation (cooperative between-items pause vs stream-consumer nack are
+different mechanisms; the consolidator loop is not a Redis consumer); the anomaly signal re-labeled
+from the non-existent FRE-870/629 to the real `insights/engine.py:572` → `stream:insights.cost_anomaly`;
+Perplexity onboarding corrected (the executor *discards* the `usage`, `perplexity.py:190` — feasible,
+not free); currency made a concrete T0 requirement (`api_costs` is `cost_usd`-only). AC-6 tightened
+to ask-first + the tool-approval waiter (not the constraint-pause path); AC-1 now requires cost
+derived from real usage, not a constant.

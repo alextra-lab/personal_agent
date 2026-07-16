@@ -11,20 +11,40 @@ manifest-driven dynamic `getattr(settings, field)` resolution in
 manifest directly, and a secret-heuristic gap where several `managed_*` fields carry
 an authoritative `json_schema_extra={"secret": True}` marker that the regex-based
 `_is_secret()` in `config_inventory.py` does not match.
+
+A further batch of tests (the `deployed_env_*` group below) backs the FRE-893 *reopen*
+fix: the first version shipped with no deployed-environment override source at all, so
+real production overrides were false-flagged as hardcode candidates. These tests use a
+temp-directory fixture via the `AUDIT_DEPLOYED_ENV_ROOT` override — never the real
+production `/opt/seshat/.env` — both to keep the suite host-independent and because a
+real secret value must never appear in a test fixture.
+
+The module-level `os.environ.setdefault` below (mirroring `tests/conftest.py`'s own
+`APP_ENV` pattern) is a code-review-confirmed fix: without it, running this suite on the
+VPS itself — this project's designated dev environment — silently read the real, live
+`/opt/seshat/.env` for every test that doesn't set its own override, making results
+host-dependent and baking production key names into `audit_all()`'s process-wide cache.
 """
 
 from __future__ import annotations
 
-from scripts.audit.config_usage_audit import (
+import os
+
+os.environ.setdefault("AUDIT_DEPLOYED_ENV_ROOT", "/nonexistent/fre-893-test-isolation-root")
+
+from scripts.audit.config_usage_audit import (  # noqa: E402
     CATEGORIES,
+    _deployed_env_key_sources,
     audit_all,
     categorize,
+    deployed_env_files_present,
     generate_inventory_section,
     generate_report,
+    override_locations,
     splice_inventory_section,
 )
 
-from personal_agent.config.settings import AppConfig
+from personal_agent.config.settings import AppConfig  # noqa: E402
 
 
 def test_every_appconfig_field_categorized() -> None:
@@ -112,6 +132,49 @@ def test_conftest_override_detected() -> None:
     assert "test-substrate" in kinds
 
 
+def test_deployed_env_override_detected(tmp_path, monkeypatch) -> None:
+    """A key present in a deployed `.env` is detected as a `deployed-env` override.
+
+    Regression guard for the FRE-893 reopen: the first version had no deployed-env
+    source, so real production overrides were false-flagged as hardcode candidates.
+    """
+    (tmp_path / ".env").write_text("AGENT_NEO4J_URI=bolt://fixture-only:7687\n", encoding="utf-8")
+    monkeypatch.setenv("AUDIT_DEPLOYED_ENV_ROOT", str(tmp_path))
+    result = override_locations("neo4j_uri", AppConfig.model_fields["neo4j_uri"])
+    kinds = {kind for _source, kind in result}
+    assert "deployed-env" in kinds
+
+
+def test_deployed_env_value_never_leaked(tmp_path, monkeypatch) -> None:
+    """Only the env-var KEY is read from a deployed file — the value never reaches evidence.
+
+    Uses a fixture value that would be unmistakable if it leaked, since a real secret
+    value must never appear in generated output.
+    """
+    secret_marker = "sk-FIXTURE-SECRET-VALUE-DO-NOT-LEAK"
+    (tmp_path / ".env").write_text(f"AGENT_ANTHROPIC_API_KEY={secret_marker}\n", encoding="utf-8")
+    monkeypatch.setenv("AUDIT_DEPLOYED_ENV_ROOT", str(tmp_path))
+    sources = _deployed_env_key_sources(tmp_path)
+    assert "AGENT_ANTHROPIC_API_KEY" in sources
+    assert secret_marker not in sources.values()
+    assert secret_marker not in "".join(sources.values())
+
+
+def test_deployed_env_missing_file_degrades_cleanly(tmp_path, monkeypatch) -> None:
+    """No deployed-env file at the configured root — override_locations does not crash."""
+    monkeypatch.setenv("AUDIT_DEPLOYED_ENV_ROOT", str(tmp_path))
+    result = override_locations("neo4j_uri", AppConfig.model_fields["neo4j_uri"])
+    kinds = {kind for _source, kind in result}
+    assert "deployed-env" not in kinds
+
+
+def test_deployed_env_files_present_reports_transparently(tmp_path) -> None:
+    """`deployed_env_files_present` names exactly the candidate paths that exist."""
+    (tmp_path / ".env").write_text("AGENT_DEBUG=true\n", encoding="utf-8")
+    found = deployed_env_files_present(tmp_path)
+    assert found == (str(tmp_path / ".env"),)
+
+
 def test_test_only_read_is_not_treated_as_production_evidence() -> None:
     """A field with zero src/ reads is `never-read` even if it happens to be touched in tests/scripts.
 
@@ -170,3 +233,20 @@ def test_splice_inventory_section_is_idempotent() -> None:
     assert once == twice == thrice
     assert twice.count("---") == 1
     assert "Some existing content." in twice
+
+
+def test_splice_inventory_section_handles_dangling_separator_with_no_marker() -> None:
+    r"""A doc with a trailing `---` but no §10 marker must not end up with a doubled rule.
+
+    Regression guard for the FRE-893 redo: a follow-up PR removed the §10 section but
+    left its leading separator dangling at EOF; re-running the generator against that
+    doc (marker absent, orphan `---` present) previously produced `---\n\n---` above
+    the freshly-inserted section instead of a single rule.
+    """
+    doc = "# Doc\n\nSome existing content.\n\n---\n"
+    section = "## §10 — Parameter usage audit (FRE-893)\n\nSummary.\n"
+
+    spliced = splice_inventory_section(doc, section)
+
+    assert spliced.count("---") == 1
+    assert "Some existing content." in spliced

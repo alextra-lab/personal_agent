@@ -629,3 +629,18 @@ Which model YAML is live depends on which compose file was deployed. Only `.clou
 | F7 | **113 `AppConfig` fields undocumented** in `.env.example` (§1, §7). | Policy (undocumented surface) | D4 coverage check |
 
 **Structural point for D1:** the two live substrate-writing profiles (`models.yaml` local, `models.cloud.yaml` prod) diverge on 3 of the cognitive-pipeline roles (F1) and on `reranker` (F3), and a `forbidden` role suffers definition drift (F2) — precisely the three drift layers ADR-0099 D1/D4 removes (assignment) and catches (definition). The role matrix (C2) should encode prod's values as the `forbidden` targets; F5 argues the guard should also flag multi-spelling env aliases.
+
+---
+
+## §10 — Parameter usage audit (FRE-893)
+
+A read-evidence + override-evidence categorization of every `AppConfig` field into load-bearing / read-but-never-overridden (hardcode candidate) / never-read (dead candidate) / writer-pinned-guardrail (secrets + `owner_storage_allowlist`, never a removal candidate). Full per-field evidence, methodology, and ranked candidate lists live in the dated report — this section is a summary only, extending this doc rather than duplicating that one.
+
+**Report:** [2026-07-16-fre-893-config-parameter-usage-audit.md](../research/2026-07-16-fre-893-config-parameter-usage-audit.md) · **311 fields categorized**
+
+| Category | Count |
+|---|---|
+| `load-bearing` | 21 |
+| `never-read` | 43 |
+| `read-but-never-overridden` | 230 |
+| `writer-pinned-guardrail` | 17 |

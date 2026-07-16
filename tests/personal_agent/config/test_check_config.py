@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import BaseModel, Field
 from scripts.check_config import main
 
 from personal_agent.config.config_guard import (
@@ -16,7 +17,9 @@ from personal_agent.config.config_guard import (
     check_deployment_manifest_internal_consistency,
     check_deployment_manifest_matches_compose,
     check_embedding_fallback_identity,
+    check_field_descriptions,
     check_matrix_shape,
+    check_secret_field_plaintext_defaults,
     load_deployment_manifest,
     load_matrix,
     run_all_checks,
@@ -306,3 +309,128 @@ class TestNormalizeContainerModelConfigPath:
 
     def test_passes_through_relative_path_unchanged(self) -> None:
         assert _normalize_container_model_config_path("config/models.yaml") == "config/models.yaml"
+
+
+class TestFieldDescriptions:
+    """ADR-0099 D4 — every AppConfig field must carry a non-empty description.
+
+    A regression ratchet, not a cleanup: 311/311 real fields already comply.
+    """
+
+    def test_flags_field_with_no_description(self) -> None:
+        class Model(BaseModel):
+            documented: str = Field(default="x", description="Has a description")
+            undocumented: str = Field(default="y")
+
+        findings = check_field_descriptions(Model.model_fields)
+        assert len(findings) == 1
+        assert findings[0].check == "undocumented_field"
+        assert findings[0].severity == "policy"
+        assert "undocumented" in findings[0].message
+
+    def test_flags_whitespace_only_description(self) -> None:
+        class Model(BaseModel):
+            blank: str = Field(default="y", description="   ")
+
+        findings = check_field_descriptions(Model.model_fields)
+        assert len(findings) == 1
+        assert "blank" in findings[0].message
+
+    def test_no_false_positive_on_real_repo(self) -> None:
+        assert check_field_descriptions() == []
+
+
+class TestSecretFieldPlaintextDefaults:
+    """FRE-876 optional add-on — no secret-marked field defaults to a real plaintext value.
+
+    check_committed_secrets (AC-8) only scans YAML/.env text for a *committed*
+    secret value; it never looks at a secret field's own Python default.
+    """
+
+    def test_flags_secret_field_with_plaintext_default(self) -> None:
+        class Model(BaseModel):
+            api_key: str | None = Field(
+                default="sk-real-looking-value", json_schema_extra={"secret": True}
+            )
+
+        findings = check_secret_field_plaintext_defaults(Model.model_fields)
+        assert len(findings) == 1
+        assert findings[0].check == "secret_field_plaintext_default"
+        assert findings[0].severity == "policy"
+        assert "api_key" in findings[0].message
+
+    def test_does_not_flag_secret_field_defaulting_to_none(self) -> None:
+        class Model(BaseModel):
+            api_key: str | None = Field(default=None, json_schema_extra={"secret": True})
+
+        assert check_secret_field_plaintext_defaults(Model.model_fields) == []
+
+    def test_flags_secret_field_with_unexempted_default_factory(self) -> None:
+        """A default_factory can return a hardcoded secret; field.default alone misses it."""
+
+        class Model(BaseModel):
+            api_key: str = Field(
+                default_factory=lambda: "sk-hardcoded-in-a-factory",
+                json_schema_extra={"secret": True},
+            )
+
+        findings = check_secret_field_plaintext_defaults(Model.model_fields)
+        assert len(findings) == 1
+        assert findings[0].check == "secret_field_plaintext_default"
+        assert "api_key" in findings[0].message
+
+    def test_exempted_default_factory_is_not_flagged(self) -> None:
+        class Model(BaseModel):
+            api_key: str = Field(
+                default_factory=lambda: "dev-only-value",
+                json_schema_extra={
+                    "secret": True,
+                    "secret_default_allow": "documented dev-only factory value",
+                },
+            )
+
+        assert check_secret_field_plaintext_defaults(Model.model_fields) == []
+
+    def test_exempted_secret_default_is_not_flagged(self) -> None:
+        class Model(BaseModel):
+            dev_password: str = Field(
+                default="dev_only_password",
+                json_schema_extra={
+                    "secret": True,
+                    "secret_default_allow": "documented local-dev-only convenience value",
+                },
+            )
+
+        assert check_secret_field_plaintext_defaults(Model.model_fields) == []
+
+    def test_empty_string_exemption_reason_does_not_count(self) -> None:
+        class Model(BaseModel):
+            dev_password: str = Field(
+                default="dev_only_password",
+                json_schema_extra={"secret": True, "secret_default_allow": "   "},
+            )
+
+        findings = check_secret_field_plaintext_defaults(Model.model_fields)
+        assert len(findings) == 1
+        assert findings[0].check == "secret_field_plaintext_default"
+
+    def test_flags_exemption_key_on_non_secret_field_as_misuse(self) -> None:
+        class Model(BaseModel):
+            plain: str = Field(default="x", json_schema_extra={"secret_default_allow": "bogus"})
+
+        findings = check_secret_field_plaintext_defaults(Model.model_fields)
+        assert len(findings) == 1
+        assert findings[0].check == "secret_default_allow_without_secret_marker"
+        assert findings[0].severity == "policy"
+        assert "plain" in findings[0].message
+
+    def test_no_false_positive_on_real_repo(self) -> None:
+        """Proves the neo4j_password exemption works end to end on the real repo."""
+        assert check_secret_field_plaintext_defaults() == []
+
+    def test_neo4j_password_carries_the_exemption(self) -> None:
+        field = AppConfig.model_fields["neo4j_password"]
+        extra = field.json_schema_extra
+        assert isinstance(extra, dict)
+        assert isinstance(extra.get("secret_default_allow"), str)
+        assert extra["secret_default_allow"].strip()

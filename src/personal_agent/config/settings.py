@@ -1178,7 +1178,14 @@ class AppConfig(BaseSettings):
     neo4j_password: str = Field(
         default="neo4j_dev_password",
         description="Neo4j password",
-        json_schema_extra={"secret": True},
+        json_schema_extra={
+            "secret": True,
+            "secret_default_allow": (
+                "local-only dev convenience password; matches docker-compose.yml's own "
+                "hardcoded fallback (NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-neo4j_dev_password}) "
+                "— not a real credential"
+            ),
+        },
     )
 
     # Substrate isolation (FRE-375)

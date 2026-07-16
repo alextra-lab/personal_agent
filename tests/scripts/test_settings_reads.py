@@ -136,19 +136,71 @@ def test_self_attribute_alias() -> None:
     assert "second_brain_cpu_threshold" in _reads(source)
 
 
-def test_shadowed_settings_name_is_not_a_read() -> None:
-    """A file that rebinds `settings` to a non-AppConfig value does not seed `settings`.
+def test_appconfig_construction_alias() -> None:
+    """`cfg = AppConfig()` then `cfg.<field>` resolves (config_guard.py pattern).
 
-    `scripts/study/sweep.py` binds `settings = StudySettings()`; its `settings.neo4j_uri`
-    read must NOT be attributed to the AppConfig field of the same name.
+    A code-review pass found `settings = AppConfig()` was treated as a non-settings
+    shadow; direct construction must count as a settings value.
     """
     source = (
-        "class StudySettings:\n"
-        "    neo4j_uri = 'x'\n"
-        "settings = StudySettings()\n"
-        "y = settings.neo4j_uri\n"
+        "from personal_agent.config.settings import AppConfig\n"
+        "def f():\n"
+        "    cfg = AppConfig()\n"
+        "    return cfg.debug\n"
     )
-    assert "neo4j_uri" not in _reads(source)
+    assert "debug" in _reads(source)
+
+
+def test_aliased_factory_import() -> None:
+    """`from ...config import get_settings as _gs; cfg = _gs(); cfg.<field>` resolves.
+
+    Real at `captains_log/capture.py` — an aliased factory import the literal-name
+    check missed, dropping a genuine read (wrong-deletion direction).
+    """
+    source = (
+        "from personal_agent.config import get_settings as _gs\n"
+        "def f():\n"
+        "    cfg = _gs()\n"
+        "    return cfg.second_brain_cpu_threshold\n"
+    )
+    assert "second_brain_cpu_threshold" in _reads(source)
+
+
+def test_di_self_attribute_alias_without_factory_fallback() -> None:
+    """`self._settings = config` (DI param, no `or get_settings()`) then a field read resolves.
+
+    A code-review pass flagged this: a dependency-injected `config: AppConfig` stored on
+    an instance attribute, read as `self._settings.<field>`, was missed.
+    """
+    source = (
+        "from personal_agent.config.settings import AppConfig\n"
+        "class C:\n"
+        "    def __init__(self, config: AppConfig) -> None:\n"
+        "        self._settings = config\n"
+        "    def check(self):\n"
+        "        return self._settings.neo4j_uri\n"
+    )
+    assert "neo4j_uri" in _reads(source)
+
+
+def test_shadow_rebind_does_not_drop_sibling_reads() -> None:
+    """A rebind of `settings` in one function must not drop a sibling function's read.
+
+    The exact `scripts/study/run_ingest.py` wrong-deletion regression a code-review pass
+    confirmed: file-global shadow suppression dropped a genuine `settings.<field>` read
+    in a sibling function of the one doing `settings = OtherSettings()`.
+    """
+    source = (
+        "from personal_agent.config import settings\n"
+        "class OtherSettings:\n"
+        "    pass\n"
+        "def reads_singleton():\n"
+        "    return settings.neo4j_uri\n"  # genuine AppConfig read
+        "def rebinds():\n"
+        "    settings = OtherSettings()\n"
+        "    return settings\n"
+    )
+    assert "neo4j_uri" in _reads(source)
 
 
 def test_unrelated_alias_is_not_a_read() -> None:

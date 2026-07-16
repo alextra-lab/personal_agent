@@ -26,9 +26,13 @@ The audit's read detection was line-oriented `git grep`, blind to reads reaching
 through an alias. FRE-896 replaced it with an AST scan
 (`scripts/audit/settings_reads.py`) that resolves: local aliases (`cfg = settings`),
 factory chains (`get_settings().<field>`), multi-line `getattr(settings, "<field>")`,
-`AppConfig`-typed params, `self._settings` attribute aliases, and
-`from personal_agent.config import settings as X` import aliases. Regenerating shrank the
-never-read set from **43 → 28** (rescued live fields — `proactive_memory_*` ×11,
+`AppConfig`-typed params, `self._settings` attribute aliases (incl. plain DI
+`self._settings = config`), direct `AppConfig()` construction, aliased factory imports
+(`get_settings as _gs`), and `from personal_agent.config import settings as X` import
+aliases. A high-effort code-review pass hardened four wrong-deletion-direction gaps in the
+first cut (a file-global shadow check that dropped sibling-function reads — now the
+`settings` name is always seeded, biasing to *keep*; and the `AppConfig()`/aliased-factory/
+DI-attribute misses above). Regenerating shrank the never-read set from **43 → 28** (rescued live fields — `proactive_memory_*` ×11,
 `insights_wiring_enabled`, `quality_monitor_*`, `slm_health_cache_ttl_seconds`,
 `freshness_backfill_confirm`) and also **removed 5 old false-positives** whose only
 "reads" were `AGENTS.md` markdown code examples the text-grep counted

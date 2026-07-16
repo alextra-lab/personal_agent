@@ -13,21 +13,29 @@ evade a per-line literal grep and were systematically false-flagged as dead conf
    lines, so ``getattr(`` and ``settings`` never share a line (e.g. the
    ``quality_monitor_*`` fields in ``brainstem/scheduler.py``).
 
-A codex plan-review pass on FRE-896 added a fourth, higher-stakes pattern:
+A codex plan-review pass and a high-effort code-review pass on FRE-896 added four more,
+all higher-stakes because each is the *wrong-deletion* direction — a genuine read dropped:
 
-4. **Self-attribute alias** — ``self._settings = config or get_settings()`` then
-   ``self._settings.<field>`` (real at ``brainstem/optimizer.py``). Missing this is the
-   *dangerous* direction: a field read only through an instance-attribute alias would be
-   misclassified never-read and become a wrong-deletion candidate.
+4. **Self-attribute alias** — ``self._settings = config or get_settings()`` (or a plain
+   DI ``self._settings = config`` where ``config: AppConfig``) then ``self._settings.<field>``
+   (real at ``brainstem/optimizer.py``).
+5. **Direct construction** — ``settings = AppConfig()`` / ``cfg = AppConfig()`` then
+   ``cfg.<field>`` (real at ``config/config_guard.py``).
+6. **Aliased factory import** — ``from personal_agent.config import get_settings as _gs``
+   then ``_gs()`` / ``cfg = _gs()`` (real at ``captains_log/capture.py``).
+7. **Settings-import alias** — ``from personal_agent.config import settings as X`` then
+   ``X.<field>`` (real at ``orchestrator/executor.py``, 7× across ``src/``).
 
-This module resolves all four with an AST pass instead of a regex. Granularity is
+This module resolves all of them with an AST pass instead of a regex. Granularity is
 file→field (the audit only asks *which fields a file reads*), so alias resolution is a
-file-level union rather than a per-scope dataflow — a conservative choice: a stray reuse
-of an alias name can only *keep* a field (mark it read), never wrongly delete one. The
-one exception handled explicitly is the literal name ``settings`` being *shadowed* by a
-non-AppConfig binding (``settings = StudySettings()`` in ``scripts/study/sweep.py``): the
-seed is withheld when the file rebinds ``settings`` to a non-settings value, so an
-unrelated object's attributes are not attributed to same-named AppConfig fields.
+file-level union rather than a per-scope dataflow — a deliberate bias to the *keep*
+direction: a stray reuse of an alias name can only *keep* a field (mark it read), never
+wrongly delete one. For the same reason the literal name ``settings`` is **always**
+seeded even in a file that rebinds it (``settings = StudySettings()``): a code-review
+pass showed a file-global "shadow" suppression dropped genuine ``settings.<field>`` reads
+in sibling functions of the rebinding one — over-counting a same-named non-AppConfig read
+(cosmetic, and only ever a ``scripts``/``tests``-root hit, never a production ``src``
+read) is the safe trade; dropping a real read is not.
 """
 
 from __future__ import annotations
@@ -42,24 +50,56 @@ _FACTORY_NAME = "get_settings"
 _APPCONFIG_TYPES: frozenset[str] = frozenset({"AppConfig"})
 # Receivers whose attribute assignments may hold a settings alias (``self._settings``).
 _SELF_RECEIVERS: frozenset[str] = frozenset({"self", "cls"})
-# The package the singleton is imported from — ``from personal_agent.config import settings``.
-_CONFIG_MODULE = "personal_agent.config"
+# The modules the singleton / factory are imported from —
+# ``from personal_agent.config import settings`` and ``...config.settings import get_settings``.
+_CONFIG_MODULES: frozenset[str] = frozenset(
+    {"personal_agent.config", "personal_agent.config.settings"}
+)
 
 
-def _is_settings_value(node: ast.expr | None) -> bool:
-    """Whether an expression evaluates to the AppConfig singleton.
+def _collect_factory_names(tree: ast.AST) -> frozenset[str]:
+    """Every name that resolves to ``get_settings`` in this module (incl. import aliases).
 
-    Recognizes the singleton name ``settings``, a ``get_settings()`` call, and any
-    ``BoolOp`` containing one (covers the ``settings or get_settings()`` idiom).
+    Seeded with the canonical ``get_settings``; extended with
+    ``from personal_agent.config[.settings] import get_settings as X`` alias imports, so
+    a factory reached under an alias (real at ``captains_log/capture.py``:
+    ``import get_settings as _get_settings``) is still recognized.
+    """
+    names = {_FACTORY_NAME}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in _CONFIG_MODULES:
+            for alias in node.names:
+                if alias.name == _FACTORY_NAME and alias.asname:
+                    names.add(alias.asname)
+    return frozenset(names)
+
+
+def _is_settings_value(
+    node: ast.expr | None,
+    factory_names: frozenset[str],
+    name_aliases: frozenset[str] = frozenset(),
+) -> bool:
+    """Whether an expression evaluates to an AppConfig instance.
+
+    Recognizes the singleton name ``settings`` (and any already-known ``name_aliases``,
+    which lets a DI param flow into a ``self._x = config`` attribute alias), a factory
+    call (``get_settings()`` or an aliased factory in ``factory_names``), a direct
+    ``AppConfig()`` construction, and any ``BoolOp`` containing one of the above (covers
+    ``config or get_settings()``).
     """
     if node is None:
         return False
     if isinstance(node, ast.Name):
-        return node.id == _SINGLETON_NAME
+        return node.id == _SINGLETON_NAME or node.id in name_aliases
     if isinstance(node, ast.Call):
-        return isinstance(node.func, ast.Name) and node.func.id == _FACTORY_NAME
+        func = node.func
+        if isinstance(func, ast.Name):
+            return func.id in factory_names or func.id in _APPCONFIG_TYPES
+        if isinstance(func, ast.Attribute):
+            return func.attr in factory_names or func.attr in _APPCONFIG_TYPES
+        return False
     if isinstance(node, ast.BoolOp):
-        return any(_is_settings_value(value) for value in node.values)
+        return any(_is_settings_value(v, factory_names, name_aliases) for v in node.values)
     return False
 
 
@@ -96,93 +136,106 @@ def _function_params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> Iterable[a
         yield args.kwarg
 
 
-def _settings_is_shadowed(tree: ast.AST) -> bool:
-    """Whether the file rebinds the name ``settings`` to a non-AppConfig value.
+def settings_alias_names(
+    tree: ast.AST, factory_names: frozenset[str] | None = None
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Resolve the ``(name_aliases, attr_aliases)`` bound to an AppConfig instance.
 
-    ``settings = StudySettings()`` (``scripts/study/sweep.py``) shadows the singleton
-    name; seeding ``settings`` as an alias there would wrongly attribute that unrelated
-    object's attributes to same-named AppConfig fields. A rebind to a genuine settings
-    value (``settings = get_settings()``) is not shadowing.
-    """
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            targets_settings = any(
-                isinstance(t, ast.Name) and t.id == _SINGLETON_NAME for t in node.targets
-            )
-            if targets_settings and not _is_settings_value(node.value):
-                return True
-        elif isinstance(node, ast.AnnAssign):
-            if (
-                isinstance(node.target, ast.Name)
-                and node.target.id == _SINGLETON_NAME
-                and not _is_settings_value(node.value)
-                and not _annotation_is_appconfig(node.annotation)
-            ):
-                return True
-    return False
+    ``name_aliases`` are plain names (locals, params, module globals) that hold an
+    AppConfig instance; ``attr_aliases`` are ``self.<attr>`` / ``cls.<attr>`` attribute
+    names that hold one. Both are file-level unions (see the module docstring — per-scope
+    precision is unnecessary and biased to the *keep* direction).
 
-
-def settings_alias_names(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
-    """Resolve the ``(name_aliases, attr_aliases)`` bound to the AppConfig singleton.
-
-    ``name_aliases`` are plain names (locals, params, module globals) that hold the
-    singleton; ``attr_aliases`` are ``self.<attr>`` / ``cls.<attr>`` attribute names that
-    hold it. Both are file-level unions (see the module docstring for why per-scope
-    precision is unnecessary and conservative).
+    The name ``settings`` is **always** seeded. An earlier version withheld the seed when
+    the file rebound ``settings`` to a non-AppConfig value (``settings = StudySettings()``)
+    to avoid cosmetic evidence pollution, but a code-review pass found that check was
+    file-global: one function's rebind suppressed genuine ``settings.<field>`` reads in
+    *sibling* functions — a wrong-deletion-direction false negative. Over-counting a
+    same-named non-AppConfig read (cosmetic, only ever a `scripts`/`tests`-root hit, never
+    a production `src` read) is the safe trade; dropping a real read is not.
 
     Args:
         tree: A parsed module AST.
+        factory_names: Names resolving to ``get_settings`` (computed if omitted).
 
     Returns:
         A ``(name_aliases, attr_aliases)`` pair of frozensets.
     """
-    name_aliases: set[str] = set()
-    attr_aliases: set[str] = set()
-
-    if not _settings_is_shadowed(tree):
-        name_aliases.add(_SINGLETON_NAME)
+    factories = factory_names if factory_names is not None else _collect_factory_names(tree)
+    name_aliases: set[str] = {_SINGLETON_NAME}
+    assigns: list[ast.Assign | ast.AnnAssign] = []
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            # `from personal_agent.config import settings as X` binds X to the singleton.
-            if node.module == _CONFIG_MODULE:
+            if node.module in _CONFIG_MODULES:  # `import settings as X`
                 for alias in node.names:
                     if alias.name == _SINGLETON_NAME and alias.asname:
                         name_aliases.add(alias.asname)
-        elif isinstance(node, ast.Assign):
-            if _is_settings_value(node.value):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        name_aliases.add(target.id)
-                    elif (
-                        isinstance(target, ast.Attribute)
-                        and isinstance(target.value, ast.Name)
-                        and target.value.id in _SELF_RECEIVERS
-                    ):
-                        attr_aliases.add(target.attr)
-        elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and (
-                _is_settings_value(node.value) or _annotation_is_appconfig(node.annotation)
-            ):
-                name_aliases.add(node.target.id)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            assigns.append(node)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for arg in _function_params(node):
                 if _annotation_is_appconfig(arg.annotation):
                     name_aliases.add(arg.arg)
 
-    return frozenset(name_aliases), frozenset(attr_aliases)
+    # Pass 1 — name aliases from assignments, to a fixpoint so alias→alias chains
+    # (`cfg = settings; alt = cfg`) resolve without ordering assumptions.
+    changed = True
+    while changed:
+        changed = False
+        for node in assigns:
+            if not _is_settings_value(node.value, factories, frozenset(name_aliases)):
+                continue
+            for name in _assign_name_targets(node):
+                if name not in name_aliases:
+                    name_aliases.add(name)
+                    changed = True
+        # AnnAssign whose annotation is AppConfig binds regardless of RHS.
+        for node in assigns:
+            if isinstance(node, ast.AnnAssign) and _annotation_is_appconfig(node.annotation):
+                if isinstance(node.target, ast.Name) and node.target.id not in name_aliases:
+                    name_aliases.add(node.target.id)
+                    changed = True
+
+    frozen_names = frozenset(name_aliases)
+
+    # Pass 2 — self/cls attribute aliases, now that name aliases are complete (so a
+    # DI ``self._settings = config`` where ``config: AppConfig`` is recognized).
+    attr_aliases: set[str] = set()
+    for node in assigns:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not _is_settings_value(node.value, factories, frozen_names):
+            continue
+        for tgt in node.targets:
+            if (
+                isinstance(tgt, ast.Attribute)
+                and isinstance(tgt.value, ast.Name)
+                and tgt.value.id in _SELF_RECEIVERS
+            ):
+                attr_aliases.add(tgt.attr)
+
+    return frozen_names, frozenset(attr_aliases)
+
+
+def _assign_name_targets(node: ast.Assign | ast.AnnAssign) -> Iterable[str]:
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    for target in targets:
+        if isinstance(target, ast.Name):
+            yield target.id
 
 
 def _value_is_settings(
-    node: ast.expr, name_aliases: frozenset[str], attr_aliases: frozenset[str]
+    node: ast.expr,
+    factory_names: frozenset[str],
+    name_aliases: frozenset[str],
+    attr_aliases: frozenset[str],
 ) -> bool:
-    """Whether a receiver expression refers to the AppConfig singleton (name/factory/attr)."""
+    """Whether a receiver expression refers to an AppConfig instance (name/factory/attr)."""
     if isinstance(node, ast.Name):
         return node.id in name_aliases
-    if isinstance(node, ast.Call):
-        return isinstance(node.func, ast.Name) and node.func.id == _FACTORY_NAME
-    if isinstance(node, ast.BoolOp):
-        return any(_value_is_settings(v, name_aliases, attr_aliases) for v in node.values)
+    if isinstance(node, ast.Call) or isinstance(node, ast.BoolOp):
+        return _is_settings_value(node, factory_names, name_aliases)
     if (
         isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name)
@@ -207,19 +260,20 @@ def collect_field_reads(tree: ast.AST, field_names: frozenset[str]) -> list[tupl
     Returns:
         A list of ``(field_name, lineno)`` reads, in AST walk order.
     """
-    name_aliases, attr_aliases = settings_alias_names(tree)
+    factory_names = _collect_factory_names(tree)
+    name_aliases, attr_aliases = settings_alias_names(tree, factory_names)
     reads: list[tuple[str, int]] = []
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and node.attr in field_names:
-            if _value_is_settings(node.value, name_aliases, attr_aliases):
+            if _value_is_settings(node.value, factory_names, name_aliases, attr_aliases):
                 reads.append((node.attr, node.lineno))
         elif (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id == "getattr"
             and len(node.args) >= 2
-            and _value_is_settings(node.args[0], name_aliases, attr_aliases)
+            and _value_is_settings(node.args[0], factory_names, name_aliases, attr_aliases)
         ):
             key = node.args[1]
             if (

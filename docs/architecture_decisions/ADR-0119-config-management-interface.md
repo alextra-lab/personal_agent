@@ -74,14 +74,24 @@ Auto/local-vs-cloud vision default) through the same surface — the second edit
 the first thing that proves the expose→persist pattern replaces FRE-886's hardcoded label.
 
 **4. One write mechanism — a thin override the resolvers prefer.** A small override store records
-the *selection* per open role; the resolvers prefer it over the file default. It spans **both**
-resolution paths so the user never sees which is behind a panel:
-- matrix roles (`artifact_builder`, …) via `resolve_role_model_key` (`config/model_loader.py`);
-- profile roles (`primary`/`sub_agent`) via `resolve_model_key` (`config/profile.py`, ADR-0044).
-The matrix stays **canonical** — it defines the candidate space and the pinned/open distinction;
-the override is *selection state* layered on top, not a redefinition. This is not a parallel
-source of truth (same shape as ADR-0076 constraint preferences and FRE-886's setting). No runtime
-YAML rewriting.
+two kinds of *selection state*, and the resolvers prefer it over the file/env default:
+- **role→model selections** for open roles, consulted by both resolution paths so the user never
+  sees which is behind a panel: matrix roles (`artifact_builder`, …) via `resolve_role_model_key`
+  (`src/personal_agent/config/model_loader.py:144`) and profile roles (`primary`/`sub_agent`) via
+  `resolve_model_key` (`src/personal_agent/config/profile.py:75`, ADR-0044). Note the two default
+  sources differ by path: `artifact_builder`'s file default is the matrix; `primary`/`sub_agent`'s
+  is the active ExecutionProfile (the resolver *can* read a `primary` matrix row if called
+  directly, but by convention those roles default through the profile — the override sits in front
+  of whichever path the role uses).
+- **whitelisted setting overrides** — currently just the FRE-886 attachment default
+  (`attachment_default_processing_target`, `src/personal_agent/config/settings.py:857`, read at
+  `orchestrator/executor.py:1649`), which is env/AppConfig-backed today. The store holds the
+  UI-set value and the read of that setting prefers the override over the env default — so a
+  settings-value panel and a role panel share **one** store and **one** API (the reusable
+  expose→validate→persist pattern), with no env mutation and no runtime YAML rewriting.
+The matrix stays **canonical** for role→model (candidate space + pinned/open); the override is
+*selection state* layered on top, not a redefinition — not a parallel source of truth (same shape
+as ADR-0076 constraint preferences).
 
 **5. Vetted candidate registry per open role** (generalize ADR-0118 T2's
 `artifact_builder_candidates`): the selectable set + onboarding metadata (provider, decoding,
@@ -167,7 +177,9 @@ gateway extension (Phase 2), not an LLM router.
 
 ### Negative Consequences
 - The override store + resolver shim must span **two** resolution paths (matrix + ExecutionProfile)
-  — modest but real plumbing, and the profile path (`primary`/`sub_agent`) has many call sites.
+  — modest but real plumbing. The profile path is a handful of source sites, not a sprawl
+  (`get_llm_client` ×4, `resolve_model_key` ×~8), and the override read is best injected inside the
+  two resolver functions so callers are unchanged.
 - A read/write config API and a PWA surface are net-new (though small and bounded).
 - Per-candidate availability checking adds a liveness concern to the read path.
 
@@ -196,8 +208,12 @@ gateway extension (Phase 2), not an LLM router.
   registry; reject a pinned role or non-candidate key server-side).
 - PWA — the config screen: observe view (matrix + pinned/open + curated settings) + open-role
   pickers + the attachment-default control; writes through the config API.
-- Reuse: ADR-0118 T1/T2 (`artifact_builder` role extraction + candidate registry) as-is;
-  FRE-886's `attachment_default_processing_target` setting.
+- **Absorb ADR-0118 T1/T2 — they are not yet built.** The `artifact_builder` role extraction
+  (FRE-879) and candidate registry (FRE-880) are Needs-Approval, not done: `llm_client/types.py`
+  has no `ARTIFACT_BUILDER` and `tools/artifact_tools.py:1437` still binds `sub_agent`. ADR-0119
+  folds those two tickets in as its first sequencing step (re-homed under this chain), supersedes
+  ADR-0118's UI half (T5), and defers the ADR-0118 build-time card (T3/T4). Reuse (already
+  shipped): FRE-886's `attachment_default_processing_target` setting — surfaced, not re-implemented.
 
 **Dependencies:** ADR-0099 (matrix + validator + `resolve_role_model_key`), ADR-0044/0079
 (ExecutionProfile + `resolve_model_key`), ADR-0118 (artifact_builder role/registry — reused),
@@ -208,12 +224,19 @@ selection, availability filtering, server-side rejection of a pinned/non-candida
 check that changing an open-role model takes effect on the next turn.
 
 **Sequencing (Phase 1 tickets, one PR each):**
-1. Override store (table + repo + migration) and the resolver-shim wiring across both paths
-   (matrix + profile), fail-closed. No UI yet; AC-1/AC-2/AC-6 provable at the API/resolver level.
-2. Generalize the candidate registry to all open roles + availability filtering (reuses ADR-0118 T2).
-3. Config read/write API (validate through the registry; server-side guardrail).
+0. **(Absorbed from ADR-0118)** `artifact_builder` role extraction — `ModelRole.ARTIFACT_BUILDER`
+   + matrix role + cost lane + telemetry identity + wire `artifact_draft` off `sub_agent` (FRE-879);
+   vetted candidate registry for `artifact_builder` (FRE-880). Prerequisite — the role must exist
+   before it can be a panel.
+1. Override store (table + repo + migration) + the resolver-shim **inside** both
+   `resolve_role_model_key` and `resolve_model_key` (fail-closed) + the attachment-setting override
+   read. No UI yet; AC-1/AC-2/AC-6 provable at the API/resolver level.
+2. Generalize the candidate registry from `artifact_builder` to the other open roles
+   (`primary`, `sub_agent`) + availability filtering.
+3. Config read/write API (validate through the registry; server-side guardrail rejecting
+   pinned/non-candidate writes).
 4. PWA observe view (matrix + pinned/open + curated settings).
-5. PWA open-role pickers + attachment-default control (the editable panels). **(Seam ticket.)**
+5. PWA open-role pickers + attachment-default control (the editable panels). **(Seam ticket, AC-7.)**
 
 ---
 
@@ -222,11 +245,15 @@ check that changing an open-role model takes effect on the next turn.
 - **AC-1 — A selection takes effect.** *Check:* set a non-default model for an open role
   (e.g. `primary`); the next turn's `MODEL_CALL_COMPLETED` for that role shows the selected model
   id. *Fails if* the resolution ignores the override.
-- **AC-2 — A selection cannot perturb a writer binding.** *Check:* set any open-role selection,
-  then assert `resolve_role_model_key(r)` for every `r ∈ {entity_extraction, captains_log,
-  insights, embedding, reranker, reranker_fallback}` is **byte-identical** to its baseline pinned
-  key, and no writer resolution reads override state. *Fails if* any writer's resolved key changes
-  as a function of a selection.
+- **AC-2 — Overrides are ignored for pinned writer roles (the guardrail).** *Check:* inject an
+  override row directly in the store naming a writer role (e.g. `entity_extraction → claude_haiku`),
+  then assert `resolve_role_model_key('entity_extraction')` still returns its pinned key — and the
+  same for every writer `r ∈ {entity_extraction, captains_log, insights, embedding, reranker,
+  reranker_fallback}`. Separately, the write API rejects such a row 4xx before it can be stored.
+  *Fails if* a writer role's resolution changes when an override for it is present. *(This is the
+  discriminating form: a broken impl that reads overrides for all roles and leans only on "writers
+  have no candidate list" would pass a byte-identical check under a benign selection, but fails here
+  when an override for a writer actually exists.)*
 - **AC-3 — Pinned roles are visible but not editable.** *Check:* the read payload marks every
   writer role `pinned` and exposes **no** candidate list / write path for it; a write attempt
   against a pinned role is rejected 4xx server-side. *Fails if* a writer is editable or absent
@@ -239,9 +266,11 @@ check that changing an open-role model takes effect on the next turn.
   default to cloud via the surface → an Auto (no-override) image routes to Sonnet; set it back to
   local → the same image routes to Qwen (FRE-886's own AC, now driven from the UI). *Fails if* the
   setting doesn't change routing.
-- **AC-6 — Overrides persist and fall back.** *Check:* an override persists across turns/sessions;
-  clearing it restores the matrix file default for that role (resolver prefers override→default).
-  *Fails if* the override doesn't persist, or clearing it doesn't restore the canonical default.
+- **AC-6 — Overrides persist and fall back to the *per-path* canonical default.** *Check:* an
+  override persists across turns/sessions; clearing it restores the resolver's canonical default —
+  the **matrix file default** for `artifact_builder`, the **active ExecutionProfile default** for
+  `primary`/`sub_agent` (they resolve via the profile, not the matrix). *Fails if* the override
+  doesn't persist, or clearing it restores the wrong source (e.g. a matrix lookup for `primary`).
 - **AC-7 (assembled seam) — the whole loop.** *Check:* open the config view, change the
   orchestrator model, the next turn runs on it (AC-1 telemetry), the writer bindings are unchanged
   (AC-2), and the picker showed only available candidates (AC-4). *Fails if* any leg breaks.
@@ -276,4 +305,10 @@ ADR-0099 matrix; frontier-flexible editability (no stakes-phasing) with KG-write
 one real line; sub-agents retained as context firewalls (model-per-role is the selectable axis);
 orchestrator routing and the ADR-0118 build-time card explicitly deferred. Routing determinism/
 latency concern settled by the 2026-07-16 SOTA survey. Reconciles ADR-0118 FRE-878–883: T1/T2
-reused, T5 bespoke picker superseded by this interface.
+absorbed as this chain's first step (they are not yet built), T5 bespoke picker superseded, T3/T4
+card deferred. Revised after codex review round 1: AC-6 corrected to per-path canonical default
+(`primary`/`sub_agent` fall back to the ExecutionProfile, not the matrix); AC-2 rewritten to a
+runnable guardrail check (inject a writer override → assert it is ignored); the write mechanism now
+covers the FRE-886 attachment setting (env-backed) as a whitelisted setting-override, not only
+role→model rows; and the ADR-0118 T1/T2 reconciliation corrected from "reuse as-is" to "absorb as
+step 0" (they are Needs-Approval, not shipped).

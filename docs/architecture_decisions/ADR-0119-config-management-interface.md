@@ -57,7 +57,7 @@ expose→validate→persist pattern.** Seven parts:
 
 **1. Observe-first read view.** Render the *resolved* config: the full role matrix (every
 role→model binding for the active profile), the active ExecutionProfile, and a **curated short
-list** of key live settings (the attachment default, cost caps, a few key flags) — **not** an
+list** of key live settings (the attachment default, the cost/spend-visibility surface — rendered by [ADR-0120](ADR-0120-cost-governance-visibility-consent.md) T6, *not* hard dollar caps, which ADR-0120 abolishes — and a few key flags) — **not** an
 editor over the ~150 AppConfig params. Each role is marked **pinned vs open** so the
 swappability principle is legible in the UI itself (you *see* that the KG-writers are pinned and
 the open roles are selectable). "Observe-first" means *you can see the config instead of

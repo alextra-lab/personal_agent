@@ -3,7 +3,8 @@
 Categorizes every ``AppConfig`` field into one of four buckets, backed by evidence:
 
 * ``load-bearing`` — read somewhere in production code AND overridden away from its
-  default somewhere in the repo.
+  default somewhere this audit can see (compose, the test substrate, or the deployed
+  environment).
 * ``read-but-never-overridden`` — read, but never seen overridden — a hardcode candidate.
 * ``never-read`` — no read evidence anywhere — a dead-config candidate.
 * ``writer-pinned-guardrail`` — a secret or safety-critical field; never a removal
@@ -19,14 +20,26 @@ the codebase, resolved by reading the manifest directly rather than tracing the 
 call — a codex plan-review pass on this ticket found that a literal-string grep alone
 cannot see this path).
 
-Override evidence combines two sources: the 5 ``docker-compose*.yml`` files' parsed
-``services.*.environment`` blocks (a real deployment-config surface), and
+Override evidence combines three sources: the 5 ``docker-compose*.yml`` files' parsed
+``services.*.environment`` blocks (a real deployment-config surface);
 ``tests/conftest.py``'s ``os.environ.setdefault("AGENT_...")`` test-substrate defaults
-(FRE-375) — tagged separately (``"compose"`` vs ``"test-substrate"``) so a reader can
-tell a real deployment override from a test-isolation default. The actual deployed
-``.env`` (gitignored, not in this repo) is NOT visible to this audit — a field with no
-in-repo override evidence is not proof it is never overridden in production, only that
-there is no repo-visible override (stated explicitly in the generated report).
+(FRE-375); and the deployed environment file(s) at the VPS root (``/opt/seshat`` by
+default, overridable via ``AUDIT_DEPLOYED_ENV_ROOT`` for tests) — gitignored, not
+tracked in this repo, but readable on disk. Scoped to the *currently active*
+environment (``get_environment()``, matching ``env_loader.py``'s own priority order)
+rather than every ``Environment`` value, so a stray ``.env.test`` alongside the real
+deployed ``.env`` isn't misread as a live production override. Tagged separately
+(``"compose"`` / ``"test-substrate"`` / ``"deployed-env"``) so a reader can tell a real
+deployment override from a test-isolation default from the live production file. Only
+env-var **key names** are ever read from the deployed file(s) — parsed with
+``python-dotenv`` (the same parser ``env_loader.py`` trusts for these files), taking
+only ``.keys()``; the value half is never bound to a variable, so no secret value can
+reach this audit's output.
+
+FRE-893 was reopened after its first pass shipped without this source: the override
+analysis conflated "not in the git repo" with "cannot see it," so 64 of the deployed
+``.env``'s 73 real ``AGENT_`` overrides were false-flagged as hardcode candidates. This
+version fixes that by reading the deployed file(s) directly.
 
 Run from the repo root::
 
@@ -35,6 +48,7 @@ Run from the repo root::
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -44,8 +58,10 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
+from dotenv import dotenv_values
 from pydantic.fields import FieldInfo
 
+from personal_agent.config.env_loader import get_environment
 from personal_agent.config.settings import AppConfig
 from scripts.audit.config_inventory import (
     INVENTORY_DOC,
@@ -58,6 +74,12 @@ SETTINGS_FILE = REPO_ROOT / "src" / "personal_agent" / "config" / "settings.py"
 SUBSTRATE_MANIFEST = REPO_ROOT / "config" / "substrate.yaml"
 CONFTEST_FILE = REPO_ROOT / "tests" / "conftest.py"
 REPORT_DOC = REPO_ROOT / "docs" / "research" / "2026-07-16-fre-893-config-parameter-usage-audit.md"
+
+# The VPS deployment root — where the real, gitignored `.env` lives (see
+# `env_loader.py::load_env_files`'s `project_root`). Overridable via
+# `AUDIT_DEPLOYED_ENV_ROOT` so tests never touch the real production file.
+_DEPLOYED_ENV_ROOT_VAR = "AUDIT_DEPLOYED_ENV_ROOT"
+_DEFAULT_DEPLOYED_ENV_ROOT = Path("/opt/seshat")
 
 # The 5 compose files present in this repo (verified via `ls docker-compose*.yml` —
 # a plan-review pass on this ticket found `docker-compose.study.yml` missing from an
@@ -206,11 +228,76 @@ def _conftest_env_keys() -> frozenset[str]:
     return frozenset(_CONFTEST_SETDEFAULT.findall(text))
 
 
+def deployed_env_root() -> Path:
+    """The deployed-env root directory (`AUDIT_DEPLOYED_ENV_ROOT` override, else the VPS)."""
+    override = os.environ.get(_DEPLOYED_ENV_ROOT_VAR)
+    return Path(override) if override else _DEFAULT_DEPLOYED_ENV_ROOT
+
+
+def _deployed_env_candidates(root: Path) -> tuple[Path, ...]:
+    """Candidate deployed-env file paths at `root`, in `env_loader.py`'s priority order.
+
+    Scoped to the *currently active* environment (`get_environment()`, reading `APP_ENV`
+    — the same signal `load_env_files()` itself uses) rather than all four `Environment`
+    values: a stray `.env.test` or `.env.development` alongside the real deployed `.env`
+    would otherwise be misread as a live production override when the running service
+    (under a different `APP_ENV`) never actually loads that file — a code-review pass on
+    this ticket found this false-positive risk in an earlier draft that scanned every
+    environment unconditionally.
+    """
+    env_name = get_environment().value
+    return (
+        root / f".env.{env_name}.local",
+        root / f".env.{env_name}",
+        root / ".env.local",
+        root / ".env",
+    )
+
+
+def deployed_env_files_present(root: Path | None = None) -> tuple[str, ...]:
+    """Which candidate deployed-env paths actually exist at `root` (report transparency)."""
+    resolved = root if root is not None else deployed_env_root()
+    return tuple(str(p) for p in _deployed_env_candidates(resolved) if p.exists())
+
+
+@lru_cache(maxsize=None)
+def _deployed_env_key_sources(root: Path) -> dict[str, str]:
+    """KEY -> first deployed-env file path (at `root`) where the key is set.
+
+    Parses each candidate file with `python-dotenv` (already a project dependency —
+    `env_loader.py` itself uses it to load these same files), taking only `.keys()` —
+    the value half of `dotenv_values(path)`'s returned mapping is never bound to a
+    variable, so no secret value can reach this audit's output. A missing file is
+    silently skipped (expected on CI/dev machines without a deployed `.env`). Values
+    are looked up in `_deployed_env_candidates`'s priority order, so a key's recorded
+    source is always the highest-priority file it appears in.
+
+    A hand-rolled line regex previously did this instead; a code-review pass on this
+    ticket found it mis-parses multi-line quoted values (e.g. a PEM cert), splitting a
+    continuation line that happens to contain `=` into a spurious extra key. `dotenv_values`
+    is the same parser `env_loader.py` trusts for these exact files, so it doesn't share
+    that gap.
+    """
+    sources: dict[str, str] = {}
+    for path in _deployed_env_candidates(root):
+        if not path.exists():
+            continue
+        try:
+            keys = tuple(dotenv_values(path).keys())
+        except OSError:
+            continue
+        for key in keys:
+            sources.setdefault(key, str(path))
+    return sources
+
+
 def override_locations(name: str, field: FieldInfo) -> list[tuple[str, str]]:
     """`(source, kind)` pairs where this field's env var is set away from its default.
 
     `kind="compose"` for a docker-compose*.yml `environment:` block; `kind="test-substrate"`
-    for a `tests/conftest.py` `os.environ.setdefault("AGENT_...")` default.
+    for a `tests/conftest.py` `os.environ.setdefault("AGENT_...")` default; `kind="deployed-env"`
+    for a key present in the VPS's real, gitignored `.env` (or a higher-priority sibling) —
+    key presence only, the value is never read.
     """
     accepted = _accepted_env(name, field)
     found: list[tuple[str, str]] = []
@@ -224,6 +311,19 @@ def override_locations(name: str, field: FieldInfo) -> list[tuple[str, str]]:
 
     if accepted & _conftest_env_keys():
         found.append((str(CONFTEST_FILE.relative_to(REPO_ROOT)), "test-substrate"))
+
+    root = deployed_env_root()
+    deployed_sources = _deployed_env_key_sources(root)
+    deployed_hits = accepted & deployed_sources.keys()
+    if deployed_hits:
+        # Attribute to whichever hit's file ranks highest in priority order — not
+        # whichever alias spelling sorts first alphabetically (a code-review-confirmed
+        # defect: an aliased field's lower-priority spelling could otherwise "win").
+        priority = {str(p): i for i, p in enumerate(_deployed_env_candidates(root))}
+        best_key = min(
+            deployed_hits, key=lambda k: (priority.get(deployed_sources[k], len(priority)), k)
+        )
+        found.append((deployed_sources[best_key], "deployed-env"))
 
     return found
 
@@ -317,7 +417,7 @@ def generate_report(results: list[FieldUsage]) -> str:
     lines.append(
         f"Every one of the {len(results)} typed `AppConfig` fields "
         "(`src/personal_agent/config/settings.py`) is categorized from evidence gathered "
-        "three ways for reads and two ways for overrides:"
+        "three ways for reads and three ways for overrides:"
     )
     lines.append("")
     lines.append(
@@ -337,18 +437,45 @@ def generate_report(results: list[FieldUsage]) -> str:
         "- **Overrides** — (1) the 5 `docker-compose*.yml` files, parsed with `pyyaml` "
         "(not raw-text regex) and checked for the field's env var in any service's "
         "`environment:` block; (2) `tests/conftest.py`'s "
-        '`os.environ.setdefault("AGENT_...")` test-substrate defaults (FRE-375), tagged '
-        "`test-substrate` separately from a real `compose` deployment override."
+        '`os.environ.setdefault("AGENT_...")` test-substrate defaults (FRE-375); (3) the '
+        "deployed environment file(s) at the VPS root (`/opt/seshat` by default) — key "
+        "**names** only, checked in `env_loader.py`'s priority order "
+        "(`.env.<environment>.local`, `.env.<environment>`, `.env.local`, `.env`). Tagged "
+        "`compose` / `test-substrate` / `deployed-env` respectively, so a reader can tell "
+        "a real deployment override from a test-isolation default from the live "
+        "production file."
     )
     lines.append("")
+    found_deployed = deployed_env_files_present()
+    if found_deployed:
+        lines.append(
+            f"**This run read the deployed environment from:** "
+            f"{', '.join(f'`{p}`' for p in found_deployed)}. Key names only — no value "
+            "was parsed, held, or printed, so no secret can leak into this report."
+        )
+    else:
+        lines.append(
+            "**This run found no deployed environment file at "
+            f"`{deployed_env_root()}`** (expected off the VPS, e.g. in CI) — override "
+            "evidence for this run reflects only `compose`/`test-substrate` sources. "
+            "**Regenerate on the VPS to include the deployed `.env`** before treating "
+            "the hardcode-candidate list below as authoritative."
+        )
+    lines.append("")
     lines.append(
-        "**Limitation (measure-don't-assert): the real deployed `.env` is gitignored and "
-        "not in this repo.** It is the one place a field could be overridden that this "
-        "audit structurally cannot see. **A field with zero in-repo override evidence is "
-        "not proof it is never overridden in production — it is proof there is no "
-        "repo-visible override.** Secrets in particular are expected to be overridden "
-        "*only* via the real `.env`; they are placed in `writer-pinned-guardrail` "
-        "specifically so this gap never reads as a false hardcode-candidate."
+        "**Limitation (measure-don't-assert), still applies even when the deployed `.env` "
+        "was read:** the three sources above are not the only way a field could be "
+        "overridden in practice — a `docker-compose.override.yml` outside the tracked 5 "
+        "files, a `docker run -e` / `--env-file` flag, a `systemd Environment=` unit "
+        "directive, a host-shell `export`, or an orchestrator/secrets-manager injection "
+        "are all invisible to this audit. **Zero override evidence across all three "
+        "sources is not proof a field is never overridden — it is proof there is no "
+        "evidence in the specific places this audit looks.** A field the deployed `.env` "
+        "sets but that has zero read evidence is still correctly `never-read` (a "
+        "genuinely dead env override, not a contradiction) — override and read evidence "
+        "are independent axes. (Why a deployed-env source exists at all: an earlier "
+        "version of this audit had none, so it silently missed the one channel that in "
+        "practice carries most real production overrides — see FRE-893's ticket history.)"
     )
     lines.append("")
     lines.append(
@@ -399,10 +526,10 @@ def generate_report(results: list[FieldUsage]) -> str:
     lines.append(f"## Hardcode candidates — read-but-never-overridden ({len(hardcode)})")
     lines.append("")
     lines.append(
-        "Read in production code, but with no repo-visible override anywhere — "
-        "candidates to hardcode and remove from the configurable surface. Per the "
-        "limitation above, this is not proof the real `.env` never overrides them; "
-        "each is a candidate for owner review, not an automatic removal."
+        "Read in production code, with no override evidence in compose, the test "
+        "substrate, or the deployed environment (when this run had access to it — see "
+        "the note above). Candidates to hardcode and remove from the configurable "
+        "surface — each is a candidate for owner review, not an automatic removal."
     )
     lines.append("")
     for result in hardcode:
@@ -444,24 +571,38 @@ def generate_inventory_section(results: list[FieldUsage]) -> str:
     return "\n".join(lines)
 
 
+_TRAILING_RULE = re.compile(r"\n{0,2}---\s*\Z")
+
+
 def splice_inventory_section(doc: str, section: str) -> str:
     """Idempotently (re)place the §10 section + its leading separator in `doc`.
 
-    Regenerating must not accumulate a fresh `---` separator on every run: a prior
-    version of this cut only `doc[:marker_index].rstrip()`, which strips whitespace
-    but not the separator's literal `---` line, so re-running `generate` repeatedly
-    left 2, 3, 4... stray horizontal rules stacked above the section (caught by a
-    code-review pass that re-ran the generator and observed the file grow).
+    Regenerating must not accumulate a fresh `---` separator on every run. Two distinct
+    ways that can happen, both handled by stripping AT MOST ONE trailing bare `---` rule
+    — not just the one immediately behind a still-present marker, but not an unbounded
+    loop either (an earlier version of this looped, which could silently eat through a
+    doc's own unrelated trailing horizontal rules — a code-review pass on this ticket
+    flagged that as a content-destroying regression):
+
+    1. The marker is present (a previous `generate` run's §10) — strip its leading
+       separator before re-appending, or repeated runs stack `---` lines above the
+       section (a code-review pass on this ticket caught this by re-running the
+       generator and observing the file grow).
+    2. The marker is ABSENT but a trailing separator still is — e.g. a §10 section was
+       manually removed (leaving its leading `---` behind) and the tool re-run before
+       a fresh insertion; naively appending a new separator here doubles it to `---`
+       `---` (this exact case happened during the FRE-893 redo: master's removal PR
+       deleted the §10 heading+body but left the separator dangling at EOF). Only one
+       dangling separator is ever left behind by either scenario, so stripping a single
+       occurrence is sufficient and doesn't risk consuming legitimate content.
     """
     idx = doc.find(_SECTION_MARKER)
-    if idx == -1:
-        prefix = doc.rstrip()
-    else:
-        prefix = doc[:idx]
-        if prefix.endswith(_SECTION_SEPARATOR):
-            prefix = prefix[: -len(_SECTION_SEPARATOR)]
-        prefix = prefix.rstrip()
-    return prefix + _SECTION_SEPARATOR + section
+    prefix = doc[:idx] if idx != -1 else doc
+    stripped = prefix.rstrip()
+    match = _TRAILING_RULE.search(stripped)
+    if match:
+        stripped = stripped[: match.start()].rstrip()
+    return stripped + _SECTION_SEPARATOR + section
 
 
 def write_outputs() -> int:

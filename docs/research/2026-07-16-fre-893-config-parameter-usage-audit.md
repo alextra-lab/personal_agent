@@ -1,5 +1,9 @@
 # Config-parameter usage audit — FRE-893 (ADR-0099 hygiene)
 
+> # ⚠️ INVALID — DO NOT ACT ON THIS REPORT
+> The **override analysis is wrong**: it never read the **deployed `.env`**, which is the authoritative override source and sets **73 `AGENT_` overrides** — **64 of them are falsely listed here as "hardcode candidate / never-overridden"** (including `cloud_weekly_budget_usd`, `database_url`, `anthropic_api_key`, and every `freshness_*` knob). The "hardcode candidate" list is discarded. **Do not prune or hardcode anything from this report.**
+> Being redone under **[FRE-893](https://linear.app/frenchforest/issue/FRE-893)** (reopened) with the deployed env as an override source. The read-based dead-config list is separately pending re-verification.
+
 > **Ticket:** [FRE-893](https://linear.app/frenchforest/issue/FRE-893) · **Backing ADR:** [ADR-0099](../architecture_decisions/ADR-0099-configuration-management-and-validation.md) · **Extends:** [CONFIG_INVENTORY.md](../reference/CONFIG_INVENTORY.md) §10 · **Generated:** 2026-07-16 · **Scope guard:** analysis and report only — zero configuration removed or changed.
 
 ## Methodology

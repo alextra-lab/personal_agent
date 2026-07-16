@@ -10,7 +10,8 @@ test_notes_tools.py):
 * ``AsyncSessionLocal`` — replaced with a stub that captures SQL calls and
   returns canned rows.
 
-artifact_draft tests additionally mock ``get_llm_client`` (ADR-0077).
+artifact_draft tests additionally mock ``get_llm_client_for_key`` (ADR-0077; the
+call site resolves through the ADR-0099 matrix as of ADR-0118 T1 / FRE-879).
 
 End-to-end DB-backed round-trip lives in the integration suite.
 """
@@ -819,8 +820,8 @@ def _install_draft_fakes(
     _install_fakes(monkeypatch, store=store)
     client = _FakeSubAgentClient(html_content=html_content)
     monkeypatch.setattr(
-        "personal_agent.llm_client.factory.get_llm_client",
-        lambda role_name="primary": client,
+        "personal_agent.llm_client.factory.get_llm_client_for_key",
+        lambda model_key, budget_role="skill_routing": client,
     )
     return store, client
 
@@ -881,6 +882,41 @@ async def test_artifact_draft_returns_expected_keys(
     assert out["generation_method"] == "draft"
     assert isinstance(out["sub_agent_duration_ms"], int)
     assert out["task_id"].startswith("draft-")
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_uses_artifact_builder_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1 slice (ADR-0118 T1, FRE-879): telemetry role is ARTIFACT_BUILDER, not SUB_AGENT."""
+    from personal_agent.llm_client.types import ModelRole
+
+    _store, client = _install_draft_fakes(monkeypatch)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="role-check", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert len(client.respond_calls) == 1
+    assert client.respond_calls[0]["role"] == ModelRole.ARTIFACT_BUILDER
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_start_log_reports_artifact_builder_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1 slice: the artifact_draft_sub_agent_start log's model_role field switches too."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    _install_draft_fakes(monkeypatch)
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="log-check", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    start_events = [kwargs for event, kwargs in events if event == "artifact_draft_sub_agent_start"]
+    assert len(start_events) == 1
+    assert start_events[0]["model_role"] == "artifact_builder"
 
 
 @pytest.mark.asyncio
@@ -1424,8 +1460,8 @@ async def test_artifact_draft_subagent_timeout_raises(
             return {"content": ""}  # never reached
 
     monkeypatch.setattr(
-        "personal_agent.llm_client.factory.get_llm_client",
-        lambda role_name="primary": _HangingClient(),
+        "personal_agent.llm_client.factory.get_llm_client_for_key",
+        lambda model_key, budget_role="skill_routing": _HangingClient(),
     )
     # Temporarily reduce timeout for test speed
     monkeypatch.setattr(artifact_tools, "_draft_timeout_s", lambda: 0.1)
@@ -1451,8 +1487,8 @@ async def test_artifact_draft_subagent_exception_raises(
             raise RuntimeError("GPU OOM")
 
     monkeypatch.setattr(
-        "personal_agent.llm_client.factory.get_llm_client",
-        lambda role_name="primary": _FailingClient(),
+        "personal_agent.llm_client.factory.get_llm_client_for_key",
+        lambda model_key, budget_role="skill_routing": _FailingClient(),
     )
 
     with pytest.raises(ToolExecutionError, match="artifact_write directly"):

@@ -43,6 +43,10 @@ roles:
     default_output_tokens: 512
     safety_factor: 1.2
     on_denial: raise                # standalone one-shot script (scripts/study/run_ingest.py) — surface budget denial immediately, nothing to NACK/redeliver
+  artifact_builder:
+    default_output_tokens: 1024
+    safety_factor: 1.2
+    on_denial: raise        # user-facing build path (ADR-0118 T1, FRE-879) — mirrors main_inference
 
 caps:
   - {time_window: daily,  role: entity_extraction, cap_usd: 5.00}   # reset 2026-07-04: FRE-771 powered A/B complete (was TEMP BUMP to $25.00)
@@ -50,8 +54,10 @@ caps:
   - {time_window: daily,  role: main_inference,    cap_usd: 15.00}  # TEMP BUMP 2026-05-08→2026-05-10: FRE-334 eval runs; reset to $5.00
   - {time_window: daily,  role: skill_routing,     cap_usd: 0.10}   # user-confirmed 2026-05-07
   - {time_window: daily,  role: study,              cap_usd: 5.00}   # FRE-839: ADR-0114 study categorizer, isolated from entity_extraction's cap so a one-time corpus run can never contend with live prod extraction — owner-confirmed 2026-07-10
+  - {time_window: daily,  role: artifact_builder,  cap_usd: 5.00}   # ADR-0118 T1 (FRE-879): mirrors main_inference's non-temp-bumped baseline — owner-confirmed 2026-07-16
   - {time_window: weekly, role: entity_extraction, cap_usd: 7.00}   # reset 2026-07-04: FRE-771 powered A/B complete (was TEMP BUMP to $45.00)
   - {time_window: weekly, role: main_inference,    cap_usd: 40.00}  # TEMP BUMP 2026-05-08→2026-05-10: FRE-334 eval runs; reset to $18.00
   - {time_window: weekly, role: skill_routing,     cap_usd: 0.50}   # user-confirmed 2026-05-07
   - {time_window: weekly, role: study,              cap_usd: 7.00}   # FRE-839: see daily cap note above — owner-confirmed 2026-07-10
+  - {time_window: weekly, role: artifact_builder,  cap_usd: 18.00}  # ADR-0118 T1 (FRE-879): mirrors main_inference's non-temp-bumped baseline — owner-confirmed 2026-07-16
   - {time_window: weekly, role: _total,            cap_usd: 50.00}  # TEMP BUMP 2026-05-08→2026-05-10: FRE-334 eval runs; reset to $25.00

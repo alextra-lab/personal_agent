@@ -31,6 +31,7 @@ _FORBIDDEN_ROLES = (
     "embedding",
     "reranker",
     "reranker_fallback",
+    "artifact_builder",
 )
 _ALLOWED_ROLES = ("compressor",)
 

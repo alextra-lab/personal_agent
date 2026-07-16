@@ -42,6 +42,7 @@ class TestForbiddenRolesResolveToTheAllValue:
             ("embedding", "embedding"),
             ("reranker", "reranker"),
             ("reranker_fallback", "reranker_fallback"),
+            ("artifact_builder", "claude_haiku"),
         ],
     )
     def test_resolves_same_key_under_both_profiles(self, role: str, expected: str) -> None:

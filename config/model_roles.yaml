@@ -58,6 +58,11 @@ roles:
   compressor:         { divergence: allowed, local: compressor, cloud: compressor }
   reranker:           { divergence: forbidden, all: reranker }
   reranker_fallback:  { divergence: forbidden, all: reranker_fallback }
+  # `artifact_builder` (ADR-0118 T1, FRE-879): extracted from the `sub_agent` binding
+  # `artifact_draft` used to borrow. `forbidden` because Phase 1 has no per-profile
+  # divergence need yet — Haiku is the default on every profile. `claude_haiku` is
+  # already defined in both models.yaml and models.cloud.yaml.
+  artifact_builder:   { divergence: forbidden, all: claude_haiku }
 
 # ── required_secrets ────────────────────────────────────────────────────────
 # Per-profile required AppConfig secret fields (ADR-0099 D4: "required secret

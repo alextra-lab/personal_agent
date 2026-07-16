@@ -1386,7 +1386,8 @@ async def artifact_draft_executor(
     import asyncio  # noqa: PLC0415
     import time  # noqa: PLC0415
 
-    from personal_agent.llm_client.factory import get_llm_client  # noqa: PLC0415
+    from personal_agent.config.model_loader import resolve_role_model_key  # noqa: PLC0415
+    from personal_agent.llm_client.factory import get_llm_client_for_key  # noqa: PLC0415
     from personal_agent.llm_client.types import ModelRole  # noqa: PLC0415
     from personal_agent.telemetry.trace import TraceContext  # noqa: PLC0415
 
@@ -1433,8 +1434,9 @@ async def artifact_draft_executor(
             session_id=session_id,
         )
 
-    # --- Acquire sub-agent client (profile-driven: D2) ---
-    sub_agent_client = get_llm_client(role_name="sub_agent")
+    # --- Acquire artifact-builder client (matrix-resolved: ADR-0099, ADR-0118 T1) ---
+    builder_model_key = resolve_role_model_key("artifact_builder")
+    sub_agent_client = get_llm_client_for_key(builder_model_key, budget_role="artifact_builder")
 
     user_prompt = (
         f"Title: {title}\n"
@@ -1458,7 +1460,7 @@ async def artifact_draft_executor(
         session_id=session_id,
         span_id=span_id,
         task_id=task_id,
-        model_role=ModelRole.SUB_AGENT.value,
+        model_role=ModelRole.ARTIFACT_BUILDER.value,
         max_tokens=draft_max_tokens,
         timeout_s=draft_timeout,
     )
@@ -1467,7 +1469,7 @@ async def artifact_draft_executor(
     try:
         response = await asyncio.wait_for(
             sub_agent_client.respond(
-                role=ModelRole.SUB_AGENT,
+                role=ModelRole.ARTIFACT_BUILDER,
                 messages=messages,
                 max_tokens=draft_max_tokens,
                 trace_ctx=child_ctx,

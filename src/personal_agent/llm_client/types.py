@@ -26,6 +26,7 @@ class ModelRole(str, Enum):
     PRIMARY = "primary"  # Tier 1: orchestrator brain
     SUB_AGENT = "sub_agent"  # Tier 2: focused task completion
     COMPRESSOR = "compressor"  # Context compression / summarization
+    ARTIFACT_BUILDER = "artifact_builder"  # HTML artifact generation (ADR-0118 T1)
 
     @classmethod
     def from_str(cls, value: str) -> "ModelRole | None":

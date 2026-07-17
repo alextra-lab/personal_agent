@@ -21,7 +21,7 @@ Usage (synthetic only, no agent needed):
     uv run python scripts/eval_04b_occupancy_curve.py --synthetic-only
 
 Usage (cloud path):
-    uv run python scripts/eval_04b_occupancy_curve.py --agent-url https://api.frenchforet.com
+    uv run python scripts/eval_04b_occupancy_curve.py --agent-url https://api.example.com
 
 Requirements (live phase):
     - Agent service running at http://localhost:9000 (or --agent-url)

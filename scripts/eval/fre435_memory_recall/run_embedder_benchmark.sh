@@ -51,7 +51,7 @@ case "$MODE" in calibrate|ab|separation) ;; *) echo "unknown mode: '$MODE' (want
 : "${AGENT_NEO4J_PASSWORD:?export AGENT_NEO4J_PASSWORD (the test stack :7688 password) first}"
 case "$EMBEDDER" in
   4b|4b-f16|8b)
-    : "${CF_ACCESS_CLIENT_ID:?$EMBEDDER needs CF_ACCESS_CLIENT_ID (Access-gated slm.frenchforet.com)}"
+    : "${CF_ACCESS_CLIENT_ID:?$EMBEDDER needs CF_ACCESS_CLIENT_ID (Access-gated slm.example.com)}"
     : "${CF_ACCESS_CLIENT_SECRET:?$EMBEDDER needs CF_ACCESS_CLIENT_SECRET}"
     ;;
 esac

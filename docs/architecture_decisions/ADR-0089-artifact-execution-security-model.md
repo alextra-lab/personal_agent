@@ -31,7 +31,7 @@ The owner needs the agent to be **free to create dynamic, interactive, visually 
 
 ### What already exists (the fix is mostly a posture flip, not infrastructure)
 
-- `artifacts.frenchforet.com` is **already a separate origin** — a Cloudflare Worker over R2, behind Cloudflare Access (ADR-0069 D2).
+- `artifacts.example.com` is **already a separate origin** — a Cloudflare Worker over R2, behind Cloudflare Access (ADR-0069 D2).
 - `ArtifactViewer.tsx` **already loads artifacts cross-origin** in `<iframe sandbox="">` (`seshat-pwa/src/components/ArtifactViewer.tsx:182`).
 
 The expensive part of safe interactive artifacts — an isolated origin — is built. What remains is a posture decision and a one-attribute flip, not an infrastructure project (FRE-397 reached the same conclusion).
@@ -78,26 +78,26 @@ There are **no security tiers.** Every artifact — static page or heavy JavaScr
 
   ```
   default-src 'none';
-  script-src  https://artifacts.frenchforet.com 'unsafe-inline';
-  style-src   https://artifacts.frenchforet.com 'unsafe-inline';
-  img-src     https://artifacts.frenchforet.com data:;
-  font-src    https://artifacts.frenchforet.com data:;
+  script-src  https://artifacts.example.com 'unsafe-inline';
+  style-src   https://artifacts.example.com 'unsafe-inline';
+  img-src     https://artifacts.example.com data:;
+  font-src    https://artifacts.example.com data:;
   connect-src 'none';
   worker-src  'none';
   form-action 'none';
   base-uri    'none';
-  frame-ancestors https://agent.frenchforet.com;
+  frame-ancestors https://agent.example.com;
   webrtc 'block';
   sandbox allow-scripts;
   ```
 
   Notes on completeness (the egress must be *complete*, not just HTTP — the documented WebRTC bypass is exactly this lesson):
-  - **Host-source, not `'self'`.** Because `sandbox` makes the origin opaque, the `'self'` keyword would not match the document's own (opaque) origin; an explicit host-source (`https://artifacts.frenchforet.com`) matches by URL and works regardless. (`'self'` would silently break toolkit loading.)
+  - **Host-source, not `'self'`.** Because `sandbox` makes the origin opaque, the `'self'` keyword would not match the document's own (opaque) origin; an explicit host-source (`https://artifacts.example.com`) matches by URL and works regardless. (`'self'` would silently break toolkit loading.)
   - **`default-src 'none'`** is the fallback that denies the resource classes not named above — `manifest-src`, `media-src`, `prefetch`/`preconnect`/`dns-prefetch` resource hints, `object-src`, `child-src`, etc. — so they need no separate lines.
   - **`connect-src 'none'`** denies `fetch`/XHR, `WebSocket`, `EventSource`, `navigator.sendBeacon`, and `<a ping>` (CSP3). Resource hints (`prefetch`/`preconnect`/`dns-prefetch`) to **non-allowlisted** origins are denied via the `default-src 'none'` fallback (hints to the allowlisted host are not — see residual note).
   - **`webrtc 'block'`** is the correct CSP3 directive, but **browser support is uneven** — Chromium honors it; WebKit/Firefox may not, and an **unsupported CSP directive is silently ignored**, leaving `RTCPeerConnection`/STUN/TURN available. It is included as the right control where supported and treated as a **bounded residual** elsewhere (see "Two tiers of guarantee" and Consequences). It must not be claimed as a cross-browser closure.
   - **`form-action 'none'`** closes form-POST exfil. The omitted `allow-top-navigation*` sandbox flags stop an artifact from navigating the *parent* PWA, **but do not stop a script from navigating its *own* tab/frame** to an external URL (`location = 'https://x/?data'`, `<meta http-equiv=refresh>`); HTML permits a navigable to navigate itself, and no widely-supported CSP control (`navigate-to` is not dependable) blocks it. **Self-navigation is therefore a bounded residual exfil channel**, not closed here.
-  - **`frame-ancestors`** names the **PWA origin** (`agent.frenchforet.com`) — **not `'self'`**, which would block the cross-origin PWA embed; it controls *who may frame the artifact* (anti-clickjacking) and is the right tool here (`frame-src` is a control for the *embedder* side, on the PWA).
+  - **`frame-ancestors`** names the **PWA origin** (`agent.example.com`) — **not `'self'`**, which would block the cross-origin PWA embed; it controls *who may frame the artifact* (anti-clickjacking) and is the right tool here (`frame-src` is a control for the *embedder* side, on the PWA).
   - **`worker-src 'none'`** blocks Service/Shared Workers (which would otherwise inherit `script-src` and create a persistent interception/egress surface).
 
 **Two tiers of guarantee (state honestly):**
@@ -105,7 +105,7 @@ There are **no security tiers.** Every artifact — static page or heavy JavaScr
 1. **Hard, cross-browser — the load-bearing guarantee:** an artifact has **no access to anything it was not handed** — no PWA session, no Access cookies, no `localStorage`/storage, no cross-user data, no same-origin reads. This rests on the opaque origin from `sandbox` (well-supported) and holds regardless of what runs inside.
 2. **Strong but not uniformly complete — egress denial:** `fetch`/XHR/WebSocket/beacon/forms are blocked cross-browser (`connect-src`/`form-action`). **WebRTC (on browsers lacking `webrtc` support) and self-navigation remain residual channels.** Crucially, tier 1 bounds what they can leak: an artifact can only exfiltrate **what was baked into it**, never the session or another user's data. The standing operating rule that makes this acceptable is therefore **"never bake secrets into an artifact"** (see D4) — and because tier 1 means an artifact cannot *acquire* anything sensitive at runtime, this reduces to a generation-side discipline.
 
-  `script-src https://artifacts.frenchforet.com` admits the curated self-hosted toolkit (see D2a); `'unsafe-inline'` admits the agent's own inline JS. **`'unsafe-inline'` is acceptable *here specifically*:** it is dangerous only in a network-enabled, same-origin context where it lets an injected inline script act with real privileges. In an opaque origin (tier 1) there is no session or storage to steal, and `connect-src 'none'` removes the programmatic egress an injected inline script would abuse — the whole artifact is one (untrusted) trust level, so there is no higher-trust script to protect from the inline one. `'unsafe-eval'` is **omitted** (modern toolkit libraries do not need `eval`; free hardening).
+  `script-src https://artifacts.example.com` admits the curated self-hosted toolkit (see D2a); `'unsafe-inline'` admits the agent's own inline JS. **`'unsafe-inline'` is acceptable *here specifically*:** it is dangerous only in a network-enabled, same-origin context where it lets an injected inline script act with real privileges. In an opaque origin (tier 1) there is no session or storage to steal, and `connect-src 'none'` removes the programmatic egress an injected inline script would abuse — the whole artifact is one (untrusted) trust level, so there is no higher-trust script to protect from the inline one. `'unsafe-eval'` is **omitted** (modern toolkit libraries do not need `eval`; free hardening).
 
   **Sandbox capabilities deliberately *omitted*** (each omission is load-bearing): `allow-same-origin` (the opaque-origin guarantee), `allow-popups` / `allow-popups-to-escape-sandbox` (no `window.open`), `allow-top-navigation` / `allow-top-navigation-by-user-activation` (no navigating the tab to an attacker URL — the standalone navigation-exfil channel), `allow-forms`, `allow-downloads`, `allow-modals`. Only `allow-scripts` is granted.
 
@@ -113,7 +113,7 @@ The agent is therefore **free to build anything inside the box** — full JS, Ca
 
 #### D2a — Curated, self-hosted toolkit (no arbitrary CDN)
 
-Version-pinned libraries (e.g. mermaid, a charting lib, three.js) are hosted on the artifact origin (`artifacts.frenchforet.com/lib/<name>@<version>.js`). `script-src https://artifacts.frenchforet.com` keeps scripts to **our origin only** — never arbitrary internet code. **The "vetted libraries only" property is not provided by the CSP keyword alone** — a host-source admits *any* executable script the Worker serves under that host. It holds only if the Worker also: serves artifact bytes as `text/html` (never as an executable script type), serves executable JavaScript **only** from the `/lib/` path, and sets `X-Content-Type-Options: nosniff` so an artifact cannot be MIME-confused into being loaded as a script. With those Worker-side controls, the toolkit allowlist is *stronger* than CDN-allow (artifacts can run only our vetted code) and matches the frontier-lab model; **without them, it is only "scripts from our host."** These controls are part of this ADR's done-bar (D5/D7).
+Version-pinned libraries (e.g. mermaid, a charting lib, three.js) are hosted on the artifact origin (`artifacts.example.com/lib/<name>@<version>.js`). `script-src https://artifacts.example.com` keeps scripts to **our origin only** — never arbitrary internet code. **The "vetted libraries only" property is not provided by the CSP keyword alone** — a host-source admits *any* executable script the Worker serves under that host. It holds only if the Worker also: serves artifact bytes as `text/html` (never as an executable script type), serves executable JavaScript **only** from the `/lib/` path, and sets `X-Content-Type-Options: nosniff` so an artifact cannot be MIME-confused into being loaded as a script. With those Worker-side controls, the toolkit allowlist is *stronger* than CDN-allow (artifacts can run only our vetted code) and matches the frontier-lab model; **without them, it is only "scripts from our host."** These controls are part of this ADR's done-bar (D5/D7).
 
 **Classic scripts, not ES modules.** Because the `sandbox` directive makes the document origin serialize as `null`, ES-module and some font/`fetch`-style subresource loads are subject to CORS and would require the Worker to emit `Access-Control-Allow-Origin` for a null origin. To avoid that fragility, the toolkit is delivered as **classic `<script src>`** (host-source matching, no CORS preflight); module delivery, if ever needed, must carry the appropriate CORS headers and is a curation-ticket decision.
 
@@ -122,7 +122,7 @@ Version-pinned libraries (e.g. mermaid, a charting lib, three.js) are hosted on 
 There are two delivery paths, and the security model must hold identically on both:
 
 - **Embedded** (in-PWA drawer): the artifact loads in an iframe.
-- **Standalone** (`artifacts.frenchforet.com/{id}` opened in a tab): the artifact is a **top-level document — no iframe, therefore no `sandbox` *attribute*.**
+- **Standalone** (`artifacts.example.com/{id}` opened in a tab): the artifact is a **top-level document — no iframe, therefore no `sandbox` *attribute*.**
 
 The key realization (and the reason the standalone path is **not** weaker): the **`sandbox` CSP *directive*** is a header-only directive that sandboxes the document **itself** — top-level or framed alike. So the **CSP, served as a Worker response header on the artifact bytes** (never a `<meta>` tag — a header cannot be content-stripped, covers both paths, and `<meta>` cannot carry `sandbox`/`frame-ancestors` anyway), carries **both** the egress lockdown **and** the opaque-origin sandboxing. It is therefore the **single primary boundary present on both paths** — tier-1 complete (opaque origin) and tier-2 bounded (egress; D2). The iframe `sandbox` *attribute* on the embedded path is pure **defense-in-depth**, not load-bearing.
 
@@ -137,7 +137,7 @@ Two distinct sanctioned channels are named for the future — both **out of scop
 **(a) Primary-model → artifact bridge (preferred; no internet at all).** The richest "live data" source is usually **our own primary model**, not the open web — the owner's point, and the proven pattern (claude.ai's `window.claude.complete()`). Realized as a **parent-brokered `postMessage` bridge**: the embedded artifact posts a request to the PWA parent, the PWA calls the model/gateway under normal governance + identity + cost accounting, and posts the result back. This needs **no network egress from the artifact at all** (`postMessage` is a parent↔frame channel, not governed by `connect-src`; it works from an opaque-origin sandboxed iframe), so `connect-src` stays `'none'`. It is **embedded-path only** (a standalone tab has no trusted parent to broker). This keeps the artifact sealed while letting the agent feed it information on demand.
 
 **(b) Allowlisting Worker proxy (only if a genuine external upstream is required).** When data must come from *outside* our system:
-- flip `connect-src 'none'` → `connect-src https://artifacts.frenchforet.com` (host-source, not `'self'` — `'self'` is opaque under the `sandbox` directive; the artifact may address **its own origin and nowhere else**), **and**
+- flip `connect-src 'none'` → `connect-src https://artifacts.example.com` (host-source, not `'self'` — `'self'` is opaque under the `sandbox` directive; the artifact may address **its own origin and nowhere else**), **and**
 - add a **server-side allowlisting proxy on the artifact Worker**: the artifact calls `…/proxy?url=<upstream>`; the Worker (trusted, server-side, with **no user credentials in the artifact context**) validates against an **allowlist** (never a blocklist), applies threat checks / response scanning / limits, then forwards.
 
 The browser wall is what makes the proxy **unavoidable**: with `connect-src` restricted to our host, even a hostile artifact *cannot* `fetch` direct, so all *programmatic* egress is forced through our origin — enforcement does not depend on the agent cooperating. Ergonomics (a `seshatFetch()` toolkit helper that routes through the proxy, or a `seshatAsk()` helper over the model-bridge) are a separate layer from enforcement (the wall / the parent broker). **Open `fetch` to arbitrary origins is never permitted in either channel.**
@@ -161,7 +161,7 @@ Because the `sandbox` CSP directive (D2/D3) yields an opaque origin on **both** 
 - **No same-origin authority** to the PWA session or Access cookies — so a shared, possibly-injected artifact opened by another user cannot act as that user or read their private conversations. (Cloudflare Access being `HttpOnly` is **not** the argument — `HttpOnly` cookies are still *sent* by the browser on navigations/subresource requests; the actual guarantee is the opaque-origin sandbox + `connect-src 'none'` + the omitted navigation flags, which mean such requests cannot be *made* and carry no exfil.)
 - **No shared storage between artifacts** — the opaque origin denies `localStorage`/IndexedDB/cookies on *both* paths, so the cross-artifact storage channel that a shared real origin would create simply does not exist. There is therefore **no standalone-hardening gate to clear before sharing.**
 
-What remains genuinely out of scope: artifact **sharing mechanics** (permissions, visibility, the group model) — a separate ADR. This ADR fixes only the **security invariants** that make sharing safe to build. **Per-artifact subdomains** (`{id}.artifacts.frenchforet.com`) are named as a *future* option **only if** persistent, per-artifact server-side storage is ever introduced (stateful artifacts) — at which point opaque origins no longer suffice to isolate artifacts from each other. Until that exists, they are unnecessary.
+What remains genuinely out of scope: artifact **sharing mechanics** (permissions, visibility, the group model) — a separate ADR. This ADR fixes only the **security invariants** that make sharing safe to build. **Per-artifact subdomains** (`{id}.artifacts.example.com`) are named as a *future* option **only if** persistent, per-artifact server-side storage is ever introduced (stateful artifacts) — at which point opaque origins no longer suffice to isolate artifacts from each other. Until that exists, they are unnecessary.
 
 ### D7 — Supersession and scope boundaries
 
@@ -211,7 +211,7 @@ What remains genuinely out of scope: artifact **sharing mechanics** (permissions
 ### C. Allow CDN / external scripts (`script-src https:` or a CDN allowlist)
 *Rejected.* A curated, version-pinned, self-hosted toolkit (host-source `script-src` + the D2a Worker controls) is strictly stronger (artifacts can only run *our* vetted code) and matches the frontier-lab model. CDN-Mermaid and friends are unnecessary once the toolkit is hosted.
 
-### D. Per-artifact subdomains now (`{id}.artifacts.frenchforet.com`)
+### D. Per-artifact subdomains now (`{id}.artifacts.example.com`)
 *Deferred, not rejected.* The `sandbox` CSP directive already denies cross-artifact storage on both paths (D6), so per-artifact origins are **not** needed for the shared-artifact future as such. They become relevant only if **persistent, per-artifact server-side storage** (stateful artifacts) is ever introduced — at which point opaque origins no longer isolate artifacts from each other. Named in D6 as that future option.
 
 ### E. Blocklist egress / "block known-harmful sites"
@@ -229,7 +229,7 @@ What remains genuinely out of scope: artifact **sharing mechanics** (permissions
 
 Realized across this repo and the Worker (infra) repo; sequenced in the implementation tickets (filed Needs Approval under the new pillar project):
 
-- **Worker (infra repo) — the primary boundary:** emit the **exact D2 CSP as a response header** on every artifact GET (both embedded and standalone), including `sandbox allow-scripts`, `webrtc 'block'`, host-source lists, and `frame-ancestors https://agent.frenchforet.com`; serve artifact bytes as `text/html` and executable JS **only** from `/lib/`; set `X-Content-Type-Options: nosniff`; host the curated version-pinned `/lib/<name>@<version>.js` toolkit.
+- **Worker (infra repo) — the primary boundary:** emit the **exact D2 CSP as a response header** on every artifact GET (both embedded and standalone), including `sandbox allow-scripts`, `webrtc 'block'`, host-source lists, and `frame-ancestors https://agent.example.com`; serve artifact bytes as `text/html` and executable JS **only** from `/lib/`; set `X-Content-Type-Options: nosniff`; host the curated version-pinned `/lib/<name>@<version>.js` toolkit.
 - **PWA:** `ArtifactViewer.tsx:182` — `sandbox=""` → `sandbox="allow-scripts"` (never `allow-same-origin`) as defense-in-depth; keep `referrerPolicy="no-referrer"`.
 - **Artifact tools (`tools/artifact_tools.py`):** remove `_validate_html_output` / `_sanitize_sandbox_violations` from the security path; retire the FRE-496/FRE-500 strip-and-flag machinery; retain only non-security malformation checks; reduce any content inspection to an optional, non-load-bearing label.
 - **Telemetry (FRE-506):** record the envelope applied per artifact serve, and alarm on a CSP-absent or directive-incomplete serve (D5) — observing the served response, not the source.
@@ -241,7 +241,7 @@ Realized across this repo and the Worker (infra) repo; sequenced in the implemen
 - **Tier 2 (egress, cross-browser parts):** `connect-src 'none'` denies fetch/XHR/WebSocket/EventSource/beacon/`<a ping>`; `form-action 'none'` denies form-POST; `worker-src 'none'` denies Service/Shared Workers; `default-src 'none'` denies resource hints and `media-src`/`manifest-src` to non-allowlisted origins — confirm each blocked (FRE-499 closed).
 - **Tier 2 residuals (confirm the *bound*, not closure):** verify that `RTCPeerConnection` is blocked where `webrtc` is supported and **document** that it is open where unsupported; verify that self-navigation (`location=`/`<meta refresh>`) can still reach an external URL but carries **only artifact-visible data** (tier 1 holds) — i.e. the failure mode is bounded, not absent.
 - The served artifact response carries the **exact D2 CSP header (all directives) on both paths**; a serve without it, or missing a directive, is **flagged in telemetry** (D5) — verified against the *served response*, not the source.
-- `frame-ancestors https://agent.frenchforet.com` **permits the PWA embed** and refuses any other embedder — confirm the drawer still loads while a foreign embed is refused.
+- `frame-ancestors https://agent.example.com` **permits the PWA embed** and refuses any other embedder — confirm the drawer still loads while a foreign embed is refused.
 - The Worker serves artifact bytes as `text/html` with `nosniff` and classic toolkit JS only from `/lib/`; an attempt to load an artifact URL as a `<script>` fails (curated-toolkit property, D2a).
 - No code path makes a *security* decision by inspecting artifact bytes (grep: the sandbox/CSP, not the regex, is the boundary).
 
@@ -302,9 +302,9 @@ Every `/lib/` library is **permissively licensed** (MIT / BSD / OFL — clean to
 
 ### A3 — Hosting & versioning policy (Phase 2 — Worker / `personal_agent_secrets`)
 
-- **Path & pinning.** Each asset at `artifacts.frenchforet.com/lib/<name>@<version>.<ext>` (`.js`, plus `.css`/`fonts/` where needed). URLs are **version-pinned and immutable** — mirroring artifact-byte immutability (ADR-0069). A version is **never mutated in place**; a new version is a new pinned path. Because committed artifacts are immutable bytes referencing a specific pin, **pins are effectively append-only**: retiring a pin requires first confirming no live artifact references it (else old artifacts render broken). That is the add/retire policy.
+- **Path & pinning.** Each asset at `artifacts.example.com/lib/<name>@<version>.<ext>` (`.js`, plus `.css`/`fonts/` where needed). URLs are **version-pinned and immutable** — mirroring artifact-byte immutability (ADR-0069). A version is **never mutated in place**; a new version is a new pinned path. Because committed artifacts are immutable bytes referencing a specific pin, **pins are effectively append-only**: retiring a pin requires first confirming no live artifact references it (else old artifacts render broken). That is the add/retire policy.
 - **Classic scripts only (D2a).** The `sandbox` directive serializes the document origin as `null`, so ES-module/`fetch`-style subresource loads incur CORS against a null origin. All toolkit assets are **classic `<script src>` / `<link>`** — host-source matching, no preflight. **three.js consequence:** modern three ships ESM + CJS but **no browser-global IIFE build** consumable by a bare `<script src>` (the CJS build is Node-style CommonJS, not a browser global), so a tested **IIFE/global build must be prepared and hosted** at hosting time. This is the single non-trivial hosting task; doing it once is the "don't revisit" investment.
-- **Fonts.** Curated **SIL OFL** faces only (e.g. a book serif such as Literata / Source Serif 4; a display such as Playfair Display / Cormorant; mono such as JetBrains Mono — final pick is a hosting-ticket detail). Hosted under the same origin; `font-src https://artifacts.frenchforet.com data:` already permits them — **no CSP change**. KaTeX's own `fonts/` dir is co-hosted at the path its CSS resolves to.
+- **Fonts.** Curated **SIL OFL** faces only (e.g. a book serif such as Literata / Source Serif 4; a display such as Playfair Display / Cormorant; mono such as JetBrains Mono — final pick is a hosting-ticket detail). Hosted under the same origin; `font-src https://artifacts.example.com data:` already permits them — **no CSP change**. KaTeX's own `fonts/` dir is co-hosted at the path its CSS resolves to.
 - **`/lib/` stays Access-gated** (the secure default). Portability is delivered by the export inliner (A5), **not** by exposing a public `/lib/`. (A public, Access-excluded `/lib/` — vetted libs only — remains a possible future optimization for online portability, but is unnecessary given the inliner and is not adopted here.)
 - **Safety property is already in place (FRE-509).** Executable JS is served **only** from `/lib/`; artifact bytes are always `text/html`; `X-Content-Type-Options: nosniff` is set. These are what make `script-src <host>` mean "vetted libraries only," not "any script from our host" (D2a). **No CSP directive changes** for the whole toolkit. A `/lib/` reachability + correct-MIME assertion is added to `make verify-envelope` (A7).
 

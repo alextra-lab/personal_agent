@@ -64,7 +64,7 @@ models:
     supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
     tool_calling_strategy: "native"  # Qwen3.5/3.6 chat template supports tools natively
     provider_type: "local"
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
 
   # ── Tier 2: Sub-Agent ───────────────────────────────────────────
   sub_agent:
@@ -93,7 +93,7 @@ models:
     supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
     tool_calling_strategy: "native"  # Qwen3.6 chat template supports tools natively
     provider_type: "local"
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
 
   # ── Experimental / A/B Testing ──────────────────────────────────
   reasoning_heavy:
@@ -110,7 +110,7 @@ models:
     thinking_budget_tokens: 3000
     supports_function_calling: true
     provider_type: "local"
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
 
   coding_large_context:
     # For large codebase analysis (future evaluation; high-memory MoE model)
@@ -239,13 +239,13 @@ models:
 
   # ── Reranker Fallback Model (FRE-851) ───────────────────────────
   reranker_fallback:
-    # Qwen3-Reranker-4B mxfp8 on the Mac/laptop GPU via slm.frenchforet.com,
+    # Qwen3-Reranker-4B mxfp8 on the Mac/laptop GPU via slm.example.com,
     # MLX runtime (FRE-696). Programmatic fallback target when Voyage
     # (the "reranker" role) errors or times out — memory/reranker.py tries
     # this before degrading to passthrough.
     id: "Qwen/Qwen3-Reranker-4B-mxfp8"
     provider_type: "local"
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
     context_length: 8192
     max_concurrency: 1
     default_timeout: 120

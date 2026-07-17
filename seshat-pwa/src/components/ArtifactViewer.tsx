@@ -6,7 +6,7 @@
  * sandbox="allow-scripts" per ADR-0089 D2/D3 (supersedes ADR-0070 D7):
  * scripts run inside a unique opaque origin — no PWA session, no storage,
  * no cookies, no parent navigation. The load-bearing boundary is the Worker
- * CSP envelope on artifacts.frenchforet.com (FRE-509); this attribute is
+ * CSP envelope on artifacts.example.com (FRE-509); this attribute is
  * defense-in-depth on the embedded path. NEVER add allow-same-origin —
  * it would lift the opaque origin and defeat the isolation model.
  *
@@ -40,7 +40,7 @@
  *
  * 6. "Open standalone ↗" button.
  *    Expected: artifact opens in a new tab (target=_blank) at
- *    artifacts.frenchforet.com/{id}. On an installed iOS home-screen PWA,
+ *    artifacts.example.com/{id}. On an installed iOS home-screen PWA,
  *    the tab opens in Safari (not in-app WebView), confirming the
  *    WKWebView→Safari handoff fix.
  *

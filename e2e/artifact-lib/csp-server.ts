@@ -6,7 +6,7 @@
  * The CSP header string is read from the fixtures' `build-manifest.json`, which
  * the Python builder derived from `EXPECTED_CSP_DIRECTIVES` — so the policy has a
  * single source of truth and the harness never re-declares it. The one fidelity
- * gap (localhost host token vs `artifacts.frenchforet.com`) is what the live
+ * gap (localhost host token vs `artifacts.example.com`) is what the live
  * `make verify-envelope` closes post-merge.
  *
  * `/lib/` assets are served with the executable/typed MIME + `nosniff` the real

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import pytest
 
+from personal_agent.config import settings
+from personal_agent.storage import artifact_export
 from personal_agent.storage.artifact_export import (
     ArtifactExportError,
     LibAsset,
@@ -24,7 +26,7 @@ from personal_agent.storage.artifact_export import (
     verify_sri,
 )
 
-_ORIGIN = "https://artifacts.frenchforet.com"
+_ORIGIN = "https://artifacts.example.com"
 
 
 class _FakeFetcher:
@@ -235,7 +237,7 @@ async def test_inline_katex_chartjs_zero_origin_refs() -> None:
 
     out = await export_artifact_html(html=html, mode="inline", sub_map=sub_map, fetcher=fetcher)
 
-    assert "artifacts.frenchforet.com" not in out
+    assert "artifacts.example.com" not in out
     assert "window.katex" in out
     assert "window.Chart" in out
 
@@ -321,7 +323,17 @@ async def test_substitute_threejs_and_font_fall_back_to_inline() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_load_real_substitution_map_shape() -> None:
+def test_load_real_substitution_map_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Parses the real committed map with the origin-override setting unset.
+
+    FRE-895: config/artifact_lib_substitution_map.json ships a placeholder
+    origin; this test pins settings.artifacts_public_base_url off so it
+    verifies the file's OWN origin, not the override (that's tested separately
+    below). The module cache is cleared so an earlier test's monkeypatched
+    setting can't poison this one via a stale cached SubstitutionMap.
+    """
+    monkeypatch.setattr(settings, "artifacts_public_base_url", None)
+    artifact_export._MAP_CACHE.clear()
     sub_map = load_substitution_map()
     assert sub_map.origin == _ORIGIN
 
@@ -337,3 +349,55 @@ def test_load_real_substitution_map_shape() -> None:
     font = sub_map.by_lib_path["lib/fonts/jetbrains-mono@2.304/jetbrains-mono.woff2"]
     assert font.public_cdn_url is None
     assert font.cors_verified is False
+    artifact_export._MAP_CACHE.clear()
+
+
+class TestSubstitutionMapOriginOverride:
+    """FRE-895: settings.artifacts_public_base_url overrides the map's placeholder origin."""
+
+    @staticmethod
+    def _write_map(tmp_path: object, origin: str) -> object:
+        import json
+        from pathlib import Path
+
+        path = Path(str(tmp_path)) / "sub_map.json"
+        path.write_text(json.dumps({"origin": origin, "entries": []}))
+        return path
+
+    def test_setting_unset_leaves_map_origin_untouched(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "artifacts_public_base_url", None)
+        path = self._write_map(tmp_path, "https://artifacts.placeholder.test")
+
+        sub_map = load_substitution_map(path)
+
+        assert sub_map.origin == "https://artifacts.placeholder.test"
+
+    def test_setting_set_overrides_map_origin(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "artifacts_public_base_url", "https://artifacts.real.test")
+        path = self._write_map(tmp_path, "https://artifacts.placeholder.test")
+
+        sub_map = load_substitution_map(path)
+
+        assert sub_map.origin == "https://artifacts.real.test"
+
+    def test_setting_change_after_first_load_is_not_stale(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: the parsed-file cache must not freeze a stale origin (FRE-895
+
+        codex/security-review catch) — only the expensive JSON parse is cached,
+        the origin is recomputed from live settings on every call.
+        """
+        path = self._write_map(tmp_path, "https://artifacts.placeholder.test")
+
+        monkeypatch.setattr(settings, "artifacts_public_base_url", None)
+        first = load_substitution_map(path)
+        assert first.origin == "https://artifacts.placeholder.test"
+
+        monkeypatch.setattr(settings, "artifacts_public_base_url", "https://artifacts.changed.test")
+        second = load_substitution_map(path)
+        assert second.origin == "https://artifacts.changed.test"

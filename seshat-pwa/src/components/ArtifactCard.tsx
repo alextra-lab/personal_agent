@@ -1,6 +1,6 @@
 /**
  * ArtifactCard — inline card rendered in chat when an assistant message
- * contains an artifacts.frenchforet.com/{uuid} URL (FRE-368, ADR-0070 Tier 3).
+ * contains an artifacts.example.com/{uuid} URL (FRE-368, ADR-0070 Tier 3).
  *
  * Fetches metadata from GET /api/v1/artifacts/{id} on mount. On success
  * renders a compact card (title, summary, content-type chip, Expand button,
@@ -13,7 +13,7 @@
  * written via artifact_write.
  *
  * 1. Ask the agent to write an HTML artifact. The assistant reply should
- *    contain the public_url (artifacts.frenchforet.com/{id}).
+ *    contain the public_url (artifacts.example.com/{id}).
  *    Expected: the URL renders as a card with the artifact's title and a
  *    one-line summary — NOT as a bare hyperlink.
  *
@@ -31,7 +31,7 @@
  *    DevTools Network shows POST /api/v1/telemetry/card_click → 204.
  *
  * 5. "Open standalone ↗" opens in a new tab.
- *    Expected: target=_blank opens artifacts.frenchforet.com/{id} in Safari
+ *    Expected: target=_blank opens artifacts.example.com/{id} in Safari
  *    (not in-app WebView) when triggered from an installed iOS home-screen
  *    PWA. CF Access SSO covers the tab — no re-auth prompt.
  *

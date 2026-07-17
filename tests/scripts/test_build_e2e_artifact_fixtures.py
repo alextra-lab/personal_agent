@@ -8,7 +8,7 @@ a fake fetcher (SRIs computed from the fixture bytes) — no network, no R2.
 
 They lock two invariants:
   * the CSP header template the harness serves is byte-derived from the single
-    Python source of truth (``EXPECTED_CSP_DIRECTIVES``), eval-free; and
+    Python source of truth (``expected_csp_directives()``), eval-free; and
   * the produced standalone is self-contained (no ``/lib/`` refs survive; fonts
     inline as ``data:`` URIs) while the ``/lib/`` mirror is written for the
     hosted-render scenario.
@@ -28,7 +28,7 @@ from scripts.build_e2e_artifact_fixtures import (
     parse_csp_header,
 )
 
-from personal_agent.observability.artifact_envelope.spec import EXPECTED_CSP_DIRECTIVES
+from personal_agent.observability.artifact_envelope.spec import expected_csp_directives
 from personal_agent.storage.artifact_export import (
     ArtifactExportError,
     LibAsset,
@@ -135,7 +135,7 @@ def _fetcher_with_correct_bytes() -> _FakeFetcher:
 
 
 # ---------------------------------------------------------------------------
-# CSP header template — single source of truth (EXPECTED_CSP_DIRECTIVES)
+# CSP header template — single source of truth (expected_csp_directives())
 # ---------------------------------------------------------------------------
 
 
@@ -148,7 +148,7 @@ def test_csp_header_template_is_eval_free_and_matches_spec() -> None:
     assert ARTIFACTS_ORIGIN not in template
 
     parsed = parse_csp_header(template.replace("{ORIGIN}", ARTIFACTS_ORIGIN))
-    assert parsed == {k: set(v) for k, v in EXPECTED_CSP_DIRECTIVES.items()}
+    assert parsed == {k: set(v) for k, v in expected_csp_directives().items()}
 
     # The eval-free property the paged.js gate depends on.
     assert "'unsafe-eval'" not in template

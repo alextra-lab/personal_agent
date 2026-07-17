@@ -473,7 +473,7 @@
         {
           "turn_index": 1,
           "user_message": "Read the system log and tell me if anything looks concerning.",
-          "response_text": "Here's my analysis of the last 24 hours of logs:\n\n## Log Summary (Last 24 Hours)\n- **DEBUG:** 95,086 events\n- **INFO:** 87,466 events  \n- **WARNING:** 1,453 events\n- **ERROR:** 119 events\n\nThe system is generating a lot of debug noise (~51% of all events). That's not immediately alarming but worth noting.\n\n---\n\n## \u26a0\ufe0f Concerning Findings\n\n### 1. **Repeated HTTP 524 Timeouts from `slm.frenchforet.com` (Primary concern)**\nMultiple errors across the last 24 hours \u2014 the LLM endpoint `https://slm.fren",
+          "response_text": "Here's my analysis of the last 24 hours of logs:\n\n## Log Summary (Last 24 Hours)\n- **DEBUG:** 95,086 events\n- **INFO:** 87,466 events  \n- **WARNING:** 1,453 events\n- **ERROR:** 119 events\n\nThe system is generating a lot of debug noise (~51% of all events). That's not immediately alarming but worth noting.\n\n---\n\n## \u26a0\ufe0f Concerning Findings\n\n### 1. **Repeated HTTP 524 Timeouts from `slm.example.com` (Primary concern)**\nMultiple errors across the last 24 hours \u2014 the LLM endpoint `https://slm.fren",
           "trace_id": "556f61cd-3736-4cf4-9620-f932443d5979",
           "response_time_ms": 113592.62259001844,
           "assertions": [
@@ -1876,7 +1876,7 @@
         {
           "turn_index": 1,
           "user_message": "Are there any specific errors I should be worried about?",
-          "response_text": "Good news and bad news \u2014 here's what I found across the past **6 hours**:\n\n---\n\n## \ud83d\udd34 Error Breakdown by Type (49 total errors)\n\n| # | Error Pattern | Count | Status |\n|---|---|---|---|\n| 1 | **404 Not Found \u2192 `slm.frenchforet.com`** | **27** | \ud83d\udfe1 **ACTIVE** |\n| 2 | **524 Gateway Timeout \u2192 `slm.frenchforet.com`** | **14** | \ud83d\udd34 **ACTIVE** (last hour) |\n| 3 | **Server disconnected (connection reset)** | **4** | \u26aa Spreading out |\n| 4 | **Linear GraphQL error \u2014 `list_linear_projects`** | **3** | \ud83d\udfe1 Need",
+          "response_text": "Good news and bad news \u2014 here's what I found across the past **6 hours**:\n\n---\n\n## \ud83d\udd34 Error Breakdown by Type (49 total errors)\n\n| # | Error Pattern | Count | Status |\n|---|---|---|---|\n| 1 | **404 Not Found \u2192 `slm.example.com`** | **27** | \ud83d\udfe1 **ACTIVE** |\n| 2 | **524 Gateway Timeout \u2192 `slm.example.com`** | **14** | \ud83d\udd34 **ACTIVE** (last hour) |\n| 3 | **Server disconnected (connection reset)** | **4** | \u26aa Spreading out |\n| 4 | **Linear GraphQL error \u2014 `list_linear_projects`** | **3** | \ud83d\udfe1 Need",
           "trace_id": "7ea54704-3777-4be8-ad74-ba747d324a94",
           "response_time_ms": 81969.3889010232,
           "assertions": [

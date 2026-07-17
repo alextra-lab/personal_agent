@@ -10,7 +10,7 @@
 
 ## Context
 
-The FRE-214 audit ratified full-harness-on-VPS as the canonical topology and identified a hidden landmine for Track 2b: when the laptop containerizes the gateway, a naive merge of `models.yaml` + `models.cloud.yaml` would route the laptop's containerized harness through Cloudflare back to itself (`slm.frenchforet.com`) just to reach a model running on the same machine.
+The FRE-214 audit ratified full-harness-on-VPS as the canonical topology and identified a hidden landmine for Track 2b: when the laptop containerizes the gateway, a naive merge of `models.yaml` + `models.cloud.yaml` would route the laptop's containerized harness through Cloudflare back to itself (`slm.example.com`) just to reach a model running on the same machine.
 
 The mechanism in audit §8 — a single model registry with **ordered candidate endpoints + first-reachable resolution** — eliminates `models.cloud.yaml` entirely and makes endpoint selection a property of *what's reachable*, not *which env file we loaded*. This is the structural change that unblocks Track 2b's compose unification without compromising the "laptop must remain self-contained" requirement (audit §8.1).
 
@@ -344,13 +344,13 @@ primary:
   endpoints:
     - http://localhost:8000/v1            # laptop native dev (slm_server / MLX on host)
     - http://host.docker.internal:8000/v1 # laptop containerized → host MLX
-    - https://slm.frenchforet.com/v1      # remote tunnel (last resort, used by VPS local profile)
+    - https://slm.example.com/v1      # remote tunnel (last resort, used by VPS local profile)
   probe_timeout_ms: 250
   context_length: 32768
   # … (rest unchanged: max_concurrency, default_timeout, quantization, …)
 ```
 
-Same shape for `sub_agent`, `embedding` (paths `8503`), `reranker` (paths `8504`). Embedding and reranker append the `slm.frenchforet.com/embedding/v1` and `/reranker/v1` paths per audit §8.3.
+Same shape for `sub_agent`, `embedding` (paths `8503`), `reranker` (paths `8504`). Embedding and reranker append the `slm.example.com/embedding/v1` and `/reranker/v1` paths per audit §8.3.
 
 ### 4.2 Delete `config/models.cloud.yaml`
 
@@ -404,7 +404,7 @@ make dev                             # uvicorn --reload, native gateway
 #   endpoint_resolved model_key=embedding endpoint=http://localhost:8503/v1 strategy=first_reachable tried=1
 ```
 
-Verify the laptop never tries `slm.frenchforet.com` (would indicate localhost probe wrongly failing):
+Verify the laptop never tries `slm.example.com` (would indicate localhost probe wrongly failing):
 
 ```bash
 # In one terminal
@@ -413,7 +413,7 @@ make logs SERVICE=seshat-gateway 2>&1 | grep endpoint_resolved
 uv run agent "smoke test"
 ```
 
-Expected: no `slm.frenchforet.com` in resolved endpoints when MLX is healthy on localhost.
+Expected: no `slm.example.com` in resolved endpoints when MLX is healthy on localhost.
 
 ### 5.2 Negative test — laptop with SLM down
 
@@ -428,7 +428,7 @@ This is the failure mode the owner asked for (audit §8.4) — laptop must work 
 ```bash
 ENV=cloud make deploy
 # Expected on the gateway's first request:
-#   endpoint_resolved model_key=primary endpoint=https://slm.frenchforet.com/v1 strategy=first_reachable tried=4
+#   endpoint_resolved model_key=primary endpoint=https://slm.example.com/v1 strategy=first_reachable tried=4
 #   endpoint_resolved model_key=embedding endpoint=http://embeddings:8503/v1 strategy=first_reachable tried=3
 #   endpoint_resolved model_key=reranker endpoint=http://reranker:8504/v1 strategy=first_reachable tried=3
 ```
@@ -481,7 +481,7 @@ If a partial rollback is needed (e.g. resolver works but one call site is wrong)
 2. `AGENT_MODEL_CONFIG_PATH` is no longer overridden anywhere.
 3. `make test` passes; `make mypy` clean; `make ruff-check` clean.
 4. Laptop request resolves to `http://localhost:8000/v1` (or `host.docker.internal` once 2b lands).
-5. VPS request resolves to `embeddings:8503` / `reranker:8504` / `slm.frenchforet.com/v1` per role.
+5. VPS request resolves to `embeddings:8503` / `reranker:8504` / `slm.example.com/v1` per role.
 6. Stopping `slm_server` on laptop produces a loud `EndpointResolutionError`, never a silent tunnel-out.
 
 ---

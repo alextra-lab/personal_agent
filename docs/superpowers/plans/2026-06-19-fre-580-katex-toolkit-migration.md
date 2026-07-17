@@ -125,5 +125,5 @@ gh pr create ...
 - [ ] package.json: "katex": "0.16.47" (exact pin, no caret)
 
 ## Post-deploy (master action, not build session)
-R2 upload: upload lib/katex@0.16.47/katex.min.{js,css} + fonts/ to artifacts.frenchforet.com.
+R2 upload: upload lib/katex@0.16.47/katex.min.{js,css} + fonts/ to artifacts.example.com.
 Old lib/katex@0.16.11/ can remain until a cleanup pass.

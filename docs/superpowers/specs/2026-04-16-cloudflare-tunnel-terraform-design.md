@@ -1,14 +1,14 @@
 # Cloudflare Tunnel + Terraform Design
 
 **Date:** 2026-04-16  
-**Domain:** frenchforet.com  
+**Domain:** example.com  
 **Status:** Approved — ready for implementation planning
 
 ---
 
 ## Goal
 
-Expose the Seshat personal agent publicly at `frenchforet.com` subdomains without requiring the Cloudflare WARP/One client on any device. Manage the entire Cloudflare configuration as code via Terraform. Enable authorized external agents to call the Seshat API.
+Expose the Seshat personal agent publicly at `example.com` subdomains without requiring the Cloudflare WARP/One client on any device. Manage the entire Cloudflare configuration as code via Terraform. Enable authorized external agents to call the Seshat API.
 
 ---
 
@@ -17,22 +17,22 @@ Expose the Seshat personal agent publicly at `frenchforet.com` subdomains withou
 ```
 Browser / External Agent
         ↓ HTTPS (TLS terminated at Cloudflare edge)
-Cloudflare (frenchforet.com zone)
-  ├── agent.frenchforet.com  ─── proxied CNAME ──→ <tunnel-id>.cfargotunnel.com
-  └── api.frenchforet.com    ─── proxied CNAME ──→ <tunnel-id>.cfargotunnel.com
+Cloudflare (example.com zone)
+  ├── agent.example.com  ─── proxied CNAME ──→ <tunnel-id>.cfargotunnel.com
+  └── api.example.com    ─── proxied CNAME ──→ <tunnel-id>.cfargotunnel.com
         ↓ HTTP/2 over TCP (QUIC blocked by OVH firewall)
 cloudflared container (cloud-sim Docker network)
         ↓ HTTP (internal Docker DNS)
 Caddy reverse proxy (172.25.0.10:80)
-  ├── agent.frenchforet.com → /api/* /chat /stream/* → seshat-gateway:9001
+  ├── agent.example.com → /api/* /chat /stream/* → seshat-gateway:9001
   │                         → /*                     → seshat-pwa:3000
-  └── api.frenchforet.com   → seshat-gateway:9001 (all paths)
+  └── api.example.com   → seshat-gateway:9001 (all paths)
 ```
 
 **Key design choice — same-origin for the PWA:**  
-`agent.frenchforet.com` uses the existing Caddyfile routing snippet (path-based). The PWA makes API calls to its own domain — no CORS required. `NEXT_PUBLIC_SESHAT_URL` becomes `https://agent.frenchforet.com`.
+`agent.example.com` uses the existing Caddyfile routing snippet (path-based). The PWA makes API calls to its own domain — no CORS required. `NEXT_PUBLIC_SESHAT_URL` becomes `https://agent.example.com`.
 
-`api.frenchforet.com` is a dedicated endpoint for external agents only. All traffic routes directly to the gateway.
+`api.example.com` is a dedicated endpoint for external agents only. All traffic routes directly to the gateway.
 
 ---
 
@@ -41,12 +41,12 @@ Caddy reverse proxy (172.25.0.10:80)
 Two-layer defence:
 
 **Layer 1 — Cloudflare WAF (edge):**  
-A custom WAF ruleset blocks any request to `api.frenchforet.com` missing an `Authorization` header before it reaches the VPS. Requests to `agent.frenchforet.com` are not blocked at the WAF layer (browser users don't send auth headers).
+A custom WAF ruleset blocks any request to `api.example.com` missing an `Authorization` header before it reaches the VPS. Requests to `agent.example.com` are not blocked at the WAF layer (browser users don't send auth headers).
 
 **Layer 2 — Gateway (origin):**  
 `AGENT_GATEWAY_AUTH_ENABLED=true` + `AGENT_GATEWAY_API_KEY=<secret>`. The gateway validates `Authorization: Bearer <key>` on all non-public endpoints. This catches anything that bypasses the WAF and enforces auth uniformly regardless of how the gateway is reached.
 
-External agents include `Authorization: Bearer <key>` in every request to `api.frenchforet.com`.
+External agents include `Authorization: Bearer <key>` in every request to `api.example.com`.
 
 ---
 
@@ -84,7 +84,7 @@ infrastructure/terraform-cloudflare/
 | `tunnel.tf` | `cloudflare_zero_trust_tunnel_cloudflared` | Creates named tunnel |
 | `tunnel.tf` | `cloudflare_zero_trust_tunnel_cloudflared_config` | Ingress routing: `agent.*` → `http://caddy:80`, `api.*` → `http://caddy:80`, catch-all → `http_status:404` |
 | `dns.tf` | `cloudflare_record` × 2 | Proxied CNAMEs: `agent` and `api` → `<tunnel-id>.cfargotunnel.com` |
-| `waf.tf` | `cloudflare_ruleset` | Custom WAF rule: block `api.frenchforet.com` requests missing `Authorization` |
+| `waf.tf` | `cloudflare_ruleset` | Custom WAF rule: block `api.example.com` requests missing `Authorization` |
 | `outputs.tf` | `output "tunnel_token"` | Sensitive — used to populate VPS credentials file |
 
 ### Variables (`terraform.tfvars.example`)
@@ -94,7 +94,7 @@ cloudflare_api_token = "YOUR_API_TOKEN"
 cloudflare_zone_id   = "YOUR_ZONE_ID"
 cloudflare_account_id = "YOUR_ACCOUNT_ID"
 tunnel_name          = "seshat-vps"
-domain               = "frenchforet.com"
+domain               = "example.com"
 ```
 
 ### Credentials Flow
@@ -121,12 +121,12 @@ Add two new site blocks (plain HTTP — TLS is Cloudflare's responsibility):
 
 ```caddyfile
 # Cloudflare Tunnel — user-facing PWA (same-origin API routing)
-http://agent.frenchforet.com {
+http://agent.example.com {
     import routing
 }
 
 # Cloudflare Tunnel — external agent API access
-http://api.frenchforet.com {
+http://api.example.com {
     reverse_proxy seshat-gateway:9001 {
         header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
         header_up X-Forwarded-Proto https
@@ -174,7 +174,7 @@ cloudflared:
 seshat-pwa:
   build:
     args:
-      NEXT_PUBLIC_SESHAT_URL: "https://agent.frenchforet.com"
+      NEXT_PUBLIC_SESHAT_URL: "https://agent.example.com"
 ```
 
 ### `docker-compose.cloud.yml` — seshat-gateway env

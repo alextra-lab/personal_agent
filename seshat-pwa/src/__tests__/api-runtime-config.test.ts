@@ -30,11 +30,11 @@ describe('GET /api/runtime-config', () => {
   });
 
   it('returns seshat_url from SESHAT_URL env var', async () => {
-    process.env.SESHAT_URL = 'https://agent.frenchforet.com';
+    process.env.SESHAT_URL = 'https://agent.example.com';
     const { GET } = await import('@/app/api/runtime-config/route');
     GET();
     expect(mockJsonFn).toHaveBeenCalledWith(
-      expect.objectContaining({ seshat_url: 'https://agent.frenchforet.com' }),
+      expect.objectContaining({ seshat_url: 'https://agent.example.com' }),
     );
   });
 
@@ -48,7 +48,7 @@ describe('GET /api/runtime-config', () => {
   });
 
   it('does NOT include gateway_token in the response', async () => {
-    process.env.SESHAT_URL = 'https://agent.frenchforet.com';
+    process.env.SESHAT_URL = 'https://agent.example.com';
     process.env.GATEWAY_TOKEN = 'super-secret';
     const { GET } = await import('@/app/api/runtime-config/route');
     GET();

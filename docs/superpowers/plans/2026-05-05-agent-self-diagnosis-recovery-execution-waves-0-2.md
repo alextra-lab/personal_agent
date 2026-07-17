@@ -145,7 +145,7 @@ The baseline produced this evidence in 16 minutes against the live system. Build
 
 ### Wave 2.B — Fix synthesis stub after one tool call (FRE-324)
 
-- **Linear**: [FRE-324](https://linear.app/frenchforet/issue/FRE-324) (Tier-2:Sonnet, Needs Approval, **blocked on FRE-323**).
+- **Linear**: [FRE-324](https://linear.app/frenchforest/issue/FRE-324) (Tier-2:Sonnet, Needs Approval, **blocked on FRE-323**).
 - **Scope**: orchestrator returns "I reached my tool-use limit before completing a synthesis" after a single `search_memory` call returning success. Find the cap or one-shot synthesis path that fires and let the model produce a real answer.
 - **Acceptance**: with FRE-323 fixed, `make eval-recovery RUN=synthesis-fix-verify --prompt memory_canary_recall` turn 2 contains the canary's distinctive content (`ultramarine`) in the response.
 

@@ -1,5 +1,5 @@
 {
-  "content_hash": "2b2d873e92c7139ea4be2d8908a774714465515f8589c4001ca3d40c0cb9d0b2",
+  "content_hash": "fda7e1abdd79be870a2db95365ed32b29034a280083e4fe360b2bf574e7d7c33",
   "generated_at": "2026-07-11T04:45:11.433839+00:00",
   "negative_pairs": [
     {
@@ -414,8 +414,8 @@
       "entity_id_b": "4:affaea02-a5a5-47d4-bab1-7cc6c7f00953:262",
       "kind_a": "Location",
       "kind_b": "Organization",
-      "name_a": "Artifacts.frenchforet.com",
-      "name_b": "artifacts.frenchforet.com",
+      "name_a": "Artifacts.example.com",
+      "name_b": "artifacts.example.com",
       "provenance": "corpus_case_variant"
     },
     {

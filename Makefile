@@ -148,7 +148,7 @@ health:
 	@curl -sf http://localhost:$(SERVICE_PORT)/health | python3 -m json.tool
 
 verify-envelope:
-	@[ -n "$(URL)" ] || { echo "Usage: make verify-envelope URL=https://artifacts.frenchforet.com/<id>"; exit 1; }
+	@[ -n "$(URL)" ] || { echo "Usage: make verify-envelope URL=https://artifacts.example.com/<id>"; exit 1; }
 	@uv run python scripts/verify_artifact_envelope.py $(URL)
 
 # Curated /lib/ toolkit assertion (FRE-527 / ADR-0089 Addendum A · A7): reachable +

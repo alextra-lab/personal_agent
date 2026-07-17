@@ -18,7 +18,7 @@ import structlog.testing
 from tests.observability.artifact_envelope.test_verifier import GOOD_CSP
 
 IDENTITY: dict[str, Any] = {
-    "public_url": "https://artifacts.frenchforet.com/aaaabbbb-0000-0000-0000-000000000000",
+    "public_url": "https://artifacts.example.com/aaaabbbb-0000-0000-0000-000000000000",
     "artifact_id": "aaaabbbb-0000-0000-0000-000000000000",
     "slug": "test-artifact",
     "content_type": "text/html; charset=utf-8",
@@ -147,7 +147,7 @@ class TestProbeDegradedPaths:
         """
         resp = _response(
             302,
-            [("Location", "https://frenchforest.cloudflareaccess.com/cdn-cgi/access/login/x")],
+            [("Location", "https://team.cloudflareaccess.com/cdn-cgi/access/login/x")],
         )
         logs, _ = await _run(resp)
         event = _event(logs)

@@ -1,9 +1,9 @@
 # Cloud / VPS model configuration
 # Used on the VPS via AGENT_MODEL_CONFIG_PATH=/app/config/models.cloud.yaml
 # Differences from models.yaml:
-#   - primary/sub_agent endpoint → https://slm.frenchforet.com/v1  (Mac SLM tunnel)
+#   - primary/sub_agent endpoint → https://slm.example.com/v1  (Mac SLM tunnel)
 #   - embedding endpoint → http://embeddings:8503/v1  (llama.cpp Docker service)
-#   - reranker endpoint  → https://slm.frenchforet.com/v1  (Mac-GPU tunnel, FRE-671; embedder stays VPS)
+#   - reranker endpoint  → https://slm.example.com/v1  (Mac-GPU tunnel, FRE-671; embedder stays VPS)
 #
 # Original: config/models.yaml (ADR-0031 + ADR-0033: two-tier taxonomy + LiteLLM)
 #
@@ -72,7 +72,7 @@ models:
     supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
     tool_calling_strategy: "native"  # Qwen3.5/3.6 chat template supports tools natively
     provider_type: "local"
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
 
   # ── Tier 2: Sub-Agent ───────────────────────────────────────────
   sub_agent:
@@ -101,7 +101,7 @@ models:
     supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
     tool_calling_strategy: "native"  # Qwen3.6 chat template supports tools natively
     provider_type: "local"
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
 
   # ── Experimental / A/B Testing ──────────────────────────────────
   reasoning_heavy:
@@ -118,7 +118,7 @@ models:
     thinking_budget_tokens: 3000
     supports_function_calling: true
     provider_type: "local"
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
 
   coding_large_context:
     # For large codebase analysis (future evaluation; high-memory MoE model)
@@ -249,7 +249,7 @@ models:
 
   # ── Reranker Fallback Model (FRE-851) ───────────────────────────
   reranker_fallback:
-    # Qwen3-Reranker-4B mxfp8 on the Mac/laptop GPU via slm.frenchforet.com, MLX runtime
+    # Qwen3-Reranker-4B mxfp8 on the Mac/laptop GPU via slm.example.com, MLX runtime
     # (FRE-696). MLX replaces llama.cpp: the llama.cpp causal-rerank path stalled under
     # sustained distinct-candidate load and timed out at the 50-candidate cap (FRE-695/696).
     # MLX is reliable AND higher-separation (Youden's J 0.747 vs 0.71 for the llama.cpp 4B)
@@ -257,12 +257,12 @@ models:
     # Paired with reranker_input_cap=25 to bound per-recall cost (~2.8s) now that recall
     # returns real candidate volume (the cap was set when recall was empty — FRE-673).
     # Stateless query-time rescorer: no KG re-embed, embedder unchanged (0.6B/VPS).
-    # CF-Access service token injected by memory/reranker.py for slm.frenchforet.com.
+    # CF-Access service token injected by memory/reranker.py for slm.example.com.
     # Programmatic fallback target (FRE-851): rerank() tries this when the Voyage
     # primary errors/times out, before degrading to vector+recency passthrough.
     id: "Qwen/Qwen3-Reranker-4B-mxfp8"
     provider_type: "local"
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
     context_length: 8192
     max_concurrency: 1
     default_timeout: 120

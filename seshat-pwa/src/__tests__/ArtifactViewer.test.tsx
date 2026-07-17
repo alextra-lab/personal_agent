@@ -24,7 +24,7 @@ vi.mock('@/lib/agui-client', async () => {
 
 import { ArtifactViewer } from '@/components/ArtifactViewer';
 
-const PUBLIC_URL = 'https://artifacts.frenchforet.com/test-artifact-id';
+const PUBLIC_URL = 'https://artifacts.example.com/test-artifact-id';
 
 function renderViewer(contentType = 'text/html; charset=utf-8') {
   return render(

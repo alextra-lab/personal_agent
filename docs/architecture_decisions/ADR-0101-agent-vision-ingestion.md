@@ -32,7 +32,7 @@ The failure is a chain of three layers, each verified in code:
 3. **`artifact_read` cannot return image bytes, and its URL is unreachable.** `artifact_read`
    (`tools/artifact_tools.py:672-690`) fetches bytes inline only for *textual* types ≤256 KB. For
    binary/image types it returns metadata + `public_url`, `content: None`, **no bytes**. The
-   `public_url` (`artifact_tools.py:267-271`) is the `artifacts.frenchforet.com/{id}` route, which is
+   `public_url` (`artifact_tools.py:267-271`) is the `artifacts.example.com/{id}` route, which is
    **guarded by Cloudflare Access** — so when the agent fetches it, CF Access returns a login page.
    The agent never receives the image content.
 

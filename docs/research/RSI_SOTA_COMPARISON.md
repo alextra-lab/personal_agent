@@ -228,7 +228,7 @@ This architecture reaches **Level 4 RSI** (specialized multi-agent improvement s
 
 ### Step 2 — GitOps Infrastructure (Level 2 sandbox)
 
-- `main` branch = prod (frenchforet.com), protected, manual merge only
+- `main` branch = prod (example.com), protected, manual merge only
 - `dev` branch = staging environment, auto-deploys on push
 - GitHub Actions: `make test` + `make mypy` + `make ruff-check` on every PR
 - Rollback = `git revert` + container restart

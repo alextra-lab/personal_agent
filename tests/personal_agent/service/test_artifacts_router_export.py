@@ -23,7 +23,7 @@ from personal_agent.service.auth import RequestUser, get_request_user
 from personal_agent.service.database import get_db_session
 from personal_agent.storage.artifact_export import ArtifactExportError
 
-_ORIGIN = "https://artifacts.frenchforet.com"
+_ORIGIN = "https://artifacts.example.com"
 _OWNER = uuid4()
 
 
@@ -141,8 +141,8 @@ def test_export_bad_mode_422(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_http_fetcher_rejects_disallowed_host() -> None:
     # SSRF guard: a host outside the allowlist is refused before any request.
     fetcher = router_module._HttpAssetFetcher(
-        origin_host="artifacts.frenchforet.com",
-        allowed_hosts=frozenset({"artifacts.frenchforet.com", "cdn.jsdelivr.net"}),
+        origin_host="artifacts.example.com",
+        allowed_hosts=frozenset({"artifacts.example.com", "cdn.jsdelivr.net"}),
     )
     with pytest.raises(ArtifactExportError):
         await fetcher.fetch("https://169.254.169.254/latest/meta-data/")
@@ -154,7 +154,7 @@ def test_build_asset_fetcher_allowlist_from_map() -> None:
     fetcher = router_module._build_asset_fetcher(load_substitution_map())
     assert isinstance(fetcher, router_module._HttpAssetFetcher)
     # set-subset (not substring) — the allowlist must contain both trusted hosts
-    assert {"artifacts.frenchforet.com", "cdn.jsdelivr.net"} <= fetcher._allowed_hosts
+    assert {"artifacts.example.com", "cdn.jsdelivr.net"} <= fetcher._allowed_hosts
 
 
 def test_export_fetch_failure_502(monkeypatch: pytest.MonkeyPatch) -> None:

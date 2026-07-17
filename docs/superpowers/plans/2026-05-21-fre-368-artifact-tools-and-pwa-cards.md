@@ -12,7 +12,7 @@
 
 The R2-backed artifact substrate ([ADR-0069](../../architecture_decisions/ADR-0069-r2-backed-artifact-substrate.md)) shipped 2026-05-17 with `notes_*` as its first consumer. FRE-368 adds the **second consumer — agent-produced artifacts** (HTML reports, charts, comparison tables, dashboards) that benefit from URL-addressability for human consumption rather than agent re-ingestion.
 
-Per [ADR-0070](../../architecture_decisions/ADR-0070-output-channel-model-markdown-and-rich.md), this ticket is also the **build-to-learn rig**: it produces the measurement data (D8) that determines whether the channel model holds or whether a dual-representation (`reply_markdown` + `reply_html`) refactor is later justified. The chat reply itself stays markdown; artifacts are referenced inline as cards, expanded in a sandboxed viewer, and reachable at a stable `artifacts.frenchforet.com/{id}` URL.
+Per [ADR-0070](../../architecture_decisions/ADR-0070-output-channel-model-markdown-and-rich.md), this ticket is also the **build-to-learn rig**: it produces the measurement data (D8) that determines whether the channel model holds or whether a dual-representation (`reply_markdown` + `reply_html`) refactor is later justified. The chat reply itself stays markdown; artifacts are referenced inline as cards, expanded in a sandboxed viewer, and reachable at a stable `artifacts.example.com/{id}` URL.
 
 The substrate (Postgres `artifacts` table, `R2ArtifactStore`, `/internal/artifacts/{id}` resolver) is already complete — **no schema, no Worker, no Access changes** are needed. The `type` column's CHECK constraint already permits `'artifact'`; the JWT-verified internal resolver already serves any type. FRE-368 layers three new tools, a public-facing listing endpoint, a card-click telemetry endpoint, and PWA components on top.
 
@@ -29,12 +29,12 @@ FRE-368 is **not Done** in Linear until every item in this table is checked. Ite
 | AC-3 | `make ruff-check` + `make ruff-format` clean | Pre-merge | 0 errors |
 | AC-4 | `artifact_write`, `artifact_list`, `artifact_read` visible to LLM in NORMAL mode | Post-deploy (PR #A) | `make shell SERVICE=seshat-gateway` → `tool_registry.list_tools(mode='NORMAL')` shows all three |
 | AC-5 | CLI write → list → read round-trip succeeds | Post-deploy (PR #A) | `uv run agent "Use artifact_write to save HTML titled 'Round-trip smoke', then artifact_list, then artifact_read"` — public_url in output matches artifact_id |
-| AC-6 | Worker serves `type='artifact'` rows — no Worker changes needed | Post-deploy (PR #A) | Open `https://artifacts.frenchforet.com/{artifact_id}` in iPad Safari → CF Access gate + bytes render |
+| AC-6 | Worker serves `type='artifact'` rows — no Worker changes needed | Post-deploy (PR #A) | Open `https://artifacts.example.com/{artifact_id}` in iPad Safari → CF Access gate + bytes render |
 | AC-7 | Inline artifact card renders in chat when assistant reply contains an artifact URL | Post-deploy (PR #B) | Ask agent to write an HTML artifact → URL in reply → card appears with title/summary/open button |
 | AC-8 | Sandboxed viewer: `sandbox=""` enforced, script blocked | Post-deploy (PR #B) | Write artifact with `<script>document.title='PWNED'</script>` → expand → title stays "Artifact" |
 | AC-9 | WKWebView → Safari handoff on iPad PWA | Post-deploy (PR #B) | "Open standalone ↗" on installed home-screen PWA → opens in Safari, CF Access SSO covers it |
 | AC-10 | `/artifacts` route shows list of user's artifacts | Post-deploy (PR #B) | Navigate from session drawer → list renders; each entry opens viewer |
-| AC-11 | `artifact_card_click` telemetry emits to ES on Expand | Post-deploy (PR #B) | DevTools Network → 204 on POST; `curl es.frenchforet.com/seshat-logs-*/_search?q=event_type:artifact_card_click` returns hits |
+| AC-11 | `artifact_card_click` telemetry emits to ES on Expand | Post-deploy (PR #B) | DevTools Network → 204 on POST; `curl es.example.com/seshat-logs-*/_search?q=event_type:artifact_card_click` returns hits |
 | AC-12 | ADR-0070 status updated from Proposed → Accepted or amended | After two-week review ≥ 2026-06-04 | ADR file Status line updated; ES query confirms `artifact_write` + `artifact_card_click` counts |
 
 **PR #A closes** when AC-1 through AC-6 are done.
@@ -295,7 +295,7 @@ async def get_artifact_metadata(
     request: Request,
 ) -> ArtifactSummary:
     """Metadata-only fetch for a single artifact. Bytes flow through the
-    Worker at artifacts.frenchforet.com — this endpoint never returns bytes."""
+    Worker at artifacts.example.com — this endpoint never returns bytes."""
     user_id = await _resolve_user_via_cf_access(request)
     row = await _load_user_artifact(user_id, artifact_id)
     if row is None:
@@ -424,7 +424,7 @@ python -c "from personal_agent.tools import tool_registry; print([t.name for t i
 uv run agent "Use artifact_write to save an HTML artifact with title 'Round-trip smoke' summarising today's plan, then call artifact_list, then artifact_read it back and confirm the title round-trips."
 ```
 
-Then on iPad Safari, open `https://artifacts.frenchforet.com/{artifact_id from output}` and confirm CF Access prompts (or shows the bytes if SSO is active). This verifies the existing Worker path still serves the new `type='artifact'` rows correctly with no Worker changes needed.
+Then on iPad Safari, open `https://artifacts.example.com/{artifact_id from output}` and confirm CF Access prompts (or shows the bytes if SSO is active). This verifies the existing Worker path still serves the new `type='artifact'` rows correctly with no Worker changes needed.
 
 ### A9. PR #A commit + Linear
 
@@ -441,7 +441,7 @@ PR #B requires PR #A on `main` (so `/api/v1/artifacts` and `/api/v1/telemetry/ca
 
 ### B1. New file: `seshat-pwa/src/components/ArtifactCard.tsx`
 
-Inline card rendered when `MarkdownContent`'s link handler detects an `artifacts.frenchforet.com/{uuid}` URL. Visual shape: title + 1-line summary + content-type chip + "Expand" button (opens viewer) + "Open standalone ↗" anchor (target=_blank, fires telemetry).
+Inline card rendered when `MarkdownContent`'s link handler detects an `artifacts.example.com/{uuid}` URL. Visual shape: title + 1-line summary + content-type chip + "Expand" button (opens viewer) + "Open standalone ↗" anchor (target=_blank, fires telemetry).
 
 Match FRE-315 chrome conventions captured by Explore: `bg-slate-800/80` chrome, `border border-slate-800/60`, button class `flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:text-seshat-accent hover:bg-slate-700/40 transition-colors`, `FEEDBACK_MS = 1400` checkmark flash on copy. Use `animate-pulse-dot` for the loading skeleton while metadata is in flight.
 
@@ -470,7 +470,7 @@ className="fixed inset-y-0 right-0 z-50 w-full md:max-w-3xl bg-slate-900 border-
 Iframe shape (per ADR-0070 D7, default "documents not apps"):
 ```tsx
 <iframe
-  src={publicUrl}                  // browser hits Worker via artifacts.frenchforet.com, CF Access SSO covers
+  src={publicUrl}                  // browser hits Worker via artifacts.example.com, CF Access SSO covers
   sandbox=""                       // empty string = strictest: no scripts, no same-origin, no nav
   referrerPolicy="no-referrer"
   className="flex-1 w-full bg-white rounded-b-2xl md:rounded-none"
@@ -490,7 +490,7 @@ Extend the existing `a({ href, children })` handler at lines 114-125 with artifa
 
 ```tsx
 // At module top:
-const ARTIFACTS_HOST = process.env.NEXT_PUBLIC_ARTIFACTS_HOST ?? 'artifacts.frenchforet.com';
+const ARTIFACTS_HOST = process.env.NEXT_PUBLIC_ARTIFACTS_HOST ?? 'artifacts.example.com';
 const ARTIFACT_PATH_RE = /^\/([0-9a-f-]{36})\/?$/i;
 
 function tryParseArtifactUrl(href: string | undefined): string | null {
@@ -611,7 +611,7 @@ Inside the session-drawer panel at lines 154-185, add an "Artifacts" navigation 
 
 Bump `CACHE_NAME` from `'seshat-v4-fre-315-image-actions'` to `'seshat-v5-fre-368-artifact-cards'`. Per the [SW cache convention memory](https://example), this is mandatory on every shell-changing PWA deploy.
 
-**Verification side-quest (worth doing in this PR or as a separate Tier-3:Haiku issue):** Explore agent flagged that `navigator.serviceWorker.register(...)` is not present anywhere under `src/`, so the SW may not be running. Before relying on the cache-bump for this PR, check the iPad PWA's DevTools (Safari Web Inspector → Service Workers) on the deployed `agent.frenchforet.com` and confirm `sw.js` is in fact registered & controlling the page. If not, either (a) add a tiny `useEffect` registration in `src/app/layout.tsx` (`if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js')`), or (b) file a Haiku issue and ship FRE-368 without the SW bump. The FRE-315 deploy worked, so registration is likely happening — but worth a 30-second DevTools check.
+**Verification side-quest (worth doing in this PR or as a separate Tier-3:Haiku issue):** Explore agent flagged that `navigator.serviceWorker.register(...)` is not present anywhere under `src/`, so the SW may not be running. Before relying on the cache-bump for this PR, check the iPad PWA's DevTools (Safari Web Inspector → Service Workers) on the deployed `agent.example.com` and confirm `sw.js` is in fact registered & controlling the page. If not, either (a) add a tiny `useEffect` registration in `src/app/layout.tsx` (`if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js')`), or (b) file a Haiku issue and ship FRE-368 without the SW bump. The FRE-315 deploy worked, so registration is likely happening — but worth a 30-second DevTools check.
 
 ### B8. PR #B quality gates & verification
 
@@ -631,7 +631,7 @@ End-to-end smoke (run from a real browser against the deployed gateway after the
 5. **/artifacts route** — open `/artifacts` from the session drawer link → list view shows the test card; clicking it opens the same viewer.
 6. **Telemetry** — DevTools Network tab shows `POST /api/v1/telemetry/card_click` 204 on Expand. ES query confirms:
    ```bash
-   curl -s 'https://es.frenchforet.com/seshat-logs-*/_search?q=event_type:artifact_card_click&size=5' | jq '.hits.hits[]._source | {artifact_id, surface, ts:.["@timestamp"]}'
+   curl -s 'https://es.example.com/seshat-logs-*/_search?q=event_type:artifact_card_click&size=5' | jq '.hits.hits[]._source | {artifact_id, surface, ts:.["@timestamp"]}'
    ```
 7. **Replay cost (ADR-0070 verification §4)** — open a session with 3 artifact references; in DevTools Performance → DOM Nodes, confirm <1MB DOM weight (no inline HTML payloads in transcript).
 8. **CACHE_NAME bump effective** — DevTools → Application → Cache Storage shows the new `seshat-v5-fre-368-artifact-cards` cache; old cache evicted (only if §B7 verification confirmed the SW is registered — else this step is N/A).
@@ -700,7 +700,7 @@ End-to-end smoke (run from a real browser against the deployed gateway after the
 | Round-trip (write → list → read) | CLI `uv run agent` smoke session in §A8 |
 | Cross-user 404 | `test_artifact_tools.py` test asserts `ToolExecutionError("artifact not found")` |
 | Size cap + content_type allowlist | Unit tests in `test_artifact_tools.py` |
-| Public URL serves bytes | iPad Safari open of `artifacts.frenchforet.com/{id}` returns rendered HTML (existing Worker, unchanged) |
+| Public URL serves bytes | iPad Safari open of `artifacts.example.com/{id}` returns rendered HTML (existing Worker, unchanged) |
 | CF-Access auth on public endpoints | `test_artifacts_router.py` extension covers 401-without-JWT |
 | Sandbox posture | §B8.3 — `<script>` payload does not execute in viewer iframe |
 | WKWebView → Safari handoff | §B8.4 — iPad home-screen PWA opens standalone link in Safari |

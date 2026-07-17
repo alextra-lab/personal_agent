@@ -15,13 +15,13 @@ The VPS `seshat-gateway` container has `models.cloud.yaml` pointing primary/sub_
 ## Architecture
 
 ```
-PWA (agent.frenchforet.com)
+PWA (agent.example.com)
   └── user selects "Local" profile
         │
         ▼
 VPS: seshat-gateway (Docker, cloud-sim network)
   └── LLM call to primary model
-        │  endpoint: https://slm.frenchforet.com/v1
+        │  endpoint: https://slm.example.com/v1
         │  headers: CF-Access-Client-Id + CF-Access-Client-Secret
         ▼
 Cloudflare Edge
@@ -52,10 +52,10 @@ infrastructure/terraform-cloudflare-mac/
 ├── variables.tf          # cloudflare_api_token, zone_id, account_id, domain
 ├── tunnel.tf             # cloudflare_zero_trust_tunnel_cloudflared.seshat_mac
 │                         # cloudflare_zero_trust_tunnel_cloudflared_config.seshat_mac
-│                         #   ingress: slm.frenchforet.com → http://localhost:8000
+│                         #   ingress: slm.example.com → http://localhost:8000
 │                         #   catch-all: http_status:404
-├── dns.tf                # CNAME slm.frenchforet.com → <tunnel-id>.cfargotunnel.com
-├── access.tf             # cloudflare_zero_trust_access_application (slm.frenchforet.com)
+├── dns.tf                # CNAME slm.example.com → <tunnel-id>.cfargotunnel.com
+├── access.tf             # cloudflare_zero_trust_access_application (slm.example.com)
 │                         # cloudflare_zero_trust_access_service_token
 │                         # cloudflare_zero_trust_access_policy (allow: service_token only)
 ├── outputs.tf            # tunnel_token, cf_access_client_id, cf_access_client_secret
@@ -87,9 +87,9 @@ Add endpoint overrides to primary and sub_agent. CF credentials are **not** embe
 ```yaml
 models:
   primary:
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
   sub_agent:
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
   # embedding, reranker, and all cloud models: unchanged
 ```
 
@@ -136,7 +136,7 @@ class ModelDefinition:
     cf_access_client_secret: str | None = None
 ```
 
-The config loader populates these from `settings.cf_access_client_id` / `settings.cf_access_client_secret` for any model whose endpoint hostname is `slm.frenchforet.com`. No YAML changes needed for the credentials themselves.
+The config loader populates these from `settings.cf_access_client_id` / `settings.cf_access_client_secret` for any model whose endpoint hostname is `slm.example.com`. No YAML changes needed for the credentials themselves.
 
 **LLM client — CF header injection**
 
@@ -163,7 +163,7 @@ GET /api/inference/status
 Response: {"local": "up" | "down", "latency_ms": int | null}
 ```
 
-Makes a `GET https://slm.frenchforet.com/health` request with CF access headers (from `settings`). Timeout: 3 seconds. Returns `"up"` on 2xx, `"down"` on any error or non-2xx. The health path is `/health` (not `/v1/health`) — matches the slm_server's existing health endpoint at `http://localhost:8000/health`.
+Makes a `GET https://slm.example.com/health` request with CF access headers (from `settings`). Timeout: 3 seconds. Returns `"up"` on 2xx, `"down"` on any error or non-2xx. The health path is `/health` (not `/v1/health`) — matches the slm_server's existing health endpoint at `http://localhost:8000/health`.
 
 ### 6. PWA: inference availability indicator
 
@@ -203,7 +203,7 @@ Implementation: `setInterval` in `useInferenceStatus` hook — no WebSocket comp
 | `test_inference_status_down_timeout` | Unit | Mock httpx to raise `ConnectTimeout` → returns `{"local": "down", "latency_ms": null}` |
 | `test_inference_status_down_502` | Unit | Mock httpx to return 502 → returns `{"local": "down", "latency_ms": null}` |
 | `test_inference_status_down_403` | Unit | Mock httpx to return 403 → returns `{"local": "down"}` + warning logged |
-| `test_models_cloud_yaml_loads` | Integration | `models.cloud.yaml` parses without error; primary/sub_agent endpoints are `slm.frenchforet.com`; CF fields present |
+| `test_models_cloud_yaml_loads` | Integration | `models.cloud.yaml` parses without error; primary/sub_agent endpoints are `slm.example.com`; CF fields present |
 | Manual E2E | Manual | Start slm_server, `terraform apply`, install cloudflared service on Mac, hit `GET /api/inference/status` from VPS → `{"local": "up"}` |
 
 All unit tests use mocked httpx — no real tunnel needed in CI. Manual E2E is the acceptance gate.
@@ -218,7 +218,7 @@ All unit tests use mocked httpx — no real tunnel needed in CI. Manual E2E is t
 | `config/models.cloud.yaml` | Add `endpoint`, `cf_access_client_id`, `cf_access_client_secret` to `primary` and `sub_agent` |
 | `docker-compose.cloud.yml` | Add `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` to `seshat-gateway` env |
 | `src/personal_agent/config/settings.py` | Add `cf_access_client_id`, `cf_access_client_secret` to `AgentSettings` |
-| `src/personal_agent/llm_client/` (model config loader) | Add two optional fields to `ModelDefinition`; populate from `settings` for `slm.frenchforet.com` endpoints |
+| `src/personal_agent/llm_client/` (model config loader) | Add two optional fields to `ModelDefinition`; populate from `settings` for `slm.example.com` endpoints |
 | `src/personal_agent/llm_client/` (HTTP client) | Add `_cf_access_headers()` method; inject into outbound requests |
 | `src/personal_agent/service/app.py` | Add `GET /api/inference/status` endpoint |
 | `seshat-pwa/src/hooks/useInferenceStatus.ts` | New hook — polls `/api/inference/status` |

@@ -14,11 +14,11 @@ from urllib.parse import urlsplit
 
 from personal_agent.observability.artifact_envelope.spec import (
     EXECUTABLE_SCRIPT_MIMES,
-    EXPECTED_CSP_DIRECTIVES,
     EXPECTED_FONT_MIMES,
     EXPECTED_STYLE_MIME,
     LIB_KIND_CSP_DIRECTIVE,
     LibAsset,
+    expected_csp_directives,
 )
 
 Headers = Mapping[str, str] | Sequence[tuple[str, str]]
@@ -206,13 +206,14 @@ def verify_envelope(status_code: int, headers: Headers, *, expect_html: bool) ->
         policy = parse_csp(csp_values[0])
         if policy.duplicates:
             failures.append("duplicate_directive")
-        missing = tuple(d for d in EXPECTED_CSP_DIRECTIVES if d not in policy.directives)
+        expected = expected_csp_directives()
+        missing = tuple(d for d in expected if d not in policy.directives)
         mismatched = tuple(
             d
-            for d, expected_tokens in EXPECTED_CSP_DIRECTIVES.items()
+            for d, expected_tokens in expected.items()
             if d in policy.directives and policy.directives[d] != expected_tokens
         )
-        unexpected = tuple(d for d in policy.directives if d not in EXPECTED_CSP_DIRECTIVES)
+        unexpected = tuple(d for d in policy.directives if d not in expected)
         if missing:
             failures.append("csp_directive_missing")
         if mismatched:
@@ -328,7 +329,7 @@ def verify_lib_asset(
         status_code: The served HTTP status.
         headers: The served response headers (mapping or multi-value pairs).
         asset: The manifest entry being verified.
-        origin: The serving origin (e.g. ``https://artifacts.frenchforet.com``).
+        origin: The serving origin (e.g. ``https://artifacts.example.com``).
 
     Returns:
         The :class:`LibAssetReport`; ``asset_ok`` is True iff no check failed.
@@ -357,7 +358,7 @@ def verify_lib_asset(
         failures.append("missing_nosniff")
 
     directive = LIB_KIND_CSP_DIRECTIVE[asset.kind]
-    csp_host_ok = origin in EXPECTED_CSP_DIRECTIVES[directive]
+    csp_host_ok = origin in expected_csp_directives()[directive]
     if not csp_host_ok:
         failures.append("csp_host_not_allowed")
 

@@ -65,7 +65,7 @@ No user_id scoping on this table — session ownership is validated at the WS ha
 **Modify:** `src/personal_agent/config/settings.py`
 
 Add fields:
-- `allowed_ws_origins: list[str]` — default `["https://seshat.frenchforet.com", "http://localhost:3000"]`
+- `allowed_ws_origins: list[str]` — default `["https://seshat.example.com", "http://localhost:3000"]`
 - `ws_ping_timeout_seconds: int = 60` — server closes socket if no inbound message within this window
 - `ws_max_message_size: int = 8192` — reject inbound messages larger than 8 KB
 - `ws_rate_limit_per_second: int = 20` — inbound message rate cap

@@ -3,8 +3,8 @@
 
 Re-scores top-K candidates from the hybrid search pipeline. PRIMARY target is
 Voyage rerank-2.5 (managed API); on error/timeout, falls back to the Mac-tunnel
-Qwen3-Reranker-4B (MLX, via slm.frenchforet.com); on total failure, degrades to
-passthrough (FRE-851).
+Qwen3-Reranker-4B (MLX, via the CF-Access-gated SLM tunnel — settings.slm_tunnel_base_url);
+on total failure, degrades to passthrough (FRE-851).
 
 Model identity and endpoints are configured in config/models.yaml (ADR-0031),
 resolved via the "reranker" (primary) and "reranker_fallback" roles
@@ -29,11 +29,6 @@ from personal_agent.config.settings import AppConfig
 from personal_agent.service.cf_service_token import cf_access_service_token_headers
 
 log = structlog.get_logger(__name__)
-
-# Hostname of the Access-gated Mac SLM gateway (mirrors llm_client/client.py:58).
-# Requests to it must carry the CF-Access service token; the internal Docker
-# reranker (reranker:8504) must not. (FRE-656)
-_SLM_TUNNEL_HOSTNAME = "slm.frenchforet.com"
 
 # Voyage AI's managed rerank API host (FRE-851). Requests to it must carry a
 # Bearer API key, not the CF-Access service token.
@@ -111,7 +106,8 @@ def _get_reranker_fallback_config() -> tuple[str, str]:
             (missing matrix, or resolved key absent from the active model
             config).
     """
-    return _resolve_reranker_role_config("reranker_fallback", "https://slm.frenchforet.com/v1")
+    slm_base = get_settings().slm_tunnel_base_url or "https://slm.example.com"
+    return _resolve_reranker_role_config("reranker_fallback", f"{slm_base.rstrip('/')}/v1")
 
 
 async def _attempt_rerank(
@@ -157,7 +153,7 @@ async def _attempt_rerank(
         if not settings.voyage_api_key:
             raise RuntimeError("voyage_api_key not configured")
         headers: dict[str, str] = {"Authorization": f"Bearer {settings.voyage_api_key}"}
-    elif _SLM_TUNNEL_HOSTNAME in endpoint:
+    elif settings.slm_tunnel_base_url and settings.slm_tunnel_base_url in endpoint:
         headers = cf_access_service_token_headers()
     else:
         headers = {}

@@ -112,7 +112,7 @@ TRACE=<trace_id>
 # All SLM request_complete docs for this turn
 curl -s -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
         -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-  "https://es.frenchforet.com/slm-requests-*/_search?q=trace_id:$TRACE&size=20" \
+  "https://es.example.com/slm-requests-*/_search?q=trace_id:$TRACE&size=20" \
   | python3 -c "
 import sys, json
 hits = json.load(sys.stdin)['hits']['hits']
@@ -142,8 +142,8 @@ cheaper than they look in terms of compute. No timezone math: all times are UTC 
 
 ## Caveats
 
-- §4 requires `es.frenchforet.com` to be reachable and slm_server to be running with
-  `SLM_ES_URL=https://es.frenchforet.com`. Steps 1–3 are fully self-contained on the gateway VPS.
+- §4 requires `es.example.com` to be reachable and slm_server to be running with
+  `SLM_ES_URL=https://es.example.com`. Steps 1–3 are fully self-contained on the gateway VPS.
 - `input_tokens` (model tokenizer) and the status bar's `turn_status.context_tokens`
   (`estimate_messages_tokens` heuristic) differ by ~10–20%; same trend, different absolute.
 - UTC timestamp join (floor): if `span_id` is absent, match by `ts` within ±5s of the

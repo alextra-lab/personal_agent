@@ -29,14 +29,14 @@ Here's a full breakdown of everything going wrong with the agent in the last 12 
 ## 🔴 Errors (6 total)
 
 ### 1. `LLMServerError` — HTTP 502 Bad Gateway (4 events)
-The most significant real errors. The LLM endpoint at `https://slm.frenchforet.com/v1/chat/completions` returned a **502 Bad Gateway** on two separate occasions, each logged by both the `client` and `executor` components:
+The most significant real errors. The LLM endpoint at `https://slm.example.com/v1/chat/completions` returned a **502 Bad Gateway** on two separate occasions, each logged by both the `client` and `executor` components:
 
 | Timestamp (UTC) | Component | Trace ID |
 |---|---|---|
 | 2026-05-07 04:43:45 | executor + client | `e6224e6c-eabb-4fe7-b4ae-150df3c5bcf2` |
 | 2026-05-06 18:48:28 | executor + client | `d0ae57f7-6709-47b0-95b6-c9b42bb6501c` |
 
-**What this means:** The self-hosted LLM (`slm.frenchforet.com`) was temporarily unavailable or overloaded. Both incidents caused the agent to fail mid-execution. The double-logging (client + executor) per incident is expected — each layer records the same failure independently.
+**What this means:** The self-hosted LLM (`slm.example.com`) was temporarily unavailable or overloaded. Both incidents caused the agent to fail mid-execution. The double-logging (client + executor) per incident is expected — each layer records the same failure independently.
 
 ---
 
@@ -73,7 +73,7 @@ Two bare `event_type: error` entries at **2026-05-07 06:27:34** with no `error_t
 
 | Issue | Priority | Action |
 |---|---|---|
-| LLM 502 errors (`slm.frenchforet.com`) | 🔴 High | Check the SLM server's health/uptime; add retry logic with backoff if not already present |
+| LLM 502 errors (`slm.example.com`) | 🔴 High | Check the SLM server's health/uptime; add retry logic with backoff if not already present |
 | `conversation_role_duplicate_merged` flood (683x) | 🟠 Medium | Investigate why the executor is building malformed role sequences at such volume; likely needs deduplication at message-append time |
 | `task_failed` (4x) | 🟡 Medium | Dig into trace IDs to confirm these are the 502-incident tasks and not separate failures |
 | `unauthenticated_request` (2x) | 🟡 Low | Verify source — could be a stale client or misconfigured health probe |

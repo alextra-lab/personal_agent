@@ -107,7 +107,7 @@ Of that 38,918-doc gap, `executor` (orchestrator) alone accounts for 7,994 (20.5
 |------|----------|------------|
 | `contextvars` don't propagate across a task/thread boundary somewhere in the request path, silently reintroducing the gap for a subset of logs | Medium | Add a regression test that spawns the consolidation background task and asserts its emitted logs still carry the bound `user_id`/`trace_id`; document any boundary found not to propagate |
 | A future extraction/dedup path merges a non-owner User's Person node with a same-named third-party entity extracted from conversation | Medium | `assert_claim`'s Cypher matches by `user_id` only, per ADR-0052's anchor invariant — never by name; add a regression test asserting a same-named non-`user_id` Person is never matched |
-| `assert_claim`'s new required `user_id` parameter breaks an untested or eval-mode caller | Low | Single production call site (`consolidator.py:739`); `capture.user_id` is a non-optional `UUID` on `TaskCapture` already (including eval-mode traffic, which uses the real `eval-verify@frenchforet.com` account, not a null identity) |
+| `assert_claim`'s new required `user_id` parameter breaks an untested or eval-mode caller | Low | Single production call site (`consolidator.py:739`); `capture.user_id` is a non-optional `UUID` on `TaskCapture` already (including eval-mode traffic, which uses the real `eval-verify@example.com` account, not a null identity) |
 | The one-time Claim backfill is a live-graph write under time pressure and is done wrong (wrong row, wrong direction) | Low | Single Cypher statement scoped by exact `claim_id`; executed by master under live-environment custodianship, not the build session; reversible by re-running the inverse MATCH/CREATE |
 
 ---

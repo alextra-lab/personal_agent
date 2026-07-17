@@ -10,14 +10,17 @@ changes, ``spec.py`` and these tests change in lockstep).
 
 from __future__ import annotations
 
+import pytest
+
+from personal_agent.config import settings
 from personal_agent.observability.artifact_envelope.spec import (
     DEFAULT_LIB_MANIFEST_PATH,
     EXECUTABLE_SCRIPT_MIMES,
-    EXPECTED_CSP_DIRECTIVES,
     EXPECTED_FONT_MIMES,
     FORBIDDEN_SCRIPT_MIMES,
     LIB_KIND_CSP_DIRECTIVE,
     LibAsset,
+    expected_csp_directives,
     load_lib_manifest,
 )
 from personal_agent.observability.artifact_envelope.verifier import (
@@ -27,21 +30,35 @@ from personal_agent.observability.artifact_envelope.verifier import (
     verify_lib_asset,
 )
 
-ARTIFACT_ORIGIN = "https://artifacts.frenchforet.com"
+ARTIFACT_ORIGIN = "https://artifacts.example.com"
+AGENT_ORIGIN = "https://agent.example.com"
+
+
+@pytest.fixture(autouse=True)
+def _pin_artifact_origins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the settings-driven CSP origins to this file's fixtures (FRE-895).
+
+    expected_csp_directives()/load_lib_manifest() resolve their origin from
+    settings at call time; without pinning, a real .env value on the dev/CI
+    machine would leak into these otherwise-deterministic fixture comparisons.
+    """
+    monkeypatch.setattr(settings, "artifacts_public_base_url", ARTIFACT_ORIGIN)
+    monkeypatch.setattr(settings, "pwa_public_origin", AGENT_ORIGIN)
+
 
 # The exact policy the Worker serves (FRE-509). Token order within a directive is
 # CSP-insignificant; this string mirrors the deployed constant.
 GOOD_CSP = (
     "default-src 'none'; "
-    "script-src https://artifacts.frenchforet.com 'unsafe-inline'; "
-    "style-src https://artifacts.frenchforet.com 'unsafe-inline'; "
-    "img-src https://artifacts.frenchforet.com data:; "
-    "font-src https://artifacts.frenchforet.com data:; "
+    "script-src https://artifacts.example.com 'unsafe-inline'; "
+    "style-src https://artifacts.example.com 'unsafe-inline'; "
+    "img-src https://artifacts.example.com data:; "
+    "font-src https://artifacts.example.com data:; "
     "connect-src 'none'; "
     "worker-src 'none'; "
     "form-action 'none'; "
     "base-uri 'none'; "
-    "frame-ancestors https://agent.frenchforet.com; "
+    "frame-ancestors https://agent.example.com; "
     "webrtc 'block'; "
     "sandbox allow-scripts"
 )
@@ -76,8 +93,8 @@ class TestHappyPath:
 
     def test_token_order_within_directive_is_insignificant(self) -> None:
         reordered = GOOD_CSP.replace(
-            "script-src https://artifacts.frenchforet.com 'unsafe-inline'",
-            "script-src 'unsafe-inline' https://artifacts.frenchforet.com",
+            "script-src https://artifacts.example.com 'unsafe-inline'",
+            "script-src 'unsafe-inline' https://artifacts.example.com",
         )
         headers = _replace(good_headers(), "Content-Security-Policy", reordered)
         assert verify_envelope(200, headers, expect_html=True).envelope_ok is True
@@ -116,7 +133,7 @@ class TestCspFailures:
         assert "missing_csp" in report.failures
 
     def test_each_missing_directive_is_flagged(self) -> None:
-        for directive in EXPECTED_CSP_DIRECTIVES:
+        for directive in expected_csp_directives():
             mutated = "; ".join(
                 part
                 for part in GOOD_CSP.split("; ")
@@ -141,7 +158,7 @@ class TestCspFailures:
 
     def test_foreign_frame_ancestors_is_flagged(self) -> None:
         mutated = GOOD_CSP.replace(
-            "frame-ancestors https://agent.frenchforet.com",
+            "frame-ancestors https://agent.example.com",
             "frame-ancestors https://evil.example.com",
         )
         headers = _replace(good_headers(), "Content-Security-Policy", mutated)
@@ -264,8 +281,8 @@ class TestAccessDenialClassifier:
     def test_access_login_redirect_is_denied(self) -> None:
         headers = {
             "Location": (
-                "https://frenchforest.cloudflareaccess.com/cdn-cgi/access/login/"
-                "artifacts.frenchforet.com?kid=abc"
+                "https://team.cloudflareaccess.com/cdn-cgi/access/login/"
+                "artifacts.example.com?kid=abc"
             )
         }
         assert classify_access_denied(302, headers) is True
@@ -324,10 +341,10 @@ class TestResidualBound:
     """
 
     def test_webrtc_block_is_in_the_spec(self) -> None:
-        assert EXPECTED_CSP_DIRECTIVES["webrtc"] == frozenset({"'block'"})
+        assert expected_csp_directives()["webrtc"] == frozenset({"'block'"})
 
     def test_sandbox_grants_exactly_allow_scripts(self) -> None:
-        assert EXPECTED_CSP_DIRECTIVES["sandbox"] == frozenset({"allow-scripts"})
+        assert expected_csp_directives()["sandbox"] == frozenset({"allow-scripts"})
 
     def test_load_bearing_sandbox_omissions(self) -> None:
         omitted = {
@@ -340,17 +357,17 @@ class TestResidualBound:
             "allow-downloads",
             "allow-modals",
         }
-        assert EXPECTED_CSP_DIRECTIVES["sandbox"].isdisjoint(omitted)
+        assert expected_csp_directives()["sandbox"].isdisjoint(omitted)
 
     def test_egress_directives_are_sealed(self) -> None:
-        assert EXPECTED_CSP_DIRECTIVES["connect-src"] == frozenset({"'none'"})
-        assert EXPECTED_CSP_DIRECTIVES["form-action"] == frozenset({"'none'"})
-        assert EXPECTED_CSP_DIRECTIVES["worker-src"] == frozenset({"'none'"})
-        assert EXPECTED_CSP_DIRECTIVES["default-src"] == frozenset({"'none'"})
+        assert expected_csp_directives()["connect-src"] == frozenset({"'none'"})
+        assert expected_csp_directives()["form-action"] == frozenset({"'none'"})
+        assert expected_csp_directives()["worker-src"] == frozenset({"'none'"})
+        assert expected_csp_directives()["default-src"] == frozenset({"'none'"})
 
     def test_frame_ancestors_names_only_the_pwa_origin(self) -> None:
-        assert EXPECTED_CSP_DIRECTIVES["frame-ancestors"] == frozenset(
-            {"https://agent.frenchforet.com"}
+        assert expected_csp_directives()["frame-ancestors"] == frozenset(
+            {"https://agent.example.com"}
         )
 
 
@@ -516,7 +533,7 @@ class TestLibManifest:
         origin, assets = load_lib_manifest(DEFAULT_LIB_MANIFEST_PATH)
         used_directives = {LIB_KIND_CSP_DIRECTIVE[a.kind] for a in assets}
         for directive in used_directives:
-            assert origin in EXPECTED_CSP_DIRECTIVES[directive]
+            assert origin in expected_csp_directives()[directive]
 
     def test_loader_rejects_unknown_kind(self, tmp_path: object) -> None:
         import json
@@ -536,3 +553,47 @@ class TestLibManifest:
         except ValueError:
             return
         raise AssertionError("expected ValueError for unknown kind")
+
+
+class TestLibManifestOriginOverride:
+    """FRE-895: the manifest ships a placeholder origin; settings.artifacts_public_base_url
+
+    overrides it at runtime so live verification targets the real origin without a
+    real host ever landing in the tracked manifest.
+    """
+
+    @staticmethod
+    def _write_manifest(tmp_path: object, origin: str) -> object:
+        import json
+        from pathlib import Path
+
+        manifest = Path(str(tmp_path)) / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "origin": origin,
+                    "assets": [{"name": "x", "path": "x@1/x.js", "kind": "script"}],
+                }
+            )
+        )
+        return manifest
+
+    def test_setting_unset_leaves_manifest_origin_untouched(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "artifacts_public_base_url", None)
+        manifest = self._write_manifest(tmp_path, "https://artifacts.placeholder.test")
+
+        origin, _ = load_lib_manifest(manifest)
+
+        assert origin == "https://artifacts.placeholder.test"
+
+    def test_setting_set_overrides_manifest_origin(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "artifacts_public_base_url", "https://artifacts.real.test")
+        manifest = self._write_manifest(tmp_path, "https://artifacts.placeholder.test")
+
+        origin, _ = load_lib_manifest(manifest)
+
+        assert origin == "https://artifacts.real.test"

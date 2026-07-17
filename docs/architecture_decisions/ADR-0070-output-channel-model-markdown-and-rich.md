@@ -105,7 +105,7 @@ The expansion affordance for Tier 3 content is **single-surface progressive disc
 
 - **Inline expand** — card grows in place; chat content reflows below; click again to collapse. Best for content that supports the conversation in progress (a comparison table the agent wants you to look at right now).
 - **Drawer / bottom sheet** — slides in from the side on desktop (~60/40 split with chat) or up from the bottom on iOS PWA (~70% sheet with chat peeking at top). Dismiss with swipe-down or click-outside. Best for medium-weight artifacts requiring focus without abandoning conversation context.
-- **Open standalone** — `artifacts.frenchforet.com/{id}` in a new tab via an explicit "view standalone" affordance. Optional, not primary. For *later* uses: revisit tomorrow, share with someone, pull up on another device.
+- **Open standalone** — `artifacts.example.com/{id}` in a new tab via an explicit "view standalone" affordance. Optional, not primary. For *later* uses: revisit tomorrow, share with someone, pull up on another device.
 
 There is no "second screen" mode within the chat session. The artifact's persistent URL (per ADR-0069) is what makes "later uses" cheap; the in-conversation experience never asks the user to context-switch.
 

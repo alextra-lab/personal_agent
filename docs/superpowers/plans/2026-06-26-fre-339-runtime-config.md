@@ -186,7 +186,7 @@ In the `seshat-pwa:` service:
 - Add under `environment:`:
   ```yaml
   environment:
-    SESHAT_URL: "https://agent.frenchforet.com"
+    SESHAT_URL: "https://agent.example.com"
     GATEWAY_TOKEN: ${GATEWAY_TOKEN_PWA}
   ```
 

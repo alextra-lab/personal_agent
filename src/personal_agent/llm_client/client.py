@@ -55,7 +55,6 @@ log = get_logger(__name__)
 
 _CF_ACCESS_CLIENT_ID_HEADER = "CF-Access-Client-Id"
 _CF_ACCESS_CLIENT_SECRET_HEADER = "CF-Access-Client-Secret"
-_SLM_TUNNEL_HOSTNAME = "slm.frenchforet.com"
 
 
 class LocalLLMClient:
@@ -397,7 +396,10 @@ class LocalLLMClient:
                 }
                 if trace_ctx.session_id:
                     request_headers["X-Session-Id"] = trace_ctx.session_id
-                if _SLM_TUNNEL_HOSTNAME in current_endpoint:
+                if (
+                    settings.slm_tunnel_base_url
+                    and settings.slm_tunnel_base_url in current_endpoint
+                ):
                     if settings.cf_access_client_id and settings.cf_access_client_secret:
                         request_headers[_CF_ACCESS_CLIENT_ID_HEADER] = settings.cf_access_client_id
                         request_headers[_CF_ACCESS_CLIENT_SECRET_HEADER] = (

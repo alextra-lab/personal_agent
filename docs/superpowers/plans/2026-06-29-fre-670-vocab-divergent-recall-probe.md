@@ -52,7 +52,7 @@ tools — no new big instrument:
 - **Arm B — 0.6B embedder vector path:** `run_embedder_benchmark.sh 0.6b ab --probe-set …` →
   `ab_relevance_bounded.py` on the test substrate (real `:8503` embedder, production recall path).
 - **Arm C — 4B embedder vector path:** `run_embedder_benchmark.sh 4b ab --probe-set …`. **Needs
-  CF-Access creds** (Access-gated `slm.frenchforet.com`) — produced in-session only if creds are
+  CF-Access creds** (Access-gated `slm.example.com`) — produced in-session only if creds are
   available, else handed to master with the exact command (master ran FRE-656).
 
 Per arm, report **recall@1, recall@5, control abstention rate, natural-vs-imagery register delta**.
@@ -135,7 +135,7 @@ tie-order non-determinism, schema-boundary change). If master later wants it lit
 - **4b. Arm B (0.6B):** `export AGENT_NEO4J_PASSWORD=<test :7688 pw>` then
   `run_embedder_benchmark.sh 0.6b ab --probe-set .../semantic_probe.yaml`.
 - **4c. Arm C (4B):** additionally `export CF_ACCESS_CLIENT_ID/SECRET` (from the repo `.env`,
-  tunnelled `slm.frenchforet.com`) then `run_embedder_benchmark.sh 4b calibrate --probe-set .../semantic_probe.yaml`.
+  tunnelled `slm.example.com`) then `run_embedder_benchmark.sh 4b calibrate --probe-set .../semantic_probe.yaml`.
 - **AC2 gate:** BM25 recall@5 must land materially below the vector recall@5. If not, STOP and
   surface — do NOT rewrite notes to force the gap. 0.6B-vs-4B delta = the FRE-656 embedder input.
 - Raw → `telemetry/archive/` (gitignored). Curated **aggregates only** → Linear comment +

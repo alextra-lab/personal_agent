@@ -55,11 +55,6 @@ _MANAGED_MAX_BATCH = 25
 # Documents are embedded without a prefix.
 _QUERY_PREFIX = "Instruct: Given a query, retrieve relevant entities and passages\nQuery: "
 
-# Hostname of the Access-gated Mac SLM gateway (mirrors llm_client/client.py:58).
-# Requests to it must carry the CF-Access service token; internal Docker
-# endpoints (embeddings:8503) must not. (FRE-656)
-_SLM_TUNNEL_HOSTNAME = "slm.frenchforet.com"
-
 # The OpenAI SDK's default ``User-Agent: OpenAI/Python <ver>`` trips a Cloudflare
 # WAF managed rule on the gateway (a 403 "request blocked", which would degrade
 # silently to a zero vector). The raw-httpx LLM client is unaffected; only this
@@ -369,6 +364,7 @@ async def _call_embeddings_api(
     Returns:
         OpenAI API response object with .data[].embedding.
     """
+    settings = get_settings()
     client = _openai_clients.get(endpoint)
     if client is None:
         import openai  # noqa: PLC0415
@@ -377,7 +373,7 @@ async def _call_embeddings_api(
         # User-Agent (the SDK default is WAF-blocked); internal Docker endpoints
         # need neither (gated by hostname).
         headers: dict[str, str] = {}
-        if _SLM_TUNNEL_HOSTNAME in endpoint:
+        if settings.slm_tunnel_base_url and settings.slm_tunnel_base_url in endpoint:
             headers = {
                 **cf_access_service_token_headers(),
                 "User-Agent": _EMBEDDING_USER_AGENT,
@@ -391,7 +387,6 @@ async def _call_embeddings_api(
         )
         _openai_clients[endpoint] = client
 
-    settings = get_settings()
     return await client.embeddings.create(
         model=model,
         input=texts,

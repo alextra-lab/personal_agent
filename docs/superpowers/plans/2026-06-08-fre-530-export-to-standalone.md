@@ -80,7 +80,7 @@ Fake `AssetFetcher` (dict url→bytes, with a real SRI computed for fixtures); l
 - inline: subresource with non-allowlisted ext / base-prefix escape → left untouched, no fetch.
 - inline: font `url(<origin>/lib/fonts/...woff2)` → `data:` URI.
 - inline: SRI mismatch on primary → `ArtifactExportError`.
-- inline: KaTeX+Chart.js doc → **zero** remaining `artifacts.frenchforet.com` refs (offline acceptance).
+- inline: KaTeX+Chart.js doc → **zero** remaining `artifacts.example.com` refs (offline acceptance).
 - **unmapped** `/lib/foo@9/bar.js` → `ArtifactExportError` (§2.5).
 - substitute: katex/chartjs → CDN URL + `integrity=` + `crossorigin=`; an **already-present `integrity` is not duplicated**.
 - substitute: three.js (cdn null) + font (cors false) → inline fallback.
@@ -113,7 +113,7 @@ TestClient minimal app (mirror `test_artifacts_router.py`): override DB to retur
 7. PR (template) — pre-merge checklist only. **STOP.**
 
 ## 5. Acceptance (ticket)
-- [ ] Inline export of a KaTeX+Chart.js artifact renders **offline** (unit: all `/lib/` refs replaced by inline/data:, **zero** remaining `artifacts.frenchforet.com` references; KaTeX fonts present as real `data:` URIs).
+- [ ] Inline export of a KaTeX+Chart.js artifact renders **offline** (unit: all `/lib/` refs replaced by inline/data:, **zero** remaining `artifacts.example.com` references; KaTeX fonts present as real `data:` URIs).
 - [ ] Substitute export references CDN + SRI (+ `crossorigin`); a CORS-lacking asset (font/three.js) falls back to inline (unit asserts both); browser-side-SRI enforcement is the stated posture (§2.3).
 - [ ] Endpoint owner-scoped + non-HTML → 400 + bad-mode → 422 + unreachable-fetch → 502 + attachment disposition.
 - [ ] Unmapped `/lib/` ref fails closed (502/`ArtifactExportError`); script attributes (`type`/`defer`) preserved through substitute.

@@ -18,7 +18,7 @@ Real bytes, no live Access: each ``/lib/`` asset is fetched from its public-CDN
 twin recorded in ``config/artifact_lib_substitution_map.json`` and **byte-verified
 against the map's pinned ``sha384`` SRI** (fail-closed on CDN drift). The single
 source of truth for the served CSP is
-:data:`personal_agent.observability.artifact_envelope.spec.EXPECTED_CSP_DIRECTIVES`
+:func:`personal_agent.observability.artifact_envelope.spec.expected_csp_directives`
 — this script emits it (host token → ``{ORIGIN}`` placeholder) into the build
 manifest, so the TypeScript harness never re-declares the policy.
 
@@ -39,7 +39,8 @@ from urllib.parse import urljoin
 
 import httpx
 
-from personal_agent.observability.artifact_envelope.spec import EXPECTED_CSP_DIRECTIVES
+from personal_agent.config import settings
+from personal_agent.observability.artifact_envelope.spec import expected_csp_directives
 from personal_agent.storage.artifact_export import (
     ArtifactExportError,
     AssetFetcher,
@@ -52,7 +53,7 @@ from personal_agent.storage.artifact_export import (
 
 #: The artifacts ``/lib/`` origin (host token in the artifact CSP). Rebound to the
 #: harness's own localhost origin via the ``{ORIGIN}`` placeholder.
-ARTIFACTS_ORIGIN = "https://artifacts.frenchforet.com"
+ARTIFACTS_ORIGIN = settings.artifacts_public_base_url or "https://artifacts.example.com"
 _ORIGIN_PLACEHOLDER = "{ORIGIN}"
 
 #: Only woff2 fonts are mirrored — every curated @font-face lists woff2 first and
@@ -103,7 +104,7 @@ def parse_csp_header(header: str) -> dict[str, set[str]]:
 
 
 def build_csp_header_template(origin_placeholder: str = _ORIGIN_PLACEHOLDER) -> str:
-    """Render :data:`EXPECTED_CSP_DIRECTIVES` as a header string with a host placeholder.
+    """Render :func:`expected_csp_directives` as a header string with a host placeholder.
 
     The artifacts host token is replaced by ``origin_placeholder`` so the harness
     can rebind it to its own localhost serving origin while preserving the exact
@@ -116,7 +117,7 @@ def build_csp_header_template(origin_placeholder: str = _ORIGIN_PLACEHOLDER) -> 
         A ``"directive tokens; …"`` CSP header string, tokens sorted for stability.
     """
     directives: list[str] = []
-    for directive, tokens in EXPECTED_CSP_DIRECTIVES.items():
+    for directive, tokens in expected_csp_directives().items():
         rendered = sorted(origin_placeholder if t == ARTIFACTS_ORIGIN else t for t in tokens)
         directives.append(" ".join([directive, *rendered]))
     return "; ".join(directives)

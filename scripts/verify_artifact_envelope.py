@@ -149,7 +149,7 @@ def main() -> int:
     parser.add_argument(
         "url",
         nargs="?",
-        help="Artifact URL, e.g. https://artifacts.frenchforet.com/<id> (omit in --lib mode)",
+        help="Artifact URL, e.g. https://artifacts.example.com/<id> (omit in --lib mode)",
     )
     parser.add_argument(
         "--non-html",

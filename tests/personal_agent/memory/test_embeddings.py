@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from personal_agent.config import settings
 from personal_agent.memory.embeddings import (
     _QUERY_PREFIX,
     cosine_similarity,
@@ -177,9 +178,10 @@ class TestCfAccessInjection:
         return ctor
 
     @pytest.mark.asyncio
-    async def test_slm_endpoint_gets_cf_headers(self) -> None:
+    async def test_slm_endpoint_gets_cf_headers(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from personal_agent.memory.embeddings import _call_embeddings_api
 
+        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.example.com")
         captured: list[dict[str, object]] = []
         with (
             patch.dict("personal_agent.memory.embeddings._openai_clients", {}, clear=True),
@@ -189,7 +191,7 @@ class TestCfAccessInjection:
                 return_value=dict(_CF_HEADERS),
             ),
         ):
-            await _call_embeddings_api(["x"], "m", "https://slm.frenchforet.com/v1")
+            await _call_embeddings_api(["x"], "m", "https://slm.example.com/v1")
 
         sent = captured[0]["default_headers"]
         assert sent["CF-Access-Client-Id"] == "id"
@@ -230,11 +232,11 @@ class TestCfAccessInjection:
             ),
         ):
             await _call_embeddings_api(["x"], "m", "http://embeddings:8503/v1")
-            await _call_embeddings_api(["x"], "m", "https://slm.frenchforet.com/v1")
+            await _call_embeddings_api(["x"], "m", "https://slm.example.com/v1")
 
         assert [c["base_url"] for c in captured] == [
             "http://embeddings:8503/v1",
-            "https://slm.frenchforet.com/v1",
+            "https://slm.example.com/v1",
         ]
 
 

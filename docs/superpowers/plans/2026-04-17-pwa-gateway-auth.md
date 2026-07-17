@@ -8,19 +8,19 @@
 
 **Tech Stack:** `@microsoft/fetch-event-source`, Next.js 15, Docker Compose
 
-**Prerequisite:** The Cloudflare Tunnel plan (`2026-04-17-cloudflare-tunnel-terraform.md`) must be fully deployed and verified before running this plan. The gateway must be reachable at `https://agent.frenchforet.com`.
+**Prerequisite:** The Cloudflare Tunnel plan (`2026-04-17-cloudflare-tunnel-terraform.md`) must be fully deployed and verified before running this plan. The gateway must be reachable at `https://agent.example.com`.
 
 ---
 
 ## Security Model
 
-`NEXT_PUBLIC_GATEWAY_TOKEN` is embedded in the Next.js JS bundle and visible to anyone who inspects the page source. This is acceptable for a low-privilege `pwa-client` token (scopes: `knowledge:read`, `sessions:read`, `observations:read` — read-only). Do not grant this token write scopes. High-privilege operations (writes, observations) should only be accessible to external agents using their own token at `api.frenchforet.com`.
+`NEXT_PUBLIC_GATEWAY_TOKEN` is embedded in the Next.js JS bundle and visible to anyone who inspects the page source. This is acceptable for a low-privilege `pwa-client` token (scopes: `knowledge:read`, `sessions:read`, `observations:read` — read-only). Do not grant this token write scopes. High-privilege operations (writes, observations) should only be accessible to external agents using their own token at `api.example.com`.
 
 ---
 
 ## Pre-flight Checklist
 
-- [ ] Cloudflare Tunnel plan fully deployed (`https://agent.frenchforet.com` loads)
+- [ ] Cloudflare Tunnel plan fully deployed (`https://agent.example.com` loads)
 - [ ] VPS `.env` accessible via SSH
 
 ---
@@ -301,14 +301,14 @@ In `docker-compose.cloud.yml`, find the `seshat-pwa` build args section:
 
 ```yaml
       args:
-        NEXT_PUBLIC_SESHAT_URL: "https://agent.frenchforet.com"
+        NEXT_PUBLIC_SESHAT_URL: "https://agent.example.com"
 ```
 
 Add the token arg:
 
 ```yaml
       args:
-        NEXT_PUBLIC_SESHAT_URL: "https://agent.frenchforet.com"
+        NEXT_PUBLIC_SESHAT_URL: "https://agent.example.com"
         NEXT_PUBLIC_GATEWAY_TOKEN: ${GATEWAY_TOKEN_PWA}
 ```
 
@@ -382,14 +382,14 @@ Expected: All containers healthy.
 - [ ] **Step 3: Verify PWA loads**
 
 ```bash
-curl -I https://agent.frenchforet.com
+curl -I https://agent.example.com
 ```
 
 Expected: `HTTP/2 200`
 
 - [ ] **Step 4: Verify SSE stream works**
 
-Open `https://agent.frenchforet.com` in a browser. Send a chat message. Confirm a response streams back. In DevTools → Network tab, confirm:
+Open `https://agent.example.com` in a browser. Send a chat message. Confirm a response streams back. In DevTools → Network tab, confirm:
 - `/chat/stream` POST → 200, `Authorization: Bearer <token>` present in request headers
 - `/stream/{id}` GET → 200 (EventSource replaced by fetch-event-source), `Authorization` header present
 
@@ -398,10 +398,10 @@ If `/stream/{id}` returns 401, the token baked into the bundle doesn't match wha
 - [ ] **Step 5: Verify unauthenticated request is rejected by gateway**
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}" https://agent.frenchforet.com/api/health
+curl -s -o /dev/null -w "%{http_code}" https://agent.example.com/api/health
 ```
 
-Expected: `401` (gateway rejects request with no Authorization header; this comes from the gateway, not the WAF, since `agent.frenchforet.com` is not covered by the WAF rule)
+Expected: `401` (gateway rejects request with no Authorization header; this comes from the gateway, not the WAF, since `agent.example.com` is not covered by the WAF rule)
 
 - [ ] **Step 6: Verify external agent access**
 
@@ -409,14 +409,14 @@ Expected: `401` (gateway rejects request with no Authorization header; this come
 # Replace <your-external-agent-token> with GATEWAY_TOKEN_EXTERNAL_AGENT from VPS .env
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Authorization: Bearer <your-external-agent-token>" \
-  https://api.frenchforet.com/health
+  https://api.example.com/health
 ```
 
 Expected: `200`
 
 ```bash
 # No token — WAF blocks before reaching gateway
-curl -s -o /dev/null -w "%{http_code}" https://api.frenchforet.com/health
+curl -s -o /dev/null -w "%{http_code}" https://api.example.com/health
 ```
 
 Expected: `403` (Cloudflare WAF)

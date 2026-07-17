@@ -22,7 +22,7 @@ URLs/versions are the shared anchor** that keeps doc ↔ prompt ↔ hosted `/lib
 
 ## Single source of truth for paths/versions
 
-`config/artifact_lib_manifest.json` (origin `https://artifacts.frenchforet.com`). Every
+`config/artifact_lib_manifest.json` (origin `https://artifacts.example.com`). Every
 `/lib/` URL in the doc is the **full absolute, version-pinned** URL `f"{origin}/lib/{path}"`
 (matching the FRE-528 prompt exactly — a relative `/lib/` path is not the expected reach form).
 

@@ -110,7 +110,7 @@ messages. No rendering fix needed; add a note in the harness.
 
 **Step A — PWA deep links in harness** (`scripts/eval/fre453_canonical_evalset/harness.py`)
 
-1. Add `--pwa-url` CLI arg (default `https://seshat.frenchforet.com`)
+1. Add `--pwa-url` CLI arg (default `https://seshat.example.com`)
 2. Store in `run_meta` as `pwa_url`
 3. Pass `pwa_url: str` param to `render_markdown()`
 4. Update line 756 in `render_markdown`:

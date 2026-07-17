@@ -14,8 +14,11 @@ import { MermaidBlock } from './MermaidBlock';
 // Artifact URL detection (FRE-368, ADR-0070 Tier 3)
 // ---------------------------------------------------------------------------
 
+// Real value comes from the NEXT_PUBLIC_ARTIFACTS_HOST build arg (FRE-895) —
+// see Dockerfile.pwa / docker-compose.cloud.yml. The fallback here is an inert
+// placeholder, never the real deployment host.
 const ARTIFACTS_HOST =
-  process.env.NEXT_PUBLIC_ARTIFACTS_HOST ?? 'artifacts.frenchforet.com';
+  process.env.NEXT_PUBLIC_ARTIFACTS_HOST ?? 'artifacts.example.com';
 
 // Matches /xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (UUID v4 canonical form)
 const ARTIFACT_UUID_RE =

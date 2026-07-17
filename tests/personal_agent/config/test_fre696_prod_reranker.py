@@ -38,7 +38,7 @@ def test_reranker_fallback_is_mlx_4b_mxfp8() -> None:
         cfg = yaml.safe_load(Path(config_file).read_text())
         fallback = cfg["models"]["reranker_fallback"]
         assert fallback["id"] == "Qwen/Qwen3-Reranker-4B-mxfp8"
-        assert fallback["endpoint"] == "https://slm.frenchforet.com/v1"
+        assert fallback["endpoint"] == "https://slm.example.com/v1"
 
 
 def test_reranker_input_cap_default_is_25() -> None:

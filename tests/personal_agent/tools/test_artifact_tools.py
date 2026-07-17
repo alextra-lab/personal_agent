@@ -27,6 +27,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from personal_agent.config import settings
 from personal_agent.observability.artifact_envelope.spec import load_lib_manifest
 from personal_agent.tools import artifact_tools
 from personal_agent.tools.executor import ToolExecutionError
@@ -1034,8 +1035,6 @@ async def test_artifact_draft_calls_respond_with_correct_max_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """respond() receives the configured artifact-draft max_tokens (FRE-478)."""
-    from personal_agent.config import settings
-
     _store, client = _install_draft_fakes(monkeypatch)
 
     await artifact_tools.artifact_draft_executor(
@@ -1473,7 +1472,7 @@ def test_system_prompt_allows_scripts() -> None:
     language, JS affirmatively available, sealed-box constraints named, and the
     portability steering present.
     """
-    prompt = artifact_tools._HTML_GENERATION_SYSTEM_PROMPT
+    prompt = artifact_tools._html_generation_system_prompt()
     # No prohibition language left.
     assert "REJECTED" not in prompt
     assert "JavaScript-free" not in prompt
@@ -1489,7 +1488,7 @@ def test_system_prompt_allows_scripts() -> None:
 
 def test_system_prompt_instructs_mermaid_markup() -> None:
     """The system prompt must direct the model to use mermaid markup for static diagrams."""
-    prompt = artifact_tools._HTML_GENERATION_SYSTEM_PROMPT
+    prompt = artifact_tools._html_generation_system_prompt()
     assert "mermaid" in prompt.lower()
     assert '<pre class="mermaid">' in prompt or "pre class" in prompt.lower()
 
@@ -1504,7 +1503,7 @@ def test_system_prompt_advertises_curated_lib_toolkit() -> None:
     typography recipes (no library) must be present, and the eval-gated
     paged.js must NOT appear as a first-class snippet.
     """
-    prompt = artifact_tools._HTML_GENERATION_SYSTEM_PROMPT
+    prompt = artifact_tools._html_generation_system_prompt()
     origin, assets = load_lib_manifest()
 
     for asset in assets:
@@ -1527,6 +1526,25 @@ def test_system_prompt_advertises_curated_lib_toolkit() -> None:
 
     # Arbitrary CDNs are still steered against — only the curated shelf is admitted.
     assert "curated" in prompt.lower()
+
+
+def test_system_prompt_placeholder_untouched_when_setting_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-895: with no real artifacts origin configured, the placeholder ships as-is."""
+    monkeypatch.setattr(settings, "artifacts_public_base_url", None)
+    prompt = artifact_tools._html_generation_system_prompt()
+    assert "https://artifacts.example.com/lib/katex" in prompt
+
+
+def test_system_prompt_real_origin_substituted_when_setting_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-895: settings.artifacts_public_base_url rebinds the placeholder host."""
+    monkeypatch.setattr(settings, "artifacts_public_base_url", "https://artifacts.real-host.test")
+    prompt = artifact_tools._html_generation_system_prompt()
+    assert "https://artifacts.real-host.test/lib/katex" in prompt
+    assert "artifacts.example.com" not in prompt
 
 
 def test_artifact_design_doc_matches_manifest() -> None:

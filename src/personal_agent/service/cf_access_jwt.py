@@ -7,7 +7,7 @@ with RS256 keys served from
 ``https://<team_domain>/cdn-cgi/access/certs`` and includes the verified
 email in the ``email`` claim.
 
-The Worker fronting ``artifacts.frenchforet.com`` forwards the JWT to the
+The Worker fronting ``artifacts.example.com`` forwards the JWT to the
 gateway as ``X-Cf-Access-Jwt-Assertion`` so the gateway can re-verify
 end-to-end. The Worker cannot be trusted to filter — only to forward.
 

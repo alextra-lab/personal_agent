@@ -639,7 +639,7 @@ A read-evidence + override-evidence categorization of every `AppConfig` field in
 
 | Category | Count |
 |---|---|
-| `load-bearing` | 67 |
-| `never-read` | 25 |
+| `load-bearing` | 68 |
+| `never-read` | 24 |
 | `read-but-never-overridden` | 199 |
 | `writer-pinned-guardrail` | 17 |

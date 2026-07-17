@@ -13,11 +13,27 @@ from personal_agent.events.models import RequestCapturedEvent
 from personal_agent.events.redis_backend import RedisStreamBus
 
 
+async def _default_xreadgroup(
+    **kwargs: object,
+) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
+    """Default XREADGROUP mock: yields control instead of returning synchronously.
+
+    A synchronous ``return_value=[]`` never suspends the awaiting task, so a
+    ``_read_loop`` iteration with no messages spins forever without ever handing
+    control back to the event loop (real Redis blocks for ``block_ms``, which is
+    a genuine suspension). ``asyncio.sleep(0)`` is the minimal real yield point
+    that avoids starving sibling coroutines (e.g. a test's own ``asyncio.sleep``)
+    without slowing the suite down with real wall-clock waits.
+    """
+    await asyncio.sleep(0)
+    return []
+
+
 @pytest.fixture
 def mock_redis() -> AsyncMock:
     """Create a mocked redis.asyncio.Redis client."""
     client = AsyncMock(spec=aioredis.Redis)
-    client.xreadgroup = AsyncMock(return_value=[])
+    client.xreadgroup = AsyncMock(side_effect=_default_xreadgroup)
     client.xadd = AsyncMock(return_value="1-0")
     client.xack = AsyncMock(return_value=1)
     client.xgroup_create = AsyncMock(return_value=True)

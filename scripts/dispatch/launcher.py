@@ -59,6 +59,8 @@ import uuid
 from collections.abc import Sequence
 from typing import Literal, Protocol
 
+from scripts.dispatch.tmux_target import exact_session
+
 # Model tiers the launcher will place on a command line. Validated so no
 # free-form value ever reaches the tmux-parsed inner command (codex #4).
 _MODELS: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
@@ -589,7 +591,10 @@ def execute_plan(plan: LaunchPlan, runner: CommandRunner = subprocess_runner) ->
     # launch is abandoned. Best-effort: a non-zero return (no such session) is
     # the benign first-launch case and is ignored.
     if plan.command[:2] == ("tmux", "new-session"):
-        runner(["tmux", "kill-session", "-t", plan.tmux_session])
+        # EXACT-match target (FRE-909). Without the ``=`` guard tmux resolves an
+        # absent session by prefix, so tearing down a dead ``cc-build`` killed
+        # the LIVE ``cc-build2`` mid-build (2026-07-17 incident).
+        runner(["tmux", "kill-session", "-t", exact_session(plan.tmux_session)])
 
     result = runner(plan.command)
     if result.returncode != 0:

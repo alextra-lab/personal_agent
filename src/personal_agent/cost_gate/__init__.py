@@ -112,6 +112,8 @@ _BUDGET_ROLE_BY_FACTORY_NAME: dict[str, str] = {
     "promotion": "promotion",
     "freshness_role": "freshness",
     "freshness": "freshness",
+    # Artifact builder — own lane, not main_inference (ADR-0118 T1, FRE-879).
+    "artifact_builder": "artifact_builder",
 }
 
 

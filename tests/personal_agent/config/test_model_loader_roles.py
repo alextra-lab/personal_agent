@@ -73,6 +73,17 @@ class TestUndeclaredRole:
         with pytest.raises(ModelRoleError, match="not declared"):
             resolve_role_model_key("totally_made_up_role", config_path=_LOCAL)
 
+    def test_artifact_builder_is_not_matrix_resolved(self) -> None:
+        """ADR-0119 §2/AC-8 (FRE-879): artifact_builder is off the matrix.
+
+        It is an "open" role resolved via the ExecutionProfile
+        (config/profiles/{local,cloud}.yaml), never the matrix. The parked FRE-879 WIP's
+        first cut made it a matrix row — the exact regression this ticket corrects — so
+        this asserts it stays undeclared here.
+        """
+        with pytest.raises(ModelRoleError, match="not declared"):
+            resolve_role_model_key("artifact_builder", config_path=_LOCAL)
+
 
 class TestMatrixMissing:
     """AC-2(b), helper level — the consumer-level case lives in the golden test."""

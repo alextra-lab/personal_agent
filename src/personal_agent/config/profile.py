@@ -76,19 +76,33 @@ def resolve_model_key(role_name: str) -> str:
     """Resolve a model role name to its config key, accounting for the active ExecutionProfile.
 
     Without an active profile, returns ``role_name`` unchanged (local/default execution).
-    With a profile, ``primary`` and ``sub_agent`` roles are redirected to the profile's
-    model identifiers (e.g. ``"claude_sonnet"``). ``compressor`` and unrecognised roles
-    are never redirected.
+    With a profile, ``primary``, ``sub_agent``, and ``artifact_builder`` — the "open" roles
+    (ADR-0119 §2) — are redirected to the profile's model identifiers (e.g. ``"claude_sonnet"``).
+    ``compressor`` and unrecognised roles are never redirected.
+
+    ``artifact_builder`` fails loud (raises) rather than falling through when a profile is
+    active but leaves the binding unset — unlike ``primary``/``sub_agent``, which are required
+    ExecutionProfile fields, ``artifact_builder_model`` is optional, so a silent pass-through
+    would resolve to the bare string ``"artifact_builder"`` (not a real model key) and
+    :func:`~personal_agent.llm_client.factory.get_llm_client` treats an unresolved key as
+    local — a cloud profile missing the binding would then silently run local instead of the
+    intended cloud default. No silent fallback for an open role (ADR-0099 D1 convention;
+    caught by codex plan-review on FRE-879).
 
     This mirrors the resolution logic in :func:`~personal_agent.llm_client.factory.get_llm_client`
     and must stay in sync with it. Having a single canonical helper prevents the two sites
     from drifting (ADR-0063 §D6).
 
     Args:
-        role_name: The model role string (e.g. ``"primary"``, ``"sub_agent"``).
+        role_name: The model role string (e.g. ``"primary"``, ``"sub_agent"``,
+            ``"artifact_builder"``).
 
     Returns:
         The resolved config key to use for ``model_configs.get()``.
+
+    Raises:
+        ValueError: If a profile is active, ``role_name`` is ``"artifact_builder"``, and the
+            profile has no ``artifact_builder_model`` binding.
     """
     profile = get_current_profile()
     if profile is None:
@@ -97,6 +111,13 @@ def resolve_model_key(role_name: str) -> str:
         return profile.primary_model
     if role_name == "sub_agent" and profile.sub_agent_model:
         return profile.sub_agent_model
+    if role_name == "artifact_builder":
+        if profile.artifact_builder_model:
+            return profile.artifact_builder_model
+        raise ValueError(
+            f"ExecutionProfile {profile.name!r} has no artifact_builder_model binding "
+            "(ADR-0119 AC-8 — no silent fallback for an open role)."
+        )
     return role_name
 
 
@@ -137,6 +158,11 @@ class ExecutionProfile(BaseModel):
         description: Human-readable description of this profile.
         primary_model: Model identifier for the primary agent.
         sub_agent_model: Model identifier for spawned sub-agents.
+        artifact_builder_model: Model identifier for artifact HTML generation (ADR-0118 T1,
+            ADR-0119 §2). Optional — unlike ``primary_model``/``sub_agent_model``, not every
+            ad hoc ``ExecutionProfile`` construction (e.g. in tests unrelated to artifact
+            builds) needs it; the real ``config/profiles/{local,cloud}.yaml`` always set it.
+            :func:`resolve_model_key` fails loud if an *active* profile omits this.
         provider_type: Whether this profile uses local or cloud inference.
         cost_limit_per_session: Maximum spend in USD per conversation session.
             None means no limit (appropriate for local profiles with no API cost).
@@ -149,6 +175,7 @@ class ExecutionProfile(BaseModel):
     description: str = ""
     primary_model: str
     sub_agent_model: str
+    artifact_builder_model: str | None = None
     provider_type: Literal["local", "cloud"]
     cost_limit_per_session: float | None = None
     delegation: DelegationConfig = Field(default_factory=DelegationConfig)

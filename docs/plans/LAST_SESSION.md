@@ -1,36 +1,36 @@
-# Last session — 2026-07-15 → 16 (very long; two /master gates + cost-gov design)
+# Last session — 2026-07-16 → 17 (very long; config chain shipped + deployed, build2 crash+recovery, tmux 3.7a, cost-gov ADR, backlog reel-in)
 
-## ▶ BEGIN HERE (owner's explicit go-forward, 2026-07-16) — resume in this order
-1. **FIRST ACTION after prime: route the cost-governance note to the adr seat.** `send-keys` cc-adrs a brief: *author a new ADR superseding ADR-0065*, design input = `docs/research/2026-07-16-cost-governance-rework-adr-0065.md` (on main). Carry the **§7 open questions** + explore's flag: **§6.5 Section-A granularity (per-vendor thresholds + per-role visibility) is a standing rec the owner never ruled on — surface it for the owner to confirm at ADR**, don't smuggle it. The ADR is authored *with the owner* in the adr seat (owner-hubbed); master routes, owner drives.
-2. **Then converge / revise as needed, and BUILD the config-UI (ADR-0119)** — with the cost-governance project **waiting in the wings** (co-design the shared seams: T5 splits artifact_builder+vision out of main_inference; T6 renders the cost surface *inside* the ADR-0119 config UI). Config-UI prerequisites to approve+dispatch: **FRE-895 (scrub) first**, then **FRE-879 → 880 → 888 → 892**.
-3. **Then: attack the Seshat inference backlog.**
+## ▶ THIS RESET IS THE TMUX CUTOVER — read first
+The reset that follows this file is **not a plain /clear** — the owner is running **`tmux kill-server`** to
+cut the shared tmux server over to **3.7a** (built from source this session; see below). It kills **every**
+seat (master, build, build2, adrs, explore). After the kill: the dispatcher (systemd, survives) spawns
+build seats on 3.7a when work is dispatched; the owner re-creates cc-adrs/cc-explore + re-primes master via
+`/prime-master`. **First thing on re-prime: confirm the seats came back and `tmux -V` in a fresh shell shows
+3.7a** (server is 3.7a only after this kill; before it, it was 3.5a).
 
 ## Doing / discussing (≤5 sentences)
-Shipped **FRE-893 config-audit redo** (PR #548 — now reads the deployed `/opt/seshat/.env` keys-only as an override source; master independently verified reads-env + no-value-leak; the first attempt's false-positive class is gone). Merged the **ADR-0119 ExecutionProfile amendment** (PR #550) — resolves the FRE-879 regression (open roles resolve via ExecutionProfile, matrix only pinned writers; AC-8/9/10 guards; vision stays pinned) → **config-UI step-0 UNBLOCKED**. Filed **FRE-895** (scrub `frenchforet.com` from the PUBLIC repo — HEAD+guard, Needs Approval). Committed **explore2+owner's cost-governance rework note** (supersedes ADR-0065; PR #552, renamed). **Stopped the dispatch orchestrator** (owner-requested, temporary) — then the owner set the sequence above and asked for this reset.
+Shipped the **FRE-896 config-cleanup chain end to end**: 876 (D4 field-doc guard) · 896 (curated removal — only 3 confirmed-outgrown deleted, owner's origin-ADR caveat held) · 897 (managed_* secret redaction) · **906 (wired event_bus_ack_timeout_seconds → XAUTOCLAIM self-reclaim sweep — DEPLOYED + live-verified: reclaimed 2 real orphaned messages on gateway startup)** · 907 (audit-scanner hardening). **cc-build2 tmux CRASHED mid-906**; recovered it (root cause: launcher relaunches into the crashed deterministic session-id → dies on the stale lock; fix = clear the session state — see memory `reference_worker_seat_crash_recovery`). Routed + merged **cost-gov ADR-0120** (Proposed, supersedes ADR-0065). Did a **backlog reel-in** (27 orphans homed into projects; ~124 stale local branches pruned; cc-explore2 torn down). Built **tmux 3.7a** from source, cutover pending = this reset.
 
-## Commits — story behind the last ~10
-#548 FRE-893 config-audit redo (reads deployed .env; **Done** w/ evidence) · #549/#551 MASTER_PLAN bumps · **#550 ADR-0119 amendment** (ExecutionProfile fix — the unblock) · #552 cost-gov note (renamed from `provider-pool-deliberation` → `cost-governance-rework-adr-0065`). Earlier: #547 reset checkpoint. All docs PRs used the auto-merge flow.
+## Commits — the story behind the last 10
+`cfffe3dc`/#562 FRE-907 scanner hardening (codex ran; 6 code-review fixes incl. quote-parity guard). `d9783ca1`/#561 **FRE-906** event-bus wiring — I reviewed the consumer logic myself (codex didn't run; workflow reviewer errored on infra) and it held; **`20ea7b25` is the WIP-checkpoint from the build2 CRASH** (committed to preserve the crashed first attempt before relaunching fresh). #560 FRE-897 secret redaction · #559 FRE-896 curated removal (I independently grep-verified the 3 deletions zero-consumer, then FRE-907 revealed my grep shared the tool's `.py`-only blind spot — re-verified clean across all file types). Not in `git log -10` but this session: PRs #554 (reel-in) #556 (ADR-0120) #557 (0065→Superseded) #558 (0119 cost-surface note).
 
 ## Worktrees — anything special
-- **cc-build** on `fre-879-artifact-builder-role-cost-lane` — **PAUSED, working impl UNCOMMITTED (do NOT discard).** The amendment settled the seam: `artifact_builder` now resolves via the **ExecutionProfile** (a binding in `config/profiles/{local,cloud}.yaml`, via `resolve_model_key`), **not** the matrix. The cost-lane/telemetry/registry work is reusable — **only the resolution seam changes**. Resumes when FRE-879 re-approved.
-- **cc-build2** — **IDLE** (FRE-893 done). Ready for FRE-895 then the config-UI chain.
-- **cc-adrs** — **free** (just delivered the ADR-0119 amendment). Its NEXT is the cost-gov ADR (go-forward #1).
-- **cc-explore** — multi-parent deliberation (owner's).
-- **cc-explore2 (EPHEMERAL)** — cost-gov deliberation **DONE**; note committed to main (renamed). **Tear down when the owner's finished** (`tmux kill-session -t cc-explore2` + `git worktree remove .claude/worktrees/explore2`).
-
-## ⚠ Actuation posture (READ before prime-master step 7b)
-**`seshat-dispatch-orchestrator.service` is INTENTIONALLY STOPPED** (owner-requested, temporary, 2026-07-16). `seshat-gating-watcher.service` is **still active** (PR-gating live; `/master <PR#>` works). This is **NOT a silent failure** — do not alarm. **Resume:** `sudo systemctl start seshat-dispatch-orchestrator.service`. Consequence: build tickets won't auto-dispatch while stopped — when starting the config-UI build, either resume the orchestrator or launch FRE-895/879 manually.
+- **cc-build (build1)** — last built FRE-907 (Done). Its worktree also holds the **committed fre-879 WIP** (artifact_builder extraction, +466, pushed to `origin/fre-879-...`) — do-not-discard, resumes when the config-UI chain does.
+- **cc-build2 (build2)** — last built FRE-906 (Done). CRASHED mid-build this session; recovered. Crashed session `4d5840d9` archived to scratchpad.
+- **cc-adrs** — delivered ADR-0120, idle.
+- **cc-explore** — owner deliberation seat.
+- **cc-explore2** — **TORN DOWN this session** (cost-gov work merged; don't look for it).
 
 ## Plan position + drift
-- **Config-UI epic (ADR-0119) UNBLOCKED** (amendment landed). Not started. **FRE-895 (frenchforet scrub) + FRE-879/880 are pending owner approval** — recommend approving all three and running **FRE-895 first** (self-contained, clears an active public-repo policy gap, generous margin before ADR-0119 sign-off; near-zero file overlap with 879).
-- **Cost-governance rework (supersedes ADR-0065):** note on main; **ADR authoring is the next design step** (route first). **T0** (instrument OVH/Voyage/Perplexity into `api_costs` — three metered vendors off the books today) is the foundation-first first-buildable; **NOT filed yet** (waits for the ADR / owner go). Everything cost/budget = **ask-first + standing "ask before budget changes."**
-- **Awaiting Deploy holds (unchanged):** FRE-884 (batched), 739/866/717.
-- **Follow-up filed:** FRE-885 (cost-estimator token-counter document-type gap, Needs Approval).
-- **Owner corrections → memory this session:** frenchforet public-repo exposure (repo is PUBLIC; 101 tracked files + 113 commits; no secrets — identifiers only) → [[feedback_no_identifiers_in_public_repo]] updated; cost-gov direction → [[project_cost_governance_rework]].
+- **Configuration Management project advanced hard**: the whole FRE-893→896/897/906/907 audit+cleanup chain shipped; ADR-0099 D4 guard live. On the go-forward: **#1 (route cost-gov to adr) DONE — ADR-0120 authored+merged Proposed.**
+- **Config-UI (ADR-0119) is still next**, waits on the cost-gov ADR *result* per owner's item-2; I amended ADR-0119 (PR #558) so its observe view renders ADR-0120's cost surface (T6), not the abolished hard caps — the two ADRs are now coherent. No structural config-UI change needed.
+- **Deploy:** running gateway is now **cfffe3dc** (rebuilt 06:51 UTC to ship 906; embedder re-stopped). Awaiting-Deploy holds unchanged: FRE-884/739/866/717.
+- No real drift — followed the go-forward, reeled in the backlog on the owner's direction, and absorbed a mid-session infra crash.
 
 ## Answers for the fresh start
-- **Very first action?** Route the cost-gov note to adr (go-forward #1). Don't re-litigate the design — §6 decisions are settled owner calls; adr formalizes + surfaces §7 open questions.
-- **Is the config-UI building?** No — unblocked, not started. Approve FRE-895 → FRE-879/880; the dispatcher is stopped, so resume it or launch manually.
-- **Is the stopped dispatcher a problem?** No — owner-requested; resume command above.
-- **cc-explore2** is disposable — its note is durable on main; tear the seat down when the owner's done with cost-gov.
-- **File T0 now?** Owner didn't take it up — it waits for the ADR; note it as the cost-gov first-buildable.
+- **Did the tmux cutover happen?** The reset was it. Verify seats are back on 3.7a (`tmux -V`); 3.5a stays in `/usr/bin` as fallback (revert = `rm /usr/local/bin/tmux`). Dispatcher PATH already resolves 3.7a.
+- **Is 906 deployed?** Yes — live-verified (2 orphans reclaimed, zero errors). Done.
+- **Was the build2 crash resolved?** Yes — both builds recovered + shipped. The recovery runbook is memory `reference_worker_seat_crash_recovery`.
+- **Cost-gov next step?** ADR-0120 is Proposed; impl tickets (T0 = instrument OVH/Voyage/Perplexity) are NOT filed — they await the owner moving it Proposed→Accepted. Still ask-first on all cost.
+- **fre-879 branch on origin?** Intentional — parked WIP backup, not stale. Keep.
+- **Branch cleanup?** Done (155→9 local; remote clean). Fold `fetch --prune` + gone-branch delete into routine.

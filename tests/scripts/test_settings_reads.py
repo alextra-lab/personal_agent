@@ -203,6 +203,50 @@ def test_shadow_rebind_does_not_drop_sibling_reads() -> None:
     assert "neo4j_uri" in _reads(source)
 
 
+def test_appconfig_import_alias_typed_param() -> None:
+    """`from ...settings import AppConfig as X` then an `X`-typed param resolves (FRE-907).
+
+    A param name that is NOT `settings` proves this isn't resolving by naming coincidence
+    (`self._settings` unconditionally seeds `settings` regardless of annotation) — the
+    exact reproduction from the FRE-907 finding, real at `memory/freshness.py:34`.
+    """
+    source = (
+        "from personal_agent.config.settings import AppConfig as Settings\n"
+        "def f(cfg: Settings):\n"
+        "    return cfg.debug\n"
+    )
+    assert "debug" in _reads(source)
+
+
+def test_appconfig_import_alias_construction() -> None:
+    """`from ...settings import AppConfig as X` then `cfg = X()` direct construction resolves."""
+    source = (
+        "from personal_agent.config.settings import AppConfig as Settings\n"
+        "def f():\n"
+        "    cfg = Settings()\n"
+        "    return cfg.debug\n"
+    )
+    assert "debug" in _reads(source)
+
+
+def test_short_appconfig_alias_does_not_pollute_string_annotation_matching() -> None:
+    """A short `AppConfig` alias must not substring-match an unrelated forward-ref string.
+
+    Regression guard for a code-review-confirmed precision defect: widening the
+    string/forward-ref annotation branch to the full alias set (as opposed to the Name/
+    Attribute/Call branches, which do exact-name matching) would let a single-letter
+    alias like `import AppConfig as S` false-positive against ANY string annotation
+    merely containing that letter — here `"SomeUnrelatedForwardRef"` contains `S` but is
+    not an `AppConfig` reference.
+    """
+    source = (
+        "from personal_agent.config.settings import AppConfig as S\n"
+        'def f(x: "SomeUnrelatedForwardRef"):\n'
+        "    return x.debug\n"
+    )
+    assert _reads(source) == set()
+
+
 def test_unrelated_alias_is_not_a_read() -> None:
     """An attribute access on a name never bound to settings is not a read."""
     source = "cfg = object()\nx = cfg.debug\n"

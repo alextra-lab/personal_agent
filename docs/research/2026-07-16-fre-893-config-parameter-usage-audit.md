@@ -19,8 +19,8 @@ Every one of the 308 typed `AppConfig` fields (`src/personal_agent/config/settin
 
 | Category | Count |
 |---|---|
-| `load-bearing` | 67 |
-| `never-read` | 25 |
+| `load-bearing` | 68 |
+| `never-read` | 24 |
 | `read-but-never-overridden` | 199 |
 | `writer-pinned-guardrail` | 17 |
 
@@ -103,7 +103,7 @@ Every one of the 308 typed `AppConfig` fields (`src/personal_agent/config/settin
 | `error_monitor_max_patterns_per_scan` | `read-but-never-overridden` | src:1 | none in-repo |
 | `error_monitor_min_occurrences` | `read-but-never-overridden` | src:2 | none in-repo |
 | `error_monitor_window_hours` | `read-but-never-overridden` | src:2 | none in-repo |
-| `event_bus_ack_timeout_seconds` | `never-read` | none | /opt/seshat/.env (deployed-env) |
+| `event_bus_ack_timeout_seconds` | `load-bearing` | src:2 | /opt/seshat/.env (deployed-env) |
 | `event_bus_consumer_poll_interval_ms` | `load-bearing` | src:1 | /opt/seshat/.env (deployed-env) |
 | `event_bus_dead_letter_stream` | `load-bearing` | src:1 | /opt/seshat/.env (deployed-env) |
 | `event_bus_enabled` | `load-bearing` | src:2, scripts:1 | /opt/seshat/.env (deployed-env) |
@@ -337,7 +337,7 @@ Every one of the 308 typed `AppConfig` fields (`src/personal_agent/config/settin
 | `ws_rate_limit_per_second` | `read-but-never-overridden` | src:1 | none in-repo |
 | `ws_ticket_ttl_seconds` | `read-but-never-overridden` | src:2 | none in-repo |
 
-## Dead-config candidates — never-read (25)
+## Dead-config candidates — never-read (24)
 
 Zero read evidence anywhere (`src/`, self-referential validator, or the substrate manifest). Removal **candidates**, not a delete list — FRE-896's origin-ADR provenance map ([2026-07-16-fre-896-config-provenance-map.md](2026-07-16-fre-896-config-provenance-map.md)) classifies each as outgrown (deleted) vs forward-declaration / wiring-gap / wiring-bug / cost-gov (kept): most never-read fields back a live or planned feature whose knob is merely unwired, so deleting them would amputate a stream.
 
@@ -347,7 +347,6 @@ Zero read evidence anywhere (`src/`, self-referential validator, or the substrat
 - `context_budget_generation_reserve_tokens`
 - `embedding_batch_size`
 - `enable_reasoning_role`
-- `event_bus_ack_timeout_seconds`
 - `feedback_defer_revisit_days`
 - `log_format`
 - `log_level`

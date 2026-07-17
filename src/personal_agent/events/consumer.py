@@ -5,6 +5,12 @@ Manages one ``asyncio.Task`` per subscription.  Each task runs an
 acknowledges on success, and routes to the dead-letter stream after
 ``max_retries`` failed attempts.
 
+Every ``event_bus_ack_timeout_seconds`` (FRE-906), the loop also sweeps its
+own Pending Entries List via ``XAUTOCLAIM``, reclaiming any message left
+unacknowledged after a crash mid-handler and reprocessing it through the
+same handler/retry/dead-letter path. Single-consumer-per-group topology
+means this is restart/crash self-recovery, not reassignment to a live peer.
+
 BudgetDenied (ADR-0065 / FRE-306) is handled specially: it's not a poison
 pill, just transient cost pressure. The runner ACKs the message (so it
 doesn't accumulate in the dead-letter queue) and emits a structured
@@ -94,9 +100,19 @@ class ConsumerRunner:
         settings = get_settings()
         block_ms = settings.event_bus_consumer_poll_interval_ms
         max_retries = settings.event_bus_max_retries
+        ack_timeout_ms = settings.event_bus_ack_timeout_seconds * 1000
+        loop = asyncio.get_event_loop()
+        # Sweep once immediately so a restart recovers PEL entries orphaned
+        # by the previous process, then re-sweep every ack-timeout interval.
+        next_claim_at = loop.time()
 
         while self._running:
             try:
+                now = loop.time()
+                if now >= next_claim_at:
+                    await self._claim_stuck_messages(sub, ack_timeout_ms, max_retries)
+                    next_claim_at = now + settings.event_bus_ack_timeout_seconds
+
                 # Read new messages (> = undelivered only)
                 results = await self._bus.client.xreadgroup(
                     groupname=sub.group,
@@ -124,6 +140,56 @@ class ConsumerRunner:
                 )
                 # Back off before retrying the loop itself
                 await asyncio.sleep(1.0)
+
+    async def _claim_stuck_messages(
+        self, sub: Subscription, min_idle_ms: int, max_retries: int
+    ) -> None:
+        """Self-reclaim PEL entries idle >= ack timeout (ADR-0041 XCLAIM) and reprocess them.
+
+        The read loop only ever consumes new (">") messages, so a message left
+        pending after a crash mid-handler is otherwise never retried, even after
+        the process restarts with the same consumer name. Single-consumer-per-group
+        topology (see service/app.py) means this reclaims to *itself*, not a live
+        peer — restart/crash recovery, not load-balancing reassignment.
+
+        Args:
+            sub: Subscription metadata (stream, group, consumer, handler).
+            min_idle_ms: Minimum idle time (ms) for a PEL entry to be reclaimed.
+            max_retries: Maximum delivery attempts, forwarded to reprocessing.
+        """
+        cursor = "0-0"
+        try:
+            while True:
+                cursor, messages, _deleted = await self._bus.client.xautoclaim(
+                    name=sub.stream,
+                    groupname=sub.group,
+                    consumername=sub.consumer_name,
+                    min_idle_time=min_idle_ms,
+                    start_id=cursor,
+                    count=10,
+                )
+                if messages:
+                    log.warning(
+                        "consumer_claim_swept",
+                        stream=sub.stream,
+                        group=sub.group,
+                        consumer=sub.consumer_name,
+                        reclaimed_count=len(messages),
+                    )
+                for message_id, fields in messages:
+                    await self._process_message(sub, message_id, fields, max_retries)
+                if cursor == "0-0":
+                    break
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error(
+                "consumer_claim_stuck_messages_error",
+                stream=sub.stream,
+                group=sub.group,
+                error=str(exc),
+                exc_info=True,
+            )
 
     async def _process_message(
         self,

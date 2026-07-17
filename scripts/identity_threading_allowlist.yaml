@@ -38,13 +38,25 @@
 # --- Event consumer pre-parse guards: trace_id is extracted from the payload
 #     AFTER these guards; an unparseable/empty message has no trace to thread. ---
 - path: src/personal_agent/events/consumer.py
-  line: 145
+  line: 211
   pattern: log
   reason: "consumer_message_missing_data — pre-parse guard, payload (and trace_id) unavailable"
 - path: src/personal_agent/events/consumer.py
-  line: 157
+  line: 223
   pattern: log
   reason: "consumer_deserialize_error — payload failed to parse, no trace_id extractable"
+
+# --- Event consumer claim sweep (FRE-906, ADR-0041 XAUTOCLAIM): pure boot/sweep
+#     scope, no in-flight message/trace_id until XAUTOCLAIM returns and messages
+#     are parsed — same class as consumer_loop_started in start(). ---
+- path: src/personal_agent/events/consumer.py
+  line: 172
+  pattern: log
+  reason: "consumer_claim_swept — sweep-level summary before per-message trace_id is parsed"
+- path: src/personal_agent/events/consumer.py
+  line: 186
+  pattern: log
+  reason: "consumer_claim_stuck_messages_error — XAUTOCLAIM call failed, no message/trace_id in scope"
 
 # --- Telemetry sink: a bulk index failure spans the whole batch; trace_id is a
 #     per-event loop variable, not a single id for the failed batch. ---

@@ -88,7 +88,7 @@ cheaper, more portable, and fully under your control.
 
 ## The Curated `/lib/` Shelf
 
-A small, vetted shelf is hosted on the artifact origin (`https://artifacts.frenchforet.com`) —
+A small, vetted shelf is hosted on the artifact origin (`https://artifacts.example.com`) —
 it is the **only** external origin a sealed artifact may load. Reference each asset by its
 **exact absolute, version-pinned URL** below; a relative `/lib/…` path is *not* the expected
 reach form and is not counted as a satisfied capability by the demand meter. URLs are immutable
@@ -98,8 +98,8 @@ pins (ADR-0089 A3) — never edit a version in place. Source of truth:
 ### KaTeX → math / formula typesetting (MIT)
 
 ```html
-<link rel="stylesheet" href="https://artifacts.frenchforet.com/lib/katex@0.16.47/katex.min.css">
-<script src="https://artifacts.frenchforet.com/lib/katex@0.16.47/katex.min.js"></script>
+<link rel="stylesheet" href="https://artifacts.example.com/lib/katex@0.16.47/katex.min.css">
+<script src="https://artifacts.example.com/lib/katex@0.16.47/katex.min.js"></script>
 ```
 
 ```html
@@ -125,7 +125,7 @@ pins (ADR-0089 A3) — never edit a version in place. Source of truth:
 ### Chart.js → charts / data visualization (MIT, global `Chart`)
 
 ```html
-<script src="https://artifacts.frenchforet.com/lib/chartjs@4.4.7/chart.umd.js"></script>
+<script src="https://artifacts.example.com/lib/chartjs@4.4.7/chart.umd.js"></script>
 ```
 
 ```html
@@ -155,7 +155,7 @@ pins (ADR-0089 A3) — never edit a version in place. Source of truth:
 ### three.js → 3-D / spatial / physics (MIT, global `THREE`, r171)
 
 ```html
-<script src="https://artifacts.frenchforet.com/lib/three@0.171.0/three.iife.min.js"></script>
+<script src="https://artifacts.example.com/lib/three@0.171.0/three.iife.min.js"></script>
 ```
 
 ```html
@@ -200,8 +200,8 @@ pins (ADR-0089 A3) — never edit a version in place. Source of truth:
 ### highlight.js → code / syntax highlighting (BSD-3, global `hljs`)
 
 ```html
-<link rel="stylesheet" href="https://artifacts.frenchforet.com/lib/highlightjs@11.9.0/github-dark.min.css">
-<script src="https://artifacts.frenchforet.com/lib/highlightjs@11.9.0/highlight.min.js"></script>
+<link rel="stylesheet" href="https://artifacts.example.com/lib/highlightjs@11.9.0/github-dark.min.css">
+<script src="https://artifacts.example.com/lib/highlightjs@11.9.0/highlight.min.js"></script>
 ```
 
 ```html
@@ -226,17 +226,17 @@ Declare each face with `@font-face`, then wire it into the design-system custom 
 ```css
 @font-face {
   font-family: "Source Serif 4";
-  src: url("https://artifacts.frenchforet.com/lib/fonts/source-serif-4@4.005/source-serif-4.woff2") format("woff2");
+  src: url("https://artifacts.example.com/lib/fonts/source-serif-4@4.005/source-serif-4.woff2") format("woff2");
   font-weight: 200 900; font-display: swap;
 }
 @font-face {
   font-family: "Playfair Display";
-  src: url("https://artifacts.frenchforet.com/lib/fonts/playfair-display@2.103/playfair-display.woff2") format("woff2");
+  src: url("https://artifacts.example.com/lib/fonts/playfair-display@2.103/playfair-display.woff2") format("woff2");
   font-weight: 400 900; font-display: swap;
 }
 @font-face {
   font-family: "JetBrains Mono";
-  src: url("https://artifacts.frenchforet.com/lib/fonts/jetbrains-mono@2.304/jetbrains-mono.woff2") format("woff2");
+  src: url("https://artifacts.example.com/lib/fonts/jetbrains-mono@2.304/jetbrains-mono.woff2") format("woff2");
   font-weight: 100 800; font-display: swap;
 }
 :root {
@@ -249,7 +249,7 @@ Declare each face with `@font-face`, then wire it into the design-system custom 
 **Gotchas:**
 - These are **variable** woff2 fonts — declare a weight range (`font-weight: 200 900`) so the
   whole axis is usable from one file.
-- `font-src https://artifacts.frenchforet.com data:` already admits them — **no CSP change**.
+- `font-src https://artifacts.example.com data:` already admits them — **no CSP change**.
   Google Fonts / other font CDNs silently fail; use these or inline `data:` woff2.
 - Use Source Serif 4 for body prose, Playfair Display for display headings, JetBrains Mono for
   code, falling back to system faces only when no shelf font fits.
@@ -428,7 +428,7 @@ and WebKit**:
 One-time browser install: `cd e2e/artifact-lib && npx playwright install --with-deps webkit chromium`.
 
 **Fidelity gap:** the harness rebinds the CSP host token to its localhost serving origin, so
-it proves render under the directive *shape*, not the exact `artifacts.frenchforet.com` tokens.
+it proves render under the directive *shape*, not the exact `artifacts.example.com` tokens.
 
 **2. Live-origin gate (master, post-merge) — `make verify-envelope URL=…` + `make verify-lib`.**
 Closes the host-token gap on the real Access-gated origin: the served artifact carries the

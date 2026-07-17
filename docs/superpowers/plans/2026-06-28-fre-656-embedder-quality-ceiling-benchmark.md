@@ -5,19 +5,19 @@
 ## Owner decision (locked, 2026-06-28)
 - **Embedder:** `Qwen/Qwen3-Embedding-4B` (GGUF Q4_K_M, native **2560-dim**) replacing `Qwen3-Embedding-0.6B` (1024-dim).
 - **Reranker:** `Voodisss/Qwen3-Reranker-4B` (Q4_K_M) replacing `Qwen3-Reranker-0.6B`.
-- Both served from the **Mac SLM gateway** and reachable from the VPS the same way the LLMs are: `https://slm.frenchforet.com/v1`, Cloudflare-Access-gated.
+- Both served from the **Mac SLM gateway** and reachable from the VPS the same way the LLMs are: `https://slm.example.com/v1`, Cloudflare-Access-gated.
 
 ## What I verified live (this session)
 | Fact | Result |
 |---|---|
-| `GET slm.frenchforet.com/v1/models` (CF token) | lists `Qwen/Qwen3-Embedding-4B` (:8505, embeddings) + `Voodisss/Qwen3-Reranker-4B` (:8506, rerank) |
+| `GET slm.example.com/v1/models` (CF token) | lists `Qwen/Qwen3-Embedding-4B` (:8505, embeddings) + `Voodisss/Qwen3-Reranker-4B` (:8506, rerank) |
 | `POST /v1/embeddings` (4B) | **dim = 2560** ✅ |
 | `POST /v1/rerank` (4B) | HTTP 200, ranks cooking docs over k8s doc ✅ |
 | Test substrate 7688/9201/5433 | all up ✅ |
 | Local 0.6B :8503 / reranker :8504 | up (baseline path) ✅ |
 
 ## The one necessary code change (surfaced — contradicts the "no instrument change" premise)
-The master/owner notes said the benchmark needs **no code change** — that assumed reaching the embedder on an unauthenticated local tunnel port. The owner then redirected to the **Access-gated** `slm.frenchforet.com`. CF-Access header injection currently lives **only** in `llm_client/client.py:400-405` (`_SLM_TUNNEL_HOSTNAME` check → `CF-Access-Client-Id/Secret` from `settings`). The two memory paths do **not** inject it:
+The master/owner notes said the benchmark needs **no code change** — that assumed reaching the embedder on an unauthenticated local tunnel port. The owner then redirected to the **Access-gated** `slm.example.com`. CF-Access header injection currently lives **only** in `llm_client/client.py:400-405` (`_SLM_TUNNEL_HOSTNAME` check → `CF-Access-Client-Id/Secret` from `settings`). The two memory paths do **not** inject it:
 - `memory/embeddings.py:135 _call_embeddings_api` — plain `openai.AsyncOpenAI`, no headers.
 - `memory/reranker.py:98` — raw `httpx.AsyncClient`, no headers.
 
@@ -28,15 +28,15 @@ Both **degrade silently** on failure (zero-vector / passthrough), so against the
 Codex confirmed: the singleton trap is real (separate processes sidestep it); a **shared CF helper already exists** (`service/cf_service_token.py:20`) — reuse it, don't add one; the driver's `os.environ.setdefault` means a **stray prod `AGENT_NEO4J_URI` would survive and `ensure_vector_index` would drop+recreate the *prod* index at 2560** (catastrophic) → force-set env + hard substrate assert; the `dimensions=` param and the reranker's hardcoded 30s timeout are silent-degradation traps → preflight + detection.
 
 ### Step 1 — Inject CF-Access headers into embedding + reranker clients (TDD)
-Reuse the existing `personal_agent.service.cf_service_token.cf_access_service_token_headers()`, **gated by hostname** at the call site (match `client.py`'s `slm.frenchforet.com` gate):
+Reuse the existing `personal_agent.service.cf_service_token.cf_access_service_token_headers()`, **gated by hostname** at the call site (match `client.py`'s `slm.example.com` gate):
 - `memory/embeddings.py` `_call_embeddings_api`: `headers = cf_access_service_token_headers() if _SLM_TUNNEL_HOSTNAME in endpoint else {}`; pass `default_headers=headers` to `AsyncOpenAI`. **Fix the singleton:** key `_openai_client` on `endpoint` (dict cache) so the slm endpoint actually gets a header-bearing client (today it binds once to the first endpoint).
 - `memory/reranker.py`: pass `headers=` (same gated call) on the `httpx` POST.
-- Add `_SLM_TUNNEL_HOSTNAME = "slm.frenchforet.com"` constant in each file (mirrors `client.py:58`; importing a private cross-module is worse).
+- Add `_SLM_TUNNEL_HOSTNAME = "slm.example.com"` constant in each file (mirrors `client.py:58`; importing a private cross-module is worse).
 - **Failing tests first** (`tests/personal_agent/memory/`): mocked-transport asserting CF headers are sent when endpoint is the slm host, absent for `http://embeddings:8503/v1`, absent when creds unset; plus a singleton test asserting two different endpoints get two clients.
 - Verify red → green: `make test-k K=embedding` / `K=rerank`. (Leave `client.py` untouched — surgical; codex agreed.)
 
 ### Step 2 — Benchmark model config (artifact, no logic)
-- `config/models.benchmark-4b.yaml` = copy of `models.cloud.yaml` with `embedding` → `id: Qwen/Qwen3-Embedding-4B`, `endpoint: https://slm.frenchforet.com/v1`; `reranker` → `id: Voodisss/Qwen3-Reranker-4B`, same endpoint. Comment notes the CF-Access gating.
+- `config/models.benchmark-4b.yaml` = copy of `models.cloud.yaml` with `embedding` → `id: Qwen/Qwen3-Embedding-4B`, `endpoint: https://slm.example.com/v1`; `reranker` → `id: Voodisss/Qwen3-Reranker-4B`, same endpoint. Comment notes the CF-Access gating.
 
 ### Step 3 — Committed safe runner with preflight asserts (new artifact; instrument unchanged)
 `scripts/eval/fre435_memory_recall/run_embedder_benchmark.sh` — encodes the safety codex demanded, so the run is reproducible and prod-safe:

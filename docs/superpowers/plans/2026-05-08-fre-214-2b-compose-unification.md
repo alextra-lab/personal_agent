@@ -2,7 +2,7 @@
 
 > **Status**: Draft — written 2026-05-08, **execution deferred** until owner signals (post-backlog reduction).
 > **Parent**: [FRE-214 audit](../../architecture/2026-05-08-fre-214-vps-topology-audit.md), [ADR-0045 amendment](../../architecture_decisions/ADR-0045-infrastructure-cloud-knowledge-layer.md).
-> **Blocked by**: Track 2a (endpoint abstraction). **Must land first** — without `endpoints[]` resolution the laptop's containerized gateway will route to `slm.frenchforet.com` for its own MLX models.
+> **Blocked by**: Track 2a (endpoint abstraction). **Must land first** — without `endpoints[]` resolution the laptop's containerized gateway will route to `slm.example.com` for its own MLX models.
 > **Tier**: 2 (Sonnet — implementation from plan).
 > **Branch when executed**: `fre-214-2b-compose-unification` off `main` (after 2a is merged).
 
@@ -31,7 +31,7 @@ Two structural constraints (from the audit):
 6. **Tunnel-mode env variable: `AGENT_TUNNEL_MODE=1`** (explicit, not heuristic). The opt-in `.env.local-to-vps` file sets this. Safety guard reads it, checks for `FORCE_LIVE_DATA=1`, and refuses to start without confirmation when write-capable roles are configured.
 7. **Tunnel transport**: `ssh -L` via `autossh -M 0` for resilience (auto-reconnect on drop). Dependency is `autossh` on the developer's Mac; documented prerequisite, install via Homebrew.
 8. **Migration sync is manual + scripted, not automatic**: `make sync-from-vps` and `make sync-to-vps` targets ship migration SQL + Kibana ndjson; Postgres replays via `psql -f`, Kibana via `import_dashboards.sh`. ES index templates are gateway-bootstrapped on startup (already today); no separate sync needed.
-9. **Caddy's host blocks** for `*.frenchforet.com` and the WARP IP move into the cloud overlay. Laptop's Caddy serves `localhost` only (HTTPS via `local_certs`). The PWA's runtime config (Track 4 D-3) lets it adapt to either host.
+9. **Caddy's host blocks** for `*.example.com` and the WARP IP move into the cloud overlay. Laptop's Caddy serves `localhost` only (HTTPS via `local_certs`). The PWA's runtime config (Track 4 D-3) lets it adapt to either host.
 10. **PWA build is environment-agnostic via runtime config**. This depends on Track 4 D-3 (runtime config endpoint) landing first, OR being delivered in this track. Decision: deliver D-3 here (small) since the PWA otherwise needs a per-deployment build, defeating the unification goal.
 
 ---
@@ -67,10 +67,10 @@ The new `docker-compose.yml` contains the following (resource caps removed — t
 
 ### 1.3 Caddyfile split
 
-The current single Caddyfile has both `localhost` blocks and `*.frenchforet.com` blocks. Split:
+The current single Caddyfile has both `localhost` blocks and `*.example.com` blocks. Split:
 
 * `config/cloud-sim/Caddyfile.local` — only the `localhost { import routing }` block plus the `(routing)` snippet. Used by laptop.
-* `config/cloud-sim/Caddyfile.cloud` — the full set including `agent.frenchforet.com`, `api.frenchforet.com`, `graph.frenchforet.com`, the WARP IP, and the `(routing)` snippet. Used by VPS overlay.
+* `config/cloud-sim/Caddyfile.cloud` — the full set including `agent.example.com`, `api.example.com`, `graph.example.com`, the WARP IP, and the `(routing)` snippet. Used by VPS overlay.
 
 ### 1.4 Gateway env file split
 
@@ -398,7 +398,7 @@ make tunnel-data-down
 ```bash
 ENV=cloud make deploy        # uses docker-compose.yml + docker-compose.cloud.yml overlay
 ENV=cloud make ps
-ENV=cloud make health        # 200 on https://agent.frenchforet.com/health (via CF Tunnel)
+ENV=cloud make health        # 200 on https://agent.example.com/health (via CF Tunnel)
 ```
 
 ### 5.5 Test suite
@@ -458,7 +458,7 @@ The PWA runtime config (Track 4 D-3) is in scope only as a small dependency: the
 ## Done means
 
 1. One `docker-compose.yml` works for laptop default; `docker-compose.cloud.yml` is a strict overlay used only on VPS.
-2. `Caddyfile.local` and `Caddyfile.cloud` are split; laptop never serves `*.frenchforet.com`.
+2. `Caddyfile.local` and `Caddyfile.cloud` are split; laptop never serves `*.example.com`.
 3. `make dev` continues to work unchanged (native uvicorn, fast).
 4. `make dev-mirror` runs containerized gateway with `develop.watch`; edit-to-reload < 5 s.
 5. `.env.local-to-vps.example` ships; `make tunnel-data` opens the four SSH forwards via autossh.
@@ -466,7 +466,7 @@ The PWA runtime config (Track 4 D-3) is in scope only as a small dependency: the
 7. `make sync-postgres-migrations` and `make sync-kibana-dashboards` work against either ENV.
 8. `docs/guides/peer-deployment-sync.md` documents the sync runbook.
 9. `make test` + `make ruff-check` + `make mypy` clean.
-10. PWA serves correctly on both `http://localhost` (laptop) and `https://agent.frenchforet.com` (VPS) without rebuilding the image.
+10. PWA serves correctly on both `http://localhost` (laptop) and `https://agent.example.com` (VPS) without rebuilding the image.
 
 ---
 

@@ -115,7 +115,7 @@ r2_secret_access_key: str | None = Field(default=None, description="R2 secret ac
 r2_region: str = Field(default="auto", description="R2 region (S3 SDK requires a value; 'auto' for R2)")
 artifacts_public_base_url: str | None = Field(
     default=None,
-    description="Public Worker URL prefix, e.g. https://artifacts.frenchforet.com",
+    description="Public Worker URL prefix, e.g. https://artifacts.example.com",
 )
 artifact_resolve_internal_token: str | None = Field(
     default=None,
@@ -331,7 +331,7 @@ async def resolve_artifact(
     )
 ```
 
-- Not behind CF Access — only the Worker can reach it (Cloudflare Tunnel ingress for `api.frenchforet.com` already exists; the Worker has the internal token).
+- Not behind CF Access — only the Worker can reach it (Cloudflare Tunnel ingress for `api.example.com` already exists; the Worker has the internal token).
 - Constant-time token compare via `secrets.compare_digest`.
 - New SQLAlchemy ORM model `ArtifactModel` lands in `src/personal_agent/service/models.py` alongside `UserModel` / `SessionModel`.
 
@@ -440,7 +440,7 @@ After PR merges, deploy and verify the empty-table happy path (gateway boots, to
 
 Once both halves are deployed (this PR + the sibling terraform ticket below):
 
-1. **Round-trip** — `uv run agent "Save a note slug='fre227-test' with content 'hello substrate'"` → tool calls `notes_write` → row appears in `artifacts` table with non-null `embedding` → R2 object exists → `https://artifacts.frenchforet.com/{artifact_id}` opens the bytes via Worker.
+1. **Round-trip** — `uv run agent "Save a note slug='fre227-test' with content 'hello substrate'"` → tool calls `notes_write` → row appears in `artifacts` table with non-null `embedding` → R2 object exists → `https://artifacts.example.com/{artifact_id}` opens the bytes via Worker.
 2. **NLP search** — `uv run agent "Find my notes about the substrate"` → `notes_search` returns the previous note with `similarity > 0.6`.
 3. **Cross-session persistence** — `uv run agent chat "..." --new` → `notes_search` still finds the note.
 4. **Prefix-escape** — direct unit-test call `notes_write(slug="../evil", ...)` raises `ArtifactKeyError` before any R2 or DB activity.
@@ -471,16 +471,16 @@ After this plan is approved I will file the following new Linear issue. It is **
 > 2. **R2 API token** — generated out-of-band in CF dashboard (or via `cloudflare_api_token` + custom scope); access key + secret captured into local `.tfvars` and copied into the VPS `.env` as `AGENT_R2_ACCESS_KEY_ID` / `AGENT_R2_SECRET_ACCESS_KEY` post-apply.
 > 3. **Worker script** — `cloudflare_workers_script "artifacts_substrate"` with bindings:
 >    - `R2_BUCKET` → the `seshat_artifacts` bucket
->    - `GATEWAY_INTERNAL_URL` → `https://api.frenchforet.com/internal/artifacts` (existing tunnel ingress)
+>    - `GATEWAY_INTERNAL_URL` → `https://api.example.com/internal/artifacts` (existing tunnel ingress)
 >    - `INTERNAL_TOKEN` → secret_text binding (the value also lands in VPS `.env` as `AGENT_ARTIFACT_RESOLVE_INTERNAL_TOKEN`)
 > 4. **Worker source** (`worker/artifacts.js` next to the HCL):
 >    - Parse `artifact_id` from path; validate UUID shape; 404 on malformed.
 >    - GET `${GATEWAY_INTERNAL_URL}/${artifact_id}` with headers `X-Internal-Token: ${INTERNAL_TOKEN}`, `X-Authenticated-User-Email: ${request.cf.access.user.email}` (CF Access populates this on validated requests).
 >    - On 200 → `R2.get(r2_key)` → stream bytes back with `Content-Type` from metadata.
 >    - On 401/404 from gateway → mirror to caller.
-> 5. **Worker custom domain** — `cloudflare_workers_custom_domain "artifacts"` binding the script to `artifacts.frenchforet.com`.
-> 6. **DNS record** — proxied CNAME `artifacts.frenchforet.com` → Worker (or whatever the v5 provider expects for Workers custom domains).
-> 7. **Cloudflare Access application** — `cloudflare_zero_trust_access_application "artifacts"` on `artifacts.frenchforet.com`, session duration `720h` (per FRE-370 convention), `auto_redirect_to_identity = true`.
+> 5. **Worker custom domain** — `cloudflare_workers_custom_domain "artifacts"` binding the script to `artifacts.example.com`.
+> 6. **DNS record** — proxied CNAME `artifacts.example.com` → Worker (or whatever the v5 provider expects for Workers custom domains).
+> 7. **Cloudflare Access application** — `cloudflare_zero_trust_access_application "artifacts"` on `artifacts.example.com`, session duration `720h` (per FRE-370 convention), `auto_redirect_to_identity = true`.
 > 8. **Access policy** — `cloudflare_zero_trust_access_policy "personal_only"` referencing the same allowlist used by the agent app (the four CF Access users from FRE-344).
 >
 > ### Apply steps
@@ -500,11 +500,11 @@ After this plan is approved I will file the following new Linear issue. It is **
 >    - `AGENT_R2_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com`
 >    - `AGENT_R2_ACCESS_KEY_ID=<from output>`
 >    - `AGENT_R2_SECRET_ACCESS_KEY=<from output>`
->    - `AGENT_ARTIFACTS_PUBLIC_BASE_URL=https://artifacts.frenchforet.com`
+>    - `AGENT_ARTIFACTS_PUBLIC_BASE_URL=https://artifacts.example.com`
 >    - `AGENT_ARTIFACT_RESOLVE_INTERNAL_TOKEN=<generated; must match Worker binding>`
 > 3. `ENV=cloud make restart SERVICE=seshat-gateway`
 > 4. Verify the gateway log line `notes_tools_registered` appears (replaces the `…_skipped_unconfigured` warning).
-> 5. From iPad Safari: log in via CF Access; `GET https://artifacts.frenchforet.com/<known-id>` returns the bytes.
+> 5. From iPad Safari: log in via CF Access; `GET https://artifacts.example.com/<known-id>` returns the bytes.
 > 6. Negative: a logged-out browser tab on the same URL is bounced to Access; an unauthorized email is also bounced (Access stops it before the Worker).
 >
 > ### Verification

@@ -10,17 +10,60 @@ All configuration loaders live in the config/ module per ADR-0007.
 
 import functools
 from pathlib import Path
+from urllib.parse import urlparse
 
 import structlog
 from pydantic import ValidationError
 
 from personal_agent.config.loader import ConfigLoadError, load_yaml_file
+from personal_agent.config.settings import AppConfig
 from personal_agent.llm_client.models import ModelConfig
 
 #: A parsed ``config/model_roles.yaml`` mapping.
 _RoleMatrix = dict[str, object]
 
 log = structlog.get_logger(__name__)
+
+#: Neutral placeholder host baked into config/models*.yaml (FRE-895) — the real Mac
+#: SLM Cloudflare-tunnel host never lands in tracked source. See settings.slm_tunnel_base_url.
+_SLM_TUNNEL_PLACEHOLDER_HOST = "slm.example.com"
+
+
+def _apply_slm_tunnel_override(config: ModelConfig, settings: AppConfig) -> ModelConfig:
+    """Rewrite placeholder SLM tunnel endpoints to the real tunnel base (FRE-895).
+
+    Any model endpoint pointed at ``_SLM_TUNNEL_PLACEHOLDER_HOST`` is rewritten to
+    ``settings.slm_tunnel_base_url`` (path preserved) when that setting is configured;
+    otherwise the placeholder passes through untouched.
+
+    Args:
+        config: The loaded model config to rewrite.
+        settings: The specific ``AppConfig`` to resolve the override against —
+            never the live global singleton implicitly, so a caller resolving
+            against an explicit (e.g. test/eval) ``AppConfig`` (ADR-0112 D3/AC-2's
+            "same interface, no code edit" seam) gets a deterministic result from
+            *that* config, not whatever the current process happens to have set.
+    """
+    real_base = settings.slm_tunnel_base_url
+    if not real_base:
+        return config
+
+    real = urlparse(real_base.rstrip("/"))
+    updated_models = dict(config.models)
+    changed = False
+    for role, definition in config.models.items():
+        if definition.endpoint is None:
+            continue
+        parsed = urlparse(definition.endpoint)
+        if parsed.hostname != _SLM_TUNNEL_PLACEHOLDER_HOST:
+            continue
+        new_endpoint = parsed._replace(scheme=real.scheme, netloc=real.netloc).geturl()
+        updated_models[role] = definition.model_copy(update={"endpoint": new_endpoint})
+        changed = True
+
+    if not changed:
+        return config
+    return config.model_copy(update={"models": updated_models})
 
 
 class ModelConfigError(ConfigLoadError):
@@ -81,12 +124,20 @@ def _load_model_config_at_path(config_path_str: str) -> ModelConfig:
         raise ModelConfigError(f"Unexpected error validating model config: {e}") from None
 
 
-def load_model_config(config_path: Path | str | None = None) -> ModelConfig:
+def load_model_config(
+    config_path: Path | str | None = None,
+    *,
+    settings: AppConfig | None = None,
+) -> ModelConfig:
     """Load and validate model configuration from YAML file.
 
     Args:
         config_path: Path (or path string) to models.yaml file. If None, uses
-            settings.model_config_path from unified config.
+            ``settings.model_config_path``.
+        settings: The ``AppConfig`` to resolve the FRE-895 SLM-tunnel override
+            against. ``None`` uses the live global singleton — pass an explicit
+            ``AppConfig`` (e.g. from :func:`personal_agent.config.substrate.resolve_substrate`)
+            to resolve deterministically against *that* config instead.
 
     Returns:
         Validated ModelConfig object (not a raw dict).
@@ -100,10 +151,12 @@ def load_model_config(config_path: Path | str | None = None) -> ModelConfig:
         >>> print(config.models["primary"].id)
         qwen/qwen3-35b-a22b
     """
-    if config_path is None:
-        # Use unified config system (ADR-0007)
-        from personal_agent.config import settings  # noqa: PLC0415
+    if settings is None:
+        from personal_agent.config import settings as _live_settings  # noqa: PLC0415
 
+        settings = _live_settings
+
+    if config_path is None:
         config_path = settings.model_config_path
         # Resolve relative paths to absolute (relative to project root)
         if not config_path.is_absolute():
@@ -124,7 +177,7 @@ def load_model_config(config_path: Path | str | None = None) -> ModelConfig:
     if not config_path.is_file():
         raise ModelConfigError(f"Model config path is not a file: {config_path}")
 
-    return _load_model_config_at_path(str(config_path))
+    return _apply_slm_tunnel_override(_load_model_config_at_path(str(config_path)), settings)
 
 
 @functools.lru_cache(maxsize=8)

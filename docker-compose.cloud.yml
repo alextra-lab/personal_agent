@@ -102,8 +102,9 @@ services:
       NEO4J_server_memory_pagecache_size: 256m
       # Bolt advertised address — tells the Browser to connect via the public hostname
       # so Bolt-over-WebSocket routes through Cloudflare Tunnel (port 443 → neo4j:7474)
-      # instead of trying localhost:7687 from the user's browser.
-      NEO4J_server_bolt_advertised__address: graph.frenchforet.com:443
+      # instead of trying localhost:7687 from the user's browser. Real value from
+      # .env's NEO4J_ADVERTISED_ADDRESS (FRE-895); placeholder here is inert.
+      NEO4J_server_bolt_advertised__address: ${NEO4J_ADVERTISED_ADDRESS:-graph.example.com:443}
     volumes:
       - neo4j_data_cloud:/data
     ports:
@@ -151,10 +152,10 @@ services:
       - cloud-sim
     restart: unless-stopped
 
-  # Kibana 8.19 — log/trace dashboards behind monitoring.frenchforet.com
+  # Kibana 8.19 — log/trace dashboards behind a monitoring.<domain> Cloudflare Tunnel host
   # Purpose: Dashboard UI for Elasticsearch telemetry (agent logs, Captain's Log, insights)
   # Access: CF Zero Trust backend_admin policy (lextra@gmail.com only, 1h session)
-  # Tunnel: monitoring.frenchforet.com → http://kibana:5601 (bypasses Caddy)
+  # Tunnel: monitoring.<domain> → http://kibana:5601 (bypasses Caddy)
   # Resource limit: 1024MB RAM, 0.5 CPU
   kibana:
     image: docker.elastic.co/kibana/kibana:8.19.0
@@ -442,8 +443,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.pwa
+      args:
+        NEXT_PUBLIC_ARTIFACTS_HOST: ${NEXT_PUBLIC_ARTIFACTS_HOST:-artifacts.example.com}
     environment:
-      SESHAT_URL: "https://agent.frenchforet.com"
+      SESHAT_URL: ${SESHAT_URL:-https://agent.example.com}
       GATEWAY_TOKEN: ${GATEWAY_TOKEN_PWA}
     container_name: cloud-sim-seshat-pwa
     ports:
@@ -471,6 +474,11 @@ services:
   caddy:
     image: caddy:2-alpine
     container_name: cloud-sim-caddy
+    environment:
+      AGENT_HOST: ${AGENT_HOST:-agent.example.com}
+      GRAPH_HOST: ${GRAPH_HOST:-graph.example.com}
+      ES_HOST: ${ES_HOST:-es.example.com}
+      API_HOST: ${API_HOST:-api.example.com}
     ports:
       - "80:80"
       - "443:443"

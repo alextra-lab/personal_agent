@@ -10,7 +10,7 @@
 
 ## Context
 
-The FRE-214 audit's deviation D-7 surfaced FRE-336: integration tests skip silently on the VPS because `tests/conftest.py:_llm_server_reachable()` probes the static `primary` role from `models.yaml` and ignores the active profile. On the VPS, `primary` is Qwen at `slm.frenchforet.com` — when the laptop is offline, the probe fails and *every* `@pytest.mark.requires_llm_server` test silently skips, even though `AGENT_ANTHROPIC_API_KEY` is set and the cloud profile would happily run those tests.
+The FRE-214 audit's deviation D-7 surfaced FRE-336: integration tests skip silently on the VPS because `tests/conftest.py:_llm_server_reachable()` probes the static `primary` role from `models.yaml` and ignores the active profile. On the VPS, `primary` is Qwen at `slm.example.com` — when the laptop is offline, the probe fails and *every* `@pytest.mark.requires_llm_server` test silently skips, even though `AGENT_ANTHROPIC_API_KEY` is set and the cloud profile would happily run those tests.
 
 The fix is two-layered:
 

@@ -39,7 +39,7 @@ I apologize, but I was unable to complete the Neo4j query due to tool call limit
 | Property | Value |
 |----------|-------|
 | Version | 5.26.24 (Community Edition) |
-| Bolt endpoint | `bolt://graph.frenchforet.com:443` (or `bolt://neo4j:7687` from Docker DNS) |
+| Bolt endpoint | `bolt://graph.example.com:443` (or `bolt://neo4j:7687` from Docker DNS) |
 | HTTP API | `http://neo4j:7474/` |
 | Auth | Required (username/password via env vars) |
 

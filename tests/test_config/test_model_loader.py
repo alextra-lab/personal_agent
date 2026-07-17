@@ -6,9 +6,10 @@ from pathlib import Path
 import pytest
 import structlog
 
-from personal_agent.config import ModelConfigError, load_model_config
+from personal_agent.config import ModelConfigError, load_model_config, settings
 from personal_agent.config import model_loader as model_loader_module
 from personal_agent.config.model_loader import check_vision_capabilities
+from personal_agent.config.settings import AppConfig
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition
 
 
@@ -249,6 +250,117 @@ models:
         assert first == second
         assert cache_info.misses == 1
         assert cache_info.hits == 1
+
+
+class TestSlmTunnelOverride:
+    """FRE-895: config/models*.yaml ship a placeholder SLM tunnel host; the real host
+
+    is only ever supplied at runtime via ``settings.slm_tunnel_base_url``, never
+    hardcoded in tracked source.
+    """
+
+    @staticmethod
+    def _write_config(tmp_path: Path) -> Path:
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text(
+            """
+models:
+  reranker:
+    id: "test-reranker"
+    endpoint: "https://slm.example.com/v1"
+    context_length: 8192
+    quantization: "8bit"
+    max_concurrency: 2
+    default_timeout: 30
+  cloud:
+    id: "test-cloud"
+    context_length: 8192
+    quantization: "8bit"
+    max_concurrency: 2
+    default_timeout: 30
+"""
+        )
+        return config_file
+
+    def test_placeholder_untouched_when_unset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "slm_tunnel_base_url", None)
+        config_file = self._write_config(tmp_path)
+
+        config = load_model_config(config_file)
+
+        assert config.models["reranker"].endpoint == "https://slm.example.com/v1"
+
+    def test_rewritten_when_set_path_preserved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.real-tunnel.test")
+        config_file = self._write_config(tmp_path)
+
+        config = load_model_config(config_file)
+
+        assert config.models["reranker"].endpoint == "https://slm.real-tunnel.test/v1"
+
+    def test_non_placeholder_endpoint_untouched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A local/dev endpoint that isn't the placeholder host is never rewritten."""
+        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.real-tunnel.test")
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text(
+            """
+models:
+  router:
+    id: "test-router"
+    endpoint: "http://localhost:8000/v1"
+    context_length: 8192
+    quantization: "8bit"
+    max_concurrency: 4
+    default_timeout: 5
+"""
+        )
+
+        config = load_model_config(config_file)
+
+        assert config.models["router"].endpoint == "http://localhost:8000/v1"
+
+    def test_no_endpoint_untouched(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A role with no endpoint override (cloud models) is left as None."""
+        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.real-tunnel.test")
+        config_file = self._write_config(tmp_path)
+
+        config = load_model_config(config_file)
+
+        assert config.models["cloud"].endpoint is None
+
+    def test_explicit_settings_param_wins_over_live_singleton(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression (codex/security-review catch, FRE-895): a caller resolving
+
+        against an explicit ``AppConfig`` (ADR-0112 D3/AC-2's "same interface, no
+        code edit" seam, e.g. ``resolve_substrate(profile, settings=custom)``)
+        must get *that* config's slm_tunnel_base_url, never the live process-wide
+        singleton's — even when they differ.
+        """
+        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.live-singleton.test")
+        config_file = self._write_config(tmp_path)
+
+        explicit_settings = AppConfig(slm_tunnel_base_url="https://slm.explicit-config.test")
+        config = load_model_config(config_file, settings=explicit_settings)
+
+        assert config.models["reranker"].endpoint == "https://slm.explicit-config.test/v1"
+
+    def test_no_settings_param_falls_back_to_live_singleton(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.live-singleton.test")
+        config_file = self._write_config(tmp_path)
+
+        config = load_model_config(config_file)
+
+        assert config.models["reranker"].endpoint == "https://slm.live-singleton.test/v1"
 
 
 class TestSupportsVisionDeployedConfig:

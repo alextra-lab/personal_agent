@@ -21,7 +21,7 @@ FRE-734-fixed gateway). The owner asked about `IMG_3075.jpeg` (uploaded June 28,
 ~4.7 MB) **without re-attaching it**. FRE-666 resolves only current-turn raster attachments
 (`ctx.attachments`), so the vision path never engaged. The agent instead ran
 `recall_personal_history` → `artifact_read`, which for a binary/image artifact returns
-`inline=False`, `content: None`, and a `public_url` (`artifacts.frenchforet.com/{id}`). That URL is
+`inline=False`, `content: None`, and a `public_url` (`artifacts.example.com/{id}`). That URL is
 guarded by **Cloudflare Access**, so the agent gets a 403 login page — it cannot fetch the image and
 cannot see it, even though the bytes sit in R2 and the credentialed `store.get(r2_key)` path (used by
 FRE-666 and `artifact_read`'s textual branch) reads them directly.

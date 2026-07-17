@@ -63,8 +63,8 @@ class AppConfig(BaseSettings):
     cors_allowed_origins: list[str] = Field(
         default=[
             "http://localhost:3000",
-            "https://seshat.frenchforet.com",
-            "https://agent.frenchforet.com",
+            "https://seshat.example.com",
+            "https://agent.example.com",
         ],
         description=(
             "CORS allowed origins for the FastAPI service. "
@@ -76,8 +76,8 @@ class AppConfig(BaseSettings):
     # WebSocket transport (ADR-0075 / FRE-388)
     allowed_ws_origins: list[str] = Field(
         default=[
-            "https://seshat.frenchforet.com",
-            "https://agent.frenchforet.com",
+            "https://seshat.example.com",
+            "https://agent.example.com",
             "http://localhost:3000",
         ],
         description="Allowed Origin headers for WebSocket upgrade requests (RFC 6455 §10.2).",
@@ -726,7 +726,7 @@ class AppConfig(BaseSettings):
     )
     artifacts_public_base_url: str | None = Field(
         default=None,
-        description="Public Worker URL prefix, e.g. https://artifacts.frenchforet.com",
+        description="Public Worker URL prefix, e.g. https://artifacts.example.com",
     )
     artifact_resolve_internal_token: str | None = Field(
         default=None,
@@ -1556,7 +1556,7 @@ class AppConfig(BaseSettings):
 
     # SLM health monitor (FRE-399 Layer 3 / ADR-0083)
     slm_health_url: str = Field(
-        default="https://slm.frenchforet.com/health",
+        default="https://slm.example.com/health",
         description=(
             "URL of the Mac SLM server health endpoint, polled by the SLM-health monitor "
             "and the /api/inference/status endpoint. The liveness-only response (today) "
@@ -1952,7 +1952,8 @@ class AppConfig(BaseSettings):
         alias="CF_ACCESS_CLIENT_ID",
         description=(
             "Cloudflare Zero Trust service token client ID for Mac SLM tunnel. "
-            "Injected as CF-Access-Client-Id header on requests to slm.frenchforet.com."
+            "Injected as CF-Access-Client-Id header on requests to the SLM tunnel host "
+            "(see slm_tunnel_base_url)."
         ),
     )
     cf_access_client_secret: str | None = Field(
@@ -1960,9 +1961,26 @@ class AppConfig(BaseSettings):
         alias="CF_ACCESS_CLIENT_SECRET",
         description=(
             "Cloudflare Zero Trust service token secret for Mac SLM tunnel. "
-            "Injected as CF-Access-Client-Secret header on requests to slm.frenchforet.com."
+            "Injected as CF-Access-Client-Secret header on requests to the SLM tunnel host "
+            "(see slm_tunnel_base_url)."
         ),
         json_schema_extra={"secret": True},
+    )
+    slm_tunnel_base_url: str | None = Field(
+        default=None,
+        description=(
+            "Real base URL of the CF-Access-gated Mac SLM Cloudflare tunnel (e.g. "
+            "https://slm.example.com), overriding the placeholder host baked into "
+            "config/models*.yaml endpoints when set. Also identifies which outbound "
+            "requests should get CF-Access headers injected (FRE-895)."
+        ),
+    )
+    pwa_public_origin: str = Field(
+        default="https://agent.example.com",
+        description=(
+            "The PWA's canonical public origin. Feeds the artifact CSP frame-ancestors "
+            "directive and is the default SESHAT_URL for the cloud PWA deployment (FRE-895)."
+        ),
     )
     cf_access_team_domain: str | None = Field(
         default=None,

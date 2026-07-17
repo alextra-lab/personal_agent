@@ -76,7 +76,7 @@ in dataset order; cases 2–3 (2-turn) happened to win the race.
    ordering for a best-effort consistency mechanism (fix sketch in FRE-520).
 4. ~~"local profile ran on Haiku"~~ — initial misread: Haiku rows in `api_costs` are the
    `skill_routing` model (`AGENT_SKILL_ROUTING_MODE=model_decided`); the primary tier ran on
-   local Qwen3.6-35B-A3B via `slm.frenchforet.com` ($0, hence invisible in `api_costs`).
+   local Qwen3.6-35B-A3B via `slm.example.com` ($0, hence invisible in `api_costs`).
    Owner-corrected. Reading: check `purpose` before attributing model usage.
 
 ## Action items

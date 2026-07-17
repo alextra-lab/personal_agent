@@ -22,8 +22,8 @@ Three arms, all f16, over the 54-case FRE-670 probe (`semantic_probe.yaml`):
 | Arm | Model | Native dim | Endpoint |
 |-----|-------|-----------:|----------|
 | 0.6B | Qwen3-Embedding-0.6B (prod) | 1024 | VPS `:8503` |
-| 4B-f16 | Qwen3-Embedding-4B | 2560 | `slm.frenchforet.com` |
-| 8B | Qwen3-Embedding-8B | 4096 | `slm.frenchforet.com:8505` |
+| 4B-f16 | Qwen3-Embedding-4B | 2560 | `slm.example.com` |
+| 8B | Qwen3-Embedding-8B | 4096 | `slm.example.com:8505` |
 | Voyage | voyage-4-large (cloud SOTA) | 2048 | Voyage API |
 
 (The 4B and 8B arms share the Access-gated slm endpoint — run separately as the served model was

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Expose the MacBook's slm_server (port 8000, MLX inference) through a Cloudflare Tunnel (`slm.frenchforet.com`) so the VPS seshat-gateway can reach it when the `local` profile is selected in the PWA.
+**Goal:** Expose the MacBook's slm_server (port 8000, MLX inference) through a Cloudflare Tunnel (`slm.example.com`) so the VPS seshat-gateway can reach it when the `local` profile is selected in the PWA.
 
-**Architecture:** A new Terraform module (`infrastructure/terraform-cloudflare-mac/`) provisions the Mac tunnel, DNS record, and a Cloudflare Access service token. The VPS gateway's LLM client injects CF-Access headers when posting to `slm.frenchforet.com`. A new `GET /api/inference/status` gateway endpoint probes the Mac tunnel and the PWA polls it to show a live availability indicator.
+**Architecture:** A new Terraform module (`infrastructure/terraform-cloudflare-mac/`) provisions the Mac tunnel, DNS record, and a Cloudflare Access service token. The VPS gateway's LLM client injects CF-Access headers when posting to `slm.example.com`. A new `GET /api/inference/status` gateway endpoint probes the Mac tunnel and the PWA polls it to show a live availability indicator.
 
 **Tech Stack:** Terraform (cloudflare provider ~> 5.0), cloudflared (Homebrew, launchd), Python/httpx (gateway), TypeScript/React (PWA).
 
@@ -26,15 +26,15 @@
 | `infrastructure/terraform-cloudflare-mac/providers.tf` | Create | Cloudflare provider config |
 | `infrastructure/terraform-cloudflare-mac/variables.tf` | Create | Input variables |
 | `infrastructure/terraform-cloudflare-mac/tunnel.tf` | Create | Tunnel resource + ingress config |
-| `infrastructure/terraform-cloudflare-mac/dns.tf` | Create | CNAME for slm.frenchforet.com |
+| `infrastructure/terraform-cloudflare-mac/dns.tf` | Create | CNAME for slm.example.com |
 | `infrastructure/terraform-cloudflare-mac/access.tf` | Create | Access Application, Service Token, Policy |
 | `infrastructure/terraform-cloudflare-mac/outputs.tf` | Create | Tunnel ID, CF access token outputs |
 | `infrastructure/terraform-cloudflare-mac/terraform.tfvars.example` | Create | Credentials template |
 | `infrastructure/terraform-cloudflare-mac/.gitignore` | Create | Ignore tfvars/state/provider cache |
 | `src/personal_agent/config/settings.py` | Modify | Add `cf_access_client_id` + `cf_access_client_secret` to `AppConfig` |
-| `src/personal_agent/llm_client/client.py` | Modify | Inject CF-Access headers when endpoint is `slm.frenchforet.com` |
+| `src/personal_agent/llm_client/client.py` | Modify | Inject CF-Access headers when endpoint is `slm.example.com` |
 | `src/personal_agent/service/app.py` | Modify | Add `GET /api/inference/status` endpoint |
-| `config/models.cloud.yaml` | Modify | Override primary/sub_agent endpoints to `https://slm.frenchforet.com/v1` |
+| `config/models.cloud.yaml` | Modify | Override primary/sub_agent endpoints to `https://slm.example.com/v1` |
 | `docker-compose.cloud.yml` | Modify | Inject `CF_ACCESS_CLIENT_ID` + `CF_ACCESS_CLIENT_SECRET` into seshat-gateway |
 | `seshat-pwa/src/hooks/useInferenceStatus.ts` | Create | Poll `/api/inference/status`; return `up`/`down`/`unknown` + latency |
 | `seshat-pwa/src/components/ProfileSelector.tsx` | Modify | Show availability dot + tooltip on Local card |
@@ -107,7 +107,7 @@ variable "tunnel_name" {
 variable "domain" {
   description = "Root domain managed in this Cloudflare zone"
   type        = string
-  default     = "frenchforet.com"
+  default     = "example.com"
 }
 ```
 
@@ -148,7 +148,7 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "seshat_mac" {
 
 ```hcl
 # infrastructure/terraform-cloudflare-mac/dns.tf
-# CNAME record: slm.frenchforet.com → tunnel (proxied — TLS at Cloudflare edge)
+# CNAME record: slm.example.com → tunnel (proxied — TLS at Cloudflare edge)
 resource "cloudflare_dns_record" "slm" {
   zone_id = var.cloudflare_zone_id
   name    = "slm"
@@ -164,7 +164,7 @@ resource "cloudflare_dns_record" "slm" {
 ```hcl
 # infrastructure/terraform-cloudflare-mac/access.tf
 #
-# Cloudflare Zero Trust Access protection for slm.frenchforet.com.
+# Cloudflare Zero Trust Access protection for slm.example.com.
 # Only requests carrying the VPS gateway's service token are allowed through.
 # All other requests → 403 at the Cloudflare edge (slm_server never sees them).
 
@@ -239,7 +239,7 @@ cloudflare_api_token  = "YOUR_CLOUDFLARE_API_TOKEN"
 cloudflare_zone_id    = "YOUR_ZONE_ID"
 cloudflare_account_id = "YOUR_ACCOUNT_ID"
 tunnel_name           = "seshat-mac"
-domain                = "frenchforet.com"
+domain                = "example.com"
 ```
 
 - [ ] **Step 8: Create .gitignore**
@@ -332,7 +332,7 @@ In `src/personal_agent/config/settings.py`, find the gateway settings block (aro
         alias="CF_ACCESS_CLIENT_ID",
         description=(
             "Cloudflare Zero Trust service token client ID for Mac SLM tunnel. "
-            "Injected as CF-Access-Client-Id header on requests to slm.frenchforet.com."
+            "Injected as CF-Access-Client-Id header on requests to slm.example.com."
         ),
     )
     cf_access_client_secret: str | None = Field(
@@ -340,7 +340,7 @@ In `src/personal_agent/config/settings.py`, find the gateway settings block (aro
         alias="CF_ACCESS_CLIENT_SECRET",
         description=(
             "Cloudflare Zero Trust service token secret for Mac SLM tunnel. "
-            "Injected as CF-Access-Client-Secret header on requests to slm.frenchforet.com."
+            "Injected as CF-Access-Client-Secret header on requests to slm.example.com."
         ),
     )
 ```
@@ -385,8 +385,8 @@ Open `tests/test_llm_client/test_client.py`. Find the `TestLocalLLMClient` class
     async def test_cf_access_headers_injected_for_slm_endpoint(
         self, mock_model_config: Path
     ) -> None:
-        """CF-Access headers are injected when endpoint contains slm.frenchforet.com."""
-        # Create client with slm.frenchforet.com endpoint
+        """CF-Access headers are injected when endpoint contains slm.example.com."""
+        # Create client with slm.example.com endpoint
         config_file = mock_model_config.parent / "models_slm.yaml"
         config_file.write_text(
             """
@@ -396,7 +396,7 @@ models:
     context_length: 32768
     max_concurrency: 1
     default_timeout: 60
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
   sub_agent:
     id: "test-sub"
     context_length: 32768
@@ -405,7 +405,7 @@ models:
 """
         )
         client = LocalLLMClient(
-            base_url="https://slm.frenchforet.com/v1",
+            base_url="https://slm.example.com/v1",
             timeout_seconds=30,
             max_retries=0,
             model_config_path=config_file,
@@ -522,10 +522,10 @@ Replace that block with:
 
 ```python
                 # Inject Cloudflare Access headers for the Mac SLM tunnel.
-                # Only added when the endpoint is slm.frenchforet.com and
+                # Only added when the endpoint is slm.example.com and
                 # credentials are configured — transparent for all other endpoints.
                 cf_headers: dict[str, str] = {}
-                if "slm.frenchforet.com" in current_endpoint:
+                if "slm.example.com" in current_endpoint:
                     if settings.cf_access_client_id and settings.cf_access_client_secret:
                         cf_headers["CF-Access-Client-Id"] = settings.cf_access_client_id
                         cf_headers["CF-Access-Client-Secret"] = settings.cf_access_client_secret
@@ -564,7 +564,7 @@ Expected: `Success: no issues found`
 
 ```bash
 git add src/personal_agent/llm_client/client.py tests/test_llm_client/test_client.py
-git commit -m "feat(llm-client): inject CF-Access headers for slm.frenchforet.com endpoint"
+git commit -m "feat(llm-client): inject CF-Access headers for slm.example.com endpoint"
 ```
 
 ---
@@ -723,14 +723,14 @@ Then add the following after line 1081 (after `return {"session_id": session_id,
 # Inference Availability (Mac SLM Tunnel)
 # ============================================================================
 
-_SLM_HEALTH_URL = "https://slm.frenchforet.com/health"
+_SLM_HEALTH_URL = "https://slm.example.com/health"
 
 
 @app.get("/api/inference/status")
 async def inference_status() -> dict[str, Any]:
     """Probe the Mac SLM tunnel and return availability for the local profile.
 
-    Makes a GET /health request to https://slm.frenchforet.com/health with
+    Makes a GET /health request to https://slm.example.com/health with
     Cloudflare Access service token headers. Times out in 3 seconds.
 
     Returns:
@@ -803,13 +803,13 @@ In `config/models.cloud.yaml`, update the `primary` and `sub_agent` endpoint lin
 For `primary` (around line 67), change to:
 
 ```yaml
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
 ```
 
 For `sub_agent` (around line 89), change to:
 
 ```yaml
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
 ```
 
 Also update the header comment block at the top of the file to reflect the new override:
@@ -825,7 +825,7 @@ Find:
 Replace with:
 ```yaml
 # Differences from models.yaml:
-#   - primary/sub_agent endpoint → https://slm.frenchforet.com/v1  (Mac SLM tunnel)
+#   - primary/sub_agent endpoint → https://slm.example.com/v1  (Mac SLM tunnel)
 #   - embedding endpoint → http://embeddings:8503/v1  (llama.cpp Docker service)
 #   - reranker endpoint  → http://embeddings:8504/v1  (llama.cpp Docker service)
 ```
@@ -840,8 +840,8 @@ cfg = load_model_config(Path('config/models.cloud.yaml'))
 print('primary endpoint:', cfg.models['primary'].endpoint)
 print('sub_agent endpoint:', cfg.models['sub_agent'].endpoint)
 print('embedding endpoint:', cfg.models['embedding'].endpoint)
-assert cfg.models['primary'].endpoint == 'https://slm.frenchforet.com/v1'
-assert cfg.models['sub_agent'].endpoint == 'https://slm.frenchforet.com/v1'
+assert cfg.models['primary'].endpoint == 'https://slm.example.com/v1'
+assert cfg.models['sub_agent'].endpoint == 'https://slm.example.com/v1'
 assert 'embeddings:8503' in cfg.models['embedding'].endpoint
 print('OK')
 "
@@ -849,8 +849,8 @@ print('OK')
 
 Expected:
 ```
-primary endpoint: https://slm.frenchforet.com/v1
-sub_agent endpoint: https://slm.frenchforet.com/v1
+primary endpoint: https://slm.example.com/v1
+sub_agent endpoint: https://slm.example.com/v1
 embedding endpoint: http://embeddings:8503/v1
 OK
 ```
@@ -877,7 +877,7 @@ Expected: no output (valid YAML). If `CF_ACCESS_CLIENT_ID` is not set locally, d
 
 ```bash
 git add config/models.cloud.yaml docker-compose.cloud.yml
-git commit -m "feat(config): route local profile LLM calls to slm.frenchforet.com tunnel"
+git commit -m "feat(config): route local profile LLM calls to slm.example.com tunnel"
 ```
 
 ---
@@ -1182,7 +1182,7 @@ Make sure slm_server is running (`cd slm_server && ./start.sh`), then:
 ```bash
 curl -H "CF-Access-Client-Id: <client_id>" \
      -H "CF-Access-Client-Secret: <client_secret>" \
-     https://slm.frenchforet.com/health
+     https://slm.example.com/health
 ```
 
 Expected: `{"status": "ok"}` (or similar health response from slm_server).
@@ -1194,7 +1194,7 @@ SSH to the VPS and run:
 ```bash
 curl -H "CF-Access-Client-Id: <CF_ACCESS_CLIENT_ID>" \
      -H "CF-Access-Client-Secret: <CF_ACCESS_CLIENT_SECRET>" \
-     https://slm.frenchforet.com/health
+     https://slm.example.com/health
 ```
 
 Expected: `{"status": "ok"}`
@@ -1206,7 +1206,7 @@ Expected: `{"status": "ok"}`
 docker compose -f docker-compose.cloud.yml restart seshat-gateway
 
 # Then test the inference status endpoint
-curl https://api.frenchforet.com/api/inference/status \
+curl https://api.example.com/api/inference/status \
      -H "Authorization: Bearer <GATEWAY_TOKEN_EXTERNAL_AGENT>"
 ```
 
@@ -1214,10 +1214,10 @@ Expected: `{"local": "up", "latency_ms": <N>}`
 
 - [ ] **Step 8: End-to-end smoke test via PWA**
 
-1. Open `https://agent.frenchforet.com` in a browser.
+1. Open `https://agent.example.com` in a browser.
 2. Verify the Local card shows a **green dot** (Mac inference online).
 3. Select Local and send a message.
-4. Verify the response comes from the Mac's slm_server (check `docker logs cloud-sim-seshat-gateway` — should show requests to `slm.frenchforet.com`).
+4. Verify the response comes from the Mac's slm_server (check `docker logs cloud-sim-seshat-gateway` — should show requests to `slm.example.com`).
 
 - [ ] **Step 9: Final commit (update VPS .env.example if it exists)**
 

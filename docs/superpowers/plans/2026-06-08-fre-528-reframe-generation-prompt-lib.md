@@ -13,24 +13,24 @@ no external CDN — fully self-contained"* framing with the **sanctioned curated
 keeping the still-true sealed-box constraints.
 
 Single source of truth for paths/versions: `config/artifact_lib_manifest.json` (origin
-`https://artifacts.frenchforet.com`). ADR-0089 A3 + the meter regex (`_SCRIPT_SRC_RE`,
+`https://artifacts.example.com`). ADR-0089 A3 + the meter regex (`_SCRIPT_SRC_RE`,
 artifact_tools.py:802) require **absolute, version-pinned** `/lib/` URLs (a relative `/lib/`
 path is *not* the expected reach form, and is not counted as host-allowed demand-met).
 
 ## Exact toolkit snippets to embed in the prompt (from the manifest)
 
-Origin: `https://artifacts.frenchforet.com`
+Origin: `https://artifacts.example.com`
 
 - **KaTeX → math** (MIT)
-  - `<link rel="stylesheet" href="https://artifacts.frenchforet.com/lib/katex@0.16.11/katex.min.css">`
-  - `<script src="https://artifacts.frenchforet.com/lib/katex@0.16.11/katex.min.js"></script>`
+  - `<link rel="stylesheet" href="https://artifacts.example.com/lib/katex@0.16.11/katex.min.css">`
+  - `<script src="https://artifacts.example.com/lib/katex@0.16.11/katex.min.js"></script>`
 - **Chart.js → data viz** (MIT) — global `Chart`
-  - `<script src="https://artifacts.frenchforet.com/lib/chartjs@4.4.7/chart.umd.js"></script>`
+  - `<script src="https://artifacts.example.com/lib/chartjs@4.4.7/chart.umd.js"></script>`
 - **three.js → 3-D** (MIT) — global `THREE`, r171; inline geometry + **textures as `data:` URIs, never fetch**
-  - `<script src="https://artifacts.frenchforet.com/lib/three@0.171.0/three.iife.min.js"></script>`
+  - `<script src="https://artifacts.example.com/lib/three@0.171.0/three.iife.min.js"></script>`
 - **highlight.js → code** (BSD-3)
-  - `<link rel="stylesheet" href="https://artifacts.frenchforet.com/lib/highlightjs@11.9.0/github-dark.min.css">`
-  - `<script src="https://artifacts.frenchforet.com/lib/highlightjs@11.9.0/highlight.min.js"></script>`
+  - `<link rel="stylesheet" href="https://artifacts.example.com/lib/highlightjs@11.9.0/github-dark.min.css">`
+  - `<script src="https://artifacts.example.com/lib/highlightjs@11.9.0/highlight.min.js"></script>`
 - **Fonts → prose** (OFL, variable woff2) via `@font-face` `src: url(...) format('woff2')`:
   - Source Serif 4 → `…/lib/fonts/source-serif-4@4.005/source-serif-4.woff2` (body serif)
   - Playfair Display → `…/lib/fonts/playfair-display@2.103/playfair-display.woff2` (display)
@@ -70,7 +70,7 @@ first-class lib like the others. → **Owner to confirm before coding.**
    at ~1386–1411). New test `test_system_prompt_advertises_curated_lib_toolkit`:
    - asserts each verified snippet substring is present with the exact manifest version pin
      (katex@0.16.11, chartjs@4.4.7, three@0.171.0, highlightjs@11.9.0, the three font paths),
-   - asserts the absolute origin `https://artifacts.frenchforet.com/lib/` is used (not a bare
+   - asserts the absolute origin `https://artifacts.example.com/lib/` is used (not a bare
      relative `/lib/`),
    - asserts native-typography tokens present (`::first-letter`, `hyphens: auto`,
      `text-wrap: balance`, `font-feature-settings`, `column-count`, `@page`),
@@ -104,7 +104,7 @@ first-class lib like the others. → **Owner to confirm before coding.**
 ## Note — meter/manifest gap is NOT in FRE-528's scope (codex)
 
 `_is_lib_reach` (artifact_tools.py:872) only checks netloc + `/lib/` prefix; it does not validate
-against manifest entries or version pins, so any `https://artifacts.frenchforet.com/lib/*.js`
+against manifest entries or version pins, so any `https://artifacts.example.com/lib/*.js`
 counts as demand-met. The prompt reframe does not (and should not) close this — it's the
 verifier's job. Reviewers should not read prompt-correctness as meter-correctness.
 

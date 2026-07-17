@@ -17,7 +17,7 @@ Against a **real serve under the live CSP**:
 
 ## 2. The honest build-vs-master seam
 
-The build session **cannot reach the live, Access-gated origin** (`artifacts.frenchforet.com/lib/`) — that needs CF Access service tokens and the live Worker. So:
+The build session **cannot reach the live, Access-gated origin** (`artifacts.example.com/lib/`) — that needs CF Access service tokens and the live Worker. So:
 
 | Acceptance piece | Owner |
 |---|---|
@@ -27,7 +27,7 @@ The build session **cannot reach the live, Access-gated origin** (`artifacts.fre
 | Live `make verify-envelope` / `verify-lib` **green on the real origin** (exact host tokens, real Worker) | **master + owner, post-merge** (Linear comment, not PR checklist) |
 | Real-device WebKit/iOS pass | **owner, post-merge** (optional, beyond CI WebKit engine) |
 
-The hermetic harness proves render + offline + eval-gate under the **exact CSP directive set** (host tokens rebound to the local serving origin — the one fidelity gap). The live `verify-envelope` on a real artifact URL closes that gap by asserting the exact `artifacts.frenchforet.com` tokens + real Worker MIME/nosniff. Together they satisfy the acceptance.
+The hermetic harness proves render + offline + eval-gate under the **exact CSP directive set** (host tokens rebound to the local serving origin — the one fidelity gap). The live `verify-envelope` on a real artifact URL closes that gap by asserting the exact `artifacts.example.com` tokens + real Worker MIME/nosniff. Together they satisfy the acceptance.
 
 **Real library bytes without live Access:** the substitution map (`config/artifact_lib_substitution_map.json`) carries public-CDN twins (jsdelivr) + pinned `sha384` SRI for KaTeX, Chart.js, highlight.js, paged.js — all `cors_verified`. The harness fetches those twins at setup and **byte-verifies against the pinned SRI** (fail-closed on CDN drift). Real bytes, no vendoring, no repo bloat.
 

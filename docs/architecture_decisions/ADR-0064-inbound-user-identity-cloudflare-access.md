@@ -201,7 +201,7 @@ The actual root cause: the agent PWA opens `public_url` links in an **iOS WKWebV
 
 **Fix lives in the PWA**, not in CF Access. `MarkdownContent.tsx` (or wherever artifact URLs render as anchors / open buttons) needs `target="_blank" rel="noopener noreferrer"` or programmatic `window.open(url, '_blank', 'noopener,noreferrer')`. On iOS that opens full Safari rather than the in-app browser, and the CF Access cookie persists across visits for the configured `session_duration`.
 
-Captured as an explicit FRE-368 PWA scope item (its existing scope already specified "open standalone affordance opens artifacts.frenchforet.com/{id} in a new tab"; the new comment makes the WKWebView avoidance mechanism explicit).
+Captured as an explicit FRE-368 PWA scope item (its existing scope already specified "open standalone affordance opens artifacts.example.com/{id} in a new tab"; the new comment makes the WKWebView avoidance mechanism explicit).
 
 This is a pure CF Access semantics clarification — the platform behavior is per-cookie-jar, not per-app or per-domain in the simple sense.
 
@@ -213,7 +213,7 @@ D1 always specified that the service "verifies the JWT against the cached team J
 
 **What shipped (FRE-227 Phase B / PR #65):** a new `service/cf_access_jwt.py` module with `CFAccessVerifier` — async cached JWKS client, RS256 signature verification, `aud` / `exp` / `iat` / `email` claim enforcement, kid-miss → JWKS refresh retry. Configuration via the existing `cf_access_team_domain` + `cf_access_aud` settings.
 
-**Scope of this implementation:** only the artifact-resolve endpoint (`/internal/artifacts/{id}`, called by the Cloudflare Worker fronting `artifacts.frenchforet.com`) currently calls the verifier. Plaintext `X-Authenticated-User-Email` is explicitly ignored on that path.
+**Scope of this implementation:** only the artifact-resolve endpoint (`/internal/artifacts/{id}`, called by the Cloudflare Worker fronting `artifacts.example.com`) currently calls the verifier. Plaintext `X-Authenticated-User-Email` is explicitly ignored on that path.
 
 **Not yet migrated** (out of scope for FRE-227, tracked as a Wave E follow-up):
 

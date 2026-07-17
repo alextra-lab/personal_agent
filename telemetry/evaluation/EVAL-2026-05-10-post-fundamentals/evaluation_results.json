@@ -473,7 +473,7 @@
         {
           "turn_index": 1,
           "user_message": "Read the system log and tell me if anything looks concerning.",
-          "response_text": "Here's what I found from the system logs over the past 24 hours:\n\n---\n\n## Log Summary (Last 24 Hours)\n\n| Level | Count |\n|-------|-------|\n| DEBUG | 47,413 |\n| INFO | 20,629 |\n| WARNING | 1,280 |\n| **ERROR** | **12** |\n\n---\n\n## \u26a0\ufe0f Concerning Findings\n\n### 1. **LLM Server Errors (524 \u2014 Gateway Timeout)** \u2014 3 occurrences\nThree `model_call_error` events with **HTTP 524** timeouts against `https://slm.frenchforet.com/v1/chat/completions` (model: `unsloth/qwen3.6-35-A3B`):\n- **14:33** \u2014 251s timeout\n",
+          "response_text": "Here's what I found from the system logs over the past 24 hours:\n\n---\n\n## Log Summary (Last 24 Hours)\n\n| Level | Count |\n|-------|-------|\n| DEBUG | 47,413 |\n| INFO | 20,629 |\n| WARNING | 1,280 |\n| **ERROR** | **12** |\n\n---\n\n## \u26a0\ufe0f Concerning Findings\n\n### 1. **LLM Server Errors (524 \u2014 Gateway Timeout)** \u2014 3 occurrences\nThree `model_call_error` events with **HTTP 524** timeouts against `https://slm.example.com/v1/chat/completions` (model: `unsloth/qwen3.6-35-A3B`):\n- **14:33** \u2014 251s timeout\n",
           "trace_id": "1a21f9ba-d07d-45d0-94db-0b7136ec3d28",
           "response_time_ms": 90438.73692397028,
           "assertions": [
@@ -1754,7 +1754,7 @@
         {
           "turn_index": 1,
           "user_message": "Now show me the recent error details.",
-          "response_text": "## Recent Errors (Last 24 Hours) \u2014 Summary\n\n**Total errors: 18** across 3 event types.\n\n---\n\n### 1. `model_call_error` \u2014 11 occurrences (actionable)\n\n| Error Type | Count | Time Range | Source |\n|---|---|---|---|\n| **524 Gateway Timeout** | 6 | 14:33 \u2013 21:15 | `slm.frenchforet.com` \u2014 server timed out responding |\n| **429 Rate Limit Exceeded** | 3 | 21:14 | \"Too many requests. Service is at capacity.\" |\n| **500 Context Size Exceeded** | 2 | 21:01 | \"Context size has been exceeded.\" |\n\n**Root caus",
+          "response_text": "## Recent Errors (Last 24 Hours) \u2014 Summary\n\n**Total errors: 18** across 3 event types.\n\n---\n\n### 1. `model_call_error` \u2014 11 occurrences (actionable)\n\n| Error Type | Count | Time Range | Source |\n|---|---|---|---|\n| **524 Gateway Timeout** | 6 | 14:33 \u2013 21:15 | `slm.example.com` \u2014 server timed out responding |\n| **429 Rate Limit Exceeded** | 3 | 21:14 | \"Too many requests. Service is at capacity.\" |\n| **500 Context Size Exceeded** | 2 | 21:01 | \"Context size has been exceeded.\" |\n\n**Root caus",
           "trace_id": "1afc5bd1-ce66-4b72-95b4-80e3d7080352",
           "response_time_ms": 44752.50382698141,
           "assertions": [
@@ -1876,7 +1876,7 @@
         {
           "turn_index": 1,
           "user_message": "Are there any specific errors I should be worried about?",
-          "response_text": "Here are the **3 specific error patterns** from the last hour, ranked by concern:\n\n---\n\n### \ud83d\udd34 1. French Forest 524 Timeouts \u2014 **4 occurrences**\n| Detail | Value |\n|---|---|\n| **Error** | `524 <none>` on `slm.frenchforet.com/v1/chat/completions` |\n| **What it means** | The remote SLM server didn't respond within Cloudflare's 100s timeout window |\n| **When** | 20:58 and 21:15 \u2014 two distinct bursts |\n| **Impact** | Failed model calls, degraded response quality for users who expected that model |\n\n*",
+          "response_text": "Here are the **3 specific error patterns** from the last hour, ranked by concern:\n\n---\n\n### \ud83d\udd34 1. French Forest 524 Timeouts \u2014 **4 occurrences**\n| Detail | Value |\n|---|---|\n| **Error** | `524 <none>` on `slm.example.com/v1/chat/completions` |\n| **What it means** | The remote SLM server didn't respond within Cloudflare's 100s timeout window |\n| **When** | 20:58 and 21:15 \u2014 two distinct bursts |\n| **Impact** | Failed model calls, degraded response quality for users who expected that model |\n\n*",
           "trace_id": "7b6e0bf7-33d1-42d3-99fd-219367c27c12",
           "response_time_ms": 45150.402302038856,
           "assertions": [

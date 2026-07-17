@@ -2368,7 +2368,7 @@
         {
           "turn_index": 8,
           "user_message": "Run a full system health check, then tell me about any issues, and also check the recent error log.",
-          "response_text": "## System Health Report\n\n### \u2705 Healthy Services (7/9)\n\n| Service | Status | Details |\n|---------|--------|---------|\n| **Redis** | \u2705 PONG | 18 keys, ~74M hits, 0 misses, 0 evicted, ~85 ops/sec |\n| **PostgreSQL 17.9** | \u2705 Healthy | 19 connections (1 active, 12 idle) on `personal_agent` |\n| **Neo4j 5.26.24** | \u2705 Healthy | Community edition, bolt routing via `graph.frenchforet.com:443` |\n| **Elasticsearch** | \u2705 Running | Indices present, agent-logs flowing (10K docs today) |\n| **Embeddings (8503)**",
+          "response_text": "## System Health Report\n\n### \u2705 Healthy Services (7/9)\n\n| Service | Status | Details |\n|---------|--------|---------|\n| **Redis** | \u2705 PONG | 18 keys, ~74M hits, 0 misses, 0 evicted, ~85 ops/sec |\n| **PostgreSQL 17.9** | \u2705 Healthy | 19 connections (1 active, 12 idle) on `personal_agent` |\n| **Neo4j 5.26.24** | \u2705 Healthy | Community edition, bolt routing via `graph.example.com:443` |\n| **Elasticsearch** | \u2705 Running | Indices present, agent-logs flowing (10K docs today) |\n| **Embeddings (8503)**",
           "trace_id": "c3eb0fe3-c78f-4247-8519-2f0a1ef87a88",
           "response_time_ms": 241286.9190260535,
           "assertions": [

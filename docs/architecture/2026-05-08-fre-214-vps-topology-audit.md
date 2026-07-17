@@ -32,23 +32,23 @@ Rows are agent-visible capabilities. Columns are the two deployment shapes the c
 |---|------------|--------------------------------|----------------------------------|-------|
 | **Datastores** ||||
 | 1 | PostgreSQL 17 + pgvector | ✅ port 5432, no resource caps | ✅ 127.0.0.1:5432, 512 MB / 0.5 CPU | Same image. Cloud caps memory; local doesn't. |
-| 2 | Neo4j 5.26 Community | ✅ ports 7474/7687, APOC | ✅ 127.0.0.1:7474/7687, heap 1G + pagecache 256M, `bolt_advertised_address=graph.frenchforet.com:443` | Cloud advertises Bolt over CF for Browser-side WebSocket split. |
+| 2 | Neo4j 5.26 Community | ✅ ports 7474/7687, APOC | ✅ 127.0.0.1:7474/7687, heap 1G + pagecache 256M, `bolt_advertised_address=graph.example.com:443` | Cloud advertises Bolt over CF for Browser-side WebSocket split. |
 | 3 | Elasticsearch 8.19 | ✅ port 9200, heap 512m | ✅ 127.0.0.1:9200, heap 512m–1g, 2 GB / 1 CPU | Same. |
 | 4 | Redis 7 | ✅ port 6379 | ✅ 127.0.0.1:6379, AOF on, 128 MB | Cloud explicitly enables `--appendonly yes`; local relies on default. |
 | 5 | SearXNG | ✅ port 8888 (`SEARXNG_BASE_URL=http://localhost:8888`) | ✅ 127.0.0.1:8888 (`SEARXNG_BASE_URL=http://searxng:8080`) | Internal hostname differs — cosmetic. |
-| 6 | Kibana 8.19 | ✅ port 5601 | ✅ 127.0.0.1:5601 (CF Tunnel → `monitoring.frenchforet.com`) | Kibana **is** present on cloud — FRE-214 description is now stale on this point. |
+| 6 | Kibana 8.19 | ✅ port 5601 | ✅ 127.0.0.1:5601 (CF Tunnel → `monitoring.example.com`) | Kibana **is** present on cloud — FRE-214 description is now stale on this point. |
 | **Inference plane** ||||
-| 7 | Primary LLM (`primary` role) | Local SLM Server at `http://localhost:8000/v1` (Qwen3.6-35B-A3B) | Cloud profile: Anthropic Claude Sonnet via LiteLLM. Local profile-on-VPS: reverse-tunnel to `https://slm.frenchforet.com/v1` (Mac SLM). | Identical model registry, different endpoints per profile. |
+| 7 | Primary LLM (`primary` role) | Local SLM Server at `http://localhost:8000/v1` (Qwen3.6-35B-A3B) | Cloud profile: Anthropic Claude Sonnet via LiteLLM. Local profile-on-VPS: reverse-tunnel to `https://slm.example.com/v1` (Mac SLM). | Identical model registry, different endpoints per profile. |
 | 8 | Sub-agent LLM | Same SLM Server | Cloud: Claude Haiku via LiteLLM. Local-on-VPS: same Mac SLM tunnel. | — |
 | 9 | Embeddings (`Qwen3-Embedding-0.6B`) | Local SLM Server `:8503/v1` | Dedicated `cloud-sim-embeddings` (llama.cpp container) `:8503/v1`, models mounted from `/opt/seshat/models/` | Same model file, **different runtime** (llama.cpp vs slm_server). Vector parity must be verified — see §3 D-7. |
 | 10 | Reranker (`Qwen3-Reranker-0.6B`) | Local SLM Server `:8504/v1` | Dedicated `cloud-sim-reranker` (llama.cpp container) `:8504/v1` | Same model file, different runtime. Same parity concern. |
 | 11 | Background-task models (entity extraction, Captain's Log, insights) | Currently `gpt-5.4-nano` via OpenAI on both | `gpt-5.4-nano` via OpenAI | Parity ✅ |
 | **Service surface** ||||
 | 12 | Personal Agent service | Native uvicorn on host port 9000 (`make dev`) | Containerized as `seshat-gateway`, port **9001**, full harness | Port differs deliberately — see Makefile lines 32–35. |
-| 13 | PWA (Next.js) | ❌ not deployed locally | ✅ containerized, port 3000, `NEXT_PUBLIC_SESHAT_URL=https://agent.frenchforet.com` baked in at build time | Local dev runs PWA via `npm run dev` if at all. |
+| 13 | PWA (Next.js) | ❌ not deployed locally | ✅ containerized, port 3000, `NEXT_PUBLIC_SESHAT_URL=https://agent.example.com` baked in at build time | Local dev runs PWA via `npm run dev` if at all. |
 | 14 | Reverse proxy | ❌ none | ✅ Caddy (static IP 172.25.0.10) — TLS termination, route split, WebSocket upgrade for Bolt | Local accesses services on raw ports. |
-| 15 | Cloudflare Tunnel | ❌ none | ✅ `cloudflared` daemon — inbound: `agent.frenchforet.com`, `api.frenchforet.com`, `graph.frenchforet.com`, `monitoring.frenchforet.com` | All public ingress runs through CF (no public IPs exposed). |
-| 16 | Mac SLM tunnel (reverse direction) | n/a | Configured via `infrastructure/terraform-cloudflare-mac/` (private repo). Mac runs cloudflared client → exposes `slm.frenchforet.com` → VPS calls back for local-profile inference. | Only matters if **local profile is selected from a phone** — see §5. |
+| 15 | Cloudflare Tunnel | ❌ none | ✅ `cloudflared` daemon — inbound: `agent.example.com`, `api.example.com`, `graph.example.com`, `monitoring.example.com` | All public ingress runs through CF (no public IPs exposed). |
+| 16 | Mac SLM tunnel (reverse direction) | n/a | Configured via `infrastructure/terraform-cloudflare-mac/` (private repo). Mac runs cloudflared client → exposes `slm.example.com` → VPS calls back for local-profile inference. | Only matters if **local profile is selected from a phone** — see §5. |
 | **Tools and MCP** ||||
 | 17 | MCP gateway enabled servers | Default: `docker mcp gateway run` (whatever the local Docker Desktop profile has authorized) | **Hardcoded `--servers "sequentialthinking,context7"` in `docker/mcp/run-gateway.sh:67`**, ignoring `AGENT_MCP_GATEWAY_ENABLED_SERVERS` | See §3 D-1. Likely root cause of FRE-223. |
 | 18 | MCP secrets path | `mcp-secrets.env` lookup via Docker Desktop secrets engine | `MCP_SECRETS_FILE=/opt/seshat/mcp-secrets.env` (host bind into MCP gateway container via Docker socket) | No local analog — local uses Docker Desktop OAuth (DCR) path that the VPS can't replicate. |
@@ -93,9 +93,9 @@ Each entry has the form: **what** · **where** (file:line) · **why-as-coded** �
 
 ### D-3 — `NEXT_PUBLIC_SESHAT_URL` baked into PWA image at build time
 
-* **What**: The Next.js PWA image is built with `NEXT_PUBLIC_SESHAT_URL=https://agent.frenchforet.com` baked in via `ARG`. Same for `NEXT_PUBLIC_GATEWAY_TOKEN`. Image is therefore deployment-specific.
+* **What**: The Next.js PWA image is built with `NEXT_PUBLIC_SESHAT_URL=https://agent.example.com` baked in via `ARG`. Same for `NEXT_PUBLIC_GATEWAY_TOKEN`. Image is therefore deployment-specific.
 * **Where**: `Dockerfile.pwa:22–26`, passed via `docker-compose.cloud.yml:380–381`.
-* **Why-as-coded**: Next.js statically inlines `NEXT_PUBLIC_*` at build time. Currently the only deployed environment is `frenchforet.com`, so it works in practice.
+* **Why-as-coded**: Next.js statically inlines `NEXT_PUBLIC_*` at build time. Currently the only deployed environment is `example.com`, so it works in practice.
 * **Remediation — feeds [FRE-216](https://linear.app/frenchforest/issue/FRE-216)** (externalize hardcoded env params). Real fix: load PWA backend URL from `/runtime-config.json` fetched at first paint, or bake a placeholder + rewrite at container start. Don't block FRE-214 on it.
 
 ### D-4 — Embedding/reranker runtime differs between local and cloud
@@ -134,10 +134,10 @@ Each entry has the form: **what** · **where** (file:line) · **why-as-coded** �
                                  ┌─────────────────────────────┐
                                  │  Cloudflare edge            │
                                  │                             │
-   Phone / iPad / laptop ──HTTPS─▶  agent.frenchforet.com      │
-   browser                       │  api.frenchforet.com        │
-                                 │  graph.frenchforet.com      │
-   admin (CF Access)  ──HTTPS───▶  monitoring.frenchforet.com  │
+   Phone / iPad / laptop ──HTTPS─▶  agent.example.com      │
+   browser                       │  api.example.com        │
+                                 │  graph.example.com      │
+   admin (CF Access)  ──HTTPS───▶  monitoring.example.com  │
                                  └────────────┬────────────────┘
                                               │  CF Tunnel (HTTP/2)
                                               ▼
@@ -175,7 +175,7 @@ Each entry has the form: **what** · **where** (file:line) · **why-as-coded** �
    └──────────────────────────────────────────────────────────────────────────────────────────┘
 
            ▲ outbound: LiteLLM → Anthropic / OpenAI APIs (cloud profile)
-           ▲ outbound: GET https://slm.frenchforet.com/v1   ← only when local profile selected
+           ▲ outbound: GET https://slm.example.com/v1   ← only when local profile selected
                      │
                      │  Mac runs cloudflared client → exposes Mac SLM Server :8000
                      │  (configured via private repo `personal_agent_secrets/terraform-cloudflare-mac`)
@@ -397,11 +397,11 @@ I'd recommend (1). If you confirm, I'll write the ADR-0045 amendment in the next
 Two coupled requirements:
 
 1. **Hide cloud-vs-local model access from callers.** Tests, eval harness, agent code — none of them should know whether a given model role is served by a local SLM Server, a Cloudflare-tunnel reverse hop, or a LiteLLM cloud provider. They ask for "primary" or "embedding" and the system resolves the right endpoint.
-2. **The laptop harness must remain self-contained.** When the harness runs on the laptop (or, soon, on the stationary home server), it must reach local models via direct localhost / host-network paths — *never* through `slm.frenchforet.com` (the reverse Cloudflare tunnel that exists for the VPS to call back to the Mac). Stronger phrasing the owner used: if all cloud models were removed, the laptop must still work end-to-end.
+2. **The laptop harness must remain self-contained.** When the harness runs on the laptop (or, soon, on the stationary home server), it must reach local models via direct localhost / host-network paths — *never* through `slm.example.com` (the reverse Cloudflare tunnel that exists for the VPS to call back to the Mac). Stronger phrasing the owner used: if all cloud models were removed, the laptop must still work end-to-end.
 
 ### 8.2 Why this matters for Track 2
 
-Today's laptop config is already self-contained: `config/models.yaml:61` points `primary` at `http://localhost:8000/v1`. The risk is that **Track 2's compose unification, done naively, breaks this**. If the gateway containerizes and the merged model config keeps `slm.frenchforet.com` as the canonical endpoint, the containerized laptop gateway would tunnel out to Cloudflare just to reach a model running 3 inches away. That is exactly the topology the owner is asking us to prevent.
+Today's laptop config is already self-contained: `config/models.yaml:61` points `primary` at `http://localhost:8000/v1`. The risk is that **Track 2's compose unification, done naively, breaks this**. If the gateway containerizes and the merged model config keeps `slm.example.com` as the canonical endpoint, the containerized laptop gateway would tunnel out to Cloudflare just to reach a model running 3 inches away. That is exactly the topology the owner is asking us to prevent.
 
 The same problem arrives for embeddings/reranker: a containerized laptop gateway has to reach the laptop's MLX embeddings (if we preserve MLX as an opt-in) without leaving the host.
 
@@ -418,7 +418,7 @@ primary:
     # Order = preference. First reachable wins. Probed at client init + cached.
     - http://localhost:8000/v1            # laptop native (uvicorn outside docker)
     - http://host.docker.internal:8000/v1 # laptop containerized (Docker Desktop)
-    - https://slm.frenchforet.com/v1      # remote (VPS → Mac reverse tunnel)
+    - https://slm.example.com/v1      # remote (VPS → Mac reverse tunnel)
   resolve: first_reachable
   probe_timeout_ms: 250
 
@@ -428,7 +428,7 @@ embedding:
     - http://localhost:8503/v1                   # laptop native dev (slm_server / MLX on host)
     - http://host.docker.internal:8503/v1        # laptop containerized → MLX on host
     - http://embeddings:8503/v1                  # VPS in-compose llama.cpp container
-    - https://slm.frenchforet.com/embedding/v1   # remote tunnel (last resort)
+    - https://slm.example.com/embedding/v1   # remote tunnel (last resort)
   resolve: first_reachable
 
 reranker:
@@ -437,7 +437,7 @@ reranker:
     - http://localhost:8504/v1
     - http://host.docker.internal:8504/v1
     - http://reranker:8504/v1                    # VPS in-compose llama.cpp container
-    - https://slm.frenchforet.com/reranker/v1
+    - https://slm.example.com/reranker/v1
   resolve: first_reachable
 ```
 

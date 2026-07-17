@@ -1,7 +1,7 @@
 """Internal artifact-resolve endpoint (ADR-0069 D2).
 
 The public-facing surface for artifacts is the Cloudflare Worker bound to
-``artifacts.frenchforet.com``. The Worker validates Cloudflare Access and
+``artifacts.example.com``. The Worker validates Cloudflare Access and
 then needs to translate ``{artifact_id}`` -> ``{r2_key, content_type,
 size_bytes}`` so it can stream bytes from R2. This module exposes that
 translation as a non-Access-gated endpoint that the Worker calls back into
@@ -257,7 +257,7 @@ async def list_artifacts(
 
     Authentication: same as the rest of the gateway — CF Access injects the
     ``Cf-Access-Authenticated-User-Email`` header which ``get_request_user``
-    reads. This matches the ``agent.frenchforet.com`` CF Access app; the
+    reads. This matches the ``agent.example.com`` CF Access app; the
     internal Worker endpoint uses JWT (different AUD) and is unaffected.
     """
     user_id = request_user.user_id
@@ -306,7 +306,7 @@ async def get_artifact_metadata(
     """Metadata-only fetch for a single artifact.
 
     Bytes never flow through this endpoint — the browser opens the artifact
-    at ``artifacts.frenchforet.com/{artifact_id}`` where the Worker
+    at ``artifacts.example.com/{artifact_id}`` where the Worker
     streams bytes directly from R2.
 
     Cross-user access returns 404 (existence-hiding per ADR-0064 D3).

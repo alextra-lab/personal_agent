@@ -129,7 +129,12 @@ ARMS: dict[str, dict[str, object]] = {
     },
 }
 _VOYAGE_MODEL = "voyage-4-large"
-_SLM_EMBED_URL = "https://slm.frenchforet.com/v1/embeddings"
+#: Real Mac SLM tunnel base (FRE-895) — same env var the app reads via
+#: settings.slm_tunnel_base_url; unset here defaults to an inert placeholder so
+#: an unconfigured run fails obviously rather than hitting a fake host silently.
+_SLM_TUNNEL_BASE_URL = os.environ.get("AGENT_SLM_TUNNEL_BASE_URL", "https://slm.example.com")
+_SLM_TUNNEL_V1_URL = f"{_SLM_TUNNEL_BASE_URL.rstrip('/')}/v1"
+_SLM_EMBED_URL = f"{_SLM_TUNNEL_V1_URL}/embeddings"
 #: Qwen3-Embedding query instruction prefix (mirrors memory/embeddings.py) — applied
 #: client-side for the MLX arms so they match the local arms' asymmetric query mode.
 _QWEN_QUERY_PREFIX = "Instruct: Given a query, retrieve relevant entities and passages\nQuery: "
@@ -513,13 +518,13 @@ def _print_dim(arm: str, row: dict[str, object]) -> None:
 #: route by model id on the slm gateway; the CPU arm is the same 0.6B-f16 on the VPS.
 RERANKER_ARMS: dict[str, dict[str, str]] = {
     "rr-0.6b-gpu": {
-        "endpoint": "https://slm.frenchforet.com/v1",
+        "endpoint": _SLM_TUNNEL_V1_URL,
         "model": "Voodisss/Qwen3-Reranker-0.6B",
         "auth": "cf",
         "engine": "llama.cpp GPU f16",
     },
     "rr-4b-gpu": {
-        "endpoint": "https://slm.frenchforet.com/v1",
+        "endpoint": _SLM_TUNNEL_V1_URL,
         "model": "Voodisss/Qwen3-Reranker-4B",
         "auth": "cf",
         "engine": "llama.cpp GPU f16 (LIVE prod reranker)",
@@ -531,19 +536,19 @@ RERANKER_ARMS: dict[str, dict[str, str]] = {
         "engine": "llama.cpp CPU f16 (VPS cross-check)",
     },
     "rr-mlx-4b": {
-        "endpoint": "https://slm.frenchforet.com/v1",
+        "endpoint": _SLM_TUNNEL_V1_URL,
         "model": "mlx-community/Qwen3-Reranker-4B-mxfp8",
         "auth": "cf",
         "engine": "MLX 4B mxfp8 (port 8508)",
     },
     "rr-mlx-8b": {
-        "endpoint": "https://slm.frenchforet.com/v1",
+        "endpoint": _SLM_TUNNEL_V1_URL,
         "model": "Qwen/Qwen3-Reranker-8B-mxfp8",
         "auth": "cf",
         "engine": "MLX 8B mxfp8 (port 8509)",
     },
     "rr-mlx-8b-bf16": {
-        "endpoint": "https://slm.frenchforet.com/v1",
+        "endpoint": _SLM_TUNNEL_V1_URL,
         "model": "Qwen/Qwen3-Reranker-8B-bf16",
         "auth": "cf",
         "engine": "MLX 8B bf16 (port 8510)",

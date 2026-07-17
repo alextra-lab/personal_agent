@@ -4,7 +4,7 @@
 > **Ticket:** [FRE-432](https://linear.app/frenchforest/issue/FRE-432) Phase 0 (measurement)
 > **ADRs:** ADR-0082 (tier-aware selection), ADR-0084 (pedagogical architecture — the counterweight)
 > **Instrument:** `scripts/research/fre432_ph0_thinking_probe.py` (standalone, read-only + serial replay)
-> **Substrate:** live `cloud-sim` stack (route_traces `:5432`, ES `:9200`, primary via `slm.frenchforet.com`)
+> **Substrate:** live `cloud-sim` stack (route_traces `:5432`, ES `:9200`, primary via `slm.example.com`)
 
 ## Verdict
 
@@ -159,7 +159,7 @@ set -a; source /opt/seshat/.env; set +a   # CF Access service token + DB passwor
 uv run python scripts/research/fre432_ph0_thinking_probe.py \
     --pg-dsn "postgresql://agent:${PW}@localhost:5432/personal_agent" \
     --es-url  http://localhost:9200 \
-    --slm-url https://slm.frenchforet.com/v1 \
+    --slm-url https://slm.example.com/v1 \
     --replay-n 12 --out /tmp/fre432_ph0.json
 # --no-replay runs the ES distribution only (no inference, no CF token needed)
 ```

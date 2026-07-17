@@ -101,7 +101,7 @@ lib choices + versions.
 - `cd seshat-pwa && npm run lint` — clean.
 - `make ruff-check` / `make mypy` — unaffected (no Python touched); run for the checklist.
 - `pre-commit run --all-files` — `check_no_personal_paths` clean.
-- **Hard-rule check:** `grep -rn "artifacts.frenchforet" seshat-pwa/src` shows only the existing
+- **Hard-rule check:** `grep -rn "artifacts.example" seshat-pwa/src` shows only the existing
   artifact-*card/URL-detection* references (passive data/links), **no `<script src>` to the artifact
   origin** — structurally guaranteed since all libs are npm deps.
 

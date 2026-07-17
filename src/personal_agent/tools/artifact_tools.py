@@ -988,6 +988,10 @@ def _emit_gate_decision(
     )
 
 
+#: Neutral placeholder artifacts origin baked into the prompt below (FRE-895) —
+#: the real Cloudflare Worker origin never lands in tracked source.
+_ARTIFACTS_ORIGIN_PLACEHOLDER = "https://artifacts.example.com"
+
 _HTML_GENERATION_SYSTEM_PROMPT = """\
 You are an HTML document generator. You receive a structured plan and produce \
 a complete, standalone HTML document.
@@ -1015,21 +1019,21 @@ asset by its EXACT absolute, version-pinned URL below (a relative path will \
 not load). Reach for one only when the document genuinely needs it; otherwise \
 inline your own code.
   * Math (KaTeX) — render TeX/LaTeX:
-    <link rel="stylesheet" href="https://artifacts.frenchforet.com/lib/katex@0.16.47/katex.min.css">
-    <script src="https://artifacts.frenchforet.com/lib/katex@0.16.47/katex.min.js"></script>
+    <link rel="stylesheet" href="https://artifacts.example.com/lib/katex@0.16.47/katex.min.css">
+    <script src="https://artifacts.example.com/lib/katex@0.16.47/katex.min.js"></script>
   * Data viz (Chart.js — global `Chart`) — charts/graphs from inline data:
-    <script src="https://artifacts.frenchforet.com/lib/chartjs@4.4.7/chart.umd.js"></script>
+    <script src="https://artifacts.example.com/lib/chartjs@4.4.7/chart.umd.js"></script>
   * 3-D (three.js — global `THREE`, r171) — scenes/geometry; build meshes in \
 code and embed any textures as data: URIs, never fetch them:
-    <script src="https://artifacts.frenchforet.com/lib/three@0.171.0/three.iife.min.js"></script>
+    <script src="https://artifacts.example.com/lib/three@0.171.0/three.iife.min.js"></script>
   * Code (highlight.js) — syntax-highlight code blocks:
-    <link rel="stylesheet" href="https://artifacts.frenchforet.com/lib/highlightjs@11.9.0/github-dark.min.css">
-    <script src="https://artifacts.frenchforet.com/lib/highlightjs@11.9.0/highlight.min.js"></script>
+    <link rel="stylesheet" href="https://artifacts.example.com/lib/highlightjs@11.9.0/github-dark.min.css">
+    <script src="https://artifacts.example.com/lib/highlightjs@11.9.0/highlight.min.js"></script>
   * Prose typography (OFL variable fonts) — declare with @font-face, then use \
 the family in your design system:
-    @font-face { font-family: "Source Serif 4"; src: url("https://artifacts.frenchforet.com/lib/fonts/source-serif-4@4.005/source-serif-4.woff2") format("woff2"); }
-    @font-face { font-family: "Playfair Display"; src: url("https://artifacts.frenchforet.com/lib/fonts/playfair-display@2.103/playfair-display.woff2") format("woff2"); }
-    @font-face { font-family: "JetBrains Mono"; src: url("https://artifacts.frenchforet.com/lib/fonts/jetbrains-mono@2.304/jetbrains-mono.woff2") format("woff2"); }
+    @font-face { font-family: "Source Serif 4"; src: url("https://artifacts.example.com/lib/fonts/source-serif-4@4.005/source-serif-4.woff2") format("woff2"); }
+    @font-face { font-family: "Playfair Display"; src: url("https://artifacts.example.com/lib/fonts/playfair-display@2.103/playfair-display.woff2") format("woff2"); }
+    @font-face { font-family: "JetBrains Mono"; src: url("https://artifacts.example.com/lib/fonts/jetbrains-mono@2.304/jetbrains-mono.woff2") format("woff2"); }
     Use Source Serif 4 for body prose, Playfair Display for display headings, \
 JetBrains Mono for code.
   * Book/print layout: prefer the NATIVE CSS recipes below (@page, \
@@ -1076,6 +1080,20 @@ nth-child, sticky header if many rows.
 - For comparison layouts: CSS grid with equal-width columns.
 - Maximum document size: aim for under 200KB of HTML text.\
 """
+
+
+def _html_generation_system_prompt() -> str:
+    """The HTML-generation system prompt with the real artifacts origin substituted in.
+
+    ``_HTML_GENERATION_SYSTEM_PROMPT`` bakes in a neutral placeholder host (FRE-895);
+    this rebinds it to ``settings.artifacts_public_base_url`` when configured, since
+    the LLM must embed the *real* origin in every generated artifact's ``/lib/`` refs.
+    """
+    if not settings.artifacts_public_base_url:
+        return _HTML_GENERATION_SYSTEM_PROMPT
+    return _HTML_GENERATION_SYSTEM_PROMPT.replace(
+        _ARTIFACTS_ORIGIN_PLACEHOLDER, settings.artifacts_public_base_url
+    )
 
 
 artifact_draft_tool = ToolDefinition(
@@ -1444,7 +1462,7 @@ async def artifact_draft_executor(
     )
 
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _HTML_GENERATION_SYSTEM_PROMPT},
+        {"role": "system", "content": _html_generation_system_prompt()},
         {"role": "user", "content": user_prompt},
     ]
 

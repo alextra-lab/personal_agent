@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Expose Seshat publicly at `agent.frenchforet.com` (PWA) and `api.frenchforet.com` (external agents) via a Terraform-managed Cloudflare Tunnel, with a WAF rule blocking unauthenticated requests to the API subdomain.
+**Goal:** Expose Seshat publicly at `agent.example.com` (PWA) and `api.example.com` (external agents) via a Terraform-managed Cloudflare Tunnel, with a WAF rule blocking unauthenticated requests to the API subdomain.
 
 **Architecture:** A new `infrastructure/terraform-cloudflare/` Terraform root module creates a named Cloudflare Tunnel (`config_src = "cloudflare"`), two proxied CNAME DNS records, and a WAF custom ruleset. Caddy gets two new HTTP site blocks (one per subdomain). The docker-compose PWA build arg is updated to the public URL. Gateway auth is **out of scope** for this plan (the PWA's `EventSource` SSE connection cannot send custom headers; enabling global gateway auth would break the PWA — track separately).
 
 **Tech Stack:** Cloudflare Terraform Provider v5, HCL 1.9+, Caddy 2, Docker Compose, Bash
 
-**Security note:** The WAF rule blocks `api.frenchforet.com` requests missing an `Authorization` header at the Cloudflare edge. Since `AGENT_GATEWAY_AUTH_ENABLED` stays `false`, the WAF is the primary API defence. The gateway's token-validation middleware is already fully implemented in `src/personal_agent/gateway/auth.py` and `config/gateway_access.yaml` — enabling it requires a separate PWA auth task (add Bearer token to all fetch calls and solve EventSource auth).
+**Security note:** The WAF rule blocks `api.example.com` requests missing an `Authorization` header at the Cloudflare edge. Since `AGENT_GATEWAY_AUTH_ENABLED` stays `false`, the WAF is the primary API defence. The gateway's token-validation middleware is already fully implemented in `src/personal_agent/gateway/auth.py` and `config/gateway_access.yaml` — enabling it requires a separate PWA auth task (add Bearer token to all fetch calls and solve EventSource auth).
 
 ---
 
@@ -17,7 +17,7 @@
 Before starting, confirm you have these values locally:
 
 - [ ] `CLOUDFLARE_API_TOKEN` — Cloudflare API token (Zone:Edit + DNS:Edit + Account:Cloudflare Tunnel:Edit)
-- [ ] `CLOUDFLARE_ZONE_ID` — Zone ID for frenchforet.com (from Cloudflare dashboard → Overview → right sidebar)
+- [ ] `CLOUDFLARE_ZONE_ID` — Zone ID for example.com (from Cloudflare dashboard → Overview → right sidebar)
 - [ ] `CLOUDFLARE_ACCOUNT_ID` — Account ID (same location)
 - [ ] Terraform >= 1.9 installed (`terraform version`)
 - [ ] Docker available locally (for Caddyfile validation)
@@ -46,7 +46,7 @@ Before starting, confirm you have these values locally:
 |---|---|
 | `config/cloud-sim/Caddyfile` | Add 2 HTTP site blocks (agent.* and api.*) |
 | `config/gateway_access.yaml` | Add external-agent token entry (prep — unused until gateway auth enabled) |
-| `docker-compose.cloud.yml` | Update PWA build arg to `https://agent.frenchforet.com` |
+| `docker-compose.cloud.yml` | Update PWA build arg to `https://agent.example.com` |
 
 ---
 
@@ -144,7 +144,7 @@ variable "tunnel_name" {
 variable "domain" {
   description = "Root domain managed in this Cloudflare zone"
   type        = string
-  default     = "frenchforet.com"
+  default     = "example.com"
 }
 ```
 
@@ -159,7 +159,7 @@ cloudflare_api_token  = "YOUR_CLOUDFLARE_API_TOKEN"
 cloudflare_zone_id    = "YOUR_ZONE_ID"
 cloudflare_account_id = "YOUR_ACCOUNT_ID"
 tunnel_name           = "seshat-vps"
-domain                = "frenchforet.com"
+domain                = "example.com"
 ```
 
 - [ ] **Step 5: Create terraform.tfvars with real values**
@@ -170,7 +170,7 @@ cloudflare_api_token  = "<your-api-token>"
 cloudflare_zone_id    = "<your-zone-id>"
 cloudflare_account_id = "<your-account-id>"
 tunnel_name           = "seshat-vps"
-domain                = "frenchforet.com"
+domain                = "example.com"
 ```
 
 - [ ] **Step 6: Run terraform init**
@@ -275,7 +275,7 @@ git commit -m "feat(infra): add Cloudflare named tunnel with agent and api ingre
 
 Create `infrastructure/terraform-cloudflare/dns.tf`:
 ```hcl
-# CNAME record: agent.frenchforet.com → tunnel (proxied — TLS at Cloudflare edge)
+# CNAME record: agent.example.com → tunnel (proxied — TLS at Cloudflare edge)
 #
 # ttl = 1 means "automatic" when proxied = true. Cloudflare ignores the TTL
 # for proxied records but the API requires it to be set.
@@ -288,7 +288,7 @@ resource "cloudflare_dns_record" "agent" {
   ttl     = 1
 }
 
-# CNAME record: api.frenchforet.com → tunnel (proxied — TLS at Cloudflare edge)
+# CNAME record: api.example.com → tunnel (proxied — TLS at Cloudflare edge)
 resource "cloudflare_dns_record" "api" {
   zone_id = var.cloudflare_zone_id
   name    = "api"
@@ -329,7 +329,7 @@ git commit -m "feat(infra): add proxied CNAME records for agent and api subdomai
 
 Create `infrastructure/terraform-cloudflare/waf.tf`:
 ```hcl
-# WAF custom ruleset — block api.frenchforet.com requests without Authorization.
+# WAF custom ruleset — block api.example.com requests without Authorization.
 #
 # This is the primary security layer for the API subdomain. External agents
 # MUST send an Authorization header; requests without it are blocked at the
@@ -343,7 +343,7 @@ Create `infrastructure/terraform-cloudflare/waf.tf`:
 resource "cloudflare_ruleset" "api_auth_check" {
   zone_id     = var.cloudflare_zone_id
   name        = "Require Authorization on API subdomain"
-  description = "Block requests to api.frenchforet.com missing Authorization header"
+  description = "Block requests to api.example.com missing Authorization header"
   kind        = "zone"
   phase       = "http_request_firewall_custom"
 
@@ -454,16 +454,16 @@ Open `config/cloud-sim/Caddyfile` and append the following **after** the existin
 
 ```caddyfile
 # Cloudflare Tunnel — user-facing PWA + same-origin API
-# Traffic arrives from cloudflared with Host: agent.frenchforet.com.
+# Traffic arrives from cloudflared with Host: agent.example.com.
 # Uses the shared routing snippet: /api/* → seshat-gateway:9001, /* → seshat-pwa:3000.
-http://agent.frenchforet.com {
+http://agent.example.com {
 	import routing
 }
 
 # Cloudflare Tunnel — external agent API access
 # All paths route directly to the gateway.
 # TLS is terminated at the Cloudflare edge; traffic arrives here as plain HTTP.
-http://api.frenchforet.com {
+http://api.example.com {
 	reverse_proxy seshat-gateway:9001 {
 		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
 		header_up X-Forwarded-Proto https
@@ -502,7 +502,7 @@ If you see `unknown directive` errors, check Caddy image version matches `caddy:
 
 ```bash
 git add config/cloud-sim/Caddyfile
-git commit -m "feat(caddy): add site blocks for agent.frenchforet.com and api.frenchforet.com"
+git commit -m "feat(caddy): add site blocks for agent.example.com and api.example.com"
 ```
 
 ---
@@ -525,16 +525,16 @@ Change it to:
 
 ```yaml
       args:
-        NEXT_PUBLIC_SESHAT_URL: "https://agent.frenchforet.com"
+        NEXT_PUBLIC_SESHAT_URL: "https://agent.example.com"
 ```
 
-The PWA makes same-origin API calls to `/api/*` — since `SESHAT_API` in `seshat-pwa/src/lib/agui-client.ts` is the base URL, calls will now go to `https://agent.frenchforet.com/api/*`, `https://agent.frenchforet.com/stream/*`, etc. Caddy's `import routing` on the `agent.*` block routes these to the gateway. ✅
+The PWA makes same-origin API calls to `/api/*` — since `SESHAT_API` in `seshat-pwa/src/lib/agui-client.ts` is the base URL, calls will now go to `https://agent.example.com/api/*`, `https://agent.example.com/stream/*`, etc. Caddy's `import routing` on the `agent.*` block routes these to the gateway. ✅
 
 - [ ] **Step 2: Commit**
 
 ```bash
 git add docker-compose.cloud.yml
-git commit -m "feat(pwa): update NEXT_PUBLIC_SESHAT_URL to public frenchforet.com domain"
+git commit -m "feat(pwa): update NEXT_PUBLIC_SESHAT_URL to public example.com domain"
 ```
 
 ---
@@ -622,8 +622,8 @@ Find the `CLOUDFLARE_TUNNEL_TOKEN` line (or add it if absent) and paste the toke
 From your local machine (not VPS):
 
 ```bash
-dig agent.frenchforet.com CNAME +short
-dig api.frenchforet.com CNAME +short
+dig agent.example.com CNAME +short
+dig api.example.com CNAME +short
 ```
 
 Expected: Both should resolve to `<tunnel-id>.cfargotunnel.com`
@@ -655,7 +655,7 @@ Expected: All containers healthy in status output.
 - [ ] **Step 2: Verify PWA loads at agent subdomain**
 
 ```bash
-curl -I https://agent.frenchforet.com
+curl -I https://agent.example.com
 ```
 
 Expected: `HTTP/2 200` with `content-type: text/html`
@@ -663,7 +663,7 @@ Expected: `HTTP/2 200` with `content-type: text/html`
 - [ ] **Step 3: Verify WAF blocks api subdomain without auth**
 
 ```bash
-curl -I https://api.frenchforet.com/health
+curl -I https://api.example.com/health
 ```
 
 Expected: `HTTP/2 403` (blocked by Cloudflare WAF before reaching the VPS)
@@ -671,7 +671,7 @@ Expected: `HTTP/2 403` (blocked by Cloudflare WAF before reaching the VPS)
 - [ ] **Step 4: Verify api subdomain passes with Authorization header**
 
 ```bash
-curl -I -H "Authorization: Bearer placeholder" https://api.frenchforet.com/health
+curl -I -H "Authorization: Bearer placeholder" https://api.example.com/health
 ```
 
 Expected: `HTTP/2 200` (WAF passes it; gateway auth is disabled so any token works for now)
@@ -680,13 +680,13 @@ Note: Once `AGENT_GATEWAY_AUTH_ENABLED=true` is enabled (separate task), the gat
 
 - [ ] **Step 5: Verify SSE stream works from the PWA**
 
-Open `https://agent.frenchforet.com` in a browser. Send a chat message. Verify a response streams back. Check browser DevTools Network tab — the `/stream/*` and `/chat/stream` calls should all show `200` with `agent.frenchforet.com` as the host.
+Open `https://agent.example.com` in a browser. Send a chat message. Verify a response streams back. Check browser DevTools Network tab — the `/stream/*` and `/chat/stream` calls should all show `200` with `agent.example.com` as the host.
 
 - [ ] **Step 6: Commit with deployment notes**
 
 ```bash
 git add -u
-git commit -m "deploy: Cloudflare tunnel live at frenchforet.com — agent and api subdomains active"
+git commit -m "deploy: Cloudflare tunnel live at example.com — agent and api subdomains active"
 ```
 
 ---
@@ -701,4 +701,4 @@ These should be tracked as separate Linear issues:
 
 3. **Remote Terraform state** — If the team grows or a second deployer is added, migrate state to an encrypted backend (Cloudflare R2 + SSE or Terraform Cloud).
 
-4. **Rate limiting** — Add a Cloudflare rate-limit ruleset to `api.frenchforet.com` to cap requests per IP.
+4. **Rate limiting** — Add a Cloudflare rate-limit ruleset to `api.example.com` to cap requests per IP.

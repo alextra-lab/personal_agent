@@ -265,13 +265,13 @@ Six weeks after this ADR was accepted, the deployed VPS runs **the full executio
 The deployed shape is the new target. Specifically:
 
 * **The VPS is the canonical execution host.** It runs the complete Personal Agent service (`personal_agent.service.app:app`), not just a knowledge gateway. The driver is accessibility (ADR-0048): a 24/7 PWA reachable from phone/iPad requires a 24/7 execution endpoint, which the laptop cannot provide.
-* **The laptop is a peer deployment**, intended to mirror the VPS shape (same compose, smaller resource caps), plus serve as a *local-profile inference target* via the existing reverse Cloudflare tunnel (`slm.frenchforet.com`).
+* **The laptop is a peer deployment**, intended to mirror the VPS shape (same compose, smaller resource caps), plus serve as a *local-profile inference target* via the existing reverse Cloudflare tunnel (`slm.example.com`).
 * **Day-to-day development happens on the VPS** via Claude-Code remote control, rather than on the laptop. The laptop's role narrows to (a) developer workstation when offline, (b) inference host when local profile is selected from any harness, (c) CI / pre-deploy validation environment.
 * **Profile selection (per ADR-0044) determines provider, not deployment**. Both `local` and `cloud` profiles run inside the same service instance on whichever host is executing. The historical implication that "cloud profile → run on cloud, local profile → run on laptop" is dropped; that distinction was never in ADR-0044 itself.
 
 ### Local-model availability — load-bearing since inception
 
-Local models are the original primary mode of the system. The Mac SLM Server has been the inference host for all four model roles — `primary`, `sub_agent`, `embedding`, `reranker` — since before this ADR was accepted; making those models available to a VPS-resident harness has always required a reverse Cloudflare tunnel (`slm.frenchforet.com`). That tunnel is **not** a temporary bridge — it is permanent infrastructure for the load-bearing requirement that local models be reachable from non-laptop hosts. This amendment does not change that; it documents it.
+Local models are the original primary mode of the system. The Mac SLM Server has been the inference host for all four model roles — `primary`, `sub_agent`, `embedding`, `reranker` — since before this ADR was accepted; making those models available to a VPS-resident harness has always required a reverse Cloudflare tunnel (`slm.example.com`). That tunnel is **not** a temporary bridge — it is permanent infrastructure for the load-bearing requirement that local models be reachable from non-laptop hosts. This amendment does not change that; it documents it.
 
 Embedding and reranker get a second layer: the VPS runs its own llama.cpp containers for these two roles 24/7. They exist not as a replacement for the laptop's MLX serving but as the **always-on availability guarantee** — if the laptop is offline, the knowledge-graph consolidation, recall scoring, and other embedding-dependent paths must still function. Both instances run the same model weights; runtime parity is verified by the cosine-similarity test in the Track 3 plan.
 
@@ -321,7 +321,7 @@ The dead `execution-service` token in `config/gateway_access.yaml` (audit §3 D-
 | Phase 2 — Data migration | ✅ Done (datastores live on VPS; pgvector + Neo4j + ES + Redis all operational) |
 | Phase 3 — Build Seshat API Gateway | **Replaced by full-harness deployment.** No thin gateway shipped; full service runs in its place. |
 | Phase 4 — Reconfigure local execution | **Not pursued as written.** Each location runs its own self-contained stack (datastores included), rather than the laptop being a thin client of cloud datastores. VPS is canonical/primary because of accessibility (ADR-0048); laptop is a secondary peer used rarely now that day-to-day dev moved to the VPS. The schema/index/dashboard sync cost this introduces is acknowledged in Negative consequences below. |
-| Phase 5 — Mobile access | ✅ Done. PWA reachable at `agent.frenchforet.com` 24/7. |
+| Phase 5 — Mobile access | ✅ Done. PWA reachable at `agent.example.com` 24/7. |
 
 ### Consequences — additions
 

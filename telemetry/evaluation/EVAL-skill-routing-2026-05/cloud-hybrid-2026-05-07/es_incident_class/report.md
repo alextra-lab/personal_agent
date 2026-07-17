@@ -45,7 +45,7 @@ Here's a comprehensive breakdown of all errors and warnings from the last 12 hou
 ### 🔴 Errors (6 total)
 
 #### `model_call_error` × 4
-LLM API calls failing — based on prior log history, these are likely **HTTP 502 Bad Gateway** responses from `slm.frenchforet.com` (the self-hosted LLM endpoint). These are intermittent and transient, but indicate the local LLM server is occasionally unavailable or overloaded.
+LLM API calls failing — based on prior log history, these are likely **HTTP 502 Bad Gateway** responses from `slm.example.com` (the self-hosted LLM endpoint). These are intermittent and transient, but indicate the local LLM server is occasionally unavailable or overloaded.
 
 #### `error` (generic) × 2
 Low-frequency generic errors — likely uncaught exceptions surfacing without a specific event type. Could be related to tool execution edge cases or internal handler failures.
@@ -79,7 +79,7 @@ One failure routing to a skill endpoint. Isolated and transient.
 
 | # | Issue | Impact | Recommended Action |
 |---|---|---|---|
-| 1 | **LLM server instability** (`model_call_error`) | Requests fail silently | Investigate `slm.frenchforet.com` uptime/health; add retry logic |
+| 1 | **LLM server instability** (`model_call_error`) | Requests fail silently | Investigate `slm.example.com` uptime/health; add retry logic |
 | 2 | **Approval UI offline** (45 auto-proceeds) | Agent bypasses human oversight | Restore PWA approval UI connectivity |
 | 3 | **Role deduplication storm** (718 merges) | Performance overhead; indicates broken turn assembly | Investigate why consecutive same-role turns are being generated; fix at source |
 | 4 | **Generic errors** × 2 | Unknown scope | Review full trace IDs for these 2 events |

@@ -34,8 +34,8 @@ then local-vs-cloud). If even rerankers overlap → the floor problem is deeper 
   item `{index, relevance_score}`. Scores re-aligned to input order by `index`. Scores are already
   in `[0,1]` — no `(cos+1)/2`, no dimension sweep.
 - **Arms (all f16):**
-  - `rr-0.6b-gpu` — `slm.frenchforet.com/v1`, id `Voodisss/Qwen3-Reranker-0.6B` (port 8508), CF headers.
-  - `rr-4b-gpu` — `slm.frenchforet.com/v1`, id `Voodisss/Qwen3-Reranker-4B` (port 8506), CF headers.
+  - `rr-0.6b-gpu` — `slm.example.com/v1`, id `Voodisss/Qwen3-Reranker-0.6B` (port 8508), CF headers.
+  - `rr-4b-gpu` — `slm.example.com/v1`, id `Voodisss/Qwen3-Reranker-4B` (port 8506), CF headers.
     **The live production reranker** → doubles as the production-representative arm.
   - `rr-0.6b-cpu` — `localhost:8504/v1`, id `Qwen3-Reranker-0.6B.F16` — same-model VPS-CPU cross-check.
   - `voyage-rerank-2.5` and `voyage-rerank-2.5-lite` — `api.voyageai.com/v1`, bearer key from

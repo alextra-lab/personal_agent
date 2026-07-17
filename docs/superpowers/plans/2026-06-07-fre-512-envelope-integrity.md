@@ -19,8 +19,8 @@ tests that assert the exact envelope against served response headers (never sour
 
 ## Measured constraints (probed 2026-06-07)
 
-1. **`artifacts.frenchforet.com` is behind Cloudflare Access.** An unauthenticated GET from the
-   VPS returns `302 → frenchforest.cloudflareaccess.com` — Access intercepts *before* the Worker,
+1. **`artifacts.example.com` is behind Cloudflare Access.** An unauthenticated GET from the
+   VPS returns `302 → team.cloudflareaccess.com` — Access intercepts *before* the Worker,
    so no Worker headers are visible without auth.
 2. **The existing service token (`CF_ACCESS_CLIENT_ID/SECRET`, used for the SLM tunnel) is NOT
    authorized on the artifacts Access app** (`service_token_status: false` in the Access meta JWT).
@@ -36,7 +36,7 @@ literal per-serve telemetry.** Direct browser serves never traverse this repo �
 per-request logging (a new Worker→ES pipeline, cross-repo) would satisfy "every served artifact"
 literally, and that would *re-invent* rather than *consume* FRE-506. The in-repo realization:
 after every artifact commit, the backend issues one real GET through the full edge path
-(`https://artifacts.frenchforet.com/{id}`) and records the envelope actually applied. Because the
+(`https://artifacts.example.com/{id}`) and records the envelope actually applied. Because the
 Worker serves one static policy for every artifact (FRE-509), a commit-time pass + the verifier
 contract tests + the alarm condition cover the drift risk. Worker-side per-request logging is
 filed as a follow-up ticket (Needs Approval) as the only literal D5 satisfier. (Codex finding 1.)
@@ -127,15 +127,15 @@ documents the two bounded-not-closed residuals (self-navigation; WebRTC on brows
    ```python
    EXPECTED_CSP_DIRECTIVES: Mapping[str, frozenset[str]] = MappingProxyType({
        "default-src": frozenset({"'none'"}),
-       "script-src": frozenset({"https://artifacts.frenchforet.com", "'unsafe-inline'"}),
-       "style-src": frozenset({"https://artifacts.frenchforet.com", "'unsafe-inline'"}),
-       "img-src": frozenset({"https://artifacts.frenchforet.com", "data:"}),
-       "font-src": frozenset({"https://artifacts.frenchforet.com", "data:"}),
+       "script-src": frozenset({"https://artifacts.example.com", "'unsafe-inline'"}),
+       "style-src": frozenset({"https://artifacts.example.com", "'unsafe-inline'"}),
+       "img-src": frozenset({"https://artifacts.example.com", "data:"}),
+       "font-src": frozenset({"https://artifacts.example.com", "data:"}),
        "connect-src": frozenset({"'none'"}),
        "worker-src": frozenset({"'none'"}),
        "form-action": frozenset({"'none'"}),
        "base-uri": frozenset({"'none'"}),
-       "frame-ancestors": frozenset({"https://agent.frenchforet.com"}),
+       "frame-ancestors": frozenset({"https://agent.example.com"}),
        "webrtc": frozenset({"'block'"}),
        "sandbox": frozenset({"allow-scripts"}),
    })
@@ -239,7 +239,7 @@ documents the two bounded-not-closed residuals (self-navigation; WebRTC on brows
       `probe_status=unverified_access_denied` — visible, not silent.
 - [ ] Live E2E after token applied: commit a test artifact → ES shows
       `artifact_envelope_integrity` with `probe_status=verified`, `envelope_ok=true`, exact CSP.
-- [ ] `make verify-envelope URL=https://artifacts.frenchforet.com/<live-id>` exits 0.
+- [ ] `make verify-envelope URL=https://artifacts.example.com/<live-id>` exits 0.
 - [ ] Reconcile D-f: confirm the Worker's served MIME for one non-HTML artifact and adjust the
       spec note if it differs from the committed content type.
 

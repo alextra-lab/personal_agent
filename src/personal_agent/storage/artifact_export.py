@@ -1,7 +1,7 @@
 """Artifact export-to-standalone transform (ADR-0089 Addendum A5 · FRE-530).
 
 A hosted artifact references the curated, Access-gated ``/lib/`` shelf
-(``https://artifacts.frenchforet.com/lib/<name>@<version>/…``). To make such an
+(``https://artifacts.example.com/lib/<name>@<version>/…``). To make such an
 artifact *portable* this module rewrites those references in one of two modes:
 
 * **inline** (default, offline-portable): fetch the pinned ``/lib/`` bytes (and
@@ -109,7 +109,12 @@ class AssetFetcher(Protocol):
 # Map loading
 # ---------------------------------------------------------------------------
 
-_MAP_CACHE: dict[str, SubstitutionMap] = {}
+# Caches the parsed file content only — never the resolved origin, since that
+# depends on the mutable settings.artifacts_public_base_url (FRE-895) and must
+# be recomputed on every call so a process/test that changes the setting after
+# first load sees it, not a stale cached value (mirrors expected_csp_directives()
+# in observability/artifact_envelope/spec.py, which is uncached for the same reason).
+_MAP_CACHE: dict[str, tuple[str, dict[str, LibAsset]]] = {}
 
 
 def load_substitution_map(path: Path | None = None) -> SubstitutionMap:
@@ -120,40 +125,45 @@ def load_substitution_map(path: Path | None = None) -> SubstitutionMap:
             ``config/artifact_lib_substitution_map.json``.
 
     Returns:
-        The parsed :class:`SubstitutionMap`.
+        The parsed :class:`SubstitutionMap`. The map's ``origin`` is a neutral
+        placeholder (FRE-895); when ``settings.artifacts_public_base_url`` is
+        configured, it overrides the placeholder so export targets the real origin.
 
     Raises:
         ArtifactExportError: If the file is missing or malformed.
     """
+    from personal_agent.config import settings  # noqa: PLC0415
+
     resolved = (path or _DEFAULT_MAP_PATH).resolve()
     cache_key = str(resolved)
     cached = _MAP_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
 
-    try:
-        raw = json.loads(resolved.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ArtifactExportError(f"cannot load substitution map at {resolved}: {exc}") from exc
+    if cached is None:
+        try:
+            raw = json.loads(resolved.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ArtifactExportError(f"cannot load substitution map at {resolved}: {exc}") from exc
 
-    origin = str(raw["origin"]).rstrip("/")
-    by_lib_path: dict[str, LibAsset] = {}
-    for entry in raw.get("entries", []):
-        asset = LibAsset(
-            lib_path=entry["lib_path"],
-            name=entry.get("name", ""),
-            kind=entry["kind"],
-            loading=entry.get("loading", "classic"),
-            public_cdn_url=entry.get("public_cdn_url"),
-            sri=entry["sri"],
-            cors_verified=bool(entry.get("cors_verified", False)),
-            fallback=entry.get("fallback", "inline"),
-        )
-        by_lib_path[asset.lib_path] = asset
+        by_lib_path: dict[str, LibAsset] = {}
+        for entry in raw.get("entries", []):
+            asset = LibAsset(
+                lib_path=entry["lib_path"],
+                name=entry.get("name", ""),
+                kind=entry["kind"],
+                loading=entry.get("loading", "classic"),
+                public_cdn_url=entry.get("public_cdn_url"),
+                sri=entry["sri"],
+                cors_verified=bool(entry.get("cors_verified", False)),
+                fallback=entry.get("fallback", "inline"),
+            )
+            by_lib_path[asset.lib_path] = asset
 
-    sub_map = SubstitutionMap(origin=origin, by_lib_path=by_lib_path)
-    _MAP_CACHE[cache_key] = sub_map
-    return sub_map
+        cached = (str(raw["origin"]).rstrip("/"), by_lib_path)
+        _MAP_CACHE[cache_key] = cached
+
+    file_origin, by_lib_path = cached
+    origin = (settings.artifacts_public_base_url or file_origin).rstrip("/")
+    return SubstitutionMap(origin=origin, by_lib_path=by_lib_path)
 
 
 # ---------------------------------------------------------------------------

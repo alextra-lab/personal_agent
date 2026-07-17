@@ -132,7 +132,7 @@ make logs SERVICE=seshat-gateway | grep -E "model_call_(started|completed)" | he
 # Expect: two rows (one started, one completed) — both with model=, session_id=, span_id=, parent_span_id=
 
 # Production probe (after deploy)
-curl -s "https://es.frenchforet.com/seshat-logs-*/_search?size=2&q=event:model_call_completed&sort=@timestamp:desc" \
+curl -s "https://es.example.com/seshat-logs-*/_search?size=2&q=event:model_call_completed&sort=@timestamp:desc" \
   | jq '.hits.hits[]._source | {model, role, session_id, trace_id, span_id, input_tokens, output_tokens, endpoint}'
 # Expect: rows from BOTH local and cloud endpoints, all identity fields populated
 ```

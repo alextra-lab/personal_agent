@@ -717,7 +717,7 @@ def render_markdown(
     results: Sequence[Mapping[str, object]],
     evalset: EvalSet,
     sweep: Sequence[SurfaceObservation] = (),
-    pwa_url: str = "https://seshat.frenchforet.com",
+    pwa_url: str = "https://seshat.example.com",
 ) -> str:
     """Render the structured run report as markdown.
 
@@ -996,7 +996,7 @@ def main() -> int:
     p.add_argument("--chat-url", default=DEFAULT_CHAT_URL, help="Service /chat URL.")
     p.add_argument(
         "--pwa-url",
-        default="https://seshat.frenchforet.com",
+        default="https://seshat.example.com",
         help="PWA base URL for session deep-links in the report (default: production).",
     )
     p.add_argument(

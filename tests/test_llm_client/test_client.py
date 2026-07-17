@@ -178,7 +178,7 @@ models:
     def tunnel_client(self, mock_model_config: Path) -> LocalLLMClient:
         """Client pointing at the SLM Cloudflare tunnel hostname."""
         return LocalLLMClient(
-            base_url="https://slm.frenchforet.com/v1",
+            base_url="https://slm.example.com/v1",
             timeout_seconds=30,
             max_retries=1,
             model_config_path=mock_model_config,
@@ -224,6 +224,7 @@ models:
         ):
             mock_settings.cf_access_client_id = "test-client-id"
             mock_settings.cf_access_client_secret = "test-client-secret"
+            mock_settings.slm_tunnel_base_url = "https://slm.example.com"
             mock_client = AsyncMock()
             mock_client.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_client
@@ -702,7 +703,7 @@ models:
 
     @pytest.mark.asyncio
     async def test_cf_access_headers_injected_for_slm_endpoint(self, tmp_path: Path) -> None:
-        """CF-Access headers are injected when endpoint contains slm.frenchforet.com."""
+        """CF-Access headers are injected when endpoint matches settings.slm_tunnel_base_url."""
         config_file = tmp_path / "models_slm.yaml"
         config_file.write_text(
             """
@@ -712,7 +713,7 @@ models:
     context_length: 32768
     max_concurrency: 1
     default_timeout: 60
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
   sub_agent:
     id: "test-sub"
     context_length: 32768
@@ -721,7 +722,7 @@ models:
 """
         )
         slm_client = LocalLLMClient(
-            base_url="https://slm.frenchforet.com/v1",
+            base_url="https://slm.example.com/v1",
             timeout_seconds=30,
             max_retries=0,
             model_config_path=config_file,
@@ -738,6 +739,7 @@ models:
         ):
             mock_settings.cf_access_client_id = "test-id-123"
             mock_settings.cf_access_client_secret = "test-secret-456"
+            mock_settings.slm_tunnel_base_url = "https://slm.example.com"
             mock_http = AsyncMock()
             mock_http.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_http
@@ -768,6 +770,7 @@ models:
         ):
             mock_settings.cf_access_client_id = "test-id-123"
             mock_settings.cf_access_client_secret = "test-secret-456"
+            mock_settings.slm_tunnel_base_url = "https://slm.example.com"
             mock_http = AsyncMock()
             mock_http.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_http

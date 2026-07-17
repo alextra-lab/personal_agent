@@ -89,7 +89,7 @@ failure mode.
 
 ### `local-model-decided` results (2026-05-08-postfix)
 
-Run via Mac SLM tunnel (`https://slm.frenchforet.com/v1`, Qwen 35B-A3B). 9/10 prompts
+Run via Mac SLM tunnel (`https://slm.example.com/v1`, Qwen 35B-A3B). 9/10 prompts
 analysed — `es_incident_class` timed out (ReadTimeout after 600s).
 
 | Metric | 2026-05-07 (broken) | 2026-05-08-postfix (fixed) |

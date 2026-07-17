@@ -3,6 +3,9 @@
 # Multi-stage build: deps → builder → runner (standalone).
 # SESHAT_URL and GATEWAY_TOKEN are runtime env vars — set in docker-compose
 # environment:, NOT build args. The image is portable across deployments (FRE-339).
+# NEXT_PUBLIC_ARTIFACTS_HOST is the one build-time exception (Next.js bakes
+# NEXT_PUBLIC_* vars into the client bundle at build time — FRE-895); its real
+# value comes from a docker-compose build arg, sourced from .env.
 #
 # Build time: ~2-3 minutes (npm install + next build)
 # Image size:  ~200MB (node:20-alpine + standalone output)
@@ -19,6 +22,8 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY seshat-pwa/ .
 
+ARG NEXT_PUBLIC_ARTIFACTS_HOST=artifacts.example.com
+ENV NEXT_PUBLIC_ARTIFACTS_HOST=$NEXT_PUBLIC_ARTIFACTS_HOST
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build

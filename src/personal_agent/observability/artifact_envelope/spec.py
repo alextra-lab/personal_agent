@@ -16,24 +16,43 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Literal
 
-#: Exact ADR-0089 D2 policy: directive → set of value tokens. Token order within
-#: a directive is CSP-insignificant; directive *presence and values* are exact.
-EXPECTED_CSP_DIRECTIVES: Mapping[str, frozenset[str]] = MappingProxyType(
-    {
-        "default-src": frozenset({"'none'"}),
-        "script-src": frozenset({"https://artifacts.frenchforet.com", "'unsafe-inline'"}),
-        "style-src": frozenset({"https://artifacts.frenchforet.com", "'unsafe-inline'"}),
-        "img-src": frozenset({"https://artifacts.frenchforet.com", "data:"}),
-        "font-src": frozenset({"https://artifacts.frenchforet.com", "data:"}),
-        "connect-src": frozenset({"'none'"}),
-        "worker-src": frozenset({"'none'"}),
-        "form-action": frozenset({"'none'"}),
-        "base-uri": frozenset({"'none'"}),
-        "frame-ancestors": frozenset({"https://agent.frenchforet.com"}),
-        "webrtc": frozenset({"'block'"}),
-        "sandbox": frozenset({"allow-scripts"}),
-    }
-)
+#: Neutral placeholder artifacts origin (FRE-895) — the real Cloudflare Worker
+#: origin never lands in tracked source. See settings.artifacts_public_base_url.
+_ARTIFACTS_ORIGIN_PLACEHOLDER = "https://artifacts.example.com"
+
+
+def expected_csp_directives() -> Mapping[str, frozenset[str]]:
+    """Exact ADR-0089 D2 policy: directive → set of value tokens (FRE-895).
+
+    Computed fresh from ``settings.artifacts_public_base_url`` /
+    ``settings.pwa_public_origin`` on every call — never cached as a module-level
+    constant — so a test or process that changes those settings sees the real
+    host, and tracked source never bakes in a frozen real value.
+
+    Token order within a directive is CSP-insignificant; directive *presence and
+    values* are exact.
+    """
+    from personal_agent.config import settings  # noqa: PLC0415
+
+    artifacts_origin = settings.artifacts_public_base_url or _ARTIFACTS_ORIGIN_PLACEHOLDER
+    agent_origin = settings.pwa_public_origin
+    return MappingProxyType(
+        {
+            "default-src": frozenset({"'none'"}),
+            "script-src": frozenset({artifacts_origin, "'unsafe-inline'"}),
+            "style-src": frozenset({artifacts_origin, "'unsafe-inline'"}),
+            "img-src": frozenset({artifacts_origin, "data:"}),
+            "font-src": frozenset({artifacts_origin, "data:"}),
+            "connect-src": frozenset({"'none'"}),
+            "worker-src": frozenset({"'none'"}),
+            "form-action": frozenset({"'none'"}),
+            "base-uri": frozenset({"'none'"}),
+            "frame-ancestors": frozenset({agent_origin}),
+            "webrtc": frozenset({"'block'"}),
+            "sandbox": frozenset({"allow-scripts"}),
+        }
+    )
+
 
 #: HTML artifacts must serve exactly this (compared structurally: type/subtype
 #: and charset case-insensitive, no other parameters permitted).
@@ -124,16 +143,23 @@ def load_lib_manifest(
 
     Returns:
         A ``(origin, assets)`` tuple — the serving origin and the parsed assets.
+        The manifest's ``origin`` is a neutral placeholder (FRE-895); when
+        ``settings.artifacts_public_base_url`` is configured, it overrides the
+        placeholder so live verification targets the real origin.
 
     Raises:
         ValueError: If the manifest is malformed, names an unknown ``kind``, or a
             font asset has an extension absent from :data:`EXPECTED_FONT_MIMES`.
     """
+    from personal_agent.config import settings  # noqa: PLC0415
+
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     origin = raw.get("origin")
     entries = raw.get("assets")
     if not isinstance(origin, str) or not isinstance(entries, list):
         raise ValueError("manifest must have a string 'origin' and a list 'assets'")
+    if settings.artifacts_public_base_url:
+        origin = settings.artifacts_public_base_url
 
     valid_kinds = set(LIB_KIND_CSP_DIRECTIVE)
     assets: list[LibAsset] = []

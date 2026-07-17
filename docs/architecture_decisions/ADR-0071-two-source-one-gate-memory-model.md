@@ -182,7 +182,7 @@ The agent surfaces its promotion decisions to the user explicitly, after a docum
 > - *Dr. Chen is your cardiologist*
 > - *Your ALT was borderline elevated in March; Dr. Chen wanted a follow-up in 6 months*
 >
-> *The rest stays in [the document](artifacts.frenchforet.com/...). Should I remember anything else, or none of these?*
+> *The rest stays in [the document](artifacts.example.com/...). Should I remember anything else, or none of these?*
 
 Mechanism: a new `proposed_promotions` block in the artifact card (PWA, ADR-0070 Tier 3) lists candidate items with confirm / reject affordances. Confirm flips queue status to `'promoted'` and triggers the `:Core` write; reject flips to `'rejected'` with a user-supplied reason recorded for the rubric to learn from.
 

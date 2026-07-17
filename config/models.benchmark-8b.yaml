@@ -3,7 +3,7 @@
 # on the Mac SLM gateway, for the FRE-694 embedder separation-ceiling benchmark.
 # Select with: AGENT_MODEL_CONFIG_PATH=config/models.benchmark-8b.yaml AGENT_EMBEDDING_DIMENSIONS=4096
 # Differences from models.cloud.yaml:
-#   - embedding endpoint → https://slm.frenchforet.com/v1  id Qwen/Qwen3-Embedding-8B (4096-dim f16, Access-gated, port 8505)
+#   - embedding endpoint → https://slm.example.com/v1  id Qwen/Qwen3-Embedding-8B (4096-dim f16, Access-gated, port 8505)
 # Precision (f16) held constant vs the 0.6B prod arm so size is the only variable —
 # clears the FRE-656 4B-Q4 confound (see config/models.benchmark-4b.yaml header).
 # NOT a prod config — no prod embedder swap until the FRE-655 rollout (one-way door).
@@ -73,7 +73,7 @@ models:
     supports_function_calling: true
     tool_calling_strategy: "native"  # Qwen3.5/3.6 chat template supports tools natively
     provider_type: "local"
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
 
   # ── Tier 2: Sub-Agent ───────────────────────────────────────────
   sub_agent:
@@ -100,7 +100,7 @@ models:
     supports_function_calling: true
     tool_calling_strategy: "native"  # Qwen3.6 chat template supports tools natively
     provider_type: "local"
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
 
   # ── Experimental / A/B Testing ──────────────────────────────────
   reasoning_heavy:
@@ -206,13 +206,13 @@ models:
     # Qwen3-Embedding-8B (GGUF f16, native 4096-dim) served by the Mac SLM
     # gateway on port 8505. Reached over the Access-gated tunnel exactly as the
     # LLMs are; the CF-Access service token is injected by memory/embeddings.py
-    # when the endpoint hostname is slm.frenchforet.com.
+    # when the endpoint hostname is slm.example.com.
     # Requires AGENT_EMBEDDING_DIMENSIONS=4096 (native width). f16 — precision held
     # constant vs the 0.6B prod arm so size is the only variable (FRE-694, clears
     # the FRE-656 4B-Q4 precision confound). One-way door for prod.
     id: "Qwen/Qwen3-Embedding-8B"
     provider_type: "local"
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
     context_length: 8192
     max_concurrency: 1
     default_timeout: 60
@@ -221,10 +221,10 @@ models:
   # ── Reranker Model (FRE-656 benchmark — Qwen3-Reranker-4B) ─────
   reranker:
     # Qwen3-Reranker-4B (GGUF Q4_K_M) served by the Mac SLM gateway; CF-Access
-    # token injected by memory/reranker.py for the slm.frenchforet.com host.
+    # token injected by memory/reranker.py for the slm.example.com host.
     id: "Voodisss/Qwen3-Reranker-4B"
     provider_type: "local"
-    endpoint: "https://slm.frenchforet.com/v1"
+    endpoint: "https://slm.example.com/v1"
     context_length: 8192
     max_concurrency: 1
     default_timeout: 120

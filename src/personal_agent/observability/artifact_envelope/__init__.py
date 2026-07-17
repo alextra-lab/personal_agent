@@ -11,7 +11,6 @@ from personal_agent.observability.artifact_envelope.probe import probe_served_en
 from personal_agent.observability.artifact_envelope.spec import (
     DEFAULT_LIB_MANIFEST_PATH,
     EXECUTABLE_SCRIPT_MIMES,
-    EXPECTED_CSP_DIRECTIVES,
     EXPECTED_FONT_MIMES,
     EXPECTED_HTML_MIME,
     EXPECTED_STYLE_MIME,
@@ -19,6 +18,7 @@ from personal_agent.observability.artifact_envelope.spec import (
     LIB_KIND_CSP_DIRECTIVE,
     LibAsset,
     LibAssetKind,
+    expected_csp_directives,
     load_lib_manifest,
 )
 from personal_agent.observability.artifact_envelope.verifier import (
@@ -33,7 +33,6 @@ from personal_agent.observability.artifact_envelope.verifier import (
 __all__ = [
     "DEFAULT_LIB_MANIFEST_PATH",
     "EXECUTABLE_SCRIPT_MIMES",
-    "EXPECTED_CSP_DIRECTIVES",
     "EXPECTED_FONT_MIMES",
     "EXPECTED_HTML_MIME",
     "EXPECTED_STYLE_MIME",
@@ -44,6 +43,7 @@ __all__ = [
     "LibAssetKind",
     "LibAssetReport",
     "classify_access_denied",
+    "expected_csp_directives",
     "load_lib_manifest",
     "parse_csp",
     "probe_served_envelope",

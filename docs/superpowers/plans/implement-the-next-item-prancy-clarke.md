@@ -32,7 +32,7 @@ For an off-allowlist email to land in `Cf-Access-Authenticated-User-Email` on th
 ## Security implications (regardless of origin of this specific request)
 
 - **Worker spoofing**: anyone who can reach `artifacts-substrate.<account>.workers.dev/<uuid>` can supply an arbitrary email header. They can enumerate artifact metadata (r2_key, content_type, size_bytes, created_at) for any artifact whose owner email they can guess. They cannot read bytes directly (no R2 binding in their session), but the metadata leak is enough to confirm an artifact's existence.
-- **Gateway spoofing**: anyone with the `X-Internal-Token` value who can reach `api.frenchforet.com/internal/artifacts/{id}` over the tunnel can spoof any email. The token's secrecy is the only thing between them and the same enumeration capability.
+- **Gateway spoofing**: anyone with the `X-Internal-Token` value who can reach `api.example.com/internal/artifacts/{id}` over the tunnel can spoof any email. The token's secrecy is the only thing between them and the same enumeration capability.
 - **`users` table inflation**: every fresh email arriving at the gateway creates a new row idempotently. No rate-limiting on `get_or_create_user_by_email`. An attacker with the workers.dev URL can fill the `users` table with arbitrary email addresses, denial-of-service through bloat.
 
 ## Plan — three phases, executed in order, with a stop after Phase A
@@ -54,7 +54,7 @@ This decides whether we're investigating an incident or a self-test. Run on **la
      --since '2026-05-17T04:40:00Z' --until '2026-05-17T04:50:00Z' \
      2>&1 | tee /tmp/wrangler-tail.json
    ```
-   Inspect the `Cf-Connecting-IP`, `cf.colo`, and incoming `Cf-Access-Authenticated-User-Email` header for the 04:45:18 hit. If `Cf-Connecting-IP` matches the user's iPad IP and the URL was `artifacts.frenchforet.com`, we have a CF Access bypass to investigate (option 2 above). If `Cf-Connecting-IP` is a Cloudflare internal IP or the URL was the workers.dev variant, it was a non-Access path.
+   Inspect the `Cf-Connecting-IP`, `cf.colo`, and incoming `Cf-Access-Authenticated-User-Email` header for the 04:45:18 hit. If `Cf-Connecting-IP` matches the user's iPad IP and the URL was `artifacts.example.com`, we have a CF Access bypass to investigate (option 2 above). If `Cf-Connecting-IP` is a Cloudflare internal IP or the URL was the workers.dev variant, it was a non-Access path.
 3. **Check Cloudflare audit log** for any policy edits / service tokens issued on 2026-05-16 / 17:
    ```bash
    # Cloudflare dashboard: My Profile → Audit Log → filter by date
@@ -71,7 +71,7 @@ Phase A ends here. **Stop and report findings before Phase B.** Hardening should
 Two hardenings, both required regardless of Phase A's outcome — they close the spoofing class of vulnerabilities permanently. Both ship in one PR.
 
 **B1. Disable workers.dev URL on the artifacts Worker** (laptop terraform, ~5 min)
-- Add `workers_dev = false` to `cloudflare_workers_script.artifacts_substrate`. The Worker becomes reachable only via `artifacts.frenchforet.com` (Access-gated) and via authenticated CF API calls from the account owner.
+- Add `workers_dev = false` to `cloudflare_workers_script.artifacts_substrate`. The Worker becomes reachable only via `artifacts.example.com` (Access-gated) and via authenticated CF API calls from the account owner.
 
 **B2. Verify CF Access JWT in the Worker before trusting the email** (Worker JS, ~30 min)
 - Add JWT validation in `worker/artifacts.js`:
@@ -136,16 +136,16 @@ The same hardening should be ported to other inbound paths that consume `Cf-Acce
 After Phase B deployment:
 
 1. **Negative: workers.dev probe rejected** — `curl https://artifacts-substrate.<account>.workers.dev/<uuid>` → should return 404 or 530, not the artifact. (Will fail to resolve DNS if `workers_dev = false`.)
-2. **Negative: forged email header on the public route** — `curl -H "Cf-Access-Authenticated-User-Email: attacker@example.com" https://artifacts.frenchforet.com/<uuid>` (without CF Access cookie) → CF Access intercepts before the Worker; redirect to login; no leak.
+2. **Negative: forged email header on the public route** — `curl -H "Cf-Access-Authenticated-User-Email: attacker@example.com" https://artifacts.example.com/<uuid>` (without CF Access cookie) → CF Access intercepts before the Worker; redirect to login; no leak.
 3. **Negative: gateway internal endpoint with shared token but no JWT** — `curl -H "X-Internal-Token: <token>" -H "X-Authenticated-User-Email: attacker@example.com" http://localhost:9001/internal/artifacts/<uuid>` → should return 401 (was 404 previously, will now hard-fail on JWT verification).
-4. **Positive: legitimate flow from iPad** — open `https://artifacts.frenchforet.com/94c09610-...` after CF Access OTP with `lextra@gmail.com` → 200 + markdown bytes.
+4. **Positive: legitimate flow from iPad** — open `https://artifacts.example.com/94c09610-...` after CF Access OTP with `lextra@gmail.com` → 200 + markdown bytes.
 5. **Verify no off-allowlist emails reach `users` table** — `SELECT email FROM users` should only contain seeded family members and any genuine CF Access auths from the four allowlisted emails.
 
 ---
 
 ## Open question to resolve in Phase A
 
-If wrangler tail shows the offending request **came from the user's iPad against `artifacts.frenchforet.com`** (not the workers.dev URL), then **CF Access itself authenticated the off-allowlist email**, which would be a much more serious finding — it would mean the policy isn't being enforced as defined. In that case, Phase B alone is insufficient; we'd need to file a CF support ticket.
+If wrangler tail shows the offending request **came from the user's iPad against `artifacts.example.com`** (not the workers.dev URL), then **CF Access itself authenticated the off-allowlist email**, which would be a much more serious finding — it would mean the policy isn't being enforced as defined. In that case, Phase B alone is insufficient; we'd need to file a CF support ticket.
 
 The most likely Phase A outcome is that the request came from a laptop-Claude test call with the email header set from the Linear MCP `createdBy` value — a self-inflicted artifact of the implementation process, not an external attack. **But we should not assume that without evidence.**
 
@@ -155,17 +155,17 @@ The most likely Phase A outcome is that the request came from a laptop-Claude te
 
 **State of the world:**
 - PR #65 (`fix(security): require CF Access JWT verification on artifact-resolve endpoint`) **merged**.
-- Gateway rebuilt; `cf_access_verifier_initialized team_domain=frenchforest.cloudflareaccess.com aud_prefix=e0c3928bbfbf…` confirmed in logs.
+- Gateway rebuilt; `cf_access_verifier_initialized team_domain=team.cloudflareaccess.com aud_prefix=e0c3928bbfbf…` confirmed in logs.
 - Token-only probe from VPS confirmed 401 + `artifact_resolve_missing_jwt` — gateway side is enforcing correctly.
 - LC reports **B2 already applied** (Worker updated to verify + forward JWT).
-- User opens `https://artifacts.frenchforet.com/94c09610-...` on iPad → "Not found".
+- User opens `https://artifacts.example.com/94c09610-...` on iPad → "Not found".
 
 **Critical observation:** the iPad request **never reached the gateway**. The only `/internal/artifacts/{id}` log lines since the rebuild are from the VPS-side probe at 07:39:34. The Worker is returning 404 *before* calling back to the gateway.
 
 That means the Worker's local JWT pre-check (step in `worker/artifacts.js` between header read and gateway fetch) is rejecting the request. One of three things is happening:
 
 ### Hypothesis 1 — Worker has no JWT to verify
-The Worker reads `request.headers.get('Cf-Access-Jwt-Assertion')` and, when null, returns 404. If CF Access isn't sending the JWT header for the `artifacts.frenchforet.com` destination (perhaps because of the `destinations`-based consolidation rather than a dedicated app), the Worker has nothing to verify.
+The Worker reads `request.headers.get('Cf-Access-Jwt-Assertion')` and, when null, returns 404. If CF Access isn't sending the JWT header for the `artifacts.example.com` destination (perhaps because of the `destinations`-based consolidation rather than a dedicated app), the Worker has nothing to verify.
 
 ### Hypothesis 2 — Worker has a JWT but `verifyAccessJwt` rejects it
 Most likely causes:
@@ -205,7 +205,7 @@ Expect both to appear with the values from FRE-371 comment B2.3. If absent, the 
 
 ```bash
 wrangler tail --name artifacts-substrate --format=pretty
-# Alex opens https://artifacts.frenchforet.com/94c09610-b7bc-401b-b32a-67bf80b02ad0 on iPad
+# Alex opens https://artifacts.example.com/94c09610-b7bc-401b-b32a-67bf80b02ad0 on iPad
 ```
 
 What we want to see:
@@ -218,18 +218,18 @@ What we want to see:
 | Request arrives with JWT, `verifyAccessJwt` returns null | Hypothesis 2b. Check incoming `aud` claim vs `env.ACCESS_AUD`. Add `console.log({audClaim: claims.aud, expected: audience})` temporarily. |
 | Request arrives, JWT verifies, fetch to gateway returns 401 | Hypothesis is wrong — gateway-side issue. Check gateway logs (we'd see `artifact_resolve_jwt_invalid` since the Worker would have forwarded the JWT). |
 
-### Step 4 — Direct test of CF Access JWT injection on artifacts.frenchforet.com
+### Step 4 — Direct test of CF Access JWT injection on artifacts.example.com
 
 If Hypothesis 1 is suspected (CF Access not forwarding the JWT for the artifacts destination after consolidation):
 
 ```bash
 # From Alex's iPad, in Safari, while signed in:
-# Visit https://artifacts.frenchforet.com/cdn-cgi/access/get-identity
+# Visit https://artifacts.example.com/cdn-cgi/access/get-identity
 # Expect JSON containing { email, identity_nonce, ... } — proves CF Access is active for this host.
 # If 404, CF Access isn't gating the host at all, meaning the destinations entry isn't taking effect.
 ```
 
-If the identity endpoint returns 404 on `artifacts.frenchforet.com` but works on `agent.frenchforet.com`, the consolidation under the destinations attribute isn't behaving as expected. Fix would be to split into a dedicated `cloudflare_zero_trust_access_application.artifacts` again (reverse the FRE-371 Dev-2 decision), with its own session_duration=720h and shared policy.
+If the identity endpoint returns 404 on `artifacts.example.com` but works on `agent.example.com`, the consolidation under the destinations attribute isn't behaving as expected. Fix would be to split into a dedicated `cloudflare_zero_trust_access_application.artifacts` again (reverse the FRE-371 Dev-2 decision), with its own session_duration=720h and shared policy.
 
 ## What happens once the diagnosis lands
 

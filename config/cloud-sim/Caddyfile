@@ -50,10 +50,10 @@ http://172.25.0.10 {
 }
 
 # Cloudflare Tunnel — user-facing PWA + same-origin API
-# Traffic arrives from cloudflared with Host: agent.frenchforet.com.
+# Traffic arrives from cloudflared with Host: {$AGENT_HOST} (real value from .env; FRE-895).
 # Uses the shared routing snippet: /api/* → seshat-gateway:9001, /* → seshat-pwa:3000.
 # :80 port suffix disables Caddy auto-HTTPS (http:// prefix alone is insufficient with local_certs).
-agent.frenchforet.com:80 {
+{$AGENT_HOST:agent.example.com}:80 {
 	@ws path /ws/*
 	handle @ws {
 		reverse_proxy seshat-gateway:9001
@@ -62,16 +62,16 @@ agent.frenchforet.com:80 {
 }
 
 # Cloudflare Tunnel — Neo4j Browser UI + Bolt WebSocket
-# graph.frenchforet.com → http://caddy:80 (configured in Cloudflare Tunnel Terraform)
+# {$GRAPH_HOST} (real value from .env; FRE-895) → http://caddy:80 (Cloudflare Tunnel Terraform)
 # TLS is terminated at the Cloudflare edge; traffic arrives here as plain HTTP.
 #
 # Bolt-over-WebSocket uses a WebSocket upgrade on the same HTTPS port (443).
 # The Browser JS driver (running in the user's browser) connects to:
-#   wss://graph.frenchforet.com  →  Cloudflare  →  caddy:80
+#   wss://{$GRAPH_HOST}  →  Cloudflare  →  caddy:80
 # Caddy then splits:
 #   WebSocket upgrade  →  neo4j:7687  (Bolt)
 #   Regular HTTP       →  neo4j:7474  (Browser UI + REST API)
-graph.frenchforet.com:80 {
+{$GRAPH_HOST:graph.example.com}:80 {
 	@websocket {
 		header Connection *Upgrade*
 		header Upgrade websocket
@@ -89,11 +89,12 @@ graph.frenchforet.com:80 {
 }
 
 # Cloudflare Tunnel — Elasticsearch write endpoint for slm_server telemetry (FRE-411).
-# slm_server (Mac) posts request_complete docs to es.frenchforet.com; the join with
-# harness logs happens in ES on span_id / trace_id. Path-allowlisted to slm-requests-*
-# indices only so a leaked CF Access token can't touch other indices. Full ES Security
-# (native auth / API keys) is the planned follow-up; this is the interim CF-only gate.
-http://es.frenchforet.com:80 {
+# slm_server (Mac) posts request_complete docs to {$ES_HOST} (real value from .env;
+# FRE-895); the join with harness logs happens in ES on span_id / trace_id.
+# Path-allowlisted to slm-requests-* indices only so a leaked CF Access token can't
+# touch other indices. Full ES Security (native auth / API keys) is the planned
+# follow-up; this is the interim CF-only gate.
+http://{$ES_HOST:es.example.com}:80 {
 	@allowed path_regexp ^/(slm-requests-[^/]+|_bulk)(/.*)?$
 	handle @allowed {
 		reverse_proxy elasticsearch:9200
@@ -109,7 +110,7 @@ http://es.frenchforet.com:80 {
 # All paths route directly to the gateway.
 # TLS is terminated at the Cloudflare edge; traffic arrives here as plain HTTP.
 # :80 port suffix disables Caddy auto-HTTPS.
-api.frenchforet.com:80 {
+{$API_HOST:api.example.com}:80 {
 	reverse_proxy seshat-gateway:9001 {
 		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
 		header_up X-Forwarded-Proto https

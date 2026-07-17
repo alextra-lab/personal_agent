@@ -11,6 +11,12 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: check-no-deployment-identifier
+        name: No real deployment domain in tracked files (FRE-895)
+        entry: uv run python scripts/check_no_deployment_identifier.py
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: check-no-direct-substrate-in-tests
         name: No direct substrate access in tests/eval scripts
         entry: uv run python scripts/check_no_direct_substrate_in_tests.py

@@ -158,7 +158,7 @@ that pre-existed PR #70 are tolerated per #70 precedent.)
 | # | Check | Verifies |
 |---|-------|----------|
 | 7 | `make deploy` exits 0 | VPS pulls + restarts |
-| 8 | `curl https://agent.frenchforet.com/health` returns 200 + healthy body | Live verification |
+| 8 | `curl https://agent.example.com/health` returns 200 + healthy body | Live verification |
 | 9 | MASTER_PLAN.md updated on `main`, committed, pushed | Project state visible |
 | 10 | Linear comment with PR link, deploy timestamp, curl evidence | Audit trail |
 | 11 | Ticket remains `In Progress` | Multi-phase rule — Phase 5 not yet shipped |

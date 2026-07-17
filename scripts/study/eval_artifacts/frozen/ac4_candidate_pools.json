@@ -883,7 +883,7 @@
       {
         "entity_id": "4:affaea02-a5a5-47d4-bab1-7cc6c7f00953:1013",
         "kind": "Location",
-        "name": "Artifacts.frenchforet.com",
+        "name": "Artifacts.example.com",
         "pool_source": "keyword"
       },
       {
@@ -1003,7 +1003,7 @@
       {
         "entity_id": "4:affaea02-a5a5-47d4-bab1-7cc6c7f00953:262",
         "kind": "Organization",
-        "name": "artifacts.frenchforet.com",
+        "name": "artifacts.example.com",
         "pool_source": "embedding"
       },
       {
@@ -1063,7 +1063,7 @@
       {
         "entity_id": "4:affaea02-a5a5-47d4-bab1-7cc6c7f00953:800",
         "kind": "Event",
-        "name": "Artifact https://artifacts.frenchforet.com/93654ab6-631c-4bbc-bf33-e9a57026ee45",
+        "name": "Artifact https://artifacts.example.com/93654ab6-631c-4bbc-bf33-e9a57026ee45",
         "pool_source": "keyword"
       },
       {
@@ -1099,7 +1099,7 @@
       {
         "entity_id": "4:affaea02-a5a5-47d4-bab1-7cc6c7f00953:8271",
         "kind": "Event",
-        "name": "https://artifacts.frenchforet.com/021e10a3-d067-4a00-a8cd-a77718c4ea9a",
+        "name": "https://artifacts.example.com/021e10a3-d067-4a00-a8cd-a77718c4ea9a",
         "pool_source": "embedding"
       },
       {
@@ -1729,6 +1729,7 @@
       "painting"
     ]
   },
+  "content_hash": "ce262910cfb891aa2619f15c0b5bc7b435d8c843c3b8c0e1a779a51ffc60df4f",
   "cooking techniques and recipes": {
     "candidates": [
       {

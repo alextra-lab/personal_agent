@@ -11,7 +11,7 @@
 
 ## What was built (the enabling change)
 
-The benchmark "needs no code change" premise broke once the owner routed the 4B through the Access-gated Mac SLM gateway (`https://slm.frenchforet.com/v1`). Two memory client paths could not reach it and **degraded silently** (zero vector / passthrough), which would have produced garbage numbers:
+The benchmark "needs no code change" premise broke once the owner routed the 4B through the Access-gated Mac SLM gateway (`https://slm.example.com/v1`). Two memory client paths could not reach it and **degraded silently** (zero vector / passthrough), which would have produced garbage numbers:
 
 - `memory/embeddings.py` and `memory/reranker.py` did not inject the CF-Access service token that `llm_client/client.py` injects. Fixed: hostname-gated injection reusing `service/cf_service_token.py`.
 - The OpenAI SDK's default `User-Agent: OpenAI/Python` trips a **Cloudflare WAF rule** on the gateway (a 403 "request blocked"; the raw-httpx LLM client is unaffected). Fixed: a benign `User-Agent` for the gated host. Bisected live — the `x-stainless-*` headers and a custom UA are fine; only `OpenAI/Python` is blocked.

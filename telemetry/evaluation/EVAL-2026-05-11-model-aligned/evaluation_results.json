@@ -473,7 +473,7 @@
         {
           "turn_index": 1,
           "user_message": "Read the system log and tell me if anything looks concerning.",
-          "response_text": "Here's my analysis of the system logs from the last 24 hours:\n\n## Summary\n\n| Level | Count |\n|-------|-------|\n| DEBUG | 61,126 |\n| INFO | 39,376 |\n| WARNING | 925 |\n| **ERROR** | **30** |\n\nThe system is healthy overall \u2014 errors are a tiny fraction (~0.03%) of all events and the most recent activity is clean (all DEBUG/INFO). However, there are **4 categories of concern**:\n\n---\n\n### 1. \ud83d\udd34 Intermittent 524 Timeouts from `slm.frenchforet.com`\n- **When:** Repeated at ~07:33, ~21:15 today (May 10)\n- ",
+          "response_text": "Here's my analysis of the system logs from the last 24 hours:\n\n## Summary\n\n| Level | Count |\n|-------|-------|\n| DEBUG | 61,126 |\n| INFO | 39,376 |\n| WARNING | 925 |\n| **ERROR** | **30** |\n\nThe system is healthy overall \u2014 errors are a tiny fraction (~0.03%) of all events and the most recent activity is clean (all DEBUG/INFO). However, there are **4 categories of concern**:\n\n---\n\n### 1. \ud83d\udd34 Intermittent 524 Timeouts from `slm.example.com`\n- **When:** Repeated at ~07:33, ~21:15 today (May 10)\n- ",
           "trace_id": "b4819255-1bb8-424f-9dcf-3e1e344fbd26",
           "response_time_ms": 71422.09242400713,
           "assertions": [
@@ -1754,7 +1754,7 @@
         {
           "turn_index": 1,
           "user_message": "Now show me the recent error details.",
-          "response_text": "Here's a summary of all recent errors:\n\n## Error Summary (Last 24 Hours)\n\n| Metric | Value |\n|---|---|\n| **Total ERROR events** | All 100% are the same error type |\n\n### Root Cause: SLM Endpoint Returning 404\n\nEvery single error in the last 24 hours is a **`model_call_error`** against the same endpoint:\n\n```\nHTTP error 404: Client error '404 Not Found' for url \n'https://slm.frenchforet.com/v1/chat/completions'\n```\n\n### Key Details\n\n- **Error type:** `model_call_error` \u2014 the LLM provider returned",
+          "response_text": "Here's a summary of all recent errors:\n\n## Error Summary (Last 24 Hours)\n\n| Metric | Value |\n|---|---|\n| **Total ERROR events** | All 100% are the same error type |\n\n### Root Cause: SLM Endpoint Returning 404\n\nEvery single error in the last 24 hours is a **`model_call_error`** against the same endpoint:\n\n```\nHTTP error 404: Client error '404 Not Found' for url \n'https://slm.example.com/v1/chat/completions'\n```\n\n### Key Details\n\n- **Error type:** `model_call_error` \u2014 the LLM provider returned",
           "trace_id": "1e0c957b-9a34-4275-9f6c-7d87fb2f956d",
           "response_time_ms": 32880.20403007977,
           "assertions": [
@@ -2368,7 +2368,7 @@
         {
           "turn_index": 8,
           "user_message": "Run a full system health check, then tell me about any issues, and also check the recent error log.",
-          "response_text": "## System Health Check \u2014 Complete\n\n| Service | Status | Details |\n|---------|--------|---------|\n| **PostgreSQL** | \u2705 Healthy | Query executed successfully |\n| **Redis** | \u2705 Healthy | PONG response |\n| **Neo4j** | \u2705 Healthy | v5.26.24 community, backed by `graph.frenchforet.com:443` (bolt + HTTPS routing) |\n| **Elasticsearch** | \u26a0\ufe0f **Yellow** | 145 primary shards active, **50 unassigned replica shards** (74.4% of shards assigned). No data loss \u2014 all primaries healthy. Expected for a single-node ",
+          "response_text": "## System Health Check \u2014 Complete\n\n| Service | Status | Details |\n|---------|--------|---------|\n| **PostgreSQL** | \u2705 Healthy | Query executed successfully |\n| **Redis** | \u2705 Healthy | PONG response |\n| **Neo4j** | \u2705 Healthy | v5.26.24 community, backed by `graph.example.com:443` (bolt + HTTPS routing) |\n| **Elasticsearch** | \u26a0\ufe0f **Yellow** | 145 primary shards active, **50 unassigned replica shards** (74.4% of shards assigned). No data loss \u2014 all primaries healthy. Expected for a single-node ",
           "trace_id": "3089cac1-78d4-4bd9-9d12-92b39be0286a",
           "response_time_ms": 55719.53261701856,
           "assertions": [

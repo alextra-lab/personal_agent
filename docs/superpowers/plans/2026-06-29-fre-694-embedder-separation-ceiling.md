@@ -36,7 +36,7 @@ This ticket re-tests at **f16 across the board** so size is the only variable.
 - **0.6B is f16** — served `Qwen3-Embedding-0.6B-f16.gguf` on the prod embedder (:8503), 1024-dim.
   No re-run needed for precision.
 - **8B is f16, native 4096** — `Qwen/Qwen3-Embedding-8B`, llamacpp, port 8505, quantization f16, on
-  the Access-gated `slm.frenchforet.com` tunnel. Precision confound eliminated.
+  the Access-gated `slm.example.com` tunnel. Precision confound eliminated.
 - **Voyage is reachable** — the key lives in the `pass` store (`pass show VOYAGEAI_API_KEY`, not
   `.env`, which is why it first read as absent). `voyage-4-large` confirmed live, **native dim 1024**.
 - `generate_embedding` hardcodes `api_key="unused"` and sends `dimensions=`; Voyage needs a bearer

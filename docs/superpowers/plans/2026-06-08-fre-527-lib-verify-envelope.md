@@ -27,7 +27,7 @@ Machine-readable, checked-in, shared with the Worker repo. Adding an asset = one
 
 ```json
 {
-  "origin": "https://artifacts.frenchforet.com",
+  "origin": "https://artifacts.example.com",
   "assets": [
     {"name": "katex",            "path": "katex@0.16.22/katex.min.js",                 "kind": "script"},
     {"name": "katex",            "path": "katex@0.16.22/katex.min.css",                "kind": "style"},

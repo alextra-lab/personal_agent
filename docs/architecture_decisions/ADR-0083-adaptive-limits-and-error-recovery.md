@@ -120,7 +120,7 @@ any exception in the hint path is swallowed; the FAILED path is never impaired.
 
 | Setting | Default | Description |
 |---|---|---|
-| `AGENT_SLM_HEALTH_URL` | `https://slm.frenchforet.com/health` | SLM health endpoint URL (shared by probe + endpoint) |
+| `AGENT_SLM_HEALTH_URL` | `https://slm.example.com/health` | SLM health endpoint URL (shared by probe + endpoint) |
 | `AGENT_SLM_HEALTH_PROBE_ENABLED` | `true` | Master switch |
 | `AGENT_SLM_HEALTH_PROBE_INTERVAL_SECONDS` | `300` | Probe cadence (seconds) |
 | `AGENT_SLM_HEALTH_INDEX_PREFIX` | `agent-monitors-slm-health` | ES index prefix |

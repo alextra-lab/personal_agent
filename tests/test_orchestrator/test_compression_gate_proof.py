@@ -10,13 +10,12 @@ these tests are the evidence backing that report's per-AC claims.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 import tiktoken
-import yaml
 
 from personal_agent.config import settings
 from personal_agent.llm_client.message_content import count_content_tokens
@@ -26,6 +25,7 @@ from personal_agent.orchestrator.context_window import (
     estimate_message_tokens,
     estimate_messages_tokens,
 )
+from tests._helpers.telemetry_mounts import gateway_mounts, is_mount_covered, load_compose
 
 
 def _msg(role: str, content: str, **extra: Any) -> dict[str, Any]:
@@ -277,20 +277,17 @@ class TestTelemetryDurability:
         assert not output_dir.is_absolute()
         assert output_dir.parts == ("telemetry", "within_session_compression")
 
-    def test_gateway_volumes_mount_context_quality_but_not_within_session_compression(
+    def test_gateway_volumes_mount_within_session_compression_durably(
         self,
     ) -> None:
-        """ADR-0059's sibling stream is durable in the deployed gateway;
-        ADR-0061's own stream is not — the container's ephemeral layer under
-        /app loses every WSC-*.jsonl record on rebuild.
+        """FRE-908 found ADR-0061's own stream ephemeral (unlike ADR-0059's
+        sibling, mounted individually). FRE-910 fixed this by mounting the
+        /app/telemetry parent once, covering every writer — this assertion
+        flips from FRE-908's original negative (proving the gap) to confirm
+        the fix landed; see TestTelemetryMountCoverage for the general guard.
         """
         repo_root = Path(__file__).resolve().parents[2]
-        compose_path = repo_root / "docker-compose.cloud.yml"
-        doc = yaml.safe_load(compose_path.read_text())
-        volumes = doc["services"]["seshat-gateway"]["volumes"]
-        targets = [
-            v.split(":", 1)[1].split(":", 1)[0] for v in volumes if isinstance(v, str) and ":" in v
-        ]
+        mounts = gateway_mounts(load_compose(repo_root))
 
-        assert "/app/telemetry/context_quality" in targets
-        assert "/app/telemetry/within_session_compression" not in targets
+        assert is_mount_covered(PurePosixPath("/app/telemetry/context_quality"), mounts)
+        assert is_mount_covered(PurePosixPath("/app/telemetry/within_session_compression"), mounts)

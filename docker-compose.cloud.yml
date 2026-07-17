@@ -389,6 +389,12 @@ services:
     volumes:
       # Docker socket — allows run-gateway.sh to spawn docker/mcp-gateway container
       - /var/run/docker.sock:/var/run/docker.sock
+      # FRE-910: durable-by-default parent mount. Every Path("telemetry/...") writer
+      # in src (nine today, any future one) lands under a mounted path automatically —
+      # no more one-mount-per-writer whack-a-mole. The nested volumes below stay
+      # mounted at their specific subpaths: Docker mounts by path depth, so a
+      # more-specific mount keeps owning its subtree and existing data — nothing moves.
+      - seshat_telemetry_cloud:/app/telemetry
       # Persist Captain's Log (CL-*.json reflections + captures/) across restarts.
       # The parent mount covers both reflection files and the captures/ subdirectory.
       # seshat_captures_cloud (legacy, captures/ only) superseded by this volume.
@@ -544,6 +550,13 @@ volumes:
   caddy_data:
     driver: local
   caddy_config:
+    driver: local
+
+  # FRE-910: parent mount for /app/telemetry — durable-by-default for every writer,
+  # not just the ones a human remembered to mount individually. Nested volumes below
+  # (captains_log, feedback_history, graph_quality, context_quality, error_patterns,
+  # freshness_review) still own their own subtrees at their specific paths.
+  seshat_telemetry_cloud:
     driver: local
 
   # Captain's Log — full directory (CL-*.json reflections + captures/)

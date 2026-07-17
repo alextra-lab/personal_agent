@@ -15,7 +15,7 @@ see `tests/test_orchestrator/test_compression_gate_proof.py` for the executable 
 | AC-1 | Does the hard-compression gate fire on a genuinely oversized history? | **Yes, it fires — but it cannot shrink the exact scenario it was built for.** See Finding 3. |
 | AC-2 | What is the estimated-vs-real token gap? | The estimator itself is exact (tiktoken cl100k_base, no heuristic gap). The gap is a **blind spot**: `reasoning_content` (thinking) is invisible to it entirely. Measured ratio on a ~3.4k-token reasoning fixture: real total is >1.5x the estimate. |
 | AC-3 | What is the precedence between the three trim mechanisms? | `_maybe_frozen_reset` (ADR-0081) runs once per turn **before** the LLM-call loop and resets accumulated tokens at 48,000 — below both ADR-0061 thresholds (62,400 soft / 81,600 hard). Under the production default (`cache_frozen_layout_enabled=True`), it structurally pre-empts the soft trigger, which is dead by design (`executor.py:4838-4842`). The hard trigger is the only surviving ADR-0061 mechanism, and only because it's checked *inside* the same turn's tool loop, after the frozen-reset checkpoint has already passed. |
-| AC-4 | Where does telemetry land, and is it durable? | `telemetry/within_session_compression/` resolves relative to CWD → `/app/telemetry/within_session_compression` in the container. `docker-compose.cloud.yml`'s gateway volume list mounts a durable volume for the sibling ADR-0059 `context_quality` stream but **not** for `within_session_compression`. Records are lost on every rebuild. |
+| AC-4 | Where does telemetry land, and is it durable? | `telemetry/within_session_compression/` resolves relative to CWD → `/app/telemetry/within_session_compression` in the container. `docker-compose.cloud.yml`'s gateway volume list mounts a durable volume for the sibling ADR-0059 `context_quality` stream but **not** for `within_session_compression`. Records are lost on every rebuild. **Fixed 2026-07-17 by FRE-910** — see addendum below. |
 | AC-5 | Behaviour/threshold changes in this ticket? | None. Measurement only. |
 
 ## Finding 0 — a mechanism the ticket didn't know about pre-empts everything
@@ -161,3 +161,18 @@ signal that, even when it fires, cannot reduce the exact working-set growth patt
 (Finding 3). Any Phase 2 work needs to target either the ADR-0081 frozen-reset scheduler directly, or extend
 the tail-extraction logic to exempt individually-oversized trailing messages from the verbatim-preservation
 floor — a design change, not a calibration tweak, and out of scope here.
+
+## Addendum (2026-07-17) — AC-4 fixed by FRE-910
+
+This ticket's own AC-4 finding proposed (but explicitly did not apply — measurement-only scope) a
+one-directory volume mount for `within_session_compression`. FRE-910 superseded that narrow fix with a
+single parent mount at `/app/telemetry` on the `seshat-gateway` service, covering `within_session_compression`
+and every other CWD-relative telemetry writer (nine total) rather than adding mounts one directory at a
+time. `within_session_compression` is now durable in `docker-compose.cloud.yml`.
+
+The test this doc originally cited,
+`TestTelemetryDurability.test_gateway_volumes_mount_context_quality_but_not_within_session_compression`,
+was renamed and its assertion flipped to match: it is now
+`test_gateway_volumes_mount_within_session_compression_durably` and asserts the stream **is** covered. The
+general-purpose guard (any current or future `Path("telemetry/...")` writer resolves under a mounted path)
+lives in `tests/personal_agent/telemetry/test_mount_coverage.py::TestTelemetryMountCoverage`.

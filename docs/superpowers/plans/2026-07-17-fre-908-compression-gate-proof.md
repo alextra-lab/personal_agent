@@ -198,3 +198,43 @@ subprocess/auth/network touched — the docker-compose YAML check reads a repo f
 **Standard** — no `src/` behavior change, but the diff requires understanding multi-file orchestrator control flow
 and asserting real internal behavior (not mechanical/config-only). Codex plan-review requested per skill default
 ("when in doubt, treat as Standard").
+
+## Addendum (relaunch, same day) — TDD surfaced a fixture bug and a genuine new finding
+
+Running the drafted tests on relaunch found two failures in `TestHardGateFiresAtProductionScale`:
+
+1. **Fixture bug**: the `needed_tokens // 3` chars-per-token divisor didn't match cl100k_base's actual
+   encoding rate for the repeated-string body used, overshooting the intended token count by ~1.7x. Fixed
+   with a calibrated `_big_tool_body()` helper that measures the real tokens-per-element ratio via
+   `tiktoken` before sizing, instead of assuming a fixed ratio.
+2. **A real finding, not a fixture bug**: once sized correctly, `compress_in_place` achieved *zero*
+   reduction on the fixture — `middle_tokens_out == middle_tokens_in`. Root cause: the tail band's token
+   floor (`within_session_min_tail_ratio × context_window_max_tokens` = 24,000) is far smaller than what a
+   single tool response needs to reach to trip the hard threshold (81,600) — so any spike big enough to
+   fire the gate is, by construction, also big enough to land entirely in the verbatim-preserved tail and
+   never reach the pre-pass/summariser step. This is now **Finding 3** in the findings doc, and the test
+   (`test_compress_in_place_cannot_shrink_a_tail_resident_spike`) asserts the real observed behavior instead
+   of an invented expectation. See `docs/research/2026-07-17-fre-908-compression-gate-proof.md`.
+
+No scope change: still measurement-only, no `src/` behavior touched, no threshold changed.
+
+### Self-review (workflow code-review, `high`/`--effort low`)
+
+Two findings reported, both on the new `test_compress_in_place_cannot_shrink_a_tail_resident_spike`:
+
+- **Finding [0]** (stale): quoted the pre-fix assertions and pre-fix test name verbatim — the workflow's
+  isolated worktree checked out the last commit (the killed session's WIP checkpoint), not the uncommitted
+  fixes above. Already resolved by the sizing fix and the rewritten assertions; no action needed.
+- **Finding [1]** (confirmed, real): the test called `compress_in_place` without mocking the compressor LLM
+  path, unlike every existing test in the sibling `test_within_session_compression.py`, which patches
+  `context_compressor.compress_turns`. Verified the specific severity claim ("~25s of network latency" /
+  "a live billed LLM call") is inaccurate — `LiteLLMClient.respond` fails fast (~36ms) via the CostGate
+  guard (`cost_gate/__init__.py:71-83`) since no gate is registered in tests, before any network I/O. But the
+  underlying hygiene point stood: relying on that incidental fast-fail instead of an explicit mock is
+  fragile (breaks silently if a CostGate is ever registered process-wide by test ordering/pollution) and
+  inconsistent with the established convention. Fixed: patch
+  `personal_agent.orchestrator.context_compressor.compress_turns` with a `FALLBACK_MARKER`-returning fake,
+  matching `test_fallback_marker_keeps_pre_passed_middle`'s pattern exactly.
+
+No security-review run — test-only diff, no inputs/subprocess/auth/network touched (the docker-compose YAML
+check reads a repo file, not a subprocess; the mocked compressor call makes no real network call).

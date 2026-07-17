@@ -28,6 +28,7 @@ host-dependent and baking production key names into `audit_all()`'s process-wide
 
 from __future__ import annotations
 
+import ast
 import os
 
 os.environ.setdefault("AUDIT_DEPLOYED_ENV_ROOT", "/nonexistent/fre-893-test-isolation-root")
@@ -35,14 +36,17 @@ os.environ.setdefault("AUDIT_DEPLOYED_ENV_ROOT", "/nonexistent/fre-893-test-isol
 from scripts.audit.config_usage_audit import (  # noqa: E402
     CATEGORIES,
     _deployed_env_key_sources,
+    _extract_heredocs,
     audit_all,
     categorize,
     deployed_env_files_present,
+    external_reads,
     generate_inventory_section,
     generate_report,
     override_locations,
     splice_inventory_section,
 )
+from scripts.audit.settings_reads import collect_field_reads  # noqa: E402
 
 from personal_agent.config.settings import AppConfig  # noqa: E402
 
@@ -265,6 +269,160 @@ def test_splice_inventory_section_is_idempotent() -> None:
     assert once == twice == thrice
     assert twice.count("---") == 1
     assert "Some existing content." in twice
+
+
+def test_extract_heredocs_single_python_heredoc() -> None:
+    """A basic `<<'PY' ... PY` heredoc is extracted and its body parses as Python."""
+    script = "#!/usr/bin/env bash\nuv run python - <<'PY'\nx = 1\nPY\necho done\n"
+    bodies = _extract_heredocs(script)
+    assert len(bodies) == 1
+    looks_like_python, body = bodies[0]
+    assert looks_like_python is True
+    assert ast.parse(body).body  # parses cleanly
+
+
+def test_extract_heredocs_line_numbers_align_with_source() -> None:
+    """A field read inside the heredoc reports the *real* file line, not the heredoc-local one.
+
+    Needed for the evidence report's `file:line` citations to point at real code (FRE-907).
+    """
+    script = (
+        "#!/usr/bin/env bash\n"  # line 1
+        "set -e\n"  # line 2
+        "uv run python - <<'PY'\n"  # line 3
+        "from personal_agent.config import settings\n"  # line 4
+        "x = settings.debug\n"  # line 5
+        "PY\n"  # line 6
+    )
+    _, body = _extract_heredocs(script)[0]
+    tree = ast.parse(body)
+    reads = collect_field_reads(tree, frozenset({"debug"}))
+    assert reads == [("debug", 5)]
+
+
+def test_extract_heredocs_dash_variant_strips_leading_tabs() -> None:
+    """`<<-DELIM` strips each body line's leading tabs before parsing (Bash's own behavior).
+
+    Without this, an indented heredoc body fails `ast.parse` even though Bash runs it fine.
+    """
+    script = (
+        "cmd <<-'PY'\n\tfrom personal_agent.config import settings\n\tx = settings.debug\n\tPY\n"
+    )
+    bodies = _extract_heredocs(script)
+    assert len(bodies) == 1
+    _, body = bodies[0]
+    tree = ast.parse(body)
+    assert collect_field_reads(tree, frozenset({"debug"}))
+
+
+def test_extract_heredocs_skips_commented_out_marker() -> None:
+    """A heredoc marker on a whole-line comment never actually runs — must not be scanned."""
+    script = "# uv run python - <<'PY'\n# x = settings.debug\n# PY\necho hi\n"
+    assert _extract_heredocs(script) == []
+
+
+def test_extract_heredocs_skips_marker_text_inside_a_quoted_string() -> None:
+    """`<<DELIM`-shaped text inside an unrelated quoted string is not a real heredoc start.
+
+    Regression guard for a code-review-confirmed defect: `echo "usage: cmd <<PY"` used to
+    be mistaken for a real heredoc redirect, which then swallowed the *next* genuine
+    heredoc's start line and body into a bogus, unparseable match — silently dropping a
+    real settings read (the exact wrong-deletion failure mode this ticket exists to close).
+    """
+    script = (
+        'echo "usage: cmd <<PY"\n'
+        "uv run python - <<'PY'\n"
+        "from personal_agent.config import settings\n"
+        "x = settings.debug\n"
+        "PY\n"
+        "echo done\n"
+    )
+    bodies = _extract_heredocs(script)
+    assert len(bodies) == 1
+    _, body = bodies[0]
+    reads = {field for field, _ in collect_field_reads(ast.parse(body), frozenset({"debug"}))}
+    assert "debug" in reads
+
+
+def test_extract_heredocs_paired_quotes_before_marker_still_recognized() -> None:
+    """Quoted args before the heredoc redirect don't confuse the quote-parity check.
+
+    The real `run_embedder_benchmark.sh` shape — `uv run python - "$EMBEDDER" "$DIMS"
+    <<'PY'` — has each quote opened and closed before the redirect, so it's still
+    recognized as a real heredoc start.
+    """
+    script = 'uv run python - "$EMBEDDER" "$DIMS" <<\'PY\'\nx = 1\nPY\n'
+    bodies = _extract_heredocs(script)
+    assert len(bodies) == 1
+
+
+def test_extract_heredocs_terminator_requires_exact_match() -> None:
+    """The terminator line must match the delimiter exactly — no `.strip()` leniency.
+
+    Regression guard for a code-review-confirmed defect: an earlier version compared
+    `.strip()` on both sides, so a merely-indented or trailing-whitespace line (which real
+    Bash does NOT treat as a terminator — it keeps reading) ended the heredoc early,
+    silently truncating (dropping) genuine reads past that point.
+    """
+    # Trailing whitespace after `PY` is not a real terminator in Bash — the heredoc must
+    # keep reading through it to the real (exact) `PY` below.
+    script = (
+        "uv run python - <<'PY'\n"
+        "from personal_agent.config import settings\n"
+        "x = settings.debug\n"
+        "PY  \n"  # not a real terminator (trailing whitespace)
+        "y = settings.neo4j_uri\n"
+        "PY\n"
+    )
+    _, body = _extract_heredocs(script)[0]
+    reads = {
+        field
+        for field, _ in collect_field_reads(ast.parse(body), frozenset({"debug", "neo4j_uri"}))
+    }
+    assert reads == {"debug", "neo4j_uri"}
+
+
+def test_extract_heredocs_field_read_only_inside_heredoc_resolves() -> None:
+    """AC (FRE-907): a field read ONLY via a `.sh`-embedded heredoc is not `never-read`.
+
+    Proves the end-to-end mechanism (extraction + AST parse + alias-aware read
+    detection) on a synthetic script, independent of `_ast_reads_by_field`'s process-wide
+    `lru_cache` (which can't be redirected to a fixture without leaking across other
+    tests — see the real-file integration test below for that wiring proof).
+    """
+    script = "uv run python - <<'PY'\nfrom personal_agent.config import settings\nprint(settings.neo4j_uri)\nPY\n"
+    _, body = _extract_heredocs(script)[0]
+    reads = {field for field, _ in collect_field_reads(ast.parse(body), frozenset({"neo4j_uri"}))}
+    assert "neo4j_uri" in reads
+
+
+def test_sh_embedded_reads_wired_into_scripts_root_evidence() -> None:
+    """The two known `.sh`-embedded heredoc reads are wired into real `scripts`-root evidence.
+
+    Ties directly to the two production files FRE-907 named: `neo4j_uri` and
+    `embedding_dimensions` are each read inside a `uv run python - <<'PY'` heredoc there.
+    Asserts the exact `file:line` citation, not just presence, to prove the line-padding
+    (`_extract_heredocs`'s blank-line prefix) actually lands on the real source line.
+    """
+    neo4j_hits = external_reads("neo4j_uri").get("scripts", [])
+    assert "scripts/eval/fre435_memory_recall/run_embedder_benchmark.sh:90" in neo4j_hits
+
+    dims_hits = external_reads("embedding_dimensions").get("scripts", [])
+    assert "scripts/eval/fre435_memory_recall/run_embedder_benchmark.sh:93" in dims_hits
+    assert "scripts/eval/fre817_corpus_ab_embedder/run_corpus_ab.sh:32" in dims_hits
+
+
+def test_generate_report_describes_ast_scan_not_git_grep() -> None:
+    """The Methodology section describes the actual AST alias-aware scan (FRE-907).
+
+    Regression guard for the stale-prose bug: an earlier version of `generate_report()`
+    still described the retired `git grep` mechanism, even though FRE-896 had already
+    replaced it with the AST scan in `settings_reads.py`.
+    """
+    report = generate_report(audit_all())
+    assert "git grep" not in report
+    assert "AST alias-aware scan" in report
+    assert ".sh" in report
 
 
 def test_splice_inventory_section_handles_dangling_separator_with_no_marker() -> None:

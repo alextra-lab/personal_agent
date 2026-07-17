@@ -61,6 +61,7 @@ from dataclasses import field as dataclass_field
 from functools import lru_cache
 from pathlib import Path
 
+import structlog
 import yaml  # type: ignore[import-untyped]
 from dotenv import dotenv_values
 from pydantic.fields import FieldInfo
@@ -74,6 +75,8 @@ from scripts.audit.config_inventory import (
     _is_secret,
 )
 from scripts.audit.settings_reads import collect_field_reads
+
+log = structlog.get_logger(__name__)
 
 SETTINGS_FILE = REPO_ROOT / "src" / "personal_agent" / "config" / "settings.py"
 SUBSTRATE_MANIFEST = REPO_ROOT / "config" / "substrate.yaml"
@@ -112,6 +115,98 @@ CATEGORIES: frozenset[str] = frozenset(
 _MANIFEST_SETTING = re.compile(r'source:\s*"setting:(\w+)"')
 _CONFTEST_SETDEFAULT = re.compile(r'os\.environ\.setdefault\(\s*["\'](AGENT_\w+)["\']')
 
+# Matches a Bash heredoc start marker: `<<DELIM`, `<<'DELIM'`, `<<"DELIM"`, or the
+# tab-stripping `<<-DELIM` variant. Group 1 is the `-` (or empty), group 3 the delimiter.
+_HEREDOC_START = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+
+
+def _unquoted_before(line: str, pos: int) -> bool:
+    """Whether `line[:pos]` ends outside any open shell quote (`'...'` / `"..."`).
+
+    A per-line quote-parity walk — not a full shell tokenizer, but enough to tell a real
+    heredoc redirect from `<<DELIM`-shaped text sitting inside an unrelated quoted string
+    (e.g. `echo "usage: cmd <<PY"`), which would otherwise be mistaken for a real heredoc
+    start and swallow the *next* genuine heredoc's start line and body into a bogus,
+    unparseable match — a real settings read silently dropped, the exact failure mode
+    this ticket exists to close (a code-review pass on this ticket found this gap).
+    Backslash escapes only apply inside double quotes, mirroring Bash.
+    """
+    in_single = False
+    in_double = False
+    i = 0
+    while i < pos:
+        ch = line[i]
+        if ch == "\\" and in_double:
+            i += 2
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        i += 1
+    return not in_single and not in_double
+
+
+def _extract_heredocs(text: str) -> list[tuple[bool, str]]:
+    r"""Every heredoc body in a shell script, as ``(looks_like_python, padded_body)`` pairs.
+
+    FRE-907: ``_ast_reads_by_field`` originally globbed only ``*.py``, so a settings read
+    embedded in a `.sh` heredoc (``uv run python - <<'PY' ... settings.<field> ... PY``,
+    real at ``scripts/eval/fre435_memory_recall/run_embedder_benchmark.sh`` and
+    ``scripts/eval/fre817_corpus_ab_embedder/run_corpus_ab.sh``) was invisible, so the
+    field could be silently misclassified `never-read`.
+
+    Each body is left-padded with blank lines so ``ast.parse``'s line numbers land on the
+    heredoc's true position in the file — required for the evidence report's `file:line`
+    citations to point at real code. Handles the ``<<-DELIM`` variant (Bash strips each
+    body line's — and the terminator line's — leading tabs before running it, so this
+    strips them too before ``ast.parse``); the terminator line must otherwise match the
+    delimiter *exactly* (no other leading/trailing whitespace tolerated), matching real
+    Bash semantics — an earlier version used `.strip()` on both sides, which terminated a
+    heredoc early on a merely-indented or trailing-whitespace line that real Bash would
+    have kept reading past, silently truncating (dropping) genuine reads past that point
+    (a code-review pass on this ticket found this). A heredoc marker on a whole-line
+    comment (``# ... <<PY``) is skipped, since it never actually runs, and one whose
+    `<<DELIM` text sits inside an unrelated quoted string is skipped too (see
+    `_unquoted_before`). Only one heredoc per line is recognized — `cmd <<A <<B` doesn't
+    occur anywhere in this repo's `.sh` files (verified), and speculatively handling it
+    would add real complexity for a case with no current consumer. ``looks_like_python``
+    flags whether the marker line mentions `python`, so the caller can distinguish a
+    genuine parse failure (worth a warning) from a non-Python heredoc (SQL/YAML/
+    here-string config — silently not Python, expected).
+    """
+    lines = text.splitlines()
+    bodies: list[tuple[bool, str]] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith("#"):
+            i += 1
+            continue
+        match = _HEREDOC_START.search(line)
+        if match is None or not _unquoted_before(line, match.start()):
+            i += 1
+            continue
+        strip_tabs = match.group(1) == "-"
+        delimiter = match.group(3)
+        looks_like_python = "python" in line.lower()
+        start = i + 1
+        end = start
+        while end < len(lines):
+            candidate = lines[end].lstrip("\t") if strip_tabs else lines[end]
+            if candidate == delimiter:
+                break
+            end += 1
+        if end >= len(lines):
+            i = len(lines)  # unterminated heredoc — malformed script, stop scanning
+            continue
+        body_lines = lines[start:end]
+        if strip_tabs:
+            body_lines = [ln.lstrip("\t") for ln in body_lines]
+        bodies.append((looks_like_python, ("\n" * start) + "\n".join(body_lines)))
+        i = end + 1
+    return bodies
+
 
 @dataclass(frozen=True)
 class FieldUsage:
@@ -129,14 +224,18 @@ class FieldUsage:
 def _ast_reads_by_field() -> dict[str, dict[str, list[str]]]:
     """`field -> {root -> [file:line, ...]}` for every alias-aware read across the tree.
 
-    One AST pass over every `*.py` under `src`, `scripts`, `tests` (excluding
-    `settings.py` itself — the field's own definition module), delegating alias
+    An AST pass over every `*.py` under `src`, `scripts`, `tests` (excluding
+    `settings.py` itself — the field's own definition module) plus every `.sh` file's
+    embedded Python heredocs (FRE-907 — see `_extract_heredocs`), delegating alias
     resolution to `scripts.audit.settings_reads.collect_field_reads` (FRE-896). Replaces
     FRE-893's line-oriented `git grep`, which could not see reads through an alias
     (`cfg = settings`, `get_settings().<field>`, a multi-line `getattr`, an
-    `AppConfig`-typed param, or a `self._settings` attribute alias). Cached — repo state
-    is fixed within a process. A file that fails to parse (e.g. a Python 2 fixture) is
-    skipped rather than aborting the whole audit.
+    `AppConfig`-typed param or its own import alias, or a `self._settings` attribute
+    alias). Cached — repo state is fixed within a process. A `.py` file that fails to
+    parse (e.g. a Python 2 fixture) is skipped rather than aborting the whole audit; a
+    `.sh` heredoc that fails to parse is also skipped, but warned to stderr when its
+    marker line looks like a Python invocation — a silent skip there would recreate the
+    exact wrong-deletion failure mode this ticket exists to close.
     """
     field_names = frozenset(AppConfig.model_fields)
     settings_rel = str(SETTINGS_FILE.relative_to(REPO_ROOT))
@@ -152,6 +251,28 @@ def _ast_reads_by_field() -> dict[str, dict[str, list[str]]]:
                 continue
             for field_name, lineno in collect_field_reads(tree, field_names):
                 by_field.setdefault(field_name, {}).setdefault(root, []).append(f"{rel}:{lineno}")
+        for path in sorted((REPO_ROOT / root).rglob("*.sh")):
+            rel = str(path.relative_to(REPO_ROOT))
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for looks_like_python, body in _extract_heredocs(text):
+                try:
+                    tree = ast.parse(body)
+                except (SyntaxError, ValueError):
+                    if looks_like_python:
+                        log.warning(
+                            "heredoc_parse_failed",
+                            file=rel,
+                            reason="python-looking heredoc failed to parse — settings "
+                            "reads inside it are invisible to this audit",
+                        )
+                    continue
+                for field_name, lineno in collect_field_reads(tree, field_names):
+                    by_field.setdefault(field_name, {}).setdefault(root, []).append(
+                        f"{rel}:{lineno}"
+                    )
     return by_field
 
 
@@ -406,17 +527,22 @@ def generate_report(results: list[FieldUsage]) -> str:
     )
     lines.append("")
     lines.append(
-        "- **Reads** — (1) `git grep` for `settings.<field>` or "
-        '`getattr(settings, "<field>")` across `src/`, `scripts/`, `tests/` (excluding '
-        "`settings.py` itself), tagged by root; (2) whether `settings.py` consults the "
-        "field via `self.<field>` inside one of its cross-field validators; (3) whether "
-        '`config/substrate.yaml` names the field via `source: "setting:<field>"` — the '
-        "one dynamic `getattr(settings, field)` resolution path in the codebase "
-        "(`src/personal_agent/config/substrate.py::_resolve_setting`), which no "
-        "literal-string grep can trace without reading the manifest directly. Only "
-        "`src`-root hits, the self-read check, or the manifest check count as **production** "
-        "read evidence — a field touched only under `tests/`/`scripts/` is not treated as "
-        "production load-bearing."
+        "- **Reads** — (1) an AST alias-aware scan (`scripts/audit/settings_reads.py`, "
+        "FRE-896/FRE-907) over every `*.py` file plus `.sh`-embedded Python heredocs, "
+        "across `src/`, `scripts/`, `tests/` (excluding `settings.py` itself), tagged by "
+        'root — resolves `settings.<field>` / `getattr(settings, "<field>")` reached '
+        "through a local alias, an aliased `settings` import (`import settings as X`), a "
+        "`get_settings()` factory chain (incl. an aliased factory import), a multi-line "
+        "`getattr`, an `AppConfig`-typed param or direct construction (under its own name "
+        "or an import alias), and a `self._settings` attribute alias; (2) whether `settings.py` "
+        "consults the field via `self.<field>` inside one of its cross-field validators; "
+        '(3) whether `config/substrate.yaml` names the field via `source: "setting:<field>"` '
+        "— the one dynamic `getattr(settings, field)` resolution path in the codebase "
+        "(`src/personal_agent/config/substrate.py::_resolve_setting`), which no AST scan "
+        "can trace without reading the manifest directly. Only `src`-root hits, the "
+        "self-read check, or the manifest check count as **production** read evidence — a "
+        "field touched only under `tests/`/`scripts/` is not treated as production "
+        "load-bearing."
     )
     lines.append(
         "- **Overrides** — (1) the 5 `docker-compose*.yml` files, parsed with `pyyaml` "

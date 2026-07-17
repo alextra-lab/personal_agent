@@ -26,6 +26,13 @@ all higher-stakes because each is the *wrong-deletion* direction — a genuine r
 7. **Settings-import alias** — ``from personal_agent.config import settings as X`` then
    ``X.<field>`` (real at ``orchestrator/executor.py``, 7× across ``src/``).
 
+FRE-907 found an eighth, in the same wrong-deletion direction: the checks above compared
+an annotation or a call's callee name against the literal string ``"AppConfig"``, so:
+
+8. **AppConfig type alias** — ``from personal_agent.config.settings import AppConfig as X``
+   then an ``X``-typed param (``def f(cfg: X): cfg.<field>``) or direct ``X()``
+   construction — silently dropped the read regardless of the bound parameter's own name.
+
 This module resolves all of them with an AST pass instead of a regex. Granularity is
 file→field (the audit only asks *which fields a file reads*), so alias resolution is a
 file-level union rather than a per-scope dataflow — a deliberate bias to the *keep*
@@ -57,35 +64,50 @@ _CONFIG_MODULES: frozenset[str] = frozenset(
 )
 
 
-def _collect_factory_names(tree: ast.AST) -> frozenset[str]:
-    """Every name that resolves to ``get_settings`` in this module (incl. import aliases).
+def _collect_import_aliases(tree: ast.AST, target_names: frozenset[str]) -> frozenset[str]:
+    """Every name that resolves to one of ``target_names`` in this module (incl. import aliases).
 
-    Seeded with the canonical ``get_settings``; extended with
-    ``from personal_agent.config[.settings] import get_settings as X`` alias imports, so
-    a factory reached under an alias (real at ``captains_log/capture.py``:
-    ``import get_settings as _get_settings``) is still recognized.
+    Seeded with ``target_names`` themselves; extended with
+    ``from personal_agent.config[.settings] import <target> as X`` alias imports, so a
+    name reached only under an alias is still recognized. Shared by
+    ``_collect_factory_names`` (target: ``get_settings`` — real at ``captains_log/capture.py``:
+    ``import get_settings as _get_settings``) and ``_collect_appconfig_type_names`` (target:
+    ``AppConfig`` — FRE-907: an aliased ``AppConfig`` import, e.g. ``import AppConfig as
+    Settings``, silently dropped the read when the check compared against the literal
+    string ``"AppConfig"``).
     """
-    names = {_FACTORY_NAME}
+    names = set(target_names)
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in _CONFIG_MODULES:
             for alias in node.names:
-                if alias.name == _FACTORY_NAME and alias.asname:
+                if alias.name in target_names and alias.asname:
                     names.add(alias.asname)
     return frozenset(names)
+
+
+def _collect_factory_names(tree: ast.AST) -> frozenset[str]:
+    """Every name that resolves to ``get_settings`` in this module (incl. import aliases)."""
+    return _collect_import_aliases(tree, frozenset({_FACTORY_NAME}))
+
+
+def _collect_appconfig_type_names(tree: ast.AST) -> frozenset[str]:
+    """Every name that resolves to the ``AppConfig`` class in this module (incl. import aliases)."""
+    return _collect_import_aliases(tree, _APPCONFIG_TYPES)
 
 
 def _is_settings_value(
     node: ast.expr | None,
     factory_names: frozenset[str],
-    name_aliases: frozenset[str] = frozenset(),
+    name_aliases: frozenset[str],
+    appconfig_type_names: frozenset[str],
 ) -> bool:
     """Whether an expression evaluates to an AppConfig instance.
 
     Recognizes the singleton name ``settings`` (and any already-known ``name_aliases``,
     which lets a DI param flow into a ``self._x = config`` attribute alias), a factory
     call (``get_settings()`` or an aliased factory in ``factory_names``), a direct
-    ``AppConfig()`` construction, and any ``BoolOp`` containing one of the above (covers
-    ``config or get_settings()``).
+    ``AppConfig()`` construction (or an aliased type in ``appconfig_type_names``), and
+    any ``BoolOp`` containing one of the above (covers ``config or get_settings()``).
     """
     if node is None:
         return False
@@ -94,31 +116,47 @@ def _is_settings_value(
     if isinstance(node, ast.Call):
         func = node.func
         if isinstance(func, ast.Name):
-            return func.id in factory_names or func.id in _APPCONFIG_TYPES
+            return func.id in factory_names or func.id in appconfig_type_names
         if isinstance(func, ast.Attribute):
-            return func.attr in factory_names or func.attr in _APPCONFIG_TYPES
+            return func.attr in factory_names or func.attr in appconfig_type_names
         return False
     if isinstance(node, ast.BoolOp):
-        return any(_is_settings_value(v, factory_names, name_aliases) for v in node.values)
+        return any(
+            _is_settings_value(v, factory_names, name_aliases, appconfig_type_names)
+            for v in node.values
+        )
     return False
 
 
-def _annotation_is_appconfig(annotation: ast.expr | None) -> bool:
-    """Whether a type annotation names ``AppConfig`` (bare, unioned, subscripted, or string)."""
+def _annotation_is_appconfig(
+    annotation: ast.expr | None, appconfig_type_names: frozenset[str]
+) -> bool:
+    """Whether a type annotation names ``AppConfig`` (bare, unioned, subscripted, or string).
+
+    ``appconfig_type_names`` widens the ``Name``/``Attribute`` match to import aliases of
+    ``AppConfig`` — see ``_collect_appconfig_type_names``. The string/forward-ref branch
+    deliberately does NOT widen: it substring-matches, and a short alias (e.g. a
+    single-letter ``import AppConfig as S``) would false-positive against any unrelated
+    string annotation merely containing that letter (a code-review pass on this ticket
+    found this precision regression) — safe against the canonical name (10 characters,
+    low collision risk), not safe against an arbitrary alias.
+    """
     if annotation is None:
         return False
     if isinstance(annotation, ast.Name):
-        return annotation.id in _APPCONFIG_TYPES
+        return annotation.id in appconfig_type_names
     if isinstance(annotation, ast.Attribute):
-        return annotation.attr in _APPCONFIG_TYPES
+        return annotation.attr in appconfig_type_names
     if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
-        return _annotation_is_appconfig(annotation.left) or _annotation_is_appconfig(
-            annotation.right
-        )
+        return _annotation_is_appconfig(
+            annotation.left, appconfig_type_names
+        ) or _annotation_is_appconfig(annotation.right, appconfig_type_names)
     if isinstance(annotation, ast.Subscript):  # Optional[AppConfig] / Union[..., AppConfig]
-        return _annotation_is_appconfig(annotation.slice) or (
+        return _annotation_is_appconfig(annotation.slice, appconfig_type_names) or (
             isinstance(annotation.slice, ast.Tuple)
-            and any(_annotation_is_appconfig(elt) for elt in annotation.slice.elts)
+            and any(
+                _annotation_is_appconfig(elt, appconfig_type_names) for elt in annotation.slice.elts
+            )
         )
     if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
         return any(t in annotation.value for t in _APPCONFIG_TYPES)
@@ -137,7 +175,9 @@ def _function_params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> Iterable[a
 
 
 def settings_alias_names(
-    tree: ast.AST, factory_names: frozenset[str] | None = None
+    tree: ast.AST,
+    factory_names: frozenset[str] | None = None,
+    appconfig_type_names: frozenset[str] | None = None,
 ) -> tuple[frozenset[str], frozenset[str]]:
     """Resolve the ``(name_aliases, attr_aliases)`` bound to an AppConfig instance.
 
@@ -157,11 +197,18 @@ def settings_alias_names(
     Args:
         tree: A parsed module AST.
         factory_names: Names resolving to ``get_settings`` (computed if omitted).
+        appconfig_type_names: Names resolving to the ``AppConfig`` class, incl. import
+            aliases (computed if omitted).
 
     Returns:
         A ``(name_aliases, attr_aliases)`` pair of frozensets.
     """
     factories = factory_names if factory_names is not None else _collect_factory_names(tree)
+    appconfig_types = (
+        appconfig_type_names
+        if appconfig_type_names is not None
+        else _collect_appconfig_type_names(tree)
+    )
     name_aliases: set[str] = {_SINGLETON_NAME}
     assigns: list[ast.Assign | ast.AnnAssign] = []
 
@@ -175,7 +222,7 @@ def settings_alias_names(
             assigns.append(node)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for arg in _function_params(node):
-                if _annotation_is_appconfig(arg.annotation):
+                if _annotation_is_appconfig(arg.annotation, appconfig_types):
                     name_aliases.add(arg.arg)
 
     # Pass 1 — name aliases from assignments, to a fixpoint so alias→alias chains
@@ -184,7 +231,9 @@ def settings_alias_names(
     while changed:
         changed = False
         for node in assigns:
-            if not _is_settings_value(node.value, factories, frozenset(name_aliases)):
+            if not _is_settings_value(
+                node.value, factories, frozenset(name_aliases), appconfig_types
+            ):
                 continue
             for name in _assign_name_targets(node):
                 if name not in name_aliases:
@@ -192,7 +241,9 @@ def settings_alias_names(
                     changed = True
         # AnnAssign whose annotation is AppConfig binds regardless of RHS.
         for node in assigns:
-            if isinstance(node, ast.AnnAssign) and _annotation_is_appconfig(node.annotation):
+            if isinstance(node, ast.AnnAssign) and _annotation_is_appconfig(
+                node.annotation, appconfig_types
+            ):
                 if isinstance(node.target, ast.Name) and node.target.id not in name_aliases:
                     name_aliases.add(node.target.id)
                     changed = True
@@ -205,7 +256,7 @@ def settings_alias_names(
     for node in assigns:
         if not isinstance(node, ast.Assign):
             continue
-        if not _is_settings_value(node.value, factories, frozen_names):
+        if not _is_settings_value(node.value, factories, frozen_names, appconfig_types):
             continue
         for tgt in node.targets:
             if (
@@ -230,12 +281,13 @@ def _value_is_settings(
     factory_names: frozenset[str],
     name_aliases: frozenset[str],
     attr_aliases: frozenset[str],
+    appconfig_type_names: frozenset[str],
 ) -> bool:
     """Whether a receiver expression refers to an AppConfig instance (name/factory/attr)."""
     if isinstance(node, ast.Name):
         return node.id in name_aliases
     if isinstance(node, ast.Call) or isinstance(node, ast.BoolOp):
-        return _is_settings_value(node, factory_names, name_aliases)
+        return _is_settings_value(node, factory_names, name_aliases, appconfig_type_names)
     if (
         isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name)
@@ -261,19 +313,24 @@ def collect_field_reads(tree: ast.AST, field_names: frozenset[str]) -> list[tupl
         A list of ``(field_name, lineno)`` reads, in AST walk order.
     """
     factory_names = _collect_factory_names(tree)
-    name_aliases, attr_aliases = settings_alias_names(tree, factory_names)
+    appconfig_types = _collect_appconfig_type_names(tree)
+    name_aliases, attr_aliases = settings_alias_names(tree, factory_names, appconfig_types)
     reads: list[tuple[str, int]] = []
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and node.attr in field_names:
-            if _value_is_settings(node.value, factory_names, name_aliases, attr_aliases):
+            if _value_is_settings(
+                node.value, factory_names, name_aliases, attr_aliases, appconfig_types
+            ):
                 reads.append((node.attr, node.lineno))
         elif (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id == "getattr"
             and len(node.args) >= 2
-            and _value_is_settings(node.args[0], factory_names, name_aliases, attr_aliases)
+            and _value_is_settings(
+                node.args[0], factory_names, name_aliases, attr_aliases, appconfig_types
+            )
         ):
             key = node.args[1]
             if (

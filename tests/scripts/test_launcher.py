@@ -16,6 +16,7 @@ Covers ADR-0110 acceptance criteria carried by FRE-786:
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Sequence
 
 import pytest
@@ -125,6 +126,25 @@ def test_clear_full_caps_launches_at_model_with_seed() -> None:
     assert f"--session-id {plan.session_id}" in joined
     assert "/build FRE-786" in joined  # the seed carries the resolved ticket (AC3)
     assert "|" not in joined  # never piped
+    # FRE-911: worker seats launch in acceptEdits so they never strand on an
+    # edit-permission prompt when the owner cannot reach the seat.
+    assert "--permission-mode acceptEdits" in joined
+
+
+def test_worker_seat_launches_in_accept_edits_permission_mode() -> None:
+    """FRE-911 regression: a dispatched seat must not block on an edit prompt.
+
+    A worker runs unattended and the owner may be unable to reach it, so the
+    launch command must carry ``--permission-mode acceptEdits`` — the flag and
+    its value adjacent, in that order, so claude parses it correctly. The claude
+    invocation is the last (shlex-joined) element of the tmux argv, so it is
+    split back out before asserting on the flag/value pair.
+    """
+    plan = plan_launch("build2", "FRE-880", "sonnet", context_keep=False)
+    assert plan.command is not None
+    inner = shlex.split(plan.command[-1])
+    assert "--permission-mode" in inner, "worker seat launched without a permission mode"
+    assert inner[inner.index("--permission-mode") + 1] == "acceptEdits"
 
 
 # --- AC-2 KEEP: never machine-launch, never reset --------------------------

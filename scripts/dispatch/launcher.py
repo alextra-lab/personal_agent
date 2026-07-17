@@ -65,6 +65,14 @@ from scripts.dispatch.tmux_target import exact_session
 # free-form value ever reaches the tmux-parsed inner command (codex #4).
 _MODELS: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
 
+# Permission mode every dispatched worker seat launches in. A worker runs
+# unattended and the owner may be unable to reach it (RC can drop), so a seat
+# that blocks on an edit-permission prompt strands unadvanceably (FRE-911).
+# ``acceptEdits`` auto-approves file edits inside the isolated worktree while
+# still gating non-edit actions; worktree isolation + master's PR gate are the
+# compensating controls. This is the mode a healthy seat already runs in.
+_WORKER_PERMISSION_MODE: str = "acceptEdits"
+
 # The approved-allowlist channel reference the launcher passes to ``--channels``
 # when a seat is cut over to channel-mode delivery (ADR-0116). Resolves to the
 # in-repo ``seshat-dispatch`` plugin registered in the local ``seshat-dispatch``
@@ -361,6 +369,15 @@ def _build_tmux_command(
         model,
         "--session-id",
         session_id,
+        # A dispatched worker runs unattended — the owner may not be able to
+        # reach the seat (RC can drop). Without this, a fresh seat blocks on its
+        # first file-edit permission prompt and strands, unadvanceable, until
+        # master send-keys it (2026-07-17 incident, FRE-911). acceptEdits
+        # auto-approves edits inside the isolated worktree — the same mode a
+        # working seat already runs in — while non-edit actions still gate. The
+        # worktree isolation + master's PR gate are the compensating controls.
+        "--permission-mode",
+        _WORKER_PERMISSION_MODE,
     ]
     # The seed is a positional and must be appended BEFORE the channel flag:
     # ``--channels`` is variadic (it accepts several space-separated plugin refs),

@@ -52,6 +52,7 @@ from scripts.dispatch.gating_watcher import (
     session_for_labels,
     session_is_idle,
 )
+from scripts.dispatch.tmux_target import exact_pane
 from scripts.dispatch.trigger_ledger import snapshot_unconsumed
 
 _MODULE_PATH = Path("scripts/dispatch/gating_watcher.py")
@@ -631,8 +632,8 @@ def test_send_master_injects_regardless_of_busy_pane() -> None:
     assert not any(call[:2] == ("tmux", "capture-pane") for call in runner.calls)
     send_keys = [call for call in runner.calls if call[:2] == ("tmux", "send-keys")]
     assert send_keys == [
-        ("tmux", "send-keys", "-t", "cc-master", "-l", "/master 1"),
-        ("tmux", "send-keys", "-t", "cc-master", "Enter"),
+        ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 1"),
+        ("tmux", "send-keys", "-t", "=cc-master:0.0", "Enter"),
     ]
 
 
@@ -646,8 +647,8 @@ def test_send_idle_session_injects() -> None:
     assert send_to_session("cc-master", "/master 1", runner) == "sent"
     send_keys = [call for call in runner.calls if call[:2] == ("tmux", "send-keys")]
     assert send_keys == [
-        ("tmux", "send-keys", "-t", "cc-master", "-l", "/master 1"),
-        ("tmux", "send-keys", "-t", "cc-master", "Enter"),
+        ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 1"),
+        ("tmux", "send-keys", "-t", "=cc-master:0.0", "Enter"),
     ]
 
 
@@ -685,7 +686,7 @@ def test_run_once_master_dedup_across_ticks() -> None:
         execute=True,
     )
     sends_tick1 = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
-    assert ("tmux", "send-keys", "-t", "cc-master", "-l", "/master 412") in sends_tick1
+    assert ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 412") in sends_tick1
     assert saved == {"master:412:abc1234def5678": 100.0}
 
     # tick 2 — same PR/sha, within TTL → no re-send
@@ -959,7 +960,7 @@ def test_run_once_reconciles_pending_ledger_entry_before_new_decisions() -> None
         ledger_persist=ledger.update,
     )
     sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
-    assert ("tmux", "send-keys", "-t", "cc-master", "-l", "/master 999") in sends
+    assert ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 999") in sends
     assert ledger["master:999:deadbeef"].consumed_at is not None
 
 
@@ -1109,8 +1110,15 @@ def test_run_once_send_keys_mode_seat_unaffected_by_channel_wiring() -> None:
     )
     sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
     assert sends == [
-        ("tmux", "send-keys", "-t", "cc-build2", "-l", "PR #412 failed CI checks - correct them"),
-        ("tmux", "send-keys", "-t", "cc-build2", "Enter"),
+        (
+            "tmux",
+            "send-keys",
+            "-t",
+            "=cc-build2:0.0",
+            "-l",
+            "PR #412 failed CI checks - correct them",
+        ),
+        ("tmux", "send-keys", "-t", "=cc-build2:0.0", "Enter"),
     ]
     entry = ledger["worker:412:abc1234def5678"]
     assert entry.transport == "send_keys"
@@ -1431,7 +1439,9 @@ def test_run_once_context_pressure_sends_nudge_when_idle_and_over_threshold() ->
         context_reader=lambda: [_pressure_reading()],
     )
     send_calls = [c for c in runner.calls if c[:2] == ("tmux", "send-keys") and len(c) == 6]
-    assert send_calls == [("tmux", "send-keys", "-t", MASTER_SESSION, "-l", send_calls[0][5])]
+    assert send_calls == [
+        ("tmux", "send-keys", "-t", exact_pane(MASTER_SESSION), "-l", send_calls[0][5])
+    ]
     assert send_calls[0][5].startswith("Context at 75% —")
     assert state == {"ctxpressure:cc-master": 100.0}
 
@@ -1498,7 +1508,7 @@ def test_run_once_context_pressure_defaults_do_not_affect_pr_only_ticks() -> Non
     )
     sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
     assert len(sends) == 2  # exactly the /master trigger's send-keys pair, nothing extra
-    assert ("tmux", "send-keys", "-t", "cc-master", "-l", "/master 412") in sends
+    assert ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 412") in sends
 
 
 # --- run_once: context-pressure wired through trigger_ledger (FRE-848) -----
@@ -1628,7 +1638,7 @@ def test_run_once_context_pressure_ledger_reconciles_pending_entry_before_new_de
         ledger_persist=ledger.update,
     )
     sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
-    assert ("tmux", "send-keys", "-t", "cc-master", "-l", "Context at 75% ...") in sends
+    assert ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "Context at 75% ...") in sends
     assert ledger["ctxpressure:cc-master"].consumed_at is not None
 
 

@@ -35,6 +35,7 @@ from scripts.dispatch.send_keys_whitelist import (
     send,
     validate,
 )
+from scripts.dispatch.tmux_target import exact_pane
 from scripts.dispatch.trigger_ledger import snapshot_unconsumed
 
 # --- fakes -------------------------------------------------------------------
@@ -253,9 +254,11 @@ def test_send_valid_build_sends() -> None:
     )
     assert outcome.result == "sent"
     send_keys = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
+    # FRE-909: actuation targets the EXACT pane (=name:0.0) via send_to_session;
+    # validate() still takes the bare seat name (pane attestation, unchanged).
     assert send_keys == [
-        ("tmux", "send-keys", "-t", _BUILD_PANE, "-l", "/build FRE-471"),
-        ("tmux", "send-keys", "-t", _BUILD_PANE, "Enter"),
+        ("tmux", "send-keys", "-t", exact_pane(_BUILD_PANE), "-l", "/build FRE-471"),
+        ("tmux", "send-keys", "-t", exact_pane(_BUILD_PANE), "Enter"),
     ]
     assert snapshot_unconsumed(ledger) == ()
     assert ledger["master:471:abc"].sent_at is not None

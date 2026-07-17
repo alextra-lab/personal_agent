@@ -103,6 +103,7 @@ from scripts.dispatch.launcher import (
     subprocess_runner,
     topology_for,
 )
+from scripts.dispatch.tmux_target import exact_pane, exact_session
 from scripts.reconcile_board import _git_toplevel, load_linear_key
 
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
@@ -853,16 +854,19 @@ def send_to_session(
         not exist; ``busy`` when ``require_idle`` and the pane is not idle — the
         latter two perform no injection.
     """
-    if runner(["tmux", "has-session", "-t", session]).returncode != 0:
+    # Exact-match targets throughout (FRE-909): a dead seat must resolve to
+    # nothing, never to a name-extension seat (cc-build -> cc-build2), which
+    # would inject this command into a DIFFERENT worker mid-build.
+    if runner(["tmux", "has-session", "-t", exact_session(session)]).returncode != 0:
         return "absent"
     if require_idle:
-        pane = runner(["tmux", "capture-pane", "-t", session, "-p"])
+        pane = runner(["tmux", "capture-pane", "-t", exact_pane(session), "-p"])
         if not session_is_idle(pane.stdout):
             return "busy"
     # Send the literal text, then Enter as a separate key — never let tmux parse
     # the command text as key names.
-    runner(["tmux", "send-keys", "-t", session, "-l", command])
-    runner(["tmux", "send-keys", "-t", session, "Enter"])
+    runner(["tmux", "send-keys", "-t", exact_pane(session), "-l", command])
+    runner(["tmux", "send-keys", "-t", exact_pane(session), "Enter"])
     return "sent"
 
 

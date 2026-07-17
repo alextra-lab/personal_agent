@@ -41,6 +41,8 @@ import re
 import subprocess
 import time
 
+from scripts.dispatch.tmux_target import exact_pane
+
 PROJECTS = os.path.expanduser("~/.claude/projects")
 DEFAULT_WINDOW = 1_000_000
 # The transcript has no window field, so map it from the model (confirmed via
@@ -91,8 +93,11 @@ def resolve_jsonl(session: str) -> str | None:
     process ``--session-id`` / ``CLAUDE_CODE_SESSION_ID`` stay at the LAUNCH
     session and go stale after ``/clear``. RC-proof; needs no open fd.
     """
+    # Exact-match pane target (FRE-909) — an absent seat must resolve to
+    # nothing, not to a name-extension seat whose context% would be reported
+    # as this seat's.
     pane_pid = (
-        _run(["tmux", "list-panes", "-t", f"{session}:0.0", "-F", "#{pane_pid}"])
+        _run(["tmux", "list-panes", "-t", exact_pane(session), "-F", "#{pane_pid}"])
         .strip()
         .split("\n")[0]
     )

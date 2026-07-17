@@ -30,6 +30,7 @@ from scripts.dispatch.launcher import (
     stream_for_tmux_session,
     topology_for,
 )
+from scripts.dispatch.tmux_target import exact_session
 
 
 class _FakeRunResult:
@@ -254,7 +255,9 @@ def test_execute_kills_existing_slot_before_new_session() -> None:
     kill_idx = next(i for i, c in enumerate(runner.calls) if "kill-session" in c)
     new_idx = next(i for i, c in enumerate(runner.calls) if "new-session" in c)
     assert kill_idx < new_idx  # torn down before recreated
-    assert any("kill-session" in c and plan.tmux_session in c for c in runner.calls)
+    # FRE-909: the teardown target is EXACT-matched (=name) so an absent seat
+    # cannot prefix-match and kill a live name-extension seat (cc-build2).
+    assert any("kill-session" in c and exact_session(plan.tmux_session) in c for c in runner.calls)
 
 
 def test_execute_dirty_worktree_aborts_without_tmux() -> None:

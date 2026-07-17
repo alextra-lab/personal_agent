@@ -885,6 +885,41 @@ async def test_artifact_draft_returns_expected_keys(
 
 
 @pytest.mark.asyncio
+async def test_artifact_draft_uses_artifact_builder_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1 slice (ADR-0118 T1, FRE-879): telemetry role is ARTIFACT_BUILDER, not SUB_AGENT."""
+    from personal_agent.llm_client.types import ModelRole
+
+    _store, client = _install_draft_fakes(monkeypatch)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="role-check", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert len(client.respond_calls) == 1
+    assert client.respond_calls[0]["role"] == ModelRole.ARTIFACT_BUILDER
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_start_log_reports_artifact_builder_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1 slice: the artifact_draft_sub_agent_start log's model_role field switches too."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    _install_draft_fakes(monkeypatch)
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="log-check", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    start_events = [kwargs for event, kwargs in events if event == "artifact_draft_sub_agent_start"]
+    assert len(start_events) == 1
+    assert start_events[0]["model_role"] == "artifact_builder"
+
+
+@pytest.mark.asyncio
 async def test_artifact_draft_chains_to_artifact_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

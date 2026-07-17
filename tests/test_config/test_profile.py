@@ -300,6 +300,7 @@ class TestResolveModelKey:
         assert resolve_model_key("primary") == "primary"
         assert resolve_model_key("sub_agent") == "sub_agent"
         assert resolve_model_key("compressor") == "compressor"
+        assert resolve_model_key("artifact_builder") == "artifact_builder"
 
     def test_redirects_primary_via_active_profile(self) -> None:
         """resolve_model_key returns profile.primary_model when a profile is active."""
@@ -332,6 +333,67 @@ class TestResolveModelKey:
             from personal_agent.config.profile import _current_profile
 
             _current_profile.reset(token)
+
+    def test_redirects_artifact_builder_via_active_profile(self) -> None:
+        """resolve_model_key returns profile.artifact_builder_model when a profile is active.
+
+        ADR-0119 §2/§4 (2026-07-16 amendment): artifact_builder joins primary/sub_agent as an
+        open role resolved via the ExecutionProfile — this is the regression fix for FRE-879's
+        first cut, which resolved artifact_builder through the model_roles.yaml matrix instead
+        and silently ignored the active profile.
+        """
+        profile = ExecutionProfile(
+            name="cloud",
+            primary_model="claude_sonnet",
+            sub_agent_model="claude_haiku",
+            artifact_builder_model="claude_haiku",
+            provider_type="cloud",
+        )
+        token = set_current_profile(profile)
+        try:
+            assert resolve_model_key("artifact_builder") == "claude_haiku"
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)
+
+    def test_active_profile_missing_artifact_builder_binding_raises(self) -> None:
+        """An active profile lacking artifact_builder_model fails loud, not silently.
+
+        Codex plan-review (FRE-879) caught that a plain pass-through here would resolve to
+        the bare string "artifact_builder" — not a real model key — and get_llm_client treats
+        an unresolved key as local, so a cloud profile missing the binding would silently run
+        local instead of Haiku. No silent fallback for an open role (ADR-0099 D1 convention).
+        """
+        profile = ExecutionProfile(
+            name="cloud",
+            primary_model="claude_sonnet",
+            sub_agent_model="claude_haiku",
+            provider_type="cloud",
+        )
+        token = set_current_profile(profile)
+        try:
+            with pytest.raises(ValueError, match="artifact_builder_model"):
+                resolve_model_key("artifact_builder")
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)
+
+    def test_real_profiles_artifact_builder_binding(self) -> None:
+        """The shipped local/cloud profiles bind artifact_builder correctly (AC-8).
+
+        Local stays on the local sub_agent model key; cloud stays on claude_haiku — proves the
+        actual deployed config, not just the Pydantic model's field-handling.
+        """
+        real_profiles = Path("config/profiles")
+        if not real_profiles.exists():
+            pytest.skip("config/profiles directory not present in working directory")
+
+        local_profile = load_profile("local", profiles_dir=real_profiles)
+        cloud_profile = load_profile("cloud", profiles_dir=real_profiles)
+        assert local_profile.artifact_builder_model == "sub_agent"
+        assert cloud_profile.artifact_builder_model == "claude_haiku"
 
     def test_does_not_redirect_compressor_role(self) -> None:
         """resolve_model_key never redirects compressor — only primary and sub_agent."""

@@ -499,6 +499,51 @@ models:
             )
 
     @pytest.mark.asyncio
+    async def test_respond_artifact_builder_resolves_via_local_profile(
+        self, client: LocalLLMClient
+    ) -> None:
+        """ADR-0118 T1 / FRE-879 regression: role=ARTIFACT_BUILDER must not look itself
+        up in model_configs directly — config/models.yaml intentionally has no
+        "artifact_builder" key (it is an ExecutionProfile-resolved open role, not a
+        matrix/models.yaml entry). Under the local profile (artifact_builder_model:
+        sub_agent), respond() must resolve to the "sub_agent" config entry and reach
+        the HTTP call, not raise ModelConfigError. (Code-review caught this on FRE-879:
+        the original wiring called self.model_configs.get(role.value) directly, which
+        broke every local-profile artifact_draft call.)
+        """
+        from personal_agent.config.profile import ExecutionProfile, _current_profile
+
+        mock_response = {
+            "choices": [{"message": {"role": "assistant", "content": "<html></html>"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        }
+        profile = ExecutionProfile(
+            name="local",
+            primary_model="primary",
+            sub_agent_model="sub_agent",
+            artifact_builder_model="sub_agent",
+            provider_type="local",
+        )
+        token = _current_profile.set(profile)
+        try:
+            with patch("httpx.AsyncClient") as mock_client_class:
+                mock_client = AsyncMock()
+                mock_client.stream = MagicMock(
+                    return_value=_stream_mock_for_response(mock_response)
+                )
+                mock_client_class.return_value.__aenter__.return_value = mock_client
+
+                response = await client.respond(
+                    role=ModelRole.ARTIFACT_BUILDER,
+                    messages=[{"role": "user", "content": "Generate HTML"}],
+                    trace_ctx=TraceContext.new_trace(),
+                )
+
+            assert response["content"] == "<html></html>"
+        finally:
+            _current_profile.reset(token)
+
+    @pytest.mark.asyncio
     async def test_404_raises_client_error(self, client: LocalLLMClient) -> None:
         """Test that 404 from server raises LLMClientError (no retry for 4xx)."""
         with patch("httpx.AsyncClient") as mock_client_class:

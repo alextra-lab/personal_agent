@@ -39,6 +39,7 @@ from personal_agent.cost_gate import (
 from personal_agent.llm_client.cost_tracker import _normalize_asyncpg_dsn
 from personal_agent.llm_client.litellm_client import LiteLLMClient
 from personal_agent.llm_client.types import LLMClientError, ModelRole
+from tests._helpers.trace import make_test_ctx
 
 pytestmark = pytest.mark.integration
 
@@ -279,3 +280,146 @@ async def test_denied_path_does_not_call_litellm(
             )
 
     fake_acompletion.assert_not_called()
+
+
+@pytest_asyncio.fixture
+async def real_gate() -> AsyncIterator[CostGate]:
+    """A connected CostGate against the REAL config/governance/budget.yaml.
+
+    Unlike ``gate_for_role`` (a synthetic per-test role + config), this exercises the
+    actually-declared ``artifact_builder`` / ``main_inference`` policies so a regression that
+    removes either role's YAML declaration fails this test too (ticket AC-2, ADR-0118 T1 /
+    FRE-879).
+    """
+    from personal_agent.cost_gate import load_budget_config
+
+    gate = CostGate(config=load_budget_config(), db_url=settings.database_url)
+    await gate.connect()
+    set_default_gate(gate)
+    try:
+        yield gate
+    finally:
+        set_default_gate(None)
+        await gate.disconnect()
+
+
+async def _daily_counter_total(pool: asyncpg.Pool, role: str) -> Decimal:
+    from personal_agent.cost_gate.gate import _window_start
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT running_total FROM budget_counters
+             WHERE user_id IS NULL AND time_window = 'daily'
+               AND provider IS NULL AND role = $1
+               AND window_start = $2
+            """,
+            role,
+            _window_start("daily"),
+        )
+        return Decimal(row["running_total"]) if row else Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_artifact_builder_lane_isolated_from_main_inference(
+    real_gate: CostGate, cleanup_pool: asyncpg.Pool
+) -> None:
+    """Ticket AC-2 (ADR-0118 T1, FRE-879): a real artifact-builder cost-gate call.
+
+    Debits its own lane and leaves main_inference untouched — proving the role was truly
+    extracted, not just renamed. Uses get_llm_client_for_key directly (not the retired
+    matrix resolution — artifact_builder is ExecutionProfile-resolved now, see
+    test_factory_artifact_builder.py for that seam; this test only cares about cost-lane
+    isolation).
+    """
+    from personal_agent.config import load_model_config
+    from personal_agent.llm_client.factory import get_llm_client_for_key
+
+    # Snapshot real (possibly pre-existing) daily counters before this test's call.
+    artifact_before = await _daily_counter_total(cleanup_pool, "artifact_builder")
+    main_inference_before = await _daily_counter_total(cleanup_pool, "main_inference")
+    async with cleanup_pool.acquire() as conn:
+        total_row = await conn.fetchrow(
+            """
+            SELECT running_total FROM budget_counters
+             WHERE user_id IS NULL AND time_window = 'weekly'
+               AND provider IS NULL AND role = '_total'
+            """
+        )
+        total_weekly_before: Decimal | None = total_row["running_total"] if total_row else None
+
+    builder_key = "claude_haiku"
+    model_def = load_model_config().models[builder_key]
+    assert model_def.id  # sanity: a real model definition backs the artifact-builder lane
+
+    client = get_llm_client_for_key(builder_key, budget_role="artifact_builder")
+    assert isinstance(client, LiteLLMClient)
+    assert client.budget_role == "artifact_builder"
+
+    fake_acompletion = AsyncMock(return_value=_fake_completion_response(cost=0.01))
+    ctx = make_test_ctx("gate_wiring_artifact_builder")
+    with (
+        patch("personal_agent.llm_client.litellm_client.litellm.acompletion", new=fake_acompletion),
+        patch(
+            "personal_agent.llm_client.litellm_client.litellm.completion_cost",
+            return_value=0.01,
+        ),
+        patch(
+            "personal_agent.llm_client.cost_estimator.estimate_reservation_for_call",
+            return_value=Decimal("0.02"),
+        ),
+    ):
+        await client.respond(
+            role=ModelRole.ARTIFACT_BUILDER,
+            messages=[{"role": "user", "content": "hi"}],
+            trace_ctx=ctx,
+        )
+
+    try:
+        artifact_after = await _daily_counter_total(cleanup_pool, "artifact_builder")
+        main_inference_after = await _daily_counter_total(cleanup_pool, "main_inference")
+
+        assert artifact_after - artifact_before == Decimal("0.010000")
+        assert main_inference_after == main_inference_before
+
+        async with cleanup_pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT role, status, actual_cost_usd FROM budget_reservations WHERE trace_id = $1",
+                ctx.trace_id,
+            )
+        assert len(rows) == 1
+        assert rows[0]["role"] == "artifact_builder"
+        assert rows[0]["status"] == ReservationStatus.COMMITTED.value
+        assert rows[0]["actual_cost_usd"] == Decimal("0.010000")
+    finally:
+        # Snapshot-and-restore only the delta this test introduced — never a
+        # delete-by-role, which would destroy other legitimate shared state
+        # on these real (not synthetic) role rows.
+        async with cleanup_pool.acquire() as conn:
+            await conn.execute("DELETE FROM budget_reservations WHERE trace_id = $1", ctx.trace_id)
+            if artifact_before == Decimal("0"):
+                await conn.execute(
+                    """
+                    DELETE FROM budget_counters
+                     WHERE user_id IS NULL AND time_window = 'daily'
+                       AND provider IS NULL AND role = 'artifact_builder'
+                    """
+                )
+            else:
+                await conn.execute(
+                    """
+                    UPDATE budget_counters SET running_total = $1, updated_at = NOW()
+                     WHERE user_id IS NULL AND time_window = 'daily'
+                       AND provider IS NULL AND role = 'artifact_builder'
+                    """,
+                    artifact_before,
+                )
+            if total_weekly_before is not None:
+                await conn.execute(
+                    """
+                    UPDATE budget_counters SET running_total = $1, updated_at = NOW()
+                     WHERE user_id IS NULL AND time_window = 'weekly'
+                       AND provider IS NULL AND role = '_total'
+                    """,
+                    total_weekly_before,
+                )

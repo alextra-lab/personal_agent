@@ -20,10 +20,11 @@ class TestModelRole:
         assert ModelRole.PRIMARY == "primary"
         assert ModelRole.SUB_AGENT == "sub_agent"
 
-    def test_model_role_exactly_three_members(self) -> None:
-        """Test that ModelRole has exactly three members (PRIMARY, SUB_AGENT, COMPRESSOR)."""
-        assert len(list(ModelRole)) == 3
+    def test_model_role_exactly_four_members(self) -> None:
+        """ModelRole has exactly four members (PRIMARY, SUB_AGENT, COMPRESSOR, ARTIFACT_BUILDER)."""
+        assert len(list(ModelRole)) == 4
         assert ModelRole.COMPRESSOR == "compressor"
+        assert ModelRole.ARTIFACT_BUILDER == "artifact_builder"
 
     def test_model_role_string_representation(self) -> None:
         """Test that ModelRole values are strings."""

@@ -16,6 +16,7 @@ from personal_agent.config import settings
 
 # Import from module directly to avoid circular import
 from personal_agent.config.model_loader import ModelConfigError, load_model_config
+from personal_agent.config.profile import resolve_model_key
 from personal_agent.llm_client.adapters import (
     _aggregate_streaming_chunks,
     adapt_chat_completions_response,
@@ -192,10 +193,17 @@ class LocalLLMClient:
             ModelConfigError: If model configuration is missing or invalid.
             InferenceSlotTimeout: If priority_timeout expires before a slot is available.
         """
-        # Get model configuration
-        model_config: ModelDefinition | None = self.model_configs.get(role.value)
+        # Get model configuration. Resolved through the active ExecutionProfile first
+        # (ADR-0044/ADR-0119) — an "open" role like artifact_builder maps to a
+        # different local model key (e.g. sub_agent) than its own role name, so a
+        # bare role.value lookup would miss config/models.yaml entirely (FRE-879
+        # code-review finding: the previous bare-role.value lookup broke every
+        # local-profile artifact_draft call, since models.yaml intentionally has no
+        # "artifact_builder" key — see config/profiles/local.yaml).
+        resolved_role_key = resolve_model_key(role.value)
+        model_config: ModelDefinition | None = self.model_configs.get(resolved_role_key)
         if not model_config:
-            raise ModelConfigError(f"No configuration found for role: {role.value}")
+            raise ModelConfigError(f"No configuration found for role: {resolved_role_key}")
 
         # Acquire concurrency slot (ADR-0029)
         async with self._concurrency.request_slot(

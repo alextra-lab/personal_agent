@@ -14,8 +14,10 @@ re-reads fresh — so keep this LEAN. Set just enough context, no data dump.
 IT IS THE REVERSE OF prime-master: it writes the overlay for what prime-master
 reads (current state + target); the process (#9) is static and needs no overlay.
 
-ROLLING: overwrite this file each reset — it is always "the LAST session." The
-appended, grepable narrative lives in MASTER_PLAN_HISTORY, not here.
+ROLLING: overwrite this file each reset — it is always "the LAST session."
+There is no history file (deleted 2026-07-18 as write-only overhead). What
+shipped lives in the git log; why a decision was made lives on the Linear
+ticket. Do not archive this file's content anywhere — it is superseded, not kept.
 
 This is a TEMPLATE: adjust the sections as we learn what's working and what
 isn't. Copy it to docs/plans/LAST_SESSION.md and fill it in.

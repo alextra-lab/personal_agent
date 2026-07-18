@@ -61,21 +61,25 @@ the #2 delta. A decision that changes a **skill's contract** → edit the skill 
 
 ## 3 — Checkpoint + compact MASTER_PLAN (the target — keep it pure)
 
-MASTER_PLAN is prime-master's **#8: the target.** It holds current live-env / standing state + active
-priorities & sequencing — **NOT** the session-decisions bridge (that is now the #2 artifact, Step 2).
-Keep it that way; a purified target is the point of the current-state/target split.
-- **`docs/plans/MASTER_PLAN.md`** = concise plan: state + priorities/sequencing. **The ONLY plan file the
-  re-prime loads at #8** — every line is context paid for on every reset, so keep it lean. No decisions block.
-- **`docs/plans/MASTER_PLAN_HISTORY.md`** = the grepable, append-only narrative. Never auto-loaded.
+MASTER_PLAN is prime-master's **#8: the target.** It holds **forward plans only** — **NOT** current
+live-env / standing state (that is #1–#7, re-read fresh on every prime) and **NOT** the
+session-decisions bridge (that is the #2 artifact, Step 2). Keep it that way; a purified target is the
+point of the current-state/target split.
+- **`docs/plans/MASTER_PLAN.md`** = **FORWARD PLANS ONLY** — what we are going to do, in order. **It is
+  NOT a diary of accomplishments; that is the git log.** The ONLY plan file the re-prime loads at #8 —
+  every line is context paid for on every reset, so keep it lean.
+- There is **no history file**. `MASTER_PLAN_HISTORY.md` was deleted 2026-07-18 as write-only overhead:
+  it was never read, and what it held is already authoritative elsewhere — what shipped → `git log`,
+  why a decision was made → the Linear ticket's comments, standing facts → memory, this session's
+  decisions → `LAST_SESSION.md`. **Do not recreate it, and do not park narrative anywhere else instead.**
 
 Do:
-- Bump MASTER_PLAN "Last updated" to today; reflect what shipped (one line each) + what's genuinely next.
-- **Compact — required, not optional:** MASTER_PLAN holds **only** current state + priorities +
-  sequencing + Needs-Approval. Move completed / superseded narrative out and **append it to
-  MASTER_PLAN_HISTORY** (move, don't delete — it stays grepable). **A header longer than ~1 screen means
-  shipped-work narrative is still in it — do the move now, don't defer.**
+- Bump MASTER_PLAN "Last updated" to today; make sure every line is still something *forthcoming*.
+- **Delete, don't relocate.** Anything completed, superseded, or narrated comes OUT of MASTER_PLAN and
+  is simply removed — git log and the tickets already hold it. **A header longer than ~1 screen means
+  accomplishment-narrative crept back in — strip it now, don't defer.**
 - **Judgment guard (bounded — the safe pass may not repeat):** a *deep* restructure is riskiest in the
-  heavy session a reset follows, so a **one-time** safe pass (append clearly-completed narrative, keep the
+  heavy session a reset follows, so a **one-time** safe pass (strip clearly-completed narrative, keep the
   unsure) is allowed — **but only if the previous reset did not already defer.** If the header is already
   over ~1 screen (a prior reset punted), the deep move is **required this reset** regardless of context
   weight. Never leave the header bloated two resets running.

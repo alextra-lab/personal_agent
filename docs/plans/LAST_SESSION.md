@@ -4,10 +4,13 @@
 
 Spent the day fixing the dispatch automation end to end, finishing with a full dispatch → build → gate →
 merge cycle running clean on the repaired machinery. Seats are `cc-master`, `cc-1build`, `cc-2build`,
-`cc-adrs`, `cc-explore` — renamed so no name is a prefix of another, all visible in Remote Control. The
-one thread still open belongs to the owner: the **owner-led ADR debate has not started** — `cc-adrs` is
-synced, idle and ready, and the ADR-0118/0119 chain (FRE-880 and successors) stays unapproved until the
-owner corrects the ADR themselves. Do not start it unilaterally.
+`cc-adrs`, `cc-explore` — renamed so no name is a prefix of another, all visible in Remote Control.
+
+**Start here, owner-directed at the reset:** the **owner-led ADR debate on the config-UI direction**, in
+the `cc-adrs` seat, followed by the open questions master is carrying. Both are written up as MASTER_PLAN
+§0 and §2 — read those first. The ADR-0118/0119 chain (FRE-880 and successors) stays un-approved until
+the owner corrects the ADR themselves. **Master does not open the debate unilaterally and does not write
+the ADR** — the owner is the architect here.
 
 ## Commits — the story behind the last 10
 

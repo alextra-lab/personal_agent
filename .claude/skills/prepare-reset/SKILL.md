@@ -61,9 +61,10 @@ the #2 delta. A decision that changes a **skill's contract** → edit the skill 
 
 ## 3 — Checkpoint + compact MASTER_PLAN (the target — keep it pure)
 
-MASTER_PLAN is prime-master's **#8: the target.** It holds current live-env / standing state + active
-priorities & sequencing — **NOT** the session-decisions bridge (that is now the #2 artifact, Step 2).
-Keep it that way; a purified target is the point of the current-state/target split.
+MASTER_PLAN is prime-master's **#8: the target.** It holds **forward plans only** — **NOT** current
+live-env / standing state (that is #1–#7, re-read fresh on every prime) and **NOT** the
+session-decisions bridge (that is the #2 artifact, Step 2). Keep it that way; a purified target is the
+point of the current-state/target split.
 - **`docs/plans/MASTER_PLAN.md`** = **FORWARD PLANS ONLY** — what we are going to do, in order. **It is
   NOT a diary of accomplishments; that is the git log.** The ONLY plan file the re-prime loads at #8 —
   every line is context paid for on every reset, so keep it lean.

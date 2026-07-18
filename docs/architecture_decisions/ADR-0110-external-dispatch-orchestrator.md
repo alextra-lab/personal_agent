@@ -112,6 +112,14 @@ A small script/service (Python, `scripts/dispatch/`) that, per stream:
   The exact no-TTY seed-and-launch incantation, and whether RC exposes programmatic session-create with a
   chosen model, are implementation spikes (see Risks); the v1 design does **not depend** on zero-tap
   auto-seed — see §4.
+> **Drift note (2026-07-18, FRE-913):** the `check-pytest-lock` hook this section grounds its
+> concurrency argument on **has been removed** (owner-directed): it matched the substring `pytest`
+> anywhere in a command, so it blocked read-only diagnostics during a run. One-pytest-at-a-time is now
+> a convention, not an enforced guard. The orchestrator's obligation (b) — never dispatch into an
+> occupied stream — is unaffected and remains the live protection; obligation (a) is now vacuous.
+> Whether this ADR should be amended (or a better guard specified) is a decision for the owner/ADR
+> session, not a build session; recorded here so the text is not read as describing a live mechanism.
+
 - **Concurrency — grounded on the existing guard, not a new one.** The single-critical-section protection
   is the **existing `check-pytest-lock` PreToolUse hook**, which denies a second concurrent `pytest`
   (exit 2), instructs the worker to wait and retry, and records the collision to

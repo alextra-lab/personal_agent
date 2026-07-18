@@ -79,6 +79,35 @@ sudo systemctl enable --now seshat-dispatch-orchestrator
 - **Concurrency.** The orchestrator never launches into an occupied stream and
   never strips hooks, so the `check-pytest-lock` PreToolUse hook stays live and
   CI re-runs tests at the master gate regardless.
+- **Persistent seats — the dispatcher never terminates a seat (FRE-913).** Seats
+  are long-lived: a dispatch *prepares* a seat, it never destroys one. The
+  launcher owns **no** tmux termination code at all (no `kill-session`,
+  `kill-pane`, or `respawn-pane`), enforced by a source-level test.
+
+  Between 2026-07-08 (commit 377d0646) and this fix, every dispatch killed the
+  seat and immediately recreated it. The new `claude` could not reclaim its
+  Remote Control name before the old registration was released, so it silently
+  registered under a fallback name (observed live: a seat launched as
+  `cc-build` came up as `build-41`) — alive and working, but invisible on the
+  owner's mobile RC view. Seat lifecycle belongs to `cc-sessions`, not the
+  dispatcher; that overlap is where the regression came from.
+
+  Three seat states, only two of which act:
+
+  | state | meaning | action |
+  |---|---|---|
+  | `live` | tmux session exists, pane runs `claude` | **reuse** — `/clear`, `/model <tier>`, `/build <FRE-id>` typed in-session; process untouched |
+  | `absent` | no tmux session | **create** — the only path that starts a seat |
+  | `unhealthy` | session exists, pane is not `claude` | **surface only** — recover it with `cc-sessions` |
+
+  Delivery is **send-keys**, not the ADR-0116 channel: `/clear` and `/model` are
+  Claude Code client commands the TTY interprets, so channel-delivered text
+  would be inert prose. The channel keeps its own job (structured PR/CI gating
+  events the seat reasons over) unchanged.
+
+  A created seat is verified to hold the requested RC name **and** the session id
+  it was launched with; a seat that takes a fallback name is reported
+  (`registration-unverified`) and **left running**, never killed and retried.
 
 ## Surface and recover a stalled or failed run
 

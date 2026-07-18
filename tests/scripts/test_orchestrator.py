@@ -19,6 +19,8 @@ terminal merge state (not at In-Review, which can be bounced by master).
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Sequence
 
 import pytest
@@ -26,6 +28,7 @@ from scripts.dispatch.next_resolver import IssueSnapshot
 from scripts.dispatch.orchestrator import (
     DEFAULT_STALL_TIMEOUT_S,
     DispatchRecord,
+    _record_for_result,
     check_preconditions,
     decide,
     is_anthropic_endpoint,
@@ -74,6 +77,54 @@ class _RecordingRunner:
             if key in argv:
                 return result
         return _FakeRunResult()
+
+
+class _SeatRunner(_RecordingRunner):
+    """A runner that models the seat FRE-913's launcher now probes.
+
+    ``_RecordingRunner`` alone answers ``tmux has-session`` with returncode 0 and
+    ``list-panes`` with empty stdout, which the launcher correctly reads as
+    "session exists but is not running claude" (``unhealthy``) — so a plain
+    recording runner can no longer reach the create path.
+
+    Defaults to an **absent** seat that registers under the requested Remote
+    Control name once created, which is the create path's happy case. The
+    session id is scraped from the ``new-session`` argv rather than recomputed,
+    so the fake stays correct if the id derivation changes.
+    """
+
+    def __init__(
+        self, results: dict[str, _FakeRunResult] | None = None, *, state: str = "absent"
+    ) -> None:
+        super().__init__(results)
+        self._state = state
+        self._session_id: str | None = None
+
+    def __call__(self, argv: Sequence[str]) -> _FakeRunResult:
+        args = list(argv)
+        if args[:2] == ["tmux", "has-session"]:
+            self.calls.append(tuple(argv))
+            return _FakeRunResult(returncode=1 if self._state == "absent" else 0)
+        if args[:2] == ["tmux", "list-panes"]:
+            self.calls.append(tuple(argv))
+            return _FakeRunResult(stdout="claude\n" if self._state == "live" else "bash\n")
+        if args[:2] == ["claude", "agents"]:
+            self.calls.append(tuple(argv))
+            agents = (
+                [{"name": "cc-build", "sessionId": self._session_id, "cwd": "/w"}]
+                if self._session_id
+                else []
+            )
+            return _FakeRunResult(stdout=json.dumps(agents))
+        if args[:2] == ["tmux", "new-session"]:
+            match = re.search(r"--session-id (\S+)", " ".join(args))
+            if match:
+                self._session_id = match.group(1)
+        return super().__call__(argv)
+
+
+def _no_wait(_seconds: float) -> None:
+    """Sleeper seam so the launcher's bounded polls never wall-clock in tests."""
 
 
 class _Notifier:
@@ -246,7 +297,7 @@ def _run(
 
 
 def test_run_once_launch_writes_launched_record_no_hook_strip() -> None:
-    runner = _RecordingRunner()  # clean git status → launch proceeds
+    runner = _SeatRunner()  # absent seat + clean git status → create proceeds
     board = [_issue("FRE-1", "Approved", _OPUS)]
     state, persisted = _run({}, runner, board)
     assert state["build1"].phase == "launched"
@@ -268,7 +319,7 @@ def test_run_once_keep_ticket_writes_surfaced_record_not_launched() -> None:
 
 
 def test_run_once_dirty_worktree_writes_no_record() -> None:
-    runner = _RecordingRunner({"status": _FakeRunResult(stdout=" M f.py\n")})
+    runner = _SeatRunner({"status": _FakeRunResult(stdout=" M f.py\n")})
     board = [_issue("FRE-1", "Approved", _OPUS)]
     state, _ = _run({}, runner, board)
     assert "build1" not in state  # no false in-flight record
@@ -440,8 +491,60 @@ def test_run_once_kill_switch_precedes_rc_check() -> None:
 
 def test_run_once_launch_proceeds_when_alive_and_no_kill_switch() -> None:
     """Regression: the guard does not block a healthy dispatch."""
-    runner = _RecordingRunner()
+    runner = _SeatRunner()
     board = [_issue("FRE-1", "Approved", _OPUS)]
     state, _ = _run({}, runner, board, rc_alive=lambda: True)
     assert state["build1"].phase == "launched"
     assert any("new-session" in c for c in runner.calls)
+
+
+# --- FRE-913: record mapping for the persistent-seat outcomes ---------------
+
+
+def test_reuse_is_an_owned_in_flight_run() -> None:
+    """A live seat dispatched in-session is owned work, exactly like a launch."""
+    record = _record_for_result("build1", "FRE-913", "reuse", now=100.0)
+    assert record is not None
+    assert record.phase == "launched"
+
+
+@pytest.mark.parametrize("outcome", ["delivery-failed", "seat-unhealthy"])
+def test_non_self_clearing_seat_failures_are_surfaced(outcome: str) -> None:
+    """FRE-913: a seat failure that needs a human must HOLD, not retry forever.
+
+    Neither of these self-clears — a seat that will not accept keystrokes, or one
+    that is not a usable claude in this worktree, stays broken until someone
+    intervenes. Writing no record would re-dispatch the same broken seat every
+    tick; ``_decide_surfaced`` holds it until the owner acts.
+    """
+    record = _record_for_result("build1", "FRE-913", outcome, now=100.0)
+    assert record is not None
+    assert record.phase == "surfaced"
+
+
+def test_seat_busy_writes_no_record_so_the_stream_retries() -> None:
+    """seat-busy is transient — recording it would wedge the stream forever.
+
+    The seat is simply mid-turn and goes idle within seconds. A ``surfaced``
+    record would hold the stream in ``_decide_surfaced`` indefinitely, trading a
+    self-healing few-minute delay for a permanent stall only the owner can clear.
+    """
+    assert _record_for_result("build1", "FRE-913", "seat-busy", now=100.0) is None
+
+
+def test_registration_unverified_is_still_an_in_flight_run() -> None:
+    """A misnamed seat is RUNNING the ticket — it needs stall tracking, not a card.
+
+    Only its Remote Control name is wrong; the seat was seeded and is building.
+    Recording it as ``surfaced`` would deny the live run stall detection and
+    ``run_complete`` handling for work that is genuinely in flight.
+    """
+    record = _record_for_result("build1", "FRE-913", "registration-unverified", now=100.0)
+    assert record is not None
+    assert record.phase == "launched"
+
+
+def test_transient_errors_still_leave_the_stream_eligible() -> None:
+    """A dirty worktree or a failed tmux call is retryable — no record."""
+    assert _record_for_result("build1", "FRE-913", "worktree-dirty", now=100.0) is None
+    assert _record_for_result("build1", "FRE-913", "launch-failed", now=100.0) is None

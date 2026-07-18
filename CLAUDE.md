@@ -56,7 +56,11 @@ make test-verbose          # verbose output
 PERSONAL_AGENT_INTEGRATION=1 make test-integration
 ```
 
-**One pytest at a time.** A pre-tool-use hook (`.claude/hooks/check-pytest-lock.sh`) blocks concurrent pytest runs — the full suite takes 7+ minutes and parallel runs saturate CPU/memory.
+**One pytest at a time (by convention, not enforced).** The full suite takes 7+ minutes and parallel
+runs saturate CPU/memory, so avoid starting a second one. The `check-pytest-lock` PreToolUse hook that
+used to enforce this was **removed 2026-07-18** (owner-directed): it matched the substring `pytest`
+anywhere in a command, so it blocked read-only diagnostics (`pgrep -f pytest`, `grep pytest <log>`)
+precisely when a suite was running and you needed them most.
 
 ### Test substrate isolation (FRE-375)
 

@@ -200,7 +200,7 @@ curl http://localhost:9200/_cluster/health
 - [ ] Files placed per file organization rules (§2)
 - [ ] ADRs/specs linked in commit message and PR
 - [ ] No Alembic migrations — schema changes go in `docker/postgres/init.sql` + `docker/postgres/migrations/`; **run migrations as the `agent` superuser via `AGENT_DATABASE_ADMIN_URL`, not the app's `AGENT_DATABASE_URL`** (the restricted `seshat_app` role cannot run DDL — FRE-808)
-- [ ] One pytest process at a time (`.claude/hooks/check-pytest-lock.sh` enforces)
+- [ ] One pytest process at a time (convention — the enforcing hook was removed 2026-07-18)
 - [ ] New tools use Tier 1/2; Tier 3 (MCP) requires ADR justification
 - [ ] **PWA changes**: `cd seshat-pwa && npm run lint` exits 0 (mirrors backend `ruff-check`; FRE-395)
 

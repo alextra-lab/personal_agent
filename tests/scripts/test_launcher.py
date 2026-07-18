@@ -16,10 +16,15 @@ Covers ADR-0110 acceptance criteria carried by FRE-786:
 
 from __future__ import annotations
 
+import ast
+import dataclasses
+import json
 import shlex
 from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
+from scripts.dispatch import launcher as launcher_module
 from scripts.dispatch.launcher import (
     DEFAULT_CAPABILITIES,
     LauncherCapabilities,
@@ -27,11 +32,13 @@ from scripts.dispatch.launcher import (
     find_warm_session,
     main,
     plan_launch,
+    seat_is_busy,
+    seat_state,
     session_id_for,
     stream_for_tmux_session,
     topology_for,
 )
-from scripts.dispatch.tmux_target import exact_session
+from scripts.dispatch.tmux_target import exact_pane, exact_session
 
 
 class _FakeRunResult:
@@ -256,28 +263,34 @@ def test_execute_manual_model_required_never_calls_runner() -> None:
 
 
 def test_execute_clean_worktree_launches() -> None:
-    runner = _RecordingRunner()  # status returns empty stdout → clean
     plan = plan_launch("build1", "FRE-786", "opus", context_keep=False)
-    result = execute_plan(plan, runner)
+    assert plan.session_id is not None
+    # FRE-913: a create is only claimed once the new seat is verified to hold the
+    # requested Remote-Control name, so the fake seat must report itself registered.
+    runner = _SeatRunner(state="absent", agents=_registered(plan.session_id))
+    result = execute_plan(plan, runner, sleeper=_no_wait)
     assert result.launched is True
     assert result.outcome == "launch"
     # tmux new-session was invoked after the git preflight.
     assert any("new-session" in call for call in runner.calls)
 
 
-def test_execute_kills_existing_slot_before_new_session() -> None:
-    # The persistent tmux slot is torn down before a fresh CLEAR launch, so
-    # `new-session` never collides with a still-existing worker session.
-    runner = _RecordingRunner()  # clean worktree
-    plan = plan_launch("build1", "FRE-786", "opus", context_keep=False)
-    result = execute_plan(plan, runner)
+def test_execute_absent_seat_creates_without_any_teardown() -> None:
+    """FRE-913: the create path reaches ``new-session`` with no teardown at all.
+
+    Replaces the FRE-786-era ``test_execute_kills_existing_slot_before_new_session``,
+    which asserted the *opposite* (kill-then-recreate). That teardown is the
+    2026-07-08 regression this ticket removes: it churned the seat's Remote
+    Control registration on every dispatch. The create path is now reached only
+    when the seat is ``absent``, where there is nothing to tear down.
+    """
+    plan = plan_launch("build1", "FRE-786", "opus", context_keep=False, seat="absent")
+    assert plan.session_id is not None
+    runner = _SeatRunner(state="absent", agents=_registered(plan.session_id))
+    result = execute_plan(plan, runner, sleeper=_no_wait)
     assert result.launched is True
-    kill_idx = next(i for i, c in enumerate(runner.calls) if "kill-session" in c)
-    new_idx = next(i for i, c in enumerate(runner.calls) if "new-session" in c)
-    assert kill_idx < new_idx  # torn down before recreated
-    # FRE-909: the teardown target is EXACT-matched (=name) so an absent seat
-    # cannot prefix-match and kill a live name-extension seat (cc-build2).
-    assert any("kill-session" in c and exact_session(plan.tmux_session) in c for c in runner.calls)
+    assert any("new-session" in call for call in runner.calls)
+    assert not any("kill-session" in call for call in runner.calls)
 
 
 def test_execute_dirty_worktree_aborts_without_tmux() -> None:
@@ -352,3 +365,479 @@ def test_cli_keep_prints_manual_continuation(capsys: pytest.CaptureFixture[str])
 def test_default_capabilities_are_both_on() -> None:
     assert DEFAULT_CAPABILITIES.auto_seed is True
     assert DEFAULT_CAPABILITIES.model_set is True
+
+
+# --- FRE-913: persistent seats — the dispatcher never terminates a seat -----
+#
+# Backing: FRE-913 (no ADR; owner ruling 3 — restores the pre-2026-07-08
+# persistent-seat behaviour). The 2026-07-08 regression (commit 377d0646) made
+# every dispatch kill and immediately recreate the seat, churning its Remote
+# Control registration so the owner lost mobile visibility of the worker.
+#
+# Owner directive 2026-07-18, stronger than the ticket text: the dispatcher must
+# not merely avoid killing on the happy path, it must not *contain* termination
+# code at all. Enforced structurally by
+# ``test_launcher_source_contains_no_tmux_termination_verb``.
+
+_TERMINATION_VERBS = ("kill-session", "kill-pane", "kill-server", "kill-window", "respawn-pane")
+
+_WORKTREE = "/opt/seshat/.claude/worktrees/build"
+_IDLE_PANE = "some earlier output\n❯\n"
+_BUSY_PANE = "● Building… (1m 2s · ↑ 4.1k tokens)\n❯\n"
+
+
+class _SeatRunner:
+    """A fake seat: models tmux liveness, pane text, and RC agent registration.
+
+    Args:
+        state: The seat's liveness — ``live`` (session exists, pane runs
+            ``claude``), ``absent`` (no tmux session), or ``unhealthy``
+            (session exists but the pane runs something else).
+        pane: ``changing`` (each capture differs and is idle — a seat that
+            processes what it is sent), ``static`` (every capture identical —
+            a seat that never processes), or ``busy`` (mid-turn).
+        agents: The ``claude agents --json --all`` payload.
+    """
+
+    def __init__(
+        self,
+        *,
+        state: str = "live",
+        pane: str = "changing",
+        agents: Sequence[dict[str, object]] | None = None,
+        goes_busy_on_build: bool = True,
+    ) -> None:
+        self.calls: list[tuple[str, ...]] = []
+        self._state = state
+        self._pane = pane
+        # Default: one registered agent for this worktree, idle. Callers pass an
+        # explicit list to model a drifted name, a stale agent, or a silent RC.
+        if agents is not None:
+            self._agents = list(agents)
+        elif state == "live":
+            self._agents = [
+                {"name": "cc-build", "sessionId": None, "cwd": _WORKTREE, "status": "idle"}
+            ]
+        else:
+            self._agents = []
+        self._goes_busy_on_build = goes_busy_on_build
+        self._build_sent = False
+        self._captures = 0
+
+    def _pane_text(self) -> str:
+        if self._pane == "busy":
+            return _BUSY_PANE
+        if self._pane == "static":
+            return _IDLE_PANE
+        self._captures += 1
+        return f"turn {self._captures}\n{_IDLE_PANE}"
+
+    def __call__(self, argv: Sequence[str]) -> _FakeRunResult:
+        self.calls.append(tuple(argv))
+        argv = list(argv)
+        if "send-keys" in argv and "-l" in argv and argv[-1].startswith("/build"):
+            self._build_sent = True
+        if argv[:2] == ["tmux", "has-session"]:
+            return _FakeRunResult(returncode=1 if self._state == "absent" else 0)
+        if argv[:2] == ["tmux", "list-panes"]:
+            # "<pane_current_command>\t<pane_current_path>" — the path half proves
+            # the seat is attached to THIS stream's worktree (FRE-913 review).
+            command = "claude" if self._state == "live" else "bash"
+            return _FakeRunResult(stdout=f"{command}\t{_WORKTREE}\n")
+        if argv[:2] == ["tmux", "capture-pane"]:
+            return _FakeRunResult(stdout=self._pane_text())
+        if argv[:2] == ["claude", "agents"]:
+            agents = [dict(agent) for agent in self._agents]
+            if self._build_sent and self._goes_busy_on_build:
+                for agent in agents:
+                    agent["status"] = "busy"
+            return _FakeRunResult(stdout=json.dumps(agents))
+        return _FakeRunResult()
+
+    def sent_text(self) -> list[str]:
+        """The literal strings send-keys typed into the seat, in order."""
+        return [call[-1] for call in self.calls if "send-keys" in call and "-l" in call]
+
+
+def _registered(session_id: str, name: str = "cc-build") -> list[dict[str, object]]:  # noqa: D103
+    return [
+        {
+            "name": name,
+            "sessionId": session_id,
+            "cwd": _WORKTREE,
+            "status": "idle",
+        }
+    ]
+
+
+def _no_wait(_seconds: float) -> None:
+    """Sleeper seam that never actually sleeps (tests must not wall-clock)."""
+
+
+# --- THE regression test ----------------------------------------------------
+
+
+def test_live_seat_dispatch_never_kills_or_recreates_the_seat() -> None:
+    """AC-1: dispatching to a live seat leaves its claude process untouched.
+
+    This is THE regression test for FRE-913. A live seat must see neither a
+    teardown nor a ``new-session`` — the running process (and therefore its
+    Remote Control registration, which belongs to that process) survives the
+    dispatch. Process-identity is what preserves the owner's mobile visibility.
+    """
+    runner = _SeatRunner(state="live")
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live")
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert result.outcome == "reuse"
+    assert result.launched is True
+    assert not any("kill-session" in call for call in runner.calls)
+    assert not any("new-session" in call for call in runner.calls)
+
+
+def test_no_seat_state_or_context_ever_issues_a_termination_verb() -> None:
+    """The invariant, swept: NO combination of inputs terminates a seat.
+
+    A single happy-path assertion would not hold the owner's rule — this walks
+    every seat state x context x capability combination and proves no argv
+    carries a tmux termination verb on any of them.
+    """
+    for state in ("live", "absent", "unhealthy"):
+        for context_keep in (True, False):
+            for model_set in (True, False):
+                runner = _SeatRunner(state=state, agents=[])
+                plan = plan_launch(
+                    "build1",
+                    "FRE-913",
+                    "sonnet",
+                    context_keep=context_keep,
+                    capabilities=LauncherCapabilities(model_set=model_set),
+                    seat=state,
+                )
+                execute_plan(plan, runner, sleeper=_no_wait)
+                for call in runner.calls:
+                    for verb in _TERMINATION_VERBS:
+                        assert verb not in call, f"{verb} issued for {state}/{context_keep}"
+
+
+def test_launcher_source_contains_no_tmux_termination_verb() -> None:
+    """The invariant, structurally: the launcher cannot terminate a seat at all.
+
+    Owner directive (2026-07-18): "Dispatcher should not have terminate tmux
+    code. If it does, remove it." Behavioural sweeps only cover the paths a test
+    thinks to walk; this pins the *capability*, so a future edit reintroducing a
+    teardown fails here even if it is on a path no test exercises. FRE-909's
+    incident was a kill that resolved to the WRONG seat and destroyed a live
+    worker mid-build — code that cannot kill cannot kill the wrong thing.
+
+    Checks string *literals* via the AST rather than raw text: a tmux argv is
+    built from string constants, so real termination code necessarily appears as
+    one. Docstrings and comments are excluded — this module documents at length
+    why it does not kill seats, and prose naming a verb must not read as using
+    it. (Caught live: the first cut of this test failed on its own docstring.)
+    """
+    tree = ast.parse(Path(launcher_module.__file__).read_text())
+    docstrings = {
+        node.body[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
+    literals = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node not in docstrings
+    ]
+    for literal in literals:
+        for verb in _TERMINATION_VERBS:
+            assert verb not in literal, f"launcher.py must not issue tmux {verb}"
+
+
+# --- reuse path: delivery ---------------------------------------------------
+
+
+def test_clear_reuse_delivers_clear_then_model_then_build_in_order() -> None:
+    """AC-2/AC-3: CLEAR resets context in-session, then dispatches the ticket."""
+    runner = _SeatRunner(state="live")
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live")
+    execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert runner.sent_text() == ["/clear", "/model sonnet", "/build FRE-913"]
+
+
+def test_reuse_delivery_targets_are_exact_pane_matched() -> None:
+    """FRE-909: every delivery target is exact-matched, never prefix-resolved."""
+    runner = _SeatRunner(state="live")
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live")
+    execute_plan(plan, runner, sleeper=_no_wait)
+
+    for call in runner.calls:
+        if "send-keys" in call or "capture-pane" in call:
+            assert exact_pane("cc-build") in call
+
+
+def test_busy_seat_is_not_interrupted_mid_turn() -> None:
+    """A seat mid-turn is never typed into — nothing is delivered at all."""
+    runner = _SeatRunner(state="live", pane="busy", agents=[])  # RC silent → scrape guards
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live")
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert result.outcome == "seat-busy"
+    assert result.launched is False
+    assert runner.sent_text() == []
+
+
+def test_unconfirmed_build_is_never_reported_as_a_successful_dispatch() -> None:
+    """A /build that the seat never picks up must not be claimed as reuse.
+
+    ``send-keys -l`` echoes the command into the input box, which changes the
+    pane *before* Enter is processed — so a text change alone cannot distinguish
+    a submitted /build from a lost one. Only the seat actually going busy proves
+    it. A seat that never goes busy is a delivery failure, not a dispatch.
+    """
+    runner = _SeatRunner(state="live", goes_busy_on_build=False)
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live")
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert result.outcome == "delivery-failed"
+    assert result.launched is False
+
+
+def test_a_no_op_clear_on_an_already_empty_seat_still_dispatches() -> None:
+    """An idle pane that does not change is a processed no-op, not a failure.
+
+    ``/clear`` on an already-empty conversation redraws to a byte-identical
+    screen. Strict change-detection would condemn a correctly-processed command
+    and strand the stream, so an idle-and-unchanged pane is accepted for
+    non-final commands.
+    """
+    runner = _SeatRunner(state="live", pane="static")
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live")
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert result.outcome == "reuse"
+    assert "/build FRE-913" in runner.sent_text()
+
+
+def test_dirty_worktree_aborts_clear_reuse_before_any_delivery() -> None:
+    """A dirty worktree still aborts a CLEAR dispatch — now before delivering."""
+
+    class _DirtyRunner(_SeatRunner):
+        def __call__(self, argv: Sequence[str]) -> _FakeRunResult:
+            if "status" in argv:
+                self.calls.append(tuple(argv))
+                return _FakeRunResult(stdout=" M src/thing.py\n")
+            return super().__call__(argv)
+
+    runner = _DirtyRunner(state="live")
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live")
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert result.outcome == "worktree-dirty"
+    assert runner.sent_text() == []
+
+
+# --- KEEP stays manual ------------------------------------------------------
+
+
+def test_keep_stays_manual_continuation_on_a_live_seat() -> None:
+    """KEEP is never machine-auto-launched — unchanged by FRE-913.
+
+    Codex review pushed back on auto-dispatching KEEP into a live seat: it would
+    remove a human gate across every worker stream (``manual-continuation`` maps
+    to a ``surfaced``/owner-gated record, ``launch`` to an owned in-flight one).
+    That is a contract change, not this ticket's fix, so KEEP is untouched.
+    """
+    runner = _SeatRunner(state="live")
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=True, seat="live")
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert plan.outcome == "manual-continuation"
+    assert result.launched is False
+    assert runner.sent_text() == []
+
+
+# --- unhealthy seat: surface, never destroy, never recreate -----------------
+
+
+def test_unhealthy_seat_is_surfaced_and_left_completely_alone() -> None:
+    """A seat whose pane is not ``claude`` is reported, never reclaimed.
+
+    Reclaiming it would mean killing the tmux session to free the name — exactly
+    the termination code the owner's rule forbids. Seat lifecycle (recover/reset)
+    belongs to ``cc-sessions``; the launcher only dispatches into seats.
+    """
+    runner = _SeatRunner(state="unhealthy")
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="unhealthy")
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert plan.outcome == "seat-unhealthy"
+    assert result.launched is False
+    assert not any("new-session" in call for call in runner.calls)
+    assert runner.sent_text() == []
+    assert "cc-sessions" in result.card  # names the tool that owns recovery
+
+
+# --- seat_state probe -------------------------------------------------------
+
+
+def test_seat_state_probe_classifies_each_case() -> None:
+    topology = topology_for("build1")
+    assert seat_state(topology, _SeatRunner(state="live")) == "live"
+    assert seat_state(topology, _SeatRunner(state="absent")) == "absent"
+    assert seat_state(topology, _SeatRunner(state="unhealthy")) == "unhealthy"
+
+
+def test_seat_state_probe_uses_exact_match_targets() -> None:
+    """FRE-909: an absent seat must not prefix-resolve to cc-build2."""
+    # agents=[] forces the pane fallback, so BOTH target forms are exercised:
+    # the session probe and the pane probe. A live seat short-circuits on the RC
+    # registry and never reaches the pane, which is why this pins the fallback.
+    runner = _SeatRunner(state="live", agents=[])
+    seat_state(topology_for("build1"), runner)
+    assert any(exact_session("cc-build") in call for call in runner.calls)
+    assert any(exact_pane("cc-build") in call for call in runner.calls)
+
+
+# --- create path: registration verified by identity (F2) --------------------
+
+
+def test_create_path_verifies_registration_by_name_and_session_id() -> None:
+    """AC-4: a created seat is verified to hold the REQUESTED RC name."""
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="absent")
+    assert plan.session_id is not None
+    runner = _SeatRunner(state="absent", agents=_registered(plan.session_id))
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert result.outcome == "launch"
+    assert result.launched is True
+
+
+def test_create_path_reports_unverified_when_rc_allocates_a_fallback_name() -> None:
+    """F2, observed live: a seat can register under a DIFFERENT name.
+
+    A seat launched as ``--remote-control cc-build`` registered as ``build-41``
+    because the requested name was still held. The process was alive and
+    working, just invisible where the owner's mobile view looks for it. It is
+    NOT killed and retried — that would destroy a healthy claude process and its
+    warm context to fix a visibility problem — it is reported.
+    """
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="absent")
+    assert plan.session_id is not None
+    runner = _SeatRunner(state="absent", agents=_registered(plan.session_id, name="build-41"))
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert result.outcome == "registration-unverified"
+    # The seat IS running and was seeded with the ticket — only its name is
+    # wrong. Claiming launched=False would deny the in-flight run stall
+    # detection, and the card must not tell the owner to reset it mid-build.
+    assert result.launched is True
+    assert "build-41" in result.card
+    assert "not reset it now" in result.card.lower().replace("do ", "")
+    assert not any("kill-session" in call for call in runner.calls)
+
+
+def test_create_path_rejects_a_stale_agent_holding_the_right_name() -> None:
+    """Codex #3: name-match alone could accept a stale agent, not the new seat.
+
+    The launcher passes ``--session-id``, so identity is exactly checkable — the
+    verified agent must be the one just launched.
+    """
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="absent")
+    runner = _SeatRunner(state="absent", agents=_registered("00000000-dead-dead-dead-000000000000"))
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert result.outcome == "registration-unverified"
+
+
+# --- LaunchPlan union invariants (codex #5) ---------------------------------
+
+
+def test_launch_plan_rejects_two_side_effect_carriers() -> None:
+    """A plan carries a create ``command`` XOR reuse ``deliveries``, never both."""
+    base = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="absent")
+    with pytest.raises(ValueError):
+        dataclasses.replace(base, deliveries=("/build FRE-913",))
+
+
+def test_reuse_plan_must_carry_deliveries() -> None:
+    base = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live")
+    assert base.command is None
+    assert base.deliveries
+    with pytest.raises(ValueError):
+        dataclasses.replace(base, deliveries=())
+
+
+# --- structured readiness beats scraping the rendered TUI -------------------
+
+
+def _agent(status: str, cwd: str = _WORKTREE) -> dict[str, object]:
+    return {"name": "cc-build", "sessionId": "s", "cwd": cwd, "status": status}
+
+
+def test_seat_is_busy_reads_remote_controls_own_status_field() -> None:
+    """Readiness comes from RC's structured status, not a TUI heuristic."""
+    topology = topology_for("build1")
+    assert seat_is_busy(topology, _SeatRunner(agents=[_agent("busy")])) is True
+    assert seat_is_busy(topology, _SeatRunner(agents=[_agent("idle")])) is False
+
+
+def test_seat_is_busy_returns_none_when_it_cannot_tell() -> None:
+    """Never guess: no match, several matches, or an unknown status → None.
+
+    ``None`` is the signal for "fall back to the pane scrape", which is why it
+    must be distinguishable from a confident ``False``.
+    """
+    topology = topology_for("build1")
+    assert seat_is_busy(topology, _SeatRunner(agents=[])) is None
+    assert seat_is_busy(topology, _SeatRunner(agents=[_agent("busy"), _agent("idle")])) is None
+    assert seat_is_busy(topology, _SeatRunner(agents=[_agent("wat")])) is None
+    assert seat_is_busy(topology, _SeatRunner(agents=[_agent("idle", cwd="/elsewhere")])) is None
+
+
+def test_seat_is_busy_matches_by_cwd_not_by_drifting_name() -> None:
+    """A seat's RC name can drift (cc-build → build-41); its worktree cannot."""
+    agents = [{"name": "build-41", "sessionId": "s", "cwd": _WORKTREE, "status": "busy"}]
+    runner = _SeatRunner(agents=agents)
+    assert seat_is_busy(topology_for("build1"), runner) is True
+
+
+def test_structured_busy_status_blocks_delivery_even_if_the_pane_looks_idle() -> None:
+    """The structured signal wins: an idle-LOOKING pane does not override it.
+
+    This is the false-idle case the TUI scrape cannot rule out — the pane renders
+    its caret box even mid-turn, so text alone can read as ready when the seat is
+    actually working.
+    """
+    runner = _SeatRunner(state="live", pane="static", agents=[_agent("busy")])
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live")
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert result.outcome == "seat-busy"
+    assert runner.sent_text() == []
+
+
+def test_scrape_is_used_only_when_remote_control_cannot_answer() -> None:
+    """With no RC status available, the pane heuristic still guards delivery."""
+    runner = _SeatRunner(state="live", pane="busy", agents=[])  # RC silent, pane busy
+    plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live")
+    assert execute_plan(plan, runner, sleeper=_no_wait).outcome == "seat-busy"
+
+
+def test_malformed_ticket_identifier_is_rejected() -> None:
+    """The ticket id is typed into a live acceptEdits seat — assert its shape.
+
+    Linear's own identifiers cannot express anything but ``TEAM-123``, so this
+    never rejects a real ticket; it makes that guarantee local instead of
+    trusting a remote API to keep its format. Anything that could carry a
+    newline, a leading dash, or free text is refused before it reaches a
+    keyboard.
+    """
+    for bad in ("FRE-913; rm -rf /", "FRE-913\n/clear", "--dangerous", "", "fre-913", "FRE-"):
+        with pytest.raises(ValueError):
+            plan_launch("build1", bad, "sonnet", context_keep=False, seat="live")
+    # The real shape still plans normally.
+    assert plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live").deliveries

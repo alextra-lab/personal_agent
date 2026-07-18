@@ -1,139 +1,135 @@
 {
-    "promptSuggestionEnabled": false,
-    "env": {
-        "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
-        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
-    },
-    "attribution": {
-        "commit": "",
-        "pr": ""
-    },
-    "plansDirectory": "./docs/superpowers/plans",
-    "prefersReducedMotion": true,
-    "terminalProgressBarEnabled": false,
-    "effortLevel": "high",
-    "permissions": {
-        "allow": [
-            "Bash",
-            "Read",
-            "Grep",
-            "Glob",
-            "Skill(loop)",
-            "Skill(prime-worker)",
-            "Skill(build)",
-            "Skill(adr)",
-            "mcp__claude_ai_Linear__list_issues",
-            "mcp__claude_ai_Linear__get_issue",
-            "mcp__claude_ai_Linear__list_comments",
-            "mcp__claude_ai_Linear__list_projects",
-            "mcp__claude_ai_Linear__get_project",
-            "mcp__claude_ai_Linear__list_documents",
-            "mcp__claude_ai_Linear__get_document",
-            "mcp__claude_ai_Linear__list_milestones",
-            "mcp__claude_ai_Linear__list_issue_statuses",
-            "mcp__claude_ai_Linear__list_teams",
-            "mcp__claude_ai_Linear__get_team",
-            "mcp__claude_ai_Linear__search_documentation",
-            "mcp__github__get_file_contents",
-            "mcp__github__pull_request_read",
-            "mcp__github__list_pull_requests",
-            "mcp__github__get_commit",
-            "mcp__github__list_commits",
-            "mcp__github__search_code",
-            "mcp__github__issue_read",
-            "mcp__github__list_issues",
-            "Bash(docker exec build-postgres-test-1 psql:*)",
-            "Bash(docker exec build2-postgres-test-1 psql:*)",
-            "Bash(docker exec adrs-postgres-test-1 psql:*)",
-            "Bash(docker exec seshat-postgres-test-1 psql:*)",
-            "Bash(docker exec build-neo4j-test-1 cypher-shell:*)",
-            "Bash(docker exec build2-neo4j-test-1 cypher-shell:*)",
-            "Bash(docker exec adrs-neo4j-test-1 cypher-shell:*)",
-            "Bash(docker exec seshat-neo4j-test-1 cypher-shell:*)"
-        ],
-        "ask": [
-            "Read(./.env)",
-            "Read(**/.env)",
-            "Read(**/.env.*)",
-            "Read(**/*.pem)",
-            "Read(**/*.key)",
-            "Read(**/id_rsa)",
-            "Read(**/*secret*)",
-            "Read(**/*credentials*)",
-            "Bash(cat .env:*)",
-            "Bash(cat ./.env:*)",
-            "Bash(git push --force:*)",
-            "Bash(git push -f:*)",
-            "Bash(git reset --hard:*)",
-            "Bash(git clean:*)",
-            "Bash(gh pr merge:*)",
-            "Bash(rm:*)",
-            "Bash(rmdir:*)",
-            "Bash(make deploy:*)",
-            "Bash(make build:*)",
-            "Bash(make build-full:*)",
-            "Bash(make rebuild:*)",
-            "Bash(make up:*)",
-            "Bash(make down:*)",
-            "Bash(make restart:*)",
-            "Bash(ENV=cloud make:*)",
-            "Bash(docker exec:*)",
-            "Bash(docker compose down:*)",
-            "Bash(docker compose up:*)",
-            "Bash(psql:*)",
-            "Bash(cypher-shell:*)"
-        ],
-        "deny": []
-    },
-    "hooks": {
-        "PreToolUse": [
-            {
-                "matcher": "Bash",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": ".claude/hooks/check-pytest-lock.sh"
-                    },
-                    {
-                        "type": "command",
-                        "command": ".claude/hooks/deploy-approval-gate.sh"
-                    },
-                    {
-                        "type": "command",
-                        "command": ".claude/hooks/block-direct-main-push.sh"
-                    }
-                ]
-            },
-            {
-                "matcher": "Edit|Write",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": ".claude/hooks/check-forbidden-patterns.sh"
-                    }
-                ]
-            }
-        ],
-        "PostToolUse": [
-            {
-                "matcher": "Edit|Write",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": ".claude/hooks/format-python.sh"
-                    }
-                ]
-            }
-        ],
-        "UserPromptSubmit": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": ".claude/hooks/nudge-discussion-mode.sh"
-                    }
-                ]
-            }
+  "promptSuggestionEnabled": false,
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "plansDirectory": "./docs/superpowers/plans",
+  "prefersReducedMotion": true,
+  "terminalProgressBarEnabled": false,
+  "effortLevel": "high",
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Grep",
+      "Glob",
+      "Skill(loop)",
+      "Skill(prime-worker)",
+      "Skill(build)",
+      "Skill(adr)",
+      "mcp__claude_ai_Linear__list_issues",
+      "mcp__claude_ai_Linear__get_issue",
+      "mcp__claude_ai_Linear__list_comments",
+      "mcp__claude_ai_Linear__list_projects",
+      "mcp__claude_ai_Linear__get_project",
+      "mcp__claude_ai_Linear__list_documents",
+      "mcp__claude_ai_Linear__get_document",
+      "mcp__claude_ai_Linear__list_milestones",
+      "mcp__claude_ai_Linear__list_issue_statuses",
+      "mcp__claude_ai_Linear__list_teams",
+      "mcp__claude_ai_Linear__get_team",
+      "mcp__claude_ai_Linear__search_documentation",
+      "mcp__github__get_file_contents",
+      "mcp__github__pull_request_read",
+      "mcp__github__list_pull_requests",
+      "mcp__github__get_commit",
+      "mcp__github__list_commits",
+      "mcp__github__search_code",
+      "mcp__github__issue_read",
+      "mcp__github__list_issues",
+      "Bash(docker exec build-postgres-test-1 psql:*)",
+      "Bash(docker exec build2-postgres-test-1 psql:*)",
+      "Bash(docker exec adrs-postgres-test-1 psql:*)",
+      "Bash(docker exec seshat-postgres-test-1 psql:*)",
+      "Bash(docker exec build-neo4j-test-1 cypher-shell:*)",
+      "Bash(docker exec build2-neo4j-test-1 cypher-shell:*)",
+      "Bash(docker exec adrs-neo4j-test-1 cypher-shell:*)",
+      "Bash(docker exec seshat-neo4j-test-1 cypher-shell:*)"
+    ],
+    "ask": [
+      "Read(./.env)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/id_rsa)",
+      "Read(**/*secret*)",
+      "Read(**/*credentials*)",
+      "Bash(cat .env:*)",
+      "Bash(cat ./.env:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(rm:*)",
+      "Bash(rmdir:*)",
+      "Bash(make deploy:*)",
+      "Bash(make build:*)",
+      "Bash(make build-full:*)",
+      "Bash(make rebuild:*)",
+      "Bash(make up:*)",
+      "Bash(make down:*)",
+      "Bash(make restart:*)",
+      "Bash(ENV=cloud make:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker compose down:*)",
+      "Bash(docker compose up:*)",
+      "Bash(psql:*)",
+      "Bash(cypher-shell:*)"
+    ],
+    "deny": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/deploy-approval-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": ".claude/hooks/block-direct-main-push.sh"
+          }
         ]
-    }
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/check-forbidden-patterns.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/format-python.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/nudge-discussion-mode.sh"
+          }
+        ]
+      }
+    ]
+  }
 }

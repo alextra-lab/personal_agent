@@ -111,7 +111,7 @@ class _SeatRunner(_RecordingRunner):
         if args[:2] == ["claude", "agents"]:
             self.calls.append(tuple(argv))
             agents = (
-                [{"name": "cc-build", "sessionId": self._session_id, "cwd": "/w"}]
+                [{"name": "cc-1build", "sessionId": self._session_id, "cwd": "/w"}]
                 if self._session_id
                 else []
             )

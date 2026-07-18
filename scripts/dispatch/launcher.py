@@ -244,14 +244,32 @@ class StreamTopology:
     mode: Literal["channel", "send_keys"] = "send_keys"
 
 
+# Seat names must never be name-extensions of one another (FRE-909 AC-5). tmux
+# resolves an unmatched target by PREFIX, so while the seats were ``cc-build``
+# and ``cc-build2`` any command aimed at an absent ``cc-build`` silently
+# retargeted the live ``cc-build2`` — which destroyed a worker mid-build on
+# 2026-07-17, and again during a manual recovery on 2026-07-18.
+#
+# ``exact_session``/``exact_pane`` close this for every code path. The rename
+# closes the AD-HOC path they cannot reach: a human or agent typing
+# ``tmux attach -t cc-build`` interactively, with no helper in between. Both
+# halves are wanted; neither substitutes for the other.
+#
+# Only the seat field changes. Stream keys, Linear ``stream:`` labels, worktree
+# directories and channel ports are all unchanged.
 _TOPOLOGY: dict[str, StreamTopology] = {
     "build1": StreamTopology(
-        "build1", ".claude/worktrees/build", "cc-build", "/build", channel_port=8790, mode="channel"
+        "build1",
+        ".claude/worktrees/build",
+        "cc-1build",
+        "/build",
+        channel_port=8790,
+        mode="channel",
     ),
     "build2": StreamTopology(
         "build2",
         ".claude/worktrees/build2",
-        "cc-build2",
+        "cc-2build",
         "/build",
         channel_port=8791,
         mode="channel",
@@ -400,6 +418,22 @@ class LaunchResult:
     outcome: ResultOutcome
     card: str
     launched: bool
+
+
+def known_streams() -> tuple[str, ...]:
+    """Return every known dispatch stream key, sorted.
+
+    The single source of truth for "is this a real stream?" — callers that take
+    a stream from a human (a CLI flag, a label) validate against this rather
+    than silently treating a typo as a stream with no work. ``--stream adrs``
+    (the worktree/seat spelling) is NOT the ``adr`` stream key, and answering
+    ``none`` for it reports "no work queued" when the truth is "no such
+    stream" (2026-07-18).
+
+    Returns:
+        The stream keys, sorted for stable CLI help and error text.
+    """
+    return tuple(sorted(_TOPOLOGY))
 
 
 def topology_for(stream: str) -> StreamTopology:

@@ -1,30 +1,36 @@
 #!/usr/bin/env python3
-"""Deterministic, read-only delivery-board reconciler (FRE-680, hardened FRE-861).
+"""Deterministic, read-only delivery-board reconciler (FRE-680/FRE-861, Linear-sourced FRE-915).
 
-Maps board *claims* to durable *evidence* and emits verdicts. No LLM. The
-evidence sources are:
+Maps board *claims* to durable *evidence* and emits verdicts. No LLM. This is
+a mechanical helper signal for master's judgment, not a replacement for it:
+it only ever compares Linear ticket state against a repo fact (a merged PR
+exists, or doesn't) — never whether a specific acceptance criterion's
+*content* is proven, which requires interpretation and stays master's job
+(see ``.claude/skills/lifecycle-rules.md`` § Signal trust boundary).
 
-* **Linear** ticket state (GraphQL API, stdlib ``urllib``),
-* **merged PRs** whose branch maps to a ticket (``gh`` CLI),
-* the **MASTER_PLAN.md** header blockquote plus the ``Current live-env &
-  standing state`` / ``Open threads (current)`` body sections,
-* injected **live-evidence probes**, one per ADR the plan claims is
-  Implemented or live.
+The claim source is **Linear ticket state**, fetched live via GraphQL
+(``AGENT_LINEAR_API_KEY``). Previously (FRE-680/FRE-861) the claim source was
+prose parsed out of ``MASTER_PLAN.md``; that path is retired (FRE-915) because
+MASTER_PLAN is now forward-plans-only and carries no status narrative to
+parse — Linear is the sole authoritative source for per-ticket state, and
+always was.
 
 Each verdict has exactly four fields: ``claim``, ``status`` (one of ``PASS`` /
 ``FAIL`` / ``UNVERIFIABLE``), ``evidence`` (a list of citations), and ``note``.
 ``UNVERIFIABLE`` (no source to check) is a first-class outcome and is never
-silently treated as ``PASS``. An Implemented/live claim with no registered
-live-evidence probe is ``FAIL``, not ``UNVERIFIABLE`` — an ungrounded
-Implemented claim is a gap to close, not a shrug.
+silently treated as ``PASS``.
 
 Callable by hand, from prime-master, and from the master post-merge step::
 
     python scripts/reconcile_board.py            # human-readable table
     python scripts/reconcile_board.py --json      # machine-readable verdict list
 
-Exit code is ``1`` if any verdict is ``FAIL``, or if the parser extracted
-*zero* claims (parser drift reads as a false pass otherwise); else ``0``.
+Exit code is ``1`` if any verdict is ``FAIL``, or if the Linear claim fetch
+itself came back *empty* (no key, bad query — nothing was checked at all, so
+this reads as a possible false pass rather than exiting clean). A non-empty
+claim set that legitimately yields zero verdicts (a healthy day — nothing
+drifted) is **not** a forced failure; that distinction is the fix for a
+found bug where the two were conflated.
 
 See ``.claude/skills/lifecycle-rules.md`` § Evidence contract (proof of Done).
 """
@@ -32,6 +38,7 @@ See ``.claude/skills/lifecycle-rules.md`` § Evidence contract (proof of Done).
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import dataclasses
 import json
 import os
@@ -49,33 +56,15 @@ Status = Literal["PASS", "FAIL", "UNVERIFIABLE"]
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 LINEAR_TEAM_KEY = "FRE"
 
-# Linear state names that mean the ticket is closed (terminal).
-_CLOSED_STATE_NAMES: frozenset[str] = frozenset({"done", "canceled", "cancelled", "duplicate"})
+# States where a merged PR is normal/expected: the ticket has already merged
+# (Done, Awaiting Deploy) or merged and then failed post-deploy verification
+# (Verify Failed — the merge already happened by definition of reaching that
+# state, so a PR being present there is not drift).
+_PR_EXPECTED_STATES: frozenset[str] = frozenset({"done", "awaiting deploy", "verify failed"})
 
-# Present-tense assertions that a ticket is still open. These are authoritative
-# current-state claims (master wrote them knowingly) and win over bare history.
-_OPEN_PHRASES: tuple[str, ...] = (
-    r"stays In Progress",
-    r"kept In Progress",
-    r"held In Progress",
-    r"stays OPEN",
-    r"kept OPEN",
-    r"closes only when",
-)
-# Words indicating a ticket was completed.
-_DONE_PHRASES: tuple[str, ...] = (
-    r"\bDONE\b",
-    r"\bDone\b",
-    r"\bSHIPPED\b",
-    r"\bDEPLOYED\b",
-    r"closed Done",
-    r"\bmerged\b",
-)
-
-_FRE_RE = re.compile(r"FRE-\d+")
-# Split the header into clauses; parens isolate parentheticals like
-# "(FRE-655 stays In Progress)" into their own clause.
-_CLAUSE_SPLIT_RE = re.compile(r"[.;·()\n]|—")
+# States where a merged PR's presence or absence carries no signal either
+# way — a canceled/duplicate ticket may or may not have had a PR.
+_PR_AMBIGUOUS_STATES: frozenset[str] = frozenset({"canceled", "cancelled", "duplicate"})
 
 
 @dataclasses.dataclass(frozen=True)
@@ -95,309 +84,105 @@ class Verdict:
     note: str
 
 
-def extract_header(master_plan_text: str) -> str:
-    """Return the ``> **Last updated**:`` header paragraph of MASTER_PLAN.
+def verdict_for_claim(
+    fre_id: str,
+    state: str,
+    merged_prs: Sequence[Mapping[str, object]] | None,
+) -> Verdict | None:
+    """Compare one ticket's Linear state against merged-PR repo evidence.
 
-    The header is where master narrates current state; the body below is the
-    live plan with checkboxes. Acceptance criterion AC1 scopes the drift check
-    to "the header narrates".
-
-    Args:
-        master_plan_text: Full text of ``docs/plans/MASTER_PLAN.md``.
-
-    Returns:
-        The header block as a single string, or an empty string if not found.
-    """
-    lines = master_plan_text.splitlines()
-    start = next(
-        (i for i, line in enumerate(lines) if "**Last updated**" in line),
-        None,
-    )
-    if start is None:
-        return ""
-    collected: list[str] = []
-    for line in lines[start:]:
-        stripped = line.strip()
-        if not stripped or not stripped.startswith(">"):
-            break
-        collected.append(stripped.lstrip("> ").rstrip())
-    return " ".join(collected)
-
-
-# Body sections that carry ticket/ADR narrative after the 2026-07 wind-down
-# moved it out of the header blockquote (FRE-861).
-_BODY_SECTION_HEADINGS: tuple[str, ...] = (
-    "## Current live-env & standing state",
-    "## Open threads (current)",
-)
-
-
-def extract_body_sections(
-    master_plan_text: str,
-    headings: Sequence[str] = _BODY_SECTION_HEADINGS,
-) -> str:
-    """Return the concatenated text of the named MASTER_PLAN body sections.
-
-    Each heading's section runs until the next ``## `` heading (the heading
-    line itself is not included). Used because ticket narrative that used to
-    live in the header blockquote now lives in these body sections.
+    This is the entire drift check: a ticket in a state where a merged PR is
+    expected (Done / Awaiting Deploy / Verify Failed) gets one, or the claim
+    is unverifiable; a ticket in an active state (Approved / In Progress / In
+    Review / anything else) that already has a merged PR is drift — the
+    GitHub auto-transition to Awaiting Deploy was likely missed.
 
     Args:
-        master_plan_text: Full text of ``docs/plans/MASTER_PLAN.md``.
-        headings: Section headings (exact line match) to collect.
+        fre_id: Ticket identifier, e.g. ``FRE-900``.
+        state: The ticket's current Linear state name.
+        merged_prs: Merged PRs whose branch maps to this ticket (``gh``
+            results, each with at least ``number``, ``headRefName``,
+            ``mergedAt``), or ``None`` if the ``gh`` lookup itself failed.
 
     Returns:
-        The collected section bodies joined by newlines, or an empty string
-        if none of the headings are found.
+        A ``Verdict``, or ``None`` when there is nothing to check yet
+        (ticket genuinely still in flight, or its state carries no PR
+        signal either way).
     """
-    lines = master_plan_text.splitlines()
-    collected: list[str] = []
-    i = 0
-    while i < len(lines):
-        if lines[i].strip() in headings:
-            i += 1
-            while i < len(lines) and not lines[i].startswith("## "):
-                collected.append(lines[i])
-                i += 1
-            continue
-        i += 1
-    return "\n".join(collected)
+    normalized = state.strip().lower()
+    if normalized in _PR_AMBIGUOUS_STATES:
+        return None
+    expected = normalized in _PR_EXPECTED_STATES
+    claim = f"{fre_id} (Linear: {state}) is backed by a merged PR"
 
-
-def extract_claims_text(master_plan_text: str) -> str:
-    """Return the full claims-bearing text the reconciler parses.
-
-    Combines the legacy ``> **Last updated**`` header blockquote with the
-    body sections narrative moved into after the 2026-07 wind-down, so a
-    ticket/ADR claim is found regardless of which location currently holds
-    it (FRE-861).
-
-    Args:
-        master_plan_text: Full text of ``docs/plans/MASTER_PLAN.md``.
-
-    Returns:
-        Combined claims-bearing text.
-    """
-    header = extract_header(master_plan_text)
-    body = extract_body_sections(master_plan_text)
-    return f"{header}\n{body}"
-
-
-def _clause_binds_open(clause: str) -> bool:
-    """Return True if the clause asserts a *current* open state.
-
-    Explicit present-tense phrases (``stays In Progress``) always count. A bare
-    ``In Progress`` counts only when not preceded by past-tense ``was``/``were``
-    (so "was In Progress" is treated as history, not a current claim).
-    """
-    if any(re.search(p, clause, re.IGNORECASE) for p in _OPEN_PHRASES):
-        return True
-    if re.search(r"\b(?:was|were)\s+in progress\b", clause, re.IGNORECASE):
-        return False
-    return bool(re.search(r"\bin progress\b", clause, re.IGNORECASE))
-
-
-def _clause_binds_done(clause: str) -> bool:
-    """Return True if the clause asserts the ticket completed/shipped."""
-    return any(re.search(p, clause) for p in _DONE_PHRASES)
-
-
-def classify_header_claims(header_text: str) -> dict[str, str]:
-    """Classify each ticket the header references as ``OPEN`` or ``DONE``.
-
-    Splits the header into clauses and binds state per ticket from phrases in
-    the same clause. ``OPEN`` is authoritative: a single current-open clause
-    fixes the ticket as ``OPEN`` regardless of historical ``DONE`` words
-    elsewhere. Tickets with no state binding are omitted (treated as OTHER).
-
-    Args:
-        header_text: The MASTER_PLAN header paragraph.
-
-    Returns:
-        Mapping of ticket id (e.g. ``FRE-655``) to ``OPEN`` or ``DONE``.
-    """
-    claims: dict[str, str] = {}
-    for clause in _CLAUSE_SPLIT_RE.split(header_text):
-        tickets = set(_FRE_RE.findall(clause))
-        if not tickets:
-            continue
-        is_open = _clause_binds_open(clause)
-        is_done = _clause_binds_done(clause)
-        for fre in tickets:
-            if is_open:
-                claims[fre] = "OPEN"
-            elif is_done and claims.get(fre) != "OPEN":
-                claims[fre] = "DONE"
-    return claims
-
-
-_ADR_RE = re.compile(r"ADR-\d{4}")
-_IMPLEMENTED_OR_LIVE_RE = re.compile(r"\bImplemented\b|\blive\b", re.IGNORECASE)
-_NEGATION_RE = re.compile(r"\bNOT\b", re.IGNORECASE)
-
-
-@dataclasses.dataclass(frozen=True)
-class ImplementedClaim:
-    """A plan claim that some ADR is Implemented or live.
-
-    Attributes:
-        subject: The ADR id the claim is about (e.g. ``ADR-0104``).
-        clause: The source clause the claim was extracted from.
-    """
-
-    subject: str
-    clause: str
-
-
-def extract_implemented_claims(claims_text: str) -> list[ImplementedClaim]:
-    """Find ADR subjects the plan claims are Implemented or live.
-
-    Splits into the same clauses used for ticket-state classification. A
-    clause containing "Implemented" or "live" (case-insensitive) and an
-    ``ADR-XXXX`` id, with no "NOT" in the same clause, yields one claim per
-    ADR id (first matching clause wins; later mentions of the same ADR are
-    not duplicated).
-
-    Args:
-        claims_text: Combined header + body claims text (see
-            ``extract_claims_text``).
-
-    Returns:
-        One ``ImplementedClaim`` per distinct ADR id claimed Implemented/live.
-    """
-    claims: list[ImplementedClaim] = []
-    seen: set[str] = set()
-    for clause in _CLAUSE_SPLIT_RE.split(claims_text):
-        if not _IMPLEMENTED_OR_LIVE_RE.search(clause):
-            continue
-        if _NEGATION_RE.search(clause):
-            continue
-        for adr in _ADR_RE.findall(clause):
-            if adr in seen:
-                continue
-            seen.add(adr)
-            claims.append(ImplementedClaim(subject=adr, clause=clause.strip()))
-    return claims
-
-
-# A probe returns True (evidence confirms the claim), False (evidence
-# contradicts it), or None (probe could not be evaluated).
-LiveEvidenceProbe = Callable[[], bool | None]
-
-
-def check_live_evidence(
-    claim: ImplementedClaim,
-    probes: Mapping[str, LiveEvidenceProbe],
-) -> Verdict:
-    """Check an Implemented/live claim against a registered live-evidence probe.
-
-    An Implemented or live claim with no registered probe is a gap in the
-    evidence chain, not a pass — this is the exact class of drift that let
-    the ADR-0104 Implemented claim and the knowledge-class live implication
-    stand while the substrate contradicted them (FRE-861).
-
-    Args:
-        claim: The extracted Implemented/live claim.
-        probes: Mapping of ADR id to a callable that checks live substrate
-            evidence for that ADR. Injected so tests never touch a live
-            substrate.
-
-    Returns:
-        ``FAIL`` when no probe is registered or the probe contradicts the
-        claim, ``PASS`` when the probe confirms it, ``UNVERIFIABLE`` when the
-        probe could not be evaluated.
-    """
-    base_claim = f"MASTER_PLAN claims {claim.subject} is Implemented/live"
-    evidence = [f'MASTER_PLAN.md: "{claim.clause}"']
-    probe = probes.get(claim.subject)
-    if probe is None:
+    if merged_prs is None:
+        if not expected:
+            return None
         return Verdict(
-            claim=base_claim,
+            claim=claim,
+            status="UNVERIFIABLE",
+            evidence=[f"Linear {fre_id} status={state}"],
+            note="gh CLI unavailable or errored — cannot confirm a merged PR",
+        )
+
+    if merged_prs:
+        evidence = [f"Linear {fre_id} status={state}"] + [
+            f"PR #{pr['number']} headRef={pr['headRefName']} mergedAt={pr['mergedAt']}"
+            for pr in merged_prs
+        ]
+        if expected:
+            return Verdict(
+                claim=claim,
+                status="PASS",
+                evidence=evidence,
+                note="merged PR with branch mapping to the ticket found",
+            )
+        return Verdict(
+            claim=f"{fre_id} (Linear: {state}) has a merged PR but is not marked Done",
             status="FAIL",
             evidence=evidence,
             note=(
-                f"no live-evidence probe registered for {claim.subject} — an "
-                "Implemented/live claim must map to a live substrate check"
+                f"a merged PR already exists for {fre_id} but Linear still shows {state} — "
+                "the GitHub auto-transition to Awaiting Deploy may have been missed"
             ),
         )
-    try:
-        result = probe()
-    except Exception as exc:  # noqa: BLE001 - probes are injected, arbitrary callables
-        return Verdict(
-            claim=base_claim,
-            status="UNVERIFIABLE",
-            evidence=evidence,
-            note=f"live-evidence probe for {claim.subject} raised: {exc}",
-        )
-    if result is None:
-        return Verdict(
-            claim=base_claim,
-            status="UNVERIFIABLE",
-            evidence=evidence,
-            note=f"live-evidence probe for {claim.subject} could not be evaluated",
-        )
-    if result:
-        return Verdict(
-            claim=base_claim,
-            status="PASS",
-            evidence=evidence,
-            note=f"live-evidence probe confirmed {claim.subject}",
-        )
+
+    if not expected:
+        return None
     return Verdict(
-        claim=base_claim,
-        status="FAIL",
-        evidence=evidence,
-        note=f"live-evidence probe contradicts the {claim.subject} claim",
+        claim=claim,
+        status="UNVERIFIABLE",
+        evidence=[f"Linear {fre_id} status={state}"],
+        note="no merged PR with a matching branch — may be decision-only or branch naming",
     )
 
 
-def reconcile_master_plan(
+PrFinder = Callable[[str], Sequence[Mapping[str, object]] | None]
+
+
+def reconcile_claims_vs_repo(
     claims: Mapping[str, str],
-    linear_states: Mapping[str, str | None],
+    pr_finder: PrFinder,
 ) -> list[Verdict]:
-    """Reconcile MASTER_PLAN header claims against Linear ticket state.
+    """Reconcile Linear ticket-state claims against merged-PR repo evidence.
 
     Args:
-        claims: Ticket id -> ``OPEN`` / ``DONE`` from the header.
-        linear_states: Ticket id -> Linear state name, or ``None`` when the
-            state could not be fetched.
+        claims: Ticket id -> current Linear state name. This *is* the claim
+            set (FRE-915 AC1) — sourced live from Linear, never MASTER_PLAN.
+        pr_finder: Callable resolving a ticket id to its merged PRs (or
+            ``None`` on lookup failure). Injected so tests never touch
+            ``gh`` or the network.
 
     Returns:
-        One verdict per ticket. A claimed-open ticket that Linear shows closed
-        (or vice versa) is ``FAIL``; an unfetchable state is ``UNVERIFIABLE``.
+        One verdict per ticket that has something to check (see
+        ``verdict_for_claim``); tickets with nothing to check yet are
+        omitted, not silently passed.
     """
     verdicts: list[Verdict] = []
-    for fre in sorted(claims):
-        claim = claims[fre]
-        state = linear_states.get(fre)
-        if state is None:
-            verdicts.append(
-                Verdict(
-                    claim=f"MASTER_PLAN header narrates {fre} as {claim}",
-                    status="UNVERIFIABLE",
-                    evidence=[f"MASTER_PLAN.md header references {fre}"],
-                    note="Linear state unavailable (no API key or request failed)",
-                )
-            )
-            continue
-        closed = state.strip().lower() in _CLOSED_STATE_NAMES
-        if claim == "OPEN" and closed:
-            status: Status = "FAIL"
-            note = f"header narrates {fre} as open, but Linear shows {state}"
-        elif claim == "DONE" and not closed:
-            status = "FAIL"
-            note = f"header narrates {fre} as done, but Linear shows {state}"
-        else:
-            status = "PASS"
-            note = f"header claim ({claim}) agrees with Linear ({state})"
-        verdicts.append(
-            Verdict(
-                claim=f"MASTER_PLAN header narrates {fre} as {claim}; Linear shows {state}",
-                status=status,
-                evidence=["MASTER_PLAN.md header", f"Linear {fre} status={state}"],
-                note=note,
-            )
-        )
+    for fre_id in sorted(claims):
+        verdict = verdict_for_claim(fre_id, claims[fre_id], pr_finder(fre_id))
+        if verdict is not None:
+            verdicts.append(verdict)
     return verdicts
 
 
@@ -441,60 +226,139 @@ def load_linear_key() -> str | None:
     return None
 
 
-def fetch_linear_states(
-    fre_ids: Sequence[str],
-    api_key: str | None,
-) -> dict[str, str | None]:
-    """Fetch current Linear state names for the given ticket ids.
+# States where a merged PR is either expected (Done/Awaiting Deploy/Verify
+# Failed) or ambiguous (Canceled/Duplicate) — together, the bucket bounded by
+# recency below. Every OTHER state (Approved, In Progress, In Review, Backlog,
+# Needs Approval, Triage, or any future state) falls into the unbounded
+# bucket: a ticket stuck there with an already-merged PR is exactly the drift
+# this reconciler exists to catch, and bounding it by recency would hide old
+# stuck tickets — a real risk given the board's current size (500+ tickets,
+# live-measured). Deriving the unbounded bucket as "NOT IN this list" (rather
+# than hardcoding an exhaustive active-state list) means a ticket in a state
+# nobody enumerated up front still gets checked, instead of silently falling
+# through an allowlist.
+_TERMINAL_STATE_NAMES: tuple[str, ...] = (
+    "Done",
+    "Awaiting Deploy",
+    "Verify Failed",
+    "Canceled",
+    "Cancelled",
+    "Duplicate",
+)
+
+_PAGE_SIZE = 100
+
+
+def fetch_board_claims(api_key: str | None, since_days: int = 90) -> dict[str, str]:
+    """Fetch the live Linear claim set: FRE ticket id -> current state name.
+
+    Queries two buckets in one filter: any state NOT IN the terminal set
+    (Approved/In Progress/In Review/Backlog/Needs Approval/etc.) with no
+    recency bound, and states IN the terminal set (Done/Awaiting
+    Deploy/Verify Failed/Canceled/Duplicate) bounded to the last
+    ``since_days`` days, so the historical archive stays bounded. Paginated
+    — the board currently carries 500+ tickets team-wide.
 
     Args:
-        fre_ids: Ticket ids such as ``FRE-655``.
-        api_key: Linear personal API key, or ``None``.
+        api_key: Linear personal API key, or ``None`` (yields an empty dict —
+            callers then treat the empty claim set as a forced failure, never
+            a silent pass).
+        since_days: Recency window in days for the terminal-state bucket.
 
     Returns:
-        Mapping of ticket id to its Linear state name. A ticket whose state
-        could not be determined (no key, request error, not found) maps to
-        ``None`` — never silently to a state.
+        Mapping of ticket id (e.g. ``FRE-900``) to its current Linear state
+        name.
     """
-    states: dict[str, str | None] = {fre: None for fre in fre_ids}
-    if not api_key or not fre_ids:
-        return states
-    numbers = [int(fre.split("-", 1)[1]) for fre in fre_ids]
+    if not api_key:
+        return {}
+    since_iso = _iso_days_ago(since_days)
     query = (
-        "query Issues($numbers: [Float!]) {"
-        f'  issues(filter: {{ team: {{ key: {{ eq: "{LINEAR_TEAM_KEY}" }} }},'
-        "                    number: { in: $numbers } }) {"
+        "query BoardClaims($terminal: [String!], $since: DateTimeOrDuration, "
+        "$after: String, $pageSize: Int!) {"
+        f"  issues(first: $pageSize, after: $after, filter: {{"
+        f'    team: {{ key: {{ eq: "{LINEAR_TEAM_KEY}" }} }},'
+        "    or: ["
+        "      { state: { name: { nin: $terminal } } },"
+        "      { and: [ { state: { name: { in: $terminal } } }, { updatedAt: { gt: $since } } ] }"
+        "    ]"
+        "  }) {"
         "    nodes { identifier state { name } }"
+        "    pageInfo { hasNextPage endCursor }"
         "  }"
         "}"
     )
-    payload = json.dumps({"query": query, "variables": {"numbers": numbers}}).encode()
-    request = urllib.request.Request(  # noqa: S310 - fixed https Linear endpoint
-        LINEAR_GRAPHQL_URL,
-        data=payload,
-        headers={"Authorization": api_key, "Content-Type": "application/json"},
-        method="POST",
+    claims: dict[str, str] = {}
+    after: str | None = None
+    while True:
+        variables: dict[str, object] = {
+            "terminal": list(_TERMINAL_STATE_NAMES),
+            "since": since_iso,
+            "after": after,
+            "pageSize": _PAGE_SIZE,
+        }
+        payload = json.dumps({"query": query, "variables": variables}).encode()
+        request = urllib.request.Request(  # noqa: S310 - fixed https Linear endpoint
+            LINEAR_GRAPHQL_URL,
+            data=payload,
+            headers={"Authorization": api_key, "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
+                data = json.loads(response.read())
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+            return claims
+        if data.get("errors"):
+            return claims
+        issues = (data.get("data") or {}).get("issues") or {}
+        for node in issues.get("nodes", []):
+            identifier = node.get("identifier")
+            state = (node.get("state") or {}).get("name")
+            if identifier and state:
+                claims[identifier] = state
+        page_info = issues.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            break
+        after = page_info.get("endCursor")
+        if not after:
+            break
+    return claims
+
+
+def _iso_days_ago(days: int) -> str:
+    """Return an ISO-8601 UTC timestamp ``days`` before the current time."""
+    import datetime
+
+    return (
+        (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days))
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
     )
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
-            data = json.loads(response.read())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
-        return states
-    nodes = (data.get("data") or {}).get("issues", {}).get("nodes", [])
-    for node in nodes:
-        identifier = node.get("identifier")
-        state = (node.get("state") or {}).get("name")
-        if identifier in states:
-            states[identifier] = state
-    return states
 
 
-def check_merged_pr(fre_id: str) -> Verdict:
-    """Check whether a merged PR's branch maps to a Done ticket (Check B).
+# Deliberately generous, not a recency bound: fetching every merged PR the
+# repo has ever had is cheap (live-measured: ~570 total, ~4s at limit=10000)
+# and correctness-critical — an old ticket stuck in an active state (see
+# `_TERMINAL_STATE_NAMES`) needs its (possibly old) merged PR to still be
+# found, or the exact drift this reconciler exists to catch goes silently
+# unnoticed (a prior version capped this at 500 and was found, live, to hide
+# older matches).
+_MERGED_PR_FETCH_LIMIT = 5000
 
-    Informational: a found PR is ``PASS``; an unreachable ``gh`` or no matching
-    PR is ``UNVERIFIABLE`` (a missing PR may be a decision-only ticket — it is
-    never silently failed).
+
+def _fetch_merged_prs() -> list[dict[str, object]] | None:
+    """Fetch merged PRs once, via a single ``gh`` call.
+
+    One call regardless of claim-set size — the board can carry 100+ active
+    tickets, and a naive per-ticket ``gh pr list --search`` (the original
+    design) means 100+ sequential subprocess calls, which was measured to
+    hang past a 2-minute budget against the live board. ``gh`` has no
+    server-side branch-name filter, so filtering per ticket happens against
+    this one fetched batch instead, in ``_make_pr_finder``.
+
+    Returns:
+        The merged PRs (each with at least ``number``, ``headRefName``,
+        ``mergedAt``), or ``None`` if ``gh`` is unavailable or errors.
     """
     try:
         out = subprocess.run(
@@ -504,12 +368,10 @@ def check_merged_pr(fre_id: str) -> Verdict:
                 "list",
                 "--state",
                 "merged",
-                "--search",
-                fre_id,
                 "--json",
                 "number,headRefName,mergedAt",
                 "--limit",
-                "20",
+                str(_MERGED_PR_FETCH_LIMIT),
             ],
             capture_output=True,
             text=True,
@@ -517,83 +379,111 @@ def check_merged_pr(fre_id: str) -> Verdict:
             check=False,
         )
     except (FileNotFoundError, subprocess.SubprocessError):
-        return Verdict(
-            claim=f"{fre_id} (Done) is backed by a merged PR",
-            status="UNVERIFIABLE",
-            evidence=[],
-            note="gh CLI unavailable",
-        )
+        return None
     if out.returncode != 0:
-        return Verdict(
-            claim=f"{fre_id} (Done) is backed by a merged PR",
-            status="UNVERIFIABLE",
-            evidence=[],
-            note=f"gh error: {out.stderr.strip()[:120]}",
-        )
+        return None
     try:
-        prs = json.loads(out.stdout or "[]")
+        prs: list[dict[str, object]] = json.loads(out.stdout or "[]")
     except json.JSONDecodeError:
-        return Verdict(
-            claim=f"{fre_id} (Done) is backed by a merged PR",
-            status="UNVERIFIABLE",
-            evidence=[],
-            note="gh returned unparseable JSON",
-        )
-    token = fre_id.lower()
-    matches = [pr for pr in prs if token in str(pr.get("headRefName", "")).lower()]
-    if matches:
-        return Verdict(
-            claim=f"{fre_id} (Done) is backed by a merged PR",
-            status="PASS",
-            evidence=[
-                f"PR #{pr['number']} headRef={pr['headRefName']} mergedAt={pr['mergedAt']}"
-                for pr in matches
-            ],
-            note="merged PR with branch mapping to the ticket found",
-        )
-    return Verdict(
-        claim=f"{fre_id} (Done) is backed by a merged PR",
-        status="UNVERIFIABLE",
-        evidence=[],
-        note="no merged PR with a matching branch — may be decision-only or branch naming",
-    )
+        return None
+    return prs
 
 
-def _default_master_plan_path() -> Path:
-    """Return the repo's ``docs/plans/MASTER_PLAN.md`` path (no hardcoded root)."""
-    return Path(__file__).resolve().parent.parent / "docs" / "plans" / "MASTER_PLAN.md"
-
-
-def reconcile(
-    master_plan_path: Path,
-    live_evidence_probes: Mapping[str, LiveEvidenceProbe] | None = None,
-) -> list[Verdict]:
-    """Run the full reconciliation and return all verdicts.
+# Anchors a ticket id to a whole branch-name segment: matches at the start of
+# the branch (or right after a "/", e.g. "docs/fre-893-...") and requires the
+# character after the id to be a non-digit (or end of string). Plain
+# substring containment (the original implementation) let a shorter id false-
+# match a longer one sharing its numeric prefix — "fre-9" is a substring of
+# "fre-900-...", so FRE-9 would wrongly pick up FRE-900's PR.
+def _branch_matches_ticket(head_ref: str, fre_id: str) -> bool:
+    """Return whether ``head_ref`` is a branch for ``fre_id``, not merely mentions it.
 
     Args:
-        master_plan_path: Path to ``MASTER_PLAN.md``.
-        live_evidence_probes: ADR id -> live-evidence probe (Check C). Omit to
-            use an empty registry, which fails every Implemented/live claim
-            loud until a real probe is registered for that ADR.
+        head_ref: A PR's ``headRefName``, e.g. ``fre-900-fix-thing`` or
+            ``docs/fre-893-redo-done``.
+        fre_id: Ticket identifier, e.g. ``FRE-900``.
 
     Returns:
-        Check-A (MASTER_PLAN ↔ Linear) verdicts, then Check-B (Done ↔
-        merged-PR) verdicts, then Check-C (Implemented/live ↔ live-evidence
-        probe) verdicts.
+        ``True`` if ``fre_id`` appears as its own branch-name segment.
     """
-    claims_text = extract_claims_text(master_plan_path.read_text())
-    claims = classify_header_claims(claims_text)
-    fre_ids = sorted(claims)
-    linear_states = fetch_linear_states(fre_ids, load_linear_key())
-    verdicts = reconcile_master_plan(claims, linear_states)
-    for fre in fre_ids:
-        state = linear_states.get(fre)
-        if claims.get(fre) == "DONE" or (state is not None and state.strip().lower() == "done"):
-            verdicts.append(check_merged_pr(fre))
-    probes = live_evidence_probes if live_evidence_probes is not None else {}
-    for claim in extract_implemented_claims(claims_text):
-        verdicts.append(check_live_evidence(claim, probes))
-    return verdicts
+    pattern = re.compile(rf"(?:^|/){re.escape(fre_id.lower())}(?:-|$)")
+    return bool(pattern.search(head_ref.lower()))
+
+
+def _make_pr_finder(merged_prs: list[dict[str, object]] | None) -> PrFinder:
+    """Build a ``PrFinder`` that filters one pre-fetched merged-PR batch per ticket.
+
+    Args:
+        merged_prs: Result of ``_fetch_merged_prs()`` — ``None`` propagates
+            as "gh unavailable" for every ticket.
+
+    Returns:
+        A callable matching ``PrFinder``: ticket id -> merged PRs whose
+        ``headRefName`` names that exact ticket (see
+        ``_branch_matches_ticket``) — not `gh`'s own text search and not
+        plain substring containment, either of which lets an incidental
+        mention (or a numeric-prefix collision between ticket ids) produce a
+        false match.
+    """
+
+    def finder(fre_id: str) -> list[dict[str, object]] | None:
+        if merged_prs is None:
+            return None
+        return [
+            pr
+            for pr in merged_prs
+            if _branch_matches_ticket(str(pr.get("headRefName", "")), fre_id)
+        ]
+
+    return finder
+
+
+@dataclasses.dataclass(frozen=True)
+class ReconcileRun:
+    """Result of one full reconciliation run.
+
+    Attributes:
+        claims: The fetched Linear claim set (ticket id -> state name). Empty
+            here means the fetch itself found nothing to check at all (no
+            key, or a query/network failure) — a distinct condition from
+            ``verdicts`` being empty, which can happen on a healthy day when
+            every fetched ticket legitimately has nothing to check yet.
+        verdicts: One verdict per ticket with something to check.
+    """
+
+    claims: dict[str, str]
+    verdicts: list[Verdict]
+
+
+def reconcile(api_key: str | None = None, since_days: int = 90) -> ReconcileRun:
+    """Run the full reconciliation and return the claim set plus all verdicts.
+
+    The Linear claim fetch and the merged-PR fetch are independent I/O with
+    no data dependency between them, so they run concurrently. The merged-PR
+    fetch is skipped entirely when there is no key — it would be wasted work
+    otherwise, since an empty claim set short-circuits to zero verdicts
+    regardless.
+
+    Args:
+        api_key: Linear API key. Defaults to ``load_linear_key()``.
+        since_days: Recency window for the terminal-state claim bucket.
+
+    Returns:
+        The fetched claim set plus one verdict per ticket with something to
+        check (see ``verdict_for_claim``).
+    """
+    key = api_key if api_key is not None else load_linear_key()
+    if not key:
+        return ReconcileRun(claims={}, verdicts=[])
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        claims_future = pool.submit(fetch_board_claims, key, since_days)
+        prs_future = pool.submit(_fetch_merged_prs)
+        claims = claims_future.result()
+        merged_prs = prs_future.result()
+    if not claims:
+        return ReconcileRun(claims={}, verdicts=[])
+    pr_finder = _make_pr_finder(merged_prs)
+    return ReconcileRun(claims=claims, verdicts=reconcile_claims_vs_repo(claims, pr_finder))
 
 
 def _print_table(verdicts: Sequence[Verdict]) -> None:
@@ -613,52 +503,55 @@ def _print_table(verdicts: Sequence[Verdict]) -> None:
 
 
 def exit_code_for(verdicts: Sequence[Verdict]) -> int:
-    """Compute the process exit code for a set of verdicts.
+    """Compute the process exit code from a set of verdicts.
 
-    Zero verdicts means the parser extracted no claims at all — an anomaly
-    (parser drift), not a pass — so it forces exit ``1`` same as a real
-    ``FAIL``, distinct from a non-empty verdict set that happens to be all
-    ``PASS``/``UNVERIFIABLE``.
+    Purely "did anything FAIL" — an empty ``verdicts`` list is **not**
+    treated as a forced failure here, because it is a legitimate, common
+    outcome (a healthy day where every fetched ticket had nothing to check).
+    The "nothing was checked at all" failure mode lives one level up, on the
+    fetched *claim set* being empty (see ``main``) — conflating the two was
+    a found bug: it turned every healthy day into a false-alarm exit 1.
 
     Args:
-        verdicts: The full verdict list from ``reconcile``.
+        verdicts: A verdict list, e.g. from a ``ReconcileRun``.
 
     Returns:
-        ``1`` if verdicts is empty or any verdict is ``FAIL``, else ``0``.
+        ``1`` if any verdict is ``FAIL``, else ``0``.
     """
-    if not verdicts:
-        return 1
     return 1 if any(v.status == "FAIL" for v in verdicts) else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Entry point. Returns ``1`` if any verdict is ``FAIL`` or none extracted."""
+    """Entry point. Returns ``1`` if any verdict is ``FAIL`` or no claims were fetched."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        "--master-plan",
-        type=Path,
-        default=_default_master_plan_path(),
-        help="Path to MASTER_PLAN.md (default: docs/plans/MASTER_PLAN.md).",
+        "--since-days",
+        type=int,
+        default=90,
+        help="Recency window in days for the Done/Awaiting-Deploy/Verify-Failed/Canceled/"
+        "Duplicate claim bucket (default: 90). Every other state has no bound.",
     )
     parser.add_argument("--json", action="store_true", help="Emit verdicts as JSON.")
     args = parser.parse_args(argv)
 
-    verdicts = reconcile(args.master_plan)
+    run = reconcile(since_days=args.since_days)
 
-    if not verdicts:
+    if not run.claims:
         print(
-            "ERROR: reconciler extracted zero claims from MASTER_PLAN — this reads as a "
-            "false pass. Parser drift suspected; refusing to exit clean.",
+            "ERROR: reconciler fetched zero ticket claims from Linear — this reads as a false "
+            "pass. Check AGENT_LINEAR_API_KEY; refusing to exit clean.",
             file=sys.stderr,
         )
-    elif args.json:
-        print(json.dumps([dataclasses.asdict(v) for v in verdicts], indent=2))
-    else:
-        _print_table(verdicts)
+        return 1
 
-    return exit_code_for(verdicts)
+    if args.json:
+        print(json.dumps([dataclasses.asdict(v) for v in run.verdicts], indent=2))
+    else:
+        _print_table(run.verdicts)
+
+    return exit_code_for(run.verdicts)
 
 
 if __name__ == "__main__":

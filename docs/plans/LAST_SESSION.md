@@ -1,36 +1,79 @@
-# Last session — 2026-07-16 → 17 (very long; config chain shipped + deployed, build2 crash+recovery, tmux 3.7a, cost-gov ADR, backlog reel-in)
+# Last session — 2026-07-18 (dispatch automation repaired; seats visible again)
 
-## ▶ THIS RESET IS THE TMUX CUTOVER — read first
-The reset that follows this file is **not a plain /clear** — the owner is running **`tmux kill-server`** to
-cut the shared tmux server over to **3.7a** (built from source this session; see below). It kills **every**
-seat (master, build, build2, adrs, explore). After the kill: the dispatcher (systemd, survives) spawns
-build seats on 3.7a when work is dispatched; the owner re-creates cc-adrs/cc-explore + re-primes master via
-`/prime-master`. **First thing on re-prime: confirm the seats came back and `tmux -V` in a fresh shell shows
-3.7a** (server is 3.7a only after this kill; before it, it was 3.5a).
+## Doing / discussing  (≤5 sentences)
 
-## Doing / discussing (≤5 sentences)
-Shipped the **FRE-896 config-cleanup chain end to end**: 876 (D4 field-doc guard) · 896 (curated removal — only 3 confirmed-outgrown deleted, owner's origin-ADR caveat held) · 897 (managed_* secret redaction) · **906 (wired event_bus_ack_timeout_seconds → XAUTOCLAIM self-reclaim sweep — DEPLOYED + live-verified: reclaimed 2 real orphaned messages on gateway startup)** · 907 (audit-scanner hardening). **cc-build2 tmux CRASHED mid-906**; recovered it (root cause: launcher relaunches into the crashed deterministic session-id → dies on the stale lock; fix = clear the session state — see memory `reference_worker_seat_crash_recovery`). Routed + merged **cost-gov ADR-0120** (Proposed, supersedes ADR-0065). Did a **backlog reel-in** (27 orphans homed into projects; ~124 stale local branches pruned; cc-explore2 torn down). Built **tmux 3.7a** from source, cutover pending = this reset.
+Spent the day fixing the dispatch automation, ending with all seats visible and the dispatcher restarted
+on merged code. Two threads remain open and both belong to the owner, not the next session: **PR 573 is
+red** on a genuine design conflict (below), and the **owner-led ADR debate has not started** — `cc-adrs`
+is synced and ready, and the owner said the ADR-0118/0119 chain (FRE-880 and successors) stays unapproved
+until they correct the ADR themselves. Do not start either unilaterally.
 
 ## Commits — the story behind the last 10
-`cfffe3dc`/#562 FRE-907 scanner hardening (codex ran; 6 code-review fixes incl. quote-parity guard). `d9783ca1`/#561 **FRE-906** event-bus wiring — I reviewed the consumer logic myself (codex didn't run; workflow reviewer errored on infra) and it held; **`20ea7b25` is the WIP-checkpoint from the build2 CRASH** (committed to preserve the crashed first attempt before relaunching fresh). #560 FRE-897 secret redaction · #559 FRE-896 curated removal (I independently grep-verified the 3 deletions zero-consumer, then FRE-907 revealed my grep shared the tool's `.py`-only blind spot — re-verified clean across all file types). Not in `git log -10` but this session: PRs #554 (reel-in) #556 (ADR-0120) #557 (0065→Superseded) #558 (0119 cost-surface note).
+
+- **FRE-914 / PR 572 (`8b0491ad`) — seat naming.** The record now states the true cause, but it took a
+  day and a wrong turn. I claimed Claude Code 2.1.214 changed `--remote-control`'s behaviour. Git
+  disproved it: `git log -S '"-n"'` on the launcher is empty — it used the positional form from its first
+  commit (`8277c66c`) and **never** passed `-n`. Nothing regressed; the bug was latent from day one and
+  only surfaced once the automation, not the owner, started launching seats. `cc-master` looked healthy
+  solely because the owner had launched it by hand with `-n`, inherited across `-c` resumes. **The owner
+  named `-n` as the answer early and I dismissed it as "only a display name."** That dismissal cost the
+  day. Ticket, comments, code comments and PR body all corrected; ticket closed with evidence.
+- **FRE-913 (`f8ef7563`) — launcher no longer terminates seats.** Landed after I destroyed an hour-long
+  owner conversation in `cc-build` by labelling a ticket and letting the old kill-recreate path run. Now
+  enforced by an AST test asserting no termination verb exists in the launcher source.
+- **FRE-909 (`85a8e78c`) — exact-match tmux targets.** Unmatched tmux targets resolve by *prefix*, proven
+  live (`kill-session -t zztest` killed `zztest2`). My own recovery attempt killed a live seat this way,
+  and it corrupted my diagnostics for several minutes.
+- **PR 574 (`e8ed010f`) — dispatch stream guard.** Merged only after an independent review bounced my
+  first attempt: I had put the guard at argparse, protecting a one-shot CLI, while the always-running
+  orchestrator imports the resolver directly and stayed exposed. Guard now sits in `stream_label()`,
+  which every resolver path crosses. I also nearly shipped an unrequested behaviour change — deriving
+  `DEFAULT_STREAMS` from the sorted `known_streams()` would have flipped per-tick order from
+  `build1`-first to `adr`-first.
+- **PR 573 — MASTER_PLAN forward-only.** Written, pushed, **still red.** See drift.
 
 ## Worktrees — anything special
-- **cc-build (build1)** — last built FRE-907 (Done). Its worktree also holds the **committed fre-879 WIP** (artifact_builder extraction, +466, pushed to `origin/fre-879-...`) — do-not-discard, resumes when the config-UI chain does.
-- **cc-build2 (build2)** — last built FRE-906 (Done). CRASHED mid-build this session; recovered. Crashed session `4d5840d9` archived to scratchpad.
-- **cc-adrs** — delivered ADR-0120, idle.
-- **cc-explore** — owner deliberation seat.
-- **cc-explore2** — **TORN DOWN this session** (cost-gov work merged; don't look for it).
+
+- **`cc-adrs`** — synced to `8b0491ad`, clean, on `docs/adr-0120-cost-governance` with **zero commits on
+  it**; the branch name is aspirational, no ADR-0120 work exists there. It had been 169 files stale and
+  was therefore reading an **old `/adr` skill** — plausibly the pre-fix version that wrote-asked-published
+  without debating, the exact FRE-809 failure. The sync removed that trap.
+- All four worktrees are at `8b0491ad` with identical skills. `master-914` is detached at origin/main.
 
 ## Plan position + drift
-- **Configuration Management project advanced hard**: the whole FRE-893→896/897/906/907 audit+cleanup chain shipped; ADR-0099 D4 guard live. On the go-forward: **#1 (route cost-gov to adr) DONE — ADR-0120 authored+merged Proposed.**
-- **Config-UI (ADR-0119) is still next**, waits on the cost-gov ADR *result* per owner's item-2; I amended ADR-0119 (PR #558) so its observe view renders ADR-0120's cost surface (T6), not the abolished hard caps — the two ADRs are now coherent. No structural config-UI change needed.
-- **Deploy:** running gateway is now **cfffe3dc** (rebuilt 06:51 UTC to ship 906; embedder re-stopped). Awaiting-Deploy holds unchanged: FRE-884/739/866/717.
-- No real drift — followed the go-forward, reeled in the backlog on the owner's direction, and absorbed a mid-session infra crash.
+
+**MASTER_PLAN on `main` is still the old 151-line version** — the forward-only rewrite and the
+`MASTER_PLAN_HISTORY.md` deletion live entirely in unmerged PR 573. Do not assume the plan reflects the
+owner's instruction yet.
+
+**Why 573 is red, and why it is not mine to fix:** `scripts/reconcile_board.py` machine-parses
+MASTER_PLAN for ticket and "Implemented/live" claims, and `test_real_master_plan_extracts_nonzero_claim_set`
+asserts the current file yields a non-zero set. A forward-only plan yields zero *by construction*. The
+reconciler assumes MASTER_PLAN is a status document — precisely what the owner said it must stop being.
+Either the reconciler points at Linear (where status is authoritative) or that extraction path retires.
+**Owner design call.** My recommendation is Linear; unrequested and non-binding.
+
+**Skill drift, fixed but unmerged:** `prepare-reset` Step 3 on `main` still instructs appending to
+`MASTER_PLAN_HISTORY.md` — the deleted file. Correction is in PR 573. **A `/prepare-reset` run before 573
+merges will be told to recreate it; ignore that instruction.**
 
 ## Answers for the fresh start
-- **Did the tmux cutover happen?** The reset was it. Verify seats are back on 3.7a (`tmux -V`); 3.5a stays in `/usr/bin` as fallback (revert = `rm /usr/local/bin/tmux`). Dispatcher PATH already resolves 3.7a.
-- **Is 906 deployed?** Yes — live-verified (2 orphans reclaimed, zero errors). Done.
-- **Was the build2 crash resolved?** Yes — both builds recovered + shipped. The recovery runbook is memory `reference_worker_seat_crash_recovery`.
-- **Cost-gov next step?** ADR-0120 is Proposed; impl tickets (T0 = instrument OVH/Voyage/Perplexity) are NOT filed — they await the owner moving it Proposed→Accepted. Still ask-first on all cost.
-- **fre-879 branch on origin?** Intentional — parked WIP backup, not stale. Keep.
-- **Branch cleanup?** Done (155→9 local; remote clean). Fold `fetch --prune` + gone-branch delete into routine.
+
+- **Safe to restart the daemons?** Owner's standing rule: restart if nothing is queued or the kill switch
+  is engaged. Verify with the *daemon's own* `skip / no-candidate` logs, not the resolver alone.
+- **Is `--stream adrs` valid?** No. Stream key is `adr`; `adrs` is the worktree/seat spelling. It now
+  fails loudly instead of printing `none` (PR 574).
+- **Did dispatch ever silently die from this?** No. The systemd unit passes no `--streams`, so it used
+  `DEFAULT_STREAMS`, all three real. The hole was latent.
+- **Why is `cc-master` on a different CC version?** Long-running process predating the updates. Not a defect.
+- **Four tickets sit in Awaiting Deploy** (884, 739, 866, 717), all from prior sessions, none from this
+  one. Not reviewed here — worth a reconcile pass.
+- **`cc-sessions` self-protection** was fixed on disk (machine-local, not in the repo): `SELF` now gates on
+  `$TMUX`, because outside tmux it returned the most-recently-active session and would protect the wrong seat.
+
+## The thing worth carrying forward
+
+Three times today I was confidently wrong in the same shape: a wrong causal theory, a fix at the wrong
+layer, and a test that would have passed with the fix deleted. Each was caught from **outside** — the
+owner, then an independent reviewer. What did not catch them was my own certainty, which felt identical
+in all three cases. On anything consequential, get the outside check.

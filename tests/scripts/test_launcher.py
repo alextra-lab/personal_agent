@@ -30,6 +30,7 @@ from scripts.dispatch.launcher import (
     LauncherCapabilities,
     execute_plan,
     find_warm_session,
+    known_streams,
     main,
     plan_launch,
     seat_is_busy,
@@ -69,9 +70,9 @@ class _RecordingRunner:
 
 
 def test_topology_maps_each_stream() -> None:
-    assert topology_for("build1").tmux_session == "cc-build"
+    assert topology_for("build1").tmux_session == "cc-1build"
     assert topology_for("build1").skill_command == "/build"
-    assert topology_for("build2").tmux_session == "cc-build2"
+    assert topology_for("build2").tmux_session == "cc-2build"
     assert topology_for("adr").skill_command == "/adr"
 
 
@@ -85,8 +86,8 @@ def test_topology_mode_is_channel_for_every_worker_seat() -> None:
 
 
 def test_stream_for_tmux_session_resolves_known_sessions() -> None:
-    assert stream_for_tmux_session("cc-build") == "build1"
-    assert stream_for_tmux_session("cc-build2") == "build2"
+    assert stream_for_tmux_session("cc-1build") == "build1"
+    assert stream_for_tmux_session("cc-2build") == "build2"
     assert stream_for_tmux_session("cc-adrs") == "adr"
 
 
@@ -126,7 +127,7 @@ def test_clear_full_caps_launches_at_model_with_seed() -> None:
     assert plan.command is not None
     # tmux detached, named, in the stream's worktree; PTY intact (no pipe).
     assert plan.command[:4] == ("tmux", "new-session", "-d", "-s")
-    assert "cc-build" in plan.command
+    assert "cc-1build" in plan.command
     assert ".claude/worktrees/build" in plan.command
     joined = " ".join(plan.command)
     assert "--model opus" in joined
@@ -416,7 +417,7 @@ class _SeatRunner:
             self._agents = list(agents)
         elif state == "live":
             self._agents = [
-                {"name": "cc-build", "sessionId": None, "cwd": _WORKTREE, "status": "idle"}
+                {"name": "cc-1build", "sessionId": None, "cwd": _WORKTREE, "status": "idle"}
             ]
         else:
             self._agents = []
@@ -459,7 +460,7 @@ class _SeatRunner:
         return [call[-1] for call in self.calls if "send-keys" in call and "-l" in call]
 
 
-def _registered(session_id: str, name: str = "cc-build") -> list[dict[str, object]]:  # noqa: D103
+def _registered(session_id: str, name: str = "cc-1build") -> list[dict[str, object]]:  # noqa: D103
     return [
         {
             "name": name,
@@ -576,7 +577,7 @@ def test_reuse_delivery_targets_are_exact_pane_matched() -> None:
 
     for call in runner.calls:
         if "send-keys" in call or "capture-pane" in call:
-            assert exact_pane("cc-build") in call
+            assert exact_pane("cc-1build") in call
 
 
 def test_busy_seat_is_not_interrupted_mid_turn() -> None:
@@ -692,14 +693,14 @@ def test_seat_state_probe_classifies_each_case() -> None:
 
 
 def test_seat_state_probe_uses_exact_match_targets() -> None:
-    """FRE-909: an absent seat must not prefix-resolve to cc-build2."""
+    """FRE-909: an absent seat must not prefix-resolve to cc-2build."""
     # agents=[] forces the pane fallback, so BOTH target forms are exercised:
     # the session probe and the pane probe. A live seat short-circuits on the RC
     # registry and never reaches the pane, which is why this pins the fallback.
     runner = _SeatRunner(state="live", agents=[])
     seat_state(topology_for("build1"), runner)
-    assert any(exact_session("cc-build") in call for call in runner.calls)
-    assert any(exact_pane("cc-build") in call for call in runner.calls)
+    assert any(exact_session("cc-1build") in call for call in runner.calls)
+    assert any(exact_pane("cc-1build") in call for call in runner.calls)
 
 
 # --- create path: registration verified by identity (F2) --------------------
@@ -719,7 +720,7 @@ def test_create_path_verifies_registration_by_name_and_session_id() -> None:
 def test_create_path_reports_unverified_when_rc_allocates_a_fallback_name() -> None:
     """F2, observed live: a seat can register under a DIFFERENT name.
 
-    A seat launched as ``--remote-control cc-build`` registered as ``build-41``.
+    A seat launched as ``--remote-control cc-1build`` registered as ``build-41``.
     The original diagnosis (the requested name was still held) was WRONG —
     corrected 2026-07-18 by FRE-914: ``--remote-control``'s optional name
     argument does not set the RC name at all — claude DERIVES it from the cwd
@@ -782,7 +783,7 @@ def test_reuse_plan_must_carry_deliveries() -> None:
 
 
 def _agent(status: str, cwd: str = _WORKTREE) -> dict[str, object]:
-    return {"name": "cc-build", "sessionId": "s", "cwd": cwd, "status": status}
+    return {"name": "cc-1build", "sessionId": "s", "cwd": cwd, "status": status}
 
 
 def test_seat_is_busy_reads_remote_controls_own_status_field() -> None:
@@ -806,7 +807,7 @@ def test_seat_is_busy_returns_none_when_it_cannot_tell() -> None:
 
 
 def test_seat_is_busy_matches_by_cwd_not_by_drifting_name() -> None:
-    """A seat's RC name can drift (cc-build → build-41); its worktree cannot."""
+    """A seat's RC name can drift (cc-1build → build-41); its worktree cannot."""
     agents = [{"name": "build-41", "sessionId": "s", "cwd": _WORKTREE, "status": "busy"}]
     runner = _SeatRunner(agents=agents)
     assert seat_is_busy(topology_for("build1"), runner) is True
@@ -867,10 +868,33 @@ def test_seat_name_is_passed_via_dash_n_not_remote_control_argument() -> None:
     inner = shlex.split(plan.command[-1])
 
     assert "-n" in inner, "seat name must be passed via -n"
-    assert inner[inner.index("-n") + 1] == "cc-build"
+    assert inner[inner.index("-n") + 1] == "cc-1build"
     # --remote-control must be BARE: the token after it is another flag, never
     # the seat name (which is silently ignored, leaving a cwd-derived name).
     rc = inner.index("--remote-control")
     assert inner[rc + 1].startswith("-"), (
         f"--remote-control must be bare, got {inner[rc + 1]!r} as its argument"
     )
+
+
+def test_no_seat_name_is_a_prefix_of_another(  # FRE-909 AC-5
+) -> None:
+    """No seat name may be a name-extension of another seat's name.
+
+    This is the assertion whose absence allowed the 2026-07-17 incident. tmux
+    resolves an unmatched target by PREFIX, so while the seats were ``cc-build``
+    and ``cc-build2``, any command aimed at an absent ``cc-build`` silently
+    retargeted the live ``cc-build2`` and killed it mid-build.
+
+    ``exact_session``/``exact_pane`` close every code path, and a source-level
+    test enforces their use. Neither can reach the AD-HOC path — a human or
+    agent typing ``tmux attach -t <seat>`` by hand — which is why the names
+    themselves must be unambiguous. This test fails the moment someone adds a
+    seat that reintroduces the ambiguity.
+    """
+    seats = [topology_for(stream).tmux_session for stream in known_streams()]
+    seats.append("cc-master")  # not a dispatch stream, but shares the namespace
+    for seat in seats:
+        others = [s for s in seats if s != seat]
+        collisions = [other for other in others if other.startswith(seat)]
+        assert not collisions, f"{seat!r} is a strict prefix of {collisions!r}"

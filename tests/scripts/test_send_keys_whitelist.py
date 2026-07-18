@@ -96,8 +96,8 @@ class _RecordingLogger:
 _REAL_IDLE_PANE = "some prior output\n❯ "
 _BUSY_PANE = "✽ Working… (esc to interrupt)"
 
-_BUILD_PANE = topology_for("build1").tmux_session  # "cc-build"
-_BUILD2_PANE = topology_for("build2").tmux_session  # "cc-build2"
+_BUILD_PANE = topology_for("build1").tmux_session  # "cc-1build"
+_BUILD2_PANE = topology_for("build2").tmux_session  # "cc-2build"
 _ADR_PANE = topology_for("adr").tmux_session  # "cc-adrs"
 
 
@@ -193,7 +193,7 @@ def test_attested_panes_matches_launcher_topology() -> None:
     expected = frozenset(
         topology_for(stream).tmux_session for stream in ("build1", "build2", "adr")
     )
-    assert attested_panes() == expected == {"cc-build", "cc-build2", "cc-adrs"}
+    assert attested_panes() == expected == {"cc-1build", "cc-2build", "cc-adrs"}
 
 
 # --- validate --------------------------------------------------------------

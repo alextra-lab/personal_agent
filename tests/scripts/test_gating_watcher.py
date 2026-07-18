@@ -259,8 +259,8 @@ def test_session_idle_false_on_tall_permission_prompt_near_bottom() -> None:
 
 
 def test_session_for_labels_maps_stream() -> None:
-    assert session_for_labels({"stream:build2", "Tier-1:Opus"}) == "cc-build2"
-    assert session_for_labels({"stream:build1"}) == "cc-build"
+    assert session_for_labels({"stream:build2", "Tier-1:Opus"}) == "cc-2build"
+    assert session_for_labels({"stream:build1"}) == "cc-1build"
     assert session_for_labels({"stream:adr"}) == "cc-adrs"
 
 
@@ -338,13 +338,13 @@ def test_worker_ci_red_routes_to_stream_session_with_message() -> None:
     pr = _pr(ci="failure")
     triggers = decide(
         [pr],
-        session_resolver=lambda t: "cc-build2" if t == "FRE-823" else None,
+        session_resolver=lambda t: "cc-2build" if t == "FRE-823" else None,
         now=100.0,
         sent={},
         master_ttl_s=600,
         worker_ttl_s=60,
     )
-    assert triggers[0].session == "cc-build2"
+    assert triggers[0].session == "cc-2build"
     assert triggers[0].command == "PR #412 failed CI checks - correct them"
 
 
@@ -360,7 +360,7 @@ def test_decide_worker_trigger_send_keys_mode_for_non_cutover_seat(monkeypatch) 
     pr = _pr(ci="failure")
     triggers = decide(
         [pr],
-        session_resolver=lambda t: "cc-build2" if t == "FRE-823" else None,
+        session_resolver=lambda t: "cc-2build" if t == "FRE-823" else None,
         now=100.0,
         sent={},
         master_ttl_s=600,
@@ -380,7 +380,7 @@ def test_decide_worker_trigger_channel_mode_carries_port_and_payload(monkeypatch
     pr = _pr(ci="failure", checks=(CheckResult("pytest", "fail", "FAILURE", "https://ci/1"),))
     triggers = decide(
         [pr],
-        session_resolver=lambda t: "cc-build2" if t == "FRE-823" else None,
+        session_resolver=lambda t: "cc-2build" if t == "FRE-823" else None,
         now=100.0,
         sent={},
         master_ttl_s=600,
@@ -711,7 +711,7 @@ def test_run_once_uses_only_tmux_and_gh_never_claude() -> None:
         {},
         now=100.0,
         board_fetcher=lambda: [pr],
-        session_resolver=lambda _t: "cc-build2",
+        session_resolver=lambda _t: "cc-2build",
         runner=runner,
         persist=lambda _s: None,
         logger=_NullLogger(),
@@ -972,7 +972,7 @@ def _channel_worker_pr() -> PullRequest:
 
 
 def _resolve_build2(ticket: str | None) -> str | None:
-    return "cc-build2" if ticket == "FRE-823" else None
+    return "cc-2build" if ticket == "FRE-823" else None
 
 
 class _FakeChannelPoster:
@@ -1114,11 +1114,11 @@ def test_run_once_send_keys_mode_seat_unaffected_by_channel_wiring() -> None:
             "tmux",
             "send-keys",
             "-t",
-            "=cc-build2:0.0",
+            "=cc-2build:0.0",
             "-l",
             "PR #412 failed CI checks - correct them",
         ),
-        ("tmux", "send-keys", "-t", "=cc-build2:0.0", "Enter"),
+        ("tmux", "send-keys", "-t", "=cc-2build:0.0", "Enter"),
     ]
     entry = ledger["worker:412:abc1234def5678"]
     assert entry.transport == "send_keys"
@@ -1163,7 +1163,7 @@ def test_run_once_channel_crash_recovery_via_reconcile_is_accurately_send_keys(m
         {},
         event_id="worker:412:abc1234def5678",
         source="worker-ci-red",
-        target_pane="cc-build2",
+        target_pane="cc-2build",
         ticket="412",
         command="PR #412 failed CI checks - correct them",
         preconditions={"head_sha": "abc1234def5678"},

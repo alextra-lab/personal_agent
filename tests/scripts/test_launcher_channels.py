@@ -69,7 +69,7 @@ def test_send_keys_seat_argv_unchanged_by_default(monkeypatch: pytest.MonkeyPatc
     inner = _inner(plan)
     assert "--channels" not in inner
     assert "SESHAT_CHANNEL_PORT" not in inner
-    assert inner.startswith("claude --remote-control -n cc-build2 --model haiku --session-id ")
+    assert inner.startswith("claude --remote-control -n cc-2build --model haiku --session-id ")
     assert inner.endswith("'/build FRE-871'")  # seed is shlex-quoted (contains a space)
 
 

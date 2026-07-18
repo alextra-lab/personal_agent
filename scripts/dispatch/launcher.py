@@ -244,14 +244,32 @@ class StreamTopology:
     mode: Literal["channel", "send_keys"] = "send_keys"
 
 
+# Seat names must never be name-extensions of one another (FRE-909 AC-5). tmux
+# resolves an unmatched target by PREFIX, so while the seats were ``cc-build``
+# and ``cc-build2`` any command aimed at an absent ``cc-build`` silently
+# retargeted the live ``cc-build2`` — which destroyed a worker mid-build on
+# 2026-07-17, and again during a manual recovery on 2026-07-18.
+#
+# ``exact_session``/``exact_pane`` close this for every code path. The rename
+# closes the AD-HOC path they cannot reach: a human or agent typing
+# ``tmux attach -t cc-build`` interactively, with no helper in between. Both
+# halves are wanted; neither substitutes for the other.
+#
+# Only the seat field changes. Stream keys, Linear ``stream:`` labels, worktree
+# directories and channel ports are all unchanged.
 _TOPOLOGY: dict[str, StreamTopology] = {
     "build1": StreamTopology(
-        "build1", ".claude/worktrees/build", "cc-build", "/build", channel_port=8790, mode="channel"
+        "build1",
+        ".claude/worktrees/build",
+        "cc-1build",
+        "/build",
+        channel_port=8790,
+        mode="channel",
     ),
     "build2": StreamTopology(
         "build2",
         ".claude/worktrees/build2",
-        "cc-build2",
+        "cc-2build",
         "/build",
         channel_port=8791,
         mode="channel",

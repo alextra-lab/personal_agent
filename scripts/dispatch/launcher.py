@@ -475,7 +475,16 @@ def _build_tmux_command(
     """
     inner_argv = [
         "claude",
+        # ``--remote-control`` stays BARE (it only enables RC). The seat name
+        # goes in ``-n`` (FRE-914). Claude Code 2.1.214 stopped honouring
+        # ``--remote-control <name>``'s optional argument and instead DERIVES the
+        # RC name from the cwd — the session record shows ``nameSource=derived``
+        # and seats registered as ``build-83`` / ``adrs-2b`` instead of
+        # ``cc-build`` / ``cc-adrs``, so they vanished from the owner's mobile
+        # Remote Control view. Verified live 2026-07-18: the bare flag plus
+        # ``-n`` restores the requested name.
         "--remote-control",
+        "-n",
         topology.tmux_session,
         "--model",
         model,

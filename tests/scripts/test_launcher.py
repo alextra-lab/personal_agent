@@ -719,11 +719,18 @@ def test_create_path_verifies_registration_by_name_and_session_id() -> None:
 def test_create_path_reports_unverified_when_rc_allocates_a_fallback_name() -> None:
     """F2, observed live: a seat can register under a DIFFERENT name.
 
-    A seat launched as ``--remote-control cc-build`` registered as ``build-41``
-    because the requested name was still held. The process was alive and
-    working, just invisible where the owner's mobile view looks for it. It is
-    NOT killed and retried — that would destroy a healthy claude process and its
-    warm context to fix a visibility problem — it is reported.
+    A seat launched as ``--remote-control cc-build`` registered as ``build-41``.
+    The original diagnosis (the requested name was still held) was WRONG —
+    corrected 2026-07-18 by FRE-914: Claude Code 2.1.214 stopped honouring
+    ``--remote-control``'s optional name argument and DERIVES the name from the
+    cwd instead (session record: ``nameSource=derived``). The launcher now passes
+    the name via ``-n``, so this should no longer occur in practice.
+
+    The guard stays regardless: whatever the cause, a seat that registers under
+    an unexpected name is alive and working, just invisible where the owner's
+    mobile view looks. It is NOT killed and retried — that would destroy a
+    healthy claude process and its warm context to fix a visibility problem —
+    it is reported.
     """
     plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="absent")
     assert plan.session_id is not None
@@ -841,3 +848,28 @@ def test_malformed_ticket_identifier_is_rejected() -> None:
             plan_launch("build1", bad, "sonnet", context_keep=False, seat="live")
     # The real shape still plans normally.
     assert plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live").deliveries
+
+
+def test_seat_name_is_passed_via_dash_n_not_remote_control_argument() -> None:
+    """FRE-914: the RC name goes in ``-n``; ``--remote-control`` stays bare.
+
+    Claude Code 2.1.214 stopped honouring ``--remote-control <name>``'s optional
+    argument and derives the Remote Control name from the cwd instead, so seats
+    registered as ``build-83`` / ``adrs-2b`` and disappeared from the owner's
+    mobile view. Verified live: the bare flag plus ``-n <name>`` restores it.
+
+    Regression guard — if this ever reverts to the positional form, every
+    dispatched seat silently becomes invisible to the owner again.
+    """
+    plan = plan_launch("build1", "FRE-914", "sonnet", context_keep=False, seat="absent")
+    assert plan.command is not None
+    inner = shlex.split(plan.command[-1])
+
+    assert "-n" in inner, "seat name must be passed via -n"
+    assert inner[inner.index("-n") + 1] == "cc-build"
+    # --remote-control must be BARE: the token after it is another flag, never
+    # the seat name (which would silently be ignored by 2.1.214+).
+    rc = inner.index("--remote-control")
+    assert inner[rc + 1].startswith("-"), (
+        f"--remote-control must be bare, got {inner[rc + 1]!r} as its argument"
+    )

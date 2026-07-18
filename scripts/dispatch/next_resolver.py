@@ -34,6 +34,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Sequence
 
+from scripts.dispatch.launcher import known_streams
 from scripts.reconcile_board import load_linear_key
 
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
@@ -286,7 +287,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        "--stream", required=True, help="Dispatch stream, e.g. build1, build2, adr."
+        "--stream",
+        required=True,
+        choices=known_streams(),
+        help="Dispatch stream. Constrained: an unknown stream must fail, not resolve to 'none'.",
     )
     parser.add_argument("--json", action="store_true", help="Emit the result as JSON.")
     parser.add_argument(

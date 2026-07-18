@@ -402,6 +402,22 @@ class LaunchResult:
     launched: bool
 
 
+def known_streams() -> tuple[str, ...]:
+    """Return every known dispatch stream key, sorted.
+
+    The single source of truth for "is this a real stream?" — callers that take
+    a stream from a human (a CLI flag, a label) validate against this rather
+    than silently treating a typo as a stream with no work. ``--stream adrs``
+    (the worktree/seat spelling) is NOT the ``adr`` stream key, and answering
+    ``none`` for it reports "no work queued" when the truth is "no such
+    stream" (2026-07-18).
+
+    Returns:
+        The stream keys, sorted for stable CLI help and error text.
+    """
+    return tuple(sorted(_TOPOLOGY))
+
+
 def topology_for(stream: str) -> StreamTopology:
     """Return the launch topology for a dispatch stream.
 

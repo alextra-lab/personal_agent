@@ -18,6 +18,7 @@ import json
 import urllib.error
 
 import pytest
+from scripts.dispatch.launcher import known_streams
 from scripts.dispatch.next_resolver import (
     Blocker,
     IssueSnapshot,
@@ -512,3 +513,27 @@ def test_fetch_board_live_query_is_valid() -> None:
         assert stream_label("build1") in snap.labels
         for blocker in snap.blocked_by:
             assert blocker.identifier
+
+
+# --- FRE-914 follow-up: an unknown stream must fail, never resolve to "none" ---
+
+
+def test_unknown_stream_is_rejected_not_resolved_as_empty() -> None:
+    """A misspelled stream exits non-zero instead of reporting "no work".
+
+    ``adrs`` is the worktree/seat spelling; the stream key is ``adr``. Before
+    this guard, ``--stream adrs`` queried Linear for the label ``stream:adrs``,
+    matched nothing, and printed ``none`` — indistinguishable from a genuinely
+    empty queue. That answer was used on 2026-07-18 to conclude the dispatcher
+    was idle and safe to restart. It happened to be idle; the check simply had
+    no power to say so.
+    """
+    with pytest.raises(SystemExit) as exc:
+        main(["--stream", "adrs", "--eligible"])
+    assert exc.value.code != 0
+
+
+def test_known_streams_are_accepted_by_the_parser() -> None:
+    """Every real stream key must survive the constraint added above."""
+    for stream in known_streams():
+        assert stream_label(stream) == f"stream:{stream}"

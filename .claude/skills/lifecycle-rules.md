@@ -147,7 +147,7 @@ substrate **+ the owner**; they never auto-talk to each other, and a human is al
 
 ### Evidence contract (proof of Done)
 
-A ticket is Done only when its claim maps to durable evidence. Done means a merged PR whose branch maps to the ticket (fre-XXX); if the ticket cites a backing ADR with acceptance criteria, those are separately proven. A MASTER_PLAN narrative state must match current Linear state plus merged-PR evidence. Deployed-at-SHA means git log of main equals the claimed SHA and health is green. UNVERIFIABLE (no source to check) is a first-class verdict, never silently treated as PASS. scripts/reconcile_board.py is the deterministic check.
+A ticket is Done only when its claim maps to durable evidence. Done means a merged PR whose branch maps to the ticket (fre-XXX); if the ticket cites a backing ADR with acceptance criteria, those are separately proven (master's own judgment call, not a script's — see § Signal trust boundary). A ticket's live Linear state must match merged-PR repo evidence (a ticket stuck open with an already-merged PR is drift). Deployed-at-SHA means git log of main equals the claimed SHA and health is green. UNVERIFIABLE (no source to check) is a first-class verdict, never silently treated as PASS. scripts/reconcile_board.py is the deterministic check — a mechanical helper signal for master, sourced live from Linear (FRE-915; MASTER_PLAN carries no status narrative to parse since it went forward-plans-only).
 
 **Close-out evidence comment (master, on every Done — plain prose + links, no code blocks / CLI / SQL
 tokens; the WAF rejects them):** PR link · merge SHA · CI run link · deploy class (standing-approval

@@ -57,6 +57,7 @@ from scripts.dispatch.launcher import (
     CommandRunner,
     execute_plan,
     find_warm_session,
+    known_streams,
     plan_launch,
     seat_state,
     subprocess_runner,
@@ -82,7 +83,12 @@ _TIER_MODEL: dict[str, str] = {
     "Tier-3:Haiku": "haiku",
 }
 
-# Default dispatch streams (the three worker worktrees).
+# Default dispatch streams (the three worker worktrees). Order is INTENTIONAL —
+# it is the per-tick consideration order — so this stays an explicit tuple
+# rather than being derived from ``known_streams()`` (which sorts, and would
+# silently promote ``adr`` ahead of ``build1``). Drift from the launcher
+# topology is caught by a test asserting every entry is a real stream, which is
+# the actual risk; the ordering is a deliberate choice, not duplication.
 DEFAULT_STREAMS: tuple[str, ...] = ("build1", "build2", "adr")
 
 # Stall grace: a launched run with no PR after this long triggers a liveness
@@ -724,8 +730,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--streams",
         nargs="+",
+        choices=known_streams(),
         default=list(DEFAULT_STREAMS),
-        help="Streams to orchestrate (default: build1 build2 adr).",
+        help="Streams to orchestrate. Constrained: an unknown stream must fail, not idle silently.",
     )
     parser.add_argument(
         "--state-file", default=str(_default_state_path()), help="Path to the state file."

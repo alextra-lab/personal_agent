@@ -18,9 +18,11 @@ import json
 import urllib.error
 
 import pytest
+from scripts.dispatch.launcher import known_streams
 from scripts.dispatch.next_resolver import (
     Blocker,
     IssueSnapshot,
+    _build_parser,
     eligible_candidates,
     fetch_board,
     main,
@@ -512,3 +514,56 @@ def test_fetch_board_live_query_is_valid() -> None:
         assert stream_label("build1") in snap.labels
         for blocker in snap.blocked_by:
             assert blocker.identifier
+
+
+# --- FRE-914 follow-up: an unknown stream must fail, never resolve to "none" ---
+
+
+def test_unknown_stream_is_rejected_not_resolved_as_empty() -> None:
+    """A misspelled stream exits non-zero instead of reporting "no work".
+
+    ``adrs`` is the worktree/seat spelling; the stream key is ``adr``. Before
+    this guard, ``--stream adrs`` queried Linear for the label ``stream:adrs``,
+    matched nothing, and printed ``none`` — indistinguishable from a genuinely
+    empty queue. That answer was used on 2026-07-18 to conclude the dispatcher
+    was idle and safe to restart. It happened to be idle; the check simply had
+    no power to say so.
+    """
+    with pytest.raises(SystemExit) as exc:
+        main(["--stream", "adrs", "--eligible"])
+    assert exc.value.code != 0
+
+
+def test_known_streams_are_accepted_by_the_parser() -> None:
+    """Every real stream key must survive the constraint added above.
+
+    Drives the real parser. An earlier version of this test asserted only
+    ``stream_label(stream) == f"stream:{stream}"``, which never touched
+    argparse at all — deleting the ``choices=`` wiring would have left it
+    passing while the fix was silently undone.
+    """
+    for stream in known_streams():
+        parser = _build_parser()
+        args = parser.parse_args(["--stream", stream, "--eligible"])
+        assert args.stream == stream
+
+
+def test_stream_label_rejects_an_unknown_stream_for_non_cli_callers() -> None:
+    """The guard lives at the chokepoint, not only at one CLI parser.
+
+    ``orchestrator.py`` imports ``resolve_next``/``fetch_board`` directly and
+    never crosses ``next_resolver.main()``. Every one of those paths labels
+    through ``stream_label``, so the guard belongs there — otherwise the daemon
+    queries a nonexistent label and reports ``occupied-or-no-candidate``
+    forever, which is the silent-idle failure this whole change exists to stop.
+    """
+    with pytest.raises(ValueError, match="unknown dispatch stream"):
+        stream_label("adrs")
+
+
+def test_orchestrator_default_streams_are_all_real_streams() -> None:
+    """The daemon's defaults must not drift from the launcher topology."""
+    from scripts.dispatch.orchestrator import DEFAULT_STREAMS
+
+    assert set(DEFAULT_STREAMS) <= set(known_streams())
+    assert DEFAULT_STREAMS, "a daemon orchestrating zero streams is a silent no-op"

@@ -34,6 +34,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Sequence
 
+from scripts.dispatch.launcher import known_streams
 from scripts.reconcile_board import load_linear_key
 
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
@@ -106,12 +107,29 @@ class IssueSnapshot:
 def stream_label(stream: str) -> str:
     """Return the Linear label name for a dispatch stream.
 
+    This is the chokepoint every resolver path crosses — ``eligible_candidates``,
+    ``resolve_next`` and ``fetch_board`` all label through here — so the
+    unknown-stream guard lives here rather than at any single caller's CLI. A
+    guard on one argparse parser protects only that entry point; the
+    orchestrator daemon imports these functions directly and would keep
+    querying a nonexistent label, matching nothing, and reporting
+    ``occupied-or-no-candidate`` forever (2026-07-18).
+
     Args:
         stream: The dispatch stream, e.g. ``build2``.
 
     Returns:
         The label name, e.g. ``stream:build2``.
+
+    Raises:
+        ValueError: The stream is not a known dispatch stream. Failing here is
+            the point: an unknown stream must never be indistinguishable from a
+            stream with no queued work.
     """
+    if stream not in known_streams():
+        raise ValueError(
+            f"unknown dispatch stream: {stream!r} (known: {', '.join(known_streams())})"
+        )
     return f"stream:{stream}"
 
 
@@ -280,13 +298,23 @@ def _issue_to_json(issue: IssueSnapshot) -> dict[str, object]:
     }
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Entry point. Prints the resolved NEXT ticket (or ``none``) for a stream."""
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser.
+
+    Split out of ``main`` so the argument contract — notably the constrained
+    ``--stream`` — is testable without running a Linear query.
+
+    Returns:
+        The configured parser.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        "--stream", required=True, help="Dispatch stream, e.g. build1, build2, adr."
+        "--stream",
+        required=True,
+        choices=known_streams(),
+        help="Dispatch stream. Constrained: an unknown stream must fail, not resolve to 'none'.",
     )
     parser.add_argument("--json", action="store_true", help="Emit the result as JSON.")
     parser.add_argument(
@@ -297,7 +325,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "single NEXT ticket."
         ),
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Entry point. Prints the resolved NEXT ticket (or ``none``) for a stream."""
+    args = _build_parser().parse_args(argv)
 
     api_key = load_linear_key()
     if not api_key:

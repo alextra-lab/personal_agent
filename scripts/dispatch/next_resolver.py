@@ -47,8 +47,9 @@ _OCCUPIED_STATES: frozenset[str] = frozenset({"in progress", "in review"})
 # A blocked-by relation is satisfied (no longer "open") once the blocker
 # reaches one of these states. Chains advance at merge, not deploy-verify, so
 # `awaiting deploy` counts as terminal here — this is a distinct set from
-# `reconcile_board._CLOSED_STATE_NAMES`, which is board-reconciliation
-# "Done" semantics and omits `awaiting deploy`.
+# `reconcile_board._PR_EXPECTED_STATES` (board-reconciliation "a merged PR is
+# expected" semantics, which also includes `verify failed`, not a dispatch
+# blocker-clearing concept at all).
 _TERMINAL_BLOCKER_STATES: frozenset[str] = frozenset(
     {"awaiting deploy", "done", "canceled", "cancelled", "duplicate"}
 )

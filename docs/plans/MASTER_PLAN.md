@@ -6,14 +6,16 @@
 > per-ticket state → [Linear](https://linear.app/frenchforest).
 > **Last updated**: 2026-07-18
 
-## 0. Fix the dispatcher — nothing else until it lands
+## 0. Owner-led ADR debate — config-UI direction
 
-**FRE-913.** A dispatch must deliver work into the running session and never create or destroy one.
-Design approved 2026-07-18 (in-session clear satisfies CLEAR; in-session model switch satisfies the
-model contract; no ADR). Proof: claude PID identical before and after a dispatch (AC-1) + the seat stays
-visible on the owner's mobile throughout (AC-5, owner-verified only).
+**Next action of the next session.** Owner-directed 2026-07-18: start here. Runs in the `adr` seat
+(`cc-adrs`), owner-driven — master does not open it unilaterally and does not write the ADR.
 
-Building on `cc-build`, hand-delivered. **Do not start the orchestrator** — it kills the seat to launch.
+Subject: the ADR-0118/0119 artifact-builder + **config-UI** chain (FRE-880/888/889/890/891/892,
+umbrellas 878/887), which stays **un-approved and held behind this debate**. The owner called
+FRE-880's shape wrong and wants to correct the ADR before any of it builds.
+
+Bring to it the open questions master is carrying (below, "Questions for the owner").
 
 ## 1. Reduce the backlog
 
@@ -24,10 +26,22 @@ Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729�
 happened (FRE-443). Owner to settle scope (Approved only vs all open states) and gate (cancel directly
 vs list-first).
 
-## 2. Owner-led ADR debate on project direction
+Note: the board reconciler now reads Linear (FRE-915), so drift is detectable automatically — run it
+before culling. It already found FRE-432 and FRE-875 shipped-but-stale.
 
-Runs in the `adr` seat, owner-driven. The ADR-0118/0119 artifact-builder + config-UI chain
-(FRE-880/888/889/890/891/892, umbrellas 878/887) is **un-approved and held behind this**.
+## 2. Questions for the owner — raise at the ADR debate
+
+- **FRE-909 residual / seat hygiene** — none. Closed, all five criteria met.
+- **FRE-432 · FRE-875** — merged PRs, stale board state. Close with evidence, or is something unfinished?
+- **The unverified handoff claim (#577)** — the build asserted a scope cut "was discussed with the owner
+  in-session". Master could not confirm it. Did that happen? If not, a worker citing owner approval is a
+  governance hole worth closing.
+- **ADR-Implemented drift check** — retired with the MASTER_PLAN parser (it read plan prose). Re-source
+  it from each ADR's own Status header, or accept the loss? Not filed.
+- **FRE-912** — narrowed by FRE-913 (no termination path), not eliminated: the deterministic session-id
+  can still collide on the absent-seat relaunch. Schedule, or accept as residual risk?
+- **Bash-prompt stranding** — FRE-911's `acceptEdits` covers file edits only. Broader mode, allowlist,
+  or detect-and-surface?
 
 ## 3. Then, in order
 
@@ -46,12 +60,8 @@ Inference. Re-sequence after 0–2.
 ## To fix, unscheduled
 
 - **ADR-0061 status is known-false** — reads "Implemented"; proven inert by FRE-908. Fix or retire.
-- **FRE-912** — deterministic session-id collides with a stale lock on relaunch. Re-scope to the create
-  path or close once FRE-913 lands.
-- **Worker seats strand on non-edit prompts** — FRE-911's `acceptEdits` covers file edits only; a bash
-  approval still blocks a seat the owner may not be able to reach.
-- **`cc-sessions` false `(self)`** — `SELF` is read from `tmux display-message` with no target, so from
-  outside tmux it self-protects the wrong seat. One-line fix: only trust it when `$TMUX` is set.
+- **FRE-912** — narrowed, not fixed; parked-Approved. See §2.
+- **Worker seats strand on non-edit prompts** — see §2.
 
 ## Deploy queue
 

@@ -2,11 +2,12 @@
 
 ## Doing / discussing  (≤5 sentences)
 
-Spent the day fixing the dispatch automation, ending with all seats visible and the dispatcher restarted
-on merged code. Two threads remain open and both belong to the owner, not the next session: **PR 573 is
-red** on a genuine design conflict (below), and the **owner-led ADR debate has not started** — `cc-adrs`
-is synced and ready, and the owner said the ADR-0118/0119 chain (FRE-880 and successors) stays unapproved
-until they correct the ADR themselves. Do not start either unilaterally.
+Spent the day fixing the dispatch automation end to end, finishing with a full dispatch → build → gate →
+merge cycle running clean on the repaired machinery. Seats are `cc-master`, `cc-1build`, `cc-2build`,
+`cc-adrs`, `cc-explore` — renamed so no name is a prefix of another, all visible in Remote Control. The
+one thread still open belongs to the owner: the **owner-led ADR debate has not started** — `cc-adrs` is
+synced, idle and ready, and the ADR-0118/0119 chain (FRE-880 and successors) stays unapproved until the
+owner corrects the ADR themselves. Do not start it unilaterally.
 
 ## Commits — the story behind the last 10
 
@@ -30,7 +31,13 @@ until they correct the ADR themselves. Do not start either unilaterally.
   which every resolver path crosses. I also nearly shipped an unrequested behaviour change — deriving
   `DEFAULT_STREAMS` from the sorted `known_streams()` would have flipped per-tick order from
   `build1`-first to `adr`-first.
-- **PR 573 — MASTER_PLAN forward-only.** Written, pushed, **still red.** See drift.
+- **PR 573 (`7add03b5`) — MASTER_PLAN forward-only + history deleted + prepare-reset fixed.** Sat red all
+  day; unblocked by FRE-915.
+- **FRE-909 AC-5 / PR 576 (`0bdb1b8f`) — seats renamed `cc-1build`/`cc-2build`.** The criterion deferred at
+  the first merge and then never followed up, because the promised follow-up ticket was never filed. Found
+  only when the owner asked. A guard test now forbids any seat name being a prefix of another.
+- **FRE-915 / PR 577 (`aa30d618`) — reconciler reads Linear, not MASTER_PLAN.** Built by a dispatched
+  worker: the first full cycle on the repaired dispatcher, seat reused rather than destroyed.
 
 ## Worktrees — anything special
 
@@ -38,24 +45,27 @@ until they correct the ADR themselves. Do not start either unilaterally.
   it**; the branch name is aspirational, no ADR-0120 work exists there. It had been 169 files stale and
   was therefore reading an **old `/adr` skill** — plausibly the pre-fix version that wrote-asked-published
   without debating, the exact FRE-809 failure. The sync removed that trap.
-- All four worktrees are at `8b0491ad` with identical skills. `master-914` is detached at origin/main.
+- All four worktrees carry identical skills. `master-914` is master's own scratch worktree, detached.
+- **Seat names changed** — `cc-build`/`cc-build2` are gone; they are `cc-1build`/`cc-2build` now.
 
 ## Plan position + drift
 
-**MASTER_PLAN on `main` is still the old 151-line version** — the forward-only rewrite and the
-`MASTER_PLAN_HISTORY.md` deletion live entirely in unmerged PR 573. Do not assume the plan reflects the
-owner's instruction yet.
+**All of it landed.** MASTER_PLAN is forward-only (59 lines, PR 573 / `7add03b5`), `MASTER_PLAN_HISTORY.md`
+is deleted — **do not recreate it** — and the `prepare-reset` Step 3 correction is on `main`, so the skill
+no longer instructs appending to a file that no longer exists.
 
-**Why 573 is red, and why it is not mine to fix:** `scripts/reconcile_board.py` machine-parses
-MASTER_PLAN for ticket and "Implemented/live" claims, and `test_real_master_plan_extracts_nonzero_claim_set`
-asserts the current file yields a non-zero set. A forward-only plan yields zero *by construction*. The
-reconciler assumes MASTER_PLAN is a status document — precisely what the owner said it must stop being.
-Either the reconciler points at Linear (where status is authoritative) or that extraction path retires.
-**Owner design call.** My recommendation is Linear; unrequested and non-binding.
+**What unblocked it, and the lesson in it.** PR 573 sat red because `scripts/reconcile_board.py` parsed
+MASTER_PLAN prose for ticket and ADR-Implemented claims, and a test asserted a non-zero claim set — which a
+forward-only plan yields never. I twice described this to the owner as "blocked on your design decision."
+**It wasn't.** The owner had already given the instruction plainly; what was missing was the work to make the
+tooling match it. Calling my own unfinished work an owner decision is the same failure shape as the AC-5
+deferral below — real work recorded as prose, with nothing holding it. The owner named it, and it was then
+built as FRE-915 (PR 577 / `aa30d618`): the reconciler now sources claims from Linear, where ticket state is
+authoritative, and the MASTER_PLAN parsing is retired.
 
-**Skill drift, fixed but unmerged:** `prepare-reset` Step 3 on `main` still instructs appending to
-`MASTER_PLAN_HISTORY.md` — the deleted file. Correction is in PR 573. **A `/prepare-reset` run before 573
-merges will be told to recreate it; ignore that instruction.**
+**Capability genuinely retired, not merely moved:** the ADR-Implemented / live-evidence check (FRE-861's
+Check C) is gone. It parsed ADR status out of MASTER_PLAN prose, so it lost its input the moment the plan
+went forward-only. Re-sourcing it from each ADR doc's own Status header is real, separate work. **Not filed.**
 
 ## Answers for the fresh start
 
@@ -66,8 +76,11 @@ merges will be told to recreate it; ignore that instruction.**
 - **Did dispatch ever silently die from this?** No. The systemd unit passes no `--streams`, so it used
   `DEFAULT_STREAMS`, all three real. The hole was latent.
 - **Why is `cc-master` on a different CC version?** Long-running process predating the updates. Not a defect.
+- **Board drift the new reconciler found on its first live run** — FRE-432 (Backlog, PR #336 merged 3 Jul)
+  and FRE-875 (Approved, PRs #519/#516 merged 13-14 Jul). Both verified real by master. Same shape as the
+  909/911/914 drift this session fixed by hand: work shipped, state never advanced. Unresolved.
 - **Four tickets sit in Awaiting Deploy** (884, 739, 866, 717), all from prior sessions, none from this
-  one. Not reviewed here — worth a reconcile pass.
+  one. Not reviewed here — worth a reconcile pass, which now actually works.
 - **`cc-sessions` self-protection** was fixed on disk (machine-local, not in the repo): `SELF` now gates on
   `$TMUX`, because outside tmux it returned the most-recently-active session and would protect the wrong seat.
 

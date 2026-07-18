@@ -47,11 +47,12 @@ read; this skill reads it back. (Winding **down** instead? That's `/prepare-rese
 
 ## Target (8) — where we're going
 
-8. **MASTER_PLAN** (`docs/plans/MASTER_PLAN.md`) — the destination, a different category from state: current
-   live-env / standing state + **active priorities & sequencing** + Needs-Approval. **It is UNIQUELY the
-   plan:** completed / superseded narrative belongs in `MASTER_PLAN_HISTORY.md` (grepable, NOT auto-loaded;
-   `/prepare-reset` moves it there), and this session's decisions are #2 (LAST_SESSION.md), not here. If
-   the header carries shipped-work narrative or runs past ~1 screen, that's drift — flag it for the next
+8. **MASTER_PLAN** (`docs/plans/MASTER_PLAN.md`) — the destination: **FORWARD PLANS ONLY**, what we are
+   going to do, in order. **It is NOT a diary of accomplishments — that is the git log.** There is no
+   history file (deleted 2026-07-18 as write-only; do not recreate it): what shipped → `git log`, why a
+   decision was made → the Linear ticket, standing facts → memory, this session's decisions → #2
+   (LAST_SESSION.md). If the plan carries accomplishment-narrative or runs past ~1 screen, that's drift
+   — strip it, and flag it for the next
    `/prepare-reset` deep compaction. Read header, "Last updated", priorities.
 
 ## Process (9) — how master drives current → target

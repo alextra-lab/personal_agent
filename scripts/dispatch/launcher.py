@@ -475,7 +475,24 @@ def _build_tmux_command(
     """
     inner_argv = [
         "claude",
+        # ``--remote-control`` stays BARE (it only enables RC). The seat name
+        # goes in ``-n`` (FRE-914). The positional form ``--remote-control
+        # <name>`` does NOT set the RC name: claude derives it from the cwd
+        # instead (session record: ``nameSource=derived``), so seats registered
+        # as ``build-83`` / ``adrs-2b`` instead of ``cc-build`` / ``cc-adrs``
+        # and vanished from the owner's mobile Remote Control view while
+        # running perfectly well.
+        #
+        # This was never a regression: ``git log -S '"-n"'`` on this file is
+        # empty — the launcher used the positional form from its first commit
+        # (8277c66c) and never passed ``-n``. The bug only surfaced once the
+        # launcher, rather than the owner, started the seats; the owner had
+        # always launched with ``-n`` by hand, and cc-master kept its correct
+        # name by inheriting it across ``-c`` resumes.
+        #
+        # Verified live 2026-07-18: bare flag plus ``-n`` restores the name.
         "--remote-control",
+        "-n",
         topology.tmux_session,
         "--model",
         model,

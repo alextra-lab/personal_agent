@@ -69,7 +69,7 @@ def test_send_keys_seat_argv_unchanged_by_default(monkeypatch: pytest.MonkeyPatc
     inner = _inner(plan)
     assert "--channels" not in inner
     assert "SESHAT_CHANNEL_PORT" not in inner
-    assert inner.startswith("claude --remote-control cc-build2 --model haiku --session-id ")
+    assert inner.startswith("claude --remote-control -n cc-build2 --model haiku --session-id ")
     assert inner.endswith("'/build FRE-871'")  # seed is shlex-quoted (contains a space)
 
 
@@ -83,7 +83,7 @@ def test_channel_mode_seat_adds_allowlist_ref_and_per_seat_port(
     port = topology_for("adr").channel_port
     assert f"env SESHAT_CHANNEL_PORT={port}" in inner
     # The seat is still an RC seat at its model — the channel composes, not replaces.
-    assert "claude --remote-control cc-adrs --model opus" in inner
+    assert "claude --remote-control -n cc-adrs --model opus" in inner
     # The seed must survive channel-mode AND precede the variadic --channels flag,
     # or --channels would swallow it as a second channel ref (never run the turn).
     assert "'/adr FRE-875'" in inner

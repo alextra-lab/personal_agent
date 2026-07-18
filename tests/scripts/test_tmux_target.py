@@ -57,13 +57,19 @@ def test_exact_pane_carries_window_pane_suffix() -> None:
     assert exact_pane("cc-build") == "=cc-build:0.0"
 
 
-def test_ac1_teardown_target_cannot_prefix_match_a_live_seat() -> None:
-    """AC-1 — the incident: teardown of a dead seat must not reach cc-build2.
+def test_ac1_no_teardown_exists_to_prefix_match_a_live_seat() -> None:
+    """AC-1 — the incident, now prevented at the root: there IS no teardown.
 
-    Drives the real teardown path (``execute_plan``) and pins the argv it hands
-    tmux. Proven live at filing: ``kill-session -t zztest`` (absent) returned 0
-    and killed the live ``zztest2``. With the ``=`` guard tmux resolves the
-    absent seat to nothing, so the live name-extension seat survives.
+    Originally this asserted the launcher's teardown used an exact ``=`` target,
+    so killing a dead ``cc-build`` could not prefix-resolve onto the live
+    ``cc-build2`` (proven live at filing: ``kill-session -t zztest`` returned 0
+    and killed ``zztest2``).
+
+    FRE-913 supersedes that guard with a stronger one: the launcher owns **no**
+    termination code at all, so there is no kill left to mis-target. The exact
+    targets this module provides still matter for every other dispatch command
+    (``has-session``, ``list-panes``, ``capture-pane``, ``send-keys``), which the
+    remaining tests here and in ``test_launcher.py`` cover.
     """
     from scripts.dispatch.launcher import LaunchPlan, execute_plan
 
@@ -81,14 +87,12 @@ def test_ac1_teardown_target_cannot_prefix_match_a_live_seat() -> None:
         card="test",
         reset_worktree=False,
     )
-    execute_plan(plan, runner)
+    execute_plan(plan, runner, sleeper=lambda _seconds: None)
 
-    kills = [argv for argv in runner.calls if "kill-session" in argv]
-    assert kills, "teardown did not run"
-    target = kills[0][kills[0].index("-t") + 1]
-    assert target == exact_session(_DEAD_SEAT) == "=cc-build"
-    # The guarded target cannot resolve to the live name-extension seat.
-    assert not target.startswith(f"={_LIVE_NAME_EXTENSION}")
+    assert not [argv for argv in runner.calls if "kill-session" in argv]
+    # Nothing the launcher issues can resolve onto the live name-extension seat.
+    for argv in runner.calls:
+        assert not any(arg == _LIVE_NAME_EXTENSION for arg in argv)
 
 
 def test_ac2_has_session_uses_exact_target_no_false_alive() -> None:

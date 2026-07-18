@@ -58,7 +58,9 @@ from scripts.dispatch.launcher import (
     execute_plan,
     find_warm_session,
     plan_launch,
+    seat_state,
     subprocess_runner,
+    topology_for,
 )
 from scripts.dispatch.next_resolver import (
     IssueSnapshot,
@@ -439,12 +441,35 @@ def _record_for_result(stream: str, ticket: str, outcome: str, now: float) -> Di
 
     A record is written **only** for an outcome that actually launches/prepares
     an owned session (``launched``) or surfaces a manual card (``surfaced``);
-    an error outcome (``worktree-dirty``/``launch-failed``) writes no record so
+    a transient error (``worktree-dirty``/``launch-failed``) writes no record so
     the stream stays eligible and is never falsely marked in-flight.
+
+    FRE-913 outcomes:
+
+    - ``reuse`` (a live seat dispatched in-session) is an owned in-flight run,
+      exactly like ``launch``/``prepare``.
+    - ``registration-unverified`` is ``launched``: the seat is running and was
+      seeded with the ticket, and only its Remote-Control *name* is wrong. Its
+      run needs stall detection and ``run_complete`` tracking exactly like any
+      other; the wrong name is a visibility warning carried on the card.
+    - ``delivery-failed``/``seat-unhealthy`` are ``surfaced``. Neither
+      self-clears — a seat that will not accept keystrokes, or one that is not a
+      usable claude in this worktree, needs a human — and writing no record
+      would re-dispatch the same broken seat every tick.
+    - ``seat-busy`` writes **no record**. It is the one genuinely transient
+      outcome: the seat is simply mid-turn and will be idle shortly. Recording
+      it as ``surfaced`` would hold the stream in ``_decide_surfaced`` forever
+      over a condition that clears itself within seconds — trading a self-healing
+      delay for a permanent stall that only the owner can clear.
     """
-    if outcome in {"launch", "prepare"}:
+    if outcome in {"launch", "prepare", "reuse", "registration-unverified"}:
         return DispatchRecord(stream, ticket, "launched", now, session_id=None)
-    if outcome in {"manual-continuation", "manual-model-required"}:
+    if outcome in {
+        "manual-continuation",
+        "manual-model-required",
+        "delivery-failed",
+        "seat-unhealthy",
+    }:
         return DispatchRecord(stream, ticket, "surfaced", now, session_id=None)
     return None
 
@@ -571,12 +596,17 @@ def _apply(
                     )
                     return  # no launch, no record — the stream stays eligible.
             warm = find_warm_session(stream, runner) if decision.context_keep else None
+            # FRE-913: probe the seat so a LIVE one is dispatched into in-session
+            # rather than recreated. Only ``execute`` probes — a dry run must not
+            # shell out to tmux.
+            seat = seat_state(topology_for(stream), runner) if execute else "absent"
             plan = plan_launch(
                 stream,
                 decision.ticket,
                 decision.model,
                 context_keep=decision.context_keep,
                 warm_session_id=warm,
+                seat=seat,
             )
             logger.info(
                 "dispatch_plan",
@@ -585,6 +615,7 @@ def _apply(
                 ticket=decision.ticket,
                 model=decision.model,
                 outcome=plan.outcome,
+                seat=seat,
                 card=plan.card,
             )
             if not execute:

@@ -9,13 +9,44 @@ and — on ``--execute`` — perform the launch. Mirrors
 unit-inspectable, and a thin IO seam (``execute_plan`` with an injectable
 runner) performs the side effects.
 
-The launcher honours the ADR-0110 context contract and graceful degradation
-(§2, §4), and — critically — never *claims* a model or context state it cannot
-prove:
+**Seats are persistent; this module owns no termination code (FRE-913).** A
+dispatch *prepares* a seat, it never destroys one. There is no ``kill-session``,
+``kill-pane``, or ``respawn-pane`` on any path — the capability is absent, not
+merely unused, and a source-level test enforces that.
 
-- **CLEAR** ticket, all Remote-Control mechanics available → ``launch``: a
-  fresh, correctly-modelled tmux + Remote-Control session, seeded with the
-  stream's skill command.
+Why the capability is removed rather than guarded: between 2026-07-08 (commit
+377d0646) and FRE-913, every dispatch killed the seat and immediately recreated
+it. The new ``claude`` could not reclaim its Remote-Control name before the old
+registration was released, so it silently registered under a fallback name
+(observed live: a seat launched as ``cc-build`` came up as ``build-41``) — alive
+and working, but invisible on the owner's mobile RC view. FRE-909's earlier
+incident was the same code killing the *wrong* seat entirely (an absent
+``cc-build`` prefix-matched the live ``cc-build2``, losing a build mid-flight).
+Code that cannot kill cannot kill the wrong thing. Seat lifecycle (create /
+reset / recover) belongs to ``cc-sessions``; this module only dispatches *into*
+seats, and that separation is precisely what the two incidents were missing.
+
+So a dispatch resolves to one of two actions, neither destructive — reuse a
+``live`` seat by typing into it, or create an ``absent`` one — while an
+``unhealthy`` seat (session present, ``claude`` not running) is surfaced and
+left alone. Delivery to a live seat is **send-keys**, not the ADR-0116 channel:
+``/clear`` and ``/model`` are Claude Code *client* commands interpreted by the
+TTY, so channel-delivered text would be inert prose rather than executed
+commands. The channel keeps its own role — structured PR/CI gating events the
+seat reasons over — unchanged.
+
+The launcher honours the ADR-0110 context contract and graceful degradation
+(§2, §4), and — critically — never *claims* a model, context state, or
+registration it cannot prove:
+
+- **CLEAR** ticket, seat already **live** → ``reuse``: the ticket is delivered
+  into the running seat (``/clear`` → ``/model <tier>`` → ``/build <id>``). The
+  common case, and the one that keeps RC registration stable.
+- **CLEAR** ticket, seat **absent**, all Remote-Control mechanics available →
+  ``launch``: a fresh, correctly-modelled tmux + Remote-Control session, seeded
+  with the stream's skill command, then verified to hold the requested RC name.
+- Seat **unhealthy** (present but not running ``claude``) → ``seat-unhealthy``:
+  a card only. Never reclaimed — reclaiming means terminating a session.
 - **CLEAR**, auto-seed unavailable → ``prepare``: a correctly-modelled fresh
   session, with the exact command surfaced for the owner to send.
 - **CLEAR**, programmatic model-set unavailable → ``manual-model-required``:
@@ -52,18 +83,27 @@ import argparse
 import dataclasses
 import json
 import os
+import re
 import shlex
 import subprocess  # noqa: S404 - launches trusted, argv-built git/tmux/claude commands
 import sys
+import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Literal, Protocol
 
-from scripts.dispatch.tmux_target import exact_session
+from scripts.dispatch.pane_state import session_is_idle
+from scripts.dispatch.tmux_target import exact_pane, exact_session
 
 # Model tiers the launcher will place on a command line. Validated so no
 # free-form value ever reaches the tmux-parsed inner command (codex #4).
 _MODELS: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
+
+# Shape of a Linear issue identifier (``FRE-913``). The ticket id is the only
+# externally-sourced value that reaches a seat's keyboard, so its shape is
+# asserted locally rather than assumed from the remote API (FRE-913 security
+# review). ASCII-only classes throughout — never the Unicode-permissive ``\d``.
+_TICKET_RE = re.compile(r"[A-Z][A-Z0-9]*-[0-9]+")
 
 # Permission mode every dispatched worker seat launches in. A worker runs
 # unattended and the owner may be unable to reach it (RC can drop), so a seat
@@ -85,15 +125,61 @@ _CHANNEL_PLUGIN_REF: str = "plugin:seshat-dispatch@seshat-dispatch"
 # maps to the same id.
 _SESSION_NS: uuid.UUID = uuid.uuid5(uuid.NAMESPACE_URL, "https://frenchforest/seshat/dispatch")
 
-PlanOutcome = Literal["launch", "prepare", "manual-model-required", "manual-continuation"]
+PlanOutcome = Literal[
+    "launch",
+    "prepare",
+    "manual-model-required",
+    "manual-continuation",
+    "reuse",
+    "seat-unhealthy",
+]
 ResultOutcome = Literal[
     "launch",
     "prepare",
     "manual-model-required",
     "manual-continuation",
+    "reuse",
+    "seat-unhealthy",
     "worktree-dirty",
     "launch-failed",
+    "registration-unverified",
+    "delivery-failed",
+    "seat-busy",
 ]
+
+# A seat's observed liveness (FRE-913).
+#
+# ``unhealthy`` exists so the launcher has somewhere to put "the tmux session is
+# there but claude is not running in it" **other than** reclaiming it. Reclaiming
+# would mean killing the session to free the name, and the dispatcher owns no
+# termination code (see module docstring). Seat lifecycle is ``cc-sessions``'s
+# job; the launcher only dispatches into seats.
+SeatState = Literal["live", "absent", "unhealthy"]
+
+# The command a healthy seat's pane runs. Verified live on the VPS against the
+# real launch shape — ``env SESHAT_CHANNEL_PORT=… claude --remote-control …``
+# reports ``claude``, because the ``env`` prefix execs away rather than staying
+# as the pane's foreground process.
+_SEAT_PANE_COMMAND: str = "claude"
+
+# Bounds for the create path's Remote-Control polls and the reuse path's
+# delivery confirmation. Deliberately polls for observable state rather than
+# sleeping a guessed interval: a fixed settle is what cc-sessions tried
+# (five seconds, still insufficient on 2026-07-17).
+# Kept deliberately tight: ``execute_plan`` runs SYNCHRONOUSLY inside the
+# orchestrator's per-stream tick, so every second spent polling is a second the
+# daemon is not servicing other streams. Worst case is bounded at roughly
+# 3 x _DELIVERY_TIMEOUT_S on the reuse path and
+# _RC_NAME_FREE_TIMEOUT_S + _RC_REGISTERED_TIMEOUT_S on the create path.
+_RC_NAME_FREE_TIMEOUT_S: float = 8.0
+_RC_REGISTERED_TIMEOUT_S: float = 10.0
+_DELIVERY_TIMEOUT_S: float = 10.0
+_POLL_INTERVAL_S: float = 0.5
+
+# Hard ceiling on any single tmux/claude/git call. Without it a wedged tmux
+# server blocks the runner — and therefore the whole dispatch tick — forever,
+# which no poll bound above can rescue.
+_SUBPROCESS_TIMEOUT_S: float = 15.0
 
 
 class RunResult(Protocol):
@@ -272,6 +358,32 @@ class LaunchPlan:
     command: tuple[str, ...] | None
     reset_worktree: bool
     card: str
+    deliveries: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Enforce exactly one side-effect carrier for the plan's outcome.
+
+        ``command`` (create a seat) and ``deliveries`` (type into a live seat)
+        are two different ways to act on the world hanging off one dataclass, so
+        an outcome carrying both — or a ``reuse`` carrying neither — is a
+        half-decided plan that would execute ambiguously. Raising here keeps the
+        discriminated union honest at construction rather than at execution.
+
+        Raises:
+            ValueError: The outcome's carriers are inconsistent.
+        """
+        if self.outcome == "reuse":
+            if self.command is not None:
+                raise ValueError("a reuse plan must not carry a create command")
+            if not self.deliveries:
+                raise ValueError("a reuse plan must carry deliveries")
+            return
+        if self.deliveries:
+            raise ValueError(f"{self.outcome!r} must not carry deliveries")
+        if self.outcome in {"launch", "prepare"} and self.command is None:
+            raise ValueError(f"{self.outcome!r} requires a create command")
+        if self.outcome not in {"launch", "prepare"} and self.command is not None:
+            raise ValueError(f"{self.outcome!r} must not carry a create command")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -429,6 +541,46 @@ def _manual_model_card(topology: StreamTopology, model: str, dispatch: str) -> s
     )
 
 
+def _reuse_card(topology: StreamTopology, model: str, dispatch: str) -> str:
+    """Card for the FRE-913 happy path — a live seat reused, never restarted."""
+    return (
+        f"[{topology.stream}] reuse → {topology.tmux_session} kept alive at {model}; "
+        f"delivered {dispatch} in-session (seat process and Remote Control "
+        f"registration untouched)"
+    )
+
+
+def _seat_unhealthy_card(topology: StreamTopology, dispatch: str) -> str:
+    """Card for a seat whose tmux session exists but is not running claude.
+
+    Names ``cc-sessions`` explicitly: seat lifecycle is its job, not the
+    dispatcher's, and the launcher deliberately owns no way to reclaim the slot.
+    """
+    return (
+        f"[{topology.stream}] seat-unhealthy → {topology.tmux_session} exists but is not "
+        f"running claude; the launcher does not reclaim seats. Recover it with "
+        f"cc-sessions, then dispatch {dispatch}"
+    )
+
+
+def _registration_unverified_card(
+    topology: StreamTopology, registered_as: str | None, dispatch: str
+) -> str:
+    """Card for a created seat that did not take the requested RC name (F2).
+
+    The seat is left RUNNING: it is alive and working, merely registered under
+    the wrong name, and killing a healthy process to chase a nicer name would
+    destroy warm context to fix a visibility problem.
+    """
+    actual = f"registered as {registered_as}" if registered_as else "not registered"
+    return (
+        f"[{topology.stream}] registration-unverified → seat started but {actual}, "
+        f"not {topology.tmux_session}. It is RUNNING and already building {dispatch}; "
+        f"only Remote Control visibility is degraded. Do NOT reset it now — that would "
+        f"kill work in flight. Reclaim the name with cc-sessions once this run lands"
+    )
+
+
 def _manual_continuation_card(
     topology: StreamTopology, model: str, warm_session_id: str | None, dispatch: str
 ) -> str:
@@ -451,6 +603,7 @@ def plan_launch(
     context_keep: bool,
     capabilities: LauncherCapabilities = DEFAULT_CAPABILITIES,
     warm_session_id: str | None = None,
+    seat: SeatState = "absent",
 ) -> LaunchPlan:
     """Decide how to launch (or refuse to launch) a stream's worker session.
 
@@ -465,6 +618,10 @@ def plan_launch(
             ``False`` for the CLEAR default (fresh session).
         capabilities: Which Remote-Control mechanics are available.
         warm_session_id: The stream's warm session id, if resolved (KEEP only).
+        seat: The seat's observed liveness (``seat_state``). A ``live`` seat is
+            reused in-session and never recreated (FRE-913); ``unhealthy``
+            surfaces a card and touches nothing. Defaults to ``absent`` so a
+            plan-only caller still describes a create.
 
     Returns:
         The decided ``LaunchPlan``.
@@ -475,6 +632,13 @@ def plan_launch(
     topology = topology_for(stream)
     if model not in _MODELS:
         raise ValueError(f"unknown model tier: {model!r} (expected one of {sorted(_MODELS)})")
+    # The ticket id is the one value on this path that originates outside the
+    # process (Linear's API), and it ends up TYPED INTO a live session running at
+    # ``acceptEdits``. Linear's own identifiers cannot express anything but
+    # ``TEAM-123``, so this never rejects a real ticket — it just makes that
+    # guarantee local, instead of trusting a remote API to keep its format.
+    if not _TICKET_RE.fullmatch(ticket):
+        raise ValueError(f"malformed ticket identifier: {ticket!r} (expected e.g. 'FRE-913')")
 
     # The seed carries the orchestrator-resolved ticket (FRE-806, AC3).
     dispatch = seed_command(topology, ticket)
@@ -511,6 +675,49 @@ def plan_launch(
             card=_manual_model_card(topology, model, dispatch),
         )
 
+    # CLEAR + a LIVE seat: reuse it in-session. The seat's process — and with it
+    # the Remote-Control registration the owner's mobile view follows — is never
+    # touched. This is the FRE-913 happy path and by far the common case.
+    if seat == "live":
+        return LaunchPlan(
+            outcome="reuse",
+            stream=stream,
+            ticket=ticket,
+            model=model,
+            context="clear",
+            tmux_session=topology.tmux_session,
+            worktree=topology.worktree,
+            session_id=None,
+            command=None,
+            # The dirty-worktree preflight still guards a CLEAR dispatch: reuse
+            # does not make uncommitted work any safer to walk over.
+            reset_worktree=True,
+            card=_reuse_card(topology, model, dispatch),
+            # The model switch is unconditional: a live seat's current tier has
+            # no reliable probe (``claude agents --json`` does not report it),
+            # and ``/model`` is idempotent — always sending it is strictly safer
+            # than skipping it on an unprovable comparison, which risks a seat
+            # silently building at the wrong tier.
+            deliveries=("/clear", f"/model {model}", dispatch),
+        )
+
+    # A seat that exists but is not running claude is reported, never reclaimed
+    # — reclaiming it means killing the tmux session to free the name.
+    if seat == "unhealthy":
+        return LaunchPlan(
+            outcome="seat-unhealthy",
+            stream=stream,
+            ticket=ticket,
+            model=model,
+            context="clear",
+            tmux_session=topology.tmux_session,
+            worktree=topology.worktree,
+            session_id=None,
+            command=None,
+            reset_worktree=False,
+            card=_seat_unhealthy_card(topology, dispatch),
+        )
+
     # CLEAR + model-set available: launch (seeded) or prepare (owner sends the command).
     session_id = session_id_for(stream, ticket, model, "clear")
     seed = dispatch if capabilities.auto_seed else None
@@ -542,10 +749,230 @@ def plan_launch(
 
 
 def subprocess_runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    """Default runner: run an argv, capturing output, never via a shell."""
-    return subprocess.run(  # noqa: S603 - argv-built from validated inputs, no shell
-        list(argv), capture_output=True, text=True, check=False
+    """Default runner: run an argv, capturing output, never via a shell.
+
+    Bounded by ``_SUBPROCESS_TIMEOUT_S``. A timeout is reported as a non-zero
+    result rather than raised, so a wedged ``tmux`` degrades to "this probe
+    failed" — which every caller already handles — instead of hanging the
+    orchestrator tick that called it.
+    """
+    try:
+        return subprocess.run(  # noqa: S603 - argv-built from validated inputs, no shell
+            list(argv),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_SUBPROCESS_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(list(argv), returncode=124, stdout="", stderr="timeout")
+
+
+def seat_state(topology: StreamTopology, runner: CommandRunner) -> SeatState:
+    """Classify a seat's liveness without touching it (FRE-913).
+
+    Three states, only two of which lead to an action — and neither action
+    destroys anything. A seat whose tmux session exists but whose pane is not
+    running ``claude`` is deliberately NOT reclaimed: reclaiming means killing
+    the session to free the name, and the launcher owns no termination code.
+
+    Exact-match targets throughout (FRE-909) so an absent ``cc-build`` can never
+    prefix-resolve onto the live ``cc-build2``.
+
+    Args:
+        topology: The stream's launch coordinates.
+        runner: The command runner seam.
+
+    Returns:
+        ``live`` (reuse it), ``absent`` (safe to create), or ``unhealthy``
+        (surface it; touch nothing).
+    """
+    if runner(["tmux", "has-session", "-t", exact_session(topology.tmux_session)]).returncode != 0:
+        return "absent"
+
+    # Primary signal: Remote Control's own registry. An agent registered against
+    # this stream's worktree proves BOTH that a claude is alive and that it is
+    # attached to the right tree — the two things reuse depends on.
+    agents = _rc_agents(runner)
+    if agents is not None and any(
+        _cwd_matches(str(agent.get("cwd", "")), topology.worktree) for agent in agents
+    ):
+        return "live"
+
+    # Fallback: the pane itself. Requires the foreground command to be claude AND
+    # the pane's path to be this stream's worktree.
+    #
+    # The worktree check is not optional. The deleted create path pinned cwd with
+    # ``new-session -c <worktree>`` on every dispatch, so reuse silently inherited
+    # a guarantee that no longer exists: a ``cc-build`` whose claude was started
+    # somewhere else (owner ran cc-sessions from the repo root) looks identical by
+    # session name, and a ``/build`` typed into it would commit against the wrong
+    # tree entirely.
+    panes = runner(
+        [
+            "tmux",
+            "list-panes",
+            "-t",
+            exact_pane(topology.tmux_session),
+            "-F",
+            "#{pane_current_command}\t#{pane_current_path}",
+        ]
     )
+    command, _, path = panes.stdout.strip().partition("\t")
+    if command == _SEAT_PANE_COMMAND and _cwd_matches(path, topology.worktree):
+        return "live"
+    return "unhealthy"
+
+
+def _capture_pane(session: str, runner: CommandRunner) -> str:
+    """Return the seat pane's current visible text."""
+    return runner(["tmux", "capture-pane", "-t", exact_pane(session), "-p"]).stdout
+
+
+def _rc_agents(runner: CommandRunner) -> list[dict[str, object]] | None:
+    """Return the Remote-Control agent registry, or ``None`` if unreadable.
+
+    ``None`` and ``[]`` mean genuinely different things and must not be
+    conflated: ``[]`` is "RC answered, no agents are registered" (evidence),
+    while ``None`` is "RC could not be read at all" — a non-zero exit, a warning
+    line before the JSON, an older CLI without ``--all``. Treating unreadable as
+    empty would let an environment problem masquerade as a registration failure
+    and condemn a perfectly healthy seat.
+    """
+    result = runner(["claude", "agents", "--json", "--all"])
+    if getattr(result, "returncode", 0) != 0:
+        return None
+    try:
+        raw: object = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(raw, dict):
+        candidate = raw.get("agents") or raw.get("sessions") or []
+        raw = candidate
+    if not isinstance(raw, list):
+        return None
+    return [agent for agent in raw if isinstance(agent, dict)]
+
+
+def _poll_until(
+    predicate: Callable[[], bool],
+    *,
+    timeout_s: float,
+    sleeper: Callable[[float], None],
+) -> bool:
+    """Poll ``predicate`` until true or the bound elapses.
+
+    Polls observable state rather than sleeping a guessed interval — the ticket's
+    own finding is that a fixed settle is a guess (cc-sessions' five seconds was
+    still insufficient on 2026-07-17).
+
+    Args:
+        predicate: The condition to wait for; called at least once.
+        timeout_s: Upper bound on total wait.
+        sleeper: The sleep seam (injectable so tests never wall-clock).
+
+    Returns:
+        Whether the predicate became true within the bound.
+    """
+    attempts = max(1, int(timeout_s / _POLL_INTERVAL_S))
+    for attempt in range(attempts):
+        if predicate():
+            return True
+        if attempt < attempts - 1:
+            sleeper(_POLL_INTERVAL_S)
+    return False
+
+
+def deliver_to_seat(
+    plan: LaunchPlan,
+    runner: CommandRunner,
+    *,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> ResultOutcome:
+    """Type a plan's commands into a live seat, confirming each is processed.
+
+    Never restarts, clears-by-recreation, or otherwise touches the seat's
+    process — the whole point of FRE-913 is that the ``claude`` process (and
+    therefore its Remote-Control registration) survives a dispatch untouched.
+
+    Readiness is read from Remote Control's own ``status`` field where it can be
+    (a structured signal from the tool itself), falling back to the rendered-TUI
+    scrape only when RC cannot answer — the scrape has no supported contract and
+    has produced both false-busy (FRE-845) and false-idle readings.
+
+    Two ordering hazards are guarded, both of which silently lose the dispatch:
+
+    - **A seat mid-turn** is not typed into at all (mirrors the watcher's
+      worker-trigger discipline), so a build in progress is never interrupted.
+    - **``tmux send-keys`` only queues input**, so a pane captured immediately
+      after ``/clear`` can still show the *pre-existing* idle prompt. Treating
+      that as "processed" would type ``/build`` into a session about to be
+      cleared and the command would die with the conversation. Confirmation
+      therefore requires the pane text to *change*, not merely to look idle.
+
+    The final command (the ``/build``) is confirmed as *submitted* (the pane
+    changed) rather than *finished* — the seat is expected to still be working
+    when this returns.
+
+    Args:
+        plan: The ``reuse`` plan whose ``deliveries`` are typed, in order.
+        runner: The command runner seam.
+        sleeper: The sleep seam (injectable for tests).
+
+    Returns:
+        ``reuse`` when every command was delivered and confirmed, ``seat-busy``
+        when the seat was mid-turn, or ``delivery-failed`` when a command could
+        not be confirmed as processed.
+    """
+    session = plan.tmux_session
+    topology = topology_for(plan.stream)
+    # Prefer Remote Control's own status field over scraping the rendered TUI.
+    # The scrape is a fallback for when RC cannot tell us (seat not registered,
+    # or an ambiguous worktree match), not the primary signal.
+    busy = seat_is_busy(topology, runner)
+    if busy is True or (busy is None and not session_is_idle(_capture_pane(session, runner))):
+        return "seat-busy"
+
+    last = len(plan.deliveries) - 1
+    for index, command in enumerate(plan.deliveries):
+        before = _capture_pane(session, runner)
+        # Literal text first, then Enter as a separate key — never let tmux
+        # parse the command text itself as key names.
+        runner(["tmux", "send-keys", "-t", exact_pane(session), "-l", command])
+        runner(["tmux", "send-keys", "-t", exact_pane(session), "Enter"])
+
+        def processed(before: str = before, is_last: bool = index == last) -> bool:
+            # The seat reporting itself busy is direct, structured evidence it
+            # accepted the command and is working — stronger than any inference
+            # from rendered text, and the only signal that distinguishes a
+            # SUBMITTED /build from one merely echoed into the input box.
+            if seat_is_busy(topology, runner) is True:
+                return True
+            if is_last:
+                # Never accept a bare text change here: `send-keys -l` echoes the
+                # command into the input box, which changes the pane *before*
+                # Enter is processed. Accepting that would report a lost /build
+                # as a successful dispatch — the exact silent failure this whole
+                # function exists to prevent. Busy is the only sufficient proof.
+                return False
+            pane = _capture_pane(session, runner)
+            return pane != before and session_is_idle(pane)
+
+        if _poll_until(processed, timeout_s=_DELIVERY_TIMEOUT_S, sleeper=sleeper):
+            continue
+
+        # Non-final commands are allowed one benign exception: an idle pane whose
+        # text never changed. `/clear` on an ALREADY-empty conversation redraws
+        # to a byte-identical screen, so strict change-detection would condemn a
+        # correctly-processed no-op. Requiring idle keeps this from masking a
+        # genuinely stuck pane.
+        if index != last and session_is_idle(_capture_pane(session, runner)):
+            continue
+
+        # Otherwise fail closed: never continue to the next command on an
+        # unconfirmed one. Proceeding is exactly what loses the dispatch.
+        return "delivery-failed"
+    return "reuse"
 
 
 def _preflight_worktree(worktree: str, runner: CommandRunner) -> bool:
@@ -568,27 +995,42 @@ def _preflight_worktree(worktree: str, runner: CommandRunner) -> bool:
     return not status.stdout.strip()
 
 
-def execute_plan(plan: LaunchPlan, runner: CommandRunner = subprocess_runner) -> LaunchResult:
+def execute_plan(
+    plan: LaunchPlan,
+    runner: CommandRunner = subprocess_runner,
+    *,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> LaunchResult:
     """Execute a launch plan, performing side effects via the runner seam.
 
-    Manual outcomes (``manual-model-required``/``manual-continuation``) perform
-    no side effect. A CLEAR launch/prepare first preflights the worktree
-    (aborting on uncommitted changes), then tears down any existing session for
-    this stream's persistent tmux slot (the busy-guard guarantees the stream is
-    idle here, so the slot holds only a finished dispatch), then starts the
-    fresh session at the ticket's model. Without the teardown, ``tmux
-    new-session -s <slot>`` collides with the persistent worker session and the
-    launch is abandoned. A tmux ``new-session`` failure is reported as
-    ``launch-failed``, never a claimed launch.
+    **This function never terminates a seat** (FRE-913, owner-directed). It has
+    exactly two ways to act:
+
+    - ``reuse`` — type the plan's commands into a live seat. The seat's
+      ``claude`` process, and with it the Remote-Control registration the
+      owner's mobile view follows, is never touched.
+    - ``launch``/``prepare`` — create a seat, reached only when the seat is
+      ``absent``, where ``tmux new-session`` has nothing to collide with.
+
+    Every other outcome performs no side effect at all. In particular an
+    ``unhealthy`` seat is surfaced rather than reclaimed, and a seat that
+    registers under the wrong Remote-Control name is left RUNNING rather than
+    killed and retried.
+
+    A CLEAR dispatch (reuse or create) preflights the worktree first and aborts
+    on uncommitted changes, so no dispatch walks over the owner's working
+    changes.
 
     Args:
         plan: The decided plan.
         runner: The command runner seam (injectable for tests).
+        sleeper: The sleep seam used by the bounded polls (injectable so tests
+            never wall-clock).
 
     Returns:
         The ``LaunchResult``.
     """
-    if plan.command is None:
+    if plan.command is None and not plan.deliveries:
         return LaunchResult(outcome=plan.outcome, card=plan.card, launched=False)
 
     if plan.reset_worktree and not _preflight_worktree(plan.worktree, runner):
@@ -601,20 +1043,45 @@ def execute_plan(plan: LaunchPlan, runner: CommandRunner = subprocess_runner) ->
             launched=False,
         )
 
-    # The stream's tmux session is a persistent worker "slot" that outlives a
-    # single dispatch; the busy-guard guarantees the stream is idle here, so a
-    # fresh CLEAR launch must first tear down any existing (finished) session
-    # for this slot — otherwise `tmux new-session -s <slot>` collides and the
-    # launch is abandoned. Best-effort: a non-zero return (no such session) is
-    # the benign first-launch case and is ignored.
-    if plan.command[:2] == ("tmux", "new-session"):
-        # EXACT-match target (FRE-909). Without the ``=`` guard tmux resolves an
-        # absent session by prefix, so tearing down a dead ``cc-build`` killed
-        # the LIVE ``cc-build2`` mid-build (2026-07-17 incident).
-        runner(["tmux", "kill-session", "-t", exact_session(plan.tmux_session)])
+    if plan.outcome == "reuse":
+        outcome = deliver_to_seat(plan, runner, sleeper=sleeper)
+        if outcome != "reuse":
+            return LaunchResult(
+                outcome=outcome,
+                card=_delivery_failure_card(plan, outcome),
+                launched=False,
+            )
+        return LaunchResult(outcome="reuse", card=plan.card, launched=True)
+
+    assert plan.command is not None  # noqa: S101 - guarded by LaunchPlan.__post_init__
+
+    # Give the Remote-Control name a chance to be released before claiming it.
+    # This is risk REDUCTION, not proof: the agent listing is an observable
+    # proxy and the allocator can still race us (this is exactly how a seat ends
+    # up as ``build-41``). The verification below is the real safety net.
+    _poll_until(
+        lambda: not _agent_holding_name(plan.tmux_session, runner),
+        timeout_s=_RC_NAME_FREE_TIMEOUT_S,
+        sleeper=sleeper,
+    )
 
     result = runner(plan.command)
     if result.returncode != 0:
+        # A create only happens when the seat probed ``absent``, so the usual
+        # cause of failure here is that the probe was wrong (a transient tmux
+        # error read as "no session") and the seat is actually alive. Re-probe:
+        # if it is live, this tick simply does nothing and the NEXT tick reuses
+        # it — self-healing, and crucially not an unbounded per-tick failure
+        # loop, which is what deleting the old teardown would otherwise create.
+        if seat_state(topology_for(plan.stream), runner) == "live":
+            return LaunchResult(
+                outcome="seat-busy",
+                card=(
+                    f"[{plan.stream}] seat-busy → {plan.tmux_session} was probed absent but "
+                    f"exists; nothing created or destroyed, will reuse it next tick"
+                ),
+                launched=False,
+            )
         return LaunchResult(
             outcome="launch-failed",
             card=(
@@ -623,7 +1090,126 @@ def execute_plan(plan: LaunchPlan, runner: CommandRunner = subprocess_runner) ->
             ),
             launched=False,
         )
+
+    # Verify by IDENTITY, not by working directory. Matching on cwd (what
+    # ``find_warm_session`` does) would happily accept a seat that registered as
+    # ``build-41`` — precisely the failure that costs the owner mobile
+    # visibility. We passed ``--session-id``, so the seat is exactly checkable.
+    if not _poll_until(
+        lambda: _seat_is_registered(plan.tmux_session, plan.session_id, runner),
+        timeout_s=_RC_REGISTERED_TIMEOUT_S,
+        sleeper=sleeper,
+    ):
+        # RC unreadable is NOT evidence of a bad registration — it is the absence
+        # of evidence. Condemning a launch because ``claude agents`` could not be
+        # parsed would fail a seat that started correctly and is already building.
+        if _rc_agents(runner) is None:
+            return LaunchResult(outcome=plan.outcome, card=plan.card, launched=True)
+        return LaunchResult(
+            outcome="registration-unverified",
+            card=_registration_unverified_card(
+                topology_for(plan.stream),
+                _agent_holding_session(plan.session_id, runner),
+                seed_command(topology_for(plan.stream), plan.ticket),
+            ),
+            # The seat IS running and WAS seeded with the ticket — only its RC
+            # name is wrong. Reporting launched=False would deny the run stall
+            # detection and run_complete tracking while it builds. This is a
+            # visibility warning attached to a real launch, not a failed one.
+            launched=True,
+        )
     return LaunchResult(outcome=plan.outcome, card=plan.card, launched=True)
+
+
+def _delivery_failure_card(plan: LaunchPlan, outcome: ResultOutcome) -> str:
+    """Card for a reuse path that could not deliver (seat busy / unconfirmed)."""
+    if outcome == "seat-busy":
+        return (
+            f"[{plan.stream}] seat-busy → {plan.tmux_session} is mid-turn; nothing was "
+            f"delivered and the seat was not interrupted"
+        )
+    return (
+        f"[{plan.stream}] delivery-failed → {plan.tmux_session} did not process a "
+        f"delivered command; stopped before sending the rest (the seat is untouched "
+        f"and still running)"
+    )
+
+
+def seat_is_busy(topology: StreamTopology, runner: CommandRunner) -> bool | None:
+    """Whether the seat is mid-turn, from Remote Control's own status field.
+
+    ``claude agents --json --all`` reports a per-seat ``status``
+    (``idle``/``busy``). That is a **structured** signal from the tool itself,
+    which is strictly better than inferring readiness by scraping the rendered
+    TUI (``capture-pane`` + prompt/spinner heuristics) — the scrape has no
+    supported contract, breaks whenever the TUI is restyled, and has already
+    produced both false-busy (FRE-845) and false-idle readings.
+
+    Matched by **working directory**, not by name: a seat's Remote-Control name
+    can drift from its tmux session name (a seat launched as ``cc-build`` can
+    register as ``build-41``), whereas one seat per worktree holds. Ambiguity is
+    never guessed at — zero or multiple matches return ``None``.
+
+    Args:
+        topology: The stream's launch coordinates.
+        runner: The command runner seam.
+
+    Returns:
+        ``True``/``False`` when Remote Control reports the seat's status, or
+        ``None`` when it cannot be determined (caller falls back to the scrape).
+    """
+    agents = _rc_agents(runner)
+    if agents is None:
+        return None
+    matches = [
+        agent for agent in agents if _cwd_matches(str(agent.get("cwd", "")), topology.worktree)
+    ]
+    if len(matches) != 1:
+        return None
+    status = str(matches[0].get("status", "")).strip().lower()
+    if status == "busy":
+        return True
+    if status == "idle":
+        return False
+    return None
+
+
+def _agent_holding_name(name: str, runner: CommandRunner) -> bool:
+    """Whether any Remote-Control agent currently holds ``name``."""
+    agents = _rc_agents(runner)
+    if agents is None:
+        # Unreadable registry is not evidence the name is free OR held. Report
+        # "not held" so the pre-create wait does not spin out its full bound on
+        # a question it cannot answer; the post-create verification is what
+        # actually decides, and it handles unreadable explicitly.
+        return False
+    return any(str(agent.get("name", "")) == name for agent in agents)
+
+
+def _seat_is_registered(name: str, session_id: str | None, runner: CommandRunner) -> bool:
+    """Whether the seat we just launched holds the requested name.
+
+    Requires BOTH the requested name and our own session id, so a stale agent
+    still holding the name cannot be mistaken for the new seat (codex #3).
+    """
+    agents = _rc_agents(runner)
+    if session_id is None or agents is None:
+        return False
+    return any(
+        str(agent.get("name", "")) == name and str(agent.get("sessionId", "")) == session_id
+        for agent in agents
+    )
+
+
+def _agent_holding_session(session_id: str | None, runner: CommandRunner) -> str | None:
+    """The RC name our launched session actually took, if it registered at all."""
+    agents = _rc_agents(runner)
+    if session_id is None or agents is None:
+        return None
+    for agent in agents:
+        if str(agent.get("sessionId", "")) == session_id:
+            return str(agent.get("name", "")) or None
+    return None
 
 
 def _cwd_matches(cwd: str, worktree: str) -> bool:
@@ -695,7 +1281,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--stream", required=True, help="Dispatch stream: build1, build2, adr.")
     parser.add_argument("--model", required=True, help="Model tier: opus, sonnet, haiku.")
-    parser.add_argument("--ticket", default="UNSPECIFIED", help="Ticket id, e.g. FRE-786.")
+    # Placeholder must itself be a well-formed identifier: the ticket id is
+    # shape-checked in plan_launch, so a free-text default like "UNSPECIFIED"
+    # would make a bare dry-run crash on its own default.
+    parser.add_argument("--ticket", default="FRE-0", help="Ticket id, e.g. FRE-786.")
     parser.add_argument(
         "--keep", action="store_true", help="Treat as a context:keep ticket (warm context)."
     )
@@ -716,6 +1305,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_set=not args.no_model_set,
     )
     warm_session_id = find_warm_session(args.stream) if (args.keep and args.execute) else None
+    # Probe the seat only when actually executing: a dry-run must stay pure and
+    # must not shell out to tmux.
+    seat: SeatState = (
+        seat_state(topology_for(args.stream), subprocess_runner) if args.execute else "absent"
+    )
 
     try:
         plan = plan_launch(
@@ -725,6 +1319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             context_keep=args.keep,
             capabilities=capabilities,
             warm_session_id=warm_session_id,
+            seat=seat,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

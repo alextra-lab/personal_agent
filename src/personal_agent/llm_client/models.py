@@ -464,11 +464,13 @@ class ModelConfig(BaseModel):
         if not self.providers:
             return self
         for key, definition in self.models.items():
+            # A deployment with no provider is a not-yet-migrated legacy entry
+            # carrying its own `endpoint`. The invariant enforced here is "no
+            # DANGLING provider reference", not "everything has migrated" —
+            # otherwise the three layers cannot be introduced additively.
+            # Tighten to require `provider` once every entry declares one.
             if definition.provider is None:
-                raise ValueError(
-                    f"deployment {key!r} declares no provider; every catalog entry "
-                    "must reference a key in providers: (ADR-0121 Layer 2)"
-                )
+                continue
             if definition.provider not in self.providers:
                 raise ValueError(
                     f"deployment {key!r} references unknown provider "

@@ -111,13 +111,19 @@ class TestProviderReferences:
                 }
             )
 
-    def test_missing_provider_fails(self) -> None:
-        """A deployment declaring no provider at all fails load."""
+    def test_missing_provider_is_a_legacy_entry_not_an_error(self) -> None:
+        """A deployment with no provider is legacy, and loads.
+
+        The invariant is "no DANGLING provider reference", not "everything has
+        migrated" — the three layers are introduced additively, so entries still
+        carrying their own `endpoint` must keep loading alongside migrated ones.
+        Tighten to require `provider` once every entry declares one.
+        """
         deployment = {k: v for k, v in _DEPLOYMENTS["qwen-chat"].items() if k != "provider"}
-        with pytest.raises(ValidationError, match="orphan"):
-            ModelConfig.model_validate(
-                {"providers": _PROVIDERS, "models": {"orphan": deployment}, "roles": {}}
-            )
+        config = ModelConfig.model_validate(
+            {"providers": _PROVIDERS, "models": {"legacy": deployment}, "roles": {}}
+        )
+        assert config.models["legacy"].provider is None
 
 
 class TestBindingReferences:

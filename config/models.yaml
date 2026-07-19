@@ -10,7 +10,42 @@
 #   "How much can I spend?"    → .env (operational runtime control)
 #
 # ── Model definition fields ───────────────────────────────────────────────────
-# Required for all models:
+# Required for all # ── Layer 1: Providers (ADR-0121) ────────────────────────────────────────────
+# Added ALONGSIDE the existing flat `models:` map. Nothing reads these yet — the
+# three layers are being introduced additively so each step stays green, and the
+# role-keyed entries below keep resolving exactly as before until every consumer
+# has moved.
+providers:
+  slm_local:
+    base_url: "https://slm.example.com/v1"
+    auth: none
+    placement: local
+    max_concurrency: 2
+    summary: "Owner's Mac GPU via the CF-Access tunnel (llama.cpp + MLX)"
+  ovh:
+    base_url: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+    auth_env: managed_embedding_token
+    placement: cloud
+    max_concurrency: 1
+    summary: "OVH AI Endpoints — managed embedding inference"
+  openai:
+    auth_env: openai_api_key
+    placement: cloud
+    max_concurrency: 10
+    summary: "OpenAI — structured extraction and compression"
+  anthropic:
+    auth_env: anthropic_api_key
+    placement: cloud
+    max_concurrency: 20
+    summary: "Anthropic — background reasoning and cloud-profile inference"
+  voyage:
+    base_url: "https://api.voyageai.com/v1"
+    auth_env: voyage_api_key
+    placement: cloud
+    max_concurrency: 5
+    summary: "Voyage AI — managed reranking"
+
+models:
 #   id               Model identifier (LM Studio slug or provider model name)
 #   context_length   Maximum context window in tokens
 #   max_concurrency  Max concurrent in-flight requests
@@ -212,6 +247,7 @@ models:
 
   # ── Embedding Model (Seshat Memory — ADR-0035) ─────────────────
   embedding:
+    kind: embedding
     # Qwen3-Embedding-0.6B via slm_server (llama.cpp GGUF)
     # Instruction-aware, Matryoshka (flexible dims), 768d default
     # One-way door: changing model requires rebuilding all Neo4j vectors
@@ -225,6 +261,7 @@ models:
 
   # ── Reranker Model (Seshat Memory — ADR-0035) ──────────────────
   reranker:
+    kind: reranker
     # Voyage rerank-2.5 — managed reranker API (FRE-851). PRIMARY: ~250ms,
     # quality-equivalent to the Mac 4B (FRE-695 J=0.73 vs 0.747, inside n=54
     # noise). Falls back to reranker_fallback (Mac-tunnel 4B) on error/timeout,
@@ -239,6 +276,7 @@ models:
 
   # ── Reranker Fallback Model (FRE-851) ───────────────────────────
   reranker_fallback:
+    kind: reranker
     # Qwen3-Reranker-4B mxfp8 on the Mac/laptop GPU via slm.example.com,
     # MLX runtime (FRE-696). Programmatic fallback target when Voyage
     # (the "reranker" role) errors or times out — memory/reranker.py tries

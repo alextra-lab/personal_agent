@@ -222,6 +222,7 @@ models:
 
   # ── Embedding Model (Seshat Memory — ADR-0035) ─────────────────
   embedding:
+    kind: embedding
     # Qwen3-Embedding-0.6B via llama.cpp Docker service (VPS)
     # Instruction-aware, Matryoshka (flexible dims), 768d default
     # One-way door: changing model requires rebuilding all Neo4j vectors
@@ -235,6 +236,7 @@ models:
 
   # ── Reranker Model (Seshat Memory — ADR-0035) ──────────────────
   reranker:
+    kind: reranker
     # Voyage rerank-2.5 — managed reranker API (FRE-851). PRIMARY: ~250ms,
     # quality-equivalent to the Mac 4B (FRE-695 J=0.73 vs 0.747, inside n=54
     # noise). Falls back to reranker_fallback (Mac-tunnel 4B) on error/timeout,
@@ -249,6 +251,7 @@ models:
 
   # ── Reranker Fallback Model (FRE-851) ───────────────────────────
   reranker_fallback:
+    kind: reranker
     # Qwen3-Reranker-4B mxfp8 on the Mac/laptop GPU via slm.example.com, MLX runtime
     # (FRE-696). MLX replaces llama.cpp: the llama.cpp causal-rerank path stalled under
     # sustained distinct-candidate load and timed out at the 50-candidate cap (FRE-695/696).

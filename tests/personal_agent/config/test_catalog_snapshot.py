@@ -91,10 +91,50 @@ def _clear_caches() -> None:
     _load_role_matrix.cache_clear()
 
 
+#: The definition fields that determine *behaviour* — what model is called, at
+#: what endpoint, with what decoding, limits, capacity, and cost.
+#:
+#: Pinned explicitly rather than dumping the whole model, so that adding
+#: descriptive catalog metadata (``kind``, ``summary``, ``status``,
+#: ``dimensions`` — ADR-0121 §2) does not read as behaviour drift. Anything that
+#: changes which model runs, or how it is called, belongs in this list; anything
+#: that only describes the model for a picker does not.
+_BEHAVIOUR_FIELDS: tuple[str, ...] = (
+    "id",
+    "provider",
+    "endpoint",
+    "context_length",
+    "max_tokens",
+    "max_concurrency",
+    "min_concurrency",
+    "default_timeout",
+    "temperature",
+    "top_p",
+    "top_k",
+    "min_p",
+    "presence_penalty",
+    "repetition_penalty",
+    "reasoning_effort",
+    "disable_thinking",
+    "thinking_budget_tokens",
+    "quantization",
+    "supports_function_calling",
+    "supports_vision",
+    "supports_pdf_document",
+    "tool_calling_strategy",
+    "parallel_tool_calls",
+    "input_cost_per_token",
+    "output_cost_per_token",
+)
+
+
 def _definition_of(key: str, catalog_path: Path) -> dict[str, Any] | None:
-    """Return the full definition for ``key``, or None when absent."""
+    """Return the behaviour-determining fields for ``key``, or None when absent."""
     definition = load_model_config(catalog_path).models.get(key)
-    return None if definition is None else definition.model_dump(mode="json")
+    if definition is None:
+        return None
+    dumped = definition.model_dump(mode="json")
+    return {field: dumped.get(field) for field in _BEHAVIOUR_FIELDS}
 
 
 def _capture_resolution() -> dict[str, Any]:

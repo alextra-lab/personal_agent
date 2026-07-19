@@ -17,12 +17,25 @@ from pydantic import ValidationError
 
 from personal_agent.config.loader import ConfigLoadError, load_yaml_file
 from personal_agent.config.settings import AppConfig
-from personal_agent.llm_client.models import ModelConfig
+from personal_agent.llm_client.models import ModelConfig, ModelDefinition
 
 #: A parsed ``config/model_roles.yaml`` mapping.
 _RoleMatrix = dict[str, object]
 
 log = structlog.get_logger(__name__)
+
+#: The two real catalogs, by RESOLVED PATH. Layer-3 bindings are merged into
+#: these only — a fixture or benchmark file defines its own deployments, and
+#: injecting the repo's bindings would dangle every reference. Matched on the
+#: full path, not the basename: the fixtures are called `models.yaml` too.
+_REPO_CONFIG: Path = Path(__file__).resolve().parents[3] / "config"
+_REAL_CATALOGS: frozenset[Path] = frozenset(
+    {_REPO_CONFIG / "models.yaml", _REPO_CONFIG / "models.cloud.yaml"}
+)
+
+#: Layer 3 role bindings (ADR-0121), merged into the same ModelConfig so all
+#: three layers validate in one pass.
+ROLE_BINDINGS_PATH: Path = Path(__file__).resolve().parents[3] / "config" / "model_roles.yaml"
 
 #: Neutral placeholder host baked into config/models*.yaml (FRE-895) — the real Mac
 #: SLM Cloudflare-tunnel host never lands in tracked source. See settings.slm_tunnel_base_url.
@@ -101,6 +114,11 @@ def _load_model_config_at_path(config_path_str: str) -> ModelConfig:
     except ConfigLoadError as e:
         raise ModelConfigError(f"Failed to load model config file: {e}") from None
 
+    # Merge Layer 3 bindings so all three layers validate together (ADR-0121).
+    if "roles" not in content and config_path.resolve() in _REAL_CATALOGS:
+        raw = load_yaml_file(ROLE_BINDINGS_PATH, error_class=ModelConfigError) or {}
+        content = {**content, "roles": raw.get("bindings", {})}
+
     # Validate against Pydantic schema
     try:
         config = ModelConfig.model_validate(content)
@@ -148,7 +166,7 @@ def load_model_config(
     Example:
         >>> from personal_agent.config import load_model_config
         >>> config = load_model_config()
-        >>> print(config.models["primary"].id)
+        >>> print(config.models["qwen3.6-35b-thinking"].id)
         qwen/qwen3-35b-a22b
     """
     if settings is None:
@@ -300,6 +318,69 @@ def resolve_role_model_key(
     return model_key
 
 
+def resolve_role_target(
+    role: str,
+    *,
+    model_key: str | None = None,
+    config: ModelConfig | None = None,
+) -> tuple[str, ModelDefinition | None]:
+    """Resolve a role to its deployment key and EFFECTIVE definition (ADR-0121).
+
+    The deployment carries what the model *is*; the Layer-3 binding carries how
+    this role *uses* it. Reading ``config.models[key]`` directly returns only the
+    former, silently dropping per-use parameters.
+
+    Overrides apply **only when the resolved key is the binding's own
+    deployment.** When an active ExecutionProfile redirects the role elsewhere
+    (cloud ``sub_agent`` -> ``claude_haiku``), that deployment's own values stand
+    — matching pre-ADR-0121 behaviour, where the profile's model was looked up
+    whole rather than merged. Overrides are model-specific in practice, so
+    carrying them onto a different model would change the call.
+
+    Args:
+        role: Role name (e.g. ``"sub_agent"``).
+        model_key: Already-resolved key, when the caller resolved it through an
+            active profile. ``None`` uses the role's binding.
+        config: Catalog to resolve against. ``None`` loads the live one.
+
+    Returns:
+        ``(deployment_key, effective_definition)``. Both, because every caller
+        needs both — the definition to make the call, the key to acquire the
+        right concurrency slot — and deriving the key separately would duplicate
+        this resolution order at the call site. Definition is ``None`` when the
+        key names no deployment.
+    """
+    resolved_config = config if config is not None else load_model_config()
+    binding = resolved_config.roles.get(role)
+    key = model_key if model_key is not None else (binding.deployment if binding else role)
+
+    definition = resolved_config.models.get(key)
+    if definition is None or binding is None or key != binding.deployment:
+        return key, definition
+
+    overrides = {
+        field: value
+        for field, value in binding.model_dump(exclude={"deployment", "open"}).items()
+        if value is not None
+    }
+    return key, (definition.model_copy(update=overrides) if overrides else definition)
+
+
+def resolve_role_definition(
+    role: str,
+    *,
+    model_key: str | None = None,
+    config: ModelConfig | None = None,
+) -> ModelDefinition | None:
+    """Return a role's effective definition — see :func:`resolve_role_target`.
+
+    Convenience wrapper for callers that need the definition but not the
+    deployment key. Prefer :func:`resolve_role_target` when you also need the
+    key (to acquire a concurrency slot, or to compare against a routing key).
+    """
+    return resolve_role_target(role, model_key=model_key, config=config)[1]
+
+
 def resolve_active_attribution(
     *,
     trace_id: str | None = None,
@@ -327,8 +408,10 @@ def resolve_active_attribution(
 
     config_path_str = str(settings.model_config_path)
     try:
-        cfg = load_model_config()
-        primary = cfg.models.get("primary")
+        # Resolve through the binding: "primary" is a ROLE, and since ADR-0121
+        # the catalog is keyed by model, so models.get("primary") returns None
+        # and every session/message would lose its model attribution.
+        _, primary = resolve_role_target("primary")
         primary_id = primary.id if primary is not None else None
     except Exception as exc:  # noqa: BLE001 — keep the chat-turn path live
         log.warning(
@@ -345,6 +428,11 @@ def resolve_active_attribution(
 # FRE-734: the drift that broke production was these roles unflagged in the
 # deployed config file — so the startup guard checks these specific roles,
 # not merely "some model is vision-capable".
+#: Names expected to be vision-capable on the deployed config. A mix of ROLES
+#: (primary, sub_agent) and DEPLOYMENT keys (claude_sonnet, claude_haiku) —
+#: resolve_role_target handles both, since a name with no binding falls back to
+#: a direct key lookup. A raw models[...] lookup would warn about the roles on
+#: every boot now that ADR-0121 keys the catalog by model.
 _EXPECTED_VISION_ROLES: tuple[str, ...] = (
     "primary",
     "sub_agent",
@@ -396,9 +484,10 @@ def check_vision_capabilities(*, trace_id: str | None = None) -> tuple[list[str]
 
     capable = sorted(key for key, model in cfg.models.items() if model.supports_vision)
     missing = [
-        role
-        for role in _EXPECTED_VISION_ROLES
-        if role not in cfg.models or not cfg.models[role].supports_vision
+        name
+        for name in _EXPECTED_VISION_ROLES
+        if (definition := resolve_role_target(name, config=cfg)[1]) is None
+        or not definition.supports_vision
     ]
 
     log.info(

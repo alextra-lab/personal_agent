@@ -40,7 +40,14 @@ class TestGenerateEmbedding:
         with (
             patch(
                 "personal_agent.memory.embeddings._get_embedding_config",
-                return_value=("Qwen/Qwen3-Embedding-0.6B", "http://localhost:8503/v1"),
+                # (model, endpoint, api_key) — the credential is resolved from the
+                # deployment's provider since ADR-0121; calling a managed
+                # endpoint without it 401s into the fail-open zero vector.
+                return_value=(
+                    "Qwen/Qwen3-Embedding-0.6B",
+                    "http://localhost:8503/v1",
+                    "unused",
+                ),
             ),
             patch(
                 "personal_agent.memory.embeddings._call_embeddings_api",
@@ -64,7 +71,14 @@ class TestGenerateEmbedding:
         with (
             patch(
                 "personal_agent.memory.embeddings._get_embedding_config",
-                return_value=("Qwen/Qwen3-Embedding-0.6B", "http://localhost:8503/v1"),
+                # (model, endpoint, api_key) — the credential is resolved from the
+                # deployment's provider since ADR-0121; calling a managed
+                # endpoint without it 401s into the fail-open zero vector.
+                return_value=(
+                    "Qwen/Qwen3-Embedding-0.6B",
+                    "http://localhost:8503/v1",
+                    "unused",
+                ),
             ),
             patch(
                 "personal_agent.memory.embeddings._call_embeddings_api",
@@ -97,7 +111,14 @@ class TestGenerateEmbedding:
         with (
             patch(
                 "personal_agent.memory.embeddings._get_embedding_config",
-                return_value=("Qwen/Qwen3-Embedding-0.6B", "http://localhost:8503/v1"),
+                # (model, endpoint, api_key) — the credential is resolved from the
+                # deployment's provider since ADR-0121; calling a managed
+                # endpoint without it 401s into the fail-open zero vector.
+                return_value=(
+                    "Qwen/Qwen3-Embedding-0.6B",
+                    "http://localhost:8503/v1",
+                    "unused",
+                ),
             ),
             patch(
                 "personal_agent.memory.embeddings._call_embeddings_api",
@@ -119,7 +140,14 @@ class TestGenerateEmbeddingsBatch:
         with (
             patch(
                 "personal_agent.memory.embeddings._get_embedding_config",
-                return_value=("Qwen/Qwen3-Embedding-0.6B", "http://localhost:8503/v1"),
+                # (model, endpoint, api_key) — the credential is resolved from the
+                # deployment's provider since ADR-0121; calling a managed
+                # endpoint without it 401s into the fail-open zero vector.
+                return_value=(
+                    "Qwen/Qwen3-Embedding-0.6B",
+                    "http://localhost:8503/v1",
+                    "unused",
+                ),
             ),
             patch(
                 "personal_agent.memory.embeddings._call_embeddings_api",
@@ -143,7 +171,14 @@ class TestGenerateEmbeddingsBatch:
         with (
             patch(
                 "personal_agent.memory.embeddings._get_embedding_config",
-                return_value=("Qwen/Qwen3-Embedding-0.6B", "http://localhost:8503/v1"),
+                # (model, endpoint, api_key) — the credential is resolved from the
+                # deployment's provider since ADR-0121; calling a managed
+                # endpoint without it 401s into the fail-open zero vector.
+                return_value=(
+                    "Qwen/Qwen3-Embedding-0.6B",
+                    "http://localhost:8503/v1",
+                    "unused",
+                ),
             ),
             patch(
                 "personal_agent.memory.embeddings._call_embeddings_api",

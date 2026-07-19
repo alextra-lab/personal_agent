@@ -45,15 +45,51 @@
 # upgraded these from gpt-5.4-nano to gpt-5.4-mini/claude_sonnet — see
 # docs/superpowers/plans/2026-05-16-fre-365-cache-diagnostic.md.)
 
+# ── Layer 1: Providers (ADR-0121) ────────────────────────────────────────────
+# One entry per BACKEND, not per model: endpoint, auth, placement, and the
+# total concurrency ceiling. Before ADR-0121 there was no provider entity at
+# all — `endpoint` was copy-pasted onto individual model entries and the
+# provider was reconstructed at runtime by parsing that URL.
+providers:
+  slm_local:
+    base_url: "https://slm.example.com/v1"
+    auth: none
+    placement: local
+    max_concurrency: 2
+    summary: "Owner's Mac GPU via the CF-Access tunnel (llama.cpp + MLX)"
+  ovh:
+    base_url: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+    auth_env: managed_embedding_token
+    placement: cloud
+    max_concurrency: 1
+    summary: "OVH AI Endpoints — managed embedding inference"
+  openai:
+    auth_env: openai_api_key
+    placement: cloud
+    max_concurrency: 10
+    summary: "OpenAI — structured extraction and compression"
+  anthropic:
+    auth_env: anthropic_api_key
+    placement: cloud
+    max_concurrency: 20
+    summary: "Anthropic — background reasoning and cloud-profile inference"
+  voyage:
+    base_url: "https://api.voyageai.com/v1"
+    auth_env: voyage_api_key
+    placement: cloud
+    max_concurrency: 5
+    summary: "Voyage AI — managed reranking"
+
 models:
   # ── Tier 1: Primary Agent ───────────────────────────────────────
-  primary:
+  qwen3.6-35b-thinking:
     # Orchestrator brain: deep reasoning, tool calling, decomposition planning.
     # Thinking enabled with bounded budget. Single concurrent (GPU-limited).
     # Renamed from "reasoning" (ADR-0033).
     # Sampling per the Qwen3.6-35B-A3B HuggingFace model card,
     # "Thinking Mode — General Tasks" preset. The card requires context >= 128K
     # to preserve thinking capability across multi-turn agent loops.
+    provider: slm_local
     id: "unsloth/qwen3.6-35-A3B"
     context_length: 131072       # Qwen card: thinking-mode minimum (was 64000)
     quantization: "8bit"
@@ -75,15 +111,16 @@ models:
     endpoint: "https://slm.example.com/v1"
 
   # ── Tier 2: Sub-Agent ───────────────────────────────────────────
-  sub_agent:
+  qwen3.6-35b-instruct:
     # Focused single-task completion for HYBRID expansion sub-agents.
     # Second instance of Qwen3.6-35B-A3B, served with thinking disabled
     # and a smaller context window. MoE (~3B active) outperforms the
     # Qwen3.5-9B-8bit dense it replaced — same family as primary, llama.cpp
     # toolchain (no MLX), better quality.
     # Sampling per the Qwen3.6 card "Instruct (Non-Thinking) Mode" preset.
+    provider: slm_local
     id: "unsloth/qwen3.6-35-A3B-subagent"
-    context_length: 16384       # Bounded for focused sub-tasks (was 32768)
+    context_length: 65536  # the window the SLM server actually serves (FRE-916)
     quantization: "8bit"
     min_concurrency: 1
     max_concurrency: 3
@@ -103,32 +140,7 @@ models:
     provider_type: "local"
     endpoint: "https://slm.example.com/v1"
 
-  # ── Experimental / A/B Testing ──────────────────────────────────
-  reasoning_heavy:
-    # Deep reasoning model with bounded thinking budget (ADR-0023).
-    id: "qwen3.6-35b-a3b"  # corrected from qwen3.5 (FRE-319 audit — matches models.yaml)
-    context_length: 64000
-    quantization: "8bit"
-    min_concurrency: 1
-    max_concurrency: 1
-    default_timeout: 180
-    temperature: 0.6
-    top_p: 0.95
-    top_k: 20
-    thinking_budget_tokens: 3000
-    supports_function_calling: true
-    provider_type: "local"
-    endpoint: "https://slm.example.com/v1"
 
-  coding_large_context:
-    # For large codebase analysis (future evaluation; high-memory MoE model)
-    id: "qwen/qwen3-coder-next"
-    context_length: 128000
-    quantization: "4bit"
-    min_concurrency: 1
-    max_concurrency: 1
-    default_timeout: 60
-    temperature: 0.2
 
   # ── Cloud Models (ADR-0031) ─────────────────────────────────────
   # API key is NOT stored here — set AGENT_ANTHROPIC_API_KEY / AGENT_OPENAI_API_KEY in .env
@@ -166,20 +178,6 @@ models:
     input_cost_per_token: 0.000001    # $1/MTok (ADR-0101 §8b / FRE-691 — config-owned cost matrix)
     output_cost_per_token: 0.000005   # $5/MTok
 
-  gpt-5.4-nano:
-    # OpenAI GPT-5.4 Nano — entity extraction, structured output tasks
-    # Cheapest cloud model with strong structured output quality
-    # Pricing: $0.20/$1.25 per MTok (input/output)
-    id: "gpt-5.4-nano"
-    provider: "openai"
-    provider_type: "cloud"
-    max_tokens: 4096
-    context_length: 128000
-    min_concurrency: 1
-    max_concurrency: 10
-    default_timeout: 60
-    input_cost_per_token: 0.0000002     # $0.20/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
-    output_cost_per_token: 0.00000125   # $1.25/MTok
 
   gpt-5.4-mini:
     # OpenAI GPT-5.4 Mini — higher-quality background reasoning
@@ -201,33 +199,23 @@ models:
     input_cost_per_token: 0.00000075    # $0.75/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
     output_cost_per_token: 0.0000045    # $4.50/MTok
 
-  # ── Tier 3: Context Compressor (ADR-0038) ────────────────────────
-  compressor:
-    # Lightweight summarization of evicted context turns.
-    # Runs asynchronously between turns when token threshold is crossed.
-    # gpt-5.4-mini chosen (FRE-365, 2026-05-16): cache-participating
-    # (unlike nano) and materially better fidelity on multi-step / state-
-    # tracking compression — what an agent-loop downstream actually
-    # depends on. Pricing $0.75/$4.50 per MTok; with the ≥1024-token
-    # stable system prompt (context_compressor.py) the cached portion
-    # bills at ~$0.075/MTok across all calls after the first.
-    id: "gpt-5.4-mini"
-    provider: "openai"
-    provider_type: "cloud"
-    max_tokens: 512
-    context_length: 128000
-    min_concurrency: 1
-    max_concurrency: 5
-    default_timeout: 30
 
   # ── Embedding Model (Seshat Memory — ADR-0035) ─────────────────
   embedding:
-    # Qwen3-Embedding-0.6B via llama.cpp Docker service (VPS)
-    # Instruction-aware, Matryoshka (flexible dims), 768d default
-    # One-way door: changing model requires rebuilding all Neo4j vectors
-    id: "Qwen/Qwen3-Embedding-0.6B"
+    kind: embedding
+    # Qwen3-Embedding-8B on OVH AI Endpoints (ADR-0112 D4/AC-5). Replaces the
+    # retired local 0.6B. Instruction-aware, Matryoshka: truncated to 1024 dims,
+    # the measured sweet spot — nDCG@5 peaks there, beating native 4096 (FRE-826).
+    # One-way door: changing this model requires rebuilding every Neo4j vector.
+    provider: ovh
+    id: "Qwen3-Embedding-8B"
+    dimensions: 1024
+    # provider_type still drives concurrency until semaphores are keyed on the
+    # provider; flipping it to "cloud" here would drop this deployment's limit
+    # of 1 before the provider's ceiling exists to re-impose it. Removed with
+    # provider_type itself in the concurrency step.
     provider_type: "local"
-    endpoint: "http://embeddings:8503/v1"
+    endpoint: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
     context_length: 32768
     max_concurrency: 1
     default_timeout: 60
@@ -235,10 +223,12 @@ models:
 
   # ── Reranker Model (Seshat Memory — ADR-0035) ──────────────────
   reranker:
+    kind: reranker
     # Voyage rerank-2.5 — managed reranker API (FRE-851). PRIMARY: ~250ms,
     # quality-equivalent to the Mac 4B (FRE-695 J=0.73 vs 0.747, inside n=54
     # noise). Falls back to reranker_fallback (Mac-tunnel 4B) on error/timeout,
     # then to passthrough on total failure (memory/reranker.py).
+    provider: voyage
     id: "rerank-2.5"
     provider_type: "cloud"
     endpoint: "https://api.voyageai.com/v1"
@@ -249,6 +239,7 @@ models:
 
   # ── Reranker Fallback Model (FRE-851) ───────────────────────────
   reranker_fallback:
+    kind: reranker
     # Qwen3-Reranker-4B mxfp8 on the Mac/laptop GPU via slm.example.com, MLX runtime
     # (FRE-696). MLX replaces llama.cpp: the llama.cpp causal-rerank path stalled under
     # sustained distinct-candidate load and timed out at the 50-candidate cap (FRE-695/696).
@@ -260,6 +251,7 @@ models:
     # CF-Access service token injected by memory/reranker.py for slm.example.com.
     # Programmatic fallback target (FRE-851): rerank() tries this when the Voyage
     # primary errors/times out, before degrading to vector+recency passthrough.
+    provider: slm_local
     id: "Qwen/Qwen3-Reranker-4B-mxfp8"
     provider_type: "local"
     endpoint: "https://slm.example.com/v1"

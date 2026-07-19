@@ -62,22 +62,53 @@ _QUERY_PREFIX = "Instruct: Given a query, retrieve relevant entities and passage
 _EMBEDDING_USER_AGENT = "seshat-memory/1.0"
 
 
-def _get_embedding_config() -> tuple[str, str]:
-    """Load embedding model id and endpoint via the role matrix.
+def _get_embedding_config() -> tuple[str, str, str]:
+    """Load embedding model id, endpoint, and credential via the role binding.
+
+    The credential comes from the deployment's PROVIDER (``auth_env`` names an
+    ``AppConfig`` field). Before ADR-0121 this path always pointed at an
+    unauthenticated local server, so no key was needed; the deployment now
+    resolves to a managed provider, and calling it unauthenticated returns 401 —
+    which the caller's fail-open swallows into an all-zero vector, silently
+    corrupting the Neo4j index.
 
     Returns:
-        Tuple of (model_id, endpoint_url).
+        Tuple of (model_id, endpoint_url, api_key). ``api_key`` is ``"unused"``
+        for providers that declare no ``auth_env``.
 
     Raises:
         ModelRoleError: If the 'embedding' role cannot be resolved (missing
             matrix, or resolved key absent from the active model config).
     """
-    from personal_agent.config import load_model_config, resolve_role_model_key  # noqa: PLC0415
+    # Effective definition, not the raw deployment: config.models[key] bypasses
+    # the Layer-3 binding, so any per-use override on this role would be
+    # silently dropped here while tests of the resolver still pass (ADR-0121).
+    from personal_agent.config import settings as _settings  # noqa: PLC0415
+    from personal_agent.config.model_loader import (  # noqa: PLC0415
+        ModelRoleError,
+        load_model_config,  # noqa: PLC0415
+        resolve_role_definition,
+    )
 
-    config = load_model_config()
-    model_def = config.models[resolve_role_model_key("embedding")]
+    catalog = load_model_config()
+    model_def = resolve_role_definition("embedding", config=catalog)
+    if model_def is None:
+        raise ModelRoleError("role 'embedding' resolves to no deployment")
     endpoint = model_def.endpoint or "http://localhost:8503/v1"
-    return model_def.id, endpoint
+
+    api_key = "unused"
+    provider = catalog.providers.get(model_def.provider or "")
+    if provider is not None and provider.auth_env:
+        resolved = getattr(_settings, provider.auth_env, None)
+        if not resolved:
+            raise ModelRoleError(
+                f"embedding provider {model_def.provider!r} requires the "
+                f"{provider.auth_env!r} credential, which is unset. Refusing to "
+                "call it unauthenticated: the 401 would be swallowed by the "
+                "fail-open path and persist zero vectors."
+            )
+        api_key = str(resolved)
+    return model_def.id, endpoint, api_key
 
 
 def _resolve_embedder_kind(settings: AppConfig) -> str:
@@ -100,8 +131,10 @@ async def _generate_vectors(texts: list[str], settings: AppConfig) -> list[list[
     in :func:`generate_embedding` / :func:`generate_embeddings_batch`.
     """
     if _resolve_embedder_kind(settings) != "managed":
-        model_id, endpoint = _get_embedding_config()
-        response = await _call_embeddings_api(texts=texts, model=model_id, endpoint=endpoint)
+        model_id, endpoint, api_key = _get_embedding_config()
+        response = await _call_embeddings_api(
+            texts=texts, model=model_id, endpoint=endpoint, api_key=api_key
+        )
         return [[float(x) for x in d.embedding] for d in response.data]
 
     dimensions = settings.embedding_dimensions
@@ -346,13 +379,14 @@ async def _embed_managed(
 # One client per endpoint. The previous single global bound to the first
 # endpoint it saw and ignored later ones — a correctness trap when an A/B run
 # switches embedders (e.g. the Docker 0.6B vs the Access-gated 4B). (FRE-656)
-_openai_clients: dict[str, Any] = {}
+_openai_clients: dict[tuple[str, str], Any] = {}
 
 
 async def _call_embeddings_api(
     texts: list[str],
     model: str,
     endpoint: str,
+    api_key: str = "unused",
 ) -> Any:
     """Call the embedding API via OpenAI-compatible client.
 
@@ -360,12 +394,15 @@ async def _call_embeddings_api(
         texts: Texts to embed.
         model: Model identifier from models.yaml (e.g., "Qwen/Qwen3-Embedding-0.6B").
         endpoint: Base URL of the embedding server (e.g., "http://localhost:8503/v1").
+        api_key: Credential for the endpoint. "unused" for unauthenticated local
+            servers; a real token for managed providers, which return 401
+            without it.
 
     Returns:
         OpenAI API response object with .data[].embedding.
     """
     settings = get_settings()
-    client = _openai_clients.get(endpoint)
+    client = _openai_clients.get((endpoint, api_key))
     if client is None:
         import openai  # noqa: PLC0415
 
@@ -381,11 +418,11 @@ async def _call_embeddings_api(
         # Local server does not require an API key, but the OpenAI client
         # requires a non-empty string.
         client = openai.AsyncOpenAI(
-            api_key="unused",
+            api_key=api_key,
             base_url=endpoint,
             default_headers=headers,
         )
-        _openai_clients[endpoint] = client
+        _openai_clients[(endpoint, api_key)] = client
 
     return await client.embeddings.create(
         model=model,

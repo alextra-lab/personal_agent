@@ -375,7 +375,12 @@ class TestSupportsVisionDeployedConfig:
     separate parametrization here.
     """
 
-    _VISION_ROLES = ("primary", "sub_agent", "claude_sonnet", "claude_haiku")
+    _VISION_ROLES = (
+        "qwen3.6-35b-thinking",
+        "qwen3.6-35b-instruct",
+        "claude_sonnet",
+        "claude_haiku",
+    )
 
     @pytest.mark.parametrize(
         "config_path",
@@ -406,7 +411,7 @@ class TestSupportsPdfDocumentDeployedConfig:
     """
 
     _PDF_CAPABLE_ROLES = ("claude_sonnet", "claude_haiku")
-    _PDF_INCAPABLE_ROLES = ("primary", "sub_agent")
+    _PDF_INCAPABLE_ROLES = ("qwen3.6-35b-thinking", "qwen3.6-35b-instruct")
 
     @pytest.mark.parametrize(
         "config_path",
@@ -448,7 +453,7 @@ class TestEntityExtractionTemperatureDeployedConfig:
     not a hand-supplied ``model_def`` — a mocked call-site test cannot catch the
     role pointing at a *different, unpinned* model entry (caught in codex
     plan-review: ``config/models.yaml``'s ``entity_extraction_role`` is
-    ``gpt-5.4-nano``, not ``gpt-5.4-mini``).
+    ``gpt-5.4-mini``).
     """
 
     @pytest.mark.parametrize(
@@ -476,19 +481,16 @@ class TestCloudGptPricingDeployedConfig:
     """FRE-742 / ADR-0101 §8b: the gpt-5.4 cloud models carry config-owned pricing.
 
     FRE-691 moved cloud cost into the model definition for the Claude entries only;
-    gpt-5.4-nano / gpt-5.4-mini still deferred to litellm's shipped registry, which
+    gpt-5.4-mini still deferred to litellm's shipped registry, which
     silently meters $0 if a future litellm upgrade renames or drops those ids (cf.
     FRE-734). Guards BOTH deployed config files (``config/models.yaml`` and
     ``config/models.cloud.yaml``) so a value present in one but not the other — the
     exact drift that broke vision in FRE-734 — fails CI. Rates per the YAML comments:
-    nano $0.20/$1.25 per MTok, mini $0.75/$4.50 per MTok.
+    mini $0.75/$4.50 per MTok.
     """
 
     # (entry key, expected input_cost_per_token, expected output_cost_per_token)
-    _EXPECTED = (
-        ("gpt-5.4-nano", 0.0000002, 0.00000125),
-        ("gpt-5.4-mini", 0.00000075, 0.0000045),
-    )
+    _EXPECTED = (("gpt-5.4-mini", 0.00000075, 0.0000045),)
 
     @pytest.mark.parametrize(
         "config_path",
@@ -498,7 +500,7 @@ class TestCloudGptPricingDeployedConfig:
         ],
     )
     def test_gpt_cloud_models_carry_config_pricing(self, config_path: Path) -> None:
-        """gpt-5.4-nano and gpt-5.4-mini declare the documented per-token pricing."""
+        """gpt-5.4-mini declares the documented per-token pricing."""
         config = load_model_config(config_path)
 
         for key, expected_input, expected_output in self._EXPECTED:

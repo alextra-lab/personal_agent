@@ -138,7 +138,7 @@ def test_claude_cloud_document_pricing_present(claude_key: str, config_path: Pat
     )
 
 
-@pytest.mark.parametrize("gpt_key", ["gpt-5.4-nano", "gpt-5.4-mini"])
+@pytest.mark.parametrize("gpt_key", ["gpt-5.4-mini"])  # nano retired (FRE-916)
 def test_gpt_cloud_ids_reconcile_config_price(gpt_key: str) -> None:
     """FRE-742: the deployed gpt-5.4 entries commit our config price, not litellm's ship.
 

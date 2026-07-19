@@ -90,8 +90,13 @@ def configure_dspy_lm(
     # Accept both ModelRole enum and plain string role names
     role_key = role.value if hasattr(role, "value") else role
 
-    # Lookup model for role
-    model_def = model_configs.models.get(role_key)
+    # Resolve through the Layer-3 binding: `role_key` may be a ROLE name, and
+    # since ADR-0121 the catalog is keyed by model, so a direct lookup misses.
+    # resolve_role_target falls back to a key lookup for names with no binding,
+    # so both a role and a deployment alias work here.
+    from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
+
+    _, model_def = resolve_role_target(role_key, config=model_configs)
     if not model_def:
         raise ModelConfigError(
             f"No model configured for role '{role_key}'. "
@@ -101,7 +106,11 @@ def configure_dspy_lm(
     model_id = model_def.id
     effective_timeout = timeout_s or settings.llm_timeout_seconds
 
-    if model_def.provider is not None:
+    # Dispatch on PLACEMENT, not on whether `provider` is set. Under ADR-0121
+    # every deployment names a provider — including local ones (slm_local) — so
+    # `provider is not None` no longer means "cloud", and local deployments would
+    # be routed through LiteLLM as "slm_local/<id>" with no api_base.
+    if model_def.provider_type is not None and model_def.provider_type != "local":
         # ── Cloud model path ─────────────────────────────────────────────────
         # LiteLLM routing uses "{provider}/{model_id}" strings natively.
         litellm_model = f"{model_def.provider}/{model_id}"

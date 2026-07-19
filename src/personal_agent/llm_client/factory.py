@@ -97,14 +97,20 @@ def get_llm_client(role_name: str = "primary") -> Any:
         >>> set_current_profile(load_profile("cloud"))
         >>> client = get_llm_client("primary")  # → LiteLLMClient(claude-sonnet-4-6)
     """
-    from personal_agent.config.profile import resolve_model_key
-
     config = load_model_config()
 
     # Resolve the model key: profile overrides role_name when profile is active.
-    resolved_key = resolve_model_key(role_name)
+    from personal_agent.config.model_loader import resolve_role_target
 
-    model_def = config.models.get(resolved_key)
+    # Effective definition — deployment plus this role's binding overrides.
+    # max_tokens below is per-use and may live on the binding.
+    # Only pass a key when a profile actually redirects the role; otherwise let
+    # the binding decide. Passing the bare role name would miss once deployments
+    # are keyed by model alias rather than by role.
+    from personal_agent.config.profile import resolve_profile_redirect
+
+    profile_key = resolve_profile_redirect(role_name)
+    resolved_key, model_def = resolve_role_target(role_name, model_key=profile_key, config=config)
 
     if model_def and model_def.provider_type != "local":
         from personal_agent.cost_gate import budget_role_for

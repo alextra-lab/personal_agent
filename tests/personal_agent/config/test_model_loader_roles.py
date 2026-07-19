@@ -49,13 +49,20 @@ class TestForbiddenRolesResolveToTheAllValue:
         assert resolve_role_model_key(role, config_path=_CLOUD) == expected
 
 
-class TestAllowedRolesResolvePerProfile:
-    """`compressor` resolves via the matrix too, even though `allowed`."""
+class TestCompressorNoLongerDiverges:
+    """`compressor` resolves to one model under both catalogs (ADR-0121, FRE-916).
+
+    It used to resolve to its own role name as a catalog key — gpt-5.4-nano
+    locally, gpt-5.4-mini in cloud. That split was the clearest case of a role
+    name masquerading as a model: `compressor` was never a model, and the two
+    files disagreed about which one it meant. With nano retired it binds to
+    gpt-5.4-mini, and there is no per-profile value left to diverge.
+    """
 
     @pytest.mark.parametrize("role", ["compressor"])
-    def test_resolves_under_each_profile(self, role: str) -> None:
-        assert resolve_role_model_key(role, config_path=_LOCAL) == role
-        assert resolve_role_model_key(role, config_path=_CLOUD) == role
+    def test_resolves_to_the_same_model_under_both_catalogs(self, role: str) -> None:
+        assert resolve_role_model_key(role, config_path=_LOCAL) == "gpt-5.4-mini"
+        assert resolve_role_model_key(role, config_path=_CLOUD) == "gpt-5.4-mini"
 
 
 class TestConfigPathDefaultsToActiveSettings:

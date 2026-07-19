@@ -122,14 +122,23 @@ capacity, and health. `infer_provider_type`'s URL string-parsing fallback is del
 `provider_type` on models and profiles is deleted (it is now derived from
 `providers[p].placement`).
 
-**`base_url` is environment-resolvable.** The `embedding.endpoint` divergence above
-(`localhost:8503` on the host, `embeddings:8503` inside the compose network) is a real deployment
-fact, not drift, and a single catalog must still express it. It is resolved the way the project
-already resolves deployment differences: the provider's `base_url` supports environment
-substitution, with the per-environment value supplied by `config/deployment.yaml`'s existing
-`env_overrides` mechanism. This keeps **one** catalog while letting the environment supply the
-endpoint — and it confines environment-awareness to the provider layer, where exactly one field
-needs it, instead of duplicating twelve model entries to vary one string.
+**`base_url` is environment-resolvable — via a small NEW mechanism, not a reused one.** The
+`embedding.endpoint` divergence above (`localhost:8503` on the host, `embeddings:8503` inside the
+compose network) is a real deployment fact, not drift, and a single catalog must still express it.
+
+Stated honestly: **nothing in the repo does this today.** `config/deployment.yaml`'s `env_overrides`
+is *not* a general interpolation mechanism — it carries exactly one key,
+`AGENT_MODEL_CONFIG_PATH`, consumed only by two ADR-0099 guards (`config_guard.py:898-920`,
+`:935-965`), and it is retired by this ADR along with the field it documents. So this is **new
+work**, deliberately kept minimal: the provider block's `base_url` supports `${VAR}` substitution
+resolved from the environment at config-load time, with each environment's compose file supplying
+the value — the same `AGENT_`-prefixed environment convention `AppConfig` already uses everywhere
+else.
+
+The cost is one small resolver; the benefit is that environment-awareness is confined to **one
+field on the provider**, instead of duplicating a twelve-entry catalog to vary one string. A missing
+or unresolvable variable must fail loudly at startup, not silently yield a broken URL — asserted by
+AC-10.
 
 **Layer 2 — Deployments (the model catalog).** One entry per *deployment*, keyed by a stable
 alias naming the **model**, never the role. Each references a provider.
@@ -504,7 +513,8 @@ value at a fraction of the risk.
 - `src/personal_agent/llm_client/models.py` — `ModelDefinition` gains `provider` (ref), `kind`,
   `reasoning_capable`, `effort_levels`, `default_effort`, `can_disable_thinking`, cost fields,
   `status`, `summary`; `provider_type` removed (derived).
-- **New:** provider definitions + loader; `src/personal_agent/llm_client/concurrency.py` —
+- **New:** provider definitions + loader, including `${VAR}` resolution for `base_url` with
+  fail-loud-at-startup on an unresolved reference (AC-10); `src/personal_agent/llm_client/concurrency.py` —
   `infer_provider_type` deleted, semaphores keyed on provider with per-deployment sub-limits.
 - `src/personal_agent/config/model_loader.py` — resolve bindings from the single catalog; validate
   every binding references an existing, `kind`-compatible key.
@@ -586,8 +596,9 @@ deleted before every consumer of the old path is moved in the *same* PR.
   ModelDefinition` (id, provider, endpoint, decoding params, limits) captured on `main` before step 1
   is asserted **byte-identical** after it, for every role. **(b)** The old path is provably no longer
   consulted: `config/models.cloud.yaml`, `ExecutionProfile`, and `resolve_model_key`
-  (`config/profile.py:75-121`) are **absent from the tree**, and a repository-wide grep for
-  `AGENT_MODEL_CONFIG_PATH` returns no hits outside historical docs. *Fails if* either half fails —
+  (`config/profile.py:75-121`) are **absent from active source and config**
+  (`src/`, `config/`, compose files — historical ADRs and postmortems naturally still name them),
+  and a grep for `AGENT_MODEL_CONFIG_PATH` over those same paths returns no hits. *Fails if* either half fails —
   and **(b) is why (a) alone is insufficient**: a no-op change that leaves `ExecutionProfile` routing
   live (which `config/model_roles.yaml:36-40` explicitly says handles `primary`/`sub_agent`/
   `artifact_builder` today) produces a byte-identical snapshot while delivering none of this
@@ -619,9 +630,8 @@ deleted before every consumer of the old path is moved in the *same* PR.
   deployments are **absent** while an available cloud deployment is **present**, and no
   non-catalog or wrong-kind key ever appears. *Fails if* the set differs in either direction — a
   leaked key, a retained dead one, or a dropped live one.
-- **AC-6 — Selection is server-authoritative, including the new-session case.** *Check, using three
-  **mutually distinct, all non-default** models A, B, D (D = the configured default) so no outcome
-  can be produced by coincidence:* (a) for an **existing** session storing A, a client supplying B on
+- **AC-6 — Selection is server-authoritative, including the new-session case.** *Check, using three **mutually distinct** models — A and B both
+  **non-default**, and D the **configured default** — so no outcome can be produced by coincidence:* (a) for an **existing** session storing A, a client supplying B on
   `/chat/stream` runs on **A** (supplied value ignored); (b) for a **new** session with no row, a
   client supplying B runs on **B** and **B is persisted** to the row — not D; (c) for a **new**
   session supplying nothing, D is adopted and persisted; (d) a `PATCH` from a bearer token belonging
@@ -651,6 +661,15 @@ deleted before every consumer of the old path is moved in the *same* PR.
   when the selection changes completes on the model it launched with. *Fails if* any Path control
   survives, the selection does not take effect, does not survive reload, or mutates an in-flight
   turn.
+
+- **AC-10 — Environment resolution of `base_url` works, and fails loudly when it cannot.**
+  *Check:* with the embedding provider's `base_url` declared as a `${VAR}` reference, (a) loading
+  under the host environment resolves to the host endpoint and under the compose environment to the
+  container-DNS endpoint — one catalog, two correct URLs, matching today's `models.yaml` vs
+  `models.cloud.yaml` values; (b) with the variable **unset**, config load **raises at startup**
+  naming the provider and the variable. *Fails if* an unresolved reference is passed through as a
+  literal `${VAR}` string, silently defaulted, or otherwise allowed to reach a client — a broken
+  endpoint discovered at first inference instead of at boot.
 
 **Seam owner:** AC-9 is owned by the **PWA picker ticket (step 5)** — the child where the assembled
 intent first holds. This ADR does **not** close when the telemetry migration (step 4) merges; it
@@ -740,3 +759,14 @@ catalog deletion (shipping otherwise is a broken deploy, not an intermediate sta
 checks are named rather than leaving "largely unnecessary" to imply an unguarded config; and AC-1,
 AC-6, AC-7 were tightened after being found gameable — AC-1 could pass on a no-op that left
 `ExecutionProfile` routing live, and AC-6 could pass on colliding fixtures.
+
+**Revised after codex review round 2.** One more false-reuse claim was caught and corrected — the
+same class of error twice, which is itself the finding: this ADR had asserted that provider
+`base_url` interpolation could ride `config/deployment.yaml`'s "existing `env_overrides` mechanism."
+It cannot. That field carries exactly one key (`AGENT_MODEL_CONFIG_PATH`), is read only by two
+ADR-0099 guards, and is retired by this ADR anyway. The `${VAR}` resolver is now stated plainly as
+**new work** with its own acceptance criterion (**AC-10**, including fail-loud-at-startup on an
+unresolved reference) rather than smuggled in as reuse. Also: AC-1(b)'s "absent from the tree" was
+scoped to active source and config, since historical ADRs will always name the removed symbols; and
+AC-6's fixture wording, which contradicted itself by calling the configured default "non-default,"
+was corrected.

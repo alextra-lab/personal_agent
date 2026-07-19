@@ -340,14 +340,25 @@ migration and this ADR's wiring both touch that call site.
   and (c) a catalog key whose provider is unavailable. In every case the build completes on the
   **configured default** and the substituted key is logged. *Fails if* any of the three reaches the
   client factory, or the build errors instead of falling back.
-- **AC-5 — No answer never means no artifact, *and the card genuinely fired*.** *Check:* simulate
-  no-socket and timeout on a build. Assert **all three**: (a) a `ConstraintPauseEvent` with
-  `constraint="artifact_builder"` was **emitted and persisted** for that turn; (b) the resolution is
-  recorded as `connection_lost` or `timeout_default`; (c) the artifact still renders, produced by
-  the configured default. *Fails if* the build stalls or yields zero artifact — **and equally fails
-  if (a) is absent**, because an implementation that never wired the card at all would otherwise
-  satisfy (b) and (c) through the pre-existing default-on-timeout behaviour in
-  `_maybe_pause_for_constraint` (`executor.py:554-600`) while delivering none of this decision.
+- **AC-5 — No answer never means no artifact, *and the decision path genuinely ran*.** The two
+  no-answer cases behave differently in the reused mechanism and are therefore asserted differently.
+  This split is deliberate: demanding a pause event in the no-socket case would require *changing*
+  ADR-0076 rather than reusing it, since `register_constraint_waiter` returns immediately with
+  `resolution="connection_lost"` and explicitly does **not** invoke the push callback when no
+  connection is active (`transport/agui/ws_endpoint.py:250-259`).
+  - **Timeout (socket connected, user does not answer):** a `ConstraintPauseEvent` with
+    `constraint="artifact_builder"` is **emitted and persisted**; the resolution is
+    `timeout_default`; the artifact renders on the configured default.
+  - **No socket (headless / disconnected):** **no** pause event is emitted — correct, and asserted
+    as such — but a resolution record for `constraint="artifact_builder"` with
+    `resolution="connection_lost"` exists for that turn, and the artifact renders on the configured
+    default.
+
+  *Fails if* the build stalls or yields zero artifact; if the timeout case produces no persisted
+  pause event; **or if the no-socket case produces no `artifact_builder` resolution record at all** —
+  that last clause is what keeps this discriminating, because an implementation that never wired the
+  decision at all would produce a perfectly good artifact with no `artifact_builder` constraint
+  record on either path.
 - **AC-6 — The card and the settings API offer exactly the valid, available set.** *Check:*
   `set(ConstraintPauseEvent.options)` **equals** the availability-filtered set of catalog
   deployments where `kind: llm` — asserted in both directions (no non-catalog key leaks in; a
@@ -394,8 +405,10 @@ when AC-7 is proven on the deployed stack. Master asserts AC-7 at the acceptance
 - `src/personal_agent/orchestrator/executor.py:462` — `_maybe_pause_for_constraint`
 - `src/personal_agent/orchestrator/constraint_options.py:62` — the static options dict to widen
 - `src/personal_agent/transport/events.py:139` — the closed `ConstraintPauseEvent.constraint` Literal
-- `src/personal_agent/cost_gate/__init__.py:95-131` — `budget_role_for`, currently mapping the
-  builder to `main_inference`
+- `src/personal_agent/cost_gate/__init__.py:95-117` — `budget_role_for`; the builder's own lane
+  (`"artifact_builder": "artifact_builder"`) is **already live** (FRE-879), not pending
+- `src/personal_agent/transport/agui/ws_endpoint.py:250-259` — `register_constraint_waiter`'s
+  no-socket path (why AC-5 splits the two no-answer cases)
 
 ---
 
@@ -432,3 +445,15 @@ every other role's resolved model so a fallback cannot coincidentally produce th
 AC-3 asserts per-*model* attribution rather than per-role. Stale line citations corrected
 (`_maybe_pause_for_constraint` is at `executor.py:554`, not `:462`) and both sides of the
 `attachment_cost` Literal drift now cited.
+
+**Revised after codex review round 2.** AC-5's hardening had over-corrected: requiring an emitted
+and persisted `ConstraintPauseEvent` in the **no-socket** case contradicts the very mechanism this
+ADR claims to reuse — `register_constraint_waiter` returns immediately with
+`resolution="connection_lost"` and deliberately does not invoke the push callback when no connection
+is active (`transport/agui/ws_endpoint.py:250-259`). Demanding an event there would have forced a
+change to ADR-0076 under the banner of reusing it. AC-5 now asserts the two no-answer cases
+separately: the timeout case requires the persisted pause event; the no-socket case requires the
+absence of one **plus** an `artifact_builder` resolution record, which preserves the discrimination
+against a never-wired implementation without altering the reused mechanism. A stale reference
+claiming the builder still bills to `main_inference` was also removed — it contradicted this ADR's
+own corrected premise and would have sent an implementer back to the false starting point.

@@ -375,7 +375,12 @@ class TestSupportsVisionDeployedConfig:
     separate parametrization here.
     """
 
-    _VISION_ROLES = ("primary", "sub_agent", "claude_sonnet", "claude_haiku")
+    _VISION_ROLES = (
+        "qwen3.6-35b-thinking",
+        "qwen3.6-35b-instruct",
+        "claude_sonnet",
+        "claude_haiku",
+    )
 
     @pytest.mark.parametrize(
         "config_path",
@@ -406,7 +411,7 @@ class TestSupportsPdfDocumentDeployedConfig:
     """
 
     _PDF_CAPABLE_ROLES = ("claude_sonnet", "claude_haiku")
-    _PDF_INCAPABLE_ROLES = ("primary", "sub_agent")
+    _PDF_INCAPABLE_ROLES = ("qwen3.6-35b-thinking", "qwen3.6-35b-instruct")
 
     @pytest.mark.parametrize(
         "config_path",

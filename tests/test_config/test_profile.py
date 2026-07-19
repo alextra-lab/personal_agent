@@ -392,7 +392,7 @@ class TestResolveModelKey:
 
         local_profile = load_profile("local", profiles_dir=real_profiles)
         cloud_profile = load_profile("cloud", profiles_dir=real_profiles)
-        assert local_profile.artifact_builder_model == "sub_agent"
+        assert local_profile.artifact_builder_model == "qwen3.6-35b-instruct"
         assert cloud_profile.artifact_builder_model == "claude_haiku"
 
     def test_does_not_redirect_compressor_role(self) -> None:

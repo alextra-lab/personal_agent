@@ -382,7 +382,7 @@
         "top_k": 20,
         "top_p": 0.8
       },
-      "key": "sub_agent"
+      "key": "qwen3.6-35b-instruct"
     },
     "cloud|local|captains_log": {
       "definition": {
@@ -562,7 +562,7 @@
         "top_k": 20,
         "top_p": 0.95
       },
-      "key": "primary"
+      "key": "qwen3.6-35b-thinking"
     },
     "cloud|local|reranker": {
       "definition": {
@@ -652,10 +652,36 @@
         "top_k": 20,
         "top_p": 0.8
       },
-      "key": "sub_agent"
+      "key": "qwen3.6-35b-instruct"
     },
     "cloud|none|artifact_builder": {
-      "definition": null,
+      "definition": {
+        "context_length": 16384,
+        "default_timeout": 90,
+        "disable_thinking": true,
+        "endpoint": "https://slm.example.com/v1",
+        "id": "unsloth/qwen3.6-35-A3B-subagent",
+        "input_cost_per_token": null,
+        "max_concurrency": 3,
+        "max_tokens": 2048,
+        "min_concurrency": 1,
+        "min_p": 0.0,
+        "output_cost_per_token": null,
+        "parallel_tool_calls": true,
+        "presence_penalty": 1.5,
+        "provider": null,
+        "quantization": "8bit",
+        "reasoning_effort": null,
+        "repetition_penalty": 1.0,
+        "supports_function_calling": true,
+        "supports_pdf_document": false,
+        "supports_vision": true,
+        "temperature": 0.7,
+        "thinking_budget_tokens": null,
+        "tool_calling_strategy": "native",
+        "top_k": 20,
+        "top_p": 0.8
+      },
       "key": "artifact_builder"
     },
     "cloud|none|captains_log": {
@@ -1256,7 +1282,7 @@
         "top_k": 20,
         "top_p": 0.8
       },
-      "key": "sub_agent"
+      "key": "qwen3.6-35b-instruct"
     },
     "local|local|captains_log": {
       "definition": {
@@ -1436,7 +1462,7 @@
         "top_k": 20,
         "top_p": 0.95
       },
-      "key": "primary"
+      "key": "qwen3.6-35b-thinking"
     },
     "local|local|reranker": {
       "definition": {
@@ -1526,10 +1552,36 @@
         "top_k": 20,
         "top_p": 0.8
       },
-      "key": "sub_agent"
+      "key": "qwen3.6-35b-instruct"
     },
     "local|none|artifact_builder": {
-      "definition": null,
+      "definition": {
+        "context_length": 32768,
+        "default_timeout": 90,
+        "disable_thinking": true,
+        "endpoint": "https://slm.example.com/v1",
+        "id": "unsloth/qwen3.6-35-A3B-subagent",
+        "input_cost_per_token": null,
+        "max_concurrency": 3,
+        "max_tokens": 2048,
+        "min_concurrency": 1,
+        "min_p": 0.0,
+        "output_cost_per_token": null,
+        "parallel_tool_calls": true,
+        "presence_penalty": 1.5,
+        "provider": null,
+        "quantization": "8bit",
+        "reasoning_effort": null,
+        "repetition_penalty": 1.0,
+        "supports_function_calling": true,
+        "supports_pdf_document": false,
+        "supports_vision": true,
+        "temperature": 0.7,
+        "thinking_budget_tokens": null,
+        "tool_calling_strategy": "native",
+        "top_k": 20,
+        "top_p": 0.8
+      },
       "key": "artifact_builder"
     },
     "local|none|captains_log": {
@@ -1828,7 +1880,11 @@
           "active": 0,
           "limit": 1
         },
-        "primary": {
+        "qwen3.6-35b-instruct": {
+          "active": 0,
+          "limit": 3
+        },
+        "qwen3.6-35b-thinking": {
           "active": 0,
           "limit": 1
         },
@@ -1839,15 +1895,11 @@
         "reranker_fallback": {
           "active": 0,
           "limit": 1
-        },
-        "sub_agent": {
-          "active": 0,
-          "limit": 3
         }
       }
     },
     "cloud|timeouts": {
-      "artifact_builder": 120,
+      "artifact_builder": 90,
       "compressor": 30,
       "primary": 600,
       "sub_agent": 90
@@ -1876,7 +1928,11 @@
           "active": 0,
           "limit": 1
         },
-        "primary": {
+        "qwen3.6-35b-instruct": {
+          "active": 0,
+          "limit": 3
+        },
+        "qwen3.6-35b-thinking": {
           "active": 0,
           "limit": 1
         },
@@ -1887,15 +1943,11 @@
         "reranker_fallback": {
           "active": 0,
           "limit": 1
-        },
-        "sub_agent": {
-          "active": 0,
-          "limit": 3
         }
       }
     },
     "local|timeouts": {
-      "artifact_builder": 120,
+      "artifact_builder": 90,
       "compressor": 30,
       "primary": 600,
       "sub_agent": 90

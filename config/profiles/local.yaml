@@ -1,11 +1,11 @@
 name: local
 description: "Local inference via SLM Server (Qwen3.6-35B-A3B)"
-primary_model: primary
-sub_agent_model: sub_agent
+primary_model: qwen3.6-35b-thinking
+sub_agent_model: qwen3.6-35b-instruct
 # artifact_builder (ADR-0118 T1, FRE-879): stays on the local sub_agent model — an open role
 # resolved via this ExecutionProfile (ADR-0119 §2), never config/model_roles.yaml, so a
 # local-profile build never silently crosses to cloud Haiku (ADR-0119 AC-8).
-artifact_builder_model: sub_agent
+artifact_builder_model: qwen3.6-35b-instruct
 provider_type: local
 cost_limit_per_session: null  # No cost limit for local
 delegation:

@@ -106,8 +106,15 @@ def get_llm_client(role_name: str = "primary") -> Any:
 
     # Effective definition — deployment plus this role's binding overrides.
     # max_tokens below is per-use and may live on the binding.
-    resolved_key = resolve_model_key(role_name)
-    _, model_def = resolve_role_target(role_name, model_key=resolved_key, config=config)
+    # Only pass a key when a profile actually redirects the role; otherwise let
+    # the binding decide. Passing the bare role name would miss once deployments
+    # are keyed by model alias rather than by role.
+    from personal_agent.config.profile import get_current_profile
+
+    profile_key = resolve_model_key(role_name) if get_current_profile() else None
+    resolved_key, model_def = resolve_role_target(
+        role_name, model_key=profile_key, config=config
+    )
 
     if model_def and model_def.provider_type != "local":
         from personal_agent.cost_gate import budget_role_for

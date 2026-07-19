@@ -128,9 +128,14 @@ _BEHAVIOUR_FIELDS: tuple[str, ...] = (
 )
 
 
-def _definition_of(key: str, catalog_path: Path) -> dict[str, Any] | None:
-    """Return the behaviour-determining fields for ``key``, or None when absent."""
-    definition = load_model_config(catalog_path).models.get(key)
+def _definition_of(
+    role: str, catalog_path: Path, *, model_key: str | None = None
+) -> dict[str, Any] | None:
+    """Return the behaviour-determining fields for a role's EFFECTIVE definition."""
+    from personal_agent.config.model_loader import resolve_role_target
+
+    config = load_model_config(catalog_path)
+    _, definition = resolve_role_target(role, model_key=model_key, config=config)
     if definition is None:
         return None
     dumped = definition.model_dump(mode="json")
@@ -151,8 +156,16 @@ def _capture_resolution() -> dict[str, Any]:
                 for role in _PROFILE_ROLES:
                     cell = f"{catalog_name}|{profile_name or 'none'}|{role}"
                     try:
-                        key = resolve_model_key(role)
-                        out[cell] = {"key": key, "definition": _definition_of(key, catalog_path)}
+                        # Mirror what LocalLLMClient/factory actually do: the
+                        # profile supplies a key only when one is active,
+                        # otherwise the Layer-3 binding decides. Measuring
+                        # resolve_model_key alone would measure a path no
+                        # consumer takes.
+                        key = resolve_model_key(role) if profile_name else None
+                        out[cell] = {
+                            "key": key or role,
+                            "definition": _definition_of(role, catalog_path, model_key=key),
+                        }
                     except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
                         out[cell] = {"raises": type(exc).__name__}
 
@@ -162,7 +175,10 @@ def _capture_resolution() -> dict[str, Any]:
                         key = resolve_role_model_key(
                             role, config_path=catalog_path, root=_REPO_ROOT
                         )
-                        out[cell] = {"key": key, "definition": _definition_of(key, catalog_path)}
+                        out[cell] = {
+                            "key": key,
+                            "definition": _definition_of(role, catalog_path, model_key=key),
+                        }
                     except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
                         out[cell] = {"raises": type(exc).__name__}
             finally:
@@ -235,10 +251,19 @@ def test_catalog_behaviour_matches_golden() -> None:
     expected = json.loads(_GOLDEN.read_text())
     actual = build_snapshot()
 
+    # Compare the resolved DEFINITION, not the catalog key. Renaming a
+    # deployment alias while it resolves to an identical definition changes
+    # nothing about the call that gets made — and ADR-0121 re-keys the whole
+    # catalog from role names to model aliases, so asserting on the key would
+    # report the intended rename as behaviour drift and drown the real signal.
+    def _definition(cell: str, side: dict[str, Any]) -> Any:
+        entry = side.get(cell)
+        return entry if entry is None or "raises" in entry else entry.get("definition")
+
     drift = sorted(
         cell
         for cell in set(expected["resolution"]) | set(actual["resolution"])
-        if expected["resolution"].get(cell) != actual["resolution"].get(cell)
+        if _definition(cell, expected["resolution"]) != _definition(cell, actual["resolution"])
     )
     assert not drift, (
         "Model resolution changed for: "

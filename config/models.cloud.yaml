@@ -47,7 +47,7 @@
 
 models:
   # ── Tier 1: Primary Agent ───────────────────────────────────────
-  primary:
+  qwen3.6-35b-thinking:
     # Orchestrator brain: deep reasoning, tool calling, decomposition planning.
     # Thinking enabled with bounded budget. Single concurrent (GPU-limited).
     # Renamed from "reasoning" (ADR-0033).
@@ -75,7 +75,7 @@ models:
     endpoint: "https://slm.example.com/v1"
 
   # ── Tier 2: Sub-Agent ───────────────────────────────────────────
-  sub_agent:
+  qwen3.6-35b-instruct:
     # Focused single-task completion for HYBRID expansion sub-agents.
     # Second instance of Qwen3.6-35B-A3B, served with thinking disabled
     # and a smaller context window. MoE (~3B active) outperforms the

@@ -30,18 +30,30 @@ gpt-5.4-mini       -> gpt-5.4-mini
 This is the root defect: **role names leaked into the model namespace**, so a model cannot be named
 independently of the job it currently happens to do.
 
-**2. The two catalog files carry almost no divergence.** `config/models.yaml` and
-`config/models.cloud.yaml` are identical in **11 of 12 entries**. The single difference is
-`compressor` (nano vs mini) — which `config/model_roles.yaml`'s own comment already flags as
-"uncorrected drift, unresolved." Meanwhile placement is *already* expressed per-entry by
-`provider_type`/`endpoint`. The two-file split, the `active_profiles` path map, and
-`AGENT_MODEL_CONFIG_PATH` exist to select between two near-identical files.
+**2. The two catalog files diverge in four entries, and each for a different reason.**
+`config/models.yaml` and `config/models.cloud.yaml` share identical key sets and differ in **4 of 12
+entries** — and no two differences are the same *kind* of thing:
+
+| Entry | Difference | What it actually is |
+|---|---|---|
+| `embedding.endpoint` | `localhost:8503` vs `embeddings:8503` | **Deployment environment** — host vs compose network. Legitimate, and not a model fact at all |
+| `compressor.id` | `gpt-5.4-nano` vs `gpt-5.4-mini` | **True drift** — `config/model_roles.yaml`'s own comment flags it as "uncorrected drift, unresolved" |
+| `gpt-5.4-nano.temperature` | `0.0` vs unset | **A decoding parameter**, which is per-use, not per-model |
+| `sub_agent.context_length` | `32768` vs `16384` | **Unexplained** — the same served deployment declaring two different windows |
+
+That is the real indictment: the two-file split is not carrying a coherent local/cloud distinction,
+it is a dumping ground for four unrelated concerns — one environment fact, one drift, one per-use
+parameter, and one unexplained inconsistency. Each belongs in a different layer, and the normalization
+below gives each one a home. Meanwhile placement is *already* expressed per-entry by
+`provider_type`/`endpoint`, so the split is not even carrying that.
 
 **3. There is no provider entity, so one is reconstructed from strings at runtime.**
 `endpoint: https://slm.example.com/v1` is copy-pasted onto 5 of 12 entries.
-`llm_client/concurrency.py:48` defines `infer_provider_type(endpoint)` — it *parses the URL* to
-recover the provider — and keeps `_endpoint_provider_type` keyed by normalized endpoint
-(`concurrency.py:202`). `config/profiles/cloud.yaml` independently carries
+`llm_client/concurrency.py:48-72` defines `infer_provider_type(endpoint)`, which *parses the URL* to
+recover the provider. It is a **fallback** — an explicit `provider_type` wins when present
+(`concurrency.py:219-224`), and the SLM entries do set it — but the fallback exists precisely
+because there is no provider entity to look up, and the semaphore registry is keyed by normalized
+endpoint (`concurrency.py:202`) rather than by a provider identity. `config/profiles/cloud.yaml` independently carries
 `delegation.escalation_provider: anthropic`. The provider concept already exists twice, implicitly,
 in incompatible forms.
 
@@ -106,9 +118,18 @@ providers:
 ```
 
 A provider owns: endpoint, authentication, **placement** (`local`/`cloud`), total concurrency
-capacity, and health. `infer_provider_type`'s URL string-parsing is deleted;
+capacity, and health. `infer_provider_type`'s URL string-parsing fallback is deleted;
 `provider_type` on models and profiles is deleted (it is now derived from
 `providers[p].placement`).
+
+**`base_url` is environment-resolvable.** The `embedding.endpoint` divergence above
+(`localhost:8503` on the host, `embeddings:8503` inside the compose network) is a real deployment
+fact, not drift, and a single catalog must still express it. It is resolved the way the project
+already resolves deployment differences: the provider's `base_url` supports environment
+substitution, with the per-environment value supplied by `config/deployment.yaml`'s existing
+`env_overrides` mechanism. This keeps **one** catalog while letting the environment supply the
+endpoint — and it confines environment-awareness to the provider layer, where exactly one field
+needs it, instead of duplicating twelve model entries to vary one string.
 
 **Layer 2 — Deployments (the model catalog).** One entry per *deployment*, keyed by a stable
 alias naming the **model**, never the role. Each references a provider.
@@ -235,6 +256,31 @@ The organizing principle is **selection authority**:
 deployment-configured with no user control. This removes the FRE-886 attachment local/cloud chip —
 the last surviving Path instance — rather than leaving the concept alive in one corner.
 
+**Pinning `vision` requires dismantling a live profile-driven escalation path, and that is in scope
+here, not deferred.** Attachment routing today is built on ADR-0044 D3: the default target is read
+from `attachment_default_processing_target` (`executor.py:1649-1655`), the cloud target comes from
+`profile.delegation.escalation_model` (`:1710-1723`), and `allow_cloud_escalation` gates it
+(`:1733-1737`, `:1839-1844`) with a routing-key resolution at `:1923-1931`. Every one of those reads
+dies with the profile. The disposition:
+
+- The attachment model becomes the **pinned `vision` role binding**, resolved from the catalog like
+  any other pinned role. `escalation_model`, `allow_cloud_escalation`, and
+  `attachment_default_processing_target` are deleted, not re-homed.
+- The **`attachment_cost` DecisionCard stays** (`constraint_options.py:41-46`, emitted at
+  `executor.py:1961-1966`). It is a *cost consent* surface, not a placement toggle: it asks "this
+  attachment will cost money — proceed?", which remains meaningful when the model is pinned and is
+  exactly the consent posture ADR-0120 generalizes. Only its local/cloud *choice* semantics are
+  removed; it becomes proceed/decline against the pinned model's cost.
+- This is the whole of ADR-0044 D3's live surface. The *general* escalation D3 describes
+  (`task_complexity`, `tool_call_failures` triggers) was never implemented — only its config fields
+  exist — so what carries to the future sub-agent ADR is D3's **intent**, not running code.
+
+**`artifact_builder` already exists as a role** — FRE-879 shipped its `ModelRole`, cost lane,
+telemetry identity, budget policy, and a binding on both profiles
+(`config/profiles/{local,cloud}.yaml`). This ADR does not create it; it **moves its binding** off the
+deleted profile onto a Layer 3 role binding, replacing the local profile's `sub_agent` *slot-alias*
+reference with a real model key. Its per-build selection surface is ADR-0122.
+
 **`sub_agent` is not user-selectable.** Its model choice belongs to the orchestrator at dispatch
 time, alongside effort and thinking/instruct mode — the pattern this project's own master/dispatcher
 uses. That requires sub-agent invocation to become model-invoked rather than gateway-assessed
@@ -289,10 +335,15 @@ silent side effect of the refactor.
   transforms rather than dies (below).
 - **ADR-0079** (Superseded in subject, inherited in substance) — the profile it governs is
   removed, but all eleven invariants in §4 are carried forward to the selection store.
-- **ADR-0099** (Amended) — the role→model matrix survives as Layer 3 bindings, but its
-  cross-profile divergence guard (`config_guard.py:801-830`) largely becomes *unnecessary* rather
-  than updated: a single catalog cannot diverge. The guard's remaining useful job is asserting that
-  every binding references an existing catalog key and a `kind`-compatible one.
+- **ADR-0099** (Amended) — the role→model matrix survives as Layer 3 bindings, and its *validator*
+  survives with a changed job. What becomes unnecessary is specifically the **cross-profile
+  divergence** check (`config_guard.py:801-830`): a single catalog cannot diverge. What **replaces**
+  it, so provenance is not simply lost: every binding must reference an existing catalog key
+  (dangling-reference check, retained) and a `kind`-compatible one (new, AC-2); every catalog entry
+  must reference an existing provider; and `config/deployment.yaml`'s per-profile
+  `model_config_path` manifest plus its `check_deployment_manifest_internal_consistency` guard are
+  retired together with the field they validate. The net is a *smaller* guard with the same
+  single-source guarantee, not an unguarded config.
 
 **D5's telemetry migration is explicit, not incidental.** `TraceContext.profile`
 (`telemetry/trace.py:50`, default `"local"`) is a live field feeding per-profile cost dashboards.
@@ -413,6 +464,11 @@ value at a fraction of the risk.
   change model silently on deploy.
 - **Two ADRs are superseded and two amended**, so anything citing ADR-0044/0079/0099/0118/0119 needs
   a reconciliation pass.
+- **Path's consumer set is wider than the PWA pill**: the CLI `--profile` flag
+  (`ui/service_cli.py:101-118`), the profile-keyed inference-status endpoint
+  (`service/app.py:2265-2291`), `config/deployment.yaml`'s profile manifest and its consistency
+  guard, and both cloud/eval compose files all read it. Every one moves in this ADR's wave, which is
+  what makes step 1 larger than a config edit.
 - **Richer per-deployment metadata is more config to maintain** — mitigated by the declared-vs-
   observed line (§2), which keeps it to facts a model card supplies rather than accumulated
   experience.
@@ -430,6 +486,8 @@ value at a fraction of the risk.
 | A selected model's provider is down and turns fail | Medium | Availability filtering at read time via provider health; unavailable deployments are absent from the picker; AC-5 |
 | Telemetry continuity breaks — dashboards keyed on `profile` go blank | Medium | `TraceContext.profile` → provider + model migrated in the same wave with dashboards updated; AC-8 |
 | Scope sprawl into the sub-agent pipeline change | Medium | Explicitly out of scope (§5), deferred to the future sub-agent ADR; `sub_agent` keeps a deployment default here |
+| A second resolution door: `factory.py:125-167`'s key-bypass path skips the guardrail the role path enforces | **High** | Sequencing step 2 unifies both paths on resolve-to-key-then-enter-by-key with an explicit `budget_role`; AC-4(c) drives an invalid key through the resolved-key path specifically |
+| A step ships that deploys broken (catalog deleted while compose still pins it) | **High** | Step 1 moves `docker-compose.cloud.yml`, `docker-compose.eval.yml`, `config/deployment.yaml`, and `settings.model_config_path` in the same PR; deployability is the step's own gate |
 | Catalog metadata rots into stale prose | Low | Declared-vs-observed line (§2): no failure-mode prose fields; observations live in telemetry |
 
 ---
@@ -466,6 +524,16 @@ value at a fraction of the risk.
 - `src/personal_agent/telemetry/trace.py` — `TraceContext.profile` → provider + model.
 - `src/personal_agent/orchestrator/expansion.py:109` — `sub_agent` resolved through the catalog
   rather than hardcoded; effort per-call overridable.
+- `src/personal_agent/llm_client/factory.py:100-118, 125-167` — the two resolution paths unified
+  (§Sequencing step 2).
+- `src/personal_agent/service/models.py:222-224` and `service/app.py:2132-2137` — the
+  `sessions.execution_profile` column and its adoption path retired after the migration reads it.
+- `src/personal_agent/service/app.py:2265-2291` — inference status re-keyed from profile to provider.
+- `src/personal_agent/ui/service_cli.py:101-118` — the CLI `--profile` surface becomes model
+  selection.
+- `docker-compose.cloud.yml:358-361`, `docker-compose.eval.yml:165,200`, `config/deployment.yaml` —
+  `AGENT_MODEL_CONFIG_PATH` pins and the profile manifest removed; the manifest's internal-consistency
+  guard is retired with the field it checks.
 - PWA — profile pill replaced by the model picker; `PROFILE_STORAGE_KEY` removed;
   `ClassifiedErrorCard` escalation reworded; observe view (bindings + pinned/open + providers).
 
@@ -479,28 +547,52 @@ loading, `kind`-compatibility validation, provider-keyed concurrency, selection 
 fallback, writer-role override rejection, and availability filtering; a live check on the deployed
 stack that selecting a model changes the model that runs the next turn.
 
-**Sequencing (one PR each):**
+**Sequencing (one PR each).** Each step must leave the system deployable; the catalog cannot be
+deleted before every consumer of the old path is moved in the *same* PR.
+
 1. **Catalog + providers refactor, behaviour-preserving.** Three layers, single catalog, provider
-   entity, `kind`/reasoning/cost metadata, concurrency re-keyed. Ships with the snapshot assertion
-   (AC-1, AC-2, AC-3 provable here). No user-visible change.
+   entity with environment-resolvable `base_url`, `kind`/reasoning/cost metadata, concurrency
+   re-keyed to providers. **Deleting `config/models.cloud.yaml` and `AGENT_MODEL_CONFIG_PATH`
+   requires the same PR to update every place that pins them** — `docker-compose.cloud.yml:358-361`,
+   `docker-compose.eval.yml:165,200`, `config/deployment.yaml`'s `profiles:` manifest and its
+   `check_deployment_manifest_internal_consistency` guard, and `settings.model_config_path`
+   (`config/settings.py:902-904`). Shipping the catalog without these is a broken deploy, not an
+   intermediate state. Ships with the snapshot assertion. AC-1, AC-2, AC-3 provable here; no
+   user-visible change.
 2. **Selection store + resolution** (table, repository, migration mapping `execution_profile`,
-   fail-closed resolver, server-side validation). AC-4, AC-6, AC-7 provable at API level.
-3. **Config read API + availability filtering** off provider health. AC-5.
-4. **Telemetry migration** — `TraceContext.profile` → provider + model, dashboards updated. AC-8.
-5. **PWA: model picker replaces the profile pill**; observe view; Path removed end to end.
-   **(Seam ticket, AC-9.)**
+   fail-closed resolver, server-side validation), **and the unification of the two resolution
+   paths**: `factory.py:100-118` (profile-resolved) and `:125-167` (key-bypass) must converge on one
+   rule — resolve to a key, then always enter by key with an explicit `budget_role` — or the
+   guardrail has a second door. AC-4, AC-6, AC-7 provable at API level.
+3. **Config read API + availability filtering** off per-provider health, replacing the profile-keyed
+   probe at `service/app.py:2265-2291` (which today proxies "cloud is available" by the presence of
+   an Anthropic key — insufficient once providers are independent). AC-5.
+4. **Telemetry migration** — `TraceContext.profile` (`telemetry/trace.py:48-50`) → provider + model.
+   This is a schema change, not a rename: the ES mapping, every emitting log site, and every Kibana
+   panel filtering on `profile` move together, with the old field retained read-only for one
+   deploy so historical dashboards do not go blank. AC-8.
+5. **Path removed end to end** — PWA model picker replaces the profile pill
+   (`StreamingChat.tsx:26,168-178`), observe view, the CLI `--profile` surface
+   (`ui/service_cli.py:101-118`), `ClassifiedErrorCard` escalation wording, and the
+   `sessions.execution_profile` read path (`service/models.py:222-224`,
+   `service/app.py:2132-2137`). **(Seam ticket, AC-9.)**
 
 ---
 
 ## Verification / Acceptance Criteria
 
-- **AC-1 — The refactor changes no model.** *Check:* a snapshot of every `(role, profile) →
-  fully-resolved ModelDefinition` (id, provider, endpoint, decoding params, limits) captured on
-  `main` before step 1 is asserted **byte-identical** after it, for every role in the matrix.
-  *Fails if* any role resolves to a different model or different parameters — including
-  `compressor`, whose nano/mini drift must be corrected as a separate reviewed commit, not absorbed
-  silently. *(A broken refactor that "loads fine" but rebinds a role passes every import test and
-  fails this.)*
+- **AC-1 — The refactor changes no model, *and actually replaces the old resolution path*.**
+  *Check, both halves required:* **(a)** a snapshot of every `(role, profile) → fully-resolved
+  ModelDefinition` (id, provider, endpoint, decoding params, limits) captured on `main` before step 1
+  is asserted **byte-identical** after it, for every role. **(b)** The old path is provably no longer
+  consulted: `config/models.cloud.yaml`, `ExecutionProfile`, and `resolve_model_key`
+  (`config/profile.py:75-121`) are **absent from the tree**, and a repository-wide grep for
+  `AGENT_MODEL_CONFIG_PATH` returns no hits outside historical docs. *Fails if* either half fails —
+  and **(b) is why (a) alone is insufficient**: a no-op change that leaves `ExecutionProfile` routing
+  live (which `config/model_roles.yaml:36-40` explicitly says handles `primary`/`sub_agent`/
+  `artifact_builder` today) produces a byte-identical snapshot while delivering none of this
+  decision. `compressor`'s nano/mini drift must be corrected as a separate reviewed commit, not
+  absorbed silently into the snapshot.
 - **AC-2 — A role cannot bind to a wrong-kind model.** *Check:* set `entity_extraction`'s binding to
   an `kind: embedding` deployment; config loading **fails** with a kind-mismatch error naming the
   role and key. Likewise binding `embedding` to a `kind: llm` deployment fails. *Fails if* config
@@ -527,17 +619,25 @@ stack that selecting a model changes the model that runs the next turn.
   deployments are **absent** while an available cloud deployment is **present**, and no
   non-catalog or wrong-kind key ever appears. *Fails if* the set differs in either direction — a
   leaked key, a retained dead one, or a dropped live one.
-- **AC-6 — Selection is server-authoritative, including the new-session case.** *Check:* (a) for an
-  **existing** session, a client-supplied `primary` selection on `/chat/stream` is **ignored** and
-  the stored value is used; (b) for a **new** session the supplied value **is** adopted and
-  persisted; (c) a `PATCH` from a bearer token belonging to a different user returns 404 and does
-  not mutate. *Fails if* a stale client can overwrite a stored selection, **or** a new session
-  silently persists the default instead of the supplied value — the exact regression ADR-0079's
-  post-deploy correction fixed.
-- **AC-7 — Existing sessions do not change model on deploy.** *Check:* a session created before the
-  migration with `execution_profile = 'cloud'` resolves, after migration and with no user action, to
-  the same model it resolved to before (per the AC-1 snapshot). *Fails if* pre-existing sessions
-  silently move to a different model.
+- **AC-6 — Selection is server-authoritative, including the new-session case.** *Check, using three
+  **mutually distinct, all non-default** models A, B, D (D = the configured default) so no outcome
+  can be produced by coincidence:* (a) for an **existing** session storing A, a client supplying B on
+  `/chat/stream` runs on **A** (supplied value ignored); (b) for a **new** session with no row, a
+  client supplying B runs on **B** and **B is persisted** to the row — not D; (c) for a **new**
+  session supplying nothing, D is adopted and persisted; (d) a `PATCH` from a bearer token belonging
+  to a different user returns 404 and leaves the stored value unchanged. *Fails if* a stale client
+  can overwrite a stored selection, **or** a new session silently persists the default instead of the
+  supplied value — the exact regression ADR-0079's post-deploy correction fixed. *(Distinct fixtures
+  are load-bearing: if the stored, supplied, and default values coincide, every branch passes
+  regardless of which one the code actually reads.)*
+- **AC-7 — Existing sessions do not change model on deploy.** *Check:* seed sessions with
+  `execution_profile` of **both** `'local'` and `'cloud'` before the migration; after migration and
+  with no user action, each resolves to the same model it resolved to before (per the AC-1
+  snapshot), and each has a persisted selection row rather than resolving through a default.
+  Additionally, a turn that was **in flight** across the migration boundary completes on the model it
+  launched with. *Fails if* pre-existing sessions silently move to a different model, if only one of
+  the two profile values was mapped, or if the mapping is implicit (no row) so the next default
+  change silently moves them.
 - **AC-8 — Spend is attributable to the model that incurred it.** *Check:* after two turns on two
   different `primary` selections, cost/telemetry records for each turn carry the **provider and
   model actually used**, and querying spend grouped by model returns non-zero, correctly-split
@@ -591,6 +691,11 @@ closes only when AC-9 is proven on the deployed stack. Master asserts AC-9 at th
 - `src/personal_agent/orchestrator/expansion.py:109` — hardcoded `sub_agent` binding
 - `seshat-pwa/src/components/StreamingChat.tsx:26` — `PROFILE_STORAGE_KEY` (the Path pill)
 - `docs/research/2026-07-16-model-routing-sota-survey.md` — deterministic routing; why orchestrator model-choice is not an LLM router
+- `config/deployment.yaml` — the per-profile `model_config_path` manifest retired with Path
+- `src/personal_agent/llm_client/factory.py:100-118, 125-167` — the two resolution paths to unify
+- `src/personal_agent/ui/service_cli.py:101-118` — the CLI `--profile` surface
+- `src/personal_agent/service/app.py:2265-2291` — profile-keyed inference status, re-keyed to provider
+- `src/personal_agent/orchestrator/executor.py:1649-1655, 1710-1723, 1733-1737, 1923-1931, 1961-1966` — the live ADR-0044 D3 attachment-escalation path dismantled by pinning `vision`
 
 ---
 
@@ -617,3 +722,21 @@ by snapshot assertion (owner-agreed). Diligence on the ADRs being retired found 
 wholly Path — D3/D4/D5 are carried forward, not deleted — and that ADR-0079 is not really about
 profiles at all but about server-authoritative session selection state, so it is inherited rather
 than discarded.
+
+**Revised after codex review round 1.** Two premise errors were found and corrected against source,
+which is exactly the failure mode that sank the superseded ADRs. (1) The claim that the two catalog
+files were "identical in 11 of 12 entries" was wrong — a full field-level diff shows **4 of 12**
+differ (`embedding.endpoint`, `compressor.id`, `gpt-5.4-nano.temperature`,
+`sub_agent.context_length`), and since each is a *different kind* of concern the corrected finding is
+a stronger argument for normalization than the original error was. It also forced a real design
+addition: provider `base_url` must be **environment-resolvable** via `config/deployment.yaml`'s
+existing `env_overrides`, because `localhost` vs compose-DNS is a legitimate deployment fact a single
+catalog must still express. (2) `infer_provider_type` was overstated as *the* mechanism; it is a
+fallback behind an explicit `provider_type`. Further corrections: the live ADR-0044 D3
+attachment-escalation path is now dismantled explicitly rather than hand-waved by "vision is pinned";
+the sequencing now requires compose/deployment-manifest/settings to move in the same PR as the
+catalog deletion (shipping otherwise is a broken deploy, not an intermediate state); the two
+`factory.py` resolution paths are unified so the guardrail has one door; ADR-0099's replacement
+checks are named rather than leaving "largely unnecessary" to imply an unguarded config; and AC-1,
+AC-6, AC-7 were tightened after being found gameable — AC-1 could pass on a no-op that left
+`ExecutionProfile` routing live, and AC-6 could pass on colliding fixtures.

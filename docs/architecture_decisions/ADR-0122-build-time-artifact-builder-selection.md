@@ -26,20 +26,35 @@ position is the reverse: **for the builder, build-time selection is the point, a
 default is the fallback that may in practice never be changed.** So the card is the primary
 affordance, not a later enhancement.
 
-**Today the builder has no identity at all.** `artifact_draft` — the sole real artifact builder
-(ADR-0077; every committed artifact routes through it) — hardcodes
-`get_llm_client(role_name="sub_agent")` (`tools/artifact_tools.py:1436-1437`). Three consequences:
+**The builder already has an identity — what it lacks is choice.** Both superseded ADRs stated that
+ADR-0118 T1 was unbuilt. That is **false as of 2026-07-17**: FRE-879 shipped completely, and this
+ADR is written against the code, not against those documents. Already live:
 
-- **Tier-conflation.** "Good at reasoning in a sub-agent" is not "good at emitting a 70 KB
-  self-contained interactive document." The builder is hostage to whatever `sub_agent` resolves to.
-- **No cost lane.** `budget_role_for("sub_agent")` maps to `main_inference`
-  (`cost_gate/__init__.py:95-131`), so artifact spend cannot be separated from sub-agent inference.
-- **No telemetry identity.** Artifact builds emit `role="sub_agent"`, so "what did artifact
-  generation cost and how did it perform" is unanswerable.
+- `ModelRole.ARTIFACT_BUILDER` exists (`llm_client/types.py:29`).
+- `artifact_draft` resolves `get_llm_client(role_name="artifact_builder")`
+  (`tools/artifact_tools.py:1454-1455`) — it no longer borrows `sub_agent`.
+- Telemetry identity is switched on both axes: `respond(role=ModelRole.ARTIFACT_BUILDER)`
+  (`artifact_tools.py:1486-1489`) and the `model_role` field on `artifact_draft_sub_agent_start`
+  (`:1473-1480`).
+- The cost lane exists: `_BUDGET_ROLE_BY_FACTORY_NAME["artifact_builder"] = "artifact_builder"`
+  (`cost_gate/__init__.py:115-117`), with an owner-confirmed policy and caps in
+  `config/governance/budget.yaml:46-49, 57, 62`.
+- Both profiles bind it (`config/profiles/cloud.yaml:7` → `claude_haiku`;
+  `config/profiles/local.yaml:8` → `sub_agent`).
+
+So tier-conflation is dissolved and artifact spend is already isolable. **What does not exist is any
+way for the user to choose**, and the binding lives on the `ExecutionProfile` — which ADR-0121
+deletes along with Path, so the binding must move to an ADR-0121 Layer 3 role binding regardless of
+this ADR.
+
+`config/profiles/local.yaml:8` also illustrates the namespace defect ADR-0121 fixes: the local
+artifact builder is bound to `sub_agent` — *a slot-alias, not a model* — so "which model builds
+locally" cannot be answered without dereferencing a role name through a second file.
 
 Large-output capability is a *measured* failure axis here, not hypothetical: the builder has hit a
 provider output cap mid-generation before (FRE-478 — exactly 16,384 output tokens, forcing a slow
-continuation call). Which model builds has observed consequences.
+continuation call). Which model builds has observed consequences, which is why the card must show
+it.
 
 **What needs to be decided:** how the user chooses a builder at build time, how that choice reaches
 `artifact_draft`, and what happens when no one answers.
@@ -51,26 +66,33 @@ continuation call). Which model builds has observed consequences.
 Give the artifact builder a **first-class role identity** and surface its selection **at build time
 through the existing ADR-0076 DecisionCard**, over the ADR-0121 catalog. Five parts.
 
-### 1. `artifact_builder` is a real role with its own cost lane and telemetry identity
+### 1. Preserve the shipped identity; move the binding onto the ADR-0121 catalog
 
-An `artifact_builder` role binding (ADR-0121 Layer 3, `open: true`) with a configured default.
-`ModelRole.ARTIFACT_BUILDER` is added to `llm_client/types.py`, a `roles.artifact_builder` policy is
-added to `config/governance/budget.yaml`, and `_BUDGET_ROLE_BY_FACTORY_NAME` maps
-`artifact_builder → artifact_builder` rather than `main_inference`.
+The role, cost lane, telemetry identity, and budget policy are **already built (FRE-879) and are not
+rebuilt here.** The only change to that layer is where the *binding* lives: it moves off the
+`ExecutionProfile` field (`artifact_builder_model`, deleted with Path) onto an ADR-0121 Layer 3 role
+binding with `open: true` and a configured default. This resolves the slot-alias reference on the
+local profile at the same time.
 
-**Two identities, two edits — they must not be conflated.** `budget_role="artifact_builder"` sets
-only the *cost lane*. The *telemetry* `role` on `MODEL_CALL_COMPLETED` comes from the
-`respond(role=…)` argument, which `artifact_draft` currently passes as `ModelRole.SUB_AGENT`
-(`artifact_tools.py:1468-1470`), alongside a `model_role` field on its
-`artifact_draft_sub_agent_start` log. **Both** must switch, or the build still emits
-`role="sub_agent"` and AC-1 passes falsely while nothing has actually changed. This distinction was
-the most valuable finding of the superseded ADR-0118 and is carried forward deliberately.
+**The two-identities rule is retained as a standing invariant, not as new work.** `budget_role`
+sets only the *cost lane*; the *telemetry* `role` on `MODEL_CALL_COMPLETED` comes from the
+`respond(role=…)` argument, and a `model_role` field appears on the
+`artifact_draft_sub_agent_start` log. All three are correct today. They are called out because the
+ADR-0121 migration and the selection wiring both touch this call site, and regressing either axis
+would make AC-1 pass while the build silently reported the wrong role. AC-2 is therefore a
+**regression guard**, not a new capability.
+
+One correctness note for the wiring in §4: `artifact_draft` today calls
+`get_llm_client(role_name="artifact_builder")`, which is correct for a caller passing a *role name*.
+Once a caller holds an already-resolved *key* from a card decision, it must switch to
+`get_llm_client_for_key(key, budget_role="artifact_builder")` — passing a resolved key to
+`get_llm_client` would mis-bill it (FRE-869).
 
 ### 2. Selection surfaces through the ADR-0076 DecisionCard — reused, not rebuilt
 
 At the artifact-build boundary the executor drives the same pause path that already powers
 tool-approval and the ADR-0101 §8b attachment card (`_maybe_pause_for_constraint`,
-`orchestrator/executor.py:462`). Everything the UX needs exists already:
+`orchestrator/executor.py:554`). Everything the UX needs exists already:
 
 | UX requirement | Existing ADR-0076 mechanism, reused as-is |
 |---|---|
@@ -78,7 +100,7 @@ tool-approval and the ADR-0101 §8b attachment card (`_maybe_pause_for_constrain
 | A configured default that skips the card | `user_constraint_preferences` (`service/models.py:418`) + `_load_constraint_preference` pre-resolves silently (`constraint_preference_applied`, `executor.py:518-526`) |
 | "Ask me every build" | the reserved preference value `always_pause` (`executor.py:518`) |
 | "Remember this choice" | the in-card `remember` flag → `_save_constraint_preference` (`executor.py:614-617`) |
-| Safe fallback on timeout / disconnect / headless | the last option auto-applies (`executor.py:566-575, 604-619`); here that is the configured default — never a zero-artifact stall |
+| Safe fallback on timeout / disconnect / headless | the last option auto-applies (`executor.py:554-600`); here that is the configured default — never a zero-artifact stall |
 
 ### 3. What is genuinely new: a catalog-backed decision type
 
@@ -89,12 +111,13 @@ is stated plainly rather than hidden behind a "one-line change" claim:
 - `orchestrator/constraint_options.py:62` — options are indexed out of a static `CONSTRAINT_OPTIONS`
   dict. `artifact_builder`'s options are computed from the ADR-0121 catalog and
   availability-filtered by provider health at pause time.
-- `orchestrator/executor.py:484` — `_maybe_pause_for_constraint` requires `constraint` to be a key
+- `orchestrator/executor.py:554` — `_maybe_pause_for_constraint` requires `constraint` to be a key
   of `CONSTRAINT_OPTIONS`; it must accept the computed-options path.
-- `transport/events.py:139` — `ConstraintPauseEvent.constraint` is a closed
+- `transport/events.py:136-143` — `ConstraintPauseEvent.constraint` is a closed
   `Literal["tool_iteration_limit", "context_compression"]` and must admit `artifact_builder`.
-  **Pre-existing drift closed in the same pass:** `attachment_cost` already flows through this event
-  at runtime behind a `# type: ignore` while absent from the Literal.
+  **Pre-existing drift closed in the same pass:** `attachment_cost` is defined in
+  `constraint_options.py:41-46` and passed at `executor.py:1961-1966`, yet is absent from the
+  Literal — both sides of that drift are cited so the fix is verifiable.
 - `service/app.py:1501-1504` — settings validation checks `preferred_action ∈ {always_pause} ∪
   option_ids(constraint)`. For `artifact_builder` the valid actions are catalog keys, so validation
   must consult the catalog. This is an API contract change, not "no change."
@@ -105,11 +128,13 @@ detail rather than on a bare key.
 
 ### 4. `artifact_draft` is wired to the resolved builder, fail-closed
 
-Replace the hardcoded `get_llm_client(role_name="sub_agent")` with a resolved builder key →
+When a card decision supplies a key, `artifact_draft` switches from its current role-name call
+(`get_llm_client(role_name="artifact_builder")`, `artifact_tools.py:1454-1455`) to
 `get_llm_client_for_key(builder_key, budget_role="artifact_builder")` (`factory.py:125` — the
 correct call for a caller holding an already-resolved key; `get_llm_client` would mis-bill it,
-FRE-869). The key comes from the card decision when present, otherwise from the role's configured
-default for headless, no-socket, and timeout paths.
+FRE-869). With no decision — headless, no socket, timeout — it keeps the role-name path and the
+role's configured default. **Both paths must bill the same lane**, which is why `budget_role` is
+passed explicitly on the key path.
 
 Before use, the key is checked against the catalog: it must exist, be `kind: llm`, be permitted for
 an `open` role, and have an available provider. Anything else **fails closed to the configured
@@ -239,16 +264,17 @@ feel and compare by hand; sub-agent dispatch is a role they explicitly do not.
 
 ## Implementation Notes
 
+**Already built — do NOT re-implement (FRE-879):** `ModelRole.ARTIFACT_BUILDER`
+(`llm_client/types.py:29`); the `artifact_builder` resolution in `artifact_tools.py:1454-1455`; the
+telemetry identity on both axes (`:1473-1480`, `:1486-1489`); the cost lane
+(`cost_gate/__init__.py:115-117`); the budget policy and owner-confirmed caps
+(`config/governance/budget.yaml:46-49, 57, 62` — to be reconciled with ADR-0120, which abolishes
+hard caps in favour of visibility and consent).
+
 **Files affected:**
-- `src/personal_agent/llm_client/types.py` — add `ModelRole.ARTIFACT_BUILDER`.
-- `config/model_roles.yaml` — `artifact_builder` binding, `open: true`, configured default
-  (ADR-0121 Layer 3).
-- `config/governance/budget.yaml` — new `roles.artifact_builder` policy. **Without it no
-  `budget_counters` row is ever created and AC-2 cannot hold.** The cap value is an owner decision
-  per that file's confirmed-values convention, and must be reconciled with ADR-0120, which abolishes
-  hard caps in favour of visibility and consent.
-- `src/personal_agent/cost_gate/__init__.py` — `_BUDGET_ROLE_BY_FACTORY_NAME`: `artifact_builder →
-  artifact_builder`.
+- `config/model_roles.yaml` — `artifact_builder` becomes an ADR-0121 Layer 3 binding, `open: true`,
+  with a real model key as its default (replacing `config/profiles/local.yaml:8`'s `sub_agent`
+  slot-alias). Delivered by the ADR-0121 migration; listed here as a dependency.
 - `src/personal_agent/orchestrator/constraint_options.py` — catalog-backed, availability-filtered
   options provider alongside the static `CONSTRAINT_OPTIONS`.
 - `src/personal_agent/orchestrator/executor.py` — accept the computed-options path; add the
@@ -273,44 +299,55 @@ fail-closed catalog check, `budget_role_for("artifact_builder")` returning a dis
 rejection of a non-catalog action, preference pre-resolution versus `always_pause`, and
 safe-default-on-timeout. A live build on the deployed stack with a non-default pick.
 
-**Sequencing (one PR each):**
-1. `artifact_builder` role identity — `ModelRole`, binding, cost lane, telemetry identity switch,
-   and `artifact_draft` wired to the role's configured default. No user-visible change; AC-1 (at the
-   default), AC-2, AC-3 provable here.
-2. Computed-options decision type — options provider, executor guard, event Literal (+
+**Sequencing (one PR each).** The role identity is already built (FRE-879) and is not re-done; the
+binding move onto ADR-0121 Layer 3 happens inside ADR-0121's own migration, not here.
+
+1. Computed-options decision type — options provider, executor guard, event Literal (+ the
    `attachment_cost` drift), settings validation. AC-6 provable.
-3. Card at the build boundary + fail-closed check + preference behaviour. AC-4, AC-5.
-4. PWA card rendering with catalog detail. **(Seam ticket, AC-7.)**
+2. Card at the build boundary + fail-closed catalog check + preference behaviour. AC-4, AC-5.
+3. PWA card rendering with catalog detail (cost, context, large-output). **(Seam ticket, AC-7.)**
+
+AC-2 (the shipped identity) is asserted as a **regression guard in every step**, because ADR-0121's
+migration and this ADR's wiring both touch that call site.
 
 ---
 
 ## Verification / Acceptance Criteria
 
 - **AC-1 — A non-default pick actually runs on that model.** *Check:* build an artifact after
-  selecting a non-default builder in the card; the `MODEL_CALL_COMPLETED` telemetry for the
-  `artifact_draft` span shows the **selected** deployment's resolved provider/model id. *Fails if*
-  the emitted `model` is the default regardless of the selection — the classic "label changed, call
-  didn't."
-- **AC-2 — The build carries the builder's own identity on both axes.** *Check:* for the same build,
-  (a) `MODEL_CALL_COMPLETED.role == "artifact_builder"` (not `sub_agent`), **and** (b) the cost-gate
-  reservation debits the `artifact_builder` `budget_counters` row while `main_inference` is
-  untouched (`budget_reservations`/`budget_counters`, `docker/postgres/init.sql:245-280`). *Fails
-  if* either axis still reports `sub_agent`/`main_inference` — wiring only the client factory
-  changes the lane but leaves the telemetry role, and wiring only `respond(role=…)` does the
-  reverse. *(Note: `api_costs` has no `budget_role` column; the lane is asserted in cost_gate.)*
-- **AC-3 — Artifact spend is separable.** *Check:* after one artifact build and one ordinary
-  sub-agent turn, querying spend grouped by role returns non-zero, **distinct** values for
-  `artifact_builder` and the sub-agent lane. *Fails if* the two are indistinguishable — the state
-  today.
+  selecting, in the card, a builder that is **not** the configured default **and not** the model any
+  other role resolves to (so a fallback cannot coincidentally produce the expected id); the
+  `MODEL_CALL_COMPLETED` telemetry for the `artifact_draft` span shows the **selected** deployment's
+  resolved provider/model id. *Fails if* the emitted `model` is the default regardless of the
+  selection — the classic "label changed, call didn't."
+- **AC-2 (regression guard) — the shipped identity survives.** The role, cost lane, and telemetry
+  identity are already live (FRE-879); this asserts the ADR-0121 migration and the card wiring do
+  not regress them. *Check:* for a build on the **default** builder and again on a **selected**
+  builder, (a) `MODEL_CALL_COMPLETED.role == "artifact_builder"` in both cases, **and** (b) the
+  cost-gate reservation debits the `artifact_builder` `budget_counters` row while `main_inference`
+  is untouched (`budget_reservations`/`budget_counters`, `docker/postgres/init.sql:245-280`).
+  *Fails if* either axis reports `sub_agent`/`main_inference` on **either** path — note the selected
+  path is the new risk, since it switches to `get_llm_client_for_key`, where omitting `budget_role`
+  silently re-bills to the default lane (FRE-869). *(`api_costs` has no `budget_role` column; the
+  lane is asserted in cost_gate.)*
+- **AC-3 — Spend is separable per builder model, not just per role.** *Check:* after two builds on
+  **two different** selected builders, spend grouped by (role, model) returns non-zero, distinct
+  rows for each model, both under the `artifact_builder` lane. *Fails if* per-model attribution
+  collapses — the ADR-0121 §8 telemetry migration is what makes this answerable, and this AC is how
+  its usefulness is proven at the artifact surface.
 - **AC-4 — An invalid builder key fails closed to the default, never onward.** *Check:* drive the
   decision path with (a) a key absent from the catalog, (b) a catalog key with `kind: embedding`,
   and (c) a catalog key whose provider is unavailable. In every case the build completes on the
   **configured default** and the substituted key is logged. *Fails if* any of the three reaches the
   client factory, or the build errors instead of falling back.
-- **AC-5 — No answer never means no artifact.** *Check:* simulate no-socket and timeout on a build;
-  the artifact still renders, produced by the configured default, with `resolution` recorded as
-  `connection_lost` or `timeout_default`. *Fails if* the build stalls or yields zero artifact when
-  the user does not answer (a regression of the FRE-471 guard).
+- **AC-5 — No answer never means no artifact, *and the card genuinely fired*.** *Check:* simulate
+  no-socket and timeout on a build. Assert **all three**: (a) a `ConstraintPauseEvent` with
+  `constraint="artifact_builder"` was **emitted and persisted** for that turn; (b) the resolution is
+  recorded as `connection_lost` or `timeout_default`; (c) the artifact still renders, produced by
+  the configured default. *Fails if* the build stalls or yields zero artifact — **and equally fails
+  if (a) is absent**, because an implementation that never wired the card at all would otherwise
+  satisfy (b) and (c) through the pre-existing default-on-timeout behaviour in
+  `_maybe_pause_for_constraint` (`executor.py:554-600`) while delivering none of this decision.
 - **AC-6 — The card and the settings API offer exactly the valid, available set.** *Check:*
   `set(ConstraintPauseEvent.options)` **equals** the availability-filtered set of catalog
   deployments where `kind: llm` — asserted in both directions (no non-catalog key leaks in; a
@@ -378,3 +415,20 @@ telemetry role — both must switch or AC-1 passes falsely). Dropped from ADR-01
 `artifact_builder_candidates` registry, whose fields duplicated `ModelDefinition` and whose
 `max_tokens` loader gate could not fail for the reason it existed (FRE-880) — options now come from
 the ADR-0121 catalog. A standing config picker for this role is explicitly deferred as speculative.
+
+**Revised after codex review round 1.** The first draft repeated ADR-0118/0119's claim that the
+`artifact_builder` role was unbuilt. **That was false**, and verifying it against source rather than
+against those documents is the whole lesson of this ADR chain: FRE-879 shipped completely on
+2026-07-17 — `ModelRole.ARTIFACT_BUILDER` (`llm_client/types.py:29`), the role resolution in
+`artifact_tools.py:1454-1455`, the telemetry identity on both axes (`:1473-1480`, `:1486-1489`), the
+cost lane (`cost_gate/__init__.py:115-117`), and owner-confirmed budget caps
+(`config/governance/budget.yaml:46-49, 57, 62`). The Context, Decision §1, sequencing, and files-
+affected sections were rebased on that reality: step 1 is deleted as already-done, AC-2 becomes a
+**regression guard** on shipped behaviour rather than a new capability, and the remaining scope is
+selection only. AC-5 was found gameable — an implementation with no card at all would satisfy it
+via the pre-existing default-on-timeout path — and now additionally requires that a
+`ConstraintPauseEvent` was emitted and persisted. AC-1 now requires the selected model to differ from
+every other role's resolved model so a fallback cannot coincidentally produce the expected id, and
+AC-3 asserts per-*model* attribution rather than per-role. Stale line citations corrected
+(`_maybe_pause_for_constraint` is at `executor.py:554`, not `:462`) and both sides of the
+`attachment_cost` Literal drift now cited.

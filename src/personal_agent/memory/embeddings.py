@@ -72,10 +72,17 @@ def _get_embedding_config() -> tuple[str, str]:
         ModelRoleError: If the 'embedding' role cannot be resolved (missing
             matrix, or resolved key absent from the active model config).
     """
-    from personal_agent.config import load_model_config, resolve_role_model_key  # noqa: PLC0415
+    from personal_agent.config.model_loader import (  # noqa: PLC0415
+        ModelRoleError,
+        resolve_role_definition,
+    )
 
-    config = load_model_config()
-    model_def = config.models[resolve_role_model_key("embedding")]
+    # Effective definition, not the raw deployment: config.models[key] bypasses
+    # the Layer-3 binding, so any per-use override on this role would be
+    # silently dropped here while tests of the resolver still pass (ADR-0121).
+    model_def = resolve_role_definition("embedding")
+    if model_def is None:
+        raise ModelRoleError("role 'embedding' resolves to no deployment")
     endpoint = model_def.endpoint or "http://localhost:8503/v1"
     return model_def.id, endpoint
 

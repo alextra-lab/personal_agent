@@ -72,10 +72,15 @@ def _resolve_reranker_role_config(role: str, default_endpoint: str) -> tuple[str
         ModelRoleError: If the role cannot be resolved (missing matrix, or
             resolved key absent from the active model config).
     """
-    from personal_agent.config import load_model_config, resolve_role_model_key  # noqa: PLC0415
+    from personal_agent.config.model_loader import (  # noqa: PLC0415
+        ModelRoleError,
+        resolve_role_definition,
+    )
 
-    config = load_model_config()
-    model_def = config.models[resolve_role_model_key(role)]
+    # Effective definition, not the raw deployment — see embeddings.py.
+    model_def = resolve_role_definition(role)
+    if model_def is None:
+        raise ModelRoleError(f"role {role!r} resolves to no deployment")
     endpoint = model_def.endpoint or default_endpoint
     return model_def.id, endpoint
 

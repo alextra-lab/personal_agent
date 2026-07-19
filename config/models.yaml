@@ -10,11 +10,38 @@
 #   "How much can I spend?"    → .env (operational runtime control)
 #
 # ── Model definition fields ───────────────────────────────────────────────────
-# Required for all # ── Layer 1: Providers (ADR-0121) ────────────────────────────────────────────
-# Added ALONGSIDE the existing flat `models:` map. Nothing reads these yet — the
-# three layers are being introduced additively so each step stays green, and the
-# role-keyed entries below keep resolving exactly as before until every consumer
-# has moved.
+# Required for all models:
+#   id               Model identifier (LM Studio slug or provider model name)
+#   context_length   Maximum context window in tokens
+#   max_concurrency  Max concurrent in-flight requests
+#   default_timeout  Request timeout in seconds
+#
+# Local-model fields (omit for cloud models):
+#   endpoint         Base URL override (defaults to settings.llm_base_url)
+#   provider_type    "local" | "managed" | "cloud" (ADR-0029; auto-detected if omitted)
+#   quantization     e.g. "8bit", "4bit" (omit for cloud models)
+#   temperature, top_p, presence_penalty   Sampling params
+#   top_k            Passed via extra_body (vLLM/LM Studio extension)
+#   disable_thinking Hard-disables thinking via chat_template_kwargs (Qwen3.5+)
+#   thinking_budget_tokens  Caps thinking tokens via extra_body (Qwen3.5+)
+#   parallel_tool_calls     Allow multiple tool calls per turn (default true; requires updated llama.cpp)
+#   min_concurrency  Floor for adaptive concurrency (ADR-0033)
+#
+# Cloud-model fields:
+#   provider         "anthropic" | "openai"  ← selects which SDK to dispatch to
+#   max_tokens       Max output tokens (billed per token; set deliberately)
+#   provider_type    "cloud" (set explicitly for ADR-0029 concurrency pass-through)
+
+# ── Process-to-model assignments ──────────────────────────────────────────────
+# Role assignment lives ONLY in config/model_roles.yaml (ADR-0099 D1 stage 2,
+# FRE-650) — entity_extraction/captains_log/insights resolve via
+# resolve_role_model_key(), not a header in this file.
+
+# ── Layer 1: Providers (ADR-0121) ────────────────────────────────────────────
+# One entry per BACKEND, not per model: endpoint, auth, placement, and the
+# total concurrency ceiling. Before ADR-0121 there was no provider entity at
+# all — `endpoint` was copy-pasted onto individual model entries and the
+# provider was reconstructed at runtime by parsing that URL.
 providers:
   slm_local:
     base_url: "https://slm.example.com/v1"
@@ -44,33 +71,6 @@ providers:
     placement: cloud
     max_concurrency: 5
     summary: "Voyage AI — managed reranking"
-
-models:
-#   id               Model identifier (LM Studio slug or provider model name)
-#   context_length   Maximum context window in tokens
-#   max_concurrency  Max concurrent in-flight requests
-#   default_timeout  Request timeout in seconds
-#
-# Local-model fields (omit for cloud models):
-#   endpoint         Base URL override (defaults to settings.llm_base_url)
-#   provider_type    "local" | "managed" | "cloud" (ADR-0029; auto-detected if omitted)
-#   quantization     e.g. "8bit", "4bit" (omit for cloud models)
-#   temperature, top_p, presence_penalty   Sampling params
-#   top_k            Passed via extra_body (vLLM/LM Studio extension)
-#   disable_thinking Hard-disables thinking via chat_template_kwargs (Qwen3.5+)
-#   thinking_budget_tokens  Caps thinking tokens via extra_body (Qwen3.5+)
-#   parallel_tool_calls     Allow multiple tool calls per turn (default true; requires updated llama.cpp)
-#   min_concurrency  Floor for adaptive concurrency (ADR-0033)
-#
-# Cloud-model fields:
-#   provider         "anthropic" | "openai"  ← selects which SDK to dispatch to
-#   max_tokens       Max output tokens (billed per token; set deliberately)
-#   provider_type    "cloud" (set explicitly for ADR-0029 concurrency pass-through)
-
-# ── Process-to-model assignments ──────────────────────────────────────────────
-# Role assignment lives ONLY in config/model_roles.yaml (ADR-0099 D1 stage 2,
-# FRE-650) — entity_extraction/captains_log/insights resolve via
-# resolve_role_model_key(), not a header in this file.
 
 models:
   # ── Tier 1: Primary Agent ───────────────────────────────────────

@@ -101,7 +101,11 @@ def configure_dspy_lm(
     model_id = model_def.id
     effective_timeout = timeout_s or settings.llm_timeout_seconds
 
-    if model_def.provider is not None:
+    # Dispatch on PLACEMENT, not on whether `provider` is set. Under ADR-0121
+    # every deployment names a provider — including local ones (slm_local) — so
+    # `provider is not None` no longer means "cloud", and local deployments would
+    # be routed through LiteLLM as "slm_local/<id>" with no api_base.
+    if model_def.provider_type is not None and model_def.provider_type != "local":
         # ── Cloud model path ─────────────────────────────────────────────────
         # LiteLLM routing uses "{provider}/{model_id}" strings natively.
         litellm_model = f"{model_def.provider}/{model_id}"

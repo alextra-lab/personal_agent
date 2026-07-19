@@ -217,6 +217,10 @@ class TestVisionRouting:
     def _patch_models(self, models: dict[str, ModelDefinition]) -> Any:
         mock_config = MagicMock()
         mock_config.models = models
+        # No Layer-3 bindings in these fixtures: they key their models by ROLE
+        # name, so resolution must fall back to the role-as-key path rather than
+        # dereference a MagicMock binding (ADR-0121).
+        mock_config.roles = {}
         return patch(
             "personal_agent.config.model_loader.load_model_config", return_value=mock_config
         )
@@ -224,12 +228,12 @@ class TestVisionRouting:
     def test_no_image_attachment_is_noop(self) -> None:
         """No raster image attachment — returns resolve_model_key(role_name) unchanged."""
         ctx = self._make_ctx(())
-        assert _resolve_vision_routing_key(ctx, "primary") == "primary"
+        assert _resolve_vision_routing_key(ctx, "primary") == "qwen3.6-35b-thinking"
 
     def test_non_raster_attachment_is_noop(self) -> None:
         """A PDF attachment (ADR-0102 territory) never triggers vision routing."""
         ctx = self._make_ctx((self._make_attachment(content_type="application/pdf"),))
-        assert _resolve_vision_routing_key(ctx, "primary") == "primary"
+        assert _resolve_vision_routing_key(ctx, "primary") == "qwen3.6-35b-thinking"
 
     def test_ac4_capable_primary_no_override_proceeds(
         self, monkeypatch: pytest.MonkeyPatch
@@ -239,7 +243,7 @@ class TestVisionRouting:
         """
         monkeypatch.setattr(settings, "attachment_default_processing_target", "local")
         ctx = self._make_ctx((self._make_attachment(),))
-        assert _resolve_vision_routing_key(ctx, "primary") == "primary"
+        assert _resolve_vision_routing_key(ctx, "primary") == "qwen3.6-35b-thinking"
 
     def test_default_cloud_no_override_routes_to_escalation_model_image(self) -> None:
         """FRE-886 AC1: default config ('cloud') routes Auto straight to the escalation
@@ -556,6 +560,10 @@ class TestDocumentRouting:
     def _patch_models(self, models: dict[str, ModelDefinition]) -> Any:
         mock_config = MagicMock()
         mock_config.models = models
+        # No Layer-3 bindings in these fixtures: they key their models by ROLE
+        # name, so resolution must fall back to the role-as-key path rather than
+        # dereference a MagicMock binding (ADR-0121).
+        mock_config.roles = {}
         return patch(
             "personal_agent.config.model_loader.load_model_config", return_value=mock_config
         )

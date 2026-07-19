@@ -789,10 +789,14 @@ def _draft_timeout_s() -> float:
     Returns:
         Timeout in seconds.
     """
-    from personal_agent.config.model_loader import ModelConfigError, load_model_config
+    from personal_agent.config.model_loader import ModelConfigError, resolve_role_definition
 
     try:
-        primary = load_model_config().models.get("primary")
+        # "primary" is a ROLE. Since ADR-0121 keyed the catalog by model, a raw
+        # models.get("primary") misses and this silently returned the global
+        # 120s fallback instead of the reasoning model's 600s — quietly cutting
+        # the artifact builder's budget to a fifth.
+        primary = resolve_role_definition("primary")
     except ModelConfigError:
         primary = None
     if primary is not None and primary.default_timeout:

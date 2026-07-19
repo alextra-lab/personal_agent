@@ -490,9 +490,7 @@ class TestCloudGptPricingDeployedConfig:
     """
 
     # (entry key, expected input_cost_per_token, expected output_cost_per_token)
-    _EXPECTED = (
-        ("gpt-5.4-mini", 0.00000075, 0.0000045),
-    )
+    _EXPECTED = (("gpt-5.4-mini", 0.00000075, 0.0000045),)
 
     @pytest.mark.parametrize(
         "config_path",

@@ -357,7 +357,11 @@ async def test_vision_routing_decision_log_fires_for_raster_attachment(
     assert entry["trace_id"] == "test-trace"
     assert entry["session_id"] == "test-session"  # ctx.session_id, not trace_ctx.session_id
     assert entry["task_id"] is None
-    assert entry["role_key"] == entry["effective_model_key"] == "primary"
+    # Both are DEPLOYMENT keys now (ADR-0121): the catalog is keyed by model,
+    # not by role. Their equality is what matters — it is what proves nothing
+    # escalated — and it is the invariant that selects the client at
+    # executor.py's `if effective_model_key == role_key`.
+    assert entry["role_key"] == entry["effective_model_key"] == "qwen3.6-35b-thinking"
     assert entry["escalated"] is False
 
 

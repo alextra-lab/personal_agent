@@ -45,6 +45,41 @@
 # upgraded these from gpt-5.4-nano to gpt-5.4-mini/claude_sonnet — see
 # docs/superpowers/plans/2026-05-16-fre-365-cache-diagnostic.md.)
 
+# ── Layer 1: Providers (ADR-0121) ────────────────────────────────────────────
+# One entry per BACKEND, not per model: endpoint, auth, placement, and the
+# total concurrency ceiling. Before ADR-0121 there was no provider entity at
+# all — `endpoint` was copy-pasted onto individual model entries and the
+# provider was reconstructed at runtime by parsing that URL.
+providers:
+  slm_local:
+    base_url: "https://slm.example.com/v1"
+    auth: none
+    placement: local
+    max_concurrency: 2
+    summary: "Owner's Mac GPU via the CF-Access tunnel (llama.cpp + MLX)"
+  ovh:
+    base_url: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+    auth_env: managed_embedding_token
+    placement: cloud
+    max_concurrency: 1
+    summary: "OVH AI Endpoints — managed embedding inference"
+  openai:
+    auth_env: openai_api_key
+    placement: cloud
+    max_concurrency: 10
+    summary: "OpenAI — structured extraction and compression"
+  anthropic:
+    auth_env: anthropic_api_key
+    placement: cloud
+    max_concurrency: 20
+    summary: "Anthropic — background reasoning and cloud-profile inference"
+  voyage:
+    base_url: "https://api.voyageai.com/v1"
+    auth_env: voyage_api_key
+    placement: cloud
+    max_concurrency: 5
+    summary: "Voyage AI — managed reranking"
+
 models:
   # ── Tier 1: Primary Agent ───────────────────────────────────────
   qwen3.6-35b-thinking:

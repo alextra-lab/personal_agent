@@ -1058,9 +1058,11 @@ async def test_artifact_draft_passes_timeout_to_respond(
 @pytest.mark.asyncio
 async def test_draft_timeout_matches_primary_reasoning_model() -> None:
     """artifact_draft's sub-agent timeout tracks the reasoning model (primary) budget."""
-    from personal_agent.config.model_loader import load_model_config
+    from personal_agent.config.model_loader import resolve_role_definition
 
-    primary = load_model_config().models.get("primary")
+    # "primary" is a ROLE; since ADR-0121 the catalog is keyed by model, so it
+    # must be resolved through its binding rather than looked up as a key.
+    primary = resolve_role_definition("primary")
     assert primary is not None and primary.default_timeout
     assert artifact_tools._draft_timeout_s() == float(primary.default_timeout)
 

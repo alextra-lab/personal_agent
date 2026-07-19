@@ -1673,14 +1673,23 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
     Raises:
         AttachmentUnsupportedError: No reachable model can serve the attachment.
     """
-    from personal_agent.config.model_loader import load_model_config
+    from personal_agent.config.model_loader import (
+        load_model_config,
+        resolve_role_target,  # noqa: PLC0415
+    )
     from personal_agent.config.profile import get_current_profile, resolve_model_key
     from personal_agent.exceptions import AttachmentUnsupportedError
     from personal_agent.orchestrator.attachment_resolution import RASTER_CONTENT_TYPES
 
+    profile_for_noop = get_current_profile()
     image_attachments = [a for a in ctx.attachments if a.content_type in RASTER_CONTENT_TYPES]
     if not image_attachments:
-        return resolve_model_key(role_name)
+        # Must return a real DEPLOYMENT key: callers look the result up in the
+        # catalog, and the bare role name stopped being a key under ADR-0121.
+        return resolve_role_target(
+            role_name,
+            model_key=resolve_model_key(role_name) if profile_for_noop else None,
+        )[0]
 
     targets = {a.processing_target for a in image_attachments if a.processing_target}
     effective_target: str | None = "local" if "local" in targets else next(iter(targets), None)
@@ -1695,13 +1704,18 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
         # cloud-bound profile would otherwise redirect this role to. Using
         # resolve_model_key() here would return "claude_sonnet" under an active
         # cloud profile — exactly the boundary crossing "local" must prevent.
-        model_def = models.get(role_name)
+        # Resolve the role's OWN binding (never the profile): under ADR-0121
+        # deployments are keyed by model, so models.get("primary") no longer
+        # hits and local-pinned attachments would fail closed as unsupported.
+        from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
+
+        local_key, model_def = resolve_role_target(role_name)
         if (
             model_def is not None
             and model_def.provider_type == "local"
             and model_def.supports_vision
         ):
-            return role_name
+            return local_key
         raise AttachmentUnsupportedError(
             "This image is pinned to local-only processing, but the local model "
             "does not support vision. It will not be escalated to cloud."
@@ -1725,8 +1739,14 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
     # No override, and _apply_default_processing_target left it unfolded (FRE-886)
     # — either attachment_default_processing_target == "local", or no profile is
     # bound — follow the profile default (§5).
-    key = resolve_model_key(role_name)
-    model_def = models.get(key)
+    # Profile-aware when one is bound, binding-resolved otherwise. A bare
+    # resolve_model_key() returns the ROLE NAME with no profile, which stopped
+    # being a catalog key when deployments were re-keyed by model (ADR-0121).
+    from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
+
+    key, model_def = resolve_role_target(
+        role_name, model_key=resolve_model_key(role_name) if profile else None
+    )
     if model_def is not None and model_def.supports_vision:
         return key
 
@@ -1799,14 +1819,17 @@ def _resolve_document_routing_key(
     effective_target = _apply_default_processing_target(effective_target, profile)
 
     if effective_target == "local":
-        model_def = models.get(role_name)
+        # Same as the image path: resolve the role's own binding, not the key.
+        from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
+
+        local_key, model_def = resolve_role_target(role_name)
         mode = (
             _capable(model_def)
             if model_def is not None and model_def.provider_type == "local"
             else None
         )
         if mode is not None:
-            return role_name, mode
+            return local_key, mode
         raise AttachmentUnsupportedError(
             "This document is pinned to local-only processing, but the local "
             "model does not support it. It will not be escalated to cloud."
@@ -1830,8 +1853,14 @@ def _resolve_document_routing_key(
     # No override, and _apply_default_processing_target left it unfolded (FRE-886)
     # — either attachment_default_processing_target == "local", or no profile is
     # bound — follow the profile default.
-    key = resolve_model_key(role_name)
-    model_def = models.get(key)
+    # Profile-aware when one is bound, binding-resolved otherwise. A bare
+    # resolve_model_key() returns the ROLE NAME with no profile, which stopped
+    # being a catalog key when deployments were re-keyed by model (ADR-0121).
+    from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
+
+    key, model_def = resolve_role_target(
+        role_name, model_key=resolve_model_key(role_name) if profile else None
+    )
     mode = _capable(model_def)
     if mode is not None:
         return key, mode
@@ -3595,17 +3624,29 @@ async def step_llm_call(
 
     try:
         # Create LLM client — dispatches to LocalLLMClient or LiteLLMClient based on provider_type
-        from personal_agent.config.profile import resolve_model_key
-        from personal_agent.llm_client.factory import get_llm_client
-        from personal_agent.orchestrator.attachment_resolution import RASTER_CONTENT_TYPES
-
         # ADR-0101 §5/§8a + ADR-0102 §3: an image or document attachment may
         # require a different model than the role's plain profile-resolved key
         # (escalation or an explicit processing_target override) — resolved
         # here, inside the try block, so a fail-closed AttachmentUnsupportedError
         # is caught by the except below rather than propagating uncaught above
         # the state machine.
-        role_key = resolve_model_key(model_role.value)
+        # Both sides must resolve to a DEPLOYMENT key or the equality below
+        # breaks: role_key was a role name while the attachment path returns a
+        # catalog key, so every plain turn would take the escalation branch —
+        # picking a client via get_llm_client_for_key and logging escalated=True
+        # for a turn that escalated nothing.
+        from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
+        from personal_agent.config.profile import (
+            get_current_profile,  # noqa: PLC0415
+            resolve_model_key,
+        )
+        from personal_agent.llm_client.factory import get_llm_client
+        from personal_agent.orchestrator.attachment_resolution import RASTER_CONTENT_TYPES
+
+        role_key, _ = resolve_role_target(
+            model_role.value,
+            model_key=resolve_model_key(model_role.value) if get_current_profile() else None,
+        )
         effective_model_key = _effective_attachment_routing_key(ctx, model_role.value)
 
         # ADR-0074 §8c / FRE-693: log the routing decision only when this turn

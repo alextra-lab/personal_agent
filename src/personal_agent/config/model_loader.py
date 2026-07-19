@@ -166,7 +166,7 @@ def load_model_config(
     Example:
         >>> from personal_agent.config import load_model_config
         >>> config = load_model_config()
-        >>> print(config.models["primary"].id)
+        >>> print(config.models["qwen3.6-35b-thinking"].id)
         qwen/qwen3-35b-a22b
     """
     if settings is None:
@@ -366,6 +366,21 @@ def resolve_role_target(
     return key, (definition.model_copy(update=overrides) if overrides else definition)
 
 
+def resolve_role_definition(
+    role: str,
+    *,
+    model_key: str | None = None,
+    config: ModelConfig | None = None,
+) -> ModelDefinition | None:
+    """Return a role's effective definition — see :func:`resolve_role_target`.
+
+    Convenience wrapper for callers that need the definition but not the
+    deployment key. Prefer :func:`resolve_role_target` when you also need the
+    key (to acquire a concurrency slot, or to compare against a routing key).
+    """
+    return resolve_role_target(role, model_key=model_key, config=config)[1]
+
+
 def resolve_active_attribution(
     *,
     trace_id: str | None = None,
@@ -393,8 +408,10 @@ def resolve_active_attribution(
 
     config_path_str = str(settings.model_config_path)
     try:
-        cfg = load_model_config()
-        primary = cfg.models.get("primary")
+        # Resolve through the binding: "primary" is a ROLE, and since ADR-0121
+        # the catalog is keyed by model, so models.get("primary") returns None
+        # and every session/message would lose its model attribution.
+        _, primary = resolve_role_target("primary")
         primary_id = primary.id if primary is not None else None
     except Exception as exc:  # noqa: BLE001 — keep the chat-turn path live
         log.warning(
@@ -411,6 +428,11 @@ def resolve_active_attribution(
 # FRE-734: the drift that broke production was these roles unflagged in the
 # deployed config file — so the startup guard checks these specific roles,
 # not merely "some model is vision-capable".
+#: Names expected to be vision-capable on the deployed config. A mix of ROLES
+#: (primary, sub_agent) and DEPLOYMENT keys (claude_sonnet, claude_haiku) —
+#: resolve_role_target handles both, since a name with no binding falls back to
+#: a direct key lookup. A raw models[...] lookup would warn about the roles on
+#: every boot now that ADR-0121 keys the catalog by model.
 _EXPECTED_VISION_ROLES: tuple[str, ...] = (
     "primary",
     "sub_agent",
@@ -462,9 +484,10 @@ def check_vision_capabilities(*, trace_id: str | None = None) -> tuple[list[str]
 
     capable = sorted(key for key, model in cfg.models.items() if model.supports_vision)
     missing = [
-        role
-        for role in _EXPECTED_VISION_ROLES
-        if role not in cfg.models or not cfg.models[role].supports_vision
+        name
+        for name in _EXPECTED_VISION_ROLES
+        if (definition := resolve_role_target(name, config=cfg)[1]) is None
+        or not definition.supports_vision
     ]
 
     log.info(

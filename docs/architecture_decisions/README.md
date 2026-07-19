@@ -208,8 +208,8 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0118](ADR-0118-artifact-builder-model-selection.md) | Model-Selection Layer for Open Roles — User-Selectable Artifact Builder (Phase 1) | Superseded by ADR-0121 + ADR-0122 |
 | [ADR-0119](ADR-0119-config-management-interface.md) | Config-Management Interface (Phase 1) — Observe + Open-Role Model Selection | Superseded by ADR-0121 |
 | [ADR-0120](ADR-0120-cost-governance-visibility-consent.md) | Cost Governance — Visibility + Consent (supersedes ADR-0065) | Proposed |
-| [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md) | Model Catalog and Selection Layer — Providers, Deployments, Bindings; the User Selects the Model | Proposed |
-| [ADR-0122](ADR-0122-build-time-artifact-builder-selection.md) | Build-Time Artifact Builder Selection — Choose the Model When You Know What You're Building | Proposed |
+| [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md) | Model Catalog and Selection Layer — Providers, Deployments, Bindings; the User Selects the Model | Accepted |
+| [ADR-0122](ADR-0122-build-time-artifact-builder-selection.md) | Build-Time Artifact Builder Selection — Choose the Model When You Know What You're Building | Accepted |
 
 ### Supplementary
 

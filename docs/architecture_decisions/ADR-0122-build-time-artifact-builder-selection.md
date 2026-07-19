@@ -1,6 +1,6 @@
 # ADR-0122: Build-time artifact builder selection — choose the model when you know what you're building
 
-**Status:** Proposed
+**Status:** Accepted — 2026-07-19 (owner). Implementation chain FRE-878 (T1–T3, seam AC-7 on FRE-921), Approved; sequenced behind ADR-0121 T1/T2.
 **Date:** 2026-07-19
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** artifact-pipeline, model-selection, human-in-the-loop, config, observability

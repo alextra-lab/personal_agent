@@ -55,7 +55,7 @@ roles:
   captains_log:       { divergence: forbidden, all: claude_sonnet }
   insights:           { divergence: forbidden, all: claude_sonnet }
   embedding:          { divergence: forbidden, all: embedding }
-  compressor:         { divergence: allowed, local: compressor, cloud: compressor }
+  compressor:         { divergence: forbidden, all: gpt-5.4-mini }
   reranker:           { divergence: forbidden, all: reranker }
   reranker_fallback:  { divergence: forbidden, all: reranker_fallback }
 
@@ -90,7 +90,7 @@ bindings:
   entity_extraction:  { deployment: gpt-5.4-mini }
   captains_log:       { deployment: claude_sonnet }
   insights:           { deployment: claude_sonnet }
-  compressor:         { deployment: compressor }
+  compressor:         { deployment: gpt-5.4-mini }
   embedding:          { deployment: embedding }
   reranker:           { deployment: reranker }
   reranker_fallback:  { deployment: reranker_fallback }

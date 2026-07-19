@@ -105,33 +105,7 @@ models:
     provider_type: "local"
     endpoint: "https://slm.example.com/v1"
 
-  # ── Experimental / A/B Testing ──────────────────────────────────
-  reasoning_heavy:
-    # Deep reasoning model with bounded thinking budget (ADR-0023).
-    provider: slm_local
-    id: "qwen3.6-35b-a3b"  # corrected from qwen3.5 (FRE-319 audit — matches models.yaml)
-    context_length: 64000
-    quantization: "8bit"
-    min_concurrency: 1
-    max_concurrency: 1
-    default_timeout: 180
-    temperature: 0.6
-    top_p: 0.95
-    top_k: 20
-    thinking_budget_tokens: 3000
-    supports_function_calling: true
-    provider_type: "local"
-    endpoint: "https://slm.example.com/v1"
 
-  coding_large_context:
-    # For large codebase analysis (future evaluation; high-memory MoE model)
-    id: "qwen/qwen3-coder-next"
-    context_length: 128000
-    quantization: "4bit"
-    min_concurrency: 1
-    max_concurrency: 1
-    default_timeout: 60
-    temperature: 0.2
 
   # ── Cloud Models (ADR-0031) ─────────────────────────────────────
   # API key is NOT stored here — set AGENT_ANTHROPIC_API_KEY / AGENT_OPENAI_API_KEY in .env
@@ -169,20 +143,6 @@ models:
     input_cost_per_token: 0.000001    # $1/MTok (ADR-0101 §8b / FRE-691 — config-owned cost matrix)
     output_cost_per_token: 0.000005   # $5/MTok
 
-  gpt-5.4-nano:
-    # OpenAI GPT-5.4 Nano — entity extraction, structured output tasks
-    # Cheapest cloud model with strong structured output quality
-    # Pricing: $0.20/$1.25 per MTok (input/output)
-    id: "gpt-5.4-nano"
-    provider: "openai"
-    provider_type: "cloud"
-    max_tokens: 4096
-    context_length: 128000
-    min_concurrency: 1
-    max_concurrency: 10
-    default_timeout: 60
-    input_cost_per_token: 0.0000002     # $0.20/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
-    output_cost_per_token: 0.00000125   # $1.25/MTok
 
   gpt-5.4-mini:
     # OpenAI GPT-5.4 Mini — higher-quality background reasoning
@@ -204,24 +164,6 @@ models:
     input_cost_per_token: 0.00000075    # $0.75/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
     output_cost_per_token: 0.0000045    # $4.50/MTok
 
-  # ── Tier 3: Context Compressor (ADR-0038) ────────────────────────
-  compressor:
-    # Lightweight summarization of evicted context turns.
-    # Runs asynchronously between turns when token threshold is crossed.
-    # gpt-5.4-mini chosen (FRE-365, 2026-05-16): cache-participating
-    # (unlike nano) and materially better fidelity on multi-step / state-
-    # tracking compression — what an agent-loop downstream actually
-    # depends on. Pricing $0.75/$4.50 per MTok; with the ≥1024-token
-    # stable system prompt (context_compressor.py) the cached portion
-    # bills at ~$0.075/MTok across all calls after the first.
-    id: "gpt-5.4-mini"
-    provider: "openai"
-    provider_type: "cloud"
-    max_tokens: 512
-    context_length: 128000
-    min_concurrency: 1
-    max_concurrency: 5
-    default_timeout: 30
 
   # ── Embedding Model (Seshat Memory — ADR-0035) ─────────────────
   embedding:

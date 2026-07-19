@@ -1,6 +1,6 @@
 # ADR-0118: Model-selection layer for open roles — user-selectable artifact builder (Phase 1)
 
-**Status:** Proposed
+**Status:** Superseded by [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md) and [ADR-0122](ADR-0122-build-time-artifact-builder-selection.md)
 **Date:** 2026-07-14
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** model-routing, artifact-pipeline, human-in-the-loop, config, observability
@@ -388,6 +388,35 @@ acceptance gate.
 ---
 
 ## Status Updates
+
+### 2026-07-19 - Superseded
+
+**Changed By:** cc-adrs (Opus)
+**Superseded by:** [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md) (model catalog and
+selection layer) and [ADR-0122](ADR-0122-build-time-artifact-builder-selection.md) (build-time
+artifact builder selection).
+
+**Reason:** Never built. This ADR was written *over* a defective config substrate rather than
+fixing it, and its first implementation ticket (FRE-880) was unsound as a direct result — a
+candidate registry duplicating `ModelDefinition` fields, justified by the false claim that
+`ModelDefinition` has no capability field (`llm_client/models.py:173-187` has an established
+`supports_*` convention), gated by a `max_tokens` YAML check that cannot fail for the reason it
+exists, and carrying prose failure-mode fields no code reads. Owner halted the chain on review.
+ADR-0121 fixes the substrate (providers → deployments → bindings, single catalog, typed models) and
+removes Path; ADR-0122 rebuilds the build-time card on top of it.
+
+**Carried forward, not lost:** the ADR-0076 DecisionCard reuse analysis (§3) and the honest
+enumeration of the four contracts that must widen → ADR-0122 §2–3. The two-identities finding
+(`budget_role` cost lane versus the `respond(role=…)` telemetry role — both must switch or AC-1
+passes falsely) → ADR-0122 §1, its single most valuable contribution. FRE-869 billing correctness
+and the `attachment_cost` Literal drift → ADR-0122. FRE-478/495 as the reason large-output
+capability matters → ADR-0121 §2 metadata and ADR-0122's card detail. The swappability principle
+(float what you feel, pin what corrupts silently) → ADR-0121 §6.
+
+**Dropped deliberately:** the bespoke `artifact_builder_candidates` registry (options now come from
+the ADR-0121 catalog); §1's flat matrix row for `artifact_builder`, which caused the FRE-879
+local→cloud regression; and Phase 2's "select your orchestrator," which ADR-0121 delivers directly
+as `primary` selection.
 
 ### 2026-07-14 - Proposed
 **Changed By:** cc-adrs (Opus)

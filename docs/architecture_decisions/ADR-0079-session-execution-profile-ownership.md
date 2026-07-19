@@ -1,6 +1,6 @@
 # ADR-0079: Server-Authoritative Session Execution Profile
 
-**Status:** Implemented (FRE-416 + FRE-419, PRs #102–#104; deployed + on-device verified 2026-05-29)
+**Status:** Implemented (FRE-416 + FRE-419, PRs #102–#104; deployed + on-device verified 2026-05-29) — **subject superseded by [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md)**: the execution profile ("Path") this ADR governs is removed in favour of per-role model selection. **The decision below is not retired — it is inherited.** All eleven invariants (server-authoritative resolution, the new-vs-existing session asymmetry and its post-deploy correction, toggle-as-a-write with user scoping, hydration at every entry point, single-socket notification, in-flight-turn immutability, durability over delivery, offline-write failure, provenance) apply verbatim to the selection store. See ADR-0121 §4.
 **Date:** 2026-05-29
 **Issue:** FRE-416, FRE-419
 **Amends:** ADR-0044 D2 (profile bound at conversation creation — see "Mid-conversation switching" below)

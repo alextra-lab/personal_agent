@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from personal_agent.config.loader import ConfigLoadError, load_yaml_file
 from personal_agent.config.settings import AppConfig
-from personal_agent.llm_client.models import ModelConfig
+from personal_agent.llm_client.models import ModelConfig, ModelDefinition
 
 #: A parsed ``config/model_roles.yaml`` mapping.
 _RoleMatrix = dict[str, object]
@@ -316,6 +316,54 @@ def resolve_role_model_key(
             f"defined under models: in {resolved_config_path}"
         )
     return model_key
+
+
+def resolve_role_target(
+    role: str,
+    *,
+    model_key: str | None = None,
+    config: ModelConfig | None = None,
+) -> tuple[str, ModelDefinition | None]:
+    """Resolve a role to its deployment key and EFFECTIVE definition (ADR-0121).
+
+    The deployment carries what the model *is*; the Layer-3 binding carries how
+    this role *uses* it. Reading ``config.models[key]`` directly returns only the
+    former, silently dropping per-use parameters.
+
+    Overrides apply **only when the resolved key is the binding's own
+    deployment.** When an active ExecutionProfile redirects the role elsewhere
+    (cloud ``sub_agent`` -> ``claude_haiku``), that deployment's own values stand
+    — matching pre-ADR-0121 behaviour, where the profile's model was looked up
+    whole rather than merged. Overrides are model-specific in practice, so
+    carrying them onto a different model would change the call.
+
+    Args:
+        role: Role name (e.g. ``"sub_agent"``).
+        model_key: Already-resolved key, when the caller resolved it through an
+            active profile. ``None`` uses the role's binding.
+        config: Catalog to resolve against. ``None`` loads the live one.
+
+    Returns:
+        ``(deployment_key, effective_definition)``. Both, because every caller
+        needs both — the definition to make the call, the key to acquire the
+        right concurrency slot — and deriving the key separately would duplicate
+        this resolution order at the call site. Definition is ``None`` when the
+        key names no deployment.
+    """
+    resolved_config = config if config is not None else load_model_config()
+    binding = resolved_config.roles.get(role)
+    key = model_key if model_key is not None else (binding.deployment if binding else role)
+
+    definition = resolved_config.models.get(key)
+    if definition is None or binding is None or key != binding.deployment:
+        return key, definition
+
+    overrides = {
+        field: value
+        for field, value in binding.model_dump(exclude={"deployment", "open"}).items()
+        if value is not None
+    }
+    return key, (definition.model_copy(update=overrides) if overrides else definition)
 
 
 def resolve_active_attribution(

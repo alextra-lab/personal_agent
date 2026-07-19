@@ -15,8 +15,12 @@ import httpx
 from personal_agent.config import settings
 
 # Import from module directly to avoid circular import
-from personal_agent.config.model_loader import ModelConfigError, load_model_config
-from personal_agent.config.profile import resolve_model_key
+from personal_agent.config.model_loader import (
+    ModelConfigError,
+    load_model_config,
+    resolve_role_target,
+)
+from personal_agent.config.profile import get_current_profile, resolve_model_key
 from personal_agent.llm_client.adapters import (
     _aggregate_streaming_chunks,
     adapt_chat_completions_response,
@@ -93,9 +97,11 @@ class LocalLLMClient:
         # Load model configurations
         try:
             config: ModelConfig = load_model_config(model_config_path)
+            self._catalog: ModelConfig | None = config
             self.model_configs: dict[str, ModelDefinition] = config.models
         except ModelConfigError as e:
             log.warning("model_config_load_failed", error=str(e), using_defaults=True)
+            self._catalog = None
             self.model_configs = {}
 
         # Initialize concurrency controller (ADR-0029)
@@ -115,7 +121,16 @@ class LocalLLMClient:
         # Use default_timeout from each model's config, fallback to hardcoded defaults
         self._role_timeouts: dict[ModelRole, int] = {}
         for role in ModelRole:
-            model_def = self.model_configs.get(role.value)  # type: ignore[assignment]
+            # ModelRole's values are the legacy slot-aliases. Once deployments
+            # are keyed by model these stop being catalog keys, and a bare
+            # lookup silently falls through to the hardcoded defaults below —
+            # dropping primary from its configured 600s to 60s. Resolve through
+            # the role binding so the key rename cannot do that.
+            model_def = (
+                resolve_role_target(role.value, config=self._catalog)[1]
+                if self._catalog is not None
+                else self.model_configs.get(role.value)  # type: ignore[assignment]
+            )
             if model_def and model_def.default_timeout:
                 self._role_timeouts[role] = model_def.default_timeout
             else:
@@ -200,14 +215,27 @@ class LocalLLMClient:
         # code-review finding: the previous bare-role.value lookup broke every
         # local-profile artifact_draft call, since models.yaml intentionally has no
         # "artifact_builder" key — see config/profiles/local.yaml).
-        resolved_role_key = resolve_model_key(role.value)
-        model_config: ModelDefinition | None = self.model_configs.get(resolved_role_key)
+        # Resolve against THIS client's catalog. An active ExecutionProfile still
+        # overrides the key; absent one the role's binding decides, so a client
+        # built with an explicit config (tests, eval harnesses, the ADR-0112
+        # seam) resolves within that config rather than the repo's.
+        profile_key = resolve_model_key(role.value) if get_current_profile() else None
+        if self._catalog is not None:
+            resolved_role_key, model_config = resolve_role_target(
+                role.value, model_key=profile_key, config=self._catalog
+            )
+        else:
+            resolved_role_key = profile_key or role.value
+            model_config = self.model_configs.get(resolved_role_key)
         if not model_config:
             raise ModelConfigError(f"No configuration found for role: {resolved_role_key}")
 
         # Acquire concurrency slot (ADR-0029)
+        # Acquire under the DEPLOYMENT key: semaphores are registered per catalog
+        # entry, so asking for a slot-alias would find neither a model nor an
+        # endpoint semaphore and yield with NO concurrency control at all.
         async with self._concurrency.request_slot(
-            role=role.value,
+            role=resolved_role_key,
             priority=priority,
             timeout=priority_timeout,
             trace_id=trace_ctx.trace_id,

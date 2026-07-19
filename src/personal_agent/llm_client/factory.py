@@ -102,9 +102,12 @@ def get_llm_client(role_name: str = "primary") -> Any:
     config = load_model_config()
 
     # Resolve the model key: profile overrides role_name when profile is active.
-    resolved_key = resolve_model_key(role_name)
+    from personal_agent.config.model_loader import resolve_role_target
 
-    model_def = config.models.get(resolved_key)
+    # Effective definition — deployment plus this role's binding overrides.
+    # max_tokens below is per-use and may live on the binding.
+    resolved_key = resolve_model_key(role_name)
+    _, model_def = resolve_role_target(role_name, model_key=resolved_key, config=config)
 
     if model_def and model_def.provider_type != "local":
         from personal_agent.cost_gate import budget_role_for

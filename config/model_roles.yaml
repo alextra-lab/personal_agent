@@ -80,7 +80,11 @@ required_secrets:
 # consumes it yet; the guardrail is declared before the mechanism that reads it.
 bindings:
   primary:            { deployment: primary,           open: true }
-  artifact_builder:   { deployment: sub_agent,         open: true }
+  # default_timeout pins today's EFFECTIVE value. Before bindings existed this
+  # role resolved to no catalog entry at all and fell through to the generic
+  # 120s client default; the sub_agent deployment declares 90s. Artifact builds
+  # are long HTML generations, so inheriting 90 would quietly shorten them.
+  artifact_builder:   { deployment: sub_agent, open: true, default_timeout: 120 }
   sub_agent:          { deployment: sub_agent }
   entity_extraction:  { deployment: gpt-5.4-mini }
   captains_log:       { deployment: claude_sonnet }

@@ -342,8 +342,8 @@ def test_configure_dspy_lm_cloud_anthropic_model_string():
 
 def test_configure_dspy_lm_cloud_openai_model_string():
     """Cloud OpenAI model produces 'openai/{model_id}' with no localhost in kwargs."""
-    lm = configure_dspy_lm(role="gpt-5.4-nano")
-    assert lm.model == "openai/gpt-5.4-nano"
+    lm = configure_dspy_lm(role="gpt-5.4-mini")  # nano retired (FRE-916)
+    assert lm.model == "openai/gpt-5.4-mini"
     # Cloud OpenAI must not point at localhost
     api_base = (lm.kwargs or {}).get("api_base")
     assert api_base is None or "localhost" not in str(api_base)
@@ -357,7 +357,12 @@ def test_configure_dspy_lm_local_model_uses_openai_prefix():
 
 def test_configure_dspy_lm_local_model_sets_api_base():
     """PRIMARY model sets api_base to its configured endpoint."""
-    expected = load_model_config().models["primary"].endpoint
+    # "primary" is a ROLE; the catalog is keyed by model (ADR-0121).
+    from personal_agent.config.model_loader import resolve_role_definition
+
+    primary_def = resolve_role_definition("primary")
+    assert primary_def is not None
+    expected = primary_def.endpoint
     lm = configure_dspy_lm(role=ModelRole.PRIMARY)
     api_base = (lm.kwargs or {}).get("api_base")
     assert api_base is not None

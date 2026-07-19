@@ -1,4 +1,0 @@
-  File "<string>", line 12
-    print('CONC', k, sorted((g['runtime'][k]['models'] or {})),
-         ^
-SyntaxError: '(' was never closed

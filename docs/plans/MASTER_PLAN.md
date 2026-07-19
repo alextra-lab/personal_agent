@@ -4,22 +4,28 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-18
+> **Last updated**: 2026-07-19
 
-## 0. Owner-led ADR debate — config-UI direction
+## 0. Owner decision — accept ADR-0121 + ADR-0122, then approve the build chain
 
-**Next action of the next session.** Owner-directed 2026-07-18: start here. Runs in the `adr` seat
-(`cc-adrs`), owner-driven — master does not open it unilaterally and does not write the ADR.
+The config-UI debate ran in `cc-adrs` and landed: **ADR-0121** (model catalog and selection layer —
+providers → deployments → role bindings, one catalog, **Path removed**, the user selects the model by
+name) and **ADR-0122** (build-time artifact-builder selection on the ADR-0076 DecisionCard). Merged as
+PR #581, both **Proposed** — publishing is not acceptance.
 
-Subject: the ADR-0118/0119 artifact-builder + **config-UI** chain (FRE-880/888/889/890/891/892,
-umbrellas 878/887), which stays **un-approved and held behind this debate**. The owner called
-FRE-880's shape wrong and wants to correct the ADR before any of it builds.
+Two gates, both the owner's:
+1. **Accept or amend the two ADRs.** ADR-0121 removes Path entirely and inherits ADR-0079's eleven
+   invariants for the selection store; that is the consequential call.
+2. **Approve the implementation chain.** FRE-887 (ADR-0121 umbrella, T1–T5, seam AC-9) and FRE-878
+   (ADR-0122 umbrella, FRE-881/882/921, seam AC-7) — all children sit **Needs Approval**. Nothing is
+   dispatchable until approved and stream-labelled.
 
-Bring to it the open questions master is carrying (below, "Questions for the owner").
+Superseded and already closed out: ADR-0118/0119, FRE-880 (canceled with cause), FRE-883, and the
+FRE-888–892 chain. FRE-894 holds the deferred Phase-2 scope.
 
 ## 1. Reduce the backlog
 
-80 Approved, 1 dispatchable; the rest is inventory, 24 of it predating the guardian role. Method:
+80 Approved, **0 currently dispatchable — no Approved ticket carries a stream label**; the rest is inventory, 24 of it predating the guardian role. Method:
 verify per cluster, cancel the provable with a one-line reason, bring judgment calls to the owner.
 Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729–732, FRE-810/811/814) ·
 `[Thread]` placeholders that can never be Done (FRE-401/418/397) · work gated on events that never

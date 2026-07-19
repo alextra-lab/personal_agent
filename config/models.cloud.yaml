@@ -85,7 +85,7 @@ models:
     # Sampling per the Qwen3.6 card "Instruct (Non-Thinking) Mode" preset.
     provider: slm_local
     id: "unsloth/qwen3.6-35-A3B-subagent"
-    context_length: 16384       # Bounded for focused sub-tasks (was 32768)
+    context_length: 65536  # the window the SLM server actually serves (FRE-916)
     quantization: "8bit"
     min_concurrency: 1
     max_concurrency: 3
@@ -168,13 +168,19 @@ models:
   # ── Embedding Model (Seshat Memory — ADR-0035) ─────────────────
   embedding:
     kind: embedding
-    # Qwen3-Embedding-0.6B via llama.cpp Docker service (VPS)
-    # Instruction-aware, Matryoshka (flexible dims), 768d default
-    # One-way door: changing model requires rebuilding all Neo4j vectors
+    # Qwen3-Embedding-8B on OVH AI Endpoints (ADR-0112 D4/AC-5). Replaces the
+    # retired local 0.6B. Instruction-aware, Matryoshka: truncated to 1024 dims,
+    # the measured sweet spot — nDCG@5 peaks there, beating native 4096 (FRE-826).
+    # One-way door: changing this model requires rebuilding every Neo4j vector.
     provider: ovh
-    id: "Qwen/Qwen3-Embedding-0.6B"
+    id: "Qwen3-Embedding-8B"
+    dimensions: 1024
+    # provider_type still drives concurrency until semaphores are keyed on the
+    # provider; flipping it to "cloud" here would drop this deployment's limit
+    # of 1 before the provider's ceiling exists to re-impose it. Removed with
+    # provider_type itself in the concurrency step.
     provider_type: "local"
-    endpoint: "http://embeddings:8503/v1"
+    endpoint: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
     context_length: 32768
     max_concurrency: 1
     default_timeout: 60

@@ -137,8 +137,8 @@
         "context_length": 32768,
         "default_timeout": 60,
         "disable_thinking": false,
-        "endpoint": "http://embeddings:8503/v1",
-        "id": "Qwen/Qwen3-Embedding-0.6B",
+        "endpoint": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+        "id": "Qwen3-Embedding-8B",
         "input_cost_per_token": null,
         "max_concurrency": 1,
         "max_tokens": null,
@@ -344,7 +344,7 @@
     },
     "cloud|local|artifact_builder": {
       "definition": {
-        "context_length": 16384,
+        "context_length": 65536,
         "default_timeout": 90,
         "disable_thinking": true,
         "endpoint": "https://slm.example.com/v1",
@@ -437,8 +437,8 @@
         "context_length": 32768,
         "default_timeout": 60,
         "disable_thinking": false,
-        "endpoint": "http://embeddings:8503/v1",
-        "id": "Qwen/Qwen3-Embedding-0.6B",
+        "endpoint": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+        "id": "Qwen3-Embedding-8B",
         "input_cost_per_token": null,
         "max_concurrency": 1,
         "max_tokens": null,
@@ -614,7 +614,7 @@
     },
     "cloud|local|sub_agent": {
       "definition": {
-        "context_length": 16384,
+        "context_length": 65536,
         "default_timeout": 90,
         "disable_thinking": true,
         "endpoint": "https://slm.example.com/v1",
@@ -644,7 +644,7 @@
     },
     "cloud|none|artifact_builder": {
       "definition": {
-        "context_length": 16384,
+        "context_length": 65536,
         "default_timeout": 90,
         "disable_thinking": true,
         "endpoint": "https://slm.example.com/v1",
@@ -737,8 +737,8 @@
         "context_length": 32768,
         "default_timeout": 60,
         "disable_thinking": false,
-        "endpoint": "http://embeddings:8503/v1",
-        "id": "Qwen/Qwen3-Embedding-0.6B",
+        "endpoint": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+        "id": "Qwen3-Embedding-8B",
         "input_cost_per_token": null,
         "max_concurrency": 1,
         "max_tokens": null,
@@ -914,7 +914,7 @@
     },
     "cloud|none|sub_agent": {
       "definition": {
-        "context_length": 16384,
+        "context_length": 65536,
         "default_timeout": 90,
         "disable_thinking": true,
         "endpoint": "https://slm.example.com/v1",
@@ -1037,8 +1037,8 @@
         "context_length": 32768,
         "default_timeout": 60,
         "disable_thinking": false,
-        "endpoint": "http://localhost:8503/v1",
-        "id": "Qwen/Qwen3-Embedding-0.6B",
+        "endpoint": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+        "id": "Qwen3-Embedding-8B",
         "input_cost_per_token": null,
         "max_concurrency": 1,
         "max_tokens": null,
@@ -1244,7 +1244,7 @@
     },
     "local|local|artifact_builder": {
       "definition": {
-        "context_length": 32768,
+        "context_length": 65536,
         "default_timeout": 90,
         "disable_thinking": true,
         "endpoint": "https://slm.example.com/v1",
@@ -1337,8 +1337,8 @@
         "context_length": 32768,
         "default_timeout": 60,
         "disable_thinking": false,
-        "endpoint": "http://localhost:8503/v1",
-        "id": "Qwen/Qwen3-Embedding-0.6B",
+        "endpoint": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+        "id": "Qwen3-Embedding-8B",
         "input_cost_per_token": null,
         "max_concurrency": 1,
         "max_tokens": null,
@@ -1514,7 +1514,7 @@
     },
     "local|local|sub_agent": {
       "definition": {
-        "context_length": 32768,
+        "context_length": 65536,
         "default_timeout": 90,
         "disable_thinking": true,
         "endpoint": "https://slm.example.com/v1",
@@ -1544,7 +1544,7 @@
     },
     "local|none|artifact_builder": {
       "definition": {
-        "context_length": 32768,
+        "context_length": 65536,
         "default_timeout": 90,
         "disable_thinking": true,
         "endpoint": "https://slm.example.com/v1",
@@ -1637,8 +1637,8 @@
         "context_length": 32768,
         "default_timeout": 60,
         "disable_thinking": false,
-        "endpoint": "http://localhost:8503/v1",
-        "id": "Qwen/Qwen3-Embedding-0.6B",
+        "endpoint": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+        "id": "Qwen3-Embedding-8B",
         "input_cost_per_token": null,
         "max_concurrency": 1,
         "max_tokens": null,
@@ -1814,7 +1814,7 @@
     },
     "local|none|sub_agent": {
       "definition": {
-        "context_length": 32768,
+        "context_length": 65536,
         "default_timeout": 90,
         "disable_thinking": true,
         "endpoint": "https://slm.example.com/v1",
@@ -1846,7 +1846,7 @@
   "runtime": {
     "cloud|concurrency": {
       "endpoints": {
-        "http://embeddings:8503": {
+        "https://oai.endpoints.kepler.ai.cloud.ovh.net:443": {
           "active": 0,
           "limit": 2
         },
@@ -1882,7 +1882,7 @@
     },
     "local|concurrency": {
       "endpoints": {
-        "http://localhost:8503": {
+        "https://oai.endpoints.kepler.ai.cloud.ovh.net:443": {
           "active": 0,
           "limit": 2
         },

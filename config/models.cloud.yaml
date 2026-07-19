@@ -54,6 +54,7 @@ models:
     # Sampling per the Qwen3.6-35B-A3B HuggingFace model card,
     # "Thinking Mode — General Tasks" preset. The card requires context >= 128K
     # to preserve thinking capability across multi-turn agent loops.
+    provider: slm_local
     id: "unsloth/qwen3.6-35-A3B"
     context_length: 131072       # Qwen card: thinking-mode minimum (was 64000)
     quantization: "8bit"
@@ -82,6 +83,7 @@ models:
     # Qwen3.5-9B-8bit dense it replaced — same family as primary, llama.cpp
     # toolchain (no MLX), better quality.
     # Sampling per the Qwen3.6 card "Instruct (Non-Thinking) Mode" preset.
+    provider: slm_local
     id: "unsloth/qwen3.6-35-A3B-subagent"
     context_length: 16384       # Bounded for focused sub-tasks (was 32768)
     quantization: "8bit"
@@ -106,6 +108,7 @@ models:
   # ── Experimental / A/B Testing ──────────────────────────────────
   reasoning_heavy:
     # Deep reasoning model with bounded thinking budget (ADR-0023).
+    provider: slm_local
     id: "qwen3.6-35b-a3b"  # corrected from qwen3.5 (FRE-319 audit — matches models.yaml)
     context_length: 64000
     quantization: "8bit"
@@ -226,6 +229,7 @@ models:
     # Qwen3-Embedding-0.6B via llama.cpp Docker service (VPS)
     # Instruction-aware, Matryoshka (flexible dims), 768d default
     # One-way door: changing model requires rebuilding all Neo4j vectors
+    provider: ovh
     id: "Qwen/Qwen3-Embedding-0.6B"
     provider_type: "local"
     endpoint: "http://embeddings:8503/v1"
@@ -241,6 +245,7 @@ models:
     # quality-equivalent to the Mac 4B (FRE-695 J=0.73 vs 0.747, inside n=54
     # noise). Falls back to reranker_fallback (Mac-tunnel 4B) on error/timeout,
     # then to passthrough on total failure (memory/reranker.py).
+    provider: voyage
     id: "rerank-2.5"
     provider_type: "cloud"
     endpoint: "https://api.voyageai.com/v1"
@@ -263,6 +268,7 @@ models:
     # CF-Access service token injected by memory/reranker.py for slm.example.com.
     # Programmatic fallback target (FRE-851): rerank() tries this when the Voyage
     # primary errors/times out, before degrading to vector+recency passthrough.
+    provider: slm_local
     id: "Qwen/Qwen3-Reranker-4B-mxfp8"
     provider_type: "local"
     endpoint: "https://slm.example.com/v1"

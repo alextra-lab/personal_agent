@@ -1,6 +1,6 @@
 # ADR-0119: Config-management interface (Phase 1) — observe + open-role model selection
 
-**Status:** Proposed
+**Status:** Superseded by [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md)
 **Date:** 2026-07-16
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** config, model-selection, observability, pwa, human-in-the-loop
@@ -334,6 +334,39 @@ closes only when AC-7 is proven live. Master asserts AC-7 at the acceptance gate
 ---
 
 ## Status Updates
+
+### 2026-07-19 - Superseded
+
+**Changed By:** cc-adrs (Opus)
+**Superseded by:** [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md) (model catalog and
+selection layer), with the artifact-builder half in
+[ADR-0122](ADR-0122-build-time-artifact-builder-selection.md).
+
+**Reason:** Never built. This ADR correctly identified that "model selection is config, not a
+feature," but built the surface over the same defective substrate ADR-0118 did — and inherited its
+consequences. Its amendment already had to correct a real regression (FRE-879 routing local builds
+to cloud Haiku), and its §4 "override-vs-profile crossing" rule existed only to paper over placement
+and model choice being the same axis. The owner's direction after review was to fix the substrate
+and to remove **Path** entirely — selecting a model by name, as frontier harnesses do — which
+changes this ADR's premise rather than its details: with no Path there is no profile to cross, no
+"crossing" rule, and no local/cloud axis for the surface to render.
+
+**Carried forward, not lost:** the core reframe (model selection is config over a canonical
+source, not a bespoke gadget) → ADR-0121's whole premise. The observe-first read view showing
+resolved bindings with pinned-vs-open marked → ADR-0121 §3/§5 and its config read API. The
+delegation/isolation-versus-model-per-role axis separation → ADR-0121 §5 and the future sub-agent
+ADR. The 2026-07-16 SOTA survey conclusion (routing is deterministic and off the hot path; never an
+LLM router) → ADR-0121 §5, which also records why an orchestrator choosing a sub-agent's model is
+*not* the rejected pattern. The writers-pinned guardrail with a fail-closed backstop and server-side
+write validation → ADR-0121 §6. The "don't let this get too big" constraint → honoured by scoping
+user selection to `primary` and deferring the rest.
+
+**Dropped deliberately:** the per-open-role candidate registry (superseded by the ADR-0121 catalog,
+where `kind` plus the role's `open` flag replace hand-maintained candidate lists); the
+override-vs-profile crossing rule (moot without Path); §3's FRE-886 attachment default as an
+editable domain (ADR-0121 pins `vision` on ADR-0102 model-coupling grounds, retiring the chip as the
+last Path instance); and a user picker for `sub_agent` (its model belongs to the orchestrator at
+dispatch time, per the future sub-agent ADR).
 
 ### 2026-07-16 - Proposed
 **Changed By:** cc-adrs (Opus)

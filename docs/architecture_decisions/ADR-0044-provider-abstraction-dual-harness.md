@@ -1,6 +1,6 @@
 # ADR-0044: Provider Abstraction & Dual-Harness Design
 
-**Status**: Accepted
+**Status**: Accepted — **D1/D2 superseded in part by [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md)** (profile-based execution config + dual-harness). **D3 carried forward** to the future sub-agent ADR, **D4 stands** (external delegation targets, with ADR-0050), **D5 transformed** (the telemetry dimension becomes provider + model). See ADR-0121 §8.
 **Date**: 2026-04-13
 **Deciders**: Project owner
 **Extends**: ADR-0033 (Multi-Provider Model Taxonomy & LiteLLM), ADR-0029 (Inference Concurrency Control)

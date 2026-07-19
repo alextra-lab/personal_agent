@@ -93,7 +93,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | ADR | Title | Status | Decision summary |
 |-----|-------|--------|-----------------|
 | [ADR-0043](ADR-0043-three-layer-separation.md) | Three-Layer Architectural Separation | Accepted | Knowledge / Execution / Observation as distinct layers with explicit ownership boundaries |
-| [ADR-0044](ADR-0044-provider-abstraction-dual-harness.md) | Provider Abstraction & Dual-Harness Design | Accepted | Profile-based config for simultaneous local + cloud execution, extending ADR-0033's two-client model |
+| [ADR-0044](ADR-0044-provider-abstraction-dual-harness.md) | Provider Abstraction & Dual-Harness Design | Accepted; D1/D2 superseded by ADR-0121 (D3/D4/D5 stand) | Profile-based config for simultaneous local + cloud execution, extending ADR-0033's two-client model |
 | [ADR-0045](ADR-0045-infrastructure-cloud-knowledge-layer.md) | Infrastructure — Cloud Knowledge Layer | Accepted | Deploy Knowledge Layer on cloud VM (~$20-40/mo); Terraform + Vault; execution stays flexible |
 | [ADR-0046](ADR-0046-agent-to-ui-protocol-stack.md) | Agent-to-UI Protocol Stack | Accepted | AG-UI SSE transport (zero context overhead); terminal + PWA clients; CLI-first preserved |
 | [ADR-0047](ADR-0047-context-management-observability.md) | Context Management & Observability | Accepted | Three-tier context model, compaction logging with feedback loops, knowledge freshness and confidence |
@@ -156,7 +156,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | ADR | Title | Status |
 |-----|-------|--------|
 | [ADR-0078](ADR-0078-prompt-management-observability.md) | Prompt Management & Observability | Proposed (P0+P1 shipped — FRE-404/405) |
-| [ADR-0079](ADR-0079-session-execution-profile-ownership.md) | Server-Authoritative Session Execution Profile | Implemented (FRE-416 + FRE-419, PRs #102–#104) |
+| [ADR-0079](ADR-0079-session-execution-profile-ownership.md) | Server-Authoritative Session Execution Profile | Implemented; subject superseded by ADR-0121 (invariants inherited) |
 | [ADR-0080](ADR-0080-thinking-control-policy.md) | Model-Aware Thinking-Control Policy | Implemented (FRE-417, PR #107) |
 | [ADR-0081](ADR-0081-cache-aware-context-layout-and-compaction.md) | Cache-Aware Context Layout & Compaction | Proposed |
 
@@ -181,7 +181,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0096](ADR-0096-memory-access-model-coordinated-hybrid.md) | Memory Access Model: Coordinated Hybrid (Ambient Floor + On-Demand Retrieval) | Accepted |
 | [ADR-0097](ADR-0097-ingested-knowledge-taxonomy.md) | Ingested-Knowledge Taxonomy (hypothesis) | Proposed (supersedes ADR-0071) |
 | [ADR-0098](ADR-0098-memory-substrate-and-lifecycle-architecture.md) | Memory Substrate & Lifecycle Architecture (Core/Docs topology; living-knowledge model) | Accepted |
-| [ADR-0099](ADR-0099-configuration-management-and-validation.md) | Configuration Management & Validation (single-source role matrix + validator) | Accepted |
+| [ADR-0099](ADR-0099-configuration-management-and-validation.md) | Configuration Management & Validation (single-source role matrix + validator) | Accepted; amended by ADR-0121 |
 | [ADR-0100](ADR-0100-relevance-bounded-recall.md) | Memory Recall — Relevance-Bounded Candidate Generation | Accepted |
 | [ADR-0101](ADR-0101-agent-vision-ingestion.md) | Agent Vision Ingestion of Uploaded Images | Accepted |
 | [ADR-0102](ADR-0102-document-ingestion.md) | Document Ingestion (PDF) — tiered, capability-routed | Accepted |
@@ -193,7 +193,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0108](ADR-0108-stored-artifact-vision-reprocessing.md) | Stored-Artifact Vision Re-processing (analyze-to-text, explicit tool) | Proposed |
 | [ADR-0109](ADR-0109-entity-taxonomy-redesign.md) | Entity & Relationship Taxonomy — V1 (inherited) → V2 (first principled derivation) | Accepted |
 
-### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0120)
+### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0122)
 
 | ADR | Title | Status |
 |-----|-------|--------|
@@ -205,9 +205,11 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0115](ADR-0115-knowledge-class-axis-emission-persistence-dispatch.md) | The Knowledge Class Axis — Two-Axis Emission, Persistence, Dispatch | Implemented |
 | [ADR-0116](ADR-0116-event-driven-dispatch-actuation.md) | Event-Driven Dispatch Actuation (capability-gateway + MCP Channels) | Accepted |
 | [ADR-0117](ADR-0117-pr-gate-signal-collector.md) | Deterministic Signal Collector for the PR Gate | Accepted |
-| [ADR-0118](ADR-0118-artifact-builder-model-selection.md) | Model-Selection Layer for Open Roles — User-Selectable Artifact Builder (Phase 1) | Proposed |
-| [ADR-0119](ADR-0119-config-management-interface.md) | Config-Management Interface (Phase 1) — Observe + Open-Role Model Selection | Proposed |
+| [ADR-0118](ADR-0118-artifact-builder-model-selection.md) | Model-Selection Layer for Open Roles — User-Selectable Artifact Builder (Phase 1) | Superseded by ADR-0121 + ADR-0122 |
+| [ADR-0119](ADR-0119-config-management-interface.md) | Config-Management Interface (Phase 1) — Observe + Open-Role Model Selection | Superseded by ADR-0121 |
 | [ADR-0120](ADR-0120-cost-governance-visibility-consent.md) | Cost Governance — Visibility + Consent (supersedes ADR-0065) | Proposed |
+| [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md) | Model Catalog and Selection Layer — Providers, Deployments, Bindings; the User Selects the Model | Proposed |
+| [ADR-0122](ADR-0122-build-time-artifact-builder-selection.md) | Build-Time Artifact Builder Selection — Choose the Model When You Know What You're Building | Proposed |
 
 ### Supplementary
 

@@ -1,6 +1,6 @@
 # ADR-0099 — Configuration Management & Validation (single-source role matrix · profile-divergence policy · cross-config validator)
 
-**Status:** Implemented — 2026-07-04 (assembled seam confirmed at the master integration gate on FRE-652 / PR #366; impl chain FRE-648 → 649 → 650 → 651 → 652 all merged. The config chain is behavior-neutral and rides the next `seshat-gateway` rebuild; the child tickets flip to Done at that deploy.)
+**Status:** Implemented — **amended by [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md)** (the role matrix survives as ADR-0121 Layer 3 bindings; the cross-profile divergence guard becomes largely unnecessary rather than updated — a single catalog cannot diverge — and is replaced by catalog-reference and `kind`-compatibility checks). Originally 2026-07-04 (assembled seam confirmed at the master integration gate on FRE-652 / PR #366; impl chain FRE-648 → 649 → 650 → 651 → 652 all merged. The config chain is behavior-neutral and rides the next `seshat-gateway` rebuild; the child tickets flip to Done at that deploy.)
 **Date:** 2026-06-28
 **Deciders:** Project owner (authorized 2026-06-28, FRE-644)
 **Extends:** ADR-0007 (Unified Configuration Management — established `AppConfig` as the typed-scalar authority and "secrets in `.env` only"), ADR-0031 (Model Configuration Consolidation — made `models.yaml` the source of truth for model *identity*; this ADR fixes the drift that re-entered through *role assignment*)

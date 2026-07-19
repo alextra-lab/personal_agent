@@ -28,21 +28,36 @@ dimension 1: ``substrate.py`` resolves it as
 **Phase 2 (FRE-916 phase 2) — why this module no longer takes a catalog axis.**
 Phase 1 captured two catalogs (``models.yaml`` and ``models.cloud.yaml``) and
 proved them byte-identical. Phase 2 deletes the second file, so the catalog axis
-collapses to one. The golden on disk is still the **two-catalog** file written on
-`main` before any of this work, and it is deliberately **left byte-identical**:
-this module projects it onto the surviving ``local`` slice rather than
-regenerating it. A deletion proven against an unrebaselined golden cannot launder
-a change; regenerating first would destroy exactly the evidence AC-1(a) rests on.
+collapses to one. Through the deletion itself the golden was deliberately left
+byte-identical and projected onto its surviving ``local`` slice, so the deletion
+was proven against an unrebaselined golden — one that could not launder a change.
 
 The profile axis (``ExecutionProfile``, ``config/profiles/{local,cloud}.yaml``)
 is a *different* thing from the catalog axis and is **retained** — FRE-917 owns
 its removal, not this ticket.
 
-The golden is rebaselined exactly once, in phase 2's concurrency step, where two
-guarded cells change shape by design (``provider_type`` → derived placement, and
-the concurrency dimension moving from endpoint keys to provider keys). Those are
-declared, enumerated deltas. Regenerate deliberately — never to make a red test
-green:
+**Rebaselined once, deliberately, in phase 2's concurrency step.** Three cells
+changed by design, and a diff of the old golden's ``local`` slice against the new
+one confirmed nothing else moved (timeouts and pricing byte-identical):
+
+1. ``provider_type`` → ``placement``. The field was deleted (ADR-0121: placement
+   is a provider fact, declared once). Every deployment's derived placement was
+   verified equal to its former ``provider_type`` except ``embedding``, whose
+   ``provider_type: "local"`` was a documented vestige of the retired local 0.6B
+   container — it declares provider ``ovh`` (``placement: cloud``), and phase 1
+   explicitly deferred the correction to this step.
+2. ``runtime.concurrency`` moved from endpoint keys to provider keys, and every
+   deployment now registers a semaphore. Cloud deployments previously registered
+   none at all — the controller skipped anything it inferred as "cloud" — so
+   their declared limits were dead config. Cloud ceilings are set high (50) to be
+   a safety valve rather than a throttle, and remain strictly more constrained
+   than the unbounded pass-through they replace.
+3. ``embedding.max_concurrency`` 1 → 50. Owner-directed. The 1 was inherited from
+   the local 0.6B llama.cpp container this deployment replaced (commit 48ae7529,
+   ``localhost:8503``), where single-request-at-a-time was literally true; against
+   the OVH managed API it was drift, and the provider ceiling governs.
+
+Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write
 """
@@ -72,12 +87,6 @@ _GOLDEN = Path(__file__).with_name("catalog_snapshot_golden.json")
 #: The single deployment catalog. ``config/models.cloud.yaml`` was deleted in
 #: FRE-916 phase 2 after being proven comment-only-different from this file.
 _CATALOG: Path = _REPO_ROOT / "config" / "models.yaml"
-
-#: The golden's catalog-axis key whose slice survives the collapse. The golden
-#: predates the deletion and still carries a ``cloud|`` slice; that slice was
-#: asserted byte-identical to this one in phase 1, so projecting onto ``local``
-#: loses no coverage.
-_GOLDEN_CATALOG = "local"
 
 #: Roles resolved through the ADR-0099 matrix (config/model_roles.yaml), whose
 #: callers then enter via ``get_llm_client_for_key``.
@@ -118,16 +127,15 @@ def _clear_caches() -> None:
 _BEHAVIOUR_FIELDS: tuple[str, ...] = (
     "id",
     "provider",
-    # provider_type decides LocalLLMClient vs LiteLLMClient dispatch
-    # (factory.py, dspy_adapter.py) and whether a deployment gets a concurrency
-    # semaphore at all. Omitting it let a local<->cloud flip pass this guard
+    # Placement decides LocalLLMClient vs LiteLLMClient dispatch (factory.py,
+    # dspy_adapter.py). Its predecessor `provider_type` was added to this list
+    # after a code review found that omitting it let a local<->cloud flip pass
     # green — local inference silently billed through LiteLLM, or cloud
-    # inference posted at the SLM tunnel. Caught by code review.
-    #
-    # FRE-916 phase 2 deletes this field in favour of the provider's declared
-    # placement. It stays guarded here until that step, which rebaselines the
-    # golden and swaps this cell for the derived placement in the same commit.
-    "provider_type",
+    # inference posted at the SLM tunnel. FRE-916 phase 2 deleted the field in
+    # favour of the provider's declared placement; the guard follows it there
+    # rather than lapsing. Injected by _definition_of, not a ModelDefinition
+    # field.
+    "placement",
     "endpoint",
     "context_length",
     "max_tokens",
@@ -159,10 +167,13 @@ def _definition_of(role: str, *, model_key: str | None = None) -> dict[str, Any]
     from personal_agent.config.model_loader import resolve_role_target
 
     config = load_model_config(_CATALOG)
-    _, definition = resolve_role_target(role, model_key=model_key, config=config)
+    key, definition = resolve_role_target(role, model_key=model_key, config=config)
     if definition is None:
         return None
     dumped = definition.model_dump(mode="json")
+    # Placement is a PROVIDER fact, not a field on the deployment, so it is
+    # derived here and guarded alongside the deployment's own values.
+    dumped["placement"] = config.placement_of(key).value
     return {field: dumped.get(field) for field in _BEHAVIOUR_FIELDS}
 
 
@@ -249,60 +260,13 @@ def build_snapshot() -> dict[str, Any]:
     return snapshot
 
 
-def _project_golden(golden: dict[str, Any]) -> dict[str, Any]:
-    """Project the committed golden onto the surviving single-catalog shape.
-
-    The golden on disk predates FRE-916 phase 2 and is keyed by
-    ``{catalog}|{profile}|{role}``. This strips the catalog axis by taking the
-    ``local`` slice, which phase 1 proved byte-identical to ``cloud``.
-
-    Projecting here — rather than regenerating the golden — is deliberate: the
-    file stays byte-identical across the deletion, so ``git diff`` on it is empty
-    and the deletion cannot be laundered through a rebaseline.
-
-    Args:
-        golden: The parsed two-catalog golden.
-
-    Returns:
-        The same snapshot in the single-catalog shape ``build_snapshot`` emits.
-
-    Raises:
-        AssertionError: If the golden carries no rows for the expected catalog
-            slice — a silently-empty projection would make every assertion
-            vacuously pass.
-    """
-    prefix = f"{_GOLDEN_CATALOG}|"
-    resolution = {
-        cell.removeprefix(prefix): value
-        for cell, value in golden["resolution"].items()
-        if cell.startswith(prefix)
-    }
-
-    expected_cells = len(_PROFILES) * (len(_PROFILE_ROLES) + len(_MATRIX_ROLES))
-    assert len(resolution) == expected_cells, (
-        f"Golden projection found {len(resolution)} resolution cells for catalog "
-        f"{_GOLDEN_CATALOG!r}, expected {expected_cells}. The golden's key shape "
-        "changed, or the role/profile lists drifted — either way this guard is "
-        "no longer comparing what it claims to."
-    )
-
-    return {
-        "resolution": resolution,
-        "runtime": {
-            "concurrency": golden["runtime"][f"{prefix}concurrency"],
-            "timeouts": golden["runtime"][f"{prefix}timeouts"],
-        },
-        "pricing": golden["pricing"][_GOLDEN_CATALOG],
-    }
-
-
 def test_catalog_behaviour_matches_golden() -> None:
     """Every role resolves, throttles, times out, and prices as it did on main."""
     assert _GOLDEN.exists(), (
         f"Golden snapshot missing at {_GOLDEN}. Generate it on an unmodified "
         "tree with: python -m tests.personal_agent.config.test_catalog_snapshot --write"
     )
-    expected = _project_golden(json.loads(_GOLDEN.read_text()))
+    expected = json.loads(_GOLDEN.read_text())
     actual = build_snapshot()
 
     # Compare the resolved DEFINITION, not the catalog key. Renaming a

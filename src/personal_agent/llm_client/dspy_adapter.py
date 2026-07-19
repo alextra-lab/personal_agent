@@ -34,6 +34,7 @@ from typing import Any
 
 from personal_agent.config import settings
 from personal_agent.config.model_loader import ModelConfigError, load_model_config
+from personal_agent.llm_client.models import Placement
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.telemetry import get_logger
 
@@ -96,7 +97,7 @@ def configure_dspy_lm(
     # so both a role and a deployment alias work here.
     from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
 
-    _, model_def = resolve_role_target(role_key, config=model_configs)
+    deployment_key, model_def = resolve_role_target(role_key, config=model_configs)
     if not model_def:
         raise ModelConfigError(
             f"No model configured for role '{role_key}'. "
@@ -110,7 +111,7 @@ def configure_dspy_lm(
     # every deployment names a provider — including local ones (slm_local) — so
     # `provider is not None` no longer means "cloud", and local deployments would
     # be routed through LiteLLM as "slm_local/<id>" with no api_base.
-    if model_def.provider_type is not None and model_def.provider_type != "local":
+    if model_configs.placement_of(deployment_key) is not Placement.LOCAL:
         # ── Cloud model path ─────────────────────────────────────────────────
         # LiteLLM routing uses "{provider}/{model_id}" strings natively.
         litellm_model = f"{model_def.provider}/{model_id}"

@@ -36,8 +36,8 @@ class Placement(str, Enum):
            Subject to strict concurrency control — the GPU is a scarce resource.
     CLOUD: a third-party API. Concurrency is the provider's problem, not ours.
 
-    Replaces ``ModelDefinition.provider_type`` and
-    :func:`~personal_agent.llm_client.concurrency.infer_provider_type`'s
+    Replaced ``ModelDefinition.provider_type`` and the retired
+    ``concurrency.infer_provider_type``'s
     URL string-parsing: placement is now declared once on the provider rather
     than reconstructed per model entry.
     """
@@ -155,7 +155,6 @@ class ModelDefinition(BaseModel):
             default / LocalLLMClient call-site default.
         endpoint: Optional base URL override for this model. If None, uses
             settings.llm_base_url. Not used for cloud models (they use provider SDK).
-        provider_type: Endpoint classification for concurrency control (ADR-0029).
             "local" = single-GPU servers (strict concurrency), "managed" = self-hosted
             multi-GPU clusters (moderate control), "cloud" = OpenAI/Anthropic/etc
             (pass-through). Auto-detected from endpoint if omitted.
@@ -237,14 +236,6 @@ class ModelDefinition(BaseModel):
         ),
     )
     endpoint: str | None = Field(None, description="Optional base URL override (local models)")
-    provider_type: str | None = Field(
-        None,
-        description=(
-            "Endpoint classification for concurrency control (ADR-0029). "
-            "'local' = single-GPU (strict), 'managed' = multi-GPU cluster, "
-            "'cloud' = OpenAI/Anthropic (pass-through). Auto-detected if omitted."
-        ),
-    )
     context_length: int = Field(..., ge=1, description="Maximum context length")
     quantization: str | None = Field(
         None,

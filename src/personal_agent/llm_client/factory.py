@@ -1,8 +1,8 @@
-"""LLM client factory — dispatches to LocalLLMClient or LiteLLMClient based on provider_type.
+"""LLM client factory — dispatches to LocalLLMClient or LiteLLMClient based on provider placement.
 
 Two-path dispatch (ADR-0033):
-  provider_type == "local"  →  LocalLLMClient (GPU-aware concurrency, thinking budget, tools)
-  provider_type == "cloud"  →  LiteLLMClient (all cloud providers via litellm.acompletion())
+  placement == local  →  LocalLLMClient (GPU-aware concurrency, thinking budget, tools)
+  placement == cloud  →  LiteLLMClient (all cloud providers via litellm.acompletion())
 
 Usage:
     from personal_agent.llm_client.factory import get_llm_client
@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 from personal_agent.config import load_model_config
+from personal_agent.llm_client.models import Placement
 
 if TYPE_CHECKING:
     from personal_agent.llm_client.types import LLMResponse, ModelRole
@@ -54,7 +55,7 @@ class LLMClient(Protocol):
 
 
 def get_llm_client(role_name: str = "primary") -> Any:
-    """Return the appropriate LLM client for a given role's provider_type.
+    """Return the appropriate LLM client for a given role's provider placement.
 
     When an ExecutionProfile is active (set via
     :func:`~personal_agent.config.profile.set_current_profile`), the profile's
@@ -67,7 +68,7 @@ def get_llm_client(role_name: str = "primary") -> Any:
     2. Otherwise → look up ``role_name`` directly in ``models.yaml`` (existing
        behaviour, unchanged for local/default execution).
 
-    ``"local"`` ``provider_type`` → :class:`LocalLLMClient` (GPU-aware concurrency,
+    ``local`` placement → :class:`LocalLLMClient` (GPU-aware concurrency,
     thinking budget, tool filtering). Any other value → :class:`LiteLLMClient`
     (all cloud providers via ``litellm.acompletion()``).
 
@@ -86,7 +87,7 @@ def get_llm_client(role_name: str = "primary") -> Any:
             (default: ``"primary"``).
 
     Returns:
-        An LLM client instance matching the resolved role's ``provider_type``.
+        An LLM client instance matching the resolved deployment's provider placement.
 
     Examples:
         >>> # Default: reads 'primary' from models.yaml
@@ -112,7 +113,7 @@ def get_llm_client(role_name: str = "primary") -> Any:
     profile_key = resolve_profile_redirect(role_name)
     resolved_key, model_def = resolve_role_target(role_name, model_key=profile_key, config=config)
 
-    if model_def and model_def.provider_type != "local":
+    if model_def and config.placement_of(resolved_key) is not Placement.LOCAL:
         from personal_agent.cost_gate import budget_role_for
         from personal_agent.llm_client.litellm_client import LiteLLMClient
 
@@ -162,7 +163,7 @@ def get_llm_client_for_key(model_key: str, budget_role: str = "skill_routing") -
             f"Unknown model key '{model_key}'. Available: {sorted(config.models.keys())}"
         )
 
-    if model_def.provider_type != "local":
+    if config.placement_of(model_key) is not Placement.LOCAL:
         from personal_agent.llm_client.litellm_client import LiteLLMClient
 
         return LiteLLMClient(

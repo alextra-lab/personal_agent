@@ -80,7 +80,7 @@ make test-infra-down
 
 Output lands in `telemetry/evaluation/fre630-extraction-quality/<run-id>.{json,md}`
 (**gitignored** — raw runs are never committed; curated summaries go in the research
-doc). The extractor model is resolved from `config/models.cloud.yaml`
+doc). The extractor model is resolved from `config/models.yaml`
 (**gpt-5.4-mini**, the prod extractor); every run stamps the model id, provider, prompt
 hash, git commit, and matcher/gold-schema versions.
 

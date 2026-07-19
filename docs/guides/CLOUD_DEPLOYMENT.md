@@ -360,14 +360,26 @@ CLOUDFLARE_TUNNEL_TOKEN=eyJ...
 
 ## 9. Model Configuration
 
-The VPS uses `config/models.cloud.yaml` (set via `AGENT_MODEL_CONFIG_PATH` in docker-compose):
+Every deployment reads the same catalog, `config/models.yaml`. The second file
+and `AGENT_MODEL_CONFIG_PATH` were removed in FRE-916 (ADR-0121) — a role can no
+longer resolve to a different model on the VPS than it does locally.
+
+What each compose file still declares is `AGENT_DEPLOYMENT_PROFILE`
+(`local` | `cloud` | `eval`), which keys the required-secret set in
+`config/model_roles.yaml`, not the catalog.
 
 ```yaml
-# Cloud primary + sub-agent models
+# Layer 1 — providers carry endpoint, auth, placement and the concurrency ceiling
+providers:
+  anthropic:
+    auth_env: anthropic_api_key
+    placement: cloud
+    max_concurrency: 50
+
+# Layer 2 — deployments reference a provider
 claude_sonnet:
+  provider: anthropic
   id: "claude-sonnet-4-6"
-  provider: "anthropic"
-  provider_type: "cloud"
   max_tokens: 8192
 
 claude_haiku:
@@ -431,7 +443,7 @@ PWA: POST /chat/stream  profile=cloud
 ### Adding a new profile
 
 1. Create `config/profiles/<name>.yaml` with the required fields
-2. Ensure referenced model keys exist in `config/models.yaml` AND `config/models.cloud.yaml`
+2. Ensure referenced model keys exist in `config/models.yaml` (the single catalog)
 3. Add the profile ID to the PWA's profile selector in `StreamingChat.tsx`
 4. Rebuild PWA container on VPS
 

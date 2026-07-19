@@ -796,3 +796,44 @@ unresolved reference) rather than smuggled in as reuse. Also: AC-1(b)'s "absent 
 scoped to active source and config, since historical ADRs will always name the removed symbols; and
 AC-6's fixture wording, which contradicted itself by calling the configured default "non-default,"
 was corrected.
+
+### 2026-07-19 - Step 1 delivered in two phases (FRE-916)
+**Changed By:** cc-build (Opus)
+**Reason:** Sequencing step 1 shipped as two PRs rather than one. Phase 1 (PR #584) normalized the
+catalog into providers/deployments/bindings and proved AC-1(a) by snapshot, but deliberately retained
+`config/models.cloud.yaml`, `AGENT_MODEL_CONFIG_PATH` and `ExecutionProfile`. Phase 2 completes the
+step.
+
+**Delivered by phase 2:** the catalog half of **AC-1(b)** — `config/models.cloud.yaml` and
+`AGENT_MODEL_CONFIG_PATH` are absent from active source and config, together with every place that
+pinned them (both compose files, `config/deployment.yaml`, `settings.model_config_path`, nine
+eval/study harnesses) — and **AC-3**, provider-keyed concurrency with `infer_provider_type` retired.
+`ModelDefinition.provider_type` is removed in favour of `ModelConfig.placement_of`.
+
+**Still open, correctly:** the `ExecutionProfile` / `resolve_model_key` half of AC-1(b), which the
+2026-07-19 amendment reassigned to step 2 (FRE-917) because deleting it before the selection store
+exists would remove the live Cloud pill with no replacement.
+
+**Three design points settled during the build, each a correction to this ADR's own text:**
+
+1. **AC-10 is dead, not deferred.** Its sole justification was the embedding endpoint's
+   localhost-vs-compose-DNS split. Moving the embedder to OVH removed that, and no
+   environment-divergent URL remains anywhere in the catalog. Building the `${VAR}` resolver would
+   have been machinery with no caller — the same false-reuse failure mode round 2 caught, arriving
+   from the opposite direction. The criterion should be struck rather than carried.
+2. **`required_secrets` needed a new key, and the obvious one was wrong.** It was derived from which
+   catalog file was selected. `settings.environment` looks like the natural replacement and is not:
+   `APP_ENV=eval` maps to `DEVELOPMENT` via `get_environment`, so keying on it would have silently
+   stopped enforcing the cloud secrets on the eval stack. An explicit `AGENT_DEPLOYMENT_PROFILE`
+   (`local|cloud|eval`) carries it instead, and `check_deployment_manifest_matches_compose` was
+   re-pointed onto that field so the provenance guard survives the one it used to read.
+3. **Provider ceilings apply to every provider, not only local ones.** Cloud deployments previously
+   registered no semaphore at all, so their declared limits were dead config. Placement now decides
+   only *dispatch*; the provider ceiling decides concurrency universally. Cloud ceilings are set to
+   50 as a safety valve — still strictly more constrained than the unbounded pass-through they
+   replace.
+
+**Correction to the record on the two catalogs.** Round 1 corrected "identical in 11 of 12 entries"
+to "4 of 12 differ." By the time phase 2 deleted the second file the two had been made structurally
+identical, and `diff` showed **only comment lines** differing — which is what made the deletion
+provable against a golden that was never rebaselined.

@@ -31,7 +31,7 @@ mechanism) is not used here.
 in ``config/models.yaml`` (the localhost-resolving file this driver pins) is
 ``http://localhost:8000/v1`` — a local SLM server that does not run on this VPS
 (the SLM runs on a separate Mac host, reached in production via the
-``slm.example.com`` Cloudflare Access tunnel through ``config/models.cloud.yaml``,
+``slm.example.com`` Cloudflare Access tunnel through ``config/models.yaml``,
 which this driver deliberately does NOT use — that file's embedder endpoint is
 a Docker-internal hostname unreachable from a host process). In that
 environment the multi-query arm's call fails, is caught, and the arm

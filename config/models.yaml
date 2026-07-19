@@ -180,7 +180,8 @@ models:
     max_concurrency: 10
     default_timeout: 60
     # FRE-758/FRE-649: the local entity_extraction_role (top of file), matching
-    # config/models.cloud.yaml's gpt-5.4-mini (the prod entity extractor).
+    # the prod entity extractor (the two catalogs agreed here before FRE-916
+    # phase 2 collapsed them into this file).
     temperature: 0.0
     input_cost_per_token: 0.00000075    # $0.75/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
     output_cost_per_token: 0.0000045    # $4.50/MTok

@@ -88,7 +88,9 @@ class LocalLLMClient:
             base_url: Base URL for the LLM API. If None, uses settings.llm_base_url.
             timeout_seconds: Default timeout for requests. If None, uses settings.llm_timeout_seconds.
             max_retries: Maximum number of retry attempts. If None, uses settings.llm_max_retries.
-            model_config_path: Path to models.yaml file. If None, uses settings.model_config_path.
+            model_config_path: Path to a models.yaml file. If None, uses the single
+                deployment catalog (model_loader.CATALOG_PATH). Tests and fixtures
+                pass an explicit path; there is no per-environment catalog choice.
         """
         self.base_url = base_url or settings.llm_base_url
         self.timeout_seconds = timeout_seconds or settings.llm_timeout_seconds

@@ -263,7 +263,8 @@ class LiteLLMClient:
     - Weekly budget enforcement (AGENT_CLOUD_WEEKLY_BUDGET_USD)
     - Telemetry emission via structlog
 
-    The factory selects this client when provider_type is not "local" (ADR-0033).
+    The factory selects this client when the deployment's provider placement is not
+    local (ADR-0033; placement replaced provider_type in ADR-0121).
     LiteLLM model string format: "{provider}/{model_id}" e.g. "anthropic/claude-sonnet-4-6".
 
     Args:

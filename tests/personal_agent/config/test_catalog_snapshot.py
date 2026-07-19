@@ -102,6 +102,12 @@ def _clear_caches() -> None:
 _BEHAVIOUR_FIELDS: tuple[str, ...] = (
     "id",
     "provider",
+    # provider_type decides LocalLLMClient vs LiteLLMClient dispatch
+    # (factory.py, dspy_adapter.py) and whether a deployment gets a concurrency
+    # semaphore at all. Omitting it let a local<->cloud flip pass this guard
+    # green — local inference silently billed through LiteLLM, or cloud
+    # inference posted at the SLM tunnel. Caught by code review.
+    "provider_type",
     "endpoint",
     "context_length",
     "max_tokens",

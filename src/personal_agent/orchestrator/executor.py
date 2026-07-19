@@ -182,10 +182,13 @@ def _resolve_context_max() -> int:
         The active model's context length, or ``settings.context_window_max_tokens``.
     """
     try:
-        from personal_agent.config.model_loader import load_model_config
-        from personal_agent.config.profile import resolve_model_key
+        # Binding-resolved: resolve_model_key returns the bare role name with no
+        # profile bound, which stopped being a catalog key under ADR-0121 — the
+        # lookup missed and silently fell back to settings.context_window_max_tokens.
+        from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
+        from personal_agent.config.profile import resolve_profile_redirect  # noqa: PLC0415
 
-        model_def = load_model_config().models.get(resolve_model_key("primary"))
+        _, model_def = resolve_role_target("primary", model_key=resolve_profile_redirect("primary"))
         if model_def is not None:
             return model_def.context_length
     except Exception:
@@ -1038,10 +1041,13 @@ def _no_think_applies() -> bool:
         True when the active primary model is a Qwen-family model.
     """
     try:
-        from personal_agent.config.model_loader import load_model_config
-        from personal_agent.config.profile import resolve_model_key
+        # Binding-resolved: resolve_model_key returns the bare role name with no
+        # profile bound, which stopped being a catalog key under ADR-0121 — the
+        # lookup missed and silently fell back to settings.context_window_max_tokens.
+        from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
+        from personal_agent.config.profile import resolve_profile_redirect  # noqa: PLC0415
 
-        model_def = load_model_config().models.get(resolve_model_key("primary"))
+        _, model_def = resolve_role_target("primary", model_key=resolve_profile_redirect("primary"))
         if model_def is not None:
             return "qwen" in model_def.id.lower()
     except Exception:
@@ -1677,18 +1683,20 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
         load_model_config,
         resolve_role_target,  # noqa: PLC0415
     )
-    from personal_agent.config.profile import get_current_profile, resolve_model_key
+    from personal_agent.config.profile import (
+        get_current_profile,
+        resolve_profile_redirect,
+    )
     from personal_agent.exceptions import AttachmentUnsupportedError
     from personal_agent.orchestrator.attachment_resolution import RASTER_CONTENT_TYPES
 
-    profile_for_noop = get_current_profile()
     image_attachments = [a for a in ctx.attachments if a.content_type in RASTER_CONTENT_TYPES]
     if not image_attachments:
         # Must return a real DEPLOYMENT key: callers look the result up in the
         # catalog, and the bare role name stopped being a key under ADR-0121.
         return resolve_role_target(
             role_name,
-            model_key=resolve_model_key(role_name) if profile_for_noop else None,
+            model_key=resolve_profile_redirect(role_name),
         )[0]
 
     targets = {a.processing_target for a in image_attachments if a.processing_target}
@@ -1744,9 +1752,7 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
     # being a catalog key when deployments were re-keyed by model (ADR-0121).
     from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
 
-    key, model_def = resolve_role_target(
-        role_name, model_key=resolve_model_key(role_name) if profile else None
-    )
+    key, model_def = resolve_role_target(role_name, model_key=resolve_profile_redirect(role_name))
     if model_def is not None and model_def.supports_vision:
         return key
 
@@ -1788,7 +1794,10 @@ def _resolve_document_routing_key(
             (and any co-present image) at the required capability.
     """
     from personal_agent.config.model_loader import load_model_config
-    from personal_agent.config.profile import get_current_profile, resolve_model_key
+    from personal_agent.config.profile import (
+        get_current_profile,
+        resolve_profile_redirect,
+    )
     from personal_agent.exceptions import AttachmentUnsupportedError
     from personal_agent.orchestrator.attachment_resolution import RASTER_CONTENT_TYPES
     from personal_agent.orchestrator.document_resolution import PDF_CONTENT_TYPES
@@ -1858,9 +1867,7 @@ def _resolve_document_routing_key(
     # being a catalog key when deployments were re-keyed by model (ADR-0121).
     from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
 
-    key, model_def = resolve_role_target(
-        role_name, model_key=resolve_model_key(role_name) if profile else None
-    )
+    key, model_def = resolve_role_target(role_name, model_key=resolve_profile_redirect(role_name))
     mode = _capable(model_def)
     if mode is not None:
         return key, mode
@@ -3636,16 +3643,13 @@ async def step_llm_call(
         # picking a client via get_llm_client_for_key and logging escalated=True
         # for a turn that escalated nothing.
         from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
-        from personal_agent.config.profile import (
-            get_current_profile,  # noqa: PLC0415
-            resolve_model_key,
-        )
+        from personal_agent.config.profile import resolve_profile_redirect  # noqa: PLC0415
         from personal_agent.llm_client.factory import get_llm_client
         from personal_agent.orchestrator.attachment_resolution import RASTER_CONTENT_TYPES
 
         role_key, _ = resolve_role_target(
             model_role.value,
-            model_key=resolve_model_key(model_role.value) if get_current_profile() else None,
+            model_key=resolve_profile_redirect(model_role.value),
         )
         effective_model_key = _effective_attachment_routing_key(ctx, model_role.value)
 

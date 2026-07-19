@@ -253,3 +253,26 @@ def is_valid_profile(name: str, profiles_dir: str | Path = "config/profiles") ->
         True when a ``<name>.yaml`` profile exists in ``profiles_dir``.
     """
     return name in set(list_profiles(profiles_dir))
+
+
+def resolve_profile_redirect(role_name: str) -> str | None:
+    """Return the profile's model key for ``role_name``, or None if it does not redirect.
+
+    :func:`resolve_model_key` returns ``role_name`` unchanged for any role the
+    active profile does not bind — a *pass-through*, not a redirect. Callers that
+    forward its result as an already-resolved catalog key must not do so in that
+    case: since ADR-0121 keyed the catalog by model, the bare role name is not a
+    key, and forwarding it bypasses the Layer-3 binding and resolves to nothing.
+
+    Args:
+        role_name: The model role string (e.g. ``"compressor"``).
+
+    Returns:
+        The profile's key when it genuinely redirects this role, else ``None``
+        so the caller falls through to the role's binding.
+    """
+    profile = get_current_profile()
+    if profile is None:
+        return None
+    resolved = resolve_model_key(role_name)
+    return resolved if resolved != role_name else None

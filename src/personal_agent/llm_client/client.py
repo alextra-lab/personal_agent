@@ -20,7 +20,7 @@ from personal_agent.config.model_loader import (
     load_model_config,
     resolve_role_target,
 )
-from personal_agent.config.profile import get_current_profile, resolve_model_key
+from personal_agent.config.profile import resolve_profile_redirect
 from personal_agent.llm_client.adapters import (
     _aggregate_streaming_chunks,
     adapt_chat_completions_response,
@@ -219,7 +219,7 @@ class LocalLLMClient:
         # overrides the key; absent one the role's binding decides, so a client
         # built with an explicit config (tests, eval harnesses, the ADR-0112
         # seam) resolves within that config rather than the repo's.
-        profile_key = resolve_model_key(role.value) if get_current_profile() else None
+        profile_key = resolve_profile_redirect(role.value)
         if self._catalog is not None:
             resolved_role_key, model_config = resolve_role_target(
                 role.value, model_key=profile_key, config=self._catalog
@@ -703,7 +703,7 @@ class LocalLLMClient:
         """
         from personal_agent.llm_client.dspy_adapter import configure_dspy_lm
 
-        model_def = self.model_configs.get(role.value)
+        _, model_def = resolve_role_target(role.value, config=self._catalog)
         effective_base_url = (
             model_def.endpoint if model_def and model_def.endpoint else self.base_url
         )

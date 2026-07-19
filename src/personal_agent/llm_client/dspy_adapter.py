@@ -90,8 +90,13 @@ def configure_dspy_lm(
     # Accept both ModelRole enum and plain string role names
     role_key = role.value if hasattr(role, "value") else role
 
-    # Lookup model for role
-    model_def = model_configs.models.get(role_key)
+    # Resolve through the Layer-3 binding: `role_key` may be a ROLE name, and
+    # since ADR-0121 the catalog is keyed by model, so a direct lookup misses.
+    # resolve_role_target falls back to a key lookup for names with no binding,
+    # so both a role and a deployment alias work here.
+    from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
+
+    _, model_def = resolve_role_target(role_key, config=model_configs)
     if not model_def:
         raise ModelConfigError(
             f"No model configured for role '{role_key}'. "

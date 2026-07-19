@@ -1,6 +1,6 @@
 # ADR-0121: Model Catalog and Selection Layer — providers, deployments, bindings; the user selects the model
 
-**Status:** Accepted — 2026-07-19 (owner). Implementation chain FRE-887 (T1–T5, seam AC-9 on FRE-920), Approved and dispatched.
+**Status:** Accepted — 2026-07-19 (owner). Implementation chain FRE-887 (T1–T5, seam AC-9 on FRE-920), Approved; T1 (FRE-916) phase 1 merged 2026-07-19 — see AC-1/AC-3/AC-10 amendments.
 **Date:** 2026-07-19
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** config, model-routing, provider-abstraction, pwa, human-in-the-loop, observability
@@ -604,6 +604,16 @@ deleted before every consumer of the old path is moved in the *same* PR.
   `artifact_builder` today) produces a byte-identical snapshot while delivering none of this
   decision. `compressor`'s nano/mini drift must be corrected as a separate reviewed commit, not
   absorbed silently into the snapshot.
+
+  **Amended 2026-07-19 (FRE-916 T1 delivery, PR #584).** Half **(a)** is delivered and proven. Half
+  **(b)** is **reassigned to step 2 (FRE-917)** and is NOT delivered by T1. Reason: deleting
+  `ExecutionProfile` and `resolve_model_key` before the selection store exists would remove the live
+  Cloud pill with no replacement — a user-visible regression for the duration of steps 2–4. T1
+  therefore retains `config/models.cloud.yaml`, `ExecutionProfile` and `AGENT_MODEL_CONFIG_PATH`, and
+  is additive and behaviour-preserving by design. The (b) criterion is unchanged in substance and
+  still binding — it is simply asserted at the step where the replacement lands. **T1 does not close
+  on (a) alone**: FRE-916 stays open for its second phase (catalog-file deletion, `model_config_path`
+  removal, provider-keyed concurrency, deployment surface).
 - **AC-2 — A role cannot bind to a wrong-kind model.** *Check:* set `entity_extraction`'s binding to
   an `kind: embedding` deployment; config loading **fails** with a kind-mismatch error naming the
   role and key. Likewise binding `embedding` to a `kind: llm` deployment fails. *Fails if* config
@@ -612,9 +622,18 @@ deleted before every consumer of the old path is moved in the *same* PR.
   `providers.slm_local.max_concurrency = 2`, issue concurrent calls against **two different**
   `slm_local` deployments (`qwen3.6-35b-thinking` and `qwen3.6-35b-instruct`) totalling 4 in
   flight; at most 2 are in flight at the provider at any instant. *Fails if* each deployment gets
-  its own independent limit and 4 run concurrently — the current behaviour, which is exactly the
-  laptop-contention bug. Additionally, a deployment sub-limit below the provider ceiling is
-  respected.
+  its own independent limit and 4 run concurrently. Additionally, a deployment sub-limit below the
+  provider ceiling is respected.
+
+  **Corrected and deferred 2026-07-19 (FRE-916, master-verified).** The original *Fails if* clause
+  asserted that 4 concurrent calls across two `slm_local` deployments run unbounded today. **That is
+  false.** `llm_client/concurrency.py` already maintains `_endpoint_semaphores` keyed by normalised
+  endpoint, and `acquire` takes both the model and endpoint semaphores for local/managed providers,
+  so two deployments sharing an endpoint are already capped together. The genuine gain is that the
+  ceiling becomes an explicit, configurable **provider** property instead of being inferred from the
+  endpoint URL string (retiring `infer_provider_type`). Consequently a test at the default value
+  passes on the *old* behaviour and proves nothing — **the check must use a non-default provider
+  ceiling.** Deferred to FRE-916 phase 2.
 - **AC-4 — A selection cannot reach a pinned role, by any route.** *Check:* (a) insert a selection
   row directly in the store naming each writer `r ∈ {entity_extraction, captains_log, insights,
   embedding, reranker, reranker_fallback}` **and** `vision`, then assert each still resolves to its
@@ -670,6 +689,13 @@ deleted before every consumer of the old path is moved in the *same* PR.
   naming the provider and the variable. *Fails if* an unresolved reference is passed through as a
   literal `${VAR}` string, silently defaulted, or otherwise allowed to reach a client — a broken
   endpoint discovered at first inference instead of at boot.
+
+  **Retired 2026-07-19 (FRE-916, master-verified).** This criterion is **moot** and is withdrawn. Its
+  sole justification was the embedding provider's host-vs-container URL split (`localhost:8503` vs
+  `embeddings:8503`). The embedder moved to the OVH-managed endpoint, and both catalogs on the T1
+  branch now carry **identical** provider `base_url`s with no environment-divergent URL anywhere —
+  verified at the gate. Implementing `${VAR}` interpolation would be machinery with no caller. If a
+  future provider reintroduces an environment-divergent URL, this criterion is reinstated as written.
 
 **Seam owner:** AC-9 is owned by the **PWA picker ticket (step 5)** — the child where the assembled
 intent first holds. This ADR does **not** close when the telemetry migration (step 4) merges; it

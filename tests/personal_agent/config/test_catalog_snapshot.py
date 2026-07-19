@@ -1,4 +1,4 @@
-"""Behaviour-preserving snapshot for the ADR-0121 T1 catalog refactor (FRE-916).
+"""Behaviour-preserving snapshot for the ADR-0121 catalog refactor (FRE-916).
 
 ADR-0121 §7 requires this refactor ship with a snapshot assertion: every role's
 fully-resolved model definition is captured *before* the catalog is restructured
@@ -10,7 +10,7 @@ byte-identical while live behaviour changes, because several consumers key off
 the *role name* rather than the resolved definition. This module therefore
 captures four dimensions:
 
-1. **Resolution** — ``(catalog, profile, role) -> resolved key + full definition``.
+1. **Resolution** — ``(profile, role) -> resolved key + full definition``.
 2. **Concurrency** — which semaphore each role registers, and at what limit.
    (``LocalLLMClient`` registers by catalog key and acquires by ``ModelRole``
    value; re-keying the catalog can silently disconnect the two.)
@@ -25,8 +25,24 @@ dimension 1: ``substrate.py`` resolves it as
 ``load_model_config(...).models[resolve_role_model_key(role)].endpoint``, and
 ``endpoint`` is part of the captured definition.
 
-The golden file is committed alongside this module. Regenerate deliberately —
-never to make a red test green:
+**Phase 2 (FRE-916 phase 2) — why this module no longer takes a catalog axis.**
+Phase 1 captured two catalogs (``models.yaml`` and ``models.cloud.yaml``) and
+proved them byte-identical. Phase 2 deletes the second file, so the catalog axis
+collapses to one. The golden on disk is still the **two-catalog** file written on
+`main` before any of this work, and it is deliberately **left byte-identical**:
+this module projects it onto the surviving ``local`` slice rather than
+regenerating it. A deletion proven against an unrebaselined golden cannot launder
+a change; regenerating first would destroy exactly the evidence AC-1(a) rests on.
+
+The profile axis (``ExecutionProfile``, ``config/profiles/{local,cloud}.yaml``)
+is a *different* thing from the catalog axis and is **retained** — FRE-917 owns
+its removal, not this ticket.
+
+The golden is rebaselined exactly once, in phase 2's concurrency step, where two
+guarded cells change shape by design (``provider_type`` → derived placement, and
+the concurrency dimension moving from endpoint keys to provider keys). Those are
+declared, enumerated deltas. Regenerate deliberately — never to make a red test
+green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write
 """
@@ -37,8 +53,6 @@ import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
-
-import pytest
 
 from personal_agent.config.model_loader import (
     _load_model_config_at_path,
@@ -55,12 +69,15 @@ from personal_agent.config.profile import (
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _GOLDEN = Path(__file__).with_name("catalog_snapshot_golden.json")
 
-#: The two model-definition files deployed today (config/model_roles.yaml
-#: active_profiles). Collapsed to one catalog by FRE-916.
-_CATALOGS: dict[str, Path] = {
-    "local": _REPO_ROOT / "config" / "models.yaml",
-    "cloud": _REPO_ROOT / "config" / "models.cloud.yaml",
-}
+#: The single deployment catalog. ``config/models.cloud.yaml`` was deleted in
+#: FRE-916 phase 2 after being proven comment-only-different from this file.
+_CATALOG: Path = _REPO_ROOT / "config" / "models.yaml"
+
+#: The golden's catalog-axis key whose slice survives the collapse. The golden
+#: predates the deletion and still carries a ``cloud|`` slice; that slice was
+#: asserted byte-identical to this one in phase 1, so projecting onto ``local``
+#: loses no coverage.
+_GOLDEN_CATALOG = "local"
 
 #: Roles resolved through the ADR-0099 matrix (config/model_roles.yaml), whose
 #: callers then enter via ``get_llm_client_for_key``.
@@ -75,8 +92,7 @@ _MATRIX_ROLES: tuple[str, ...] = (
 )
 
 #: Roles resolved through the ExecutionProfile (config/profile.py), whose
-#: callers enter via ``get_llm_client``. These are the roles FRE-916 re-homes
-#: onto Layer-3 bindings, so they are the highest-risk rows in the snapshot.
+#: callers enter via ``get_llm_client``. Highest-risk rows in the snapshot.
 _PROFILE_ROLES: tuple[str, ...] = ("primary", "sub_agent", "artifact_builder")
 
 #: ExecutionProfile states to capture. ``None`` is the no-profile path — the one
@@ -86,7 +102,7 @@ _PROFILES: tuple[str | None, ...] = (None, "local", "cloud")
 
 
 def _clear_caches() -> None:
-    """Drop the loader's lru_caches so each catalog is read fresh."""
+    """Drop the loader's lru_caches so the catalog is read fresh."""
     _load_model_config_at_path.cache_clear()
     _load_role_matrix.cache_clear()
 
@@ -107,6 +123,10 @@ _BEHAVIOUR_FIELDS: tuple[str, ...] = (
     # semaphore at all. Omitting it let a local<->cloud flip pass this guard
     # green — local inference silently billed through LiteLLM, or cloud
     # inference posted at the SLM tunnel. Caught by code review.
+    #
+    # FRE-916 phase 2 deletes this field in favour of the provider's declared
+    # placement. It stays guarded here until that step, which rebaselines the
+    # golden and swaps this cell for the derived placement in the same commit.
     "provider_type",
     "endpoint",
     "context_length",
@@ -134,13 +154,11 @@ _BEHAVIOUR_FIELDS: tuple[str, ...] = (
 )
 
 
-def _definition_of(
-    role: str, catalog_path: Path, *, model_key: str | None = None
-) -> dict[str, Any] | None:
+def _definition_of(role: str, *, model_key: str | None = None) -> dict[str, Any] | None:
     """Return the behaviour-determining fields for a role's EFFECTIVE definition."""
     from personal_agent.config.model_loader import resolve_role_target
 
-    config = load_model_config(catalog_path)
+    config = load_model_config(_CATALOG)
     _, definition = resolve_role_target(role, model_key=model_key, config=config)
     if definition is None:
         return None
@@ -149,49 +167,45 @@ def _definition_of(
 
 
 def _capture_resolution() -> dict[str, Any]:
-    """Capture ``(catalog, profile, role) -> resolved key + definition``."""
+    """Capture ``(profile, role) -> resolved key + definition``."""
     out: dict[str, Any] = {}
-    for catalog_name, catalog_path in _CATALOGS.items():
-        for profile_name in _PROFILES:
-            token = None
-            if profile_name is not None:
-                token = set_current_profile(
-                    load_profile(profile_name, _REPO_ROOT / "config" / "profiles")
-                )
-            try:
-                for role in _PROFILE_ROLES:
-                    cell = f"{catalog_name}|{profile_name or 'none'}|{role}"
-                    try:
-                        # Mirror what LocalLLMClient/factory actually do: the
-                        # profile supplies a key only when one is active,
-                        # otherwise the Layer-3 binding decides. Measuring
-                        # resolve_model_key alone would measure a path no
-                        # consumer takes.
-                        key = resolve_model_key(role) if profile_name else None
-                        out[cell] = {
-                            "key": key or role,
-                            "definition": _definition_of(role, catalog_path, model_key=key),
-                        }
-                    except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
-                        out[cell] = {"raises": type(exc).__name__}
+    for profile_name in _PROFILES:
+        token = None
+        if profile_name is not None:
+            token = set_current_profile(
+                load_profile(profile_name, _REPO_ROOT / "config" / "profiles")
+            )
+        try:
+            for role in _PROFILE_ROLES:
+                cell = f"{profile_name or 'none'}|{role}"
+                try:
+                    # Mirror what LocalLLMClient/factory actually do: the
+                    # profile supplies a key only when one is active, otherwise
+                    # the Layer-3 binding decides. Measuring resolve_model_key
+                    # alone would measure a path no consumer takes.
+                    key = resolve_model_key(role) if profile_name else None
+                    out[cell] = {
+                        "key": key or role,
+                        "definition": _definition_of(role, model_key=key),
+                    }
+                except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
+                    out[cell] = {"raises": type(exc).__name__}
 
-                for role in _MATRIX_ROLES:
-                    cell = f"{catalog_name}|{profile_name or 'none'}|{role}"
-                    try:
-                        key = resolve_role_model_key(
-                            role, config_path=catalog_path, root=_REPO_ROOT
-                        )
-                        out[cell] = {
-                            "key": key,
-                            "definition": _definition_of(role, catalog_path, model_key=key),
-                        }
-                    except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
-                        out[cell] = {"raises": type(exc).__name__}
-            finally:
-                if token is not None:
-                    from personal_agent.config.profile import _current_profile
+            for role in _MATRIX_ROLES:
+                cell = f"{profile_name or 'none'}|{role}"
+                try:
+                    key = resolve_role_model_key(role, config_path=_CATALOG, root=_REPO_ROOT)
+                    out[cell] = {
+                        "key": key,
+                        "definition": _definition_of(role, model_key=key),
+                    }
+                except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
+                    out[cell] = {"raises": type(exc).__name__}
+        finally:
+            if token is not None:
+                from personal_agent.config.profile import _current_profile
 
-                    _current_profile.reset(token)
+                _current_profile.reset(token)
     return out
 
 
@@ -200,37 +214,31 @@ def _capture_concurrency_and_timeouts() -> dict[str, Any]:
     from personal_agent.llm_client.client import LocalLLMClient
     from personal_agent.llm_client.types import ModelRole
 
-    out: dict[str, Any] = {}
-    for catalog_name, catalog_path in _CATALOGS.items():
-        _clear_caches()
-        client = LocalLLMClient(model_config_path=catalog_path)
-        out[f"{catalog_name}|concurrency"] = client._concurrency.get_status()
-        out[f"{catalog_name}|timeouts"] = {
-            role.value: client._role_timeouts[role] for role in ModelRole
-        }
-    return out
+    _clear_caches()
+    client = LocalLLMClient(model_config_path=_CATALOG)
+    return {
+        "concurrency": client._concurrency.get_status(),
+        "timeouts": {role.value: client._role_timeouts[role] for role in ModelRole},
+    }
 
 
 def _capture_pricing() -> dict[str, Any]:
-    """Capture the litellm.model_cost entries each catalog registers."""
+    """Capture the litellm.model_cost entries the catalog registers."""
     from personal_agent.llm_client.pricing import register_model_pricing
 
-    out: dict[str, Any] = {}
-    for catalog_name, catalog_path in _CATALOGS.items():
-        _clear_caches()
-        captured: dict[str, Any] = {}
+    _clear_caches()
+    captured: dict[str, Any] = {}
 
-        def _capture(entries: dict[str, Any], _sink: dict[str, Any] = captured) -> None:
-            _sink.update(entries)
+    def _capture(entries: dict[str, Any]) -> None:
+        captured.update(entries)
 
-        with patch("litellm.register_model", side_effect=_capture):
-            register_model_pricing(load_model_config(catalog_path))
-        out[catalog_name] = captured
-    return out
+    with patch("litellm.register_model", side_effect=_capture):
+        register_model_pricing(load_model_config(_CATALOG))
+    return captured
 
 
 def build_snapshot() -> dict[str, Any]:
-    """Build the full four-dimension behaviour snapshot."""
+    """Build the full four-dimension behaviour snapshot for the single catalog."""
     _clear_caches()
     snapshot = {
         "resolution": _capture_resolution(),
@@ -241,20 +249,60 @@ def build_snapshot() -> dict[str, Any]:
     return snapshot
 
 
-@pytest.mark.skipif(
-    not (_REPO_ROOT / "config" / "models.cloud.yaml").exists(),
-    reason=(
-        "Pre-FRE-916 snapshot: the two-catalog golden is only meaningful while "
-        "config/models.cloud.yaml exists. Superseded by the post-refactor golden."
-    ),
-)
+def _project_golden(golden: dict[str, Any]) -> dict[str, Any]:
+    """Project the committed golden onto the surviving single-catalog shape.
+
+    The golden on disk predates FRE-916 phase 2 and is keyed by
+    ``{catalog}|{profile}|{role}``. This strips the catalog axis by taking the
+    ``local`` slice, which phase 1 proved byte-identical to ``cloud``.
+
+    Projecting here — rather than regenerating the golden — is deliberate: the
+    file stays byte-identical across the deletion, so ``git diff`` on it is empty
+    and the deletion cannot be laundered through a rebaseline.
+
+    Args:
+        golden: The parsed two-catalog golden.
+
+    Returns:
+        The same snapshot in the single-catalog shape ``build_snapshot`` emits.
+
+    Raises:
+        AssertionError: If the golden carries no rows for the expected catalog
+            slice — a silently-empty projection would make every assertion
+            vacuously pass.
+    """
+    prefix = f"{_GOLDEN_CATALOG}|"
+    resolution = {
+        cell.removeprefix(prefix): value
+        for cell, value in golden["resolution"].items()
+        if cell.startswith(prefix)
+    }
+
+    expected_cells = len(_PROFILES) * (len(_PROFILE_ROLES) + len(_MATRIX_ROLES))
+    assert len(resolution) == expected_cells, (
+        f"Golden projection found {len(resolution)} resolution cells for catalog "
+        f"{_GOLDEN_CATALOG!r}, expected {expected_cells}. The golden's key shape "
+        "changed, or the role/profile lists drifted — either way this guard is "
+        "no longer comparing what it claims to."
+    )
+
+    return {
+        "resolution": resolution,
+        "runtime": {
+            "concurrency": golden["runtime"][f"{prefix}concurrency"],
+            "timeouts": golden["runtime"][f"{prefix}timeouts"],
+        },
+        "pricing": golden["pricing"][_GOLDEN_CATALOG],
+    }
+
+
 def test_catalog_behaviour_matches_golden() -> None:
     """Every role resolves, throttles, times out, and prices as it did on main."""
     assert _GOLDEN.exists(), (
         f"Golden snapshot missing at {_GOLDEN}. Generate it on an unmodified "
         "tree with: python -m tests.personal_agent.config.test_catalog_snapshot --write"
     )
-    expected = json.loads(_GOLDEN.read_text())
+    expected = _project_golden(json.loads(_GOLDEN.read_text()))
     actual = build_snapshot()
 
     # Compare the resolved DEFINITION, not the catalog key. Renaming a

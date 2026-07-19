@@ -1,6 +1,6 @@
 # ADR-0121: Model Catalog and Selection Layer — providers, deployments, bindings; the user selects the model
 
-**Status:** Proposed
+**Status:** Accepted — 2026-07-19 (owner). Implementation chain FRE-887 (T1–T5, seam AC-9 on FRE-920), Approved and dispatched.
 **Date:** 2026-07-19
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** config, model-routing, provider-abstraction, pwa, human-in-the-loop, observability

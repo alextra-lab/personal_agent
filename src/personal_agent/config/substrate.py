@@ -118,8 +118,8 @@ def _resolve_model_endpoint(role: str, settings: AppConfig, root: Path) -> str |
     )
 
     try:
-        key = resolve_role_model_key(role, config_path=settings.model_config_path, root=root)
-        model_def = load_model_config(settings.model_config_path, settings=settings).models.get(key)
+        key = resolve_role_model_key(role, root=root)
+        model_def = load_model_config(settings=settings).models.get(key)
     except Exception as exc:  # noqa: BLE001 — a config error surfaces as an unresolved source
         raise SubstrateSourceError(
             f"source 'model_endpoint:{role}' could not be resolved: {exc}"

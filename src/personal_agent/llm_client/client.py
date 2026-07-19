@@ -88,7 +88,9 @@ class LocalLLMClient:
             base_url: Base URL for the LLM API. If None, uses settings.llm_base_url.
             timeout_seconds: Default timeout for requests. If None, uses settings.llm_timeout_seconds.
             max_retries: Maximum number of retry attempts. If None, uses settings.llm_max_retries.
-            model_config_path: Path to models.yaml file. If None, uses settings.model_config_path.
+            model_config_path: Path to a models.yaml file. If None, uses the single
+                deployment catalog (model_loader.CATALOG_PATH). Tests and fixtures
+                pass an explicit path; there is no per-environment catalog choice.
         """
         self.base_url = base_url or settings.llm_base_url
         self.timeout_seconds = timeout_seconds or settings.llm_timeout_seconds
@@ -104,17 +106,19 @@ class LocalLLMClient:
             self._catalog = None
             self.model_configs = {}
 
-        # Initialize concurrency controller (ADR-0029)
-        self._concurrency = InferenceConcurrencyController(
-            default_base_url=self.base_url,
-            default_endpoint_limit=2,
-        )
+        # Initialize concurrency controller (ADR-0029; provider-keyed per ADR-0121)
+        self._concurrency = InferenceConcurrencyController(default_base_url=self.base_url)
+        if self._catalog is not None:
+            for provider_name, provider in self._catalog.providers.items():
+                self._concurrency.register_provider(
+                    provider_name, max_concurrency=provider.max_concurrency
+                )
         for role_name, model_def in self.model_configs.items():
             self._concurrency.register_model(
                 role=role_name,
                 max_concurrency=model_def.max_concurrency,
                 endpoint=model_def.endpoint,
-                provider_type=model_def.provider_type,
+                provider=model_def.provider,
             )
 
         # Build timeout map per role from model configs

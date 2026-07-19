@@ -115,7 +115,7 @@ def test_dated_response_model_still_commits_nonzero() -> None:
 
 
 @pytest.mark.parametrize(
-    "config_path", [Path("config/models.yaml"), Path("config/models.cloud.yaml")]
+    "config_path", [Path("config/models.yaml")]
 )
 @pytest.mark.parametrize("claude_key", ["claude_sonnet", "claude_haiku"])
 def test_claude_cloud_document_pricing_present(claude_key: str, config_path: Path) -> None:
@@ -142,12 +142,12 @@ def test_claude_cloud_document_pricing_present(claude_key: str, config_path: Pat
 def test_gpt_cloud_ids_reconcile_config_price(gpt_key: str) -> None:
     """FRE-742: the deployed gpt-5.4 entries commit our config price, not litellm's ship.
 
-    Loads the real ``config/models.cloud.yaml``, registers its pricing, and asserts
+    Loads the real ``config/models.yaml``, registers its pricing, and asserts
     the reconciled commit-cost for each gpt id equals the config-declared per-token
     rate × usage — non-zero and deterministic, so a future litellm registry drift
     on those ids cannot silently meter them at $0 (cf. FRE-734).
     """
-    config = load_model_config(Path("config/models.cloud.yaml"))
+    config = load_model_config(Path("config/models.yaml"))
     definition = config.models[gpt_key]
 
     # Red-before-green guard: the config must actually own the price (not None),

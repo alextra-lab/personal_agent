@@ -18,7 +18,6 @@
 #
 # Local-model fields (omit for cloud models):
 #   endpoint         Base URL override (defaults to settings.llm_base_url)
-#   provider_type    "local" | "managed" | "cloud" (ADR-0029; auto-detected if omitted)
 #   quantization     e.g. "8bit", "4bit" (omit for cloud models)
 #   temperature, top_p, presence_penalty   Sampling params
 #   top_k            Passed via extra_body (vLLM/LM Studio extension)
@@ -28,9 +27,12 @@
 #   min_concurrency  Floor for adaptive concurrency (ADR-0033)
 #
 # Cloud-model fields:
-#   provider         "anthropic" | "openai"  ← selects which SDK to dispatch to
 #   max_tokens       Max output tokens (billed per token; set deliberately)
-#   provider_type    "cloud" (set explicitly for ADR-0029 concurrency pass-through)
+#
+# NOTE: `provider_type` was removed in FRE-916 phase 2 (ADR-0121). Placement is a
+# PROVIDER fact, declared once under `providers:` and read via
+# ModelConfig.placement_of — it decides dispatch (LocalLLMClient vs LiteLLMClient).
+# Concurrency is keyed on the provider's own ceiling, not on this field.
 
 # ── Process-to-model assignments ──────────────────────────────────────────────
 # Role assignment lives ONLY in config/model_roles.yaml (ADR-0099 D1 stage 2,
@@ -53,23 +55,23 @@ providers:
     base_url: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
     auth_env: managed_embedding_token
     placement: cloud
-    max_concurrency: 1
+    max_concurrency: 50
     summary: "OVH AI Endpoints — managed embedding inference"
   openai:
     auth_env: openai_api_key
     placement: cloud
-    max_concurrency: 10
+    max_concurrency: 50
     summary: "OpenAI — structured extraction and compression"
   anthropic:
     auth_env: anthropic_api_key
     placement: cloud
-    max_concurrency: 20
+    max_concurrency: 50
     summary: "Anthropic — background reasoning and cloud-profile inference"
   voyage:
     base_url: "https://api.voyageai.com/v1"
     auth_env: voyage_api_key
     placement: cloud
-    max_concurrency: 5
+    max_concurrency: 50
     summary: "Voyage AI — managed reranking"
 
 models:
@@ -99,7 +101,6 @@ models:
     supports_vision: true         # Qwen3.6-35B-A3B vision-capable on the deployed build (ADR-0101)
     supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
     tool_calling_strategy: "native"  # Qwen3.5/3.6 chat template supports tools natively
-    provider_type: "local"
     endpoint: "https://slm.example.com/v1"
 
   # ── Tier 2: Sub-Agent ───────────────────────────────────────────
@@ -129,14 +130,12 @@ models:
     supports_vision: true         # Qwen3.6-35B-A3B vision-capable on the deployed build (ADR-0101)
     supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
     tool_calling_strategy: "native"  # Qwen3.6 chat template supports tools natively
-    provider_type: "local"
     endpoint: "https://slm.example.com/v1"
 
 
 
   # ── Cloud Models (ADR-0031) ─────────────────────────────────────
   # API key is NOT stored here — set AGENT_ANTHROPIC_API_KEY / AGENT_OPENAI_API_KEY in .env
-  # provider_type: "cloud" opts out of local GPU concurrency control (ADR-0029)
 
   claude_sonnet:
     # Anthropic Claude Sonnet — used for background reasoning tasks
@@ -144,7 +143,6 @@ models:
     # LiteLLM model string: "anthropic/claude-sonnet-5" (prefixed at call time)
     id: "claude-sonnet-5"
     provider: "anthropic"
-    provider_type: "cloud"
     max_tokens: 32768
     context_length: 200000
     min_concurrency: 1
@@ -160,7 +158,6 @@ models:
     # Used as sub_agent_model in config/profiles/cloud.yaml
     id: "claude-haiku-4-5-20251001"
     provider: "anthropic"
-    provider_type: "cloud"
     max_tokens: 4096
     context_length: 200000
     min_concurrency: 1
@@ -177,14 +174,14 @@ models:
     # Pricing: $0.75/$4.50 per MTok (input/output)
     id: "gpt-5.4-mini"
     provider: "openai"
-    provider_type: "cloud"
     max_tokens: 8192
     context_length: 128000
     min_concurrency: 1
     max_concurrency: 10
     default_timeout: 60
     # FRE-758/FRE-649: the local entity_extraction_role (top of file), matching
-    # config/models.cloud.yaml's gpt-5.4-mini (the prod entity extractor).
+    # the prod entity extractor (the two catalogs agreed here before FRE-916
+    # phase 2 collapsed them into this file).
     temperature: 0.0
     input_cost_per_token: 0.00000075    # $0.75/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
     output_cost_per_token: 0.0000045    # $4.50/MTok
@@ -200,14 +197,12 @@ models:
     provider: ovh
     id: "Qwen3-Embedding-8B"
     dimensions: 1024
-    # provider_type still drives concurrency until semaphores are keyed on the
-    # provider; flipping it to "cloud" here would drop this deployment's limit
-    # of 1 before the provider's ceiling exists to re-impose it. Removed with
-    # provider_type itself in the concurrency step.
-    provider_type: "local"
     endpoint: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
     context_length: 32768
-    max_concurrency: 1
+    # Was 1, inherited from the local 0.6B llama.cpp container this replaced
+    # (48ae7529, localhost:8503) where single-request-at-a-time was literally
+    # true. Against a managed API it was drift; the provider ceiling governs.
+    max_concurrency: 50
     default_timeout: 60
     supports_function_calling: false
 
@@ -220,7 +215,6 @@ models:
     # then to passthrough on total failure (memory/reranker.py).
     provider: voyage
     id: "rerank-2.5"
-    provider_type: "cloud"
     endpoint: "https://api.voyageai.com/v1"
     context_length: 32000
     max_concurrency: 5
@@ -236,7 +230,6 @@ models:
     # this before degrading to passthrough.
     provider: slm_local
     id: "Qwen/Qwen3-Reranker-4B-mxfp8"
-    provider_type: "local"
     endpoint: "https://slm.example.com/v1"
     context_length: 8192
     max_concurrency: 1
@@ -248,7 +241,6 @@ models:
   #   # LiteLLM model string: "gemini/gemini-2.5-pro"
   #   id: "gemini-2.5-pro"
   #   provider: "google"
-  #   provider_type: "cloud"
   #   max_tokens: 8192
   #   context_length: 1000000
   #   min_concurrency: 1

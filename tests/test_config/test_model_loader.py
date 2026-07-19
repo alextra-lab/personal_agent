@@ -302,6 +302,42 @@ models:
 
         assert config.models["reranker"].endpoint == "https://slm.real-tunnel.test/v1"
 
+    def test_provider_base_url_rewritten_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The provider's own base_url carries the placeholder and must be rewritten.
+
+        ADR-0121 makes the provider the authoritative endpoint locus; leaving the
+        placeholder host there is a trap for the first consumer that reads it
+        (FRE-917 unifies resolution onto the provider). The override covers both
+        the model endpoint and the provider base_url so the two never disagree.
+        """
+        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.real-tunnel.test")
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text(
+            """
+providers:
+  slm_local:
+    base_url: "https://slm.example.com/v1"
+    auth: none
+    placement: local
+    max_concurrency: 2
+models:
+  reranker:
+    provider: slm_local
+    id: "test-reranker"
+    endpoint: "https://slm.example.com/v1"
+    context_length: 8192
+    max_concurrency: 2
+    default_timeout: 30
+"""
+        )
+
+        config = load_model_config(config_file)
+
+        assert config.providers["slm_local"].base_url == "https://slm.real-tunnel.test/v1"
+        assert config.models["reranker"].endpoint == "https://slm.real-tunnel.test/v1"
+
     def test_non_placeholder_endpoint_untouched(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -386,7 +422,6 @@ class TestSupportsVisionDeployedConfig:
         "config_path",
         [
             Path("config/models.yaml"),
-            Path("config/models.cloud.yaml"),
         ],
     )
     def test_deployed_vision_capable_models_flagged(self, config_path: Path) -> None:
@@ -417,7 +452,6 @@ class TestSupportsPdfDocumentDeployedConfig:
         "config_path",
         [
             Path("config/models.yaml"),
-            Path("config/models.cloud.yaml"),
         ],
     )
     def test_deployed_pdf_document_capable_models_flagged(self, config_path: Path) -> None:
@@ -433,7 +467,6 @@ class TestSupportsPdfDocumentDeployedConfig:
         "config_path",
         [
             Path("config/models.yaml"),
-            Path("config/models.cloud.yaml"),
         ],
     )
     def test_deployed_pdf_document_incapable_models_unflagged(self, config_path: Path) -> None:
@@ -460,7 +493,6 @@ class TestEntityExtractionTemperatureDeployedConfig:
         "config_path",
         [
             Path("config/models.yaml"),
-            Path("config/models.cloud.yaml"),
         ],
     )
     def test_entity_extraction_role_has_pinned_temperature(self, config_path: Path) -> None:
@@ -496,7 +528,6 @@ class TestCloudGptPricingDeployedConfig:
         "config_path",
         [
             Path("config/models.yaml"),
-            Path("config/models.cloud.yaml"),
         ],
     )
     def test_gpt_cloud_models_carry_config_pricing(self, config_path: Path) -> None:

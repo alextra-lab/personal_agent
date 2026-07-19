@@ -1,5 +1,0 @@
-# Fixture: cloud side is fine — only local dangles (AC-9, FRE-650).
-models:
-  gpt-5.4-mini:
-    id: "gpt-5.4-mini"
-    provider: "openai"

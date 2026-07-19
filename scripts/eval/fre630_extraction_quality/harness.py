@@ -38,7 +38,6 @@ import os
 # extractor). ``setdefault`` lets the caller pre-override any of these.
 _TEST_SUBSTRATE_ENV = {
     "APP_ENV": "test",
-    "AGENT_MODEL_CONFIG_PATH": "config/models.cloud.yaml",
     "AGENT_NEO4J_URI": "bolt://localhost:7688",
     "AGENT_ELASTICSEARCH_URL": "http://localhost:9201",
     "AGENT_DATABASE_URL": (
@@ -77,6 +76,7 @@ from scripts.eval.fre630_extraction_quality.report import (  # noqa: E402
 from scripts.eval.fre630_extraction_quality.scoring import score_case  # noqa: E402
 
 from personal_agent.config import load_model_config, resolve_role_model_key, settings  # noqa: E402
+from personal_agent.config.model_loader import CATALOG_RELPATH  # noqa: E402
 from personal_agent.second_brain import entity_extraction  # noqa: E402
 
 log = structlog.get_logger(__name__)
@@ -129,7 +129,7 @@ def _build_meta(run_id: str, gold_set: str, samples: int, fuzzy_threshold: float
         extractor_model=model_id,
         entity_extraction_role=role,
         provider=provider,
-        model_config_path=str(settings.model_config_path),
+        model_config_path=CATALOG_RELPATH,
         git_commit=_git_commit(),
         prompt_hash=_prompt_hash(),
         matcher_version=MATCHER_VERSION,

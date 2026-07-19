@@ -94,11 +94,29 @@ class TestPolicyWarnsAndBoots:
 
 
 class TestRequiredSecretPerActiveProfile:
-    """(c) Safety, per-profile — cloud requires anthropic/openai keys; local requires none."""
+    """(c) Safety, per-profile — cloud/eval require anthropic+openai keys; local requires none.
 
-    def test_missing_cloud_secret_raises(self) -> None:
+    Keyed on AGENT_DEPLOYMENT_PROFILE since FRE-916 phase 2, which deleted the
+    model_config_path this used to be derived from.
+    """
+
+    @pytest.mark.parametrize("profile", ["cloud", "eval"])
+    def test_missing_secret_raises_for_cloud_and_eval(self, profile: str) -> None:
         cfg = make_config(
-            model_config_path="config/models.cloud.yaml",
+            deployment_profile=profile,
+            anthropic_api_key=None,
+            openai_api_key=None,
+        )
+        with pytest.raises(ValueError, match="requires secrets"):
+            enforce_required_secrets(cfg)
+
+    def test_eval_is_enforced_not_silently_dropped(self) -> None:
+        """Regression: keying on settings.environment would map APP_ENV=eval to
+        DEVELOPMENT and silently stop enforcing the cloud secrets on the eval
+        stack. The profile field must carry it independently of environment."""
+        cfg = make_config(
+            deployment_profile="eval",
+            environment=Environment.DEVELOPMENT,
             anthropic_api_key=None,
             openai_api_key=None,
         )
@@ -107,12 +125,18 @@ class TestRequiredSecretPerActiveProfile:
 
     def test_missing_secret_under_local_profile_boots(self) -> None:
         cfg = make_config(
-            model_config_path="config/models.yaml",
+            deployment_profile="local",
             anthropic_api_key=None,
             openai_api_key=None,
         )
         enforce_required_secrets(cfg)  # does not raise
         assert cfg.anthropic_api_key is None
+
+    def test_default_profile_is_local(self) -> None:
+        """`make dev` sets nothing, so it must boot keyless."""
+        cfg = make_config(anthropic_api_key=None, openai_api_key=None)
+        assert cfg.deployment_profile == "local"
+        enforce_required_secrets(cfg)  # does not raise
 
     def test_load_app_config_calls_enforce_required_secrets(
         self, monkeypatch: pytest.MonkeyPatch

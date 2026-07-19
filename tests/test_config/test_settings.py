@@ -159,7 +159,6 @@ class TestAppConfig:
         config = AppConfig()
         assert config.log_dir.is_absolute()
         assert config.governance_config_path.is_absolute()
-        assert config.model_config_path.is_absolute()
 
 
 class TestCompressionGeometry:
@@ -326,19 +325,17 @@ class TestLoadAppConfig:
 
     def test_load_app_config_creates_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that load_app_config creates a valid config."""
-        # FRE-435/FRE-630 eval-harness test modules pin AGENT_MODEL_CONFIG_PATH to
-        # config/models.cloud.yaml via an import-time os.environ.setdefault that
-        # outlives their own test module (FRE-649). Isolate this test's "default
-        # config" intent from that leak, since a "cloud" profile with no API keys
-        # would otherwise trip the FRE-649 required-secret startup check.
-        monkeypatch.delenv("AGENT_MODEL_CONFIG_PATH", raising=False)
+        # A leaked AGENT_DEPLOYMENT_PROFILE would put this "default config" test
+        # on the cloud profile, whose required-secret check (FRE-649) fails with
+        # no API keys set. Isolate the default-profile intent explicitly.
+        monkeypatch.delenv("AGENT_DEPLOYMENT_PROFILE", raising=False)
         config = load_app_config()
         assert isinstance(config, AppConfig)
         assert config.log_level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
     def test_load_app_config_logs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that load_app_config logs configuration loading."""
-        monkeypatch.delenv("AGENT_MODEL_CONFIG_PATH", raising=False)  # see test above
+        monkeypatch.delenv("AGENT_DEPLOYMENT_PROFILE", raising=False)  # see test above
 
         # Reset singleton to test logging
         import personal_agent.config.settings as settings_module

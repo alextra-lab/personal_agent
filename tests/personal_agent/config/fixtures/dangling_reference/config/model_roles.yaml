@@ -1,8 +1,7 @@
-active_profiles:
-  local: config/models.yaml
-  cloud: config/models.cloud.yaml
+# Fixture: the matrix's `all:` value names a model absent from the catalog's
+# models: mapping (AC-9, FRE-650; re-shaped for the single catalog in FRE-916
+# phase 2).
 roles:
-  entity_extraction: { divergence: allowed, local: gpt-9-ghost, cloud: gpt-5.4-mini }
+  entity_extraction: { all: gpt-9-ghost }
 required_secrets:
   local: []
-  cloud: []

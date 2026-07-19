@@ -20,7 +20,6 @@ from personal_agent.config.config_guard import (
     check_orphan_env_keys,
     load_matrix,
     repo_root,
-    resolve_active_profile,
 )
 from personal_agent.config.env_loader import Environment, get_environment, load_env_files
 from personal_agent.config.validators import (
@@ -48,7 +47,7 @@ class AppConfig(BaseSettings):
         case_sensitive=False,
         extra="ignore",
         populate_by_name=True,  # Allow both field name and alias
-        protected_namespaces=(),  # Allow model_* field names (we have model_config_path)
+        protected_namespaces=(),  # Don't reserve the model_* namespace pydantic guards by default
     )
 
     # Environment
@@ -56,6 +55,14 @@ class AppConfig(BaseSettings):
         default_factory=get_environment, description="Current environment"
     )
     debug: bool = Field(default=False, alias="APP_DEBUG", description="Debug mode flag")
+    deployment_profile: Literal["local", "cloud", "eval"] = Field(
+        default="local",
+        description=(
+            "Which deployment this process is running as — keys the per-profile "
+            "required-secret set in config/model_roles.yaml (ADR-0099 D4). "
+            "Declared explicitly by each compose file; 'local' is the make-dev default."
+        ),
+    )
 
     # Application
     project_name: str = Field(default="Personal Local AI Collaborator", description="Project name")
@@ -130,7 +137,7 @@ class AppConfig(BaseSettings):
         """Validate log format."""
         return validate_log_format(v)
 
-    @field_validator("log_dir", "governance_config_path", "model_config_path", mode="before")
+    @field_validator("log_dir", "governance_config_path", mode="before")
     @classmethod
     def resolve_paths(cls, v: Path | str) -> Path:
         """Resolve relative paths to absolute."""
@@ -898,9 +905,6 @@ class AppConfig(BaseSettings):
     # Paths (for domain config loaders)
     governance_config_path: Path = Field(
         default=Path("config/governance"), description="Path to governance config directory"
-    )
-    model_config_path: Path = Field(
-        default=Path("config/models.yaml"), description="Path to model config file"
     )
 
     # Service Configuration
@@ -2606,39 +2610,43 @@ def enforce_required_secrets(config: "AppConfig", *, root: Path | None = None) -
     real application-boot entry point — rather than an ``AppConfig``
     ``model_validator``. Ad-hoc ``AppConfig()`` / ``.model_validate()``
     construction is pervasive across the test suite (tests deliberately
-    bypass env-file loading for isolation), and several legitimate
-    eval-harness test files (FRE-435/FRE-630) pin
-    ``AGENT_MODEL_CONFIG_PATH=config/models.cloud.yaml`` via an import-time
-    ``os.environ.setdefault`` that outlives their own test module for the
-    rest of the pytest session. A pydantic validator would fire on every one
-    of those incidental constructions; a plain post-construction check called
-    only from the real boot path fires only when the application is actually
-    starting.
+    bypass env-file loading for isolation). A pydantic validator would fire on
+    every one of those incidental constructions; a plain post-construction check
+    called only from the real boot path fires only when the application is
+    actually starting.
+
+    **Keyed on ``deployment_profile`` since FRE-916 phase 2.** It previously
+    derived the profile from ``model_config_path`` — which catalog file was
+    selected — and that field no longer exists (ADR-0121 collapsed the two
+    catalogs into one). ``settings.environment`` was considered and rejected as
+    the replacement: ``APP_ENV=eval`` maps to ``DEVELOPMENT`` via
+    :func:`get_environment`, so keying on it would silently stop enforcing the
+    cloud secrets on the eval stack, which enforces them today.
 
     Args:
         config: The constructed ``AppConfig`` to check.
         root: Repo root override (test seam); defaults to ``repo_root()``.
 
     Raises:
-        ValueError: When the active profile requires a secret that is unset.
+        ValueError: When the active deployment profile requires a secret that is unset.
     """
     resolved_root = root if root is not None else repo_root()
     matrix = load_matrix(resolved_root)
     if not matrix:
         return
 
-    active_profile = resolve_active_profile(config.model_config_path, matrix, resolved_root)
+    profile = config.deployment_profile
     required_secrets_by_profile = matrix.get("required_secrets", {})
     required_secrets: list[str] = (
-        required_secrets_by_profile.get(active_profile, [])
+        required_secrets_by_profile.get(profile, [])
         if isinstance(required_secrets_by_profile, dict)
         else []
     )
     missing = [name for name in required_secrets if getattr(config, name, None) is None]
     if missing:
         raise ValueError(
-            f"Active profile {active_profile!r} (resolved from model_config_path="
-            f"{config.model_config_path!r}) requires secrets {missing} but they are unset. "
+            f"Deployment profile {profile!r} (AGENT_DEPLOYMENT_PROFILE) requires "
+            f"secrets {missing} but they are unset. "
             "Set the corresponding AGENT_* env var(s) before starting."
         )
 

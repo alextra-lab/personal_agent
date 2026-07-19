@@ -36,8 +36,8 @@ class Placement(str, Enum):
            Subject to strict concurrency control — the GPU is a scarce resource.
     CLOUD: a third-party API. Concurrency is the provider's problem, not ours.
 
-    Replaces ``ModelDefinition.provider_type`` and
-    :func:`~personal_agent.llm_client.concurrency.infer_provider_type`'s
+    Replaced ``ModelDefinition.provider_type`` and the retired
+    ``concurrency.infer_provider_type``'s
     URL string-parsing: placement is now declared once on the provider rather
     than reconstructed per model entry.
     """
@@ -155,10 +155,6 @@ class ModelDefinition(BaseModel):
             default / LocalLLMClient call-site default.
         endpoint: Optional base URL override for this model. If None, uses
             settings.llm_base_url. Not used for cloud models (they use provider SDK).
-        provider_type: Endpoint classification for concurrency control (ADR-0029).
-            "local" = single-GPU servers (strict concurrency), "managed" = self-hosted
-            multi-GPU clusters (moderate control), "cloud" = OpenAI/Anthropic/etc
-            (pass-through). Auto-detected from endpoint if omitted.
         context_length: Maximum context length for this model.
         quantization: Quantization level (e.g., "8bit", "4bit", "5bit"). None for
             cloud models where quantization is managed by the provider.
@@ -237,14 +233,6 @@ class ModelDefinition(BaseModel):
         ),
     )
     endpoint: str | None = Field(None, description="Optional base URL override (local models)")
-    provider_type: str | None = Field(
-        None,
-        description=(
-            "Endpoint classification for concurrency control (ADR-0029). "
-            "'local' = single-GPU (strict), 'managed' = multi-GPU cluster, "
-            "'cloud' = OpenAI/Anthropic (pass-through). Auto-detected if omitted."
-        ),
-    )
     context_length: int = Field(..., ge=1, description="Maximum context length")
     quantization: str | None = Field(
         None,
@@ -460,17 +448,27 @@ class ModelConfig(BaseModel):
 
     @model_validator(mode="after")
     def _deployments_reference_known_providers(self) -> "ModelConfig":
-        """Every deployment's provider must exist (ADR-0121 §8 replacement check)."""
+        """Every deployment must reference a known provider (ADR-0121 §8 replacement check).
+
+        FRE-916 phase 2 tightened this from "no DANGLING provider reference" to
+        "provider REQUIRED". Phase 1 introduced the layers additively and allowed
+        a providerless deployment as a not-yet-migrated legacy entry; every entry
+        now declares a provider, so the laxity has outlived its purpose and is a
+        live fail-open. A deployment with no provider has no declared placement,
+        and :meth:`placement_of` would default it to ``LOCAL`` — routing a
+        would-be cloud model to the local client and silently skipping the
+        paid-attachment cost gate (caught in code review). Requiring the provider
+        makes that state unrepresentable rather than merely improbable.
+        """
         if not self.providers:
             return self
         for key, definition in self.models.items():
-            # A deployment with no provider is a not-yet-migrated legacy entry
-            # carrying its own `endpoint`. The invariant enforced here is "no
-            # DANGLING provider reference", not "everything has migrated" —
-            # otherwise the three layers cannot be introduced additively.
-            # Tighten to require `provider` once every entry declares one.
             if definition.provider is None:
-                continue
+                raise ValueError(
+                    f"deployment {key!r} declares no provider; every deployment must "
+                    f"reference one of {sorted(self.providers)} (ADR-0121 — placement is a "
+                    "provider fact, and a providerless deployment fails open to LOCAL)"
+                )
             if definition.provider not in self.providers:
                 raise ValueError(
                     f"deployment {key!r} references unknown provider "
@@ -514,9 +512,14 @@ class ModelConfig(BaseModel):
 
         Returns:
             The deployment's provider placement. Defaults to
-            :attr:`Placement.LOCAL` when the deployment or its provider is
-            unknown — matching the pre-ADR-0121 fallback, where an unresolved
-            ``provider_type`` meant local.
+            :attr:`Placement.LOCAL` only for a deployment (or provider) absent
+            from this config — a defensive fallback for a partially-constructed
+            or test config, NOT a behavioural rule. It is unreachable for any
+            catalog that loaded: :meth:`_deployments_reference_known_providers`
+            fails config load on a providerless or dangling deployment. (It is
+            *not* "pre-ADR-0121 parity": an unresolved ``provider_type`` used to
+            default to cloud dispatch, the opposite direction — which is exactly
+            why the providerless state had to become unrepresentable.)
         """
         definition = self.models.get(deployment_key)
         if definition is None or definition.provider is None:

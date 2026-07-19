@@ -111,19 +111,27 @@ class TestProviderReferences:
                 }
             )
 
-    def test_missing_provider_is_a_legacy_entry_not_an_error(self) -> None:
-        """A deployment with no provider is legacy, and loads.
+    def test_missing_provider_fails_when_providers_declared(self) -> None:
+        """A deployment with no provider fails load (FRE-916 phase 2).
 
-        The invariant is "no DANGLING provider reference", not "everything has
-        migrated" — the three layers are introduced additively, so entries still
-        carrying their own `endpoint` must keep loading alongside migrated ones.
-        Tighten to require `provider` once every entry declares one.
+        Phase 1 allowed a providerless "legacy" entry while the three layers were
+        introduced additively. Every entry now declares a provider, so the laxity
+        became a live fail-open: a providerless deployment has no placement, and
+        placement_of would default it to LOCAL — routing a would-be cloud model
+        local and skipping the paid-attachment cost gate (code review). The
+        provider is now required; the error names the deployment.
         """
         deployment = {k: v for k, v in _DEPLOYMENTS["qwen-chat"].items() if k != "provider"}
-        config = ModelConfig.model_validate(
-            {"providers": _PROVIDERS, "models": {"legacy": deployment}, "roles": {}}
-        )
-        assert config.models["legacy"].provider is None
+        with pytest.raises(ValidationError, match="orphan"):
+            ModelConfig.model_validate(
+                {"providers": _PROVIDERS, "models": {"orphan": deployment}, "roles": {}}
+            )
+
+    def test_missing_provider_tolerated_when_no_providers_block(self) -> None:
+        """With no `providers:` block (a bare fixture catalog) the check is inert."""
+        deployment = {k: v for k, v in _DEPLOYMENTS["qwen-chat"].items() if k != "provider"}
+        config = ModelConfig.model_validate({"models": {"bare": deployment}, "roles": {}})
+        assert config.models["bare"].provider is None
 
 
 class TestBindingReferences:

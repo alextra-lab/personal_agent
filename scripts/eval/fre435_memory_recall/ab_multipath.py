@@ -31,7 +31,7 @@ mechanism) is not used here.
 in ``config/models.yaml`` (the localhost-resolving file this driver pins) is
 ``http://localhost:8000/v1`` — a local SLM server that does not run on this VPS
 (the SLM runs on a separate Mac host, reached in production via the
-``slm.example.com`` Cloudflare Access tunnel through ``config/models.cloud.yaml``,
+``slm.example.com`` Cloudflare Access tunnel through ``config/models.yaml``,
 which this driver deliberately does NOT use — that file's embedder endpoint is
 a Docker-internal hostname unreachable from a host process). In that
 environment the multi-query arm's call fails, is caught, and the arm
@@ -58,7 +58,6 @@ import os
 _TEST_SUBSTRATE_ENV = {
     "APP_ENV": "test",
     "AGENT_SUBSTRATE_PROFILE": "test",
-    "AGENT_MODEL_CONFIG_PATH": "config/models.yaml",
     "AGENT_NEO4J_URI": "bolt://localhost:7688",
     "AGENT_ELASTICSEARCH_URL": "http://localhost:9201",
     "AGENT_DATABASE_URL": (

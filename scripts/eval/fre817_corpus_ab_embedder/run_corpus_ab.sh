@@ -16,7 +16,6 @@
 set -euo pipefail
 
 # Force-set (not setdefault) so no stray value survives from the shell.
-export AGENT_MODEL_CONFIG_PATH="config/models.yaml"
 export AGENT_EMBEDDING_DIMENSIONS=1024
 
 # Preflight: refuse to spend on the full corpus unless the LOCAL 0.6b embedder

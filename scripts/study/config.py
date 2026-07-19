@@ -60,7 +60,6 @@ def study_substrate_env(study_settings: StudySettings) -> dict[str, str]:
     """
     return {
         "APP_ENV": "test",
-        "AGENT_MODEL_CONFIG_PATH": "config/models.yaml",
         "AGENT_NEO4J_URI": study_settings.neo4j_uri,
         "AGENT_NEO4J_USER": study_settings.neo4j_user,
         "AGENT_NEO4J_PASSWORD": study_settings.neo4j_password,

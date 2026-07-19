@@ -397,19 +397,21 @@ def test_extract_heredocs_field_read_only_inside_heredoc_resolves() -> None:
 
 
 def test_sh_embedded_reads_wired_into_scripts_root_evidence() -> None:
-    """The two known `.sh`-embedded heredoc reads are wired into real `scripts`-root evidence.
+    """`.sh`-embedded heredoc reads are wired into real `scripts`-root evidence.
 
-    Ties directly to the two production files FRE-907 named: `neo4j_uri` and
-    `embedding_dimensions` are each read inside a `uv run python - <<'PY'` heredoc there.
-    Asserts the exact `file:line` citation, not just presence, to prove the line-padding
-    (`_extract_heredocs`'s blank-line prefix) actually lands on the real source line.
+    Ties to a production file FRE-907 named: `embedding_dimensions` is read inside
+    a `uv run python - <<'PY'` heredoc there. Asserts the exact `file:line`
+    citation, not just presence, to prove the line-padding (`_extract_heredocs`'s
+    blank-line prefix) actually lands on the real source line.
+
+    FRE-916 phase 2 deleted `run_embedder_benchmark.sh` — it existed only to
+    select the benchmark catalogs via the retired `AGENT_MODEL_CONFIG_PATH`, so it
+    went with them. It carried this test's only `neo4j_uri` heredoc citation, so
+    that half is retired rather than re-pointed at a file that does not read it.
     """
-    neo4j_hits = external_reads("neo4j_uri").get("scripts", [])
-    assert "scripts/eval/fre435_memory_recall/run_embedder_benchmark.sh:90" in neo4j_hits
-
     dims_hits = external_reads("embedding_dimensions").get("scripts", [])
-    assert "scripts/eval/fre435_memory_recall/run_embedder_benchmark.sh:93" in dims_hits
-    assert "scripts/eval/fre817_corpus_ab_embedder/run_corpus_ab.sh:32" in dims_hits
+    assert "scripts/eval/fre817_corpus_ab_embedder/run_corpus_ab.sh:31" in dims_hits
+    assert "scripts/eval/fre817_corpus_ab_embedder/run_corpus_ab.sh:33" in dims_hits
 
 
 def test_generate_report_describes_ast_scan_not_git_grep() -> None:

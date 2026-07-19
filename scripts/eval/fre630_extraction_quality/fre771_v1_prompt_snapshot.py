@@ -5,7 +5,7 @@ activates it against the live `entity_extraction` module for the powered A/B's "
 comparison arm.
 
 Isolated into its own module (no `harness`/`bench` import) so it is unit-testable without
-live cloud credentials — `harness.py` pins `AGENT_MODEL_CONFIG_PATH` to the cloud profile
+live cloud credentials — the extractor resolves through the single deployment catalog
 at import time (by design, for benchmark realism), which requires real API keys; this
 module only needs `personal_agent.second_brain.entity_extraction`, which does not.
 

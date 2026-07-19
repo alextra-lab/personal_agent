@@ -1,79 +1,62 @@
 # config/model_roles.yaml — ADR-0099 D1 role matrix (stage 2, FRE-650)
 #
 # The ONE hand-edited home for role→model assignment. Stage 2 makes this
-# GENERATIVE: each role now carries the actual model-key value(s), and
+# GENERATIVE: each role carries the actual model-key value, and
 # src/personal_agent/config/model_loader.py's resolve_role_model_key()
 # resolves every runtime consumer directly from this file. The per-profile
 # `<role>_role:` YAML headers stage 1 checked this file against are REMOVED
 # (there is no second place a role assignment can live).
 #
-# ── active_profiles ─────────────────────────────────────────────────────────
-# The two model-definition files actually deployed (CONFIG_INVENTORY.md §6):
-# local dev (`make dev`) uses AppConfig's model_config_path default; cloud AND
-# eval both pin AGENT_MODEL_CONFIG_PATH to models.cloud.yaml. Treating eval as
-# the `cloud` bucket here is deliberate (docker-compose.eval.yml also requires
-# the same cloud API keys) — NOT a stand-in for ADR-0099 AC-7's eval-specific
-# opt-in-divergence mechanism, which is out of this ticket's scope.
-# The models.benchmark-*.yaml files are never deployed and are intentionally
-# excluded from the guard's active-profile set. (models-baseline.yaml and
-# models.medium.yaml — the other two files once excluded here — were retired
-# outright in stage 4, FRE-652: no active/deployed reader ever used them.)
-active_profiles:
-  local: config/models.yaml
-  cloud: config/models.cloud.yaml
-
 # ── roles ───────────────────────────────────────────────────────────────────
-# divergence: forbidden  → exactly one `all:` model key, used under every
-#   active profile (assignment drift is structurally impossible: there is no
-#   per-profile value to diverge). The key must resolve to the SAME
-#   fully-resolved ModelDefinition (id + provider + sampling params) in every
-#   active profile's models: mapping — a mismatch there is definition drift,
-#   still caught by the guard (check_forbidden_role_divergence_and_dangling_refs).
-# divergence: allowed    → a `local:`/`cloud:` model key per profile (at least
-#   one required). The role may legitimately resolve to different keys, or to
-#   the same key backed by a different ModelDefinition per profile's file.
+# FRE-916 phase 2 (ADR-0121) COLLAPSED the divergence axis. `active_profiles`
+# and the `divergence: allowed | forbidden` distinction both existed to describe
+# how a role could resolve differently across the two model-definition files.
+# There is now exactly one catalog (config/models.yaml), so there is no second
+# file for an assignment to diverge into: every role has one value, and
+# assignment drift is structurally impossible rather than merely policed.
 #
-# `primary`/`sub_agent` are intent-only here — they are NOT resolved through
-# this matrix. They stay on the pre-existing ExecutionProfile mechanism
-# (ADR-0044, config/profiles/{local,cloud}.yaml, config/profile.py's
-# resolve_model_key()), a session-scoped runtime choice, not a deployment-
-# config divergence. FRE-650 does not touch that mechanism.
+# The two `allowed` roles this retired (`primary`, `sub_agent`) already carried
+# identical `local:`/`cloud:` values, so the collapse is a no-op in resolution.
+# They were also never resolved through this matrix in the first place — they
+# route via ExecutionProfile (ADR-0044) and, since ADR-0121, the Layer-3
+# bindings below. FRE-917 removes ExecutionProfile itself.
 #
-# `compressor` stays `allowed` (FRE-649 follow-up: owner to decide whether it
-# should become `forbidden` — its nano/mini split looks like uncorrected
-# drift, unresolved by this ticket). `reranker` moved to `forbidden` (FRE-851):
-# both profiles now point at the same Voyage rerank-2.5 managed endpoint, so
-# there is no per-profile value left to diverge — the local/cloud 0.6B/4B
-# split this role once carried is gone (Voyage is the primary in both files;
-# the retired Mac-tunnel 4B lives on as the `reranker_fallback` role, also
-# `forbidden` for the same reason — one programmatic fallback target, not a
-# per-profile choice).
+# The dangling-reference half of the old guard is RETAINED
+# (config_guard.check_forbidden_role_divergence_and_dangling_refs): a role
+# pointing at a model key that no longer exists is still a real failure.
 roles:
-  primary:            { divergence: allowed, local: qwen3.6-35b-thinking, cloud: qwen3.6-35b-thinking }
-  sub_agent:          { divergence: allowed, local: qwen3.6-35b-instruct, cloud: qwen3.6-35b-instruct }
-  entity_extraction:  { divergence: forbidden, all: gpt-5.4-mini }
-  captains_log:       { divergence: forbidden, all: claude_sonnet }
-  insights:           { divergence: forbidden, all: claude_sonnet }
-  embedding:          { divergence: forbidden, all: embedding }
-  compressor:         { divergence: forbidden, all: gpt-5.4-mini }
-  reranker:           { divergence: forbidden, all: reranker }
-  reranker_fallback:  { divergence: forbidden, all: reranker_fallback }
+  primary:            { all: qwen3.6-35b-thinking }
+  sub_agent:          { all: qwen3.6-35b-instruct }
+  entity_extraction:  { all: gpt-5.4-mini }
+  captains_log:       { all: claude_sonnet }
+  insights:           { all: claude_sonnet }
+  embedding:          { all: embedding }
+  compressor:         { all: gpt-5.4-mini }
+  reranker:           { all: reranker }
+  reranker_fallback:  { all: reranker_fallback }
 
 # ── required_secrets ────────────────────────────────────────────────────────
 # Per-profile required AppConfig secret fields (ADR-0099 D4: "required secret
 # is per-profile, not global"). Checked at AppConfig startup (safety class) —
 # fires only when the ACTIVE profile is the one requiring the secret.
+#
+# Keyed by AGENT_DEPLOYMENT_PROFILE since FRE-916 phase 2. It was previously
+# keyed by which catalog file AGENT_MODEL_CONFIG_PATH selected; that variable is
+# gone. `eval` is listed explicitly and requires the same set as `cloud`, which
+# is what it enforces today — deriving the key from settings.environment instead
+# would have silently dropped it, because APP_ENV=eval maps to DEVELOPMENT.
 required_secrets:
   local: []
   cloud:
     - anthropic_api_key
     - openai_api_key
+  eval:
+    - anthropic_api_key
+    - openai_api_key
 
 # ── Layer 3 bindings (ADR-0121) ──────────────────────────────────────────────
-# Added ALONGSIDE the `roles:` divergence matrix above, which still drives
-# resolution. These point at the CURRENT model keys, so they encode today's
-# behaviour exactly; the keys are renamed to model aliases in a later step, and
-# the divergence matrix is deleted only once nothing reads it.
+# Which deployment each role uses, plus its per-use parameters. These point at
+# deployment keys in config/models.yaml's `models:` mapping.
 #
 # `open: true` marks a role a user may select. Absent means pinned — fail-closed,
 # so a role added later is never selectable by omission (ADR-0121 §6). Nothing

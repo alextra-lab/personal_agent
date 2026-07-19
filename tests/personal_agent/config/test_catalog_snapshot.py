@@ -1,4 +1,4 @@
-"""Behaviour-preserving snapshot for the ADR-0121 T1 catalog refactor (FRE-916).
+"""Behaviour-preserving snapshot for the ADR-0121 catalog refactor (FRE-916).
 
 ADR-0121 §7 requires this refactor ship with a snapshot assertion: every role's
 fully-resolved model definition is captured *before* the catalog is restructured
@@ -10,7 +10,7 @@ byte-identical while live behaviour changes, because several consumers key off
 the *role name* rather than the resolved definition. This module therefore
 captures four dimensions:
 
-1. **Resolution** — ``(catalog, profile, role) -> resolved key + full definition``.
+1. **Resolution** — ``(profile, role) -> resolved key + full definition``.
 2. **Concurrency** — which semaphore each role registers, and at what limit.
    (``LocalLLMClient`` registers by catalog key and acquires by ``ModelRole``
    value; re-keying the catalog can silently disconnect the two.)
@@ -25,8 +25,39 @@ dimension 1: ``substrate.py`` resolves it as
 ``load_model_config(...).models[resolve_role_model_key(role)].endpoint``, and
 ``endpoint`` is part of the captured definition.
 
-The golden file is committed alongside this module. Regenerate deliberately —
-never to make a red test green:
+**Phase 2 (FRE-916 phase 2) — why this module no longer takes a catalog axis.**
+Phase 1 captured two catalogs (``models.yaml`` and ``models.cloud.yaml``) and
+proved them byte-identical. Phase 2 deletes the second file, so the catalog axis
+collapses to one. Through the deletion itself the golden was deliberately left
+byte-identical and projected onto its surviving ``local`` slice, so the deletion
+was proven against an unrebaselined golden — one that could not launder a change.
+
+The profile axis (``ExecutionProfile``, ``config/profiles/{local,cloud}.yaml``)
+is a *different* thing from the catalog axis and is **retained** — FRE-917 owns
+its removal, not this ticket.
+
+**Rebaselined once, deliberately, in phase 2's concurrency step.** Three cells
+changed by design, and a diff of the old golden's ``local`` slice against the new
+one confirmed nothing else moved (timeouts and pricing byte-identical):
+
+1. ``provider_type`` → ``placement``. The field was deleted (ADR-0121: placement
+   is a provider fact, declared once). Every deployment's derived placement was
+   verified equal to its former ``provider_type`` except ``embedding``, whose
+   ``provider_type: "local"`` was a documented vestige of the retired local 0.6B
+   container — it declares provider ``ovh`` (``placement: cloud``), and phase 1
+   explicitly deferred the correction to this step.
+2. ``runtime.concurrency`` moved from endpoint keys to provider keys, and every
+   deployment now registers a semaphore. Cloud deployments previously registered
+   none at all — the controller skipped anything it inferred as "cloud" — so
+   their declared limits were dead config. Cloud ceilings are set high (50) to be
+   a safety valve rather than a throttle, and remain strictly more constrained
+   than the unbounded pass-through they replace.
+3. ``embedding.max_concurrency`` 1 → 50. Owner-directed. The 1 was inherited from
+   the local 0.6B llama.cpp container this deployment replaced (commit 48ae7529,
+   ``localhost:8503``), where single-request-at-a-time was literally true; against
+   the OVH managed API it was drift, and the provider ceiling governs.
+
+Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write
 """
@@ -37,8 +68,6 @@ import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
-
-import pytest
 
 from personal_agent.config.model_loader import (
     _load_model_config_at_path,
@@ -55,12 +84,9 @@ from personal_agent.config.profile import (
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _GOLDEN = Path(__file__).with_name("catalog_snapshot_golden.json")
 
-#: The two model-definition files deployed today (config/model_roles.yaml
-#: active_profiles). Collapsed to one catalog by FRE-916.
-_CATALOGS: dict[str, Path] = {
-    "local": _REPO_ROOT / "config" / "models.yaml",
-    "cloud": _REPO_ROOT / "config" / "models.cloud.yaml",
-}
+#: The single deployment catalog. ``config/models.cloud.yaml`` was deleted in
+#: FRE-916 phase 2 after being proven comment-only-different from this file.
+_CATALOG: Path = _REPO_ROOT / "config" / "models.yaml"
 
 #: Roles resolved through the ADR-0099 matrix (config/model_roles.yaml), whose
 #: callers then enter via ``get_llm_client_for_key``.
@@ -75,8 +101,7 @@ _MATRIX_ROLES: tuple[str, ...] = (
 )
 
 #: Roles resolved through the ExecutionProfile (config/profile.py), whose
-#: callers enter via ``get_llm_client``. These are the roles FRE-916 re-homes
-#: onto Layer-3 bindings, so they are the highest-risk rows in the snapshot.
+#: callers enter via ``get_llm_client``. Highest-risk rows in the snapshot.
 _PROFILE_ROLES: tuple[str, ...] = ("primary", "sub_agent", "artifact_builder")
 
 #: ExecutionProfile states to capture. ``None`` is the no-profile path — the one
@@ -86,7 +111,7 @@ _PROFILES: tuple[str | None, ...] = (None, "local", "cloud")
 
 
 def _clear_caches() -> None:
-    """Drop the loader's lru_caches so each catalog is read fresh."""
+    """Drop the loader's lru_caches so the catalog is read fresh."""
     _load_model_config_at_path.cache_clear()
     _load_role_matrix.cache_clear()
 
@@ -102,12 +127,15 @@ def _clear_caches() -> None:
 _BEHAVIOUR_FIELDS: tuple[str, ...] = (
     "id",
     "provider",
-    # provider_type decides LocalLLMClient vs LiteLLMClient dispatch
-    # (factory.py, dspy_adapter.py) and whether a deployment gets a concurrency
-    # semaphore at all. Omitting it let a local<->cloud flip pass this guard
+    # Placement decides LocalLLMClient vs LiteLLMClient dispatch (factory.py,
+    # dspy_adapter.py). Its predecessor `provider_type` was added to this list
+    # after a code review found that omitting it let a local<->cloud flip pass
     # green — local inference silently billed through LiteLLM, or cloud
-    # inference posted at the SLM tunnel. Caught by code review.
-    "provider_type",
+    # inference posted at the SLM tunnel. FRE-916 phase 2 deleted the field in
+    # favour of the provider's declared placement; the guard follows it there
+    # rather than lapsing. Injected by _definition_of, not a ModelDefinition
+    # field.
+    "placement",
     "endpoint",
     "context_length",
     "max_tokens",
@@ -134,64 +162,61 @@ _BEHAVIOUR_FIELDS: tuple[str, ...] = (
 )
 
 
-def _definition_of(
-    role: str, catalog_path: Path, *, model_key: str | None = None
-) -> dict[str, Any] | None:
+def _definition_of(role: str, *, model_key: str | None = None) -> dict[str, Any] | None:
     """Return the behaviour-determining fields for a role's EFFECTIVE definition."""
     from personal_agent.config.model_loader import resolve_role_target
 
-    config = load_model_config(catalog_path)
-    _, definition = resolve_role_target(role, model_key=model_key, config=config)
+    config = load_model_config(_CATALOG)
+    key, definition = resolve_role_target(role, model_key=model_key, config=config)
     if definition is None:
         return None
     dumped = definition.model_dump(mode="json")
+    # Placement is a PROVIDER fact, not a field on the deployment, so it is
+    # derived here and guarded alongside the deployment's own values.
+    dumped["placement"] = config.placement_of(key).value
     return {field: dumped.get(field) for field in _BEHAVIOUR_FIELDS}
 
 
 def _capture_resolution() -> dict[str, Any]:
-    """Capture ``(catalog, profile, role) -> resolved key + definition``."""
+    """Capture ``(profile, role) -> resolved key + definition``."""
     out: dict[str, Any] = {}
-    for catalog_name, catalog_path in _CATALOGS.items():
-        for profile_name in _PROFILES:
-            token = None
-            if profile_name is not None:
-                token = set_current_profile(
-                    load_profile(profile_name, _REPO_ROOT / "config" / "profiles")
-                )
-            try:
-                for role in _PROFILE_ROLES:
-                    cell = f"{catalog_name}|{profile_name or 'none'}|{role}"
-                    try:
-                        # Mirror what LocalLLMClient/factory actually do: the
-                        # profile supplies a key only when one is active,
-                        # otherwise the Layer-3 binding decides. Measuring
-                        # resolve_model_key alone would measure a path no
-                        # consumer takes.
-                        key = resolve_model_key(role) if profile_name else None
-                        out[cell] = {
-                            "key": key or role,
-                            "definition": _definition_of(role, catalog_path, model_key=key),
-                        }
-                    except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
-                        out[cell] = {"raises": type(exc).__name__}
+    for profile_name in _PROFILES:
+        token = None
+        if profile_name is not None:
+            token = set_current_profile(
+                load_profile(profile_name, _REPO_ROOT / "config" / "profiles")
+            )
+        try:
+            for role in _PROFILE_ROLES:
+                cell = f"{profile_name or 'none'}|{role}"
+                try:
+                    # Mirror what LocalLLMClient/factory actually do: the
+                    # profile supplies a key only when one is active, otherwise
+                    # the Layer-3 binding decides. Measuring resolve_model_key
+                    # alone would measure a path no consumer takes.
+                    key = resolve_model_key(role) if profile_name else None
+                    out[cell] = {
+                        "key": key or role,
+                        "definition": _definition_of(role, model_key=key),
+                    }
+                except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
+                    out[cell] = {"raises": type(exc).__name__}
 
-                for role in _MATRIX_ROLES:
-                    cell = f"{catalog_name}|{profile_name or 'none'}|{role}"
-                    try:
-                        key = resolve_role_model_key(
-                            role, config_path=catalog_path, root=_REPO_ROOT
-                        )
-                        out[cell] = {
-                            "key": key,
-                            "definition": _definition_of(role, catalog_path, model_key=key),
-                        }
-                    except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
-                        out[cell] = {"raises": type(exc).__name__}
-            finally:
-                if token is not None:
-                    from personal_agent.config.profile import _current_profile
+            for role in _MATRIX_ROLES:
+                cell = f"{profile_name or 'none'}|{role}"
+                try:
+                    key = resolve_role_model_key(role, config_path=_CATALOG, root=_REPO_ROOT)
+                    out[cell] = {
+                        "key": key,
+                        "definition": _definition_of(role, model_key=key),
+                    }
+                except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
+                    out[cell] = {"raises": type(exc).__name__}
+        finally:
+            if token is not None:
+                from personal_agent.config.profile import _current_profile
 
-                    _current_profile.reset(token)
+                _current_profile.reset(token)
     return out
 
 
@@ -200,37 +225,31 @@ def _capture_concurrency_and_timeouts() -> dict[str, Any]:
     from personal_agent.llm_client.client import LocalLLMClient
     from personal_agent.llm_client.types import ModelRole
 
-    out: dict[str, Any] = {}
-    for catalog_name, catalog_path in _CATALOGS.items():
-        _clear_caches()
-        client = LocalLLMClient(model_config_path=catalog_path)
-        out[f"{catalog_name}|concurrency"] = client._concurrency.get_status()
-        out[f"{catalog_name}|timeouts"] = {
-            role.value: client._role_timeouts[role] for role in ModelRole
-        }
-    return out
+    _clear_caches()
+    client = LocalLLMClient(model_config_path=_CATALOG)
+    return {
+        "concurrency": client._concurrency.get_status(),
+        "timeouts": {role.value: client._role_timeouts[role] for role in ModelRole},
+    }
 
 
 def _capture_pricing() -> dict[str, Any]:
-    """Capture the litellm.model_cost entries each catalog registers."""
+    """Capture the litellm.model_cost entries the catalog registers."""
     from personal_agent.llm_client.pricing import register_model_pricing
 
-    out: dict[str, Any] = {}
-    for catalog_name, catalog_path in _CATALOGS.items():
-        _clear_caches()
-        captured: dict[str, Any] = {}
+    _clear_caches()
+    captured: dict[str, Any] = {}
 
-        def _capture(entries: dict[str, Any], _sink: dict[str, Any] = captured) -> None:
-            _sink.update(entries)
+    def _capture(entries: dict[str, Any]) -> None:
+        captured.update(entries)
 
-        with patch("litellm.register_model", side_effect=_capture):
-            register_model_pricing(load_model_config(catalog_path))
-        out[catalog_name] = captured
-    return out
+    with patch("litellm.register_model", side_effect=_capture):
+        register_model_pricing(load_model_config(_CATALOG))
+    return captured
 
 
 def build_snapshot() -> dict[str, Any]:
-    """Build the full four-dimension behaviour snapshot."""
+    """Build the full four-dimension behaviour snapshot for the single catalog."""
     _clear_caches()
     snapshot = {
         "resolution": _capture_resolution(),
@@ -241,13 +260,6 @@ def build_snapshot() -> dict[str, Any]:
     return snapshot
 
 
-@pytest.mark.skipif(
-    not (_REPO_ROOT / "config" / "models.cloud.yaml").exists(),
-    reason=(
-        "Pre-FRE-916 snapshot: the two-catalog golden is only meaningful while "
-        "config/models.cloud.yaml exists. Superseded by the post-refactor golden."
-    ),
-)
 def test_catalog_behaviour_matches_golden() -> None:
     """Every role resolves, throttles, times out, and prices as it did on main."""
     assert _GOLDEN.exists(), (

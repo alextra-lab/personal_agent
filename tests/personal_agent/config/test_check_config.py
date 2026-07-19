@@ -12,9 +12,8 @@ from pydantic import BaseModel, Field
 from scripts.check_config import main
 
 from personal_agent.config.config_guard import (
-    _compose_model_config_paths,
-    _normalize_container_model_config_path,
-    check_deployment_manifest_internal_consistency,
+    _compose_deployment_profiles,
+    check_dangling_model_references,
     check_deployment_manifest_matches_compose,
     check_embedding_fallback_identity,
     check_field_descriptions,
@@ -30,30 +29,31 @@ _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-class TestForbiddenRoleDivergence:
-    """AC-3 — guard fails on a definition-drift forbidden role; passes on the real repo."""
+class TestRealRepoMatrixShape:
+    """The real matrix is clean and carries the post-FRE-916 single-key shape.
 
-    def test_fails_on_divergent_forbidden_role_fixture(self) -> None:
-        findings = run_all_checks(_FIXTURES / "divergent_forbidden_role")
-        names = [f.check for f in findings]
-        assert "forbidden_role_divergence" in names
-        messages = " ".join(f.message for f in findings)
-        assert "entity_extraction" in messages
-
-    def test_cli_exits_nonzero_on_divergent_forbidden_role_fixture(self) -> None:
-        exit_code = main(["--root", str(_FIXTURES / "divergent_forbidden_role")])
-        assert exit_code != 0
+    Replaces TestForbiddenRoleDivergence. The definition-drift fixture it used
+    (`divergent_forbidden_role`) modelled the same key backed by different
+    models in two catalogs — a state that became unrepresentable when phase 2
+    collapsed to one catalog, so the fixture and its guard were both retired.
+    """
 
     def test_passes_on_real_repo(self) -> None:
         findings = run_all_checks(_REPO_ROOT)
         assert findings == []
 
-    def test_real_repo_forbidden_roles_declare_all_value(self) -> None:
-        matrix = load_matrix(_REPO_ROOT)
-        roles = matrix["roles"]
-        assert roles["entity_extraction"] == {"divergence": "forbidden", "all": "gpt-5.4-mini"}
-        assert roles["captains_log"] == {"divergence": "forbidden", "all": "claude_sonnet"}
-        assert roles["insights"] == {"divergence": "forbidden", "all": "claude_sonnet"}
+    def test_real_repo_roles_declare_a_bare_all_value(self) -> None:
+        roles = load_matrix(_REPO_ROOT)["roles"]
+        assert roles["entity_extraction"] == {"all": "gpt-5.4-mini"}
+        assert roles["captains_log"] == {"all": "claude_sonnet"}
+        assert roles["insights"] == {"all": "claude_sonnet"}
+        # The two roles whose `divergence: allowed` rows phase 2 collapsed.
+        assert roles["primary"] == {"all": "qwen3.6-35b-thinking"}
+        assert roles["sub_agent"] == {"all": "qwen3.6-35b-instruct"}
+
+    def test_no_role_carries_a_retired_per_profile_key(self) -> None:
+        for role, cfg in load_matrix(_REPO_ROOT)["roles"].items():
+            assert set(cfg) == {"all"}, f"role {role!r} carries retired keys: {sorted(cfg)}"
 
 
 class TestOrphanEnvKeys:
@@ -95,7 +95,7 @@ class TestDanglingModelReference:
         dangling = [f for f in findings if f.check == "dangling_model_reference"]
         assert len(dangling) == 1
         assert "gpt-9-ghost" in dangling[0].message
-        assert "local" in dangling[0].message
+        assert "config/models.yaml" in dangling[0].message
 
     def test_no_false_positive_on_real_repo(self) -> None:
         findings = run_all_checks(_REPO_ROOT)
@@ -142,22 +142,21 @@ class TestRetiredModelDefinitionYamlsStayGone:
 
 
 class TestMatrixShape:
-    """A role's declared keys must match its own divergence value (FRE-650)."""
+    """Every role declares exactly one `all:` key, and no retired keys (FRE-916 phase 2)."""
 
-    def test_flags_forbidden_role_missing_all_and_allowed_role_missing_local_or_cloud(
-        self,
-    ) -> None:
+    def test_flags_missing_all_key_and_retired_per_profile_keys(self) -> None:
         matrix = load_matrix(_FIXTURES / "malformed_matrix_shape")
         findings = check_matrix_shape(matrix)
         messages = " ".join(f.message for f in findings)
 
         assert any("entity_extraction" in f.message and "no 'all'" in f.message for f in findings)
-        assert any(
-            "entity_extraction" in f.message and "declares 'local'/'cloud'" in f.message
-            for f in findings
-        )
-        assert any("compressor" in f.message and "declares neither" in f.message for f in findings)
-        assert any("compressor" in f.message and "declares 'all'" in f.message for f in findings)
+        # compressor HAS a valid `all`, so it must be flagged purely for carrying
+        # the retired keys — which the loader now ignores silently.
+        stale = [f for f in findings if "compressor" in f.message]
+        assert len(stale) == 1
+        assert "'cloud'" in stale[0].message
+        assert "'divergence'" in stale[0].message
+        assert "'local'" in stale[0].message
         assert all(f.severity == "policy" for f in findings)
         assert "entity_extraction" in messages and "compressor" in messages
 
@@ -167,42 +166,21 @@ class TestMatrixShape:
         assert findings == []
 
 
-class TestDeploymentManifestInternalConsistency:
-    """A profile row's model_config_path must name the same file as its own
-    env_overrides.AGENT_MODEL_CONFIG_PATH (ADR-0099 D2.2, FRE-651 — codex
-    plan-review finding: without this, config-resolve could silently answer
-    from a different file than the one env_overrides documents as deployed).
-    """
-
-    def test_fails_on_internal_mismatch_fixture(self) -> None:
-        manifest = load_deployment_manifest(_FIXTURES / "deployment_manifest_internal_mismatch")
-        findings = check_deployment_manifest_internal_consistency(manifest)
-        assert len(findings) == 1
-        assert findings[0].check == "deployment_manifest_internal_mismatch"
-        assert findings[0].severity == "policy"
-        assert "config/models.yaml" in findings[0].message
-        assert "config/models.cloud.yaml" in findings[0].message
-
-    def test_no_false_positive_on_real_repo(self) -> None:
-        manifest = load_deployment_manifest(_REPO_ROOT)
-        findings = check_deployment_manifest_internal_consistency(manifest)
-        assert findings == []
-
-
 class TestDeploymentManifestMatchesCompose:
-    """AC-5 — the manifest's declared AGENT_MODEL_CONFIG_PATH must match what
-    the profile's actual compose file sets (ADR-0099 D2.2, FRE-651).
+    """AC-5 — a profile's compose file must declare that same profile via
+    AGENT_DEPLOYMENT_PROFILE (ADR-0099 D2.2, FRE-651; re-pointed off the retired
+    AGENT_DEPLOYMENT_PROFILE in FRE-916 phase 2).
     """
 
-    def test_fails_on_manifest_compose_mismatch_fixture(self) -> None:
+    def test_fails_when_compose_declares_a_different_profile(self) -> None:
         root = _FIXTURES / "deployment_manifest_mismatch"
         manifest = load_deployment_manifest(root)
         findings = check_deployment_manifest_matches_compose(root, manifest)
         assert len(findings) == 1
         assert findings[0].check == "deployment_manifest_mismatch"
         assert findings[0].severity == "policy"
-        assert "models.WRONG.yaml" in findings[0].message
-        assert "models.cloud.yaml" in findings[0].message
+        assert "cloud" in findings[0].message
+        assert "eval" in findings[0].message
 
     def test_no_false_positive_on_real_repo(self) -> None:
         manifest = load_deployment_manifest(_REPO_ROOT)
@@ -255,60 +233,48 @@ class TestEmbeddingFallbackIdentity:
         assert run_all_checks(_REPO_ROOT) == []
 
 
-class TestComposeModelConfigPathParsing:
-    """Unit coverage for _compose_model_config_paths's dict/list environment forms."""
+class TestComposeDeploymentProfileParsing:
+    """Unit coverage for _compose_deployment_profiles's dict/list environment forms."""
 
     def test_dict_form_single_service(self) -> None:
         compose = {
-            "services": {"gw": {"environment": {"AGENT_MODEL_CONFIG_PATH": "/app/config/x.yaml"}}}
+            "services": {"gw": {"environment": {"AGENT_DEPLOYMENT_PROFILE": "cloud"}}}
         }
-        assert _compose_model_config_paths(compose) == {"/app/config/x.yaml"}
+        assert _compose_deployment_profiles(compose) == {"cloud"}
 
     def test_list_form_single_service(self) -> None:
         compose = {
-            "services": {"gw": {"environment": ["AGENT_MODEL_CONFIG_PATH=/app/config/x.yaml"]}}
+            "services": {"gw": {"environment": ["AGENT_DEPLOYMENT_PROFILE=cloud"]}}
         }
-        assert _compose_model_config_paths(compose) == {"/app/config/x.yaml"}
+        assert _compose_deployment_profiles(compose) == {"cloud"}
 
     def test_two_services_agreeing_returns_one_value(self) -> None:
         compose = {
             "services": {
-                "a": {"environment": {"AGENT_MODEL_CONFIG_PATH": "/app/config/x.yaml"}},
-                "b": {"environment": {"AGENT_MODEL_CONFIG_PATH": "/app/config/x.yaml"}},
+                "a": {"environment": {"AGENT_DEPLOYMENT_PROFILE": "cloud"}},
+                "b": {"environment": {"AGENT_DEPLOYMENT_PROFILE": "cloud"}},
             }
         }
-        assert _compose_model_config_paths(compose) == {"/app/config/x.yaml"}
+        assert _compose_deployment_profiles(compose) == {"cloud"}
 
     def test_two_services_disagreeing_returns_both_values(self) -> None:
         compose = {
             "services": {
-                "a": {"environment": {"AGENT_MODEL_CONFIG_PATH": "/app/config/x.yaml"}},
-                "b": {"environment": {"AGENT_MODEL_CONFIG_PATH": "/app/config/y.yaml"}},
+                "a": {"environment": {"AGENT_DEPLOYMENT_PROFILE": "cloud"}},
+                "b": {"environment": {"AGENT_DEPLOYMENT_PROFILE": "eval"}},
             }
         }
-        assert _compose_model_config_paths(compose) == {
-            "/app/config/x.yaml",
-            "/app/config/y.yaml",
+        assert _compose_deployment_profiles(compose) == {
+            "cloud",
+            "eval",
         }
 
     def test_no_environment_block_returns_empty_set(self) -> None:
-        assert _compose_model_config_paths({"services": {"gw": {"image": "x"}}}) == set()
+        assert _compose_deployment_profiles({"services": {"gw": {"image": "x"}}}) == set()
 
     def test_service_with_no_matching_key_returns_empty_set(self) -> None:
         compose = {"services": {"gw": {"environment": {"OTHER_KEY": "value"}}}}
-        assert _compose_model_config_paths(compose) == set()
-
-
-class TestNormalizeContainerModelConfigPath:
-    """Unit coverage for the /app/ container-mount-prefix normalization."""
-
-    def test_strips_app_prefix(self) -> None:
-        assert _normalize_container_model_config_path("/app/config/models.cloud.yaml") == (
-            "config/models.cloud.yaml"
-        )
-
-    def test_passes_through_relative_path_unchanged(self) -> None:
-        assert _normalize_container_model_config_path("config/models.yaml") == "config/models.yaml"
+        assert _compose_deployment_profiles(compose) == set()
 
 
 class TestFieldDescriptions:

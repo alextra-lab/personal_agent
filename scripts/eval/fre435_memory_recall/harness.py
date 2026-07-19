@@ -45,7 +45,6 @@ import os
 # after the first import is a no-op. ``setdefault`` lets the caller pre-override.
 _TEST_SUBSTRATE_ENV = {
     "APP_ENV": "test",
-    "AGENT_MODEL_CONFIG_PATH": "config/models.cloud.yaml",
     "AGENT_NEO4J_URI": "bolt://localhost:7688",
     "AGENT_ELASTICSEARCH_URL": "http://localhost:9201",
     "AGENT_DATABASE_URL": (
@@ -78,6 +77,7 @@ from scripts.eval.fre435_memory_recall.report import (  # noqa: E402
 from scripts.eval.fre435_memory_recall.scoring import flatten_recall, score_case  # noqa: E402
 
 from personal_agent.config import resolve_role_model_key, settings  # noqa: E402
+from personal_agent.config.model_loader import CATALOG_RELPATH  # noqa: E402
 from personal_agent.config.env_loader import Environment  # noqa: E402
 from personal_agent.memory.embeddings import generate_embedding  # noqa: E402
 from personal_agent.memory.fact import PromotionCandidate  # noqa: E402
@@ -96,63 +96,41 @@ DEFAULT_PROBE_SET = "scripts/eval/fre435_memory_recall/seed_probe.yaml"
 DEFAULT_OUT = "telemetry/evaluation/fre435-memory-recall"
 DEFAULT_K_SWEEP = (1, 3, 5, 10)
 DEFAULT_PROD_K = 5
-_PROD_MODEL_CONFIG_PATH = Path("config/models.cloud.yaml")
 _PIPELINE_ROLES = ("entity_extraction", "captains_log", "insights")
 
 
-def _pipeline_role_values(config_path: Path) -> dict[str, str]:
-    """Return the matrix-resolved model key for each pipeline role under *config_path*.
+def _pipeline_role_values() -> dict[str, str]:
+    """Return the matrix-resolved model key for each pipeline role.
 
-    ADR-0099 D1 stage 2 (FRE-650): these are all `divergence: forbidden` roles,
-    so this now always resolves to the same key regardless of config_path —
-    "evals run on prod config" is a structural guarantee, not merely checked
-    here. This still calls through the real resolver (not a bare getattr), so
-    a dangling `all:` reference under either config path still raises loudly.
+    Calls through the real resolver (not a bare getattr), so a dangling ``all:``
+    reference raises loudly rather than silently yielding a key nothing defines.
     """
-    return {role: resolve_role_model_key(role, config_path=config_path) for role in _PIPELINE_ROLES}
+    return {role: resolve_role_model_key(role) for role in _PIPELINE_ROLES}
 
 
 def _check_model_config_fidelity() -> None:
-    """Verify the active eval model config matches the production baseline.
+    """Verify the eval's pipeline roles resolve against the deployment catalog.
+
+    **Narrowed by FRE-916 phase 2 (ADR-0121).** This used to compare the active
+    model config against a pinned production one and refuse to run on a
+    divergence, with ``EVAL_MODEL_CONFIG_ALLOW_DIVERGE=1`` as the escape hatch.
+    Both sides now read the same single catalog, so the comparison could never
+    fail — a check that cannot fail is worse than no check, because it reads as
+    coverage. "Evals run on prod config" became a structural guarantee rather
+    than something to assert.
+
+    What remains has teeth: resolving every pipeline role, which raises if any
+    role is undeclared or points at a key the catalog does not define, and
+    logging the resolved set so each eval run records the models it actually used.
 
     Raises:
-        RuntimeError: If active pipeline roles diverge from production and the
-            divergence was not explicitly declared.
+        ModelRoleError: If a pipeline role cannot be resolved.
     """
-    active_roles = _pipeline_role_values(settings.model_config_path)
-    prod_roles = _pipeline_role_values(_PROD_MODEL_CONFIG_PATH)
+    active_roles = _pipeline_role_values()
     log.info(
         "eval_model_config_active",
         **active_roles,
-        config_path=str(settings.model_config_path),
-    )
-
-    divergent = {
-        role: {"active": active_roles[role], "prod": prod_roles[role]}
-        for role in _PIPELINE_ROLES
-        if active_roles[role] != prod_roles[role]
-    }
-    if not divergent:
-        return
-
-    if os.environ.get("EVAL_MODEL_CONFIG_ALLOW_DIVERGE") == "1":
-        log.warning(
-            "eval_model_config_divergence_declared",
-            divergent_roles=sorted(divergent),
-            active_roles=active_roles,
-            prod_roles=prod_roles,
-            config_path=str(settings.model_config_path),
-            prod_config_path=str(_PROD_MODEL_CONFIG_PATH),
-        )
-        return
-
-    details = "; ".join(
-        f"{role}: active={values['active']!r}, prod={values['prod']!r}"
-        for role, values in sorted(divergent.items())
-    )
-    raise RuntimeError(
-        "Active eval model config diverges from production for pipeline roles: "
-        f"{details}. Set EVAL_MODEL_CONFIG_ALLOW_DIVERGE=1 to declare this divergence."
+        config_path=CATALOG_RELPATH,
     )
 
 

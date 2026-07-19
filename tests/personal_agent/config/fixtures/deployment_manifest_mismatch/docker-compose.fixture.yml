@@ -1,7 +1,7 @@
-# Fixture compose file: the "real" deployed value disagrees with
-# config/deployment.yaml's declared env_overrides (FRE-651).
+# Fixture compose file: the "real" deployed profile disagrees with the one
+# config/deployment.yaml declares this compose file serves (FRE-651).
 services:
   seshat-gateway:
     image: fixture
     environment:
-      AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml
+      AGENT_DEPLOYMENT_PROFILE: eval

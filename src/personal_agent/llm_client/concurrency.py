@@ -1,10 +1,32 @@
-"""Inference concurrency controller for local and remote LLM endpoints.
+"""Inference concurrency controller, keyed on provider (ADR-0029; ADR-0121 Layer 1).
 
-Implements per-model and per-endpoint concurrency limits with priority-based
-scheduling. Local inference servers (LM Studio, Ollama) are single-request-at-a-time
-for large models; cloud providers handle concurrency server-side.
+Implements per-provider and per-deployment concurrency limits with priority-based
+scheduling. A provider owns a total in-flight ceiling shared by all of its
+deployments; each deployment may declare a smaller sub-limit beneath it.
 
-See ADR-0029 for design rationale.
+**Re-keyed by FRE-916 phase 2.** The outer semaphore used to be keyed on the
+normalised *endpoint URL*, with the provider "type" inferred by string-matching
+that URL (``infer_provider_type``), and cloud endpoints bypassing control
+entirely. Capacity now follows the declared provider, because that is what the
+capacity actually belongs to: the owner's GPU is scarce regardless of which URL
+reaches it, and two providers behind one hostname are not one pool.
+
+This is a deliberate semantic change, not a refactor. For the deployed catalog
+the two coincide — the SLM deployments share one provider *and* one endpoint —
+so live behaviour is preserved, but the general case differs in both directions
+and is asserted as such in the tests.
+
+Every provider — including cloud ones — is registered with a ceiling, and any
+deployment that acquires a slot is capped at its provider's ceiling. But note
+what actually reaches this controller today: it is instantiated only by
+``LocalLLMClient``, so only **local-placement** deployments call ``request_slot``.
+Cloud placement dispatches to ``LiteLLMClient``, which does not go through here,
+so the registered cloud ceilings (``openai``/``anthropic``/``voyage``/``ovh``)
+are declared-but-inert until the two resolution paths are unified (ADR-0121
+step 2, FRE-917). They are set high (50) so that unification does not introduce a
+throttle by surprise. Placement (local vs cloud) decides only *dispatch* — which
+client class handles the call — which is ``ModelConfig.placement_of``'s job, not
+this module's.
 """
 
 from __future__ import annotations
@@ -32,68 +54,6 @@ class InferencePriority(IntEnum):
     ELEVATED = 2
     BACKGROUND = 3
     DEFERRED = 4
-
-
-class ProviderType(str):
-    """Provider type constants for endpoint classification."""
-
-    LOCAL = "local"
-    MANAGED = "managed"
-    CLOUD = "cloud"
-
-
-_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "[::1]"})
-
-
-def infer_provider_type(endpoint: str | None) -> str:
-    """Auto-detect provider type from endpoint URL.
-
-    Args:
-        endpoint: Base URL for the inference server.
-
-    Returns:
-        Provider type string: "local", "managed", or "cloud".
-    """
-    if not endpoint:
-        return ProviderType.LOCAL
-
-    try:
-        from urllib.parse import urlparse
-
-        parsed = urlparse(endpoint)
-        host = (parsed.hostname or "").lower()
-        if host in _LOCAL_HOSTS:
-            return ProviderType.LOCAL
-        if parsed.scheme == "http" and not host.endswith((".com", ".ai", ".io", ".dev")):
-            return ProviderType.MANAGED
-    except Exception:
-        pass
-
-    return ProviderType.CLOUD
-
-
-def _normalize_endpoint(endpoint: str | None, default_base_url: str) -> str:
-    """Normalize endpoint to a canonical key for grouping.
-
-    Strips trailing path components so models on the same server share a key.
-
-    Args:
-        endpoint: Model-specific endpoint or None.
-        default_base_url: Fallback base URL from settings.
-
-    Returns:
-        Normalized endpoint string (scheme + host + port).
-    """
-    url = endpoint or default_base_url
-    try:
-        from urllib.parse import urlparse
-
-        parsed = urlparse(url)
-        host = parsed.hostname or "localhost"
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        return f"{parsed.scheme}://{host}:{port}"
-    except Exception:
-        return url
 
 
 class _PrioritySlot:
@@ -161,7 +121,20 @@ class _PrioritySemaphore:
         except asyncio.TimeoutError:
             async with self._lock:
                 if slot in self._waiters:
+                    # Still queued — a clean timeout, nothing was handed to us.
                     self._waiters.remove(slot)
+                    return False
+                # Race: release() popped this slot and set its event in the
+                # window between wait_for firing and us re-acquiring the lock.
+                # That slot IS a live grant — release() hands off without
+                # decrementing _active — so abandoning it here would leak the
+                # permit forever and, once _active pins at _limit, wedge every
+                # future acquire on this semaphore. Pass the grant on instead of
+                # dropping it: to the next waiter, or back to the pool.
+                if self._waiters:
+                    self._waiters.pop(0).event.set()
+                else:
+                    self._active -= 1
             return False
 
     async def release(self) -> None:
@@ -175,63 +148,76 @@ class _PrioritySemaphore:
 
 
 class InferenceConcurrencyController:
-    """Manages concurrent access to inference endpoints.
+    """Manages concurrent access to inference providers.
 
-    Enforces per-model and per-endpoint concurrency limits with
-    priority-based scheduling. Local endpoints get strict control;
-    cloud endpoints pass through with minimal overhead.
+    Enforces a per-provider total ceiling with optional per-deployment sub-limits,
+    both priority-scheduled. A deployment acquires its provider's slot first, then
+    its own — so the provider ceiling is the binding constraint across every
+    deployment it serves.
 
     Args:
-        default_base_url: Default base URL for models without explicit endpoints.
-        default_endpoint_limit: Default per-endpoint concurrency limit for local providers.
+        default_base_url: Default base URL, retained for log context on
+            deployments that declare no endpoint of their own.
+        default_provider_limit: Ceiling applied to a provider referenced by a
+            deployment but never explicitly registered. A fallback for tests and
+            partial fixtures — the real catalog declares every provider.
     """
 
     def __init__(
         self,
         default_base_url: str = "http://127.0.0.1:1234/v1",
-        default_endpoint_limit: int = 2,
+        default_provider_limit: int = 2,
     ) -> None:
-        """Initialize controller with default URL and per-endpoint concurrency limit."""
+        """Initialize the controller with a default URL and fallback provider ceiling."""
         self._default_base_url = default_base_url
-        self._default_endpoint_limit = default_endpoint_limit
+        self._default_provider_limit = default_provider_limit
 
+        self._provider_semaphores: dict[str, _PrioritySemaphore] = {}
         self._model_semaphores: dict[str, _PrioritySemaphore] = {}
-        self._endpoint_semaphores: dict[str, _PrioritySemaphore] = {}
-        self._model_endpoint_map: dict[str, str] = {}
-        self._model_provider_type: dict[str, str] = {}
-        self._endpoint_provider_type: dict[str, str] = {}
+        self._model_provider: dict[str, str] = {}
+        self._model_endpoint: dict[str, str] = {}
+
+    def register_provider(self, provider: str, max_concurrency: int) -> None:
+        """Register a provider's total in-flight ceiling.
+
+        Idempotent: re-registering an already-known provider leaves its existing
+        semaphore in place, so a mid-flight limit is never silently reset.
+
+        Args:
+            provider: Provider name — a key in the catalog's ``providers:`` mapping.
+            max_concurrency: Total in-flight requests permitted across all of this
+                provider's deployments.
+        """
+        if provider in self._provider_semaphores:
+            return
+        self._provider_semaphores[provider] = _PrioritySemaphore(max_concurrency)
+        log.info("provider_semaphore_created", provider=provider, limit=max_concurrency)
 
     def register_model(
         self,
         role: str,
         max_concurrency: int,
         endpoint: str | None = None,
-        provider_type: str | None = None,
+        provider: str | None = None,
     ) -> None:
-        """Register a model role with its concurrency limits.
+        """Register a deployment with its provider and its own sub-limit.
 
         Args:
-            role: Model role name (e.g., "primary", "sub_agent").
-            max_concurrency: Maximum concurrent requests for this model.
-            endpoint: Model-specific endpoint URL. None uses default.
-            provider_type: "local", "managed", or "cloud". None auto-detects.
+            role: Deployment key (e.g. ``"qwen3.6-35b-thinking"``).
+            max_concurrency: This deployment's own in-flight cap, applied beneath
+                its provider's ceiling.
+            endpoint: Deployment-specific endpoint URL, kept for log context only.
+                It is no longer a grouping key — capacity follows the provider.
+            provider: Provider name. ``None`` places the deployment in a private
+                pool named for itself, so an unattributed deployment is bounded
+                rather than unbounded.
         """
-        norm_endpoint = _normalize_endpoint(endpoint, self._default_base_url)
-        effective_provider = provider_type or infer_provider_type(endpoint)
+        effective_provider = provider or f"_unattributed:{role}"
+        self._model_provider[role] = effective_provider
+        self._model_endpoint[role] = endpoint or self._default_base_url
 
-        self._model_endpoint_map[role] = norm_endpoint
-        self._model_provider_type[role] = effective_provider
-        self._endpoint_provider_type[norm_endpoint] = effective_provider
-
-        if effective_provider == ProviderType.CLOUD:
-            log.debug(
-                "model_registered_cloud",
-                role=role,
-                endpoint=norm_endpoint,
-                provider_type=effective_provider,
-                max_concurrency=max_concurrency,
-            )
-            return
+        if effective_provider not in self._provider_semaphores:
+            self.register_provider(effective_provider, self._default_provider_limit)
 
         if role not in self._model_semaphores:
             self._model_semaphores[role] = _PrioritySemaphore(max_concurrency)
@@ -239,23 +225,8 @@ class InferenceConcurrencyController:
                 "model_semaphore_created",
                 role=role,
                 limit=max_concurrency,
-                provider_type=effective_provider,
+                provider=effective_provider,
             )
-
-        if norm_endpoint not in self._endpoint_semaphores:
-            self._endpoint_semaphores[norm_endpoint] = _PrioritySemaphore(
-                self._default_endpoint_limit
-            )
-            log.info(
-                "endpoint_semaphore_created",
-                endpoint=norm_endpoint,
-                limit=self._default_endpoint_limit,
-                provider_type=effective_provider,
-            )
-
-    def _needs_control(self, role: str) -> bool:
-        """Check if a model role requires concurrency control."""
-        return self._model_provider_type.get(role, ProviderType.LOCAL) != ProviderType.CLOUD
 
     @asynccontextmanager
     async def request_slot(
@@ -265,13 +236,10 @@ class InferenceConcurrencyController:
         timeout: float | None = None,
         trace_id: str | None = None,
     ) -> AsyncIterator[None]:
-        """Context manager to acquire an inference slot with priority.
-
-        For cloud providers, yields immediately with no blocking.
-        For local/managed providers, acquires both model and endpoint semaphores.
+        """Acquire an inference slot with priority: provider ceiling, then deployment sub-limit.
 
         Args:
-            role: Model role name.
+            role: Deployment key.
             priority: Request priority tier.
             timeout: Max seconds to wait for a slot. None waits forever.
             trace_id: Originating request trace_id, threaded onto wait/timeout
@@ -279,36 +247,32 @@ class InferenceConcurrencyController:
                 caller has no request context.
 
         Yields:
-            None when slot is acquired.
+            None when the slot is acquired.
 
         Raises:
-            InferenceSlotTimeout: If timeout expires before slot is acquired.
+            InferenceSlotTimeout: If timeout expires before a slot is acquired.
         """
-        if not self._needs_control(role):
-            yield
-            return
-
         model_sem = self._model_semaphores.get(role)
-        endpoint_key = self._model_endpoint_map.get(role, "")
-        endpoint_sem = self._endpoint_semaphores.get(endpoint_key)
+        provider = self._model_provider.get(role, "")
+        provider_sem = self._provider_semaphores.get(provider)
 
-        if not model_sem and not endpoint_sem:
+        if not model_sem and not provider_sem:
             yield
             return
 
         start = time.monotonic()
         model_acquired = False
-        endpoint_acquired = False
+        provider_acquired = False
 
         try:
-            if endpoint_sem:
-                acquired = await endpoint_sem.acquire(priority, timeout=timeout)
+            if provider_sem:
+                acquired = await provider_sem.acquire(priority, timeout=timeout)
                 if not acquired:
                     raise InferenceSlotTimeout(
-                        f"Timed out waiting for endpoint slot on {endpoint_key} "
+                        f"Timed out waiting for provider slot on {provider} "
                         f"(priority={priority.name}, timeout={timeout}s)"
                     )
-                endpoint_acquired = True
+                provider_acquired = True
 
             remaining_timeout = None
             if timeout is not None:
@@ -318,9 +282,14 @@ class InferenceConcurrencyController:
             if model_sem:
                 acquired = await model_sem.acquire(priority, timeout=remaining_timeout)
                 if not acquired:
+                    # Report the budget actually waited on the model semaphore
+                    # (remaining_timeout), not the original — when the provider
+                    # ceiling consumed most of the budget these differ, and the
+                    # original would point at the wrong semaphore to tune.
                     raise InferenceSlotTimeout(
                         f"Timed out waiting for model slot on {role} "
-                        f"(priority={priority.name}, timeout={timeout}s)"
+                        f"(priority={priority.name}, timeout={remaining_timeout}s "
+                        f"of {timeout}s total)"
                     )
                 model_acquired = True
 
@@ -331,7 +300,8 @@ class InferenceConcurrencyController:
                     role=role,
                     priority=priority.name,
                     wait_ms=wait_ms,
-                    endpoint=endpoint_key,
+                    provider=provider,
+                    endpoint=self._model_endpoint.get(role, ""),
                     trace_id=trace_id,
                 )
 
@@ -343,7 +313,7 @@ class InferenceConcurrencyController:
                 role=role,
                 priority=priority.name,
                 timeout=timeout,
-                endpoint=endpoint_key,
+                provider=provider,
                 trace_id=trace_id,
             )
             raise
@@ -351,20 +321,20 @@ class InferenceConcurrencyController:
         finally:
             if model_acquired and model_sem:
                 await model_sem.release()
-            if endpoint_acquired and endpoint_sem:
-                await endpoint_sem.release()
+            if provider_acquired and provider_sem:
+                await provider_sem.release()
 
     def get_status(self) -> dict[str, dict[str, dict[str, int]]]:
         """Return current concurrency status for monitoring.
 
         Returns:
-            Dict with model and endpoint semaphore states.
+            Dict with model and provider semaphore states.
         """
-        status: dict[str, dict[str, dict[str, int]]] = {"models": {}, "endpoints": {}}
+        status: dict[str, dict[str, dict[str, int]]] = {"models": {}, "providers": {}}
         for role, sem in self._model_semaphores.items():
             status["models"][role] = {"active": sem.active, "limit": sem.limit}
-        for endpoint, sem in self._endpoint_semaphores.items():
-            status["endpoints"][endpoint] = {"active": sem.active, "limit": sem.limit}
+        for provider, sem in self._provider_semaphores.items():
+            status["providers"][provider] = {"active": sem.active, "limit": sem.limit}
         return status
 
 

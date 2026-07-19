@@ -459,15 +459,17 @@ def _build_llm_batch_classifier() -> tuple[BatchClassifier, str]:
     """
     from personal_agent.config import load_model_config
     from personal_agent.llm_client import ModelRole
+    from personal_agent.llm_client.models import Placement
     from personal_agent.telemetry.trace import SystemTraceContext
 
     role = resolve_role_model_key("entity_extraction")
-    model_def = load_model_config().models.get(role)
+    catalog = load_model_config()
+    model_def = catalog.models.get(role)
     # Typed Any to match get_llm_client's own return annotation (factory.py) — LocalLLMClient's
     # concrete respond() signature (extra named kwargs) doesn't structurally satisfy the LLMClient
     # Protocol's **kwargs catch-all, the same pre-existing mismatch the factory function sidesteps.
     client: Any
-    if model_def is not None and model_def.provider_type != "local":
+    if model_def is not None and catalog.placement_of(role) is not Placement.LOCAL:
         from personal_agent.llm_client.litellm_client import LiteLLMClient
 
         client = LiteLLMClient(

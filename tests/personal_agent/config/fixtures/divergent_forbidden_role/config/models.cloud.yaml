@@ -1,6 +1,0 @@
-# Fixture: prod state — the correct definition (AC-3 known-bad fixture, stage 2, FRE-650).
-models:
-  gpt-5.4-mini:
-    id: "gpt-5.4-mini"
-    provider: "openai"
-    max_tokens: 8192

@@ -10,7 +10,12 @@ from personal_agent.config.profile import DelegationConfig, ExecutionProfile, se
 from personal_agent.exceptions import AttachmentUnsupportedError
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client import ModelRole
-from personal_agent.llm_client.models import ModelDefinition
+from personal_agent.llm_client.models import (
+    ModelConfig,
+    ModelDefinition,
+    Placement,
+    ProviderDefinition,
+)
 from personal_agent.orchestrator import Channel, Orchestrator
 from personal_agent.orchestrator.executor import (
     _determine_initial_model_role,
@@ -205,24 +210,46 @@ class TestVisionRouting:
         )
 
     def _model_def(self, *, supports_vision: bool, provider_type: str = "local") -> ModelDefinition:
+        """Build a deployment whose PROVIDER carries the intended placement.
+
+        `provider_type` is kept as the parameter name so the call sites read the
+        same, but ADR-0121 deleted that field: placement is a provider fact now,
+        so this maps "local"/"cloud" onto a provider declared in _patch_models.
+        """
         return ModelDefinition(
             id="test-model",
             context_length=8192,
             max_concurrency=1,
             default_timeout=30,
-            provider_type=provider_type,
+            provider="slm_local" if provider_type == "local" else "anthropic",
             supports_vision=supports_vision,
         )
 
     def _patch_models(self, models: dict[str, ModelDefinition]) -> Any:
-        mock_config = MagicMock()
-        mock_config.models = models
+        """Patch in a REAL ModelConfig, not a MagicMock.
+
+        A MagicMock's `placement_of` returns a MagicMock, which is never
+        `Placement.LOCAL` — so every deployment would silently read as cloud and
+        the local-routing assertions would pass or fail for the wrong reason.
+        Building the real object makes placement resolution genuine.
+        """
         # No Layer-3 bindings in these fixtures: they key their models by ROLE
         # name, so resolution must fall back to the role-as-key path rather than
-        # dereference a MagicMock binding (ADR-0121).
-        mock_config.roles = {}
+        # dereference a binding (ADR-0121).
         return patch(
-            "personal_agent.config.model_loader.load_model_config", return_value=mock_config
+            "personal_agent.config.model_loader.load_model_config",
+            return_value=ModelConfig(
+                providers={
+                    "slm_local": ProviderDefinition(
+                        placement=Placement.LOCAL, max_concurrency=2
+                    ),
+                    "anthropic": ProviderDefinition(
+                        placement=Placement.CLOUD, max_concurrency=50
+                    ),
+                },
+                models=models,
+                roles={},
+            ),
         )
 
     def test_no_image_attachment_is_noop(self) -> None:

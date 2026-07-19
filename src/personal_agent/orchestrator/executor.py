@@ -21,6 +21,7 @@ from personal_agent.llm_client.message_content import (
     get_text_content,
     merge_content,
 )
+from personal_agent.llm_client.models import Placement
 from personal_agent.observability.topology import observe_topology
 from personal_agent.orchestrator import compression_manager
 from personal_agent.orchestrator.context_window import (
@@ -1702,7 +1703,8 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
     targets = {a.processing_target for a in image_attachments if a.processing_target}
     effective_target: str | None = "local" if "local" in targets else next(iter(targets), None)
 
-    models = load_model_config().models
+    catalog = load_model_config()
+    models = catalog.models
     profile = get_current_profile()
     effective_target = _apply_default_processing_target(effective_target, profile)
 
@@ -1720,7 +1722,7 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
         local_key, model_def = resolve_role_target(role_name)
         if (
             model_def is not None
-            and model_def.provider_type == "local"
+            and catalog.placement_of(local_key) is Placement.LOCAL
             and model_def.supports_vision
         ):
             return local_key
@@ -1735,7 +1737,7 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
         if (
             esc_key is not None
             and esc_def is not None
-            and esc_def.provider_type != "local"
+            and catalog.placement_of(esc_key) is not Placement.LOCAL
             and esc_def.supports_vision
         ):
             return esc_key
@@ -1823,7 +1825,8 @@ def _resolve_document_routing_key(
     targets = {a.processing_target for a in relevant if a.processing_target}
     effective_target: str | None = "local" if "local" in targets else next(iter(targets), None)
 
-    models = load_model_config().models
+    catalog = load_model_config()
+    models = catalog.models
     profile = get_current_profile()
     effective_target = _apply_default_processing_target(effective_target, profile)
 
@@ -1834,7 +1837,7 @@ def _resolve_document_routing_key(
         local_key, model_def = resolve_role_target(role_name)
         mode = (
             _capable(model_def)
-            if model_def is not None and model_def.provider_type == "local"
+            if model_def is not None and catalog.placement_of(local_key) is Placement.LOCAL
             else None
         )
         if mode is not None:
@@ -1849,7 +1852,9 @@ def _resolve_document_routing_key(
         esc_def = models.get(esc_key) if esc_key else None
         mode = (
             _capable(esc_def)
-            if esc_key is not None and esc_def is not None and esc_def.provider_type != "local"
+            if esc_key is not None
+            and esc_def is not None
+            and catalog.placement_of(esc_key) is not Placement.LOCAL
             else None
         )
         if mode is not None and esc_key is not None:
@@ -1962,9 +1967,14 @@ async def _maybe_confirm_attachment_cost(
         # Routing can't serve this attachment — let step_llm_call raise it as today.
         return True
 
-    model_def = load_model_config().models.get(effective_key)
+    catalog = load_model_config()
+    model_def = catalog.models.get(effective_key)
     input_price = model_def.input_cost_per_token if model_def is not None else None
-    if model_def is None or model_def.provider_type == "local" or not input_price:
+    if (
+        model_def is None
+        or catalog.placement_of(effective_key) is Placement.LOCAL
+        or not input_price
+    ):
         # Local/free or unpriced — nothing to gate.
         ctx.attachment_cost_confirmed = True
         return True
@@ -3630,7 +3640,7 @@ async def step_llm_call(
     )
 
     try:
-        # Create LLM client — dispatches to LocalLLMClient or LiteLLMClient based on provider_type
+        # Create LLM client — dispatches to LocalLLMClient or LiteLLMClient by provider placement
         # ADR-0101 §5/§8a + ADR-0102 §3: an image or document attachment may
         # require a different model than the role's plain profile-resolved key
         # (escalation or an explicit processing_target override) — resolved

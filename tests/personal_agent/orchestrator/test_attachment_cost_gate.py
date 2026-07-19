@@ -19,7 +19,12 @@ import pytest
 from personal_agent.cost_gate import BudgetConfig, CapEntry, OnDenialBehaviour, RoleConfig
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client.cost_estimator import estimate_reservation_for_call
-from personal_agent.llm_client.models import ModelConfig, ModelDefinition
+from personal_agent.llm_client.models import (
+    ModelConfig,
+    ModelDefinition,
+    Placement,
+    ProviderDefinition,
+)
 from personal_agent.llm_client.pricing import register_model_pricing
 from personal_agent.orchestrator import executor as executor_mod
 from personal_agent.orchestrator.attachment_cost import estimate_attachment_cloud_cost_usd
@@ -50,7 +55,6 @@ def _cloud_def(input_price: float = 0.000003) -> ModelDefinition:
     return ModelDefinition(
         id="claude-sonnet-4-6",
         provider="anthropic",
-        provider_type="cloud",
         max_tokens=32768,
         context_length=200000,
         max_concurrency=10,
@@ -65,7 +69,16 @@ def _patch_routing(
     monkeypatch: pytest.MonkeyPatch, model_def: ModelDefinition, key: str = "claude_sonnet"
 ) -> None:
     monkeypatch.setattr(executor_mod, "_resolve_vision_routing_key", lambda ctx, role: key)
-    cfg = ModelConfig(models={key: model_def})
+    # Declare the providers: placement is a PROVIDER fact since ADR-0121, so a
+    # catalog with no `providers:` would silently resolve every deployment to
+    # LOCAL and skip the cost gate this module exists to test.
+    cfg = ModelConfig(
+        providers={
+            "anthropic": ProviderDefinition(placement=Placement.CLOUD, max_concurrency=10),
+            "slm_local": ProviderDefinition(placement=Placement.LOCAL, max_concurrency=2),
+        },
+        models={key: model_def},
+    )
     monkeypatch.setattr("personal_agent.config.model_loader.load_model_config", lambda *a, **k: cfg)
 
 
@@ -77,7 +90,13 @@ def _patch_document_routing(
     the two-level document routing key resolution it wraps.
     """
     monkeypatch.setattr(executor_mod, "_effective_attachment_routing_key", lambda ctx, role: key)
-    cfg = ModelConfig(models={key: model_def})
+    cfg = ModelConfig(
+        providers={
+            "anthropic": ProviderDefinition(placement=Placement.CLOUD, max_concurrency=10),
+            "slm_local": ProviderDefinition(placement=Placement.LOCAL, max_concurrency=2),
+        },
+        models={key: model_def},
+    )
     monkeypatch.setattr("personal_agent.config.model_loader.load_model_config", lambda *a, **k: cfg)
 
 
@@ -165,8 +184,7 @@ async def test_local_routing_is_free_and_ungated(monkeypatch: pytest.MonkeyPatch
     ctx = _ctx(sm)
     local_def = ModelDefinition(
         id="qwen-local",
-        provider=None,
-        provider_type="local",
+        provider="slm_local",
         context_length=40000,
         max_concurrency=1,
         default_timeout=120,

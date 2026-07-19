@@ -79,7 +79,7 @@ timeout = settings.llm_timeout_seconds
 
 # Domain configs (paths come from settings automatically)
 governance_config = load_governance_config()  # Uses settings.governance_config_path
-model_config = load_model_config()            # Uses settings.model_config_path
+model_config = load_model_config()            # Uses model_loader.CATALOG_PATH
 
 # Components use both
 mode_manager = ModeManager(
@@ -121,7 +121,7 @@ The `AppConfig` class provides these configuration groups:
 
 ### Paths (for domain config loaders)
 - `governance_config_path: Path` - Path to governance config directory
-- `model_config_path: Path` - Path to model config file
+- `deployment_profile: Literal['local','cloud','eval']` - Which deployment this is; keys required_secrets (the model catalog is a constant, not a setting — ADR-0121)
 
 ## Environment Variable Naming
 
@@ -234,7 +234,7 @@ from personal_agent.config import settings, load_governance_config, load_model_c
 
 # Load domain configs (paths come from settings automatically)
 governance_config = load_governance_config()  # Uses settings.governance_config_path
-model_config = load_model_config()            # Uses settings.model_config_path
+model_config = load_model_config()            # Uses model_loader.CATALOG_PATH
 
 # Use both app settings and domain configs
 manager = ModeManager(

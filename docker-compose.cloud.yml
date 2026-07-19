@@ -357,7 +357,7 @@ services:
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       # ── Docker-specific paths and hardcoded production values ─────────────────
       AGENT_MCP_GATEWAY_COMMAND: '["/app/docker/mcp/run-gateway.sh"]'
-      AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml
+      AGENT_DEPLOYMENT_PROFILE: cloud
       MCP_SECRETS_FILE: /opt/seshat/mcp-secrets.env
       AGENT_GATEWAY_AUTH_ENABLED: "true"
       API_HOST: 0.0.0.0

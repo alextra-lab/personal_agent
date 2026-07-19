@@ -1,10 +1,8 @@
-# Fixture: FRE-651 — cloud profile's declared env_overrides disagrees with what
-# docker-compose.fixture.yml actually sets. Isolates
-# check_deployment_manifest_matches_compose (model_config_path here matches
-# env_overrides, so check_deployment_manifest_internal_consistency stays clean).
+# Fixture: FRE-651 — the manifest declares a `cloud` profile, but
+# docker-compose.fixture.yml sets AGENT_DEPLOYMENT_PROFILE to something else, so
+# that deployment would boot under the wrong profile and enforce the wrong
+# required-secret set. Isolates check_deployment_manifest_matches_compose.
+# (Re-pointed from AGENT_MODEL_CONFIG_PATH in FRE-916 phase 2.)
 profiles:
   cloud:
     compose_file: docker-compose.fixture.yml
-    model_config_path: config/models.WRONG.yaml
-    env_overrides:
-      AGENT_MODEL_CONFIG_PATH: /app/config/models.WRONG.yaml

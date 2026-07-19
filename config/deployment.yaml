@@ -1,36 +1,24 @@
 # config/deployment.yaml — ADR-0099 D2.2 deployment-provenance manifest (stage 3, FRE-651)
 #
-# Answers "which config is live in prod?" from committed files alone — the
-# config-resolve CLI (src/personal_agent/config/resolve.py) reads a profile's
-# `model_config_path` here, then resolves a role through the same
-# matrix-backed loader every runtime consumer uses (config/model_roles.yaml,
-# stage 2). No running container is ever inspected.
+# Answers "which deployment targets exist, and what composes them?" from
+# committed files alone. No running container is ever inspected.
 #
-# Distinct from config/model_roles.yaml's `active_profiles` (which scopes
-# forbidden-role divergence checking) even though `cloud`'s and `eval`'s
-# `model_config_path` values match `active_profiles.cloud` today — `eval` has
-# its own compose file (docker-compose.eval.yml) and is a genuinely separate
-# deployment target, deliberately sharing cloud's model-definition file (see
-# model_roles.yaml's active_profiles comment).
+# `model_config_path` and `env_overrides` were REMOVED in FRE-916 phase 2
+# (ADR-0121). They recorded which of two model-definition files each profile
+# selected via AGENT_MODEL_CONFIG_PATH; there is now exactly one catalog
+# (config/models.yaml) and no environment variable selecting it, so both fields
+# — and the two guards that cross-checked them
+# (config_guard.check_deployment_manifest_internal_consistency, and the
+# env-override half of check_deployment_manifest_matches_compose) — described a
+# choice that no longer exists.
 #
-# `env_overrides` records the AGENT_MODEL_CONFIG_PATH value each profile's
-# compose file actually sets (a container-mounted path, e.g. /app/config/...)
-# — the guard (config_guard.check_deployment_manifest_matches_compose) fails
-# if this ever disagrees with the real compose file, and
-# (check_deployment_manifest_internal_consistency) fails if it disagrees with
-# this row's own `model_config_path`.
+# Each profile name here matches AGENT_DEPLOYMENT_PROFILE, which the
+# corresponding compose file sets and which keys the per-profile required-secret
+# set in config/model_roles.yaml (ADR-0099 D4).
 profiles:
   local:
     compose_file: docker-compose.yml
-    model_config_path: config/models.yaml
-    env_overrides: {}
   cloud:
     compose_file: docker-compose.cloud.yml
-    model_config_path: config/models.cloud.yaml
-    env_overrides:
-      AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml
   eval:
     compose_file: docker-compose.eval.yml
-    model_config_path: config/models.cloud.yaml
-    env_overrides:
-      AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml

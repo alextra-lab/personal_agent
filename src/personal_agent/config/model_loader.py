@@ -75,21 +75,38 @@ def _apply_slm_tunnel_override(config: ModelConfig, settings: AppConfig) -> Mode
         return config
 
     real = urlparse(real_base.rstrip("/"))
+
+    def _rewrite(url: str | None) -> str | None:
+        if url is None:
+            return None
+        parsed = urlparse(url)
+        if parsed.hostname != _SLM_TUNNEL_PLACEHOLDER_HOST:
+            return None
+        return parsed._replace(scheme=real.scheme, netloc=real.netloc).geturl()
+
     updated_models = dict(config.models)
     changed = False
     for role, definition in config.models.items():
-        if definition.endpoint is None:
-            continue
-        parsed = urlparse(definition.endpoint)
-        if parsed.hostname != _SLM_TUNNEL_PLACEHOLDER_HOST:
-            continue
-        new_endpoint = parsed._replace(scheme=real.scheme, netloc=real.netloc).geturl()
-        updated_models[role] = definition.model_copy(update={"endpoint": new_endpoint})
-        changed = True
+        new_endpoint = _rewrite(definition.endpoint)
+        if new_endpoint is not None:
+            updated_models[role] = definition.model_copy(update={"endpoint": new_endpoint})
+            changed = True
+
+    # Rewrite the provider base_url too. Nothing dispatches off it yet — the SLM
+    # models still carry their own endpoint — but ADR-0121 makes the provider the
+    # authoritative locus, and FRE-917 unifies resolution onto it. Leaving the
+    # placeholder host in that authoritative field is a trap for the first
+    # consumer that reads it; rewrite it here so the two loci never disagree.
+    updated_providers = dict(config.providers)
+    for name, provider in config.providers.items():
+        new_base = _rewrite(provider.base_url)
+        if new_base is not None:
+            updated_providers[name] = provider.model_copy(update={"base_url": new_base})
+            changed = True
 
     if not changed:
         return config
-    return config.model_copy(update={"models": updated_models})
+    return config.model_copy(update={"models": updated_models, "providers": updated_providers})
 
 
 class ModelConfigError(ConfigLoadError):

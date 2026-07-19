@@ -16,10 +16,17 @@ the two coincide — the SLM deployments share one provider *and* one endpoint �
 so live behaviour is preserved, but the general case differs in both directions
 and is asserted as such in the tests.
 
-Cloud providers are no longer exempt: they carry explicit ceilings too, set high
-enough to act as a safety valve rather than a throttle. Placement (local vs
-cloud) now decides only *dispatch* — which client class handles the call — which
-is `ModelConfig.placement_of`'s job, not this module's.
+Every provider — including cloud ones — is registered with a ceiling, and any
+deployment that acquires a slot is capped at its provider's ceiling. But note
+what actually reaches this controller today: it is instantiated only by
+``LocalLLMClient``, so only **local-placement** deployments call ``request_slot``.
+Cloud placement dispatches to ``LiteLLMClient``, which does not go through here,
+so the registered cloud ceilings (``openai``/``anthropic``/``voyage``/``ovh``)
+are declared-but-inert until the two resolution paths are unified (ADR-0121
+step 2, FRE-917). They are set high (50) so that unification does not introduce a
+throttle by surprise. Placement (local vs cloud) decides only *dispatch* — which
+client class handles the call — which is ``ModelConfig.placement_of``'s job, not
+this module's.
 """
 
 from __future__ import annotations
@@ -114,7 +121,20 @@ class _PrioritySemaphore:
         except asyncio.TimeoutError:
             async with self._lock:
                 if slot in self._waiters:
+                    # Still queued — a clean timeout, nothing was handed to us.
                     self._waiters.remove(slot)
+                    return False
+                # Race: release() popped this slot and set its event in the
+                # window between wait_for firing and us re-acquiring the lock.
+                # That slot IS a live grant — release() hands off without
+                # decrementing _active — so abandoning it here would leak the
+                # permit forever and, once _active pins at _limit, wedge every
+                # future acquire on this semaphore. Pass the grant on instead of
+                # dropping it: to the next waiter, or back to the pool.
+                if self._waiters:
+                    self._waiters.pop(0).event.set()
+                else:
+                    self._active -= 1
             return False
 
     async def release(self) -> None:
@@ -262,9 +282,14 @@ class InferenceConcurrencyController:
             if model_sem:
                 acquired = await model_sem.acquire(priority, timeout=remaining_timeout)
                 if not acquired:
+                    # Report the budget actually waited on the model semaphore
+                    # (remaining_timeout), not the original — when the provider
+                    # ceiling consumed most of the budget these differ, and the
+                    # original would point at the wrong semaphore to tune.
                     raise InferenceSlotTimeout(
                         f"Timed out waiting for model slot on {role} "
-                        f"(priority={priority.name}, timeout={timeout}s)"
+                        f"(priority={priority.name}, timeout={remaining_timeout}s "
+                        f"of {timeout}s total)"
                     )
                 model_acquired = True
 

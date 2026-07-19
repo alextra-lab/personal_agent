@@ -78,10 +78,44 @@ class TestPrioritySemaphore:
         await asyncio.sleep(0.05)
         await sem.release()
 
-        await asyncio.wait_for(
-            asyncio.gather(bg_task, crit_task), timeout=3.0
-        )
+        await asyncio.wait_for(asyncio.gather(bg_task, crit_task), timeout=3.0)
         assert order[0] == "critical", f"Expected critical first, got {order}"
+
+    @pytest.mark.asyncio
+    async def test_timeout_racing_release_does_not_leak_capacity(self) -> None:
+        """A waiter that times out AFTER release() handed it the slot must return it.
+
+        Regression for the race the provider-keyed rewrite put on the hot path:
+        release() hands a freed permit to a waiter by popping its slot and setting
+        its event WITHOUT decrementing `_active`, on the assumption the waiter will
+        use it. If that waiter's `wait_for` timed out in the same window, it used to
+        find its slot already gone, return False, and reclaim nothing — leaking the
+        permit. Two such races pin `_active` at the limit and wedge every future
+        acquire.
+
+        The interleaving is forced deterministically: we hold `_lock` so the
+        timed-out waiter's cleanup cannot run, perform release()'s exact handoff by
+        hand, then drop the lock and let the cleanup observe the handed-off state.
+        """
+        sem = _PrioritySemaphore(1)
+        assert await sem.acquire(InferencePriority.USER_FACING) is True  # holder, _active == 1
+
+        w = asyncio.create_task(sem.acquire(InferencePriority.BACKGROUND, timeout=0.03))
+        await asyncio.sleep(0)  # let w queue its slot and enter wait_for
+        assert len(sem._waiters) == 1
+        slot = sem._waiters[0]
+
+        await sem._lock.acquire()
+        await asyncio.sleep(0.05)  # w times out; its except-handler now blocks on _lock
+        # The holder releases into w: pop + set event, _active deliberately unchanged.
+        sem._waiters.remove(slot)
+        slot.event.set()
+        sem._lock.release()
+
+        assert await w is False  # w still reports a timeout...
+        # ...but the permit it was handed is returned, not leaked. Proven two ways:
+        assert sem.active == 0
+        assert await sem.acquire(InferencePriority.USER_FACING, timeout=0.1) is True
 
 
 class TestInferenceConcurrencyController:
@@ -172,7 +206,9 @@ class TestInferenceConcurrencyController:
         gets its own private pool so a missing `provider:` can never mean "no limit".
         """
         ctrl = InferenceConcurrencyController()
-        ctrl.register_model("orphan", max_concurrency=1, endpoint="https://somewhere.example.com/v1")
+        ctrl.register_model(
+            "orphan", max_concurrency=1, endpoint="https://somewhere.example.com/v1"
+        )
         assert ctrl._model_provider["orphan"] == "_unattributed:orphan"
 
         async with ctrl.request_slot("orphan", InferencePriority.USER_FACING):
@@ -196,7 +232,10 @@ class TestInferenceConcurrencyController:
         ctrl = InferenceConcurrencyController(default_base_url="http://127.0.0.1:1234/v1")
         ctrl.register_provider("slm_local", max_concurrency=1)
         ctrl.register_model(
-            "reasoning", max_concurrency=2, endpoint="http://127.0.0.1:1234/v1", provider="slm_local"
+            "reasoning",
+            max_concurrency=2,
+            endpoint="http://127.0.0.1:1234/v1",
+            provider="slm_local",
         )
         ctrl.register_model(
             "standard", max_concurrency=2, endpoint="http://127.0.0.1:1234/v1", provider="slm_local"
@@ -207,12 +246,16 @@ class TestInferenceConcurrencyController:
         async with ctrl.request_slot("reasoning", InferencePriority.CRITICAL):
 
             async def bg_request():
-                async with ctrl.request_slot("reasoning", InferencePriority.BACKGROUND, timeout=3.0):
+                async with ctrl.request_slot(
+                    "reasoning", InferencePriority.BACKGROUND, timeout=3.0
+                ):
                     order.append("background")
 
             async def user_request():
                 await asyncio.sleep(0.02)
-                async with ctrl.request_slot("standard", InferencePriority.USER_FACING, timeout=3.0):
+                async with ctrl.request_slot(
+                    "standard", InferencePriority.USER_FACING, timeout=3.0
+                ):
                     order.append("user_facing")
 
             bg_task = asyncio.create_task(bg_request())

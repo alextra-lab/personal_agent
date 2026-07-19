@@ -827,11 +827,17 @@ exists would remove the live Cloud pill with no replacement.
    stopped enforcing the cloud secrets on the eval stack. An explicit `AGENT_DEPLOYMENT_PROFILE`
    (`local|cloud|eval`) carries it instead, and `check_deployment_manifest_matches_compose` was
    re-pointed onto that field so the provenance guard survives the one it used to read.
-3. **Provider ceilings apply to every provider, not only local ones.** Cloud deployments previously
-   registered no semaphore at all, so their declared limits were dead config. Placement now decides
-   only *dispatch*; the provider ceiling decides concurrency universally. Cloud ceilings are set to
-   50 as a safety valve — still strictly more constrained than the unbounded pass-through they
-   replace.
+3. **Provider ceilings are declared for every provider; enforcement for cloud lands with the
+   unification.** The controller now keys on the provider and every provider is registered with a
+   ceiling. But the controller is instantiated only by `LocalLLMClient`, so today only
+   *local-placement* deployments actually acquire a slot; cloud placement dispatches to `LiteLLMClient`,
+   which does not pass through it. The registered cloud ceilings
+   (`openai`/`anthropic`/`voyage`/`ovh`) are therefore **declared-but-inert** until step 2 (FRE-917)
+   unifies the two resolution paths — at which point the ceilings become live with no further catalog
+   change. They are set to 50 (a safety valve, not a throttle) precisely so that unification does not
+   introduce a surprise throttle. AC-3 is proven against the *local* provider, where enforcement is
+   live now. (Caught by the self-review's own code-review pass, which flagged the first draft of this
+   note — and the module docstring — for overclaiming that cloud ceilings were already enforced.)
 
 **Correction to the record on the two catalogs.** Round 1 corrected "identical in 11 of 12 entries"
 to "4 of 12 differ." By the time phase 2 deleted the second file the two had been made structurally

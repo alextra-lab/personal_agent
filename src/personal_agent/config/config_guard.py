@@ -168,12 +168,6 @@ def load_matrix(root: Path) -> JSONDict:
     return _load_yaml(root / "config" / "model_roles.yaml")
 
 
-class DeploymentProfileError(Exception):
-    """Raised when a profile cannot be resolved from ``config/deployment.yaml`` (ADR-0099 D2.2, FRE-651)."""
-
-    pass
-
-
 def load_deployment_manifest(root: Path) -> JSONDict:
     """Load ``config/deployment.yaml`` under *root*, or ``{}`` if absent/empty."""
     return _load_yaml(root / "config" / "deployment.yaml")

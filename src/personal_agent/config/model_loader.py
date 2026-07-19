@@ -24,6 +24,19 @@ _RoleMatrix = dict[str, object]
 
 log = structlog.get_logger(__name__)
 
+#: The two real catalogs, by RESOLVED PATH. Layer-3 bindings are merged into
+#: these only — a fixture or benchmark file defines its own deployments, and
+#: injecting the repo's bindings would dangle every reference. Matched on the
+#: full path, not the basename: the fixtures are called `models.yaml` too.
+_REPO_CONFIG: Path = Path(__file__).resolve().parents[3] / "config"
+_REAL_CATALOGS: frozenset[Path] = frozenset(
+    {_REPO_CONFIG / "models.yaml", _REPO_CONFIG / "models.cloud.yaml"}
+)
+
+#: Layer 3 role bindings (ADR-0121), merged into the same ModelConfig so all
+#: three layers validate in one pass.
+ROLE_BINDINGS_PATH: Path = Path(__file__).resolve().parents[3] / "config" / "model_roles.yaml"
+
 #: Neutral placeholder host baked into config/models*.yaml (FRE-895) — the real Mac
 #: SLM Cloudflare-tunnel host never lands in tracked source. See settings.slm_tunnel_base_url.
 _SLM_TUNNEL_PLACEHOLDER_HOST = "slm.example.com"
@@ -100,6 +113,11 @@ def _load_model_config_at_path(config_path_str: str) -> ModelConfig:
             return ModelConfig(models={})
     except ConfigLoadError as e:
         raise ModelConfigError(f"Failed to load model config file: {e}") from None
+
+    # Merge Layer 3 bindings so all three layers validate together (ADR-0121).
+    if "roles" not in content and config_path.resolve() in _REAL_CATALOGS:
+        raw = load_yaml_file(ROLE_BINDINGS_PATH, error_class=ModelConfigError) or {}
+        content = {**content, "roles": raw.get("bindings", {})}
 
     # Validate against Pydantic schema
     try:

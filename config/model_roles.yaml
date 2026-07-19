@@ -68,3 +68,24 @@ required_secrets:
   cloud:
     - anthropic_api_key
     - openai_api_key
+
+# ── Layer 3 bindings (ADR-0121) ──────────────────────────────────────────────
+# Added ALONGSIDE the `roles:` divergence matrix above, which still drives
+# resolution. These point at the CURRENT model keys, so they encode today's
+# behaviour exactly; the keys are renamed to model aliases in a later step, and
+# the divergence matrix is deleted only once nothing reads it.
+#
+# `open: true` marks a role a user may select. Absent means pinned — fail-closed,
+# so a role added later is never selectable by omission (ADR-0121 §6). Nothing
+# consumes it yet; the guardrail is declared before the mechanism that reads it.
+bindings:
+  primary:            { deployment: primary,           open: true }
+  artifact_builder:   { deployment: sub_agent,         open: true }
+  sub_agent:          { deployment: sub_agent }
+  entity_extraction:  { deployment: gpt-5.4-mini }
+  captains_log:       { deployment: claude_sonnet }
+  insights:           { deployment: claude_sonnet }
+  compressor:         { deployment: compressor }
+  embedding:          { deployment: embedding }
+  reranker:           { deployment: reranker }
+  reranker_fallback:  { deployment: reranker_fallback }

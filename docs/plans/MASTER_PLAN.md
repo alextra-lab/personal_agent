@@ -6,22 +6,20 @@
 > per-ticket state → [Linear](https://linear.app/frenchforest).
 > **Last updated**: 2026-07-19
 
-## 0. Owner decision — accept ADR-0121 + ADR-0122, then approve the build chain
+## 0. In flight — ADR-0121/0122 config-management chain (owner-accepted)
 
-The config-UI debate ran in `cc-adrs` and landed: **ADR-0121** (model catalog and selection layer —
-providers → deployments → role bindings, one catalog, **Path removed**, the user selects the model by
-name) and **ADR-0122** (build-time artifact-builder selection on the ADR-0076 DecisionCard). Merged as
-PR #581, both **Proposed** — publishing is not acceptance.
+Both ADRs **Accepted** (owner, 2026-07-19). **ADR-0121** = model catalog + selection layer, Path
+removed. **ADR-0122** = build-time artifact-builder selection. Chains approved and dispatched.
 
-Two gates, both the owner's:
-1. **Accept or amend the two ADRs.** ADR-0121 removes Path entirely and inherits ADR-0079's eleven
-   invariants for the selection store; that is the consequential call.
-2. **Approve the implementation chain.** FRE-887 (ADR-0121 umbrella, T1–T5, seam AC-9) and FRE-878
-   (ADR-0122 umbrella, FRE-881/882/921, seam AC-7) — all children sit **Needs Approval**. Nothing is
-   dispatchable until approved and stream-labelled.
+- **FRE-916 (ADR-0121 T1) — DONE, deploy-verified live.** Single catalog; gateway loads
+  `config/models.yaml`, second catalog deleted. Sub-agent ctx 65536, compressor mini, artifact_builder
+  resolves, embedder OVH-managed.
+- **build1 head: FRE-917 (T2)** — selection store + resolver unification; carries ADR-0079's eleven
+  invariants + a Postgres migration (ask-first deploy). Then T3 918 → T4 919 → **T5 920 (seam AC-9)**.
+- **build2: FRE-881 (ADR-0122 T1)** blocked by FRE-917 → 882 → **921 (seam AC-7)**.
 
-Superseded and already closed out: ADR-0118/0119, FRE-880 (canceled with cause), FRE-883, and the
-FRE-888–892 chain. FRE-894 holds the deferred Phase-2 scope.
+Umbrellas FRE-887 / FRE-878 close only when their seams (920 / 921) prove live. Superseded + closed
+out: ADR-0118/0119, FRE-880 (canceled), FRE-883, FRE-888–892. FRE-894 holds deferred Phase-2 scope.
 
 ## 1. Reduce the backlog
 

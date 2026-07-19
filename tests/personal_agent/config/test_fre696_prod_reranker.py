@@ -24,21 +24,19 @@ from personal_agent.config.settings import AppConfig
 
 
 def test_reranker_is_voyage_rerank_2_5() -> None:
-    """The "reranker" role's PRIMARY target is Voyage rerank-2.5 (FRE-851), in both profiles."""
-    for config_file in ("config/models.yaml", "config/models.cloud.yaml"):
-        cfg = yaml.safe_load(Path(config_file).read_text())
-        reranker = cfg["models"]["reranker"]
-        assert reranker["id"] == "rerank-2.5"
-        assert reranker["endpoint"] == "https://api.voyageai.com/v1"
+    """The "reranker" role's PRIMARY target is Voyage rerank-2.5 (FRE-851)."""
+    cfg = yaml.safe_load(Path("config/models.yaml").read_text())
+    reranker = cfg["models"]["reranker"]
+    assert reranker["id"] == "rerank-2.5"
+    assert reranker["endpoint"] == "https://api.voyageai.com/v1"
 
 
 def test_reranker_fallback_is_mlx_4b_mxfp8() -> None:
     """The "reranker_fallback" role — the programmatic fallback target — is the reliable MLX 4B mxfp8."""
-    for config_file in ("config/models.yaml", "config/models.cloud.yaml"):
-        cfg = yaml.safe_load(Path(config_file).read_text())
-        fallback = cfg["models"]["reranker_fallback"]
-        assert fallback["id"] == "Qwen/Qwen3-Reranker-4B-mxfp8"
-        assert fallback["endpoint"] == "https://slm.example.com/v1"
+    cfg = yaml.safe_load(Path("config/models.yaml").read_text())
+    fallback = cfg["models"]["reranker_fallback"]
+    assert fallback["id"] == "Qwen/Qwen3-Reranker-4B-mxfp8"
+    assert fallback["endpoint"] == "https://slm.example.com/v1"
 
 
 def test_reranker_input_cap_default_is_25() -> None:

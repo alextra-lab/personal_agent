@@ -21,18 +21,19 @@ from personal_agent.second_brain.entity_extraction import extract_entities_and_r
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
-_LOCAL = _REPO_ROOT / "config" / "models.yaml"
-_CLOUD = _REPO_ROOT / "config" / "models.cloud.yaml"
+_CATALOG = _REPO_ROOT / "config" / "models.yaml"
 
-_FORBIDDEN_ROLES = (
+_MATRIX_ROLES = (
+    "primary",
+    "sub_agent",
     "entity_extraction",
     "captains_log",
     "insights",
+    "compressor",
     "embedding",
     "reranker",
     "reranker_fallback",
 )
-_ALLOWED_ROLES = ("compressor",)
 
 
 @pytest.fixture(autouse=True)
@@ -47,38 +48,27 @@ def _definition_tuple(config_path: Path, model_key: str) -> tuple[object, ...]:
     return (model_def.id, model_def.provider, model_def.max_tokens, model_def.temperature)
 
 
-class TestForbiddenRolesResolveIdenticallyAcrossProfiles:
-    """AC-1 — a forbidden role's fully-resolved ModelDefinition matches across profiles.
+class TestEveryRoleDereferencesToARealDefinition:
+    """AC-1 — every matrix role resolves to a key the catalog actually defines.
 
-    Must fail if entity_extraction ever again resolves gpt-5.4-nano local vs
-    gpt-5.4-mini cloud, or the name matches but the underlying id differs.
+    This used to assert a forbidden role's ModelDefinition matched across the two
+    catalogs, guarding against entity_extraction resolving gpt-5.4-nano locally
+    and gpt-5.4-mini in cloud. FRE-916 phase 2 deleted the second catalog, so
+    that divergence is unrepresentable and the cross-profile comparison has
+    nothing to compare. What still has teeth — and is what actually broke in
+    production — is that each role dereferences to a real, fully-formed
+    definition rather than a dangling key.
     """
 
-    @pytest.mark.parametrize("role", _FORBIDDEN_ROLES)
-    def test_same_definition_local_and_cloud(self, role: str) -> None:
-        """The role resolves to the same model key and ModelDefinition on both profiles."""
-        local_key = resolve_role_model_key(role, config_path=_LOCAL)
-        cloud_key = resolve_role_model_key(role, config_path=_CLOUD)
-        assert local_key == cloud_key
-
-        local_def = _definition_tuple(_LOCAL, local_key)
-        cloud_def = _definition_tuple(_CLOUD, cloud_key)
-        assert local_def == cloud_def
-
-
-class TestAllowedRolesResolveWithoutError:
-    """AC-1's lighter half — compressor/reranker resolve via the matrix under each profile.
-
-    No cross-profile equality assertion — they are `allowed`, expected to diverge.
-    """
-
-    @pytest.mark.parametrize("role", _ALLOWED_ROLES)
-    @pytest.mark.parametrize("config_path", [_LOCAL, _CLOUD])
-    def test_resolves_to_the_profiles_own_model_entry(self, role: str, config_path: Path) -> None:
-        """The resolved key is a real entry in that profile's own models: mapping."""
-        model_key = resolve_role_model_key(role, config_path=config_path)
-        config = load_model_config(config_path)
+    @pytest.mark.parametrize("role", _MATRIX_ROLES)
+    def test_resolves_to_a_defined_model(self, role: str) -> None:
+        model_key = resolve_role_model_key(role, config_path=_CATALOG)
+        config = load_model_config(_CATALOG)
         assert model_key in config.models
+
+        model_id, provider, _max_tokens, _temperature = _definition_tuple(_CATALOG, model_key)
+        assert model_id, f"role {role!r} resolved to a definition with no id"
+        assert provider, f"role {role!r} resolved to a definition with no provider"
 
 
 class TestConsumerRaisesWhenMatrixMissing:
@@ -92,9 +82,9 @@ class TestConsumerRaisesWhenMatrixMissing:
         fixture_root = _FIXTURES / "no_matrix"
         fixture_models_path = fixture_root / "config" / "models.yaml"
 
-        from personal_agent.config import config_guard, settings
+        from personal_agent.config import config_guard, model_loader
 
-        monkeypatch.setattr(settings, "model_config_path", fixture_models_path)
+        monkeypatch.setattr(model_loader, "CATALOG_PATH", fixture_models_path)
         monkeypatch.setattr(config_guard, "repo_root", lambda: fixture_root)
 
         with (

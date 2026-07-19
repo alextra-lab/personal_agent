@@ -101,8 +101,8 @@ class TestPrivateMirrorsReality:
     def test_embedder_reranker_mirror_model_def_endpoint(self, managed_settings: AppConfig) -> None:
         resolution = resolve_substrate("private", settings=managed_settings)
         for component, role in (("embedder", "embedding"), ("reranker", "reranker")):
-            key = resolve_role_model_key(role, config_path=managed_settings.model_config_path)
-            expected = load_model_config(managed_settings.model_config_path).models[key].endpoint
+            key = resolve_role_model_key(role)
+            expected = load_model_config(settings=managed_settings).models[key].endpoint
             assert resolution.backends[component].target == expected
 
 

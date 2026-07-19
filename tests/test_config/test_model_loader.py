@@ -386,7 +386,6 @@ class TestSupportsVisionDeployedConfig:
         "config_path",
         [
             Path("config/models.yaml"),
-            Path("config/models.cloud.yaml"),
         ],
     )
     def test_deployed_vision_capable_models_flagged(self, config_path: Path) -> None:
@@ -417,7 +416,6 @@ class TestSupportsPdfDocumentDeployedConfig:
         "config_path",
         [
             Path("config/models.yaml"),
-            Path("config/models.cloud.yaml"),
         ],
     )
     def test_deployed_pdf_document_capable_models_flagged(self, config_path: Path) -> None:
@@ -433,7 +431,6 @@ class TestSupportsPdfDocumentDeployedConfig:
         "config_path",
         [
             Path("config/models.yaml"),
-            Path("config/models.cloud.yaml"),
         ],
     )
     def test_deployed_pdf_document_incapable_models_unflagged(self, config_path: Path) -> None:
@@ -460,7 +457,6 @@ class TestEntityExtractionTemperatureDeployedConfig:
         "config_path",
         [
             Path("config/models.yaml"),
-            Path("config/models.cloud.yaml"),
         ],
     )
     def test_entity_extraction_role_has_pinned_temperature(self, config_path: Path) -> None:
@@ -496,7 +492,6 @@ class TestCloudGptPricingDeployedConfig:
         "config_path",
         [
             Path("config/models.yaml"),
-            Path("config/models.cloud.yaml"),
         ],
     )
     def test_gpt_cloud_models_carry_config_pricing(self, config_path: Path) -> None:

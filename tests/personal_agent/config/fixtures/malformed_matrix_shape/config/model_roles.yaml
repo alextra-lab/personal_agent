@@ -1,13 +1,11 @@
-# Fixture: matrix entries whose declared keys contradict their own
-# divergence value (FRE-650). entity_extraction is forbidden but declares
-# local/cloud instead of all; compressor is allowed but declares all
-# instead of local/cloud.
-active_profiles:
-  local: config/models.yaml
-  cloud: config/models.cloud.yaml
+# Fixture: matrix entries whose declared keys are invalid post-FRE-916 phase 2.
+# entity_extraction declares no `all` key at all. compressor declares `all` but
+# ALSO carries the retired per-profile/divergence keys, which
+# resolve_role_model_key now ignores silently — the exact drift
+# check_matrix_shape exists to catch.
 roles:
-  entity_extraction: { divergence: forbidden, local: gpt-5.4-mini, cloud: gpt-5.4-mini }
-  compressor: { divergence: allowed, all: compressor }
+  entity_extraction: {}
+  compressor: { all: gpt-5.4-mini, divergence: allowed, local: gpt-5.4-nano, cloud: gpt-5.4-mini }
 required_secrets:
   local: []
   cloud: []

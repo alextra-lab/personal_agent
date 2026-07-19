@@ -202,7 +202,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 152 | `mode_controller_enabled` | `AGENT_MODE_CONTROLLER_ENABLED` | `bool` | `True` |  | — |
 | 153 | `mode_evaluation_interval_seconds` | `AGENT_MODE_EVALUATION_INTERVAL_SECONDS` | `float` | `30.0` |  | — |
 | 154 | `mode_window_size` | `AGENT_MODE_WINDOW_SIZE` | `int` | `12` |  | — |
-| 155 | `model_config_path` | `AGENT_MODEL_CONFIG_PATH` | `Path` | `PosixPath('config/models.yaml')` |  | ✅ |
+| 155 | `deployment_profile` | `AGENT_DEPLOYMENT_PROFILE` | `Literal['local','cloud','eval']` | `'local'` | Keys required_secrets (FRE-916 phase 2; replaced `model_config_path`) | ✅ |
 | 156 | `multipath_arm_top_k` | `AGENT_MULTIPATH_ARM_TOP_K` | `int` | `50` |  | — |
 | 157 | `multipath_paraphrase_count` | `AGENT_MULTIPATH_PARAPHRASE_COUNT` | `int` | `3` |  | — |
 | 158 | `multipath_recall_enabled` | `AGENT_MULTIPATH_RECALL_ENABLED` | `bool` | `False` |  | — |
@@ -516,7 +516,9 @@ The `entity_extraction_role` / `captains_log_role` / `insights_role` headers are
 - `captains_log` + `insights`: **local `nano` ≠ prod `sonnet`**.
 - `models.medium.yaml`: all three resolve to **`primary`** (header-less fallback) — a *third* distinct assignment.
 
-The two live profiles that write to the shared substrate are `models.yaml` (local dev, via `make dev`) and `models.cloud.yaml` (prod, pinned by `AGENT_MODEL_CONFIG_PATH` in `docker-compose.cloud.yml`). Their divergence is the operative one.
+The two live profiles that write to the shared substrate were `models.yaml` (local dev, via `make dev`) and `models.cloud.yaml` (prod, pinned by `AGENT_MODEL_CONFIG_PATH` in `docker-compose.cloud.yml`). Their divergence was the operative one.
+
+**Update (ADR-0121, FRE-916 phase 2):** this entire drift class is now **structurally closed**. `models.cloud.yaml` is deleted and `AGENT_MODEL_CONFIG_PATH` is removed — there is exactly one catalog (`config/models.yaml`), so a role cannot resolve to different models in different deployments. The two files were proven comment-only-different before the deletion, and the role-resolution snapshot (`tests/personal_agent/config/test_catalog_snapshot.py`) asserts it byte-for-byte. The sections below are retained as the point-in-time audit record.
 
 **Update (ADR-0099 stage 4, FRE-652):** `models-baseline.yaml` and `models.medium.yaml` — both columns above — are now **retired** (deleted from the repo). Neither had a live or test reader; the header-less-fallback risk (`models.medium.yaml`) is closed by deletion, not correction. The table above is left as the point-in-time audit record; treat those two columns as historical.
 
@@ -581,16 +583,18 @@ _Note: `config/governance/tools.yaml.backup` is an untracked-style backup file c
 
 ## §6 — `docker-compose*.yml` `environment:` blocks (deployment provenance, ADR-0099 D2.2)
 
-Which model YAML is live depends on which compose file was deployed. Only `.cloud.yml` and `.eval.yml` run the agent service (and both pin `models.cloud.yaml`); `.yml` (local dev) and `.test.yml` run **infra only** — the agent runs via `make dev` (uvicorn) reading the `AGENT_MODEL_CONFIG_PATH` default → `config/models.yaml`.
+Every deployment reads the same catalog (`config/models.yaml`) since FRE-916 phase 2. What still varies per compose file is **which deployment profile** it declares, because that keys the required-secret set. Only `.cloud.yml` and `.eval.yml` run the agent service; `.yml` (local dev) and `.test.yml` run **infra only** — the agent runs via `make dev` (uvicorn) at the `local` default.
 
-| File | Runs agent? | `AGENT_MODEL_CONFIG_PATH` | `APP_ENV` | Notable env |
+| File | Runs agent? | `AGENT_DEPLOYMENT_PROFILE` | `APP_ENV` | Notable env |
 |---|---|---|---|---|
-| `docker-compose.yml` | no (infra only) | — → default `models.yaml` | — | Postgres/ES/Neo4j dev passwords (`:-` defaults) |
-| `docker-compose.cloud.yml` | **yes** | `/app/config/models.cloud.yaml` | `production` | DB/Neo4j/ES/Redis/SearXNG URIs; `AGENT_GATEWAY_AUTH_ENABLED=true`; CF-Access client id/secret; `?`-required passwords |
-| `docker-compose.eval.yml` | **yes** (2 services) | `/app/config/models.cloud.yaml` | `eval` | `AGENT_CLOUD_WEEKLY_BUDGET_USD=50.0`; `AGENT_GATEWAY_AUTH_ENABLED=false`; MCP/primitives toggles differ between the two services; `AGENT_ANTHROPIC/OPENAI_API_KEY` passthrough |
+| `docker-compose.yml` | no (infra only) | — → default `local` | — | Postgres/ES/Neo4j dev passwords (`:-` defaults) |
+| `docker-compose.cloud.yml` | **yes** | `cloud` | `production` | DB/Neo4j/ES/Redis/SearXNG URIs; `AGENT_GATEWAY_AUTH_ENABLED=true`; CF-Access client id/secret; `?`-required passwords |
+| `docker-compose.eval.yml` | **yes** (2 services) | `eval` | `eval` | `AGENT_CLOUD_WEEKLY_BUDGET_USD=50.0`; `AGENT_GATEWAY_AUTH_ENABLED=false`; MCP/primitives toggles differ between the two services; `AGENT_ANTHROPIC/OPENAI_API_KEY` passthrough |
 | `docker-compose.test.yml` | no (infra only) | — | — | dev-default passwords |
 
-**Provenance chain:** `prod` → `docker-compose.cloud.yml` → `AGENT_MODEL_CONFIG_PATH=/app/config/models.cloud.yaml` → extraction `gpt-5.4-mini`, captains_log/insights `claude_sonnet` (`claude-sonnet-5`). This is the one committed place tying profile → compose → active YAML → resolved model, per ADR-0099 D2.2.
+**Provenance chain:** `prod` → `docker-compose.cloud.yml` → `AGENT_DEPLOYMENT_PROFILE=cloud` → required secrets `anthropic_api_key` + `openai_api_key`, and roles resolved from `config/models.yaml` → extraction `gpt-5.4-mini`, captains_log/insights `claude_sonnet` (`claude-sonnet-5`). `config_guard.check_deployment_manifest_matches_compose` fails if a compose file's declared profile disagrees with `config/deployment.yaml`, per ADR-0099 D2.2.
+
+**Note:** `APP_ENV=eval` maps to `Environment.DEVELOPMENT` (`env_loader.get_environment` recognizes only production/staging/test). That is precisely why required-secrets is keyed on `AGENT_DEPLOYMENT_PROFILE` rather than `settings.environment` — the latter would silently drop the eval stack's cloud-secret enforcement.
 
 ---
 

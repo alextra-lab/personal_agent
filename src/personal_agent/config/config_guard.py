@@ -155,21 +155,6 @@ def _load_yaml(path: Path) -> JSONDict:
     return content if isinstance(content, dict) else {}
 
 
-def _resolved_role_model_key(role_cfg: JSONDict, profile: str) -> str | None:
-    """Resolve a role's model key for *profile* from the matrix entry itself.
-
-    ADR-0099 D1 stage 2 (FRE-650): role assignment lives ONLY in the matrix
-    now — a ``forbidden`` role's key is its ``all:`` value (same for every
-    profile); an ``allowed`` role's key is its ``local:``/``cloud:`` value for
-    *profile*. Returns ``None`` if the entry declares no value for this case
-    (e.g. an ``allowed`` role with no value for this particular profile) —
-    the caller treats that as nothing to check, not a finding.
-    """
-    divergence = role_cfg.get("divergence")
-    value = role_cfg.get("all") if divergence == "forbidden" else role_cfg.get(profile)
-    return value if isinstance(value, str) else None
-
-
 def _resolved_model_definition(profile_yaml: JSONDict, model_name: str) -> JSONDict | None:
     models = profile_yaml.get("models")
     if not isinstance(models, dict):
@@ -412,115 +397,44 @@ def check_dev_test_profile_isolation(root: Path) -> list[Finding]:
     return findings
 
 
-def model_config_path_for_profile(profile: str, manifest: JSONDict, root: Path) -> Path:
-    """Resolve *profile*'s active model-definition file from the deployment manifest.
+def check_dangling_model_references(root: Path, matrix: JSONDict) -> list[Finding]:
+    """AC-9 — every role must resolve to a model key the catalog actually defines.
 
-    Args:
-        profile: A key under the manifest's ``profiles:`` mapping (e.g. ``"cloud"``).
-        manifest: The parsed ``config/deployment.yaml`` (see :func:`load_deployment_manifest`).
-        root: Repo (or fixture) root the manifest's relative paths resolve against.
+    **Narrowed by FRE-916 phase 2 (ADR-0121).** This was
+    ``check_forbidden_role_divergence_and_dangling_refs``, and its first half
+    compared each ``divergence: forbidden`` role's resolved ``ModelDefinition``
+    across the two active catalogs to catch *definition* drift — the same key
+    backed by a different model in each file. Collapsing to one catalog makes
+    that comparison impossible to fail, because there is nothing left to compare
+    against: definition drift became unrepresentable rather than merely policed.
 
-    Returns:
-        The absolute path to the profile's active model-definition file.
-
-    Raises:
-        DeploymentProfileError: If *profile* is undeclared, or declares no ``model_config_path``.
+    The dangling-reference half is retained unchanged in substance. A role
+    pointing at a key the catalog does not define is still a live failure, and it
+    is *safety* class — it wedges role resolution at runtime, so it must fail
+    loudly rather than merely block CI.
     """
-    profiles: dict[str, JSONDict] = manifest.get("profiles", {})  # type: ignore[assignment]
-    row = profiles.get(profile)
-    if row is None:
-        raise DeploymentProfileError(
-            f"profile {profile!r} is not declared in config/deployment.yaml profiles:"
-        )
-    rel_path = row.get("model_config_path")
-    if not isinstance(rel_path, str):
-        raise DeploymentProfileError(
-            f"profile {profile!r} declares no 'model_config_path' in config/deployment.yaml"
-        )
-    return (root / rel_path).resolve()
-
-
-def resolve_active_profile(model_config_path: Path, matrix: JSONDict, root: Path) -> str | None:
-    """Return the ``active_profiles`` key whose file resolves to *model_config_path*.
-
-    Both sides are resolved absolute before comparing, so callers may pass
-    either an already-resolved ``settings.model_config_path`` or a bare
-    relative path. Returns ``None`` if no entry matches (e.g. a fixture or
-    test root with no ``active_profiles`` declared).
-    """
-    target = model_config_path.resolve()
-    active_profiles = matrix.get("active_profiles", {})
-    if not isinstance(active_profiles, dict):
-        return None
-    for profile, rel_path in active_profiles.items():
-        if (root / rel_path).resolve() == target:
-            return str(profile)
-    return None
-
-
-def check_forbidden_role_divergence_and_dangling_refs(
-    root: Path, matrix: JSONDict
-) -> list[Finding]:
-    """AC-3 (forbidden-role divergence) + AC-9 (dangling model reference)."""
     findings: list[Finding] = []
-    active_profiles: dict[str, str] = matrix.get("active_profiles", {})  # type: ignore[assignment]
     roles: dict[str, JSONDict] = matrix.get("roles", {})  # type: ignore[assignment]
 
-    profile_yamls: dict[str, JSONDict] = {}
-    for profile, rel_path in active_profiles.items():
-        path = root / rel_path
-        if path.is_file():
-            profile_yamls[profile] = _load_yaml(path)
+    catalog_rel = "config/models.yaml"
+    catalog_path = root / catalog_rel
+    if not catalog_path.is_file():
+        return findings
 
+    catalog = _load_yaml(catalog_path)
     for role, role_cfg in roles.items():
-        resolved: dict[str, tuple[str, JSONDict | None]] = {}
-        for profile, profile_yaml in profile_yamls.items():
-            model_name = _resolved_role_model_key(role_cfg, profile)
-            if model_name is None:
-                # No value declared for this profile (e.g. an `allowed` role
-                # with only a `local:`/`cloud:` value, not both) — nothing to
-                # check for this profile.
-                continue
-            definition = _resolved_model_definition(profile_yaml, model_name)
-            resolved[profile] = (model_name, definition)
-            if definition is None:
-                findings.append(
-                    Finding(
-                        check="dangling_model_reference",
-                        severity="safety",
-                        message=(
-                            f"role '{role}' resolves to model '{model_name}' under profile "
-                            f"'{profile}', which has no matching entry under models: "
-                            f"in {active_profiles[profile]}"
-                        ),
-                    )
-                )
-
-        if role_cfg.get("divergence") != "forbidden" or len(resolved) < 2:
+        model_name = role_cfg.get("all")
+        if not isinstance(model_name, str):
+            # Shape is check_matrix_shape's job; nothing to dereference here.
             continue
-
-        definitions = {
-            profile: definition
-            for profile, (_, definition) in resolved.items()
-            if definition is not None
-        }
-        distinct = {
-            (d.get("id"), d.get("provider"), d.get("max_tokens"), d.get("temperature"))
-            for d in definitions.values()
-        }
-        if len(distinct) > 1:
-            model_name = next(name for name, _ in resolved.values())
-            profile_summary = ", ".join(
-                f"{profile}={d.get('id')}" for profile, d in sorted(definitions.items())
-            )
+        if _resolved_model_definition(catalog, model_name) is None:
             findings.append(
                 Finding(
-                    check="forbidden_role_divergence",
-                    severity="policy",
+                    check="dangling_model_reference",
+                    severity="safety",
                     message=(
-                        f"role '{role}' is divergence:forbidden and resolves to the same "
-                        f"model key '{model_name}' in every active profile, but the "
-                        f"underlying ModelDefinition differs (definition drift): {profile_summary}"
+                        f"role '{role}' resolves to model '{model_name}', which has no "
+                        f"matching entry under models: in {catalog_rel}"
                     ),
                 )
             )
@@ -782,94 +696,49 @@ def _strip_provider_prefix(model_id: str) -> str:
 
 
 def check_matrix_shape(matrix: JSONDict) -> list[Finding]:
-    """A role's declared keys must match its own ``divergence`` value (FRE-650).
+    """Every role must declare exactly one ``all:`` model key (FRE-650; FRE-916 phase 2).
 
-    A ``forbidden`` role must declare ``all`` and must NOT declare
-    ``local``/``cloud`` (there is no per-profile value to diverge — that is
-    the entire point of ``forbidden``). An ``allowed`` role must declare at
-    least one of ``local``/``cloud`` and must NOT declare ``all`` (an `all`
-    value on an `allowed` role is a stale/contradictory declaration). Without
-    this check, a malformed matrix silently relocates the old
-    assignment-drift failure mode into ``config/model_roles.yaml`` itself,
-    uncaught by :func:`check_forbidden_role_divergence_and_dangling_refs`.
+    **Re-scoped by FRE-916 phase 2 (ADR-0121).** This check used to enforce the
+    ``divergence: allowed | forbidden`` contract — that a ``forbidden`` role
+    declare ``all`` and no per-profile value, and an ``allowed`` role the
+    reverse. Collapsing to a single catalog removed the per-profile axis
+    entirely, so the only remaining shape rule is the one that always carried the
+    weight: a role resolves to exactly one declared key.
+
+    Per-profile keys are now rejected outright rather than being one valid shape
+    — a re-introduced ``local:``/``cloud:`` value would be silently ignored by
+    :func:`~personal_agent.config.model_loader.resolve_role_model_key`, which is
+    precisely the silent-assignment-drift failure this check exists to prevent.
     """
     findings: list[Finding] = []
     roles: dict[str, JSONDict] = matrix.get("roles", {})  # type: ignore[assignment]
     for role, role_cfg in roles.items():
-        divergence = role_cfg.get("divergence")
-        has_all = "all" in role_cfg
-        has_per_profile = "local" in role_cfg or "cloud" in role_cfg
-        if divergence == "forbidden":
-            if not has_all:
-                findings.append(
-                    Finding(
-                        check="matrix_shape",
-                        severity="policy",
-                        message=f"role '{role}' is divergence:forbidden but declares no 'all' value",
-                    )
+        if not isinstance(role_cfg.get("all"), str):
+            findings.append(
+                Finding(
+                    check="matrix_shape",
+                    severity="policy",
+                    message=f"role '{role}' declares no 'all' model key",
                 )
-            if has_per_profile:
-                findings.append(
-                    Finding(
-                        check="matrix_shape",
-                        severity="policy",
-                        message=(
-                            f"role '{role}' is divergence:forbidden but declares "
-                            "'local'/'cloud' — a forbidden role has no per-profile value"
-                        ),
-                    )
-                )
-        elif divergence == "allowed":
-            if not has_per_profile:
-                findings.append(
-                    Finding(
-                        check="matrix_shape",
-                        severity="policy",
-                        message=(
-                            f"role '{role}' is divergence:allowed but declares neither "
-                            "'local' nor 'cloud'"
-                        ),
-                    )
-                )
-            if has_all:
-                findings.append(
-                    Finding(
-                        check="matrix_shape",
-                        severity="policy",
-                        message=(
-                            f"role '{role}' is divergence:allowed but declares 'all' "
-                            "— 'all' is only valid for a forbidden role"
-                        ),
-                    )
-                )
-        else:
+            )
+        stale = sorted(k for k in ("local", "cloud", "eval", "divergence") if k in role_cfg)
+        if stale:
             findings.append(
                 Finding(
                     check="matrix_shape",
                     severity="policy",
                     message=(
-                        f"role '{role}' has invalid divergence {divergence!r} "
-                        "(expected 'forbidden' or 'allowed')"
+                        f"role '{role}' declares {stale}, which FRE-916 phase 2 retired "
+                        "along with the second catalog. Only 'all' is read now, so these "
+                        "would be silently ignored — the exact drift this check prevents."
                     ),
                 )
             )
     return findings
 
 
-def _normalize_container_model_config_path(value: str) -> str:
-    """Strip a container's ``/app/`` mount prefix (ADR-0099 D2.2, FRE-651).
-
-    Compose files set ``AGENT_MODEL_CONFIG_PATH`` as a container-mounted path
-    (``/app/config/models.cloud.yaml``); the manifest's ``model_config_path``
-    is repo-relative (``config/models.cloud.yaml``). Normalizing lets the two
-    representations compare equal.
-    """
-    prefix = "/app/"
-    return value[len(prefix) :] if value.startswith(prefix) else value
-
-
-def _compose_model_config_paths(compose_yaml: JSONDict) -> set[str]:
-    """Every distinct ``AGENT_MODEL_CONFIG_PATH`` value set across a compose file's services.
+def _compose_deployment_profiles(compose_yaml: JSONDict) -> set[str]:
+    """Every distinct ``AGENT_DEPLOYMENT_PROFILE`` value set across a compose file's services.
 
     Handles both the mapping (``KEY: value``) and list (``- KEY=value``) forms
     docker-compose's ``environment:`` block allows. Merge keys (``<<: *anchor``)
@@ -885,55 +754,30 @@ def _compose_model_config_paths(compose_yaml: JSONDict) -> set[str]:
             continue
         environment = service.get("environment")
         if isinstance(environment, dict):
-            value = environment.get("AGENT_MODEL_CONFIG_PATH")
+            value = environment.get("AGENT_DEPLOYMENT_PROFILE")
             if isinstance(value, str):
                 values.add(value)
         elif isinstance(environment, list):
             for item in environment:
-                if isinstance(item, str) and item.startswith("AGENT_MODEL_CONFIG_PATH="):
+                if isinstance(item, str) and item.startswith("AGENT_DEPLOYMENT_PROFILE="):
                     values.add(item.split("=", 1)[1])
     return values
 
 
-def check_deployment_manifest_internal_consistency(manifest: JSONDict) -> list[Finding]:
-    """A profile row's own ``model_config_path`` and ``env_overrides`` must agree (FRE-651).
-
-    Without this, ``config-resolve`` (which reads ``model_config_path``) could
-    silently answer from a different file than the one ``env_overrides``
-    documents as deployed, even if that ``env_overrides`` value itself matches
-    the real compose file — the manifest row would be internally
-    self-contradictory. See :func:`check_deployment_manifest_matches_compose`
-    for the complementary manifest-vs-compose check.
-    """
-    findings: list[Finding] = []
-    profiles: dict[str, JSONDict] = manifest.get("profiles", {})  # type: ignore[assignment]
-    for profile, row in profiles.items():
-        model_config_path = row.get("model_config_path")
-        env_overrides = row.get("env_overrides", {})
-        override_value = (
-            env_overrides.get("AGENT_MODEL_CONFIG_PATH")
-            if isinstance(env_overrides, dict)
-            else None
-        )
-        if not isinstance(model_config_path, str) or not isinstance(override_value, str):
-            continue
-        if _normalize_container_model_config_path(override_value) != model_config_path:
-            findings.append(
-                Finding(
-                    check="deployment_manifest_internal_mismatch",
-                    severity="policy",
-                    message=(
-                        f"profile '{profile}' declares model_config_path={model_config_path!r} "
-                        f"but env_overrides.AGENT_MODEL_CONFIG_PATH={override_value!r} names a "
-                        "different file"
-                    ),
-                )
-            )
-    return findings
-
-
 def check_deployment_manifest_matches_compose(root: Path, manifest: JSONDict) -> list[Finding]:
-    """AC-5 — a profile's declared ``env_overrides`` must match its compose file (ADR-0099 D2.2, FRE-651).
+    """AC-5 — a profile's compose file must declare that same profile (ADR-0099 D2.2, FRE-651).
+
+    **Re-pointed in FRE-916 phase 2 (ADR-0121).** This guard used to cross-check
+    each profile's ``AGENT_MODEL_CONFIG_PATH`` override against its compose file.
+    That variable is gone — there is one catalog now — so the guard follows the
+    provenance question onto the field that replaced it as the per-deployment
+    discriminator: ``AGENT_DEPLOYMENT_PROFILE``, which keys the required-secret
+    set. Getting it wrong is the same class of failure the old check caught: a
+    deployment silently running under another profile's configuration.
+
+    ``local`` is exempt from the must-declare half because it is the field's
+    default; a compose file that declares nothing is correctly ``local``. Any
+    profile that IS declared must match its manifest row.
 
     ADR-0099 D4 lists "provenance-manifest ≠ actual compose" explicitly under
     the *policy* severity class — a mismatch here must block CI/pre-commit but
@@ -946,59 +790,46 @@ def check_deployment_manifest_matches_compose(root: Path, manifest: JSONDict) ->
         compose_rel = row.get("compose_file")
         if not isinstance(compose_rel, str):
             continue
-        compose_yaml = _load_yaml(root / compose_rel)
-        actual_values = {
-            _normalize_container_model_config_path(v)
-            for v in _compose_model_config_paths(compose_yaml)
-        }
 
-        env_overrides = row.get("env_overrides", {})
-        declared_value = (
-            env_overrides.get("AGENT_MODEL_CONFIG_PATH")
-            if isinstance(env_overrides, dict)
-            else None
-        )
-        declared = (
-            _normalize_container_model_config_path(declared_value)
-            if isinstance(declared_value, str)
-            else None
-        )
+        compose_path = root / compose_rel
+        if not compose_path.is_file():
+            findings.append(
+                Finding(
+                    check="deployment_manifest_mismatch",
+                    severity="policy",
+                    message=(
+                        f"profile '{profile}' declares compose_file={compose_rel!r} in "
+                        "config/deployment.yaml, but that file does not exist"
+                    ),
+                )
+            )
+            continue
 
-        if declared is None:
-            if actual_values:
+        declared = _compose_deployment_profiles(_load_yaml(compose_path))
+
+        if not declared:
+            if profile != "local":
                 findings.append(
                     Finding(
                         check="deployment_manifest_mismatch",
                         severity="policy",
                         message=(
-                            f"profile '{profile}' declares no AGENT_MODEL_CONFIG_PATH override in "
-                            f"config/deployment.yaml, but {compose_rel} sets it to "
-                            f"{sorted(actual_values)}"
+                            f"profile '{profile}' sets no AGENT_DEPLOYMENT_PROFILE in "
+                            f"{compose_rel}, so it would boot as 'local' and enforce local's "
+                            "required-secret set (config/model_roles.yaml)"
                         ),
                     )
                 )
             continue
 
-        if not actual_values:
+        if declared != {profile}:
             findings.append(
                 Finding(
                     check="deployment_manifest_mismatch",
                     severity="policy",
                     message=(
-                        f"profile '{profile}' declares AGENT_MODEL_CONFIG_PATH={declared_value!r} "
-                        f"in config/deployment.yaml but {compose_rel} sets no such override"
-                    ),
-                )
-            )
-        elif actual_values != {declared}:
-            findings.append(
-                Finding(
-                    check="deployment_manifest_mismatch",
-                    severity="policy",
-                    message=(
-                        f"profile '{profile}' declares AGENT_MODEL_CONFIG_PATH={declared_value!r} "
-                        f"in config/deployment.yaml but {compose_rel} sets "
-                        f"{sorted(actual_values)}"
+                        f"profile '{profile}' is declared in config/deployment.yaml but "
+                        f"{compose_rel} sets AGENT_DEPLOYMENT_PROFILE={sorted(declared)}"
                     ),
                 )
             )
@@ -1012,13 +843,12 @@ def run_all_checks(root: Path) -> list[Finding]:
 
     findings: list[Finding] = []
     findings.extend(check_matrix_shape(matrix))
-    findings.extend(check_forbidden_role_divergence_and_dangling_refs(root, matrix))
+    findings.extend(check_dangling_model_references(root, matrix))
     findings.extend(check_no_role_headers(root))
     findings.extend(check_orphan_env_keys(root))
     findings.extend(check_committed_secrets(root))
     findings.extend(check_field_descriptions())
     findings.extend(check_secret_field_plaintext_defaults())
-    findings.extend(check_deployment_manifest_internal_consistency(manifest))
     findings.extend(check_deployment_manifest_matches_compose(root, manifest))
     findings.extend(check_substrate_manifest(root))
     findings.extend(check_dev_test_profile_isolation(root))

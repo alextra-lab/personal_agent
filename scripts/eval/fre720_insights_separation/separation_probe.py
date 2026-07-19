@@ -30,7 +30,6 @@ import os
 
 for _key, _value in {
     "APP_ENV": "test",
-    "AGENT_MODEL_CONFIG_PATH": "config/models.yaml",
     "AGENT_NEO4J_URI": "bolt://localhost:7688",
     "AGENT_ELASTICSEARCH_URL": "http://localhost:9201",
     "AGENT_DATABASE_URL": (

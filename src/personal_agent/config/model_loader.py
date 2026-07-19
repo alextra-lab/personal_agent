@@ -24,14 +24,27 @@ _RoleMatrix = dict[str, object]
 
 log = structlog.get_logger(__name__)
 
-#: The two real catalogs, by RESOLVED PATH. Layer-3 bindings are merged into
-#: these only — a fixture or benchmark file defines its own deployments, and
-#: injecting the repo's bindings would dangle every reference. Matched on the
-#: full path, not the basename: the fixtures are called `models.yaml` too.
 _REPO_CONFIG: Path = Path(__file__).resolve().parents[3] / "config"
-_REAL_CATALOGS: frozenset[Path] = frozenset(
-    {_REPO_CONFIG / "models.yaml", _REPO_CONFIG / "models.cloud.yaml"}
-)
+
+#: The one deployment catalog (ADR-0121). ``config/models.cloud.yaml`` was
+#: deleted in FRE-916 phase 2 after being proven comment-only-different from this
+#: file, together with the ``AGENT_MODEL_CONFIG_PATH`` setting that selected it:
+#: there is no longer a per-environment catalog choice, so the path is a constant
+#: rather than configuration. The one legitimate environment difference the second
+#: file used to carry is expressed as provider ``base_url`` instead.
+CATALOG_PATH: Path = _REPO_CONFIG / "models.yaml"
+
+#: Repo-relative form of :data:`CATALOG_PATH`, for attribution columns that
+#: record which catalog a row was written under (ADR-0074). Deliberately relative
+#: and stable: an absolute path would embed the deployment's filesystem layout in
+#: every session row and differ between host and container.
+CATALOG_RELPATH: str = "config/models.yaml"
+
+#: Layer-3 bindings are merged into the real catalog only — a fixture or benchmark
+#: file defines its own deployments, and injecting the repo's bindings would dangle
+#: every reference. Matched on the full resolved path, not the basename: the
+#: fixtures are called `models.yaml` too.
+_REAL_CATALOGS: frozenset[Path] = frozenset({CATALOG_PATH})
 
 #: Layer 3 role bindings (ADR-0121), merged into the same ModelConfig so all
 #: three layers validate in one pass.
@@ -150,8 +163,10 @@ def load_model_config(
     """Load and validate model configuration from YAML file.
 
     Args:
-        config_path: Path (or path string) to models.yaml file. If None, uses
-            ``settings.model_config_path``.
+        config_path: Path (or path string) to a models.yaml file. If None, uses
+            :data:`CATALOG_PATH` — the single deployment catalog. Callers pass an
+            explicit path only for fixtures and tests; there is no longer a
+            per-environment catalog choice (FRE-916 phase 2).
         settings: The ``AppConfig`` to resolve the FRE-895 SLM-tunnel override
             against. ``None`` uses the live global singleton — pass an explicit
             ``AppConfig`` (e.g. from :func:`personal_agent.config.substrate.resolve_substrate`)
@@ -175,14 +190,7 @@ def load_model_config(
         settings = _live_settings
 
     if config_path is None:
-        config_path = settings.model_config_path
-        # Resolve relative paths to absolute (relative to project root)
-        if not config_path.is_absolute():
-            project_root = Path(__file__).parent.parent.parent.parent
-            config_path = (project_root / config_path).resolve()
-        else:
-            config_path = config_path.resolve()
-        log.debug("using_model_config_path_from_settings", path=str(config_path))
+        config_path = CATALOG_PATH
     elif isinstance(config_path, str):
         config_path = Path(config_path)
 
@@ -220,21 +228,20 @@ def resolve_role_model_key(
 ) -> str:
     """Resolve a role to its model key via ``config/model_roles.yaml`` (ADR-0099 D1 stage 2).
 
-    The matrix is the one hand-edited home for role assignment. A
-    ``divergence: forbidden`` role always resolves to its single ``all:``
-    value, used under every active profile. A ``divergence: allowed`` role
-    resolves to the ``local:``/``cloud:`` value matching whichever active
-    profile ``config_path`` maps to. There is no fallback: a missing matrix,
-    an undeclared role, an unresolvable divergence value, or a resolved key
-    absent from the active profile's ``models:`` mapping all raise.
+    The matrix is the one hand-edited home for role assignment. Every role
+    resolves to its single ``all:`` value. FRE-916 phase 2 retired the
+    ``divergence: allowed`` branch along with the second catalog: with one
+    catalog there is no per-profile value for an assignment to diverge into.
+    There is no fallback — a missing matrix, an undeclared role, a role with no
+    ``all`` key, or a resolved key absent from the catalog's ``models:`` mapping
+    all raise.
 
     Args:
         role: The matrix role name (e.g. ``"entity_extraction"``).
-        config_path: Model-definition file path used to detect the active
-            profile bucket (for ``allowed`` roles) and to validate the
-            resolved key exists. ``None`` uses ``settings.model_config_path``
-            (the live deployment's active config), matching
-            :func:`load_model_config`'s own convention.
+        config_path: Catalog path the resolved key is validated against.
+            ``None`` uses :data:`CATALOG_PATH`, matching
+            :func:`load_model_config`'s own convention. Tests point it at a
+            fixture.
         root: Repo (or fixture) root containing ``config/model_roles.yaml``.
             Defaults to the real repo root; tests point this at a fixture.
 
@@ -242,15 +249,11 @@ def resolve_role_model_key(
         The resolved model key — a key in the active config's ``models:`` mapping.
 
     Raises:
-        ModelRoleError: If the matrix is missing/empty, the role is
-            undeclared, the role's divergence value has no matching entry,
-            the active profile cannot be determined, or the resolved key is
-            absent from the active profile's ``models:`` mapping.
+        ModelRoleError: If the matrix is missing/empty, the role is undeclared,
+            the role declares no ``all`` key, or the resolved key is absent from
+            the catalog's ``models:`` mapping.
     """
-    from personal_agent.config.config_guard import (  # noqa: PLC0415
-        repo_root,
-        resolve_active_profile,
-    )
+    from personal_agent.config.config_guard import repo_root  # noqa: PLC0415
 
     resolved_root = root if root is not None else repo_root()
     matrix = _load_role_matrix(str(resolved_root))
@@ -266,41 +269,17 @@ def resolve_role_model_key(
         raise ModelRoleError(f"role {role!r} is not declared in config/model_roles.yaml roles:")
 
     if config_path is None:
-        from personal_agent.config import settings  # noqa: PLC0415
-
-        config_path = settings.model_config_path
+        config_path = CATALOG_PATH
     resolved_config_path = Path(config_path)
     if not resolved_config_path.is_absolute():
         resolved_config_path = (resolved_root / resolved_config_path).resolve()
     else:
         resolved_config_path = resolved_config_path.resolve()
 
-    divergence = role_cfg.get("divergence") if isinstance(role_cfg, dict) else None
-    raw_model_key: object
-    if divergence == "forbidden":
-        raw_model_key = role_cfg.get("all")
-        if not raw_model_key:
-            raise ModelRoleError(
-                f"role {role!r} is divergence:forbidden but has no 'all' value "
-                "in config/model_roles.yaml"
-            )
-    elif divergence == "allowed":
-        profile = resolve_active_profile(resolved_config_path, matrix, resolved_root)
-        if profile is None:
-            raise ModelRoleError(
-                "cannot determine the active profile for model_config_path="
-                f"{resolved_config_path} against config/model_roles.yaml active_profiles"
-            )
-        raw_model_key = role_cfg.get(profile)
-        if not raw_model_key:
-            raise ModelRoleError(
-                f"role {role!r} has divergence:allowed but no {profile!r} value "
-                "in config/model_roles.yaml"
-            )
-    else:
+    raw_model_key: object = role_cfg.get("all") if isinstance(role_cfg, dict) else None
+    if not raw_model_key:
         raise ModelRoleError(
-            f"role {role!r} has invalid divergence {divergence!r} in "
-            "config/model_roles.yaml (expected 'forbidden' or 'allowed')"
+            f"role {role!r} declares no 'all' model key in config/model_roles.yaml"
         )
 
     if not isinstance(raw_model_key, str):
@@ -402,11 +381,11 @@ def resolve_active_attribution(
         ``(primary_model_id, model_config_path_str)`` — ``primary_model_id``
         is ``None`` only if the config has no ``primary`` role assignment
         (degenerate startup config); ``model_config_path_str`` is always
-        the resolved path string from settings.
+        :data:`CATALOG_RELPATH`, retained so existing session/message rows keep a
+        populated attribution column (ADR-0121 step 4 migrates this dimension to
+        provider + model properly).
     """
-    from personal_agent.config import settings  # noqa: PLC0415
-
-    config_path_str = str(settings.model_config_path)
+    config_path_str = CATALOG_RELPATH
     try:
         # Resolve through the binding: "primary" is a ROLE, and since ADR-0121
         # the catalog is keyed by model, so models.get("primary") returns None
@@ -445,10 +424,12 @@ def check_vision_capabilities(*, trace_id: str | None = None) -> tuple[list[str]
     """Log the active config's vision-capable roles and warn on drift (ADR-0101 §5).
 
     Startup drift guard (FRE-734). Vision broke in production once because the
-    deployed config file (``config/models.cloud.yaml``, selected via
-    ``AGENT_MODEL_CONFIG_PATH``) was never given the ``supports_vision`` flag that
-    ``config/models.yaml`` carried, so every image turn failed routing while CI
-    stayed green. This emits a startup signal — an info line listing the
+    then-deployed second config file was never given the ``supports_vision`` flag
+    that ``config/models.yaml`` carried, so every image turn failed routing while
+    CI stayed green. FRE-916 phase 2 removed that whole class of drift by
+    collapsing to a single catalog — this guard is retained because a role can
+    still be re-bound to a deployment that lacks the flag. It emits a startup
+    signal — an info line listing the
     vision-capable roles, plus a role-aware warning when an expected production
     role is not flagged — so the drift is visible in logs at boot, not discovered
     by a user.
@@ -468,9 +449,7 @@ def check_vision_capabilities(*, trace_id: str | None = None) -> tuple[list[str]
         is the subset of ``_EXPECTED_VISION_ROLES`` absent or not vision-flagged.
         Both empty lists on a load failure.
     """
-    from personal_agent.config import settings  # noqa: PLC0415
-
-    config_path_str = str(settings.model_config_path)
+    config_path_str = CATALOG_RELPATH
     try:
         cfg = load_model_config()
     except Exception as exc:  # noqa: BLE001 — startup diagnostic must never down the service

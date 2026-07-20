@@ -746,3 +746,231 @@ def test_patch_selection_404_when_other_user_owns_it() -> None:
 
     assert resp.status_code == 404
     upsert_mock.assert_not_awaited()  # stored value unchanged
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/sessions/{id}/config — picker/observe-view read API (ADR-0121 §3, FRE-918)
+# ---------------------------------------------------------------------------
+
+_CHECK_ALL_PROVIDERS = "personal_agent.llm_client.provider_health.check_all_providers"
+_SELECTION_GET_ALL = (
+    "personal_agent.service.repositories.session_model_selection_repository."
+    "SessionModelSelectionRepository.get_all"
+)
+
+_ALL_PROVIDERS_UP = {
+    "slm_local": True,
+    "ovh": True,
+    "openai": True,
+    "anthropic": True,
+    "voyage": True,
+}
+_LOCAL_DOWN = {**_ALL_PROVIDERS_UP, "slm_local": False}
+
+
+def test_get_session_config_basic_shape() -> None:
+    """GET /sessions/{id}/config returns every declared role and every provider."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(patch(_SELECTION_GET_ALL, new_callable=AsyncMock, return_value={}))
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+        )
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session_id"] == sid
+    for role in (
+        "primary",
+        "artifact_builder",
+        "sub_agent",
+        "entity_extraction",
+        "embedding",
+        "reranker",
+    ):
+        assert role in body["roles"], role
+    provider_keys = {p["key"] for p in body["providers"]}
+    assert provider_keys == set(_ALL_PROVIDERS_UP)
+
+
+def test_get_session_config_ac5_candidates_exclude_down_provider_both_directions() -> None:
+    """AC-5 — primary's candidate list equals {kind=llm} minus the down provider's deployments."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(patch(_SELECTION_GET_ALL, new_callable=AsyncMock, return_value={}))
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_LOCAL_DOWN)
+        )
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
+
+    candidates = {c["key"] for c in resp.json()["roles"]["primary"]["candidates"]}
+    assert candidates == {"claude_sonnet", "claude_haiku", "gpt-5.4-mini"}
+    assert "qwen3.6-35b-thinking" not in candidates
+    assert "qwen3.6-35b-instruct" not in candidates
+    assert "embedding" not in candidates
+    assert "reranker" not in candidates
+
+
+def test_get_session_config_pinned_role_has_no_candidates() -> None:
+    """A pinned role never carries a candidates list at all (§6 structural half)."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(patch(_SELECTION_GET_ALL, new_callable=AsyncMock, return_value={}))
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+        )
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
+
+    entity_extraction = resp.json()["roles"]["entity_extraction"]
+    assert entity_extraction["open"] is False
+    assert "candidates" not in entity_extraction
+
+
+def test_get_session_config_ac9_slice_reports_stored_selection_not_raw_default() -> None:
+    """AC-9 slice — a stored selection wins over the raw binding default in the payload."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(
+            patch(
+                _SELECTION_GET_ALL,
+                new_callable=AsyncMock,
+                return_value={"primary": "claude_sonnet"},
+            )
+        )
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+        )
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
+
+    primary = resp.json()["roles"]["primary"]
+    assert primary["resolved"] == "claude_sonnet"  # NOT the raw default qwen3.6-35b-thinking
+    assert primary["provenance"] == "server-hydrated"
+
+
+def test_get_session_config_bridges_profile_when_no_selection_row() -> None:
+    """The FRE-918 codex-review fix: a row-less cloud session bridges via execution_profile.
+
+    Closes the gap where a session created via the legacy POST /chat endpoint
+    (which never writes a selection-store row) would otherwise report the local
+    binding default while get_llm_client() actually dispatches to the cloud
+    profile's model — the exact AC-9-slice failure mode.
+    """
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="cloud")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(patch(_SELECTION_GET_ALL, new_callable=AsyncMock, return_value={}))
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+        )
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
+
+    roles = resp.json()["roles"]
+    assert roles["primary"]["resolved"] == "claude_sonnet"
+    assert roles["artifact_builder"]["resolved"] == "claude_haiku"
+    assert roles["sub_agent"]["resolved"] == "claude_haiku"
+
+
+def test_get_session_config_selection_store_failure_logs_trace_id() -> None:
+    """A selection-store read failure logs trace_id (ADR-0074) and degrades gracefully.
+
+    Regression test for a finding from the code-review workflow: extracting the
+    hydration logic into a shared helper dropped trace_id from this warning,
+    breaking incident correlation across every role on this endpoint.
+    """
+    import structlog.testing
+
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(
+            patch(_SELECTION_GET_ALL, new_callable=AsyncMock, side_effect=RuntimeError("boom"))
+        )
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+        )
+        app = _build_app_with_db_factory(db_session)
+        with structlog.testing.capture_logs() as captured:
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200  # degrades to binding defaults, never 500s
+    failure_log = next(e for e in captured if e.get("event") == "selection_store_hydration_failed")
+    assert failure_log.get("trace_id")
+
+
+def test_get_session_config_404_when_other_user_owns_it() -> None:
+    """GET /sessions/{id}/config returns 404 (not 403) when another user owns the session."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=None))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 404
+
+
+def test_get_session_config_invalid_uuid_422() -> None:
+    """GET /sessions/{id}/config returns 422 for a non-UUID session_id."""
+    db_session = AsyncMock()
+    app = _build_app_with_db_factory(db_session)
+
+    with _patched_user_resolver():
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.get("/api/v1/sessions/not-a-uuid/config", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 422
+
+
+def test_get_session_config_401_without_cf_access_header() -> None:
+    """GET /sessions/{id}/config returns 401 when the CF Access header is absent."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    app = _build_app_with_db_factory(db_session)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.get(f"/api/v1/sessions/{sid}/config")
+
+    assert resp.status_code == 401

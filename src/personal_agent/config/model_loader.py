@@ -9,6 +9,7 @@ All configuration loaders live in the config/ module per ADR-0007.
 """
 
 import functools
+from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -440,6 +441,41 @@ def resolve_selected_deployment(role: str, selection: str | None, config: ModelC
     if selection is None:
         return default_key
     return selection if is_selectable_binding(role, selection, config) else default_key
+
+
+def role_candidates(
+    role: str, config: ModelConfig, provider_availability: Mapping[str, bool]
+) -> list[str]:
+    """Return the selectable, available candidate deployment keys for a role (ADR-0121 §3/§6, AC-5).
+
+    Authorization is the same intersection :func:`is_selectable_binding` enforces —
+    ``open`` (role-side) AND ``kind``-compatible (model-side) — with a third,
+    read-time-only condition layered on top: the deployment's provider must be
+    currently available. A pinned role always returns an empty list, so this is
+    safe to call for any role name without the caller pre-checking ``open``.
+
+    Args:
+        role: The role to compute candidates for.
+        config: The loaded catalog.
+        provider_availability: Provider key -> currently available, from a fresh
+            per-provider health check
+            (:func:`personal_agent.llm_client.provider_health.check_all_providers`).
+            A provider absent from this mapping is treated as unavailable
+            (fail-closed).
+
+    Returns:
+        Deployment keys whose ``kind`` matches the role's requirement and whose
+        provider is available — the exact set AC-5 asserts the picker may offer.
+    """
+    binding = config.roles.get(role)
+    if binding is None or not binding.open:
+        return []
+    required = required_kind_for_role(role)
+    return [
+        key
+        for key, model in config.models.items()
+        if model.kind is required and provider_availability.get(model.provider or "", False)
+    ]
 
 
 def resolve_active_attribution(

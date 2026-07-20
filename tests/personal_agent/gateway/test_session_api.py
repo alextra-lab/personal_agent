@@ -479,6 +479,8 @@ def test_patch_session_profile_updates_and_emits() -> None:
         stack.enter_context(_patched_user_resolver())
         stack.enter_context(patch(_SESSION_UPDATE, update_mock))
         emit_mock = stack.enter_context(patch(_EMIT_PROFILE, new_callable=AsyncMock))
+        stack.enter_context(patch(_SELECTION_UPSERT, new_callable=AsyncMock))
+        stack.enter_context(patch(_EMIT_SELECTION, new_callable=AsyncMock))
         app = _build_app_with_db_factory(db_session)
         with TestClient(app, raise_server_exceptions=True) as client:
             resp = client.patch(
@@ -491,6 +493,64 @@ def test_patch_session_profile_updates_and_emits() -> None:
     # Ownership invariant: write MUST be scoped to the resolved user_id.
     assert update_mock.await_args.kwargs.get("user_id") == _TEST_USER_ID
     emit_mock.assert_awaited_once()
+
+
+def test_patch_profile_couples_primary_selection() -> None:
+    """The live Path pill writes the profile's primary_model into the selection store.
+
+    ADR-0121 §4: with the selection store authoritative for ``primary``, flipping
+    the pill must move the stored selection too — otherwise the pill would change
+    execution_profile but no longer change which model ``primary`` runs.
+    """
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    updated = _make_session_model(session_id=sid, execution_profile="cloud")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_UPDATE, new_callable=AsyncMock, return_value=updated))
+        stack.enter_context(patch(_EMIT_PROFILE, new_callable=AsyncMock))
+        upsert_mock = stack.enter_context(patch(_SELECTION_UPSERT, new_callable=AsyncMock))
+        emit_sel_mock = stack.enter_context(patch(_EMIT_SELECTION, new_callable=AsyncMock))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.patch(
+                f"/api/v1/sessions/{sid}", json={"profile": "cloud"}, headers=_AUTH_HEADERS
+            )
+
+    assert resp.status_code == 200
+    upsert_mock.assert_awaited_once()
+    # cloud.yaml primary_model is claude_sonnet — the pill's flip moves primary.
+    assert upsert_mock.await_args.kwargs.get("deployment_key") == "claude_sonnet"
+    assert upsert_mock.await_args.kwargs.get("role") == "primary"
+    emit_sel_mock.assert_awaited_once()
+
+
+def test_get_session_stale_stored_key_provenance_is_default() -> None:
+    """A stored key no longer in the catalog hydrates as the default with provenance=default.
+
+    Provenance must not claim 'server-hydrated' when the guardrail dropped the
+    stale key — the picker needs to know the selection was reset, not treat the
+    default as the user's active choice.
+    """
+    db_session = AsyncMock()
+    db_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0.0)))
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="cloud")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(
+            patch(_SELECTION_GET, new_callable=AsyncMock, return_value="retired_model_key")
+        )
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
+
+    body = resp.json()
+    assert body["primary_selection"] == "qwen3.6-35b-thinking"  # guardrail fell back to default
+    assert body["selection_provenance"] == "default"  # NOT 'server-hydrated'
 
 
 def test_patch_session_profile_invalid_name_422() -> None:
@@ -538,3 +598,151 @@ def test_patch_session_profile_invalid_uuid_422() -> None:
             )
 
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Model selection — GET field + PATCH selection write (ADR-0121 §4/§6 / FRE-917)
+# ---------------------------------------------------------------------------
+
+_SELECTION_GET = (
+    "personal_agent.service.repositories.session_model_selection_repository."
+    "SessionModelSelectionRepository.get"
+)
+_SELECTION_UPSERT = (
+    "personal_agent.service.repositories.session_model_selection_repository."
+    "SessionModelSelectionRepository.upsert"
+)
+_EMIT_SELECTION = "personal_agent.transport.agui.transport.emit_session_selection"
+
+
+def test_get_session_includes_primary_selection_hydration() -> None:
+    """GET /sessions/{id} surfaces the resolved primary selection + provenance."""
+    db_session = AsyncMock()
+    db_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0.0)))
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="cloud")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(
+            patch(_SELECTION_GET, new_callable=AsyncMock, return_value="claude_sonnet")
+        )
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["primary_selection"] == "claude_sonnet"
+    assert body["selection_provenance"] == "server-hydrated"
+
+
+def test_get_session_selection_defaults_when_no_row() -> None:
+    """GET hydration falls to the primary default (provenance=default) with no stored row."""
+    db_session = AsyncMock()
+    db_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0.0)))
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(patch(_SELECTION_GET, new_callable=AsyncMock, return_value=None))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
+
+    body = resp.json()
+    assert body["primary_selection"] == "qwen3.6-35b-thinking"
+    assert body["selection_provenance"] == "default"
+
+
+def test_patch_selection_updates_and_emits() -> None:
+    """PATCH .../selection persists an open-role selection (scoped) and emits STATE_DELTA."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid)
+    get_mock = AsyncMock(return_value=session_model)
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, get_mock))
+        upsert_mock = stack.enter_context(patch(_SELECTION_UPSERT, new_callable=AsyncMock))
+        emit_mock = stack.enter_context(patch(_EMIT_SELECTION, new_callable=AsyncMock))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.patch(
+                f"/api/v1/sessions/{sid}/selection",
+                json={"role": "primary", "deployment_key": "claude_sonnet"},
+                headers=_AUTH_HEADERS,
+            )
+
+    assert resp.status_code == 200
+    # Ownership invariant: the session read MUST be scoped to the resolved user_id.
+    assert get_mock.await_args.kwargs.get("user_id") == _TEST_USER_ID
+    upsert_mock.assert_awaited_once()
+    assert upsert_mock.await_args.kwargs.get("deployment_key") == "claude_sonnet"
+    emit_mock.assert_awaited_once()
+
+
+def test_patch_selection_pinned_role_422_before_storage() -> None:
+    """AC-4b — a selection naming a pinned role is rejected 422 before any storage."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        upsert_mock = stack.enter_context(patch(_SELECTION_UPSERT, new_callable=AsyncMock))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.patch(
+                f"/api/v1/sessions/{sid}/selection",
+                json={"role": "entity_extraction", "deployment_key": "claude_sonnet"},
+                headers=_AUTH_HEADERS,
+            )
+
+    assert resp.status_code == 422
+    upsert_mock.assert_not_awaited()  # nothing stored
+
+
+def test_patch_selection_noncatalog_key_422_before_storage() -> None:
+    """AC-4b — a non-catalog key for an open role is rejected 422 before any storage."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        upsert_mock = stack.enter_context(patch(_SELECTION_UPSERT, new_callable=AsyncMock))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.patch(
+                f"/api/v1/sessions/{sid}/selection",
+                json={"role": "primary", "deployment_key": "no_such_model_xyz"},
+                headers=_AUTH_HEADERS,
+            )
+
+    assert resp.status_code == 422
+    upsert_mock.assert_not_awaited()
+
+
+def test_patch_selection_404_when_other_user_owns_it() -> None:
+    """AC-6d — a PATCH from a different user's token returns 404 and stores nothing."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=None))
+        upsert_mock = stack.enter_context(patch(_SELECTION_UPSERT, new_callable=AsyncMock))
+        stack.enter_context(patch(_EMIT_SELECTION, new_callable=AsyncMock))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.patch(
+                f"/api/v1/sessions/{sid}/selection",
+                json={"role": "primary", "deployment_key": "claude_sonnet"},
+                headers=_AUTH_HEADERS,
+            )
+
+    assert resp.status_code == 404
+    upsert_mock.assert_not_awaited()  # stored value unchanged

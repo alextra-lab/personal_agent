@@ -275,6 +275,29 @@ async def emit_session_profile(*, session_id: str, profile: str) -> None:
     )
 
 
+async def emit_session_selection(*, session_id: str, role: str, deployment_key: str) -> None:
+    """Persist + enqueue a ``session_selection`` STATE_DELTA event (ADR-0121 §4).
+
+    Best-effort live notification to the single active client (ADR-0075) that the
+    session's server-owned model selection for ``role`` changed. Correctness does
+    not depend on delivery — other clients converge via hydration on the session
+    GET / WS reconnect. See ADR-0079 §5-6 (invariants inherited).
+
+    Args:
+        session_id: Target session identifier.
+        role: The role whose selection changed (e.g. ``"primary"``).
+        deployment_key: The newly selected catalog deployment key.
+    """
+    await _push_event(
+        StateUpdateEvent(
+            key="session_selection",
+            value={"role": role, "deployment_key": deployment_key},
+            session_id=session_id,
+        ),
+        session_id,
+    )
+
+
 class AGUITransport:
     """AG-UI streaming transport via WebSocket.
 

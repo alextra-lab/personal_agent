@@ -17,7 +17,11 @@ from pydantic import ValidationError
 
 from personal_agent.config.loader import ConfigLoadError, load_yaml_file
 from personal_agent.config.settings import AppConfig
-from personal_agent.llm_client.models import ModelConfig, ModelDefinition
+from personal_agent.llm_client.models import (
+    ModelConfig,
+    ModelDefinition,
+    required_kind_for_role,
+)
 
 #: A parsed ``config/model_roles.yaml`` mapping.
 _RoleMatrix = dict[str, object]
@@ -375,6 +379,67 @@ def resolve_role_definition(
     key (to acquire a concurrency slot, or to compare against a routing key).
     """
     return resolve_role_target(role, model_key=model_key, config=config)[1]
+
+
+def is_selectable_binding(role: str, key: str, config: ModelConfig) -> bool:
+    """Whether ``key`` is a legal user selection for ``role`` (ADR-0121 §6).
+
+    Authorization is the **intersection** of a role-side and a model-side fact:
+    the role is ``open`` (a blast-radius policy on the role) AND the key names a
+    valid, ``kind``-compatible catalog entry (intrinsic to the model). Both
+    halves are required and both fail closed — a pinned role, an unknown key, or
+    a wrong-kind key all return ``False``.
+
+    This is the single predicate behind both guardrail actions: the resolver
+    (:func:`resolve_selected_deployment`) falls back to the default when it is
+    ``False``, and the selection write API rejects the write when it is
+    ``False``. (Provider *availability* — health — is a read-time concern layered
+    on top by FRE-918/AC-5; existence + kind + open are the T2 checks.)
+
+    Args:
+        role: The role a selection is proposed for.
+        key: The proposed catalog deployment key.
+        config: The catalog to validate against.
+
+    Returns:
+        ``True`` iff ``role`` is open and ``key`` is a valid, kind-compatible
+        deployment; ``False`` otherwise.
+    """
+    binding = config.roles.get(role)
+    if binding is None or not binding.open:
+        return False
+    definition = config.models.get(key)
+    if definition is None:
+        return False
+    return definition.kind is required_kind_for_role(role)
+
+
+def resolve_selected_deployment(role: str, selection: str | None, config: ModelConfig) -> str:
+    """Resolve the effective deployment key for a role given an advisory selection.
+
+    Fail-closed (ADR-0121 §6): the ``selection`` is honoured ONLY when
+    :func:`is_selectable_binding` accepts it (open role + valid, kind-compatible
+    key). Otherwise the role's configured binding default wins — never an
+    arbitrary or empty model. Pinned roles are never consulted, so a selection
+    row that exists for a pinned role (injected directly, bypassing the write
+    API) is structurally ignored (AC-4a).
+
+    Args:
+        role: The role being resolved.
+        selection: The advisory selected key (from the selection store or a
+            client), or ``None`` when the session has no selection for this role.
+        config: The catalog to resolve against.
+
+    Returns:
+        The deployment key to run this role on — the honoured selection, or the
+        role's configured binding default (its own name when the role is
+        unbound, matching :func:`resolve_role_target`'s fallback).
+    """
+    binding = config.roles.get(role)
+    default_key = binding.deployment if binding else role
+    if selection is None:
+        return default_key
+    return selection if is_selectable_binding(role, selection, config) else default_key
 
 
 def resolve_active_attribution(

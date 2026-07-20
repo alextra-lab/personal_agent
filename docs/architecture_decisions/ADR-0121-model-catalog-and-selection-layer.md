@@ -614,6 +614,20 @@ deleted before every consumer of the old path is moved in the *same* PR.
   still binding — it is simply asserted at the step where the replacement lands. **T1 does not close
   on (a) alone**: FRE-916 stays open for its second phase (catalog-file deletion, `model_config_path`
   removal, provider-keyed concurrency, deployment surface).
+
+  **Refined 2026-07-20 (FRE-917 T2 planning, owner-decided).** Half **(b)** splits across two steps,
+  not one, because `resolve_model_key` resolves **three** open roles (`primary`, `sub_agent`,
+  `artifact_builder`) and only `primary` gets a selection-store home in T2 — `sub_agent` is
+  orchestrator-chosen (future sub-agent ADR) and `artifact_builder` is per-build (ADR-0122), neither a
+  session-scoped standing selection. On the **cloud** profile `sub_agent`/`artifact_builder` resolve
+  to `claude_haiku` *via the profile*; deleting `resolve_model_key` in T2 would silently regress them
+  to the local default and would drag §5's vision/attachment/cost dismantling (owned by T5/FRE-920)
+  forward. Therefore **T2 (FRE-917) makes the selection store authoritative for `primary` only**
+  (seeded from `execution_profile`, so nothing moves — AC-7) and **removes `ExecutionProfile`/
+  `resolve_model_key` from `primary`'s resolution path**; the class and its remaining
+  `sub_agent`/`artifact_builder` model-resolution duty stay until **T5 (FRE-920)** removes Path end to
+  end, where the full grep-clean assertion of (b) completes. The (b) criterion is unchanged in
+  substance — its completion point is now step 5, tracked on FRE-920, not step 2.
 - **AC-2 — A role cannot bind to a wrong-kind model.** *Check:* set `entity_extraction`'s binding to
   an `kind: embedding` deployment; config loading **fails** with a kind-mismatch error naming the
   role and key. Likewise binding `embedding` to a `kind: llm` deployment fails. *Fails if* config

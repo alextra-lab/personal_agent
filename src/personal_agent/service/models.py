@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -78,6 +79,18 @@ class SessionProfileUpdate(BaseModel):
     """Request to change a session's server-owned execution profile (ADR-0079)."""
 
     profile: str
+
+
+class SessionSelectionUpdate(BaseModel):
+    """Request to change a session's server-owned model selection (ADR-0121 §4).
+
+    The canonical write path for the model picker that replaces the Path pill.
+    ``role`` must be an ``open`` role and ``deployment_key`` a valid,
+    kind-compatible catalog entry — rejected server-side otherwise (§6).
+    """
+
+    role: str = "primary"
+    deployment_key: str
 
 
 class ConstraintPreferenceUpdate(BaseModel):
@@ -436,6 +449,49 @@ class UserConstraintPreferenceModel(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
     source_session_id = Column(PG_UUID(as_uuid=True), nullable=True)
+
+
+class SessionModelSelectionModel(Base):
+    """SQLAlchemy model for the session_model_selections table (ADR-0121 §4 / FRE-917).
+
+    Session-scoped model selection state — the server-authoritative store that
+    replaces the execution-profile "Path" as the source of truth for which model
+    a role runs (ADR-0079's invariants inherited verbatim). One row per
+    ``(session_id, role)`` naming a deployment key from the catalog.
+
+    In T2 only ``role='primary'`` is populated (the sole standing user-selectable
+    role); the table is keyed generally so per-build (``artifact_builder``,
+    ADR-0122) and orchestrator-chosen roles can layer in later. A missing row for
+    a role means "resolve through the role's configured binding default" — the
+    fail-closed default the guardrail (ADR-0121 §6) falls back to.
+
+    Ownership is enforced through the session, not a column here: the write API
+    resolves the CF-Access user, scopes the session read to that ``user_id``
+    (404 on mismatch), then upserts — so a bearer token cannot mutate another
+    user's selection. ``ON DELETE CASCADE`` ties rows to the session lifecycle.
+    """
+
+    __tablename__ = "session_model_selections"
+
+    session_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sessions.session_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    role = Column(Text, primary_key=True)
+    deployment_key = Column(Text, nullable=False)
+    # server_default mirrors init.sql / migration 0020's ``DEFAULT NOW()`` so a
+    # table created by ``Base.metadata.create_all`` (init_db on startup) carries
+    # the same DDL default. Without it, if the app boots before the migration
+    # runs, ``create_all`` makes the columns NOT NULL with no server default and
+    # the migration's ``CREATE TABLE IF NOT EXISTS`` no-ops — then its backfill
+    # INSERT (which omits these columns) would raise a NOT NULL violation.
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, default=datetime.now, server_default=func.now()
+    )
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, default=datetime.now, server_default=func.now()
+    )
 
 
 class ConsolidationAttemptModel(Base):

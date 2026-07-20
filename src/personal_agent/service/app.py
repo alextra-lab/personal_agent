@@ -222,6 +222,7 @@ async def _process_chat_stream_background(
     profile_name: str,
     user_id: UUID,
     trace_id: str,
+    primary_selection_key: str | None = None,
     user_email: str | None = None,
     user_display_name: str | None = None,
     client_msg_id: str | None = None,
@@ -238,6 +239,11 @@ async def _process_chat_stream_background(
         profile_name: Execution profile name (e.g. ``"local"``, ``"cloud"``).
         user_id: Authenticated user UUID — used for session ownership scoping.
         trace_id: Pre-generated trace ID (from the endpoint, used for dedup record).
+        primary_selection_key: The resolved server-authoritative ``primary``
+            deployment key for this turn (ADR-0121 §4). Pinned into the per-turn
+            selection context so the factory resolves ``primary`` against the
+            store, and persisted on new-session creation. ``None`` leaves
+            resolution to the profile fallback.
         user_email: CF Access email of the connected user (FRE-213).
         user_display_name: Display name from the users table, if set (FRE-213).
         client_msg_id: Client-provided idempotency key (FRE-392); used to release
@@ -266,6 +272,16 @@ async def _process_chat_stream_background(
                 profile=profile_name,
                 trace_id=trace_id,
             )
+
+        # ADR-0121 §4: pin the resolved primary selection for THIS turn. Set once
+        # here so the factory resolves `primary` against the server-authoritative
+        # store, and — because each asyncio.Task gets its own context copy — a
+        # selection change mid-turn (a PATCH from elsewhere) never mutates a turn
+        # already in flight (invariant 7 / AC-7b).
+        if primary_selection_key is not None:
+            from personal_agent.config.selection import set_current_selection
+
+            set_current_selection({"primary": primary_selection_key})
 
         # ── Session ──────────────────────────────────────────────────────
         session_uuid = UUID(session_id)
@@ -302,6 +318,21 @@ async def _process_chat_stream_background(
                 db.add(session)
                 await db.commit()
                 await db.refresh(session)
+
+                # ADR-0121 §4: persist the adopted primary selection on first
+                # turn (invariant 2 — an explicit stored value, never a silent
+                # param fallback), so the session row + this row are the source
+                # of truth from creation onward.
+                if primary_selection_key is not None:
+                    from personal_agent.service.repositories.session_model_selection_repository import (  # noqa: E501
+                        SessionModelSelectionRepository,
+                    )
+
+                    await SessionModelSelectionRepository(db).upsert(
+                        session_id=session_uuid,
+                        role="primary",
+                        deployment_key=primary_selection_key,
+                    )
 
             db_messages = list(session.messages or [])
             max_history = settings.conversation_max_history_messages
@@ -2137,11 +2168,112 @@ async def _resolve_session_profile(
     return supplied or "local"
 
 
+async def _resolve_session_selection(
+    session_id: str,
+    supplied_key: str | None,
+    resolved_profile: str,
+    user_id: UUID,
+    *,
+    trace_id: str,
+) -> tuple[str, str]:
+    """Resolve the server-authoritative ``primary`` model selection (ADR-0121 §4).
+
+    Mirrors :func:`_resolve_session_profile` one layer up: the selection store row
+    is the source of truth, with the same new-vs-existing asymmetry (ADR-0079
+    invariant 3):
+
+    - **Existing session** → the stored ``primary`` selection wins; ``supplied_key``
+      is advisory and **ignored** (a stale/reloaded client cannot overwrite it —
+      the sole mutator is the ``PATCH`` selection write). The stored key is
+      re-validated through the §6 guardrail, so a catalog change fail-closes to
+      the role default rather than resolving a dangling model. An existing session
+      with no row (a pre-migration gap) bridges from its stored
+      ``execution_profile``.
+    - **New session** → adopt ``supplied_key`` when it is a valid selection, else
+      bridge from the resolved profile's ``primary_model`` (so the still-live Path
+      pill keeps a cloud session on its cloud model until Path is removed in T5),
+      else the ``primary`` binding default. The value is persisted when the
+      background task creates the session row.
+
+    Args:
+        session_id: Client-generated session UUID string.
+        supplied_key: Advisory ``primary`` deployment key from the request, or
+            ``None`` when omitted (the live PWA does not send one yet).
+        resolved_profile: The profile already resolved for this turn (used only
+            to bridge a new session while the pill is live).
+        user_id: Authenticated owner — scopes the read.
+        trace_id: Trace id for logging.
+
+    Returns:
+        ``(resolved_deployment_key, provenance)`` where provenance is one of
+        ``stored`` / ``stored-bridge`` / ``adopted`` / ``profile-bridge`` /
+        ``default`` — emitted so a selection flip is attributable (invariant 10).
+    """
+    from personal_agent.config.model_loader import (
+        is_selectable_binding,
+        load_model_config,
+        resolve_selected_deployment,
+    )
+    from personal_agent.config.profile import load_profile
+    from personal_agent.service.repositories.session_model_selection_repository import (
+        SessionModelSelectionRepository,
+    )
+
+    config = load_model_config()
+    session_uuid = UUID(session_id)
+
+    def _profile_primary(profile_name: str) -> str | None:
+        # load_profile raises FileNotFoundError for an unknown name and ValueError
+        # for a blank name or structurally-invalid profile YAML — either way the
+        # bridge fails closed to the primary default rather than propagating a 500.
+        try:
+            return load_profile(profile_name).primary_model
+        except (FileNotFoundError, ValueError):
+            return None
+
+    async with AsyncSessionLocal() as db:
+        session = await SessionRepository(db).get(session_uuid, user_id=user_id)
+
+    # The selection read runs in its own transaction so a missing table (deploy
+    # lag: the gateway image live before migration 0020 is applied) degrades to
+    # the profile bridge — the pre-T2 behaviour — instead of 500-ing every turn.
+    stored: str | None = None
+    if session is not None:
+        try:
+            async with AsyncSessionLocal() as db2:
+                stored = await SessionModelSelectionRepository(db2).get(session_uuid, "primary")
+        except Exception as exc:  # noqa: BLE001 — availability guard, deliberately broad
+            log.warning(
+                "selection_store_read_failed_falling_back_to_profile",
+                error=str(exc),
+                session_id=session_id,
+                trace_id=trace_id,
+            )
+            stored = None
+
+    if session is not None:
+        # Existing session: stored selection is authoritative; supplied ignored.
+        if stored is not None:
+            return resolve_selected_deployment("primary", stored, config), "stored"
+        bridge = _profile_primary(str(session.execution_profile))
+        return resolve_selected_deployment("primary", bridge, config), "stored-bridge"
+
+    # New session: adopt a valid supplied key, else bridge from the pill, else default.
+    if supplied_key is not None and is_selectable_binding("primary", supplied_key, config):
+        return supplied_key, "adopted"
+    bridge = _profile_primary(resolved_profile)
+    if bridge is not None:
+        resolved = resolve_selected_deployment("primary", bridge, config)
+        return resolved, ("profile-bridge" if resolved == bridge else "default")
+    return resolve_selected_deployment("primary", None, config), "default"
+
+
 @app.post("/chat/stream")
 async def chat_stream_endpoint(
     message: str = Form(...),
     session_id: str = Form(...),
     profile: str | None = Form(default=None),
+    primary_selection: str | None = Form(default=None),
     client_msg_id: str | None = Form(default=None),
     attachments: str | None = Form(default=None),
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
@@ -2162,6 +2294,9 @@ async def chat_stream_endpoint(
         session_id: Client-generated session UUID.
         profile: Optional execution profile override (e.g. ``"local"``,
             ``"cloud"``). Omitted → use the session's stored profile.
+        primary_selection: Optional advisory ``primary`` model deployment key
+            (ADR-0121 §4). Existing session → ignored (stored selection wins);
+            new session → adopted if valid. The live PWA does not send it yet.
         client_msg_id: Optional client-generated idempotency key (UUID v4).
             When provided, duplicate submissions within the TTL window are
             detected and silently ignored (FRE-392).
@@ -2216,11 +2351,17 @@ async def chat_stream_endpoint(
         session_id, profile, request_user.user_id, trace_id=trace_id
     )
 
+    # ADR-0121 §4: resolve the server-authoritative primary model selection.
+    resolved_selection, selection_provenance = await _resolve_session_selection(
+        session_id, primary_selection, resolved_profile, request_user.user_id, trace_id=trace_id
+    )
+
     asyncio.create_task(
         _process_chat_stream_background(
             session_id=session_id,
             message=message,
             profile_name=resolved_profile,
+            primary_selection_key=resolved_selection,
             user_id=request_user.user_id,
             trace_id=trace_id,
             user_email=request_user.email,
@@ -2235,9 +2376,18 @@ async def chat_stream_endpoint(
         session_id=session_id,
         profile=resolved_profile,
         profile_supplied=profile,
+        primary_selection=resolved_selection,
+        primary_selection_supplied=primary_selection,
+        selection_provenance=selection_provenance,
         trace_id=trace_id,
     )
-    return {"session_id": session_id, "status": "streaming", "profile": resolved_profile}
+    return {
+        "session_id": session_id,
+        "status": "streaming",
+        "profile": resolved_profile,
+        "primary_selection": resolved_selection,
+        "selection_provenance": selection_provenance,
+    }
 
 
 # ============================================================================

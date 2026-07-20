@@ -248,8 +248,11 @@ def test_resolve_options_and_default_artifact_builder_against_real_catalog() -> 
     # non-llm deployments are never options
     assert "embedding" not in opts
     assert "reranker" not in opts
-    # the configured default is the artifact_builder binding's deployment
-    assert default == "qwen3.6-35b-instruct"
+    # the configured default is the artifact_builder binding's deployment —
+    # claude_haiku since ADR-0121 T5 (FRE-920, owner-decided 2026-07-20):
+    # there is only one binding now that Path/ExecutionProfile is gone, and
+    # it preserves what the removed cloud profile provided.
+    assert default == "claude_haiku"
 
 
 def test_valid_preference_actions_artifact_builder_against_real_catalog() -> None:

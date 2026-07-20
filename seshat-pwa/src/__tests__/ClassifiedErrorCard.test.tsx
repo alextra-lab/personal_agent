@@ -15,9 +15,9 @@ import type { ClassifiedErrorData } from '@/lib/types';
 
 const MODEL_SERVER_ERROR: ClassifiedErrorData = {
   category: 'model_server',
-  reason: 'The local model server returned an error.',
+  reason: 'The model server returned an error.',
   next_step: 'Check that the model server is running.',
-  actions: ['retry', 'switch_to_cloud', 'stop'],
+  actions: ['retry', 'stop'],
   partial: false,
 };
 
@@ -55,7 +55,7 @@ describe('ClassifiedErrorCard — rendering', () => {
 
   it('shows the error reason text', () => {
     render(<ClassifiedErrorCard error={MODEL_SERVER_ERROR} onDismiss={vi.fn()} />);
-    expect(screen.getByText('The local model server returned an error.')).toBeDefined();
+    expect(screen.getByText('The model server returned an error.')).toBeDefined();
   });
 
   it('shows the next_step guidance', () => {
@@ -80,32 +80,12 @@ describe('ClassifiedErrorCard — action buttons', () => {
     expect(screen.getByText('Retry')).toBeDefined();
   });
 
-  it('renders a Switch to Cloud button when switch_to_cloud is in actions', () => {
-    render(<ClassifiedErrorCard error={MODEL_SERVER_ERROR} onDismiss={vi.fn()} />);
-    expect(screen.getByText('Switch to Cloud')).toBeDefined();
-  });
-
   it('calls onRetry when Retry is clicked', () => {
     const onRetry = vi.fn();
     const onDismiss = vi.fn();
     render(<ClassifiedErrorCard error={MODEL_SERVER_ERROR} onRetry={onRetry} onDismiss={onDismiss} />);
     fireEvent.click(screen.getByText('Retry'));
     expect(onRetry).toHaveBeenCalledTimes(1);
-    expect(onDismiss).not.toHaveBeenCalled();
-  });
-
-  it('calls onSwitchToCloud when Switch to Cloud is clicked', () => {
-    const onSwitchToCloud = vi.fn();
-    const onDismiss = vi.fn();
-    render(
-      <ClassifiedErrorCard
-        error={MODEL_SERVER_ERROR}
-        onSwitchToCloud={onSwitchToCloud}
-        onDismiss={onDismiss}
-      />,
-    );
-    fireEvent.click(screen.getByText('Switch to Cloud'));
-    expect(onSwitchToCloud).toHaveBeenCalledTimes(1);
     expect(onDismiss).not.toHaveBeenCalled();
   });
 

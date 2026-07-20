@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-from personal_agent.config.profile import ExecutionProfile, _current_profile, set_current_profile
+from personal_agent.config.selection import reset_current_selection, set_current_selection
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client.history_sanitiser import sanitise_messages
 from personal_agent.llm_client.models import ToolCallingStrategy
@@ -753,18 +753,18 @@ class TestToolUsingFlow:
 
 @patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio
-async def test_execute_task_uses_profile_resolved_model_config(mock_client_class) -> None:
-    """Executor reads model_config via profile-resolved key, not raw role name (ADR-0063 §D6).
+async def test_execute_task_uses_selection_resolved_model_config(mock_client_class) -> None:
+    """Executor reads model_config via selection-resolved key, not raw role name (ADR-0063 §D6).
 
-    When a cloud profile is active (primary → claude_sonnet), the executor must
-    look up model_configs["claude_sonnet"], not model_configs["primary"].
+    When a per-turn selection is active (primary → claude_sonnet), the executor
+    must look up model_configs["claude_sonnet"], not model_configs["primary"].
     The two configs carry different effective_tool_strategy values so we can
     observe which one was used.
     """
     mock_client = AsyncMock()
 
     # Two distinct configs: "primary" returns PROMPT_INJECTED (old, wrong path);
-    # "claude_sonnet" returns NATIVE (correct, profile-resolved path).
+    # "claude_sonnet" returns NATIVE (correct, selection-resolved path).
     primary_def = MagicMock()
     primary_def.effective_tool_strategy = ToolCallingStrategy.PROMPT_INJECTED  # wrong path
     cloud_def = MagicMock()
@@ -784,13 +784,7 @@ async def test_execute_task_uses_profile_resolved_model_config(mock_client_class
         "raw": {},
     }
 
-    cloud_profile = ExecutionProfile(
-        name="cloud",
-        primary_model="claude_sonnet",
-        sub_agent_model="claude_haiku",
-        provider_type="cloud",
-    )
-    token = set_current_profile(cloud_profile)
+    token = set_current_selection({"primary": "claude_sonnet"})
     try:
         session_manager = SessionManager()
         session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
@@ -804,7 +798,7 @@ async def test_execute_task_uses_profile_resolved_model_config(mock_client_class
         )
         result = await execute_task_safe(ctx, session_manager)
     finally:
-        _current_profile.reset(token)
+        reset_current_selection(token)
 
     # If executor looked up model_configs["primary"] (bug), it would get PROMPT_INJECTED
     # strategy and pass a prompt-injected tool text in the respond() call.
@@ -817,7 +811,7 @@ async def test_execute_task_uses_profile_resolved_model_config(mock_client_class
     system_prompt = call_kwargs.get("system_prompt", "") or ""
     assert "<tools>" not in system_prompt, (
         "Executor used PROMPT_INJECTED strategy from wrong model config lookup. "
-        "Fix: executor must resolve model key through the active ExecutionProfile."
+        "Fix: executor must resolve model key through the active selection."
     )
 
 

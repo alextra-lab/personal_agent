@@ -332,11 +332,10 @@ def resolve_role_target(
     former, silently dropping per-use parameters.
 
     Overrides apply **only when the resolved key is the binding's own
-    deployment.** When an active ExecutionProfile redirects the role elsewhere
-    (cloud ``sub_agent`` -> ``claude_haiku``), that deployment's own values stand
-    — matching pre-ADR-0121 behaviour, where the profile's model was looked up
-    whole rather than merged. Overrides are model-specific in practice, so
-    carrying them onto a different model would change the call.
+    deployment.** When a per-turn selection or an explicit ``model_key``
+    redirects the role elsewhere, that deployment's own values stand — the
+    binding's overrides are model-specific in practice, so carrying them onto
+    a different model would change the call.
 
     Args:
         role: Role name (e.g. ``"sub_agent"``).

@@ -191,6 +191,40 @@ describe('useSSEStream — STATE_DELTA (turn_status)', () => {
   });
 });
 
+describe('useSSEStream — STATE_DELTA (session_selection, ADR-0121 §4)', () => {
+  it('sets serverSelection from a well-formed session_selection STATE_DELTA', async () => {
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+
+    pushEvent({
+      type: 'STATE_DELTA',
+      data: {
+        key: 'session_selection',
+        value: { role: 'primary', deployment_key: 'claude_sonnet' },
+      },
+      seq: 1,
+    });
+
+    expect(hook.result.current.serverSelection).toEqual({
+      role: 'primary',
+      deploymentKey: 'claude_sonnet',
+    });
+  });
+
+  it('ignores a malformed session_selection payload', async () => {
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+
+    pushEvent({
+      type: 'STATE_DELTA',
+      data: { key: 'session_selection', value: { role: 'primary' } }, // missing deployment_key
+      seq: 1,
+    });
+
+    expect(hook.result.current.serverSelection).toBeNull();
+  });
+});
+
 describe('useSSEStream — CONSTRAINT_PAUSE / CONSTRAINT_RESOLVED', () => {
   it('sets pendingConstraint on CONSTRAINT_PAUSE', async () => {
     const hook = renderHook(() => useSSEStream());

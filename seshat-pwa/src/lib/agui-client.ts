@@ -14,7 +14,7 @@
  * See: docs/architecture_decisions/ADR-0075-websocket-transport.md
  */
 
-import type { AGUIEvent, ClientMessage, ExecutionProfile } from './types';
+import type { AGUIEvent, ClientMessage, SessionConfig } from './types';
 
 /**
  * Base URL for the Seshat backend.
@@ -76,14 +76,10 @@ export interface CompletedUpload {
 /**
  * An attachment attached to an outgoing chat turn.
  *
- * `processing_target` is the ADR-0101 §8a per-attachment cloud/local override, sent
- * unchanged to `/chat/stream` and threaded through by the backend (FRE-661/691/692).
- * `'none'` is the wire value for "no selection made" — the backend treats it (and any
- * other non-`'cloud'`/`'local'` value) as equivalent to absent.
+ * ADR-0121 T5 (FRE-920): vision is a pinned Layer-3 role now — there is no
+ * per-attachment local/cloud override to carry.
  */
-export interface UploadedAttachment extends CompletedUpload {
-  processing_target: 'cloud' | 'local' | 'none';
-}
+export type UploadedAttachment = CompletedUpload;
 
 /** Per-file upload state tracked by ChatInput. */
 export interface UploadState {
@@ -93,8 +89,6 @@ export interface UploadState {
   status: 'uploading' | 'complete' | 'error';
   artifact_id?: string;
   error?: string;
-  /** ADR-0101 §8a override; undefined = no selection (sent as `'none'` on submit). */
-  processingTarget?: 'cloud' | 'local';
 }
 
 interface _PresignResponse {
@@ -167,12 +161,13 @@ export interface SendMessageOptions {
   message: string;
   sessionId: string;
   /**
-   * The client's selected profile (the pill). Used by the server only to
-   * establish a brand-new session's profile; ignored for an existing session,
-   * whose stored value is authoritative (ADR-0079). Sending it ensures a new
-   * "Cloud" session is not silently created as `local`.
+   * The client's selected `primary` model (ADR-0121 §4). Used by the server
+   * only to establish a brand-new session's selection; ignored for an
+   * existing session, whose stored value is authoritative (ADR-0079
+   * invariants, carried forward). Sending it ensures a new session honours
+   * the user's picker choice instead of silently adopting the default.
    */
-  profile?: ExecutionProfile;
+  primarySelection?: string;
   /** Client-generated idempotency key (UUID v4) — deduplicated server-side (FRE-392). */
   clientMsgId?: string;
   /** Completed uploads to attach to this turn (FRE-369). */
@@ -223,15 +218,15 @@ export class BudgetDeniedError extends Error {
  * @throws Error for any other non-2xx response.
  */
 export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
-  // ADR-0079: the profile is server-owned. We still send the client's pill so
-  // a NEW session is established with the user's selection; the server ignores
-  // it for an existing session (stored value wins). The toggle is the canonical
-  // mutator via setSessionProfile (PATCH).
-  const { message, sessionId, profile, clientMsgId, attachments } = opts;
+  // ADR-0121 §4: the selection is server-owned. We still send the client's
+  // picker choice so a NEW session is established with it; the server ignores
+  // it for an existing session (stored value wins). The picker's canonical
+  // mutator is setSessionSelection (PATCH .../selection).
+  const { message, sessionId, primarySelection, clientMsgId, attachments } = opts;
 
   const params: Record<string, string> = { message, session_id: sessionId };
-  if (profile) {
-    params['profile'] = profile;
+  if (primarySelection) {
+    params['primary_selection'] = primarySelection;
   }
   if (clientMsgId) {
     params['client_msg_id'] = clientMsgId;
@@ -567,8 +562,10 @@ export interface SessionSummary {
   last_active_at: string;
   mode: string;
   channel: string | null;
-  /** Server-authoritative execution profile (ADR-0079 / FRE-419). */
-  execution_profile: ExecutionProfile;
+  /** Server-authoritative `primary` model selection (ADR-0121 §4). */
+  primary_selection: string;
+  /** How `primary_selection` was resolved — `stored` / `adopted` / `default`. */
+  selection_provenance: string;
   message_count: number;
   /** Number of user turns (user-role messages only) in this session (FRE-521). */
   turn_count?: number;
@@ -633,8 +630,8 @@ export async function getSessionMessages(
 
 /**
  * Fetch a single session, including its server-authoritative
- * `execution_profile` (ADR-0079 / FRE-419). Used on mount to hydrate the
- * profile pill from the server instead of client-only localStorage.
+ * `primary_selection` (ADR-0121 §4). Used on mount to hydrate the model
+ * picker from the server instead of client-only localStorage.
  *
  * @param sessionId - The session to fetch.
  * @returns The session detail, or null when it does not exist yet (404).
@@ -651,29 +648,69 @@ export async function getSession(sessionId: string): Promise<SessionSummary | nu
 }
 
 /**
- * Set a session's server-authoritative execution profile (ADR-0079 / FRE-419).
+ * Fetch the model-picker + observe-view read payload for a session
+ * (ADR-0121 §3 — `GET /api/v1/sessions/{id}/config`).
  *
- * This is the canonical write for the profile toggle: it persists the value
- * on the session and triggers a `session_profile` STATE_DELTA to the active
- * client. The displayed pill should reflect the server-confirmed value.
+ * 404s until the session's first DB row exists (created on first message) —
+ * use {@link getConfig} for a brand-new conversation instead.
  *
- * @param sessionId - The session to update.
- * @param profile   - The new execution profile.
+ * @param sessionId - The session to fetch config for.
+ * @returns The config payload, or null when the session doesn't exist yet (404).
+ * @throws Error when the backend returns a non-2xx, non-404 status.
+ */
+export async function getSessionConfig(sessionId: string): Promise<SessionConfig | null> {
+  const resp = await fetch(
+    `${SESHAT_API}/api/v1/sessions/${encodeURIComponent(sessionId)}/config`,
+    { headers: authHeaders() },
+  );
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`getSessionConfig failed: ${resp.status}`);
+  return resp.json() as Promise<SessionConfig>;
+}
+
+/**
+ * Fetch the sessionless model-picker + observe-view read payload
+ * (ADR-0121 T5, FRE-920 — `GET /api/v1/config`).
+ *
+ * Same `roles`/`providers` shape as {@link getSessionConfig} minus the
+ * per-session `resolved`/`provenance` fields — used for a brand-new
+ * conversation before its first message creates a DB row.
+ *
+ * @returns The sessionless config payload.
  * @throws Error when the backend returns a non-2xx status.
  */
-export async function setSessionProfile(
+export async function getConfig(): Promise<SessionConfig> {
+  const resp = await fetch(`${SESHAT_API}/api/v1/config`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`getConfig failed: ${resp.status}`);
+  return resp.json() as Promise<SessionConfig>;
+}
+
+/**
+ * Set a session's server-authoritative `primary` model selection (ADR-0121 §4).
+ *
+ * This is the canonical write for the model picker: it persists the value
+ * on the session and triggers a `session_selection` STATE_DELTA to the
+ * active client.
+ *
+ * @param sessionId    - The session to update.
+ * @param role         - The role to set (only `"primary"` is user-selectable today).
+ * @param deploymentKey - The new deployment key.
+ * @throws Error when the backend returns a non-2xx status.
+ */
+export async function setSessionSelection(
   sessionId: string,
-  profile: ExecutionProfile,
+  role: string,
+  deploymentKey: string,
 ): Promise<void> {
   const resp = await fetch(
-    `${SESHAT_API}/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+    `${SESHAT_API}/api/v1/sessions/${encodeURIComponent(sessionId)}/selection`,
     {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ profile }),
+      body: JSON.stringify({ role, deployment_key: deploymentKey }),
     },
   );
-  if (!resp.ok) throw new Error(`setSessionProfile failed: ${resp.status}`);
+  if (!resp.ok) throw new Error(`setSessionSelection failed: ${resp.status}`);
 }
 
 // --------------------------------------------------------------------------

@@ -71,8 +71,9 @@ class SessionRepository:
             messages=[],
             primary_model_at_creation=primary_model_at_creation,
             model_config_path=model_config_path,
-            # ADR-0079: explicit stored profile; default 'local' when unset.
-            execution_profile=data.execution_profile or "local",
+            # ADR-0121 T5 (FRE-920): vestigial — nothing reads this back; the
+            # selection store is the source of truth. Column stays NOT NULL.
+            execution_profile="local",
         )
         self.db.add(session)
         await self.db.commit()

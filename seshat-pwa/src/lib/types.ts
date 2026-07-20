@@ -164,8 +164,53 @@ export interface ChatMessage {
   rating?: number;
 }
 
-/** Execution profile — determines which model the backend uses. */
-export type ExecutionProfile = 'local' | 'cloud';
+// --------------------------------------------------------------------------
+// Model catalog + selection (ADR-0121 — Path removed, model picker)
+// --------------------------------------------------------------------------
+
+/** A single catalog deployment, as offered to the model picker (§2 of the ADR). */
+export interface DeploymentView {
+  key: string;
+  id: string;
+  provider: string;
+  placement: 'local' | 'cloud';
+  kind: string;
+  status: string;
+  summary: string | null;
+  context_length: number;
+  max_tokens: number;
+  supports_vision: boolean;
+  supports_pdf_document: boolean;
+  input_cost_per_token: number | null;
+  output_cost_per_token: number | null;
+}
+
+/** A single provider row, for the observe view's provider table. */
+export interface ProviderView {
+  key: string;
+  placement: 'local' | 'cloud';
+  available: boolean;
+  summary: string | null;
+  max_concurrency: number;
+}
+
+/** Per-role entry in the config-read payload — session-scoped fields are optional. */
+export interface SessionConfigRole {
+  open: boolean;
+  /** Present only on the session-scoped `GET /{id}/config` read. */
+  resolved?: string;
+  /** Present only on the session-scoped `GET /{id}/config` read. */
+  provenance?: string;
+  /** Present only for `open` roles. */
+  candidates?: DeploymentView[];
+}
+
+/** Response shape shared by `GET /{id}/config` and the sessionless `GET /config`. */
+export interface SessionConfig {
+  session_id?: string;
+  roles: Record<string, SessionConfigRole>;
+  providers: ProviderView[];
+}
 
 /** Pending HITL interrupt requiring user decision. */
 export interface PendingInterrupt {

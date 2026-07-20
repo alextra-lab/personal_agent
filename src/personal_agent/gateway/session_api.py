@@ -21,12 +21,17 @@ from personal_agent.gateway.rate_limiting import get_rate_limiter
 from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition, ProviderDefinition
 from personal_agent.service.auth import _CF_EMAIL_HEADER, _get_user_with_display_name
-from personal_agent.service.models import SessionProfileUpdate, SessionSelectionUpdate
+from personal_agent.service.models import SessionSelectionUpdate
 from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+#: Sessionless config read (ADR-0121 T5, FRE-920) — no ``/sessions`` prefix,
+#: mounted directly under ``/api/v1`` alongside ``router`` so a brand-new
+#: conversation (no DB row yet) still has a model-picker read path.
+config_router = APIRouter(tags=["config"])
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +216,7 @@ async def get_session(
     _config = _load_model_config()
     _stored = await _fetch_selections(db, uuid, roles=["primary"], ctx=ctx)
     _resolved_primary, _selection_provenance = _resolve_role_binding(
-        "primary", str(session.execution_profile), _config, _stored.get("primary")
+        "primary", _config, _stored.get("primary")
     )
     result["primary_selection"] = _resolved_primary
     result["selection_provenance"] = _selection_provenance
@@ -342,65 +347,25 @@ async def _attach_turn_ratings(
 # (ADR-0121 §3/§4, FRE-918)
 # ---------------------------------------------------------------------------
 
-#: Roles the legacy ExecutionProfile (ADR-0044) still redirects, independent of
-#: the ADR-0121 §6 `open` flag — `sub_agent` is pinned re: user selection but
-#: still profile-redirected today (llm_client/factory.py's profile-fallback
-#: branch), so this map is NOT the same set as "open" roles. Mirrors
-#: config/profile.py's `resolve_model_key`/`resolve_profile_redirect`.
-_PROFILE_REDIRECT_ATTR: dict[str, str] = {
-    "primary": "primary_model",
-    "sub_agent": "sub_agent_model",
-    "artifact_builder": "artifact_builder_model",
-}
-
-
-def _profile_role_bridge(profile_name: str, role: str) -> str | None:
-    """Return the named profile's model for ``role``, or ``None`` if it doesn't redirect.
-
-    Args:
-        profile_name: An ``execution_profile`` value (e.g. ``"local"``, ``"cloud"``).
-        role: The role to look up.
-
-    Returns:
-        The profile's bound model key for roles it redirects
-        (``primary``/``sub_agent``/``artifact_builder``), else ``None`` — a
-        missing/invalid profile name degrades to ``None`` rather than raising.
-    """
-    attr = _PROFILE_REDIRECT_ATTR.get(role)
-    if attr is None:
-        return None
-    from personal_agent.config.profile import load_profile  # noqa: PLC0415
-
-    try:
-        return getattr(load_profile(profile_name), attr, None)
-    except (FileNotFoundError, ValueError):
-        return None
-
 
 def _resolve_role_binding(
     role: str,
-    execution_profile: str,
     config: ModelConfig,
     stored: str | None,
 ) -> tuple[str, str]:
     """Resolve a session's effective deployment for ``role``, plus provenance.
 
     Generalizes the primary-only hydration ``get_session`` used before FRE-918
-    to any role, and closes a gap codex plan-review found: a session created
-    via the legacy ``POST /chat`` endpoint (``service/app.py``) never writes a
-    selection-store row and never carries a per-turn selection context, so its
-    actual next-turn resolution falls through to the ExecutionProfile redirect
-    (``llm_client/factory.py``'s profile-fallback branch). Reporting the bare
-    binding default here would show a binding that "differs from what the next
-    turn uses" — the exact AC-9-slice failure mode. Order: stored selection
-    (open roles only, guardrailed) -> profile bridge (primary/sub_agent/
-    artifact_builder only, trusted — not re-guardrailed, matching how
-    ``factory.py`` treats a profile-resolved key) -> binding default.
+    to any role. ADR-0121 T5 (FRE-920) retired the ExecutionProfile bridge this
+    used to fall back to — ``service/app.py``'s legacy ``POST /chat`` endpoint
+    now always writes a selection-store row (on an explicit ``model`` or on
+    first turn for a brand-new session), so a missing row degrades straight to
+    the binding default rather than needing a profile-shaped stand-in.
+
+    Order: stored selection (open roles only, guardrailed) -> binding default.
 
     Provenance is deliberately binary (``"server-hydrated"`` / ``"default"``),
-    matching this endpoint family's existing, tested contract — a bridge that
-    happens to resolve is still labelled ``"default"``: the label is a coarse
-    UI hint, the *resolved key* is what AC-9-slice actually gates on.
+    matching this endpoint family's existing, tested contract.
 
     Takes an already-fetched ``stored`` value rather than querying the
     selection store itself — callers batch the DB read once per session
@@ -411,7 +376,6 @@ def _resolve_role_binding(
 
     Args:
         role: The role to resolve.
-        execution_profile: The session's stored ``execution_profile`` value.
         config: The loaded catalog.
         stored: This role's already-fetched selection-store value, or
             ``None`` when no row exists (or the batched read failed).
@@ -428,10 +392,6 @@ def _resolve_role_binding(
         resolved = resolve_selected_deployment(role, stored, config)
         provenance = "server-hydrated" if resolved == stored else "default"
         return resolved, provenance
-
-    bridge = _profile_role_bridge(execution_profile, role)
-    if bridge is not None and bridge in config.models:
-        return bridge, "default"
 
     return resolve_selected_deployment(role, None, config), "default"
 
@@ -537,11 +497,16 @@ async def get_session_config(
     """Return the model-picker + observe-view read payload (ADR-0121 §3 / FRE-918).
 
     For every declared role: whether it is ``open`` or pinned, the effective
-    resolved binding for **this session** (selection-applied, profile-bridged
-    where the legacy Path mechanism still governs — AC-9 slice: "what the next
-    turn will actually use"), and for open roles the currently available,
-    kind-compatible candidate list (AC-5). Also returns the provider table
-    with placement and live-checked availability.
+    resolved binding for **this session** (selection-applied — AC-9 slice:
+    "what the next turn will actually use"), and for open roles the currently
+    available, kind-compatible candidate list (AC-5). Also returns the
+    provider table with placement and live-checked availability.
+
+    404s until the session's first DB row exists (created on first message).
+    A brand-new conversation has no row yet — use the sessionless
+    ``GET /api/v1/config`` (:func:`get_config`) for that case; it returns the
+    same ``roles``/``providers`` shape minus the per-session ``resolved``/
+    ``provenance`` fields (ADR-0121 T5, FRE-920).
 
     Args:
         request: FastAPI request (injected).
@@ -590,9 +555,7 @@ async def get_session_config(
 
     roles: dict[str, Any] = {}
     for role, binding in config.roles.items():
-        resolved, provenance = _resolve_role_binding(
-            role, str(session.execution_profile), config, stored_selections.get(role)
-        )
+        resolved, provenance = _resolve_role_binding(role, config, stored_selections.get(role))
         entry: dict[str, Any] = {
             "open": binding.open,
             "resolved": resolved,
@@ -620,117 +583,55 @@ async def get_session_config(
     return {"session_id": session_id, "roles": roles, "providers": providers}
 
 
-@router.patch("/{session_id}")
-async def update_session_profile(
-    request: Request,
-    session_id: str,
-    body: SessionProfileUpdate,
-    token: TokenInfo = Depends(require_scope("sessions:write")),  # noqa: B008
-    db: AsyncSession = Depends(_get_db),  # noqa: B008
+@config_router.get("/config")
+async def get_config(
+    token: TokenInfo = Depends(require_scope("sessions:read")),  # noqa: B008
 ) -> dict[str, Any]:
-    """Set a session's server-owned execution profile (ADR-0079 / FRE-416).
+    """Return the sessionless model-picker + observe-view read payload (ADR-0121 T5, FRE-920).
 
-    The profile is the source of truth for which models run the session's
-    turns. This is the canonical write path used by the PWA profile toggle;
-    the change is persisted and emitted to the active client as a
-    ``session_profile`` STATE_DELTA. The write is scoped to the authenticated
-    user so a token holder cannot mutate another user's session.
+    A brand-new conversation has no session row yet — both
+    ``GET /{session_id}/config`` and ``PATCH /{session_id}/selection`` 404
+    before the first message creates one (codex plan-review finding). This
+    endpoint serves the same ``roles``/``providers`` shape with no per-session
+    resolution: for every declared role, whether it is ``open`` or pinned and,
+    for open roles, the currently available candidate list (AC-5); the
+    provider table with placement and live-checked availability.
 
     Args:
-        request: FastAPI request (injected).
-        session_id: UUID string of the session.
-        body: New execution profile.
-        token: Validated bearer token with ``sessions:write`` scope.
-        db: Async SQLAlchemy session (injected).
+        token: Validated bearer token with ``sessions:read`` scope.
 
     Returns:
-        The updated session dict.
-
-    Raises:
-        HTTPException(422): When ``session_id`` is not a valid UUID or the
-            profile name is not a known profile.
-        HTTPException(404): When the session does not exist or is owned by
-            another user.
+        ``{"roles": {role: {"open", "candidates"?}}, "providers": [...]}`` —
+        the same shape as ``GET /{session_id}/config`` minus ``resolved``/
+        ``provenance`` (there is no session to resolve a selection against).
     """
     get_rate_limiter().check(token)
-    from personal_agent.config.profile import is_valid_profile
-    from personal_agent.service.models import SessionUpdate
-    from personal_agent.service.repositories.session_repository import SessionRepository
-    from personal_agent.transport.agui.transport import emit_session_profile
+    from personal_agent.config import load_model_config  # noqa: PLC0415
+    from personal_agent.config import settings as _settings  # noqa: PLC0415
+    from personal_agent.config.model_loader import role_candidates  # noqa: PLC0415
+    from personal_agent.llm_client.provider_health import check_all_providers  # noqa: PLC0415
 
-    user_id = await _require_request_user_id(request, db)
-    ctx = SystemTraceContext.new("session_api", session_id=session_id)
+    ctx = SystemTraceContext.new("session_api")
+    config = load_model_config()
+    availability = await check_all_providers(config, _settings, trace_id=ctx.trace_id)
 
-    try:
-        uuid = UUID(session_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "invalid_parameter",
-                "message": "session_id must be a valid UUID",
-                "status": 422,
-            },
-        ) from exc
+    roles: dict[str, Any] = {}
+    for role, binding in config.roles.items():
+        entry: dict[str, Any] = {"open": binding.open}
+        if binding.open:
+            entry["candidates"] = [
+                _deployment_view(key, config.models[key], config)
+                for key in role_candidates(role, config, availability)
+            ]
+        roles[role] = entry
 
-    if not is_valid_profile(body.profile):
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "invalid_parameter",
-                "message": f"unknown execution profile: {body.profile}",
-                "status": 422,
-            },
-        )
+    providers = [
+        _provider_view(key, provider, availability.get(key, False))
+        for key, provider in config.providers.items()
+    ]
 
-    repo = SessionRepository(db)
-    session = await repo.update(
-        uuid, SessionUpdate(execution_profile=body.profile), user_id=user_id
-    )
-    if session is None:
-        raise not_found("session")
-
-    # ADR-0121 §4 (FRE-917): the Path pill is still the live primary control until
-    # T5 replaces it with the picker. The selection store is now authoritative for
-    # `primary`, so the pill must WRITE to it — otherwise flipping the pill would
-    # change execution_profile but no longer move which model `primary` runs (the
-    # stored selection would win). Mirror the profile's `primary_model` into the
-    # selection store so the pill keeps working during the transition. Guardrailed
-    # (§6): only a valid, selectable key is written; an unselectable one is skipped
-    # rather than persisting a bad selection.
-    from personal_agent.config import load_model_config
-    from personal_agent.config.model_loader import is_selectable_binding
-    from personal_agent.config.profile import load_profile
-    from personal_agent.service.repositories.session_model_selection_repository import (
-        SessionModelSelectionRepository,
-    )
-    from personal_agent.transport.agui.transport import emit_session_selection
-
-    try:
-        pill_primary = load_profile(body.profile).primary_model
-    except (FileNotFoundError, ValueError):
-        pill_primary = None
-    if pill_primary is not None and is_selectable_binding(
-        "primary", pill_primary, load_model_config()
-    ):
-        await SessionModelSelectionRepository(db).upsert(
-            session_id=uuid, role="primary", deployment_key=pill_primary
-        )
-        await emit_session_selection(
-            session_id=session_id, role="primary", deployment_key=pill_primary
-        )
-
-    await emit_session_profile(session_id=session_id, profile=body.profile)
-    log.info(
-        "gateway_sessions_set_profile",
-        session_id=session_id,
-        profile=body.profile,
-        primary_selection=pill_primary,
-        token_name=token.name,
-        user_id=str(user_id),
-        trace_id=ctx.trace_id,
-    )
-    return _session_to_dict(session)
+    log.info("gateway_config_get", token_name=token.name, trace_id=ctx.trace_id)
+    return {"roles": roles, "providers": providers}
 
 
 @router.patch("/{session_id}/selection")
@@ -870,8 +771,6 @@ def _session_to_dict(session: Any) -> dict[str, Any]:
         "last_active_at": session.last_active_at.isoformat() if session.last_active_at else None,
         "mode": session.mode,
         "channel": session.channel,
-        # ADR-0079: server-authoritative execution profile for PWA hydration.
-        "execution_profile": getattr(session, "execution_profile", "local") or "local",
         "message_count": len(msgs),
         "turn_count": sum(1 for m in msgs if m.get("role") == "user"),
         "title": _extract_title(msgs),

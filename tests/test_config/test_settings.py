@@ -239,26 +239,6 @@ class TestDocumentGuardrailCaps:
         assert config.document_max_extracted_text_chars == 200_000
 
 
-class TestAttachmentDefaultProcessingTarget:
-    """FRE-886 / ADR-0101 §8a, ADR-0102 §7a — Auto-attachment default routing target."""
-
-    def test_default_is_cloud(self) -> None:
-        config = AppConfig()
-        assert config.attachment_default_processing_target == "cloud"
-
-    def test_reads_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("AGENT_ATTACHMENT_DEFAULT_PROCESSING_TARGET", "local")
-        config = AppConfig()
-        assert config.attachment_default_processing_target == "local"
-
-    def test_rejects_invalid_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from pydantic import ValidationError
-
-        monkeypatch.setenv("AGENT_ATTACHMENT_DEFAULT_PROCESSING_TARGET", "bogus")
-        with pytest.raises(ValidationError):
-            AppConfig()
-
-
 class TestEntityExtractionFewshotFlag:
     """FRE-759 — the flag gating the few-shot exemplar block (default OFF)."""
 

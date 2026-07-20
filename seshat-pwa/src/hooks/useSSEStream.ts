@@ -18,7 +18,6 @@ import type {
   ClassifiedErrorData,
   ConstraintPauseData,
   ConstraintResolvedData,
-  ExecutionProfile,
   PendingConstraint,
   PendingInterrupt,
   ResolvedConstraint,
@@ -26,6 +25,12 @@ import type {
   ToolCall,
   TurnStatus,
 } from '@/lib/types';
+
+/** Server-authoritative model-selection change, from a `session_selection` STATE_DELTA. */
+export interface ServerSelection {
+  role: string;
+  deploymentKey: string;
+}
 
 // --------------------------------------------------------------------------
 // Constants
@@ -48,11 +53,11 @@ export interface UseSSEStreamReturn {
   /** Live per-turn metrics (ADR-0076); null until first turn_status STATE_DELTA. */
   turnStatus: TurnStatus | null;
   /**
-   * Server-authoritative execution profile from a `session_profile` STATE_DELTA
-   * (ADR-0079 / FRE-419); null until one arrives. The UI reconciles its pill
-   * to this when it changes.
+   * Server-authoritative model-selection change from a `session_selection`
+   * STATE_DELTA (ADR-0121 §4); null until one arrives. The UI reconciles the
+   * picker to this when it changes elsewhere (another tab, a WS reconnect).
    */
-  serverProfile: ExecutionProfile | null;
+  serverSelection: ServerSelection | null;
   /** Active constraint pause awaiting a decision (ADR-0076); null when none. */
   pendingConstraint: PendingConstraint | null;
   /** Constraints resolved this turn, rendered as collapsed pills. */
@@ -77,7 +82,7 @@ export interface UseSSEStreamReturn {
   classifiedError: ClassifiedErrorData | null;
   /** Dismiss the ClassifiedErrorCard (user action or next send). */
   dismissClassifiedError: () => void;
-  sendMessage: (text: string, sessionId: string, profile: ExecutionProfile, attachments?: UploadedAttachment[]) => Promise<void>;
+  sendMessage: (text: string, sessionId: string, primarySelection?: string, attachments?: UploadedAttachment[]) => Promise<void>;
   resolveInterrupt: (choice: string) => void;
   /** Post an approve/deny decision for the current pendingApproval. */
   handleApprovalDecision: (decision: 'approve' | 'deny') => void;
@@ -120,7 +125,7 @@ export function useSSEStream(): UseSSEStreamReturn {
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeTools, setActiveTools] = useState<ToolCall[]>([]);
   const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
-  const [serverProfile, setServerProfile] = useState<ExecutionProfile | null>(null);
+  const [serverSelection, setServerSelection] = useState<ServerSelection | null>(null);
   const [pendingConstraint, setPendingConstraint] = useState<PendingConstraint | null>(null);
   const [resolvedConstraints, setResolvedConstraints] = useState<ResolvedConstraint[]>([]);
   const [cancelled, setCancelled] = useState<boolean>(false);
@@ -254,9 +259,12 @@ export function useSSEStream(): UseSSEStreamReturn {
             currentTurnTraceIdRef.current = tid;
           }
         }
-        // ADR-0079 / FRE-419: server-authoritative profile change → reconcile pill.
-        if (key === 'session_profile' && (value === 'local' || value === 'cloud')) {
-          setServerProfile(value);
+        // ADR-0121 §4: server-authoritative selection change → reconcile picker.
+        if (key === 'session_selection' && value !== null && typeof value === 'object') {
+          const { role, deployment_key } = value as { role?: unknown; deployment_key?: unknown };
+          if (typeof role === 'string' && typeof deployment_key === 'string') {
+            setServerSelection({ role, deploymentKey: deployment_key });
+          }
         }
         break;
       }
@@ -449,7 +457,7 @@ export function useSSEStream(): UseSSEStreamReturn {
   // --------------------------------------------------------------------------
 
   const sendMessage = useCallback(
-    async (text: string, sessionId: string, profile: ExecutionProfile, attachments?: UploadedAttachment[]) => {
+    async (text: string, sessionId: string, primarySelection?: string, attachments?: UploadedAttachment[]) => {
       // Close any existing stream.
       streamRef.current?.close();
       streamRef.current = null;
@@ -516,7 +524,7 @@ export function useSSEStream(): UseSSEStreamReturn {
       // a second POST that might arrive if the WS reconnects mid-request (FRE-392).
       const clientMsgId = generateUUID();
       try {
-        await sendChatMessage({ message: text, sessionId, profile, clientMsgId, attachments });
+        await sendChatMessage({ message: text, sessionId, primarySelection, clientMsgId, attachments });
       } catch (err) {
         isStreamingRef.current = false; // FRE-236: keep ref in sync
         setIsStreaming(false);
@@ -643,7 +651,7 @@ export function useSSEStream(): UseSSEStreamReturn {
     isReconnecting,
     activeTools,
     turnStatus,
-    serverProfile,
+    serverSelection,
     pendingConstraint,
     resolvedConstraints,
     cancelled,

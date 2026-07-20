@@ -20,7 +20,7 @@ from personal_agent.config.model_loader import (
     load_model_config,
     resolve_role_target,
 )
-from personal_agent.config.profile import resolve_profile_redirect
+from personal_agent.config.selection import get_current_selection
 from personal_agent.llm_client.adapters import (
     _aggregate_streaming_chunks,
     adapt_chat_completions_response,
@@ -212,24 +212,18 @@ class LocalLLMClient:
             ModelConfigError: If model configuration is missing or invalid.
             InferenceSlotTimeout: If priority_timeout expires before a slot is available.
         """
-        # Get model configuration. Resolved through the active ExecutionProfile first
-        # (ADR-0044/ADR-0119) — an "open" role like artifact_builder maps to a
-        # different local model key (e.g. sub_agent) than its own role name, so a
-        # bare role.value lookup would miss config/models.yaml entirely (FRE-879
-        # code-review finding: the previous bare-role.value lookup broke every
-        # local-profile artifact_draft call, since models.yaml intentionally has no
-        # "artifact_builder" key — see config/profiles/local.yaml).
-        # Resolve against THIS client's catalog. An active ExecutionProfile still
-        # overrides the key; absent one the role's binding decides, so a client
-        # built with an explicit config (tests, eval harnesses, the ADR-0112
-        # seam) resolves within that config rather than the repo's.
-        profile_key = resolve_profile_redirect(role.value)
+        # Get model configuration. Resolved against THIS client's catalog — a
+        # per-turn selection still overrides the key (ADR-0121 §4); absent one
+        # the role's binding decides, so a client built with an explicit config
+        # (tests, eval harnesses, the ADR-0112 seam) resolves within that config
+        # rather than the repo's.
+        selection_key = get_current_selection(role.value)
         if self._catalog is not None:
             resolved_role_key, model_config = resolve_role_target(
-                role.value, model_key=profile_key, config=self._catalog
+                role.value, model_key=selection_key, config=self._catalog
             )
         else:
-            resolved_role_key = profile_key or role.value
+            resolved_role_key = selection_key or role.value
             model_config = self.model_configs.get(resolved_role_key)
         if not model_config:
             raise ModelConfigError(f"No configuration found for role: {resolved_role_key}")

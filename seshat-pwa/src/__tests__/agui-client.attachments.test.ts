@@ -1,9 +1,11 @@
 /**
- * Tests for sendChatMessage's attachment serialization (ADR-0101 §8a / FRE-692).
+ * Tests for sendChatMessage's attachment serialization (FRE-369).
  *
- * `sendChatMessage` must forward the `attachments` array — including each
- * item's `processing_target` — into the `/chat/stream` form body unchanged.
- * No transform happens between ChatInput's payload and the wire request.
+ * `sendChatMessage` must forward the `attachments` array into the
+ * `/chat/stream` form body unchanged. No transform happens between
+ * ChatInput's payload and the wire request. ADR-0121 T5 (FRE-920) removed
+ * `processing_target` — vision is a pinned role with no per-attachment
+ * choice to pass through.
  */
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -19,7 +21,7 @@ function mockFetchOnce() {
   return fn;
 }
 
-describe('sendChatMessage — attachment processing_target passthrough', () => {
+describe('sendChatMessage — attachment passthrough', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -27,10 +29,10 @@ describe('sendChatMessage — attachment processing_target passthrough', () => {
     vi.restoreAllMocks();
   });
 
-  it('serializes a chosen processing_target unchanged into the form body', async () => {
+  it('serializes attachments unchanged into the form body', async () => {
     const fn = mockFetchOnce();
     const attachments: UploadedAttachment[] = [
-      { artifact_id: 'a1', content_type: 'image/png', title: 'photo.png', processing_target: 'cloud' },
+      { artifact_id: 'a1', content_type: 'image/png', title: 'photo.png' },
     ];
 
     await sendChatMessage({ message: 'hi', sessionId: 's1', attachments });
@@ -40,16 +42,21 @@ describe('sendChatMessage — attachment processing_target passthrough', () => {
     expect(JSON.parse(body.get('attachments')!)).toEqual(attachments);
   });
 
-  it('serializes the default "none" processing_target when no override was chosen', async () => {
+  it('sends primary_selection when provided', async () => {
     const fn = mockFetchOnce();
-    const attachments: UploadedAttachment[] = [
-      { artifact_id: 'a1', content_type: 'image/png', title: 'photo.png', processing_target: 'none' },
-    ];
-
-    await sendChatMessage({ message: 'hi', sessionId: 's1', attachments });
+    await sendChatMessage({ message: 'hi', sessionId: 's1', primarySelection: 'claude_sonnet' });
 
     const [, opts] = fn.mock.calls[0];
     const body = new URLSearchParams(opts.body as string);
-    expect(JSON.parse(body.get('attachments')!)[0].processing_target).toBe('none');
+    expect(body.get('primary_selection')).toBe('claude_sonnet');
+  });
+
+  it('omits primary_selection when not provided', async () => {
+    const fn = mockFetchOnce();
+    await sendChatMessage({ message: 'hi', sessionId: 's1' });
+
+    const [, opts] = fn.mock.calls[0];
+    const body = new URLSearchParams(opts.body as string);
+    expect(body.has('primary_selection')).toBe(false);
   });
 });

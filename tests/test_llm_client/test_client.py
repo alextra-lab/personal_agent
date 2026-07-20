@@ -499,32 +499,29 @@ models:
             )
 
     @pytest.mark.asyncio
-    async def test_respond_artifact_builder_resolves_via_local_profile(
+    async def test_respond_artifact_builder_resolves_via_selection(
         self, client: LocalLLMClient
     ) -> None:
-        """ADR-0118 T1 / FRE-879 regression: role=ARTIFACT_BUILDER must not look itself
-        up in model_configs directly — config/models.yaml intentionally has no
-        "artifact_builder" key (it is an ExecutionProfile-resolved open role, not a
-        matrix/models.yaml entry). Under the local profile (artifact_builder_model:
-        sub_agent), respond() must resolve to the "sub_agent" config entry and reach
-        the HTTP call, not raise ModelConfigError. (Code-review caught this on FRE-879:
-        the original wiring called self.model_configs.get(role.value) directly, which
-        broke every local-profile artifact_draft call.)
+        """ADR-0118 T1 / FRE-879 regression, carried forward by ADR-0121 T5 / FRE-920:
+        role=ARTIFACT_BUILDER must not look itself up in model_configs directly —
+        this fixture's catalog intentionally has no "artifact_builder" key (it is an
+        open role resolved via the selection context, not a bare model_configs
+        entry). With a per-turn selection naming "sub_agent", respond() must resolve
+        to the "sub_agent" config entry and reach the HTTP call, not raise
+        ModelConfigError. (Code-review caught this on FRE-879: the original wiring
+        called self.model_configs.get(role.value) directly, which broke every
+        artifact_draft call once the resolved key stopped matching the role name.)
         """
-        from personal_agent.config.profile import ExecutionProfile, _current_profile
+        from personal_agent.config.selection import (
+            reset_current_selection,
+            set_current_selection,
+        )
 
         mock_response = {
             "choices": [{"message": {"role": "assistant", "content": "<html></html>"}}],
             "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
         }
-        profile = ExecutionProfile(
-            name="local",
-            primary_model="primary",
-            sub_agent_model="sub_agent",
-            artifact_builder_model="sub_agent",
-            provider_type="local",
-        )
-        token = _current_profile.set(profile)
+        token = set_current_selection({"artifact_builder": "sub_agent"})
         try:
             with patch("httpx.AsyncClient") as mock_client_class:
                 mock_client = AsyncMock()
@@ -541,7 +538,7 @@ models:
 
             assert response["content"] == "<html></html>"
         finally:
-            _current_profile.reset(token)
+            reset_current_selection(token)
 
     @pytest.mark.asyncio
     async def test_404_raises_client_error(self, client: LocalLLMClient) -> None:

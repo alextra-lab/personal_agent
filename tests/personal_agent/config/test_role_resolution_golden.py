@@ -24,8 +24,10 @@ _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 _CATALOG = _REPO_ROOT / "config" / "models.yaml"
 
 _MATRIX_ROLES = (
+    # `sub_agent` is deliberately absent: ADR-0121 T5 (FRE-920, master gate
+    # 2026-07-20) removed its matrix entry as a stale duplicate of the Layer-3
+    # binding — it was never actually resolved through this matrix.
     "primary",
-    "sub_agent",
     "entity_extraction",
     "captains_log",
     "insights",

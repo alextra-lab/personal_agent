@@ -17,12 +17,6 @@ from personal_agent.config.model_loader import (
     load_model_config,
     resolve_role_model_key,
 )
-from personal_agent.config.profile import (
-    DelegationConfig,
-    ExecutionProfile,
-    list_profiles,
-    load_profile,
-)
 from personal_agent.config.settings import AppConfig, get_settings, load_app_config
 
 # Singleton instance
@@ -40,11 +34,6 @@ __all__ = [
     "load_governance_config",
     "load_model_config",
     "resolve_role_model_key",
-    # Execution profiles (ADR-0044)
-    "ExecutionProfile",
-    "DelegationConfig",
-    "load_profile",
-    "list_profiles",
     # Exception classes
     "GovernanceConfigError",
     "ModelConfigError",

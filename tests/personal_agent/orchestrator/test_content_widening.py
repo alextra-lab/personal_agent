@@ -87,12 +87,12 @@ def test_duplicate_role_merge_str_only_unchanged_behavior() -> None:
 @pytest.fixture
 def _no_think_enabled_local(monkeypatch: pytest.MonkeyPatch):
     from personal_agent.config import settings
-    from personal_agent.config.profile import _current_profile, load_profile, set_current_profile
+    from personal_agent.config.selection import reset_current_selection, set_current_selection
 
     monkeypatch.setattr(settings, "llm_append_no_think_to_tool_prompts", True)
-    token = set_current_profile(load_profile("local"))
+    token = set_current_selection({"primary": "qwen3.6-35b-thinking"})
     yield
-    _current_profile.reset(token)
+    reset_current_selection(token)
 
 
 def test_no_think_skips_block_list_last_user_message(_no_think_enabled_local: None) -> None:
@@ -299,10 +299,11 @@ async def test_vision_routing_decision_log_fires_for_raster_attachment(
 ) -> None:
     """FRE-693 (ADR-0074 §8c): step_llm_call logs the routing decision with identity.
 
-    No profile is bound here — the FRE-886 default-cloud fold-in requires a bound
-    profile (there is no "profile's escalation model" to route to otherwise), so
-    this exercises the pre-FRE-886 profile-independent resolution path regardless
-    of attachment_default_processing_target.
+    ADR-0121 T5 (FRE-920): vision is a pinned Layer-3 role — any raster image
+    always routes to the pinned ``vision`` deployment (``claude_sonnet`` in the
+    real catalog), regardless of whether the calling role (``primary``, here
+    ``qwen3.6-35b-thinking``) could itself have served the image. This always
+    reads as "escalated", by design — there is no conditional path anymore.
     """
     import structlog
 
@@ -357,12 +358,13 @@ async def test_vision_routing_decision_log_fires_for_raster_attachment(
     assert entry["trace_id"] == "test-trace"
     assert entry["session_id"] == "test-session"  # ctx.session_id, not trace_ctx.session_id
     assert entry["task_id"] is None
-    # Both are DEPLOYMENT keys now (ADR-0121): the catalog is keyed by model,
-    # not by role. Their equality is what matters — it is what proves nothing
-    # escalated — and it is the invariant that selects the client at
-    # executor.py's `if effective_model_key == role_key`.
-    assert entry["role_key"] == entry["effective_model_key"] == "qwen3.6-35b-thinking"
-    assert entry["escalated"] is False
+    # Both are DEPLOYMENT keys (ADR-0121): the catalog is keyed by model, not
+    # by role. `role_key` is the calling role's own resolution; the image
+    # always routes `effective_model_key` to the pinned `vision` deployment
+    # instead (ADR-0121 T5), so the two always differ.
+    assert entry["role_key"] == "qwen3.6-35b-thinking"
+    assert entry["effective_model_key"] == "claude_sonnet"
+    assert entry["escalated"] is True
 
 
 @pytest.mark.asyncio

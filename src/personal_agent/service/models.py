@@ -62,7 +62,6 @@ class SessionCreate(BaseModel):
     channel: str | None = None
     mode: str = "NORMAL"
     metadata: dict[str, Any] = Field(default_factory=dict)
-    execution_profile: str | None = None
 
 
 class SessionUpdate(BaseModel):
@@ -72,13 +71,6 @@ class SessionUpdate(BaseModel):
     channel: str | None = None
     metadata: dict[str, Any] | None = None
     messages: list[dict[str, Any]] | None = None
-    execution_profile: str | None = None
-
-
-class SessionProfileUpdate(BaseModel):
-    """Request to change a session's server-owned execution profile (ADR-0079)."""
-
-    profile: str
 
 
 class SessionSelectionUpdate(BaseModel):
@@ -130,7 +122,6 @@ class SessionResponse(BaseModel):
     messages: list[dict[str, Any]]
     primary_model_at_creation: str | None = None
     model_config_path: str | None = None
-    execution_profile: str = "local"
     # ADR-0098 D4/D6 (FRE-860) — retention soft-prune tombstone. Non-null
     # means messages were cleared by the retention sweep; without this a
     # purged session is indistinguishable from a genuinely empty/new one.

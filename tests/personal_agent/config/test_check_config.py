@@ -47,9 +47,12 @@ class TestRealRepoMatrixShape:
         assert roles["entity_extraction"] == {"all": "gpt-5.4-mini"}
         assert roles["captains_log"] == {"all": "claude_sonnet"}
         assert roles["insights"] == {"all": "claude_sonnet"}
-        # The two roles whose `divergence: allowed` rows phase 2 collapsed.
+        # `primary`'s `divergence: allowed` row phase 2 collapsed (still present
+        # here, unlike `sub_agent`'s: ADR-0121 T5 (FRE-920, master gate 2026-07-20)
+        # removed that entry — a stale duplicate of the Layer-3 binding, never
+        # actually consulted through this matrix in the first place).
         assert roles["primary"] == {"all": "qwen3.6-35b-thinking"}
-        assert roles["sub_agent"] == {"all": "qwen3.6-35b-instruct"}
+        assert "sub_agent" not in roles
 
     def test_no_role_carries_a_retired_per_profile_key(self) -> None:
         for role, cfg in load_matrix(_REPO_ROOT)["roles"].items():
@@ -237,15 +240,11 @@ class TestComposeDeploymentProfileParsing:
     """Unit coverage for _compose_deployment_profiles's dict/list environment forms."""
 
     def test_dict_form_single_service(self) -> None:
-        compose = {
-            "services": {"gw": {"environment": {"AGENT_DEPLOYMENT_PROFILE": "cloud"}}}
-        }
+        compose = {"services": {"gw": {"environment": {"AGENT_DEPLOYMENT_PROFILE": "cloud"}}}}
         assert _compose_deployment_profiles(compose) == {"cloud"}
 
     def test_list_form_single_service(self) -> None:
-        compose = {
-            "services": {"gw": {"environment": ["AGENT_DEPLOYMENT_PROFILE=cloud"]}}
-        }
+        compose = {"services": {"gw": {"environment": ["AGENT_DEPLOYMENT_PROFILE=cloud"]}}}
         assert _compose_deployment_profiles(compose) == {"cloud"}
 
     def test_two_services_agreeing_returns_one_value(self) -> None:

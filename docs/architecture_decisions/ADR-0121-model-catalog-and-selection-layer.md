@@ -864,3 +864,72 @@ exists would remove the live Cloud pill with no replacement.
 to "4 of 12 differ." By the time phase 2 deleted the second file the two had been made structurally
 identical, and `diff` showed **only comment lines** differing — which is what made the deletion
 provable against a golden that was never rebaselined.
+
+### 2026-07-20 - Step 5 built, AC-9 pending deploy verification (FRE-920)
+
+**Changed By:** cc-build (Sonnet)
+**Reason:** Sequencing step 5 (the assembled seam) built. This entry records what was delivered and
+the design decisions made during the build; it does **not** close the ADR — per the Seam owner note
+above, that happens only once master proves AC-9 on the deployed stack.
+
+**Delivered:** Path removed end to end — the PWA profile pill (`ModelPicker` replaces it, driven by
+the T3 `GET /{id}/config` read endpoint plus a new sessionless `GET /api/v1/config` for a brand-new
+conversation with no DB row yet), the attachment local/cloud chip (vision is now a pinned Layer-3
+role, resolved unconditionally — no per-attachment override survives), the `ClassifiedErrorCard`
+"switch to cloud" escalation (retry is placement-neutral now), the CLI `--profile` flag (replaced by
+`--model`, a `primary` deployment key), and the session `execution_profile` read path (the DB column
+is left vestigial, written a constant `'local'`, never read back through any response model).
+`config/profile.py`, `config/profiles/{local,cloud}.yaml`, and every consumer are deleted —
+completing AC-1(b)'s grep-clean requirement, verified by direct grep over `src/`, `config/`, and
+compose files. The observe view (`/observe`) renders every role's pinned/open status and resolved
+binding, plus the provider table with placement and live availability.
+
+**Design decisions, owner-approved before implementation (plan reviewed by `codex:rescue` first —
+two critical gaps found and fixed pre-implementation: a pre-session picker read/write path, and an
+incomplete `config/profile.py` consumer list):**
+
+1. **`sub_agent` and `artifact_builder`'s binding default changed from `qwen3.6-35b-instruct` to
+   `claude_sonnet`** (`config/model_roles.yaml`). With Path gone there is only one binding per role,
+   and it cannot simultaneously match what both the `local` and `cloud` profiles used to provide.
+   **Corrected at the master gate (2026-07-20):** the build's first pass bounced — it stated the
+   binding was chosen to "preserve the cloud profile's value" (`claude_haiku`, the `cloud` profile's
+   `sub_agent_model`/`artifact_builder_model`), a rationale master could not confirm and that was, on
+   checking with the owner, not the actual decision. The owner directed `claude_sonnet` for both
+   directly. Net effect: a session that previously ran the `local` pill now gets
+   `sub_agent`/`artifact_builder` calls on cloud Claude Sonnet instead of the local Qwen instruct
+   deployment. `artifact_builder`'s real per-build choice remains ADR-0122's job, not this ticket's.
+   The same gate also caught a **stale duplicate**: the top `roles:` matrix in
+   `config/model_roles.yaml` still carried a `sub_agent: { all: qwen3.6-35b-instruct }` entry — never
+   actually consulted for resolution (per that section's own header comment), but drifted from the
+   Layer-3 binding once the binding changed, a two-places-for-one-role trap. Removed with the fix.
+2. **`vision` is a new pinned Layer-3 role**, bound to `claude_sonnet` — it did not exist as a
+   catalog role before this ticket. Matches what both retired profiles' `escalation_model` already
+   pointed at, and the removed code's own comment documented an owner-authorized live-test finding
+   that local Qwen vision reads scanned pages materially worse. `_resolve_vision_routing_key` /
+   `_resolve_document_routing_key` (`orchestrator/executor.py`) collapsed from profile/escalation
+   branching to a single unconditional resolution of this pinned role.
+3. **`GET /api/inference/status` is deleted, not re-keyed to provider**, per §3's literal text —
+   made safe only by the new sessionless `GET /api/v1/config`, which already carries
+   `providers[].available` and covers the pre-session case the profile-keyed endpoint used to paper
+   over via `localStorage` + poll.
+4. **`sessions.execution_profile` stays as a vestigial NOT NULL column**, not dropped by a migration.
+   Nothing reads or writes it meaningfully after this ticket (the repository hardcodes `'local'` on
+   create); dropping the column itself is a separate, lower-risk future cleanup out of this ticket's
+   stated scope (the *read path*, per its own title).
+
+**Two follow-on backend gaps found and fixed during implementation, beyond the reviewed plan:**
+
+- Legacy `POST /chat` did not previously guarantee a selection-store row existed after a session's
+  first turn when no explicit model was supplied — reproducing the exact gap the now-deleted
+  `_profile_role_bridge` existed to paper over. Fixed: `_chat_impl` now upserts the resolved selection
+  whenever the turn just created the session row, matching `/chat/stream`'s existing new-session
+  upsert.
+- A new session's first-turn selection (adopted from the PWA's pre-session picker choice) was
+  persisted but never broadcast over the already-connected WebSocket, so the picker could not
+  converge live without waiting for the next poll or reload. Fixed:
+  `_process_chat_stream_background` now also calls `emit_session_selection` on new-session creation.
+
+**Not yet proven live:** AC-9 requires verification on the deployed stack (PWA picker with no
+surviving Path control; a model switch taking effect on the next turn with `MODEL_CALL_COMPLETED.model`
+matching; survival across reload and WS reconnect; an in-flight turn unaffected by a mid-turn switch).
+That is master's gate, not this entry.

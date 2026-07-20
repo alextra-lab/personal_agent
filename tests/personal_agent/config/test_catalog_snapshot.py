@@ -57,6 +57,33 @@ one confirmed nothing else moved (timeouts and pricing byte-identical):
    ``localhost:8503``), where single-request-at-a-time was literally true; against
    the OVH managed API it was drift, and the provider ceiling governs.
 
+**Rebaselined a second time, deliberately, for ADR-0121 T5 (FRE-920).** T5
+deletes ``config/profile.py`` and ``config/profiles/{local,cloud}.yaml``
+outright (Path is removed), so the profile axis this module used to capture
+(``None`` / ``"local"`` / ``"cloud"``) no longer exists — there is exactly one
+resolution per role now, via its Layer-3 binding. Four deltas, all explicit and
+reviewed, none a side effect:
+
+1. **Profile axis retired.** ``_PROFILES`` and the ``resolve_model_key`` /
+   ``load_profile`` / ``set_current_profile`` imports are gone; every row below
+   is what the removed ``none|*`` cells used to capture — binding-only
+   resolution, now the *only* resolution.
+2. **``sub_agent`` and ``artifact_builder`` binding default: ``qwen3.6-35b-instruct``
+   → ``claude_haiku``.** Owner-decided (2026-07-20): with one binding replacing
+   two profile-specific values, the owner chose to preserve what the (removed)
+   ``cloud`` profile provided rather than the ``local`` one.
+   ``config/model_roles.yaml``'s ``bindings:`` changed accordingly.
+3. **``artifact_builder`` no longer raises.** The old ``none|artifact_builder``
+   cell recorded a raise (no profile bound, no binding fallback existed yet).
+   It now always resolves via its Layer-3 binding — the fail-loud path
+   documented in the (deleted) ``config.profile.resolve_model_key`` no longer
+   applies to any resolution path.
+4. **New role: ``vision``**, pinned to ``claude_sonnet`` — ADR-0121 §5's pinned
+   attachment-routing role, resolved directly by
+   ``orchestrator/executor.py``'s ``_resolve_vision_routing_key`` /
+   ``_resolve_document_routing_key`` for any turn carrying a raster image or a
+   Tier-2 PDF. Did not exist as a Layer-3 role before T5.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write
@@ -74,11 +101,6 @@ from personal_agent.config.model_loader import (
     _load_role_matrix,
     load_model_config,
     resolve_role_model_key,
-)
-from personal_agent.config.profile import (
-    load_profile,
-    resolve_model_key,
-    set_current_profile,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -100,14 +122,11 @@ _MATRIX_ROLES: tuple[str, ...] = (
     "reranker_fallback",
 )
 
-#: Roles resolved through the ExecutionProfile (config/profile.py), whose
-#: callers enter via ``get_llm_client``. Highest-risk rows in the snapshot.
-_PROFILE_ROLES: tuple[str, ...] = ("primary", "sub_agent", "artifact_builder")
-
-#: ExecutionProfile states to capture. ``None`` is the no-profile path — the one
-#: that returns the bare role name today and must keep resolving to the same
-#: model once the catalog is keyed by deployment.
-_PROFILES: tuple[str | None, ...] = (None, "local", "cloud")
+#: Roles resolved purely through their Layer-3 binding (ADR-0121) — since T5
+#: (FRE-920) removed the ExecutionProfile redirect, this is every remaining
+#: resolution path callers enter via ``get_llm_client``/``get_llm_client_for_key``
+#: with no profile involved. Highest-risk rows in the snapshot.
+_BINDING_ROLES: tuple[str, ...] = ("primary", "sub_agent", "artifact_builder", "vision")
 
 
 def _clear_caches() -> None:
@@ -178,45 +197,29 @@ def _definition_of(role: str, *, model_key: str | None = None) -> dict[str, Any]
 
 
 def _capture_resolution() -> dict[str, Any]:
-    """Capture ``(profile, role) -> resolved key + definition``."""
+    """Capture ``role -> resolved key + definition`` (no profile axis since T5)."""
     out: dict[str, Any] = {}
-    for profile_name in _PROFILES:
-        token = None
-        if profile_name is not None:
-            token = set_current_profile(
-                load_profile(profile_name, _REPO_ROOT / "config" / "profiles")
-            )
+
+    for role in _BINDING_ROLES:
+        cell = f"binding|{role}"
         try:
-            for role in _PROFILE_ROLES:
-                cell = f"{profile_name or 'none'}|{role}"
-                try:
-                    # Mirror what LocalLLMClient/factory actually do: the
-                    # profile supplies a key only when one is active, otherwise
-                    # the Layer-3 binding decides. Measuring resolve_model_key
-                    # alone would measure a path no consumer takes.
-                    key = resolve_model_key(role) if profile_name else None
-                    out[cell] = {
-                        "key": key or role,
-                        "definition": _definition_of(role, model_key=key),
-                    }
-                except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
-                    out[cell] = {"raises": type(exc).__name__}
+            out[cell] = {
+                "key": role,
+                "definition": _definition_of(role),
+            }
+        except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
+            out[cell] = {"raises": type(exc).__name__}
 
-            for role in _MATRIX_ROLES:
-                cell = f"{profile_name or 'none'}|{role}"
-                try:
-                    key = resolve_role_model_key(role, config_path=_CATALOG, root=_REPO_ROOT)
-                    out[cell] = {
-                        "key": key,
-                        "definition": _definition_of(role, model_key=key),
-                    }
-                except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
-                    out[cell] = {"raises": type(exc).__name__}
-        finally:
-            if token is not None:
-                from personal_agent.config.profile import _current_profile
-
-                _current_profile.reset(token)
+    for role in _MATRIX_ROLES:
+        cell = f"binding|{role}"
+        try:
+            key = resolve_role_model_key(role, config_path=_CATALOG, root=_REPO_ROOT)
+            out[cell] = {
+                "key": key,
+                "definition": _definition_of(role, model_key=key),
+            }
+        except Exception as exc:  # noqa: BLE001 — a raise IS the behaviour
+            out[cell] = {"raises": type(exc).__name__}
     return out
 
 

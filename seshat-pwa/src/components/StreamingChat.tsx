@@ -5,10 +5,10 @@ import { useRouter } from 'next/navigation';
 
 import Link from 'next/link';
 
-import { getSession, getSessionMessages, setSessionProfile, type UploadedAttachment } from '@/lib/agui-client';
+import { getSession, getSessionMessages, setSessionSelection, type UploadedAttachment } from '@/lib/agui-client';
 import { generateUUID } from '@/lib/uuid';
-import type { ExecutionProfile } from '@/lib/types';
 import { useSSEStream } from '@/hooks/useSSEStream';
+import { useSessionConfig } from '@/hooks/useSessionConfig';
 
 import { resolutionLabel } from '@/lib/constraint-options';
 
@@ -23,7 +23,6 @@ import { SessionList } from './SessionList';
 import { ToolIndicator } from './ToolIndicator';
 import { TurnStatusBar } from './TurnStatusBar';
 
-const PROFILE_STORAGE_KEY = 'seshat_profile';
 const LAST_SESSION_KEY = 'seshat_last_session_id';
 // FRE-575 (fold-in to FRE-573): per-session key for last completed engagement tool state.
 const toolStateKey = (sid: string) => `seshat-tool-state-${sid}`;
@@ -48,19 +47,23 @@ interface StreamingChatProps {
 export function StreamingChat({ sessionId }: StreamingChatProps) {
   const router = useRouter();
 
-  const [profile, setProfile] = useState<ExecutionProfile>(() => {
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem(PROFILE_STORAGE_KEY);
-      if (stored === 'local' || stored === 'cloud') return stored as ExecutionProfile;
-    }
-    return 'local';
-  });
+  // ADR-0121 §4: no client-side default — a brand-new conversation's picker
+  // choice lives here only until the first message persists it server-side.
+  const [pendingSelection, setPendingSelection] = useState<string | null>(null);
 
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [lastUserMessage, setLastUserMessage] = useState<string>('');
   const [lastAttachments, setLastAttachments] = useState<UploadedAttachment[]>([]);
   const [sessionTurnCount, setSessionTurnCount] = useState<number | null>(null);
+
+  const {
+    roles: configRoles,
+    hydrated: configHydrated,
+    refetch: refetchConfig,
+  } = useSessionConfig(sessionId);
+  const modelCandidates = configRoles.primary?.candidates ?? [];
+  const selectedModelKey = pendingSelection ?? configRoles.primary?.resolved ?? null;
 
   useEffect(() => {
     if (!isDrawerOpen) return;
@@ -71,30 +74,24 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     return () => document.removeEventListener('keydown', handler);
   }, [isDrawerOpen]);
 
-  const handleProfileChange = useCallback(
-    (p: ExecutionProfile) => {
-      const previous = profile;
-      // Optimistic update + fast-paint cache.
-      setProfile(p);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(PROFILE_STORAGE_KEY, p);
-      }
-      if (!sessionId) return;
-      // ADR-0079 / FRE-419: the toggle is a server-side write. Revert the pill
-      // if the write fails so the UI never diverges from the server.
-      void setSessionProfile(sessionId, p).catch((err: unknown) => {
-        // 404 = session not in DB yet (new session, no messages sent). The profile
-        // is already in localStorage and will be sent with the first message —
-        // no revert needed.
-        if (err instanceof Error && err.message.includes('404')) return;
-        console.error('Failed to set session profile; reverting', err);
-        setProfile(previous);
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(PROFILE_STORAGE_KEY, previous);
-        }
-      });
+  const handleModelChange = useCallback(
+    (key: string) => {
+      setPendingSelection(key);
+      if (!sessionId) return; // No DB row yet — sent with the first message instead.
+      void setSessionSelection(sessionId, 'primary', key)
+        .then(() => {
+          setPendingSelection(null);
+          refetchConfig();
+        })
+        .catch((err: unknown) => {
+          // 404 = session not in DB yet (new session, no messages sent). The
+          // choice is held in pendingSelection and sent with the first message.
+          if (err instanceof Error && err.message.includes('404')) return;
+          console.error('Failed to set model selection', err);
+          setPendingSelection(null);
+        });
     },
-    [sessionId, profile],
+    [sessionId, refetchConfig],
   );
 
   const {
@@ -103,7 +100,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     isReconnecting,
     activeTools,
     turnStatus,
-    serverProfile,
+    serverSelection,
     pendingConstraint,
     resolvedConstraints,
     cancelled,
@@ -121,16 +118,16 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     seedTurnStatus,
   } = useSSEStream();
 
-  // Reconcile the pill when the server broadcasts a profile change to the
-  // active socket (ADR-0079 / FRE-419 — e.g. a change made elsewhere).
+  // Reconcile the picker when the server broadcasts a selection change to the
+  // active socket (ADR-0121 §4 — e.g. a change made elsewhere, or the live
+  // confirmation of a selection this tab just sent with a new session's first
+  // message).
   useEffect(() => {
-    if (serverProfile && serverProfile !== profile) {
-      setProfile(serverProfile);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(PROFILE_STORAGE_KEY, serverProfile);
-      }
+    if (serverSelection && serverSelection.role === 'primary') {
+      setPendingSelection(null);
+      refetchConfig();
     }
-  }, [serverProfile, profile]);
+  }, [serverSelection, refetchConfig]);
 
   // Hydrate message history from the backend when the session changes.
   useEffect(() => {
@@ -165,17 +162,12 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         if (!cancelled) setIsLoadingHistory(false);
       });
 
-    // ADR-0079 / FRE-419: hydrate the profile pill from the server (source of
-    // truth) so an iOS reload / second device can't leave it on the cached
-    // `local` default. 404 (new session) keeps the cached value.
+    // FRE-426: also hydrate turn/cost status. Model-selection hydration is
+    // handled separately by useSessionConfig (ADR-0121 §4).
     getSession(sessionId)
       .then((s) => {
         if (cancelled || s === null) return;
-        setProfile(s.execution_profile);
         if (s.turn_count !== undefined) setSessionTurnCount(s.turn_count);
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(PROFILE_STORAGE_KEY, s.execution_profile);
-        }
         // FRE-426: seed the status bar so context + cost show on mount/switch,
         // before the first live turn_status. Corrected by the next turn.
         if (s.context_tokens !== undefined && s.context_max !== undefined) {
@@ -231,9 +223,9 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     localStorage.setItem(LAST_SESSION_KEY, sessionId);
     setLastUserMessage(text);
     setLastAttachments(attachments);
-    // ADR-0079: send the pill so a NEW session is established with the user's
-    // selection; the server ignores it for an existing session (stored wins).
-    sendMessage(text, sessionId, profile, attachments);
+    // ADR-0121 §4: send the picker's choice so a NEW session adopts it; the
+    // server ignores it for an existing session (stored selection wins).
+    sendMessage(text, sessionId, pendingSelection ?? undefined, attachments);
   };
 
   const handleInterruptChoice = (choice: string) => {
@@ -291,6 +283,16 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             >
               <span aria-hidden="true">📎</span>
               Artifacts
+            </Link>
+
+            {/* Observe nav link — ADR-0121 §5 (FRE-920): resolved bindings + provider table */}
+            <Link
+              href={sessionId ? `/observe?session=${sessionId}` : '/observe'}
+              onClick={() => setIsDrawerOpen(false)}
+              className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 border-b border-slate-700/50 transition-colors"
+            >
+              <span aria-hidden="true">🔍</span>
+              Observe
             </Link>
 
             {/* Location consent toggle — FRE-230 (hidden when operator gate off) */}
@@ -394,15 +396,6 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
                         }
                       : undefined
                   }
-                  onSwitchToCloud={
-                    lastUserMessage
-                      ? () => {
-                          dismissClassifiedError();
-                          handleProfileChange('cloud');
-                          handleSend(lastUserMessage, lastAttachments);
-                        }
-                      : undefined
-                  }
                   onDismiss={dismissClassifiedError}
                 />
               </div>
@@ -476,8 +469,10 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
           disabled={pendingInterrupt !== null || pendingApproval !== null}
           isStreaming={isStreaming}
           onStop={sendUserCancel}
-          profile={profile}
-          onProfileChange={handleProfileChange}
+          candidates={modelCandidates}
+          selectedModelKey={selectedModelKey}
+          modelHydrated={configHydrated || pendingSelection !== null}
+          onModelChange={handleModelChange}
         />
       </footer>
     </div>

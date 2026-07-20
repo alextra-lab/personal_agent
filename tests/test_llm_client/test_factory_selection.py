@@ -16,7 +16,6 @@ from collections.abc import Iterator
 import pytest
 
 from personal_agent.config import load_model_config
-from personal_agent.config.profile import _current_profile
 from personal_agent.config.selection import _current_selection, set_current_selection
 from personal_agent.llm_client.client import LocalLLMClient
 from personal_agent.llm_client.factory import get_llm_client
@@ -25,13 +24,11 @@ from personal_agent.llm_client.litellm_client import LiteLLMClient
 
 @pytest.fixture(autouse=True)
 def _reset_context() -> Iterator[None]:
-    """No active profile or selection leaks between tests in this module."""
-    p_token = _current_profile.set(None)
+    """No active selection leaks between tests in this module."""
     s_token = _current_selection.set({})
     try:
         yield
     finally:
-        _current_profile.reset(p_token)
         _current_selection.reset(s_token)
 
 

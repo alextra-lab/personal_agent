@@ -334,7 +334,6 @@ async def _resolve_one_document(
                 content_type=attachment.content_type,
                 title=attachment.title,
                 r2_key=attachment.r2_key,
-                processing_target=attachment.processing_target,
                 dropped_pages=tuple(sorted(set(attachment.requested_pages))),
             )
             if attachment.requested_pages
@@ -403,7 +402,6 @@ async def _resolve_one_document(
                 content_type=attachment.content_type,
                 title=attachment.title,
                 r2_key=attachment.r2_key,
-                processing_target=attachment.processing_target,
                 dropped_pages=tuple(still_dropped_1idx),
             )
     else:
@@ -425,7 +423,6 @@ async def _resolve_one_document(
                 content_type=attachment.content_type,
                 title=attachment.title,
                 r2_key=attachment.r2_key,
-                processing_target=attachment.processing_target,
                 dropped_pages=tuple(dropped_1idx),
             )
 

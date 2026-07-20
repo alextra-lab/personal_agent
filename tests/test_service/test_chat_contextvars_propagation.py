@@ -84,6 +84,9 @@ async def test_chat_rebinds_real_session_id_for_a_new_session(
     session = SimpleNamespace(session_id=new_session_id, messages=[], execution_profile="local")
     mock_repo = MagicMock()
     mock_repo.create = AsyncMock(return_value=session)
+    # ADR-0121 §4: selection resolution re-fetches by session_id (the session
+    # now exists, just created above) — matches the other tests in this file.
+    mock_repo.get = AsyncMock(return_value=session)
     mock_repo.append_message = AsyncMock(return_value=None)
     mock_repo_cls.return_value = mock_repo
 

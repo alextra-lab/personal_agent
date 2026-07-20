@@ -611,7 +611,6 @@ class TestIncludedDroppedRangeDisclosure:
             artifact_id="doc-xyz",
             title="scan.pdf",
             r2_key="upload/u/g/scan.pdf",
-            processing_target="cloud",
         )
         store = _mock_store({attachment.r2_key: pdf_bytes})
 
@@ -631,7 +630,6 @@ class TestIncludedDroppedRangeDisclosure:
         assert offer.artifact_id == "doc-xyz"
         assert offer.title == "scan.pdf"
         assert offer.r2_key == "upload/u/g/scan.pdf"
-        assert offer.processing_target == "cloud"
         assert offer.dropped_pages == (3, 4, 5)
 
 

@@ -73,7 +73,6 @@ def _pending(
                     content_type="application/pdf",
                     title="report.pdf",
                     r2_key="uploads/report.pdf",
-                    processing_target=None,
                     dropped_pages=(
                         24,
                         25,
@@ -431,7 +430,6 @@ class TestReinjectionTopology:
                 content_type="application/pdf",
                 title="a.pdf",
                 r2_key="uploads/a.pdf",
-                processing_target=None,
                 dropped_pages=(24, 25, 26),
             ),
             DocumentContinuationOffer(
@@ -439,7 +437,6 @@ class TestReinjectionTopology:
                 content_type="application/pdf",
                 title="b.pdf",
                 r2_key="uploads/b.pdf",
-                processing_target=None,
                 dropped_pages=(50, 51, 52),
             ),
         )
@@ -516,7 +513,6 @@ class TestAC4EndToEndContinuation:
             content_type=offer.content_type,
             title=offer.title,
             r2_key=offer.r2_key,
-            processing_target=offer.processing_target,
             requested_pages=offer.dropped_pages,
         )
 
@@ -573,7 +569,6 @@ class TestStepInitMergesContinuationOffers:
             content_type="application/pdf",
             title="a.pdf",
             r2_key="upload/u/g/a.pdf",
-            processing_target=None,
             dropped_pages=(10, 11, 12),
         )
         existing_pending = {
@@ -583,7 +578,6 @@ class TestStepInitMergesContinuationOffers:
                     "content_type": "application/pdf",
                     "title": "b.pdf",
                     "r2_key": "upload/u/g/b.pdf",
-                    "processing_target": None,
                     "dropped_pages": [50, 51, 52],
                 }
             ],
@@ -656,7 +650,6 @@ class TestStepInitMergesContinuationOffers:
             content_type="application/pdf",
             title="a.pdf",
             r2_key="upload/u/g/a.pdf",
-            processing_target=None,
             dropped_pages=(10, 11, 12),
         )
         existing_pending = {
@@ -666,7 +659,6 @@ class TestStepInitMergesContinuationOffers:
                     "content_type": "application/pdf",
                     "title": "a.pdf",
                     "r2_key": "upload/u/g/a.pdf",
-                    "processing_target": None,
                     "dropped_pages": [13, 14, 15],  # leftover from a partial match
                 }
             ],

@@ -102,11 +102,10 @@ def get_llm_client(role_name: str = "primary", *, selection_key: str | None = No
        honoured only for an ``open`` role naming a valid, kind-compatible key;
        otherwise the role's binding default wins. A user's model choice therefore
        never reaches a pinned writer role, by any route.
-    2. **Profile fallback** — when no selection is carried, the active
-       ExecutionProfile's redirect still applies (cloud ``sub_agent`` →
-       ``claude_haiku``), unchanged, until Path is removed in ADR-0121 T5. In a
-       chat turn ``primary`` always carries a selection, so its resolution is
-       store-authoritative and does not consult the profile.
+    2. **Binding default** — when no selection is carried, the role's own
+       ``config/model_roles.yaml`` binding decides (ADR-0121 T5, FRE-920: the
+       ``ExecutionProfile`` redirect this used to fall back to is gone — Path is
+       removed).
 
     ``local`` placement → :class:`LocalLLMClient`; any cloud placement →
     :class:`LiteLLMClient`.
@@ -125,7 +124,7 @@ def get_llm_client(role_name: str = "primary", *, selection_key: str | None = No
         role_name: The factory role name (default: ``"primary"``).
         selection_key: An advisory selected deployment key for this role, applied
             through the guardrail. ``None`` falls back to the per-turn selection
-            context, then the profile redirect.
+            context, then the role's binding default.
 
     Returns:
         An LLM client instance matching the resolved deployment's provider placement.
@@ -146,12 +145,8 @@ def get_llm_client(role_name: str = "primary", *, selection_key: str | None = No
         # else the role's binding default (fail-closed, ADR-0121 §6 / AC-4c).
         model_key = resolve_selected_deployment(role_name, selection, config)
     else:
-        # No selection carried — the ExecutionProfile redirect still governs the
-        # open roles it always has (sub_agent/artifact_builder), until T5 removes
-        # Path. Only pass a key when a profile actually redirects the role.
-        from personal_agent.config.profile import resolve_profile_redirect
-
-        model_key = resolve_profile_redirect(role_name)
+        # No selection carried — the role's own binding decides (ADR-0121 T5).
+        model_key = None
 
     resolved_key, model_def = resolve_role_target(role_name, model_key=model_key, config=config)
 
@@ -176,10 +171,11 @@ def get_llm_client_for_key(model_key: str, budget_role: str = "skill_routing") -
     ADR, where a *model* proposes a sub-agent key, routes that key through the
     guarded path for the same reason.
 
-    Used for components that need a *specific* model regardless of the active
-    ExecutionProfile — e.g. the Phase C skill router, which must use a remote
-    model even when the primary agent runs locally (the local SLM server is
-    currently single-threaded; running routing on it would serialize calls).
+    Used for components that need a *specific* model regardless of the
+    current selection — e.g. the Phase C skill router, which must use a
+    remote model even when the primary agent runs locally (the local SLM
+    server is currently single-threaded; running routing on it would
+    serialize calls).
     Passing such a config-resolved key to :func:`get_llm_client` instead would
     silently mis-bill spend, since ``budget_role_for`` cannot map a resolved
     model key back to its budget lane (FRE-869).

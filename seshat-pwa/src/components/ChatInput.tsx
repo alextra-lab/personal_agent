@@ -10,17 +10,20 @@ import {
   type DragEvent,
 } from 'react';
 
-import type { ExecutionProfile } from '@/lib/types';
+import type { DeploymentView } from '@/lib/types';
 import type { UploadedAttachment, UploadState } from '@/lib/agui-client';
 import { presignUpload, uploadToR2, completeUpload } from '@/lib/agui-client';
-import { useInferenceStatus } from '@/hooks/useInferenceStatus';
+import { ModelPicker } from './ModelPicker';
 
 interface ChatInputProps {
   onSend: (text: string, attachments: UploadedAttachment[]) => void;
   disabled?: boolean;
   placeholder?: string;
-  profile: ExecutionProfile;
-  onProfileChange: (profile: ExecutionProfile) => void;
+  /** The `primary` role's selectable candidates (ADR-0121 §3). */
+  candidates: DeploymentView[];
+  selectedModelKey: string | null;
+  modelHydrated: boolean;
+  onModelChange: (key: string) => void;
   /** While true the action button becomes a Stop control (ADR-0076). */
   isStreaming?: boolean;
   /** Invoked when the Stop button is tapped (sends USER_CANCEL). */
@@ -32,17 +35,8 @@ const ACCEPTED_TYPES =
 const ACCEPTED_TYPE_SET = new Set(ACCEPTED_TYPES.split(','));
 
 /**
- * Whether a completed attachment of this content type carries the per-attachment
- * Auto/Cloud/Local processing-target override (ADR-0101 §8a images / ADR-0102 §7a
- * documents). v1 document scope is `application/pdf` only.
- */
-function canOverrideProcessingTarget(fileType: string): boolean {
-  return fileType.startsWith('image/') || fileType === 'application/pdf';
-}
-
-/**
- * Chat input bar with textarea, inline model toggle, send button, and
- * user-upload support (FRE-369): file picker, drag-drop, paste-image.
+ * Chat input bar with textarea, model picker, send button, and user-upload
+ * support (FRE-369): file picker, drag-drop, paste-image.
  *
  * Behaviour:
  * - Cmd+Enter (macOS) or Ctrl+Enter (Win/Linux) sends; Enter inserts a newline.
@@ -50,17 +44,17 @@ function canOverrideProcessingTarget(fileType: string): boolean {
  * - The textarea auto-grows up to 5 lines.
  * - Footer padding accounts for iOS home-indicator via safe-area-inset-bottom.
  * - Send is blocked while any upload is in-progress (status !== 'complete').
- * - Completed image (ADR-0101 §8a, FRE-692) and PDF (ADR-0102 §7a, FRE-687) attachments
- *   carry an Auto/Cloud/Local cycle button; the chosen value (or 'none' if untouched) is
- *   sent as `processing_target`. Auto now defaults to the cloud path server-side
- *   (FRE-886), so the chip labels the Auto state "Auto (Cloud)" to stay honest.
+ * - Attachments carry no local/cloud override (ADR-0121 T5): vision is a
+ *   pinned role, resolved server-side with no per-attachment choice.
  */
 export function ChatInput({
   onSend,
   disabled = false,
   placeholder = 'Message Seshat...',
-  profile,
-  onProfileChange,
+  candidates,
+  selectedModelKey,
+  modelHydrated,
+  onModelChange,
   isStreaming = false,
   onStop,
 }: ChatInputProps) {
@@ -69,11 +63,6 @@ export function ChatInput({
   const [isDragOver, setIsDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const inference = useInferenceStatus(profile);
-  const pathUnavailable = inference.status === 'down';
-  const activeLabel = profile === 'local' ? 'Local' : 'Cloud';
-  const otherLabel = profile === 'local' ? 'Cloud' : 'Local';
 
   // ---------------------------------------------------------------------------
   // Upload flow
@@ -124,22 +113,6 @@ export function ChatInput({
     setUploads((prev) => prev.filter((u) => u.id !== id));
   };
 
-  /** Cycle an attachment's processing-target override: Auto → Cloud → Local → Auto. */
-  const cycleProcessingTarget = (id: string) => {
-    setUploads((prev) =>
-      prev.map((u) => {
-        if (u.id !== id) return u;
-        const next =
-          u.processingTarget === undefined
-            ? 'cloud'
-            : u.processingTarget === 'cloud'
-              ? 'local'
-              : undefined;
-        return { ...u, processingTarget: next };
-      }),
-    );
-  };
-
   // ---------------------------------------------------------------------------
   // Send
   // ---------------------------------------------------------------------------
@@ -148,7 +121,7 @@ export function ChatInput({
     e?.preventDefault();
     const trimmed = text.trim();
     const anyUploading = uploads.some((u) => u.status === 'uploading');
-    if (!trimmed || disabled || pathUnavailable || anyUploading) return;
+    if (!trimmed || disabled || anyUploading) return;
 
     const completed: UploadedAttachment[] = uploads
       .filter((u) => u.status === 'complete' && u.artifact_id)
@@ -156,7 +129,6 @@ export function ChatInput({
         artifact_id: u.artifact_id!,
         content_type: u.file.type,
         title: u.file.name,
-        processing_target: u.processingTarget ?? 'none',
       }));
 
     onSend(trimmed, completed);
@@ -227,15 +199,11 @@ export function ChatInput({
   };
 
   // ---------------------------------------------------------------------------
-  // Render helpers
+  // Render
   // ---------------------------------------------------------------------------
 
-  const toggleProfile = () => {
-    onProfileChange(profile === 'local' ? 'cloud' : 'local');
-  };
-
   const anyUploading = uploads.some((u) => u.status === 'uploading');
-  const canSend = text.trim().length > 0 && !disabled && !pathUnavailable && !anyUploading;
+  const canSend = text.trim().length > 0 && !disabled && !anyUploading;
 
   return (
     <div
@@ -244,18 +212,6 @@ export function ChatInput({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Why Send is disabled — name the unavailable path + offer the switch. */}
-      {pathUnavailable && (
-        <button
-          type="button"
-          onClick={toggleProfile}
-          className="w-full px-4 pt-2 text-left text-xs text-amber-300/90 hover:text-amber-200 transition-colors"
-        >
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 mr-1.5 align-middle" />
-          {activeLabel} is currently unavailable. Tap to switch to {otherLabel}.
-        </button>
-      )}
-
       {/* Attachment chips */}
       {uploads.length > 0 && (
         <div className="flex flex-wrap gap-1.5 px-4 pt-2">
@@ -295,33 +251,6 @@ export function ChatInput({
               {u.status === 'complete' && <span>✓</span>}
               {u.status === 'error' && <span>✗</span>}
               <span className="max-w-[120px] truncate">{u.file.name}</span>
-              {u.status === 'complete' && canOverrideProcessingTarget(u.file.type) && (
-                <button
-                  type="button"
-                  onClick={() => cycleProcessingTarget(u.id)}
-                  className={`px-1 rounded ${
-                    u.processingTarget === 'cloud'
-                      ? 'text-amber-300'
-                      : u.processingTarget === 'local'
-                        ? 'text-emerald-300'
-                        : 'text-slate-400'
-                  }`}
-                  aria-label={`Set processing target for ${u.file.name}, currently ${
-                    u.processingTarget === 'cloud'
-                      ? 'Cloud'
-                      : u.processingTarget === 'local'
-                        ? 'Local'
-                        : 'Auto (routes to Cloud)'
-                  }`}
-                  title="Cycle per-attachment processing target (Auto → Cloud by default / Cloud / Local)"
-                >
-                  {u.processingTarget === 'cloud'
-                    ? 'Cloud'
-                    : u.processingTarget === 'local'
-                      ? 'Local'
-                      : 'Auto (Cloud)'}
-                </button>
-              )}
               <button
                 type="button"
                 onClick={() => removeUpload(u.id)}
@@ -340,24 +269,12 @@ export function ChatInput({
         className="flex items-center gap-2 px-4 pt-3"
         style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.5rem)' }}
       >
-        {/* Compact model toggle */}
-        <button
-          type="button"
-          onClick={toggleProfile}
-          className="flex-shrink-0 flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200 transition-colors whitespace-nowrap"
-          title={profile === 'local' ? 'Switch to Cloud (Claude Sonnet)' : 'Switch to Local (Qwen)'}
-        >
-          <span
-            className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-              pathUnavailable
-                ? 'bg-red-500'
-                : profile === 'local'
-                  ? 'bg-emerald-400'
-                  : 'bg-amber-400'
-            }`}
-          />
-          {profile === 'local' ? 'Local' : 'Cloud'}
-        </button>
+        <ModelPicker
+          candidates={candidates}
+          selectedKey={selectedModelKey}
+          hydrated={modelHydrated}
+          onSelect={onModelChange}
+        />
 
         {/* Hidden file input */}
         <input

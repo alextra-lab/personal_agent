@@ -84,15 +84,14 @@ class TestClassifyLLMServerError:
     def test_reason_non_empty(self) -> None:
         assert classify_error(LLMServerError("msg")).reason
 
-    def test_next_step_mentions_retry_and_cloud(self) -> None:
+    def test_next_step_mentions_retry(self) -> None:
         result = classify_error(LLMServerError("msg"))
         combined = (result.reason + " " + result.next_step).lower()
-        assert "retry" in combined or "cloud" in combined
+        assert "retry" in combined
 
-    def test_actions_include_retry_and_switch_to_cloud(self) -> None:
+    def test_actions_include_retry(self) -> None:
         actions = classify_error(LLMServerError("msg")).actions
         assert "retry" in actions
-        assert "switch_to_cloud" in actions
 
     def test_returns_classified_error(self) -> None:
         assert isinstance(classify_error(LLMServerError("e")), ClassifiedError)
@@ -106,10 +105,9 @@ class TestClassifyLLMTimeout:
         result = classify_error(LLMTimeout("msg"))
         assert "timeout" in result.reason.lower() or "timed out" in result.reason.lower()
 
-    def test_actions_include_retry_and_switch_to_cloud(self) -> None:
+    def test_actions_include_retry(self) -> None:
         actions = classify_error(LLMTimeout("msg")).actions
         assert "retry" in actions
-        assert "switch_to_cloud" in actions
 
 
 class TestClassifyLLMConnectionError:
@@ -203,12 +201,12 @@ class TestClassifyGenericFallback:
 
 
 # ---------------------------------------------------------------------------
-# Path-aware copy + actions (FRE-415)
+# Placement-neutral copy + actions (ADR-0121 T5, FRE-920)
 # ---------------------------------------------------------------------------
 
 
-class TestClassifyCloudPath:
-    """On the cloud path the copy is not "local" and switch_to_cloud is omitted."""
+class TestClassifyPlacementNeutral:
+    """Path is removed — no "switch_to_cloud" action, no "local"/"cloud" wording."""
 
     @pytest.mark.parametrize(
         "error",
@@ -218,37 +216,9 @@ class TestClassifyCloudPath:
             LLMConnectionError("ECONNREFUSED"),
         ],
     )
-    def test_cloud_omits_switch_to_cloud(self, error: Exception) -> None:
-        result = classify_error(error, is_cloud=True)
+    def test_no_switch_to_cloud_action(self, error: Exception) -> None:
+        result = classify_error(error)
         assert "switch_to_cloud" not in result.actions
         assert "retry" in result.actions
         assert "local" not in (result.reason + " " + result.next_step).lower()
-
-    @pytest.mark.parametrize(
-        "error",
-        [
-            LLMServerError("530"),
-            LLMTimeout("timed out"),
-            LLMConnectionError("ECONNREFUSED"),
-        ],
-    )
-    def test_local_keeps_switch_to_cloud(self, error: Exception) -> None:
-        result = classify_error(error, is_cloud=False)
-        assert "switch_to_cloud" in result.actions
-
-    def test_resolves_is_cloud_from_active_profile(self) -> None:
-        """With no explicit flag, is_cloud is read from the active profile."""
-        from personal_agent.config.profile import (
-            _current_profile,
-            load_profile,
-            set_current_profile,
-        )
-
-        token = set_current_profile(load_profile("cloud"))
-        try:
-            result = classify_error(LLMServerError("530"))
-        finally:
-            _current_profile.reset(token)
-
-        assert "switch_to_cloud" not in result.actions
-        assert "local" not in result.reason.lower()
+        assert "cloud" not in (result.reason + " " + result.next_step).lower()

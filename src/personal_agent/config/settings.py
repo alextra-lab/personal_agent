@@ -829,21 +829,6 @@ class AppConfig(BaseSettings):
             "Owner-tunable via AGENT_ATTACHMENT_COST_CONFIRMATION_THRESHOLD_USD."
         ),
     )
-    attachment_default_processing_target: Literal["cloud", "local"] = Field(
-        default="cloud",
-        alias="AGENT_ATTACHMENT_DEFAULT_PROCESSING_TARGET",
-        description=(
-            "Effective processing_target for an attachment with no per-attachment "
-            "override ('Auto') — images (ADR-0101 §8a) and PDFs (ADR-0102 §7a). "
-            "'cloud' (default, FRE-886): Auto routes straight to the profile's cloud "
-            "escalation model, same as an explicit 'cloud' override (cost-gated) — "
-            "the local Qwen vision path produced a materially worse read than cloud "
-            "Sonnet on a live scanned-page test. 'local' restores the pre-FRE-886 "
-            "default: resolve the profile's own model, escalating only if the "
-            "profile's allow_cloud_escalation permits. "
-            "Env var: AGENT_ATTACHMENT_DEFAULT_PROCESSING_TARGET"
-        ),
-    )
     document_text_density_floor_per_page: int = Field(
         default=100,
         gt=0,
@@ -1916,20 +1901,6 @@ class AppConfig(BaseSettings):
         ge=1,
         le=100,
         description="Neo4j vector query top_k before per-session filtering.",
-    )
-
-    # Execution Profiles (ADR-0044, FRE-207)
-    default_profile: str = Field(
-        default="local",
-        description=(
-            "Default execution profile name (e.g. 'local', 'cloud'). "
-            "Used when no profile is explicitly specified for a conversation. "
-            "Must match a file in profiles_dir."
-        ),
-    )
-    profiles_dir: str = Field(
-        default="config/profiles",
-        description="Directory containing execution profile YAML files (ADR-0044).",
     )
 
     # Seshat API Gateway (FRE-206)

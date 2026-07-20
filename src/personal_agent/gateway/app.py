@@ -30,6 +30,7 @@ from personal_agent.gateway.feedback_api import router as feedback_router
 from personal_agent.gateway.knowledge_api import router as knowledge_router
 from personal_agent.gateway.observation_api import router as observation_router
 from personal_agent.gateway.route_trace_api import router as route_trace_router
+from personal_agent.gateway.session_api import config_router
 from personal_agent.gateway.session_api import router as session_router
 from personal_agent.gateway.sub_agent_capture_api import router as sub_agent_capture_router
 from personal_agent.telemetry import get_logger
@@ -87,6 +88,7 @@ def create_gateway_router() -> APIRouter:
     root = APIRouter(prefix="/api/v1")
     root.include_router(knowledge_router)
     root.include_router(session_router)
+    root.include_router(config_router)
     root.include_router(observation_router)
     root.include_router(route_trace_router)
     root.include_router(sub_agent_capture_router)

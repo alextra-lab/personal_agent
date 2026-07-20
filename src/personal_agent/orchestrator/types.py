@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
 
 from personal_agent.governance.models import Mode
@@ -160,8 +160,6 @@ class AttachmentRef:
         content_type: MIME type of the upload.
         title: Display filename.
         r2_key: Object key for the credentialed ``store.get(r2_key)`` byte fetch (§3).
-        processing_target: Optional per-attachment cloud/local override (§8a).
-            ``None`` follows the conversation's bound ExecutionProfile.
         requested_pages: Optional 1-indexed page numbers to force-select for a
             Tier-2 PDF, bypassing salience auto-selection (ADR-0102 §4 /
             FRE-685). A resolution directive, not upload metadata — set only
@@ -174,7 +172,6 @@ class AttachmentRef:
     content_type: str
     title: str
     r2_key: str
-    processing_target: Literal["cloud", "local"] | None = None
     requested_pages: tuple[int, ...] | None = None
 
 
@@ -220,7 +217,6 @@ class DocumentContinuationOffer:
         content_type: MIME type (``application/pdf`` for this record).
         title: Display filename, echoed in disclosures.
         r2_key: Object key for the credentialed ``store.get(r2_key)`` re-fetch.
-        processing_target: The original attachment's cloud/local override.
         dropped_pages: 1-indexed page numbers not included this turn.
     """
 
@@ -228,7 +224,6 @@ class DocumentContinuationOffer:
     content_type: str
     title: str
     r2_key: str
-    processing_target: Literal["cloud", "local"] | None
     dropped_pages: tuple[int, ...]
 
 

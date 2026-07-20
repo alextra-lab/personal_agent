@@ -4,26 +4,23 @@
  * ClassifiedErrorCard — renders a RUN_ERROR transport event (FRE-398).
  *
  * Surfaces the classified reason and next-step guidance inline in the
- * message stream. Action buttons (retry, switch_to_cloud, stop) are
- * labelled per the backend action ids; retry and switch-to-cloud are
- * wired in FRE-399.
+ * message stream. Action buttons (retry, stop) are labelled per the backend
+ * action ids (FRE-399). ADR-0121 T5 (FRE-920): Path is removed, so there is
+ * no "switch to cloud" escalation action — retrying means retrying.
  */
 
 import type { ClassifiedErrorData } from '@/lib/types';
 
 export interface ClassifiedErrorCardProps {
   error: ClassifiedErrorData;
-  /** Re-send the last message with the current profile (FRE-399). */
+  /** Re-send the last message on the current selection (FRE-399). */
   onRetry?: () => void;
-  /** Switch to cloud profile and re-send the last message (FRE-399). */
-  onSwitchToCloud?: () => void;
   /** Dismiss the card. */
   onDismiss: () => void;
 }
 
 const ACTION_LABELS: Record<string, string> = {
   retry: 'Retry',
-  switch_to_cloud: 'Switch to Cloud',
   stop: 'Dismiss',
 };
 
@@ -40,7 +37,6 @@ const CATEGORY_TITLES: Record<ClassifiedErrorData['category'], string> = {
 export function ClassifiedErrorCard({
   error,
   onRetry,
-  onSwitchToCloud,
   onDismiss,
 }: ClassifiedErrorCardProps) {
   const title = CATEGORY_TITLES[error.category] ?? 'Turn failed';
@@ -49,10 +45,6 @@ export function ClassifiedErrorCard({
     switch (actionId) {
       case 'retry':
         if (onRetry) onRetry();
-        else onDismiss();
-        break;
-      case 'switch_to_cloud':
-        if (onSwitchToCloud) onSwitchToCloud();
         else onDismiss();
         break;
       case 'stop':

@@ -486,65 +486,8 @@ async def test_validate_attachments_returns_attachment_ref_with_r2_key(
             content_type="image/png",
             title="photo.png",
             r2_key="upload/user/GLOBAL/abc.png",
-            processing_target=None,
         )
     ]
-
-
-@pytest.mark.asyncio
-async def test_validate_attachments_threads_processing_target(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """_validate_attachments threads an inbound processing_target unchanged (AC-9 slice)."""
-    import personal_agent.service.app as app_mod
-
-    artifact_id = str(uuid4())
-    session = _StubSession()
-    session.enqueue(
-        SimpleNamespace(
-            id=UUID(artifact_id),
-            content_type="image/png",
-            title="photo.png",
-            r2_key="upload/user/GLOBAL/abc.png",
-        )
-    )
-    monkeypatch.setattr(app_mod, "AsyncSessionLocal", lambda: session)
-
-    result = await app_mod._validate_attachments(
-        f'[{{"artifact_id": "{artifact_id}", "processing_target": "cloud"}}]',
-        user_id=_USER_ID,
-        trace_id="t1",
-    )
-
-    assert result[0].processing_target == "cloud"
-
-
-@pytest.mark.asyncio
-async def test_validate_attachments_drops_invalid_processing_target(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An out-of-domain processing_target value is dropped, not passed through."""
-    import personal_agent.service.app as app_mod
-
-    artifact_id = str(uuid4())
-    session = _StubSession()
-    session.enqueue(
-        SimpleNamespace(
-            id=UUID(artifact_id),
-            content_type="image/png",
-            title="photo.png",
-            r2_key="upload/user/GLOBAL/abc.png",
-        )
-    )
-    monkeypatch.setattr(app_mod, "AsyncSessionLocal", lambda: session)
-
-    result = await app_mod._validate_attachments(
-        f'[{{"artifact_id": "{artifact_id}", "processing_target": "bogus"}}]',
-        user_id=_USER_ID,
-        trace_id="t1",
-    )
-
-    assert result[0].processing_target is None
 
 
 @pytest.mark.asyncio

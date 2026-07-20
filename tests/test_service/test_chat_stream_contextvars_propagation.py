@@ -70,7 +70,6 @@ async def test_stream_background_binds_user_id_reaching_gateway_pipeline_logs(
         await _process_chat_stream_background(
             session_id=str(session_id),
             message="Tell me about Python",
-            profile_name="local",
             user_id=_TEST_USER_ID,
             trace_id="trace-1",
         )

@@ -98,14 +98,14 @@ def _ensure_session_id(client: httpx.Client, *, force_new: bool = False) -> str:
     return created
 
 
-def _send_chat(message: str, force_new: bool, profile: str | None = None) -> int:
+def _send_chat(message: str, force_new: bool, model: str | None = None) -> int:
     """Send one chat request and print the service response.
 
     Args:
         message: User message to send.
         force_new: Start a fresh conversation session before sending.
-        profile: Execution profile name (e.g. "local", "cloud"). When None,
-            the service uses its configured default_profile.
+        model: Optional ``primary`` deployment key (ADR-0121 §4). When None,
+            the session's existing selection (or the binding default) governs.
 
     Returns:
         Exit code: 0 on success, 1 on error.
@@ -114,8 +114,8 @@ def _send_chat(message: str, force_new: bool, profile: str | None = None) -> int
         with httpx.Client(timeout=120.0) as client:
             session_id = _ensure_session_id(client, force_new=force_new)
             params: dict[str, str] = {"message": message, "session_id": session_id}
-            if profile is not None:
-                params["profile"] = profile
+            if model is not None:
+                params["model"] = model
             response = client.post(
                 f"{settings.service_url}/chat",
                 params=params,
@@ -126,15 +126,13 @@ def _send_chat(message: str, force_new: bool, profile: str | None = None) -> int
             _write_current_session(_session_file_path(), resolved_session_id)
             console.print(Markdown(str(data.get("response", ""))))
             trace_id = data.get("trace_id")
-            active_profile = data.get("profile", profile or settings.default_profile)
+            active_model = data.get("primary_selection", model or "default")
             if trace_id:
                 console.print(
-                    f"[dim]session: {resolved_session_id}  trace_id: {trace_id}  profile: {active_profile}[/dim]"
+                    f"[dim]session: {resolved_session_id}  trace_id: {trace_id}  model: {active_model}[/dim]"
                 )
             else:
-                console.print(
-                    f"[dim]session: {resolved_session_id}  profile: {active_profile}[/dim]"
-                )
+                console.print(f"[dim]session: {resolved_session_id}  model: {active_model}[/dim]")
             return 0
     except Exception as error:  # noqa: BLE001
         console.print(f"[red]{_request_error_message(error)}[/red]")
@@ -160,17 +158,18 @@ def chat(
         "--new",
         help="Start a new conversation session before sending the message.",
     ),
-    profile: str | None = typer.Option(
+    model: str | None = typer.Option(
         None,
-        "--profile",
+        "--model",
         help=(
-            "Execution profile to use (e.g. 'local', 'cloud'). "
-            "Defaults to the service's configured default_profile."
+            "Primary model deployment key to run this turn on (e.g. "
+            "'qwen3.6-35b-thinking', 'claude_sonnet'). Omit to use the "
+            "session's existing selection, or the binding default for a new one."
         ),
     ),
 ) -> None:
     """Send a chat message to the service."""
-    raise typer.Exit(_send_chat(message, force_new=new, profile=profile))
+    raise typer.Exit(_send_chat(message, force_new=new, model=model))
 
 
 @session_app.callback(invoke_without_command=True)

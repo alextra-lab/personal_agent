@@ -1,7 +1,7 @@
 """Tests for the structured attachment carrier (FRE-661 / ADR-0101 §2, §8a).
 
-Proves AC-5 (clean task description) and the AC-9 slice (processing_target
-threaded end to end) at the handle_user_request -> ExecutionContext seam.
+Proves AC-5 (clean task description) at the handle_user_request ->
+ExecutionContext seam.
 """
 
 from __future__ import annotations
@@ -34,14 +34,6 @@ class TestAttachmentRef:
         ref = _make_attachment()
         with pytest.raises(FrozenInstanceError):
             ref.title = "other.png"  # type: ignore[misc]
-
-    def test_processing_target_defaults_none(self) -> None:
-        ref = _make_attachment()
-        assert ref.processing_target is None
-
-    def test_processing_target_accepts_cloud_or_local(self) -> None:
-        assert _make_attachment(processing_target="cloud").processing_target == "cloud"
-        assert _make_attachment(processing_target="local").processing_target == "local"
 
 
 class TestExecutionContextAttachmentsField:
@@ -109,30 +101,6 @@ class TestHandleUserRequestAttachmentCarrier:
 
         ctx = captured["ctx"]
         assert ctx.attachments == (attachment,)
-
-    @pytest.mark.asyncio
-    async def test_processing_target_threaded_unchanged_ac9(self) -> None:
-        """AC-9 slice: processing_target set on the inbound attachment reaches ctx unchanged."""
-        attachment = _make_attachment(processing_target="cloud")
-        orchestrator = Orchestrator()
-        captured: dict[str, ExecutionContext] = {}
-
-        async def _fake_execute_task_safe(ctx: ExecutionContext, session_manager: object) -> object:
-            captured["ctx"] = ctx
-            return {"reply": "ok", "steps": [], "trace_id": ctx.trace_id}
-
-        with patch(
-            "personal_agent.orchestrator.orchestrator.execute_task_safe",
-            new=AsyncMock(side_effect=_fake_execute_task_safe),
-        ):
-            await orchestrator.handle_user_request(
-                session_id=str(uuid4()),
-                user_message="hi",
-                attachments=[attachment],
-            )
-
-        ctx = captured["ctx"]
-        assert ctx.attachments[0].processing_target == "cloud"
 
     @pytest.mark.asyncio
     async def test_no_attachments_defaults_to_empty_tuple(self) -> None:

@@ -68,8 +68,12 @@ bindings:
   # deployment's 90s. The 120s only ever appeared on the no-profile path, which
   # raised anyway, and artifact_tools passes its own _draft_timeout_s() at the
   # call site regardless.
-  artifact_builder:   { deployment: qwen3.6-35b-instruct, open: true }
-  sub_agent:          { deployment: qwen3.6-35b-instruct }
+  # ADR-0121 T5 (FRE-920): pinned to claude_haiku, not qwen3.6-35b-instruct —
+  # there is only one binding default now that ExecutionProfile is gone, and
+  # the owner chose to preserve the value the (removed) cloud profile carried.
+  # artifact_builder's real per-build choice lands with ADR-0122.
+  artifact_builder:   { deployment: claude_haiku, open: true }
+  sub_agent:          { deployment: claude_haiku }
   entity_extraction:  { deployment: gpt-5.4-mini }
   captains_log:       { deployment: claude_sonnet }
   insights:           { deployment: claude_sonnet }
@@ -77,3 +81,8 @@ bindings:
   embedding:          { deployment: embedding }
   reranker:           { deployment: reranker }
   reranker_fallback:  { deployment: reranker_fallback }
+  # ADR-0121 T5 (FRE-920): pinned — no user control (ADR-0102 model-coupling).
+  # Resolved directly by _resolve_vision_routing_key/_resolve_document_routing_key
+  # (orchestrator/executor.py) for any turn carrying a raster image or a
+  # Tier-2 PDF, replacing the old profile-escalation logic.
+  vision:             { deployment: claude_sonnet }

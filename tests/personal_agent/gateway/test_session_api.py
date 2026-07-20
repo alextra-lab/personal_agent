@@ -441,89 +441,12 @@ def test_list_sessions_turn_count_counts_only_user_messages() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Execution profile — GET field + PATCH (ADR-0079 / FRE-416)
+# Execution profile — retired (ADR-0121 T5, FRE-920). GET /sessions/{id} no
+# longer surfaces execution_profile and PATCH /sessions/{id} (the profile
+# pill mutator) is deleted; only the selection provenance check below remains.
 # ---------------------------------------------------------------------------
 
 _SESSION_GET = "personal_agent.service.repositories.session_repository.SessionRepository.get"
-_SESSION_UPDATE = "personal_agent.service.repositories.session_repository.SessionRepository.update"
-_EMIT_PROFILE = "personal_agent.transport.agui.transport.emit_session_profile"
-
-
-def test_get_session_includes_execution_profile() -> None:
-    """GET /sessions/{id} surfaces the server-owned execution profile."""
-    db_session = AsyncMock()
-    # FRE-426: get_session now sums api_costs via raw SQL — mock the cost query.
-    db_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0.0)))
-    sid = str(uuid4())
-    session_model = _make_session_model(session_id=sid, execution_profile="cloud")
-
-    with ExitStack() as stack:
-        stack.enter_context(_patched_user_resolver())
-        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
-        app = _build_app_with_db_factory(db_session)
-        with TestClient(app, raise_server_exceptions=True) as client:
-            resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
-
-    assert resp.status_code == 200
-    assert resp.json()["execution_profile"] == "cloud"
-
-
-def test_patch_session_profile_updates_and_emits() -> None:
-    """PATCH /sessions/{id} persists the profile (scoped) and emits a STATE_DELTA."""
-    db_session = AsyncMock()
-    sid = str(uuid4())
-    updated = _make_session_model(session_id=sid, execution_profile="cloud")
-    update_mock = AsyncMock(return_value=updated)
-
-    with ExitStack() as stack:
-        stack.enter_context(_patched_user_resolver())
-        stack.enter_context(patch(_SESSION_UPDATE, update_mock))
-        emit_mock = stack.enter_context(patch(_EMIT_PROFILE, new_callable=AsyncMock))
-        stack.enter_context(patch(_SELECTION_UPSERT, new_callable=AsyncMock))
-        stack.enter_context(patch(_EMIT_SELECTION, new_callable=AsyncMock))
-        app = _build_app_with_db_factory(db_session)
-        with TestClient(app, raise_server_exceptions=True) as client:
-            resp = client.patch(
-                f"/api/v1/sessions/{sid}", json={"profile": "cloud"}, headers=_AUTH_HEADERS
-            )
-
-    assert resp.status_code == 200
-    assert resp.json()["execution_profile"] == "cloud"
-    update_mock.assert_awaited_once()
-    # Ownership invariant: write MUST be scoped to the resolved user_id.
-    assert update_mock.await_args.kwargs.get("user_id") == _TEST_USER_ID
-    emit_mock.assert_awaited_once()
-
-
-def test_patch_profile_couples_primary_selection() -> None:
-    """The live Path pill writes the profile's primary_model into the selection store.
-
-    ADR-0121 §4: with the selection store authoritative for ``primary``, flipping
-    the pill must move the stored selection too — otherwise the pill would change
-    execution_profile but no longer change which model ``primary`` runs.
-    """
-    db_session = AsyncMock()
-    sid = str(uuid4())
-    updated = _make_session_model(session_id=sid, execution_profile="cloud")
-
-    with ExitStack() as stack:
-        stack.enter_context(_patched_user_resolver())
-        stack.enter_context(patch(_SESSION_UPDATE, new_callable=AsyncMock, return_value=updated))
-        stack.enter_context(patch(_EMIT_PROFILE, new_callable=AsyncMock))
-        upsert_mock = stack.enter_context(patch(_SELECTION_UPSERT, new_callable=AsyncMock))
-        emit_sel_mock = stack.enter_context(patch(_EMIT_SELECTION, new_callable=AsyncMock))
-        app = _build_app_with_db_factory(db_session)
-        with TestClient(app, raise_server_exceptions=True) as client:
-            resp = client.patch(
-                f"/api/v1/sessions/{sid}", json={"profile": "cloud"}, headers=_AUTH_HEADERS
-            )
-
-    assert resp.status_code == 200
-    upsert_mock.assert_awaited_once()
-    # cloud.yaml primary_model is claude_sonnet — the pill's flip moves primary.
-    assert upsert_mock.await_args.kwargs.get("deployment_key") == "claude_sonnet"
-    assert upsert_mock.await_args.kwargs.get("role") == "primary"
-    emit_sel_mock.assert_awaited_once()
 
 
 def test_get_session_stale_stored_key_provenance_is_default() -> None:
@@ -551,53 +474,6 @@ def test_get_session_stale_stored_key_provenance_is_default() -> None:
     body = resp.json()
     assert body["primary_selection"] == "qwen3.6-35b-thinking"  # guardrail fell back to default
     assert body["selection_provenance"] == "default"  # NOT 'server-hydrated'
-
-
-def test_patch_session_profile_invalid_name_422() -> None:
-    """PATCH /sessions/{id} rejects unknown profile names with 422."""
-    db_session = AsyncMock()
-    sid = str(uuid4())
-    app = _build_app_with_db_factory(db_session)
-
-    with _patched_user_resolver():
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.patch(
-                f"/api/v1/sessions/{sid}", json={"profile": "bogus"}, headers=_AUTH_HEADERS
-            )
-
-    assert resp.status_code == 422
-
-
-def test_patch_session_profile_404_when_other_user_owns_it() -> None:
-    """PATCH /sessions/{id} returns 404 when the scoped update touches no row."""
-    db_session = AsyncMock()
-    sid = str(uuid4())
-
-    with ExitStack() as stack:
-        stack.enter_context(_patched_user_resolver())
-        stack.enter_context(patch(_SESSION_UPDATE, new_callable=AsyncMock, return_value=None))
-        stack.enter_context(patch(_EMIT_PROFILE, new_callable=AsyncMock))
-        app = _build_app_with_db_factory(db_session)
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.patch(
-                f"/api/v1/sessions/{sid}", json={"profile": "cloud"}, headers=_AUTH_HEADERS
-            )
-
-    assert resp.status_code == 404
-
-
-def test_patch_session_profile_invalid_uuid_422() -> None:
-    """PATCH /sessions/{id} returns 422 for a non-UUID session_id."""
-    db_session = AsyncMock()
-    app = _build_app_with_db_factory(db_session)
-
-    with _patched_user_resolver():
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.patch(
-                "/api/v1/sessions/not-a-uuid", json={"profile": "cloud"}, headers=_AUTH_HEADERS
-            )
-
-    assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------
@@ -876,13 +752,11 @@ def test_get_session_config_ac9_slice_reports_stored_selection_not_raw_default()
     assert primary["provenance"] == "server-hydrated"
 
 
-def test_get_session_config_bridges_profile_when_no_selection_row() -> None:
-    """The FRE-918 codex-review fix: a row-less cloud session bridges via execution_profile.
-
-    Closes the gap where a session created via the legacy POST /chat endpoint
-    (which never writes a selection-store row) would otherwise report the local
-    binding default while get_llm_client() actually dispatches to the cloud
-    profile's model — the exact AC-9-slice failure mode.
+def test_get_session_config_no_selection_row_falls_back_to_binding_default() -> None:
+    """ADR-0121 T5 (FRE-920): a row-less session falls back to the plain binding
+    default for every role — the profile bridge FRE-918 relied on is retired,
+    since legacy POST /chat now always writes a selection-store row itself
+    (closing the gap the bridge used to paper over).
     """
     db_session = AsyncMock()
     sid = str(uuid4())
@@ -900,7 +774,7 @@ def test_get_session_config_bridges_profile_when_no_selection_row() -> None:
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
 
     roles = resp.json()["roles"]
-    assert roles["primary"]["resolved"] == "claude_sonnet"
+    assert roles["primary"]["resolved"] == "qwen3.6-35b-thinking"
     assert roles["artifact_builder"]["resolved"] == "claude_haiku"
     assert roles["sub_agent"]["resolved"] == "claude_haiku"
 

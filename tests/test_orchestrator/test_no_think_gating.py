@@ -1,4 +1,4 @@
-"""Tests for /no_think profile gating (FRE-417) and its retirement (FRE-434).
+"""Tests for /no_think selection gating (FRE-417) and its retirement (FRE-434).
 
 `/no_think` is a Qwen control token. It was gated to the Qwen primary path and
 never the cloud (Sonnet) path. As of FRE-434 it is **disabled by default**
@@ -6,6 +6,9 @@ never the cloud (Sonnet) path. As of FRE-434 it is **disabled by default**
 reasoning enabled and the sub-agent is an instruct variant, and the suffix is a
 byte-identity hazard for the ADR-0081 §D2 frozen layout. These tests pin the new
 default-off behavior and keep coverage of the gating logic when explicitly enabled.
+
+ADR-0121 T5 (FRE-920) removed Path — gating now keys on the per-turn
+``primary`` selection (``config/selection.py``), not an ExecutionProfile.
 """
 
 from __future__ import annotations
@@ -13,11 +16,7 @@ from __future__ import annotations
 import pytest
 
 from personal_agent.config import settings
-from personal_agent.config.profile import (
-    _current_profile,
-    load_profile,
-    set_current_profile,
-)
+from personal_agent.config.selection import reset_current_selection, set_current_selection
 from personal_agent.orchestrator.executor import (
     _append_no_think_to_last_user_message,
     _no_think_applies,
@@ -25,39 +24,39 @@ from personal_agent.orchestrator.executor import (
 
 
 def test_no_think_disabled_by_default() -> None:
-    """Default (FRE-434): /no_think is not injected even on the local profile."""
+    """Default (FRE-434): /no_think is not injected even on the Qwen primary."""
     assert settings.llm_append_no_think_to_tool_prompts is False
-    token = set_current_profile(load_profile("local"))
+    token = set_current_selection({"primary": "qwen3.6-35b-thinking"})
     try:
         out = _append_no_think_to_last_user_message([{"role": "user", "content": "hello"}])
         assert out[-1]["content"] == "hello"
         assert "/no_think" not in out[-1]["content"]
     finally:
-        _current_profile.reset(token)
+        reset_current_selection(token)
 
 
-def test_no_think_skipped_on_cloud_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_think_skipped_on_cloud_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     """Even if explicitly enabled, cloud (Sonnet) → suffix is not injected."""
     monkeypatch.setattr(settings, "llm_append_no_think_to_tool_prompts", True)
-    token = set_current_profile(load_profile("cloud"))
+    token = set_current_selection({"primary": "claude_sonnet"})
     try:
         assert _no_think_applies() is False
         out = _append_no_think_to_last_user_message([{"role": "user", "content": "hello"}])
         assert out[-1]["content"] == "hello"
         assert "/no_think" not in out[-1]["content"]
     finally:
-        _current_profile.reset(token)
+        reset_current_selection(token)
 
 
-def test_no_think_injected_when_explicitly_enabled_on_local(
+def test_no_think_injected_when_explicitly_enabled_on_qwen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Gating logic still works when re-enabled on the local (Qwen) profile."""
+    """Gating logic still works when re-enabled on the Qwen primary."""
     monkeypatch.setattr(settings, "llm_append_no_think_to_tool_prompts", True)
-    token = set_current_profile(load_profile("local"))
+    token = set_current_selection({"primary": "qwen3.6-35b-thinking"})
     try:
         assert _no_think_applies() is True
         out = _append_no_think_to_last_user_message([{"role": "user", "content": "hello"}])
         assert "/no_think" in out[-1]["content"]
     finally:
-        _current_profile.reset(token)
+        reset_current_selection(token)

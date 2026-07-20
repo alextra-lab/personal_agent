@@ -98,12 +98,17 @@ def test_configure_dspy_lm_with_primary_role():
 
 
 def test_configure_dspy_lm_with_sub_agent_role():
-    """Test DSPy LM configuration with SUB_AGENT role."""
+    """Test DSPy LM configuration with SUB_AGENT role.
+
+    ADR-0121 T5 (FRE-920): sub_agent is pinned to claude_haiku (owner-decided
+    2026-07-20), not the local Qwen deployment, so this now resolves to an
+    Anthropic-prefixed cloud model string, not an OpenAI-compatible local one.
+    """
     lm = configure_dspy_lm(role=ModelRole.SUB_AGENT)
 
     assert lm is not None
     assert hasattr(lm, "model")
-    assert lm.model.startswith("openai/")
+    assert lm.model.startswith("anthropic/")
 
 
 def test_configure_dspy_lm_with_invalid_role():

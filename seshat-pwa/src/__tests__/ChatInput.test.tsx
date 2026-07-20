@@ -1,17 +1,13 @@
 /**
- * Tests for ChatInput Send↔Stop behaviour (ADR-0076 / FRE-400 WS2).
- *
- * Covers: Send button present when not streaming; Stop button (aria-label
- * "Stop generating") present when isStreaming=true; onStop fires on click;
- * textarea stays writable during streaming (FRE-421); Send gated on
- * pathUnavailable.
+ * Tests for ChatInput Send↔Stop behaviour (ADR-0076 / FRE-400 WS2) and
+ * upload flow (FRE-369). ADR-0121 T5 (FRE-920) removed the profile pill and
+ * the per-attachment processing-target override — model-picker interaction
+ * is covered separately in ModelPicker.test.tsx.
  */
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
-// Mock agui-client (needed by useInferenceStatus transitively, and by the
-// upload flow exercised in the FRE-692 override tests below).
 vi.mock('@/lib/agui-client', () => ({
   SESHAT_API: 'http://localhost:9000',
   authHeaders: () => ({}),
@@ -20,30 +16,24 @@ vi.mock('@/lib/agui-client', () => ({
   completeUpload: vi.fn(),
 }));
 
-// Mock useInferenceStatus to return 'up' by default so Send is enabled.
-vi.mock('@/hooks/useInferenceStatus', () => ({
-  useInferenceStatus: vi.fn(() => ({ status: 'up', latencyMs: 10 })),
-}));
-
 import { ChatInput } from '@/components/ChatInput';
-import { useInferenceStatus } from '@/hooks/useInferenceStatus';
 import { presignUpload, uploadToR2, completeUpload } from '@/lib/agui-client';
 
-const mockUseInference = useInferenceStatus as ReturnType<typeof vi.fn>;
 const mockPresignUpload = presignUpload as ReturnType<typeof vi.fn>;
 const mockUploadToR2 = uploadToR2 as ReturnType<typeof vi.fn>;
 const mockCompleteUpload = completeUpload as ReturnType<typeof vi.fn>;
 
 const DEFAULT_PROPS = {
   onSend: vi.fn(),
-  profile: 'local' as const,
-  onProfileChange: vi.fn(),
+  candidates: [],
+  selectedModelKey: null,
+  modelHydrated: false,
+  onModelChange: vi.fn(),
 };
 
 beforeEach(() => {
   DEFAULT_PROPS.onSend.mockClear();
-  DEFAULT_PROPS.onProfileChange.mockClear();
-  mockUseInference.mockReturnValue({ status: 'up', latencyMs: 10 });
+  DEFAULT_PROPS.onModelChange.mockClear();
   mockPresignUpload.mockReset();
   mockUploadToR2.mockReset();
   mockCompleteUpload.mockReset();
@@ -113,16 +103,40 @@ describe('ChatInput — Stop button (isStreaming=true)', () => {
   });
 });
 
-describe('ChatInput — path unavailable gating (FRE-421)', () => {
-  it('shows an unavailability notice when the active path is down', () => {
-    mockUseInference.mockReturnValue({ status: 'down', latencyMs: null });
-    render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
-    expect(screen.getByText(/currently unavailable/)).toBeDefined();
+describe('ChatInput — attachments (FRE-369)', () => {
+  function sendWithText(container: HTMLElement) {
+    const textarea = screen.getByPlaceholderText('Message Seshat...');
+    fireEvent.change(textarea, { target: { value: 'look at this' } });
+    fireEvent.submit(container.querySelector('form')!);
+  }
+
+  it('sends a completed attachment with no processing-target field (ADR-0121 T5)', async () => {
+    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
+    const file = new File(['x'], 'photo.png', { type: 'image/png' });
+    await attachFile(container, file, 'a1');
+
+    sendWithText(container);
+
+    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('look at this', [
+      { artifact_id: 'a1', content_type: 'image/png', title: 'photo.png' },
+    ]);
   });
 
-  it('Send button is disabled when text present but path is down', () => {
-    mockUseInference.mockReturnValue({ status: 'down', latencyMs: null });
-    render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
+  it('renders no per-attachment override control (removed in ADR-0121 T5)', async () => {
+    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
+    const file = new File(['x'], 'photo.png', { type: 'image/png' });
+    await attachFile(container, file, 'a1');
+
+    expect(screen.queryByLabelText(/Set processing target/)).toBeNull();
+  });
+
+  it('Send is blocked while an upload is in progress', async () => {
+    mockPresignUpload.mockReturnValue(new Promise(() => {})); // never resolves
+    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
+    const file = new File(['x'], 'photo.png', { type: 'image/png' });
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
     const textarea = screen.getByPlaceholderText('Message Seshat...');
     fireEvent.change(textarea, { target: { value: 'hello' } });
     const sendBtn = screen.getByLabelText('Send message');
@@ -130,119 +144,9 @@ describe('ChatInput — path unavailable gating (FRE-421)', () => {
   });
 });
 
-describe('ChatInput — per-attachment processing-target override (FRE-692/FRE-687, ADR-0101 §8a / ADR-0102 §7a)', () => {
-  function sendWithText(container: HTMLElement) {
-    const textarea = screen.getByPlaceholderText('Message Seshat...');
-    fireEvent.change(textarea, { target: { value: 'look at this' } });
-    fireEvent.submit(container.querySelector('form')!);
-  }
-
-  it('sends processing_target "none" for an image attachment with no override chosen', async () => {
-    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
-    const file = new File(['x'], 'photo.png', { type: 'image/png' });
-    await attachFile(container, file, 'a1');
-
-    sendWithText(container);
-
-    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('look at this', [
-      { artifact_id: 'a1', content_type: 'image/png', title: 'photo.png', processing_target: 'none' },
-    ]);
-  });
-
-  it('cycles Auto -> Cloud and sends processing_target "cloud"', async () => {
-    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
-    const file = new File(['x'], 'photo.png', { type: 'image/png' });
-    await attachFile(container, file, 'a1');
-
-    const toggle = screen.getByLabelText(/Set processing target for photo\.png, currently Auto/);
-    // FRE-886: the Auto chip communicates that Auto now routes to the cloud path.
-    expect(toggle).toHaveTextContent(/Auto.*Cloud/);
-
-    fireEvent.click(toggle);
-    expect(screen.getByLabelText(/currently Cloud/)).toBeDefined();
-
-    sendWithText(container);
-
-    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('look at this', [
-      { artifact_id: 'a1', content_type: 'image/png', title: 'photo.png', processing_target: 'cloud' },
-    ]);
-  });
-
-  it('cycles Auto -> Cloud -> Local and sends processing_target "local"', async () => {
-    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
-    const file = new File(['x'], 'photo.png', { type: 'image/png' });
-    await attachFile(container, file, 'a1');
-
-    const toggle = screen.getByLabelText(/Set processing target for photo\.png/);
-    fireEvent.click(toggle); // -> Cloud
-    fireEvent.click(screen.getByLabelText(/currently Cloud/)); // -> Local
-    expect(screen.getByLabelText(/currently Local/)).toBeDefined();
-
-    sendWithText(container);
-
-    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('look at this', [
-      { artifact_id: 'a1', content_type: 'image/png', title: 'photo.png', processing_target: 'local' },
-    ]);
-  });
-
-  it('does not render the override control for a non-eligible (non-image, non-PDF) attachment, and sends "none"', async () => {
-    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
-    const file = new File(['x'], 'notes.txt', { type: 'text/plain' });
-    await attachFile(container, file, 'a2');
-
-    expect(screen.queryByLabelText(/Set processing target/)).toBeNull();
-
-    sendWithText(container);
-
-    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('look at this', [
-      { artifact_id: 'a2', content_type: 'text/plain', title: 'notes.txt', processing_target: 'none' },
-    ]);
-  });
-
-  it('sends processing_target "none" for a PDF attachment with no override chosen (FRE-687)', async () => {
-    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
-    const file = new File(['x'], 'report.pdf', { type: 'application/pdf' });
-    await attachFile(container, file, 'a3');
-
-    expect(screen.getByLabelText(/Set processing target for report\.pdf, currently Auto/)).toBeDefined();
-
-    sendWithText(container);
-
-    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('look at this', [
-      { artifact_id: 'a3', content_type: 'application/pdf', title: 'report.pdf', processing_target: 'none' },
-    ]);
-  });
-
-  it('cycles Auto -> Cloud and sends processing_target "cloud" for a PDF attachment (FRE-687)', async () => {
-    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
-    const file = new File(['x'], 'report.pdf', { type: 'application/pdf' });
-    await attachFile(container, file, 'a3');
-
-    const toggle = screen.getByLabelText(/Set processing target for report\.pdf, currently Auto/);
-    fireEvent.click(toggle);
-    expect(screen.getByLabelText(/currently Cloud/)).toBeDefined();
-
-    sendWithText(container);
-
-    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('look at this', [
-      { artifact_id: 'a3', content_type: 'application/pdf', title: 'report.pdf', processing_target: 'cloud' },
-    ]);
-  });
-
-  it('cycles Auto -> Cloud -> Local and sends processing_target "local" for a PDF attachment (FRE-687)', async () => {
-    const { container } = render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
-    const file = new File(['x'], 'report.pdf', { type: 'application/pdf' });
-    await attachFile(container, file, 'a3');
-
-    const toggle = screen.getByLabelText(/Set processing target for report\.pdf/);
-    fireEvent.click(toggle); // -> Cloud
-    fireEvent.click(screen.getByLabelText(/currently Cloud/)); // -> Local
-    expect(screen.getByLabelText(/currently Local/)).toBeDefined();
-
-    sendWithText(container);
-
-    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('look at this', [
-      { artifact_id: 'a3', content_type: 'application/pdf', title: 'report.pdf', processing_target: 'local' },
-    ]);
+describe('ChatInput — model picker', () => {
+  it('renders the ModelPicker control', () => {
+    render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
+    expect(screen.getByLabelText('Choose model')).toBeDefined();
   });
 });

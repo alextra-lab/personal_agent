@@ -8,8 +8,9 @@ and a per-seat ``SESHAT_CHANNEL_PORT`` **iff** that seat's ``mode == "channel"``
 there is no independent per-invocation channel flag (FRE-875 removed it), so the
 launch shape can never drift from the mode the watcher reads to pick a transport.
 
-A ``send_keys``-mode seat is byte-for-byte its pre-channel shape (ADR-0116 §5,
-"one seat at a time"). All three live worker seats are now cut over to channel
+A ``send_keys``-mode seat is its pre-channel shape (ADR-0116 §5, "one seat at a
+time") **plus** the FRE-922 background-tasks-disabled ``env`` prefix that every
+worker seat now carries. All three live worker seats are cut over to channel
 (FRE-875 Phase B complete), so ``send_keys`` is no longer any live seat's default
 — it remains the ``StreamTopology`` dataclass default and the channel-down
 fallback target, and these tests construct it explicitly via ``_flip_to_send_keys``.
@@ -69,7 +70,12 @@ def test_send_keys_seat_argv_unchanged_by_default(monkeypatch: pytest.MonkeyPatc
     inner = _inner(plan)
     assert "--channels" not in inner
     assert "SESHAT_CHANNEL_PORT" not in inner
-    assert inner.startswith("claude --remote-control -n cc-2build --model haiku --session-id ")
+    # FRE-922: every worker seat is launched with background tasks disabled, so
+    # even a send_keys seat carries the env prefix — no channel port, though.
+    assert inner.startswith(
+        "env CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 "
+        "claude --remote-control -n cc-2build --model haiku --session-id "
+    )
     assert inner.endswith("'/build FRE-871'")  # seed is shlex-quoted (contains a space)
 
 
@@ -81,7 +87,9 @@ def test_channel_mode_seat_adds_allowlist_ref_and_per_seat_port(
     inner = _inner(plan)
     assert f"--channels {_CHANNEL_REF}" in inner
     port = topology_for("adr").channel_port
-    assert f"env SESHAT_CHANNEL_PORT={port}" in inner
+    # FRE-922: the background-tasks kill flag and the per-seat port share one
+    # ``env`` prefix (order: kill flag first, then port), before ``claude``.
+    assert f"env CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 SESHAT_CHANNEL_PORT={port} claude" in inner
     # The seat is still an RC seat at its model — the channel composes, not replaces.
     assert "claude --remote-control -n cc-adrs --model opus" in inner
     # The seed must survive channel-mode AND precede the variadic --channels flag,

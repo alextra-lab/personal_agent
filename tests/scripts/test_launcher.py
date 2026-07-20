@@ -35,6 +35,7 @@ from scripts.dispatch.launcher import (
     plan_launch,
     seat_is_busy,
     seat_state,
+    seat_wedge_signature,
     session_id_for,
     stream_for_tmux_session,
     topology_for,
@@ -833,6 +834,52 @@ def test_scrape_is_used_only_when_remote_control_cannot_answer() -> None:
     runner = _SeatRunner(state="live", pane="busy", agents=[])  # RC silent, pane busy
     plan = plan_launch("build1", "FRE-913", "sonnet", context_keep=False, seat="live")
     assert execute_plan(plan, runner, sleeper=_no_wait).outcome == "seat-busy"
+
+
+# --- FRE-922: prevention (env var) + suspected-wedge detection ---------------
+
+
+def test_worker_seat_launch_disables_background_tasks() -> None:
+    """AC-1 (CC #61568): the seat-launch env carries the background-tasks kill flag.
+
+    A worker seat that leaves an orphaned ``run_in_background`` bash poller alive
+    keeps Remote Control reporting it busy while its pane sits idle, wedging the
+    stream's dispatch (FRE-917 sat 90 min). Disabling the capability at process
+    start is a structural fix — a seat that cannot start a background shell
+    cannot orphan one. Asserted on the real launch command, not a mock.
+    """
+    plan = plan_launch("build1", "FRE-922", "opus", context_keep=False, seat="absent")
+    assert plan.command is not None
+    inner = plan.command[-1]
+    # The env prefix precedes ``claude`` so the flag is in the process env.
+    assert "env CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 " in inner
+    assert inner.index("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1") < inner.index("claude")
+
+
+def test_seat_wedge_signature_truth_table() -> None:
+    """A suspected wedge = RC confidently busy AND the pane sits idle.
+
+    Deliberately a *heuristic*, not a classifier: a genuine mid-turn seat whose
+    spinner the scrape missed produces the same instantaneous reading, which is
+    why the orchestrator only surfaces it after N consecutive ticks. RC that
+    cannot be read cleanly (``seat_is_busy`` → ``None``) never fires — an
+    intentional blind spot (that path either dispatches or is genuinely busy).
+    """
+    topology = topology_for("build1")
+    # RC busy + pane idle → suspected wedge.
+    assert (
+        seat_wedge_signature(topology, _SeatRunner(pane="static", agents=[_agent("busy")])) is True
+    )
+    # RC busy + pane shows the live spinner → genuinely busy, NOT a wedge (AC-3).
+    assert (
+        seat_wedge_signature(topology, _SeatRunner(pane="busy", agents=[_agent("busy")])) is False
+    )
+    # RC idle → not a wedge.
+    assert (
+        seat_wedge_signature(topology, _SeatRunner(pane="static", agents=[_agent("idle")])) is False
+    )
+    # RC unreadable/ambiguous (None) → never fires (blind spot).
+    assert seat_wedge_signature(topology, _SeatRunner(pane="static", agents=[])) is False
 
 
 def test_malformed_ticket_identifier_is_rejected() -> None:

@@ -113,6 +113,23 @@ _TICKET_RE = re.compile(r"[A-Z][A-Z0-9]*-[0-9]+")
 # compensating controls. This is the mode a healthy seat already runs in.
 _WORKER_PERMISSION_MODE: str = "acceptEdits"
 
+# Background-task kill switch set in every worker seat's launch environment
+# (FRE-922, CC #61568). Claude Code's Bash tool can start commands with
+# ``run_in_background``; those background shells have no upper-bound duration and
+# no cleanup guarantee (anthropics/claude-code #61568, #38927, #13091, #55893,
+# #43944), so an orphaned ``until…/sleep`` poller left alive after a build keeps
+# Remote Control reporting the seat ``busy`` while the conversation sits idle at
+# its input prompt — wedging the stream's next dispatch (FRE-917 sat undispatched
+# ~90 min). A worker seat never legitimately needs a background bash (the build
+# skill polls CI/workflow completion in the foreground and otherwise goes idle),
+# so disabling the capability at the seat's process start removes the failure
+# mode structurally: a seat that cannot start a background shell cannot orphan
+# one. Verified a real Claude Code env var against the installed 2.1.215 binary
+# (registered in the known-env-var schema; read by a dedicated accessor). It
+# gates only the Bash background option — RC status (``claude agents``), MCP
+# servers, and the seshat-dispatch channel are separate subsystems, unaffected.
+_DISABLE_BACKGROUND_TASKS_ENV: str = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"
+
 # The approved-allowlist channel reference the launcher passes to ``--channels``
 # when a seat is cut over to channel-mode delivery (ADR-0116). Resolves to the
 # in-repo ``seshat-dispatch`` plugin registered in the local ``seshat-dispatch``
@@ -493,8 +510,11 @@ def _build_tmux_command(
     deliberately **not** placed on the command line — it would be visible in
     ``ps``/the plan JSON; it is provisioned out-of-band into the seat's
     environment (``SESHAT_CHANNEL_SECRET``) by the deploy runbook, and the
-    channel server reads it there (failing closed if absent). When ``channels``
-    is off the argv is byte-for-byte the pre-channel shape (ADR-0116 §5).
+    channel server reads it there (failing closed if absent). Every worker seat
+    — channel or send_keys — is additionally launched under an ``env`` prefix
+    carrying ``CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`` (FRE-922). When
+    ``channels`` is off the argv is otherwise the pre-channel shape (ADR-0116 §5),
+    the only addition being that background-tasks env prefix.
 
     Args:
         topology: The stream's launch coordinates.
@@ -549,9 +569,16 @@ def _build_tmux_command(
     # exact argv master live-verifies against the (undocumented) flag's parser.
     if seed is not None:
         inner_argv.append(seed)
+    # Every worker seat launches with background tasks disabled (FRE-922, CC
+    # #61568) so it can never orphan a ``run_in_background`` poller that wedges
+    # the stream. The channel port (non-secret) joins the same ``env`` prefix
+    # when channel-mode is on; the shared secret never touches the command line.
+    env_assignments = [f"{_DISABLE_BACKGROUND_TASKS_ENV}=1"]
     if channels:
-        # env-prefix the per-seat port (non-secret); append the allowlist ref last.
-        inner_argv = ["env", f"SESHAT_CHANNEL_PORT={topology.channel_port}", *inner_argv]
+        env_assignments.append(f"SESHAT_CHANNEL_PORT={topology.channel_port}")
+    inner_argv = ["env", *env_assignments, *inner_argv]
+    if channels:
+        # Append the allowlist ref last (variadic — must follow the seed).
         inner_argv += ["--channels", _CHANNEL_PLUGIN_REF]
     inner = shlex.join(inner_argv)
     return (
@@ -1223,6 +1250,41 @@ def seat_is_busy(topology: StreamTopology, runner: CommandRunner) -> bool | None
     if status == "idle":
         return False
     return None
+
+
+def seat_wedge_signature(topology: StreamTopology, runner: CommandRunner) -> bool:
+    """Whether a seat shows the *suspected*-wedge signature (FRE-922, CC #61568).
+
+    The signature is Remote Control **confidently** reporting the seat ``busy``
+    while its tmux pane sits at the idle input prompt. That is what an orphaned
+    ``run_in_background`` bash poller looks like from the outside: the poller
+    keeps RC busy, but the conversation itself is idle, so the stream's reuse
+    dispatch returns ``seat-busy`` every tick and never lands.
+
+    This is deliberately a **heuristic, not a classifier**. A single observation
+    is ambiguous — a genuinely mid-turn seat whose in-progress spinner the pane
+    scrape momentarily missed (``session_is_idle`` is documented best-effort and
+    has produced false-idle readings) reads identically. The discriminator is
+    therefore *persistence*: the orchestrator only surfaces a wedge after N
+    consecutive ticks (a real turn re-renders its spinner within N ticks and
+    resets the count; only a persistently-idle pane survives). The N-tick gate
+    lives in the orchestrator, not here.
+
+    RC that cannot be read cleanly (``seat_is_busy`` → ``None`` on an unreadable,
+    zero-match, multi-match, or unknown-status registry) never fires the
+    signature — an intentional blind spot: that path either dispatches (RC
+    silent + pane idle → delivery proceeds) or is genuinely busy.
+
+    Args:
+        topology: The stream's launch coordinates.
+        runner: The command runner seam.
+
+    Returns:
+        ``True`` iff RC confidently reports the seat busy AND its pane is idle.
+    """
+    if seat_is_busy(topology, runner) is not True:
+        return False
+    return session_is_idle(_capture_pane(topology.tmux_session, runner))
 
 
 def _agent_holding_name(name: str, runner: CommandRunner) -> bool:

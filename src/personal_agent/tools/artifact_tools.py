@@ -1455,8 +1455,53 @@ async def artifact_draft_executor(
             session_id=session_id,
         )
 
-    # --- Acquire artifact-builder client (profile-driven: ADR-0044, ADR-0118 T1) ---
-    builder_client = get_llm_client(role_name="artifact_builder")
+    # --- ADR-0122 §2/§4: raise the build-time artifact-builder decision through the
+    # existing ADR-0076 pause path, then acquire the resolved client. With no genuine
+    # decision (timeout / no socket / Stop-button cancel) this keeps the pre-existing
+    # role-name path and its already-correct telemetry/cost-lane identity (FRE-879,
+    # AC-2 regression guard); a card pick or a standing preference switches to the
+    # by-key call so the *selected* deployment actually runs (AC-1), fail-closed
+    # checked against the catalog first so a stale/invalid key never reaches the
+    # client factory (AC-4).
+    from personal_agent.config.model_loader import load_model_config  # noqa: PLC0415
+    from personal_agent.llm_client.factory import get_llm_client_for_key  # noqa: PLC0415
+    from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
+        build_provider_availability,
+        resolve_artifact_builder_key,
+    )
+    from personal_agent.orchestrator.executor import _maybe_pause_for_constraint  # noqa: PLC0415
+
+    user_id = getattr(ctx, "user_id", None) if ctx else None
+    builder_decision = await _maybe_pause_for_constraint(
+        session_id=session_id or "",
+        trace_id=trace_id,
+        user_id=user_id,
+        constraint="artifact_builder",
+        context=f'Choose the model to build "{title}".',
+    )
+
+    if builder_decision.resolution in ("user_choice", "preference_applied"):
+        builder_catalog = load_model_config()
+        builder_key = resolve_artifact_builder_key(
+            builder_decision,
+            builder_catalog,
+            is_provider_available=build_provider_availability(builder_catalog, settings),
+        )
+        if builder_key != builder_decision:
+            log.warning(
+                "artifact_builder_key_substituted",
+                trace_id=trace_id,
+                session_id=session_id,
+                slug=slug,
+                task_id=task_id,
+                requested_key=str(builder_decision),
+                substituted_key=builder_key,
+            )
+        builder_client = get_llm_client_for_key(builder_key, budget_role="artifact_builder")
+    else:
+        # Headless / timeout / disconnected / cancelled — no genuine decision, keep
+        # today's role-name path and its already-shipped default binding (FRE-879).
+        builder_client = get_llm_client(role_name="artifact_builder")
 
     user_prompt = (
         f"Title: {title}\n"

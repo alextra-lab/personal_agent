@@ -621,6 +621,238 @@ def test_duplicate_streams_do_not_double_increment_the_wedge_counter() -> None:
     assert wedge_counts["build1"] == 1  # one increment for one tick, not three
 
 
+# --- FRE-924: held-too-long escalation (surface by age, never resolve) ------
+
+_HELD_S = 1800.0  # the held-escalation threshold under test (seconds)
+
+
+def _surfaced(ticket: str, launched_at: float = 0.0) -> DispatchRecord:
+    """A surfaced (manual-card) record for the held-escalation tests."""
+    return _launched_record(ticket=ticket, phase="surfaced", launched_at=launched_at)
+
+
+def _run_held(  # type: ignore[no-untyped-def]
+    *,
+    ticks: int,
+    now: float,
+    launched_at: float = 0.0,
+    held_escalation_s: float = _HELD_S,
+    ticket: str = "FRE-786",
+    state: dict[str, DispatchRecord] | None = None,
+    held_escalated: dict[str, str] | None = None,
+):
+    """Run N ticks with a surfaced record still-NEXT (so ``_decide_surfaced`` holds).
+
+    A hold decision never shells out (no launch/PR probe), so a plain recording
+    runner suffices and never issues a termination command.
+    """
+    board = [_issue(ticket, "Approved", _OPUS | {"context:keep"})]
+    if state is None:
+        state = {"build1": _surfaced(ticket, launched_at)}
+    held_escalated = {} if held_escalated is None else held_escalated
+    notifier = _Notifier()
+    logger = _CapturingLogger()
+    runner = _RecordingRunner()
+    for _ in range(ticks):
+        run_once(
+            ["build1"],
+            state,
+            now=now,
+            stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+            board_fetcher=lambda s: board,
+            runner=runner,
+            notifier=notifier,
+            persist=lambda st: None,
+            logger=logger,
+            execute=True,
+            rc_alive=lambda: True,
+            held_escalated=held_escalated,
+            held_escalation_s=held_escalation_s,
+        )
+    return state, held_escalated, notifier, logger, runner
+
+
+def test_held_card_escalates_once_past_threshold() -> None:
+    """AC-1: a card held past the age threshold escalates exactly once per episode.
+
+    Across several ticks all past the threshold, exactly one greppable
+    ``dispatch_held_too_long`` warning AND one master ping fire (not one per
+    tick) — distinct from the per-tick ``card-already-surfaced`` hold trail.
+    """
+    state, held_escalated, notifier, logger, _ = _run_held(ticks=4, now=5000.0, launched_at=0.0)
+
+    events = [e for e in notifier.events if e[0] == "dispatch_held_too_long"]
+    assert len(events) == 1, "master is pinged exactly once per held episode"
+    assert events[0][1]["stream"] == "build1"
+    assert events[0][1]["ticket"] == "FRE-786"
+    logs = [w for w in logger.warnings if w[0] == "dispatch_held_too_long"]
+    assert len(logs) == 1, "one greppable escalation log per episode, not per tick"
+    assert held_escalated["build1"] == "FRE-786"
+
+
+def test_held_escalation_never_mutates_state_or_kills() -> None:
+    """AC-2: escalation surfaces only — the record is untouched, nothing is killed."""
+    rec = _surfaced("FRE-786", launched_at=0.0)
+    state, _, notifier, _, runner = _run_held(ticks=3, now=5000.0, state={"build1": rec})
+
+    assert any(e[0] == "dispatch_held_too_long" for e in notifier.events)  # it did escalate
+    assert state["build1"] is rec  # never cleared, never replaced/refreshed
+    assert state["build1"].phase == "surfaced"
+    assert state["build1"].launched_at == 0.0
+    assert _no_termination_argv(runner)  # detection + surfacing ONLY
+
+
+def test_fresh_surfaced_card_within_threshold_does_not_escalate() -> None:
+    """AC-3 (regression): a card the owner may act on promptly does not alarm."""
+    state, held_escalated, notifier, logger, _ = _run_held(ticks=3, now=1000.0, launched_at=0.0)
+
+    assert not any(e[0] == "dispatch_held_too_long" for e in notifier.events)
+    assert not any(w[0] == "dispatch_held_too_long" for w in logger.warnings)
+    assert "build1" not in held_escalated
+
+
+def test_held_escalation_boundary_is_strictly_greater_than() -> None:
+    """Age exactly at the threshold does not escalate; one second past does.
+
+    Pins the ``age <= threshold`` early-return / ``age > threshold`` fire boundary.
+    """
+    _, _, at_notifier, _, _ = _run_held(ticks=1, now=_HELD_S, launched_at=0.0)
+    assert not any(e[0] == "dispatch_held_too_long" for e in at_notifier.events)
+
+    _, _, past_notifier, _, _ = _run_held(ticks=1, now=_HELD_S + 1.0, launched_at=0.0)
+    assert sum(e[0] == "dispatch_held_too_long" for e in past_notifier.events) == 1
+
+
+def _held_ticker(state, held_escalated, notifier, board):  # type: ignore[no-untyped-def]
+    """A single-tick runner over shared state/board for multi-episode tests."""
+
+    def _tick(now: float) -> None:
+        run_once(
+            ["build1"],
+            state,
+            now=now,
+            stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+            board_fetcher=lambda s: board,
+            runner=_RecordingRunner(),
+            notifier=notifier,
+            persist=lambda st: None,
+            logger=_NullLogger(),
+            execute=True,
+            rc_alive=lambda: True,
+            held_escalated=held_escalated,
+            held_escalation_s=_HELD_S,
+        )
+
+    return _tick
+
+
+def test_held_escalation_re_fires_on_a_new_episode() -> None:
+    """The escalation is per-episode: the owner acting re-arms it for the next card.
+
+    Mirrors the FRE-922 re-arm test — proves the in-memory latch is dropped on
+    the ``clear`` decision (owner acted) so a later surfaced hold escalates again.
+    """
+    state: dict[str, DispatchRecord] = {"build1": _surfaced("FRE-1", launched_at=0.0)}
+    held_escalated: dict[str, str] = {}
+    notifier = _Notifier()
+    board = [_issue("FRE-1", "Approved", _OPUS | {"context:keep"})]
+    tick = _held_ticker(state, held_escalated, notifier, board)
+
+    tick(5000.0)  # episode 1: past threshold → escalates once
+    assert sum(e[0] == "dispatch_held_too_long" for e in notifier.events) == 1
+
+    board[:] = [_issue("FRE-1", "In Progress", _OPUS | {"context:keep"})]  # owner acted → clear
+    tick(5100.0)
+    assert "build1" not in held_escalated and "build1" not in state  # latch + record dropped
+
+    # Episode 2: a fresh surfaced card, aged past threshold → escalates again.
+    state["build1"] = _surfaced("FRE-2", launched_at=5100.0)
+    board[:] = [_issue("FRE-2", "Approved", _OPUS | {"context:keep"})]
+    tick(7000.0)
+    assert sum(e[0] == "dispatch_held_too_long" for e in notifier.events) == 2
+
+
+def test_held_escalation_re_fires_when_surfaced_ticket_changes() -> None:
+    """Codex finding #3: the latch is keyed by (stream, ticket), not stream alone.
+
+    A surfaced ticket swapped in place on one stream while it stays a ``hold``
+    (reachable only via external state surgery — the normal path emits ``clear``
+    first) must still escalate the new ticket, never be suppressed by the old
+    ticket's latch entry.
+    """
+    state: dict[str, DispatchRecord] = {"build1": _surfaced("FRE-1", launched_at=0.0)}
+    held_escalated: dict[str, str] = {}
+    notifier = _Notifier()
+    board = [_issue("FRE-1", "Approved", _OPUS | {"context:keep"})]
+    tick = _held_ticker(state, held_escalated, notifier, board)
+
+    tick(5000.0)
+    assert held_escalated["build1"] == "FRE-1"
+    assert sum(e[0] == "dispatch_held_too_long" for e in notifier.events) == 1
+
+    # Same stream, different surfaced ticket, still a hold — no intervening clear.
+    state["build1"] = _surfaced("FRE-2", launched_at=5000.0)
+    board[:] = [_issue("FRE-2", "Approved", _OPUS | {"context:keep"})]
+    tick(7000.0)  # age 2000 > 1800 and ticket changed → re-fires for FRE-2
+    assert held_escalated["build1"] == "FRE-2"
+    assert sum(e[0] == "dispatch_held_too_long" for e in notifier.events) == 2
+
+
+def test_held_escalation_is_gated_on_execute() -> None:
+    """A dry-run tick (execute=False) over a held state file emits no escalation.
+
+    The hold path must stay side-effect-free in dry-run — no warning, no master
+    ping, no latch mutation — matching the launch/wedge path's ``if not execute``
+    guard (a non-actuating inspection run must not page the owner).
+    """
+    state: dict[str, DispatchRecord] = {"build1": _surfaced("FRE-786", launched_at=0.0)}
+    held_escalated: dict[str, str] = {}
+    notifier = _Notifier()
+    logger = _CapturingLogger()
+    run_once(
+        ["build1"],
+        state,
+        now=5000.0,  # well past threshold
+        stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+        board_fetcher=lambda s: [_issue("FRE-786", "Approved", _OPUS | {"context:keep"})],
+        runner=_RecordingRunner(),
+        notifier=notifier,
+        persist=lambda st: None,
+        logger=logger,
+        execute=False,  # dry run
+        rc_alive=lambda: True,
+        held_escalated=held_escalated,
+        held_escalation_s=_HELD_S,
+    )
+    assert not any(e[0] == "dispatch_held_too_long" for e in notifier.events)
+    assert not any(w[0] == "dispatch_held_too_long" for w in logger.warnings)
+    assert "build1" not in held_escalated
+
+
+def test_duplicate_streams_do_not_double_escalate_held() -> None:
+    """A repeated ``--streams`` value escalates a held stream once per tick, not per repeat."""
+    state: dict[str, DispatchRecord] = {"build1": _surfaced("FRE-786", launched_at=0.0)}
+    held_escalated: dict[str, str] = {}
+    notifier = _Notifier()
+    board = [_issue("FRE-786", "Approved", _OPUS | {"context:keep"})]
+    run_once(
+        ["build1", "build1", "build1"],  # duplicated
+        state,
+        now=5000.0,
+        stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+        board_fetcher=lambda s: board,
+        runner=_RecordingRunner(),
+        notifier=notifier,
+        persist=lambda st: None,
+        logger=_NullLogger(),
+        execute=True,
+        rc_alive=lambda: True,
+        held_escalated=held_escalated,
+        held_escalation_s=_HELD_S,
+    )
+    assert sum(e[0] == "dispatch_held_too_long" for e in notifier.events) == 1
+
+
 # --- CLI -------------------------------------------------------------------
 
 

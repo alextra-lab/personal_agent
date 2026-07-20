@@ -119,6 +119,27 @@ DEFAULT_POLL_INTERVAL_S: float = 300.0
 # greppable warning still fires every tick meanwhile.
 DEFAULT_WEDGE_TICKS: int = 2
 
+# Held-too-long escalation threshold (FRE-924). A ``surfaced`` manual card
+# (KEEP / manual-model-required / delivery-failed / seat-unhealthy) that stays
+# the stream's NEXT re-emits a ``hold`` (``card-already-surfaced``) every tick
+# and never self-clears — it awaits the owner. Nothing escalated its *age*:
+# FRE-920's card sat held ~2.5 h, surfaced only because the owner noticed an
+# idle stream. Past this age (wall-clock ``now - launched_at``, since the
+# surfaced record pins ``launched_at`` at first-surface), the hold is escalated
+# once as a distinct, greppable ``dispatch_held_too_long`` anomaly + one master
+# ping. 30 min is a fair window for the owner to act on a fresh card (never a
+# premature alarm) yet far short of 2.5 h. The escalation is age-based, not
+# tick-based (unlike the wedge counter): the record carries a durable timestamp,
+# so age is the honest, cadence-independent signal.
+#
+# The one-shot latch (``held_escalated``, stream → escalated ticket) is
+# IN-MEMORY across ticks and reset on restart — the FRE-922 lesson: a persisted
+# crossing state can be first-observed past its trigger after a restart/crash
+# and silently lose the single alert. In-memory, a card outliving a restart
+# simply re-escalates once (age is already past threshold) — at-least-once
+# across restarts, exactly-once per (stream, ticket) episode within a run.
+DEFAULT_HELD_ESCALATION_S: float = 1800.0
+
 # The only endpoint host at which Remote Control is enabled — it is disabled
 # when ``ANTHROPIC_BASE_URL`` points anywhere else (an LLM gateway/proxy),
 # per the RC docs (v2.1.196+).
@@ -516,6 +537,8 @@ def run_once(
     kill_switch_engaged: Callable[[], bool] = lambda: False,
     wedge_counts: dict[str, int] | None = None,
     wedge_ticks: int = DEFAULT_WEDGE_TICKS,
+    held_escalated: dict[str, str] | None = None,
+    held_escalation_s: float = DEFAULT_HELD_ESCALATION_S,
 ) -> dict[str, DispatchRecord]:
     """Run one orchestration tick across ``streams``, mutating and returning state.
 
@@ -543,6 +566,11 @@ def run_once(
             mutated in place across ticks within a daemon run (in-memory, reset on
             restart); defaults to a throwaway map when unused.
         wedge_ticks: Consecutive ticks to tolerate before surfacing a wedge.
+        held_escalated: Per-stream one-shot held-too-long latch (FRE-924), stream →
+            the ticket already escalated this hold-episode; mutated in place across
+            ticks (in-memory, reset on restart); defaults to a throwaway map.
+        held_escalation_s: Age (seconds since first-surface) past which a still-held
+            surfaced card is escalated once.
 
     Returns:
         The updated state dict.
@@ -551,6 +579,8 @@ def run_once(
         rc_alive = lambda: rc_server_alive(runner)  # noqa: E731
     if wedge_counts is None:
         wedge_counts = {}
+    if held_escalated is None:
+        held_escalated = {}
     # De-dup while preserving order: a repeated ``--streams`` value must not
     # double-process a stream — and, since FRE-922, must not double-increment its
     # wedge counter and trip the threshold a tick early.
@@ -593,6 +623,8 @@ def run_once(
             kill_switch_engaged=kill_switch_engaged,
             wedge_counts=wedge_counts,
             wedge_ticks=wedge_ticks,
+            held_escalated=held_escalated,
+            held_escalation_s=held_escalation_s,
         )
     return state
 
@@ -612,6 +644,8 @@ def _apply(
     kill_switch_engaged: Callable[[], bool],
     wedge_counts: dict[str, int],
     wedge_ticks: int,
+    held_escalated: dict[str, str],
+    held_escalation_s: float,
 ) -> None:
     """Apply one decision's side effects (launch / notify / record mutation)."""
     stream = decision.stream
@@ -623,6 +657,14 @@ def _apply(
     # stale count into a later episode).
     if decision.kind != "launch":
         _reset_wedge(stream, wedge_counts)
+    # The held-too-long escalation is a per-episode one-shot latch (FRE-924). Any
+    # decision other than ``hold`` ends the episode — the card was acted on
+    # (``clear``) or the stream moved on — so drop the latch; a later surfaced
+    # hold is a fresh episode that must escalate again. Unlike the wedge counter,
+    # ``launch`` is not special-cased: a launch is never a hold, so it resets like
+    # every other non-hold decision.
+    if decision.kind != "hold":
+        held_escalated.pop(stream, None)
     match decision.kind:
         case "launch":
             assert decision.ticket is not None and decision.model is not None
@@ -732,7 +774,33 @@ def _apply(
                 )
                 state[stream] = dataclasses.replace(record, stall_notified=True)
                 persist(state)
-        case _:  # await / hold / skip — no state change.
+        case "hold":
+            # FRE-924: a surfaced card still held past the age threshold is
+            # escalated once — a distinct greppable anomaly + one master ping —
+            # instead of only re-emitting the per-tick ``card-already-surfaced``
+            # hold. Surface only: the record is never cleared/refreshed and no
+            # process is terminated (AC-2); master decides.
+            #
+            # Gated on ``execute`` so a dry-run tick (``--once`` without
+            # ``--execute``, used for inspection) stays side-effect-free — no
+            # escalation warning, no master ping, no latch mutation — matching the
+            # launch/wedge path's ``if not execute`` guard. (The pre-existing
+            # ``stall`` case notifies ungated in dry-run; that inconsistency is
+            # out of scope here — a possible follow-up.)
+            record = state.get(stream)
+            if execute and record is not None:
+                _note_held(
+                    stream,
+                    record.ticket,
+                    held_escalated,
+                    now=now,
+                    launched_at=record.launched_at,
+                    held_escalation_s=held_escalation_s,
+                    trace_id=trace_id,
+                    notifier=notifier,
+                    logger=logger,
+                )
+        case _:  # await / skip — no state change.
             return
 
 
@@ -794,6 +862,83 @@ def _note_wedge(
             ticket=ticket,
             consecutive_ticks=count,
         )
+
+
+def _note_held(
+    stream: str,
+    ticket: str,
+    held_escalated: dict[str, str],
+    *,
+    now: float,
+    launched_at: float,
+    held_escalation_s: float,
+    trace_id: str,
+    notifier: Notifier,
+    logger: Logger,
+) -> None:
+    """Escalate a surfaced card held past the age threshold, once per episode (FRE-924).
+
+    The card's age is ``now - launched_at`` (clamped at zero, so a future or
+    corrupt ``launched_at`` reads as freshly-surfaced rather than logging a
+    negative age). Within the threshold, or already escalated for this exact
+    ``(stream, ticket)`` this episode, this is a no-op — leaving only the per-tick
+    ``card-already-surfaced`` hold trail. Past the threshold and not yet
+    escalated, it emits BOTH a distinct greppable ``dispatch_held_too_long``
+    warning AND one master ping (once, unlike the wedge which warns every
+    post-threshold tick) and latches the ticket in ``held_escalated``.
+
+    The latch maps stream → the escalated ticket (not a bare stream set), so the
+    suppression check is ``held_escalated.get(stream) == ticket``: if the surfaced
+    ticket on a stream is swapped while it stays held (reachable only via external
+    state surgery — the normal path emits ``clear`` first, dropping the latch),
+    the value no longer matches and the new ticket still escalates. In-memory
+    only — a card outliving a daemon restart re-escalates once (at-least-once
+    across restarts, exactly-once per (stream, ticket) episode within a run).
+    Detection + surfacing ONLY — the record is never mutated and no process is
+    terminated here; master decides whether to intervene (AC-2).
+
+    Scope (FRE-924): the age measures **continuous** hold of the current surfaced
+    record — the FRE-920 incident shape (one card held ~2.5 h). It does NOT
+    accumulate across board churn: if a higher-priority ticket outranks the held
+    one, ``_decide_surfaced`` emits ``clear`` and the stream re-dispatches, writing
+    a fresh surfaced record with a new ``launched_at`` (age reset). A persistently
+    broken seat that re-fails delivery across *different* churned tickets
+    ("repeating the same failure") is therefore NOT yet caught here — closing that
+    needs the re-dispatch/atomicity half (FRE-923) or a ``_decide_surfaced``
+    churn-vs-owner-action distinction; tracked as a follow-up, not silently
+    covered.
+
+    Args:
+        stream: The held stream.
+        ticket: The surfaced ticket the stream is held on.
+        held_escalated: Per-stream latch (stream → escalated ticket), mutated in place.
+        now: Wall-clock epoch seconds.
+        launched_at: When the surfaced record was first created (first-surface time).
+        held_escalation_s: Age threshold in seconds.
+        trace_id: The tick's trace id.
+        notifier: The master-notification sink (pinged once, on escalation).
+        logger: Structured logger (warns once, on escalation).
+    """
+    age = max(0.0, now - launched_at)
+    if age <= held_escalation_s or held_escalated.get(stream) == ticket:
+        return
+    held_escalated[stream] = ticket
+    logger.warning(
+        "dispatch_held_too_long",
+        trace_id=trace_id,
+        stream=stream,
+        ticket=ticket,
+        held_seconds=round(age, 1),
+        detail="a surfaced manual card has been held awaiting the owner past the "
+        "escalation threshold — the stream is stalled and needs attention",
+    )
+    notifier(
+        "dispatch_held_too_long",
+        trace_id=trace_id,
+        stream=stream,
+        ticket=ticket,
+        held_seconds=round(age, 1),
+    )
 
 
 def _record_to_json(record: DispatchRecord) -> dict[str, object]:
@@ -886,6 +1031,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Consecutive RC-busy+pane-idle ticks tolerated before surfacing a wedge.",
     )
     parser.add_argument(
+        "--held-escalation-timeout",
+        type=float,
+        default=DEFAULT_HELD_ESCALATION_S,
+        help="Seconds a surfaced manual card may be held before escalating it once.",
+    )
+    parser.add_argument(
         "--preflight",
         action="store_true",
         help="Check preconditions + RC liveness, report, and exit (for ExecStartPre).",
@@ -908,9 +1059,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     notifier = _structlog_notifier(logger)
     state_path = Path(args.state_file)
     kill_switch_path = Path(args.kill_switch_file)
-    # In-memory across ticks within this run, reset on restart (FRE-922) — never
-    # persisted, so a stale count can never mislead the one-shot master ping.
+    # In-memory across ticks within this run, reset on restart (FRE-922/FRE-924) —
+    # never persisted, so a stale value can never mislead the one-shot ping.
     wedge_counts: dict[str, int] = {}
+    held_escalated: dict[str, str] = {}
 
     def tick() -> None:
         state = load_state(state_path)
@@ -928,6 +1080,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             kill_switch_engaged=lambda: _kill_switch_engaged(kill_switch_path),
             wedge_counts=wedge_counts,
             wedge_ticks=args.wedge_ticks,
+            held_escalated=held_escalated,
+            held_escalation_s=args.held_escalation_timeout,
         )
 
     if args.loop:

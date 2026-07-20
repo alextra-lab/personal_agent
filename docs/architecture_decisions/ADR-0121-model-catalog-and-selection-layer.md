@@ -581,6 +581,13 @@ deleted before every consumer of the old path is moved in the *same* PR.
    This is a schema change, not a rename: the ES mapping, every emitting log site, and every Kibana
    panel filtering on `profile` move together, with the old field retained read-only for one
    deploy so historical dashboards do not go blank. AC-8.
+   **Delivered 2026-07-20 (FRE-919), correction:** `TraceContext.profile` was found to be **dead** —
+   never bound into structlog, absent from the emit payload and the ES template, referenced by **zero**
+   of the 16 Kibana dashboards. There was no live dimension to retain, so it was **removed outright**
+   rather than kept read-only, and the "no panel goes blank" clause is vacuously satisfied. The step
+   also closed a pre-existing bug: `api_costs.model` wrote the bare id while `model_call_completed`
+   used the provider-prefixed form for the same call (migration 0021 backfilled 4297 rows). Deployed +
+   verified live.
 5. **Path removed end to end** — PWA model picker replaces the profile pill
    (`StreamingChat.tsx:26,168-178`), observe view, the CLI `--profile` surface
    (`ui/service_cli.py:101-118`), `ClassifiedErrorCard` escalation wording, and the

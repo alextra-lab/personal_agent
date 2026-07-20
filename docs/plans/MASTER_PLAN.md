@@ -11,11 +11,11 @@
 Both ADRs **Accepted** (owner, 2026-07-19). **ADR-0121** = model catalog + selection layer, Path
 removed. **ADR-0122** = build-time artifact-builder selection.
 
-- **ADR-0121 T1–T3 DONE, deploy-verified live (2026-07-20).** T1 FRE-916 (single catalog, sub-agent
+- **ADR-0121 T1–T4 DONE, deploy-verified live (2026-07-20).** T1 FRE-916 (single catalog, sub-agent
   ctx 65536, embedder OVH), T2 FRE-917 (selection store; migration 0020 applied, 1235 rows backfilled),
-  T3 FRE-918 (config read API). Gateway rebuilt + live.
-- **build1 head: FRE-919 (T4)** — telemetry migration, profile → provider+model (ES-mapping change).
-  Then **T5 FRE-920 (seam AC-9)** — PWA picker + Path removed end-to-end; also owns retiring the
+  T3 FRE-918 (config read API), T4 FRE-919 (telemetry profile→provider+model; migration 0021 backfilled 4297 rows). Gateway + ES live.
+- **build1 head: FRE-920 (T5, seam AC-9)** — PWA model picker + Path removed end-to-end;
+  also owns retiring the
   profile-keyed `/api/inference/status` (T3 seam note).
 - **build2: FRE-881 (ADR-0122 T1)** building → 882 → **921 (seam AC-7)**.
 - **FRE-922 DONE** — worker-seat background-poller wedge fix (CC #61568); daemons restarted, detector live.

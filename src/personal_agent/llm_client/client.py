@@ -371,6 +371,7 @@ class LocalLLMClient:
             role=role.value,
             model=model_id,
             endpoint=current_endpoint,
+            provider=model_config.provider or "unknown",
             trace_ctx=trace_ctx,
             span_id=span_id,
         )
@@ -560,6 +561,7 @@ class LocalLLMClient:
                         role=role.value,
                         model=model_id,
                         endpoint=current_endpoint,
+                        provider=model_config.provider or "unknown",
                         trace_ctx=trace_ctx,
                         span_id=span_id,
                         latency_ms=duration_ms,

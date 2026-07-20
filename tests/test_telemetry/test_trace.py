@@ -1,5 +1,6 @@
 """Tests for TraceContext."""
 
+import dataclasses
 import uuid
 
 import pytest
@@ -98,6 +99,16 @@ class TestTraceContext:
         parent = TraceContext.new_trace(authenticated=True)
         child_ctx, _ = parent.new_span()
         assert child_ctx.authenticated is True
+
+    def test_no_profile_field(self) -> None:
+        """ADR-0121 §8: profile was retired (dead — never consumed downstream).
+
+        Provider + model are now stamped per model call instead (see
+        personal_agent.llm_client.telemetry). Regression guard against
+        reintroducing a trace-wide profile dimension.
+        """
+        field_names = {f.name for f in dataclasses.fields(TraceContext)}
+        assert "profile" not in field_names
 
 
 class TestSystemTraceContext:

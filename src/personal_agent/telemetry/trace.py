@@ -24,13 +24,15 @@ class TraceContext:
     Components should create new spans using new_span() rather than modifying
     the context.
 
+    Formerly carried a ``profile`` field (ADR-0044 D5) for per-profile cost
+    dashboards. Removed under ADR-0121 §8: a trace can span calls to several
+    different models, so trace-wide profile was the wrong grain — provider
+    and model are now stamped per call on ``model_call_completed`` instead
+    (:mod:`personal_agent.llm_client.telemetry`).
+
     Attributes:
         trace_id: Unique identifier for the trace (UUID string).
         parent_span_id: Optional parent span ID for nested operations.
-        profile: Execution profile name bound to this trace (ADR-0044 D5).
-            Defaults to "local". All telemetry emitted within this trace is
-            tagged with this value to enable per-profile cost dashboards and
-            A/B comparisons.
         user_id: Owning user UUID propagated from the authenticated request
             (ADR-0064). Tool executors that receive ``ctx`` read this for
             per-user scoping (e.g. notes_search, recall_personal_history).
@@ -47,7 +49,6 @@ class TraceContext:
 
     trace_id: str
     parent_span_id: str | None = None
-    profile: str = "local"
     user_id: UUID | None = None
     session_id: str | None = None
     kind: str = "user"
@@ -60,7 +61,6 @@ class TraceContext:
     @classmethod
     def new_trace(
         cls,
-        profile: str = "local",
         *,
         user_id: UUID | None = None,
         session_id: str | None = None,
@@ -69,7 +69,6 @@ class TraceContext:
         """Start a new trace.
 
         Args:
-            profile: Execution profile name for this trace (default: "local").
             user_id: Optional authenticated user UUID to propagate to child
                 spans and tool executors.
             session_id: Optional session id to propagate.
@@ -81,7 +80,6 @@ class TraceContext:
         """
         return cls(
             trace_id=str(uuid.uuid4()),
-            profile=profile,
             user_id=user_id,
             session_id=session_id,
             authenticated=authenticated,
@@ -92,7 +90,7 @@ class TraceContext:
 
         Returns:
             A tuple of (new TraceContext with this span as parent, new span_id).
-            The new context has the same trace_id, profile, user_id, session_id,
+            The new context has the same trace_id, user_id, session_id,
             kind, eval_mode, authenticated, and a new parent_span_id set to the
             generated span_id.
         """
@@ -100,7 +98,6 @@ class TraceContext:
         return TraceContext(
             trace_id=self.trace_id,
             parent_span_id=span_id,
-            profile=self.profile,
             user_id=self.user_id,
             session_id=self.session_id,
             kind=self.kind,
@@ -133,7 +130,6 @@ class SystemTraceContext:
     def new(
         source: str,
         *,
-        profile: str = "local",
         session_id: str | None = None,
         user_id: UUID | None = None,
     ) -> TraceContext:
@@ -144,7 +140,6 @@ class SystemTraceContext:
                 example ``"scheduler"``, ``"monitor"``, ``"reflection"``,
                 ``"captains_log_feedback"``, ``"knowledge_api"``,
                 ``"joinability_probe"``. Must be non-empty.
-            profile: Execution profile name; defaults to ``"local"``.
             session_id: Optional session id when the system path operates
                 on behalf of a known session (e.g. a scheduler tick that
                 consolidates one session at a time).
@@ -165,7 +160,6 @@ class SystemTraceContext:
             )
         return TraceContext(
             trace_id=str(uuid.uuid4()),
-            profile=profile,
             user_id=user_id,
             session_id=session_id,
             kind=f"{SYSTEM_KIND_PREFIX}{source}",

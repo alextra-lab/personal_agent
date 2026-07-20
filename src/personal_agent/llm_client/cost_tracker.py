@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID
 
 import asyncpg  # type: ignore[import-untyped]
@@ -113,7 +113,9 @@ class CostTrackerService:
 
         Args:
             provider: API provider (e.g., ``"anthropic"``, ``"openai"``).
-            model: Model name (e.g., ``"claude-sonnet-4.5"``).
+            model: Canonical model identifier — must match the ``model`` field
+                the same call emits on ``model_call_completed`` (ADR-0121 T4 /
+                AC-8), e.g. ``"anthropic/claude-sonnet-4-6"``.
             input_tokens: Number of input tokens.
             output_tokens: Number of output tokens.
             cost_usd: Cost in USD.  For Anthropic, this reflects cache-tier
@@ -307,6 +309,63 @@ class CostTrackerService:
             "provider": provider if provider else "all",
         }
 
+    async def _get_cost_breakdown_by(
+        self,
+        dimension: Literal["purpose", "model"],
+        days: int = 7,
+        provider: str | None = None,
+    ) -> dict[str, float]:
+        """Get cost breakdown grouped by ``dimension`` for the last N days.
+
+        Shared by :meth:`get_cost_by_purpose` and :meth:`get_cost_by_model` so
+        the pool-guard / cutoff / provider-filter / error-handling shape has one
+        definition. ``dimension`` is restricted to a fixed literal set (never
+        caller-supplied free text) since it is interpolated as a column/alias
+        name, which ``asyncpg`` parameter placeholders cannot bind.
+
+        Args:
+            dimension: Column to group by — ``"purpose"`` or ``"model"``.
+            days: Number of days to look back
+            provider: Optional provider filter
+
+        Returns:
+            Dict mapping the dimension's value to cost in USD
+        """
+        if not self.pool:
+            return {}
+
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+            async with self.pool.acquire() as conn:
+                if provider:
+                    rows = await conn.fetch(
+                        f"""
+                        SELECT {dimension}, SUM(cost_usd) as cost
+                        FROM api_costs
+                        WHERE provider = $1 AND timestamp >= $2
+                        GROUP BY {dimension}
+                        """,
+                        provider,
+                        cutoff,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        f"""
+                        SELECT {dimension}, SUM(cost_usd) as cost
+                        FROM api_costs
+                        WHERE timestamp >= $1
+                        GROUP BY {dimension}
+                        """,
+                        cutoff,
+                    )
+
+                return {row[dimension] or "unknown": float(row["cost"]) for row in rows}
+
+        except Exception as e:
+            log.error(f"{dimension}_cost_fetch_failed", error=str(e), exc_info=True)
+            return {}
+
     async def get_cost_by_purpose(
         self, days: int = 7, provider: str | None = None
     ) -> dict[str, float]:
@@ -319,40 +378,25 @@ class CostTrackerService:
         Returns:
             Dict mapping purpose to cost in USD
         """
-        if not self.pool:
-            return {}
+        return await self._get_cost_breakdown_by("purpose", days, provider)
 
-        try:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    async def get_cost_by_model(
+        self, days: int = 7, provider: str | None = None
+    ) -> dict[str, float]:
+        """Get cost breakdown by model for the last N days (ADR-0121 T4 / AC-8).
 
-            async with self.pool.acquire() as conn:
-                if provider:
-                    rows = await conn.fetch(
-                        """
-                        SELECT purpose, SUM(cost_usd) as cost
-                        FROM api_costs
-                        WHERE provider = $1 AND timestamp >= $2
-                        GROUP BY purpose
-                        """,
-                        provider,
-                        cutoff,
-                    )
-                else:
-                    rows = await conn.fetch(
-                        """
-                        SELECT purpose, SUM(cost_usd) as cost
-                        FROM api_costs
-                        WHERE timestamp >= $1
-                        GROUP BY purpose
-                        """,
-                        cutoff,
-                    )
+        The dimension ADR-0121 replaces per-profile cost dashboards with: spend
+        attributable to the model that actually incurred it, rather than a
+        two-valued execution profile.
 
-                return {row["purpose"] or "unknown": float(row["cost"]) for row in rows}
+        Args:
+            days: Number of days to look back
+            provider: Optional provider filter
 
-        except Exception as e:
-            log.error("purpose_cost_fetch_failed", error=str(e), exc_info=True)
-            return {}
+        Returns:
+            Dict mapping model to cost in USD
+        """
+        return await self._get_cost_breakdown_by("model", days, provider)
 
 
 def _normalize_asyncpg_dsn(database_url: str) -> str:

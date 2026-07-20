@@ -264,6 +264,7 @@ def test_logs_dashboard_referenced_fields_are_explicit() -> None:
         "memory_used": "float",
         "from_state": "keyword",
         "role": "keyword",
+        "provider": "keyword",
         "target_agent": "keyword",
         "title": "keyword",
         "trimmed": "boolean",

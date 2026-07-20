@@ -64,6 +64,7 @@ def emit_model_call_started(
     role: str,
     model: str,
     endpoint: str,
+    provider: str,
     trace_ctx: TraceContext,
     span_id: str,
     extra: dict[str, Any] | None = None,
@@ -75,6 +76,10 @@ def emit_model_call_started(
         role: ``ModelRole.value`` for the call (``"primary"`` / ``"extractor"`` / …).
         model: Canonical model identifier (e.g. ``"anthropic/claude-sonnet-4-6"``).
         endpoint: URL or provider tag this call dispatches to.
+        provider: ADR-0121 catalog provider key (e.g. ``"anthropic"``,
+            ``"slm_local"``) — the dimension cost/telemetry records are
+            attributed against (ADR-0121 §8, replacing the retired
+            ``TraceContext.profile``).
         trace_ctx: Trace context as passed into the call (pre-``new_span``).
         span_id: Newly minted span id for this model call.
         extra: Provider-specific fields to merge into the emit
@@ -82,6 +87,7 @@ def emit_model_call_started(
     """
     payload: dict[str, Any] = {
         "model": model,
+        "provider": provider,
         "role": role,
         "endpoint": endpoint,
         **_identity_fields(trace_ctx=trace_ctx, span_id=span_id),
@@ -97,6 +103,7 @@ def emit_model_call_completed(
     role: str,
     model: str,
     endpoint: str,
+    provider: str,
     trace_ctx: TraceContext,
     span_id: str,
     latency_ms: int,
@@ -114,6 +121,10 @@ def emit_model_call_completed(
         role: ``ModelRole.value`` for the call.
         model: Canonical model identifier.
         endpoint: URL or provider tag this call dispatched to.
+        provider: ADR-0121 catalog provider key (e.g. ``"anthropic"``,
+            ``"slm_local"``) — the dimension cost/telemetry records are
+            attributed against (ADR-0121 §8, replacing the retired
+            ``TraceContext.profile``).
         trace_ctx: Trace context as passed into the call (pre-``new_span``).
         span_id: Span id of the model call (same one used in ``_started``).
         latency_ms: Wall-clock latency of the call in milliseconds.
@@ -131,6 +142,7 @@ def emit_model_call_completed(
     """
     payload: dict[str, Any] = {
         "model": model,
+        "provider": provider,
         "role": role,
         "endpoint": endpoint,
         "latency_ms": latency_ms,

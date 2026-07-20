@@ -65,7 +65,6 @@ def _ctx_with_session() -> TraceContext:
     return TraceContext(
         trace_id=base.trace_id,
         parent_span_id="22222222-2222-2222-2222-222222222222",
-        profile=base.profile,
         user_id=base.user_id,
         session_id=base.session_id,
         kind=base.kind,
@@ -90,6 +89,7 @@ class TestCanonicalEmitContract:
             role="primary",
             model="anthropic/claude-sonnet-4-6",
             endpoint="anthropic",
+            provider="anthropic",
             trace_ctx=ctx,
             span_id="33333333-3333-3333-3333-333333333333",
         )
@@ -114,6 +114,7 @@ class TestCanonicalEmitContract:
             role="primary",
             model="anthropic/claude-sonnet-4-6",
             endpoint="anthropic",
+            provider="anthropic",
             trace_ctx=ctx,
             span_id="33333333-3333-3333-3333-333333333333",
             latency_ms=125,
@@ -143,6 +144,7 @@ class TestCanonicalEmitContract:
             role="primary",
             model="anthropic/claude-sonnet-4-6",
             endpoint="anthropic",
+            provider="anthropic",
             trace_ctx=_ctx_with_session(),
             span_id="33333333-3333-3333-3333-333333333333",
             latency_ms=125,
@@ -167,6 +169,7 @@ class TestCanonicalEmitContract:
             role="primary",
             model="anthropic/claude-sonnet-4-6",
             endpoint="anthropic",
+            provider="anthropic",
             trace_ctx=_ctx_with_session(),
             span_id="33333333-3333-3333-3333-333333333333",
         )
@@ -261,9 +264,91 @@ class TestClientWiring:
         assert s_kwargs["model"] == "anthropic/claude-sonnet-4-6"
         assert s_kwargs["role"] == "primary"
         assert s_kwargs["endpoint"] == "anthropic"
+        assert s_kwargs["provider"] == "anthropic"
+        assert c_kwargs["provider"] == "anthropic"
         # Started and completed must share the span_id so they join.
         assert s_kwargs["span_id"] == c_kwargs["span_id"]
         assert s_kwargs["span_id"]  # non-empty
+
+    @pytest.mark.asyncio
+    async def test_litellm_cost_row_model_matches_telemetry_model(self) -> None:
+        """ADR-0121 T4 / AC-8 regression guard (codex plan-review finding).
+
+        ``api_costs.model`` must name the same model as the ``model_call_completed``
+        event for the same call — codex's plan review caught that ``record_api_call``
+        was writing the bare ``model_id`` while telemetry wrote ``provider/model_id``,
+        which AC-8's fail clause ("if the recorded model differs from the
+        model-call-completed model") explicitly forbids.
+        """
+        from personal_agent.llm_client.litellm_client import LiteLLMClient
+        from personal_agent.llm_client.types import ModelRole
+
+        usage = MagicMock()
+        usage.prompt_tokens = 100
+        usage.completion_tokens = 50
+        usage.total_tokens = 150
+        usage.cache_read_input_tokens = None
+        usage.cache_creation_input_tokens = None
+        usage.prompt_tokens_details = None
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "ok"
+        response.choices[0].message.tool_calls = None
+        response.usage = usage
+        response.id = "resp_cost_match"
+
+        mock_gate = MagicMock()
+        mock_gate.reserve = AsyncMock(return_value="res-cost-match")
+        mock_gate.commit = AsyncMock()
+        mock_tracker = AsyncMock()
+
+        ctx = _ctx_with_session()
+
+        with (
+            patch(
+                "personal_agent.llm_client.litellm_client.emit_model_call_completed"
+            ) as completed,
+            patch("litellm.acompletion", AsyncMock(return_value=response)),
+            # A definite non-zero cost so record_api_call is guaranteed to fire
+            # (the code path only records when cost > 0).
+            patch("litellm.completion_cost", return_value=0.05),
+            patch("personal_agent.cost_gate.get_default_gate", return_value=mock_gate),
+            patch("personal_agent.cost_gate.load_budget_config", return_value=MagicMock()),
+            patch(
+                "personal_agent.llm_client.cost_estimator.estimate_reservation_for_call",
+                return_value=Decimal("0.01"),
+            ),
+            patch(
+                "personal_agent.llm_client.history_sanitiser.sanitise_messages",
+                side_effect=lambda msgs, trace_id: (msgs, []),
+            ),
+            patch(
+                "personal_agent.llm_client.cost_tracker.CostTrackerService",
+                return_value=mock_tracker,
+            ),
+            patch(
+                "personal_agent.config.settings.get_settings",
+                return_value=MagicMock(anthropic_api_key="k", openai_api_key=None),
+            ),
+        ):
+            client = LiteLLMClient(
+                model_id="claude-sonnet-4-6",
+                provider="anthropic",
+                max_tokens=16,
+                budget_role="main_inference",
+            )
+            await client.respond(
+                role=ModelRole.PRIMARY,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=ctx,
+            )
+
+        completed.assert_called_once()
+        mock_tracker.record_api_call.assert_awaited_once()
+
+        telemetry_model = completed.call_args.kwargs["model"]
+        cost_row_model = mock_tracker.record_api_call.call_args.kwargs["model"]
+        assert telemetry_model == cost_row_model == "anthropic/claude-sonnet-4-6"
 
     @pytest.mark.asyncio
     async def test_local_client_calls_started_with_correct_args(self, tmp_path: Path) -> None:
@@ -325,6 +410,11 @@ models:
         assert s_kwargs["model"] == "test-primary"
         assert s_kwargs["role"] == "primary"
         assert s_kwargs["endpoint"] == "http://mock-slm.test/v1/chat/completions"
+        # This fixture's models.yaml declares no `providers:` block, so the
+        # ADR-0121 provider-required validator never runs and
+        # ModelDefinition.provider is None — the emit helper must fall back
+        # to "unknown" rather than crash the chat turn.
+        assert s_kwargs["provider"] == "unknown"
         assert s_kwargs["span_id"]  # non-empty
 
 

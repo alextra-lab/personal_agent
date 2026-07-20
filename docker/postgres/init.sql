@@ -428,6 +428,23 @@ CREATE TABLE IF NOT EXISTS user_constraint_preferences (
     PRIMARY KEY (user_id, constraint_name)
 );
 
+-- Session-scoped model selections (ADR-0121 §4 / FRE-917).
+-- Server-authoritative store for which model a role runs in a session — the
+-- replacement for execution-profile "Path" as the source of truth (ADR-0079's
+-- invariants inherited). One row per (session_id, role) naming a catalog
+-- deployment key; a missing row means "resolve through the role's binding
+-- default" (the guardrail's fail-closed fallback, ADR-0121 §6). In T2 only
+-- role='primary' is populated. Ownership flows through the session, not a
+-- column here. Mirrored in migration 0020_session_model_selections.sql.
+CREATE TABLE IF NOT EXISTS session_model_selections (
+    session_id     UUID NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    role           TEXT NOT NULL,
+    deployment_key TEXT NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (session_id, role)
+);
+
 -- ===========================================================================
 -- sysgraph schema (ADR-0105 D2/D3 / FRE-714)
 --

@@ -71,6 +71,24 @@ ROLE_KIND_REQUIREMENTS: dict[str, ModelKind] = {
 }
 
 
+def required_kind_for_role(role: str) -> ModelKind:
+    """Return the deployment kind a role may legally bind to (ADR-0121 §6, AC-2).
+
+    Single source of the role→kind rule shared by config-load binding validation
+    (:meth:`ModelConfig._bindings_are_valid_and_kind_compatible`) and the runtime
+    selection guardrail (``config.model_loader.is_selectable_binding``). A role
+    absent from :data:`ROLE_KIND_REQUIREMENTS` requires ``LLM`` — the fail-closed
+    default, so a role added later cannot silently accept an arbitrary kind.
+
+    Args:
+        role: The role name.
+
+    Returns:
+        The required :class:`ModelKind` for the role.
+    """
+    return ROLE_KIND_REQUIREMENTS.get(role, ModelKind.LLM)
+
+
 class ProviderDefinition(BaseModel):
     """A backend we talk to — one entry per provider, not per model (ADR-0121 Layer 1).
 
@@ -492,7 +510,7 @@ class ModelConfig(BaseModel):
                     f"role {role!r} binds to deployment {binding.deployment!r}, which is "
                     f"not defined under models:; known deployments: {sorted(self.models)}"
                 )
-            required = ROLE_KIND_REQUIREMENTS.get(role, ModelKind.LLM)
+            required = required_kind_for_role(role)
             if definition.kind is not required:
                 raise ValueError(
                     f"role {role!r} requires a {required.value!r} deployment but "

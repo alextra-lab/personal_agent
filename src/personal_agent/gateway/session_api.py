@@ -20,7 +20,7 @@ from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.rate_limiting import get_rate_limiter
 from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.service.auth import _CF_EMAIL_HEADER, _get_user_with_display_name
-from personal_agent.service.models import SessionProfileUpdate
+from personal_agent.service.models import SessionProfileUpdate, SessionSelectionUpdate
 from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
@@ -200,6 +200,41 @@ async def get_session(
         )
     ).scalar()
     result["cost_usd"] = float(cost_scalar or 0.0)
+
+    # ADR-0121 §4: server-authoritative primary model selection + provenance, so
+    # a client hydrates the picker on mount (localStorage is a cache, never the
+    # authority — invariants 1/5/10). The stored key is run through the §6
+    # guardrail so a stale/removed key fail-closes to the default here too.
+    from personal_agent.config import load_model_config as _load_model_config  # noqa: PLC0415
+    from personal_agent.config.model_loader import (  # noqa: PLC0415
+        resolve_selected_deployment as _resolve_selected_deployment,
+    )
+    from personal_agent.service.repositories.session_model_selection_repository import (  # noqa: PLC0415, E501
+        SessionModelSelectionRepository,
+    )
+
+    _config = _load_model_config()
+    _default_primary = _resolve_selected_deployment("primary", None, _config)
+    try:
+        _stored_primary = await SessionModelSelectionRepository(db).get(uuid, "primary")
+    except Exception as exc:  # noqa: BLE001 — availability guard (migration lag), degrade gracefully
+        log.warning(
+            "selection_store_hydration_failed",
+            session_id=session_id,
+            error=str(exc),
+            trace_id=ctx.trace_id,
+        )
+        _stored_primary = None
+    _resolved_primary = _resolve_selected_deployment("primary", _stored_primary, _config)
+    result["primary_selection"] = _resolved_primary
+    # Provenance must not claim "server-hydrated" when the stored key was actually
+    # dropped by the guardrail (stale/removed key → default): report the truth so
+    # the picker can signal a reset rather than render the default as the choice.
+    result["selection_provenance"] = (
+        "server-hydrated"
+        if _stored_primary is not None and _resolved_primary == _stored_primary
+        else "default"
+    )
     return result
 
 
@@ -392,11 +427,140 @@ async def update_session_profile(
     if session is None:
         raise not_found("session")
 
+    # ADR-0121 §4 (FRE-917): the Path pill is still the live primary control until
+    # T5 replaces it with the picker. The selection store is now authoritative for
+    # `primary`, so the pill must WRITE to it — otherwise flipping the pill would
+    # change execution_profile but no longer move which model `primary` runs (the
+    # stored selection would win). Mirror the profile's `primary_model` into the
+    # selection store so the pill keeps working during the transition. Guardrailed
+    # (§6): only a valid, selectable key is written; an unselectable one is skipped
+    # rather than persisting a bad selection.
+    from personal_agent.config import load_model_config
+    from personal_agent.config.model_loader import is_selectable_binding
+    from personal_agent.config.profile import load_profile
+    from personal_agent.service.repositories.session_model_selection_repository import (
+        SessionModelSelectionRepository,
+    )
+    from personal_agent.transport.agui.transport import emit_session_selection
+
+    try:
+        pill_primary = load_profile(body.profile).primary_model
+    except (FileNotFoundError, ValueError):
+        pill_primary = None
+    if pill_primary is not None and is_selectable_binding(
+        "primary", pill_primary, load_model_config()
+    ):
+        await SessionModelSelectionRepository(db).upsert(
+            session_id=uuid, role="primary", deployment_key=pill_primary
+        )
+        await emit_session_selection(
+            session_id=session_id, role="primary", deployment_key=pill_primary
+        )
+
     await emit_session_profile(session_id=session_id, profile=body.profile)
     log.info(
         "gateway_sessions_set_profile",
         session_id=session_id,
         profile=body.profile,
+        primary_selection=pill_primary,
+        token_name=token.name,
+        user_id=str(user_id),
+        trace_id=ctx.trace_id,
+    )
+    return _session_to_dict(session)
+
+
+@router.patch("/{session_id}/selection")
+async def update_session_selection(
+    request: Request,
+    session_id: str,
+    body: SessionSelectionUpdate,
+    token: TokenInfo = Depends(require_scope("sessions:write")),  # noqa: B008
+    db: AsyncSession = Depends(_get_db),  # noqa: B008
+) -> dict[str, Any]:
+    """Set a session's server-owned model selection (ADR-0121 §4 / FRE-917).
+
+    The canonical write path for the model picker that replaces the Path pill —
+    the selection-store analog of :func:`update_session_profile`. The write is
+    guarded two ways (ADR-0121 §6): the ``(role, deployment_key)`` is validated
+    server-side **before any storage** (an ``open`` role naming a valid,
+    kind-compatible catalog key — a pinned role or non-catalog/wrong-kind key is
+    rejected 422), and the write is scoped to the authenticated user so a token
+    holder cannot mutate another user's session (404 on mismatch). The change is
+    persisted and emitted to the single active client as a ``session_selection``
+    STATE_DELTA (ADR-0075).
+
+    Args:
+        request: FastAPI request (injected).
+        session_id: UUID string of the session.
+        body: The role and deployment key to select.
+        token: Validated bearer token with ``sessions:write`` scope.
+        db: Async SQLAlchemy session (injected).
+
+    Returns:
+        The session dict (unchanged shape; the stored selection is the effect).
+
+    Raises:
+        HTTPException(422): When ``session_id`` is not a valid UUID, or the
+            ``(role, deployment_key)`` is not a permitted selection.
+        HTTPException(404): When the session does not exist or is owned by
+            another user.
+    """
+    get_rate_limiter().check(token)
+    from personal_agent.config import load_model_config
+    from personal_agent.config.model_loader import is_selectable_binding
+    from personal_agent.service.repositories.session_model_selection_repository import (
+        SessionModelSelectionRepository,
+    )
+    from personal_agent.service.repositories.session_repository import SessionRepository
+    from personal_agent.transport.agui.transport import emit_session_selection
+
+    user_id = await _require_request_user_id(request, db)
+    ctx = SystemTraceContext.new("session_api", session_id=session_id)
+
+    try:
+        uuid = UUID(session_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_parameter",
+                "message": "session_id must be a valid UUID",
+                "status": 422,
+            },
+        ) from exc
+
+    # §6 server-side validation BEFORE any storage: reject a pinned role or a
+    # non-catalog / wrong-kind key (never trust the client).
+    if not is_selectable_binding(body.role, body.deployment_key, load_model_config()):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_parameter",
+                "message": (
+                    f"'{body.deployment_key}' is not a selectable model for role '{body.role}'"
+                ),
+                "status": 422,
+            },
+        )
+
+    # Ownership: a user-scoped read returns None for a wrong owner → 404, leaving
+    # the stored value untouched (the write below never runs).
+    session = await SessionRepository(db).get(uuid, user_id=user_id)
+    if session is None:
+        raise not_found("session")
+
+    await SessionModelSelectionRepository(db).upsert(
+        session_id=uuid, role=body.role, deployment_key=body.deployment_key
+    )
+    await emit_session_selection(
+        session_id=session_id, role=body.role, deployment_key=body.deployment_key
+    )
+    log.info(
+        "gateway_sessions_set_selection",
+        session_id=session_id,
+        role=body.role,
+        deployment_key=body.deployment_key,
         token_name=token.name,
         user_id=str(user_id),
         trace_id=ctx.trace_id,

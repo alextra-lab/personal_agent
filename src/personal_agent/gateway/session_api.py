@@ -19,9 +19,10 @@ from personal_agent.gateway.auth import TokenInfo, require_scope
 from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.rate_limiting import get_rate_limiter
 from personal_agent.llm_client.message_content import get_text_content
+from personal_agent.llm_client.models import ModelConfig, ModelDefinition, ProviderDefinition
 from personal_agent.service.auth import _CF_EMAIL_HEADER, _get_user_with_display_name
 from personal_agent.service.models import SessionProfileUpdate, SessionSelectionUpdate
-from personal_agent.telemetry.trace import SystemTraceContext
+from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 
 log = structlog.get_logger(__name__)
 
@@ -206,35 +207,14 @@ async def get_session(
     # authority — invariants 1/5/10). The stored key is run through the §6
     # guardrail so a stale/removed key fail-closes to the default here too.
     from personal_agent.config import load_model_config as _load_model_config  # noqa: PLC0415
-    from personal_agent.config.model_loader import (  # noqa: PLC0415
-        resolve_selected_deployment as _resolve_selected_deployment,
-    )
-    from personal_agent.service.repositories.session_model_selection_repository import (  # noqa: PLC0415, E501
-        SessionModelSelectionRepository,
-    )
 
     _config = _load_model_config()
-    _default_primary = _resolve_selected_deployment("primary", None, _config)
-    try:
-        _stored_primary = await SessionModelSelectionRepository(db).get(uuid, "primary")
-    except Exception as exc:  # noqa: BLE001 — availability guard (migration lag), degrade gracefully
-        log.warning(
-            "selection_store_hydration_failed",
-            session_id=session_id,
-            error=str(exc),
-            trace_id=ctx.trace_id,
-        )
-        _stored_primary = None
-    _resolved_primary = _resolve_selected_deployment("primary", _stored_primary, _config)
-    result["primary_selection"] = _resolved_primary
-    # Provenance must not claim "server-hydrated" when the stored key was actually
-    # dropped by the guardrail (stale/removed key → default): report the truth so
-    # the picker can signal a reset rather than render the default as the choice.
-    result["selection_provenance"] = (
-        "server-hydrated"
-        if _stored_primary is not None and _resolved_primary == _stored_primary
-        else "default"
+    _stored = await _fetch_selections(db, uuid, roles=["primary"], ctx=ctx)
+    _resolved_primary, _selection_provenance = _resolve_role_binding(
+        "primary", str(session.execution_profile), _config, _stored.get("primary")
     )
+    result["primary_selection"] = _resolved_primary
+    result["selection_provenance"] = _selection_provenance
     return result
 
 
@@ -355,6 +335,289 @@ async def _attach_turn_ratings(
         tid = m.get("trace_id")
         if isinstance(tid, str) and tid in by_trace:
             m["rating"] = by_trace[tid]
+
+
+# ---------------------------------------------------------------------------
+# Model selection resolution — shared by GET /{id} and GET /{id}/config
+# (ADR-0121 §3/§4, FRE-918)
+# ---------------------------------------------------------------------------
+
+#: Roles the legacy ExecutionProfile (ADR-0044) still redirects, independent of
+#: the ADR-0121 §6 `open` flag — `sub_agent` is pinned re: user selection but
+#: still profile-redirected today (llm_client/factory.py's profile-fallback
+#: branch), so this map is NOT the same set as "open" roles. Mirrors
+#: config/profile.py's `resolve_model_key`/`resolve_profile_redirect`.
+_PROFILE_REDIRECT_ATTR: dict[str, str] = {
+    "primary": "primary_model",
+    "sub_agent": "sub_agent_model",
+    "artifact_builder": "artifact_builder_model",
+}
+
+
+def _profile_role_bridge(profile_name: str, role: str) -> str | None:
+    """Return the named profile's model for ``role``, or ``None`` if it doesn't redirect.
+
+    Args:
+        profile_name: An ``execution_profile`` value (e.g. ``"local"``, ``"cloud"``).
+        role: The role to look up.
+
+    Returns:
+        The profile's bound model key for roles it redirects
+        (``primary``/``sub_agent``/``artifact_builder``), else ``None`` — a
+        missing/invalid profile name degrades to ``None`` rather than raising.
+    """
+    attr = _PROFILE_REDIRECT_ATTR.get(role)
+    if attr is None:
+        return None
+    from personal_agent.config.profile import load_profile  # noqa: PLC0415
+
+    try:
+        return getattr(load_profile(profile_name), attr, None)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _resolve_role_binding(
+    role: str,
+    execution_profile: str,
+    config: ModelConfig,
+    stored: str | None,
+) -> tuple[str, str]:
+    """Resolve a session's effective deployment for ``role``, plus provenance.
+
+    Generalizes the primary-only hydration ``get_session`` used before FRE-918
+    to any role, and closes a gap codex plan-review found: a session created
+    via the legacy ``POST /chat`` endpoint (``service/app.py``) never writes a
+    selection-store row and never carries a per-turn selection context, so its
+    actual next-turn resolution falls through to the ExecutionProfile redirect
+    (``llm_client/factory.py``'s profile-fallback branch). Reporting the bare
+    binding default here would show a binding that "differs from what the next
+    turn uses" — the exact AC-9-slice failure mode. Order: stored selection
+    (open roles only, guardrailed) -> profile bridge (primary/sub_agent/
+    artifact_builder only, trusted — not re-guardrailed, matching how
+    ``factory.py`` treats a profile-resolved key) -> binding default.
+
+    Provenance is deliberately binary (``"server-hydrated"`` / ``"default"``),
+    matching this endpoint family's existing, tested contract — a bridge that
+    happens to resolve is still labelled ``"default"``: the label is a coarse
+    UI hint, the *resolved key* is what AC-9-slice actually gates on.
+
+    Takes an already-fetched ``stored`` value rather than querying the
+    selection store itself — callers batch the DB read once per session
+    (:meth:`SessionModelSelectionRepository.get_all`) instead of once per role,
+    so this is a pure function, trivially safe to call for a pinned role too
+    (it is simply ignored: ``binding.open`` gates whether ``stored`` is
+    honoured, matching AC-4a even when a row exists for a pinned role).
+
+    Args:
+        role: The role to resolve.
+        execution_profile: The session's stored ``execution_profile`` value.
+        config: The loaded catalog.
+        stored: This role's already-fetched selection-store value, or
+            ``None`` when no row exists (or the batched read failed).
+
+    Returns:
+        ``(resolved_deployment_key, provenance)``.
+    """
+    from personal_agent.config.model_loader import (  # noqa: PLC0415
+        resolve_selected_deployment,
+    )
+
+    binding = config.roles.get(role)
+    if binding is not None and binding.open and stored is not None:
+        resolved = resolve_selected_deployment(role, stored, config)
+        provenance = "server-hydrated" if resolved == stored else "default"
+        return resolved, provenance
+
+    bridge = _profile_role_bridge(execution_profile, role)
+    if bridge is not None and bridge in config.models:
+        return bridge, "default"
+
+    return resolve_selected_deployment(role, None, config), "default"
+
+
+async def _fetch_selections(
+    db: AsyncSession, session_uuid: UUID, *, roles: list[str] | None, ctx: TraceContext
+) -> dict[str, str]:
+    """Fetch a session's stored selections, degrading to empty on a store failure.
+
+    Args:
+        db: Async SQLAlchemy session.
+        session_uuid: The session's UUID.
+        roles: When a single role is needed, ``[role]`` fetches just that row
+            (matches the pre-FRE-918 single-query cost for ``get_session``).
+            ``None`` batches every role in one query
+            (:meth:`SessionModelSelectionRepository.get_all`), avoiding an
+            N-role fan-out of round trips.
+        ctx: The request's trace context, threaded into the failure log so a
+            selection-store degradation is correlatable (ADR-0074).
+
+    Returns:
+        ``{role: deployment_key}`` for whatever rows exist; ``{}`` on a store
+        read failure (e.g. migration lag before table 0020 exists) so callers
+        degrade to binding defaults rather than 500ing.
+    """
+    from personal_agent.service.repositories.session_model_selection_repository import (  # noqa: PLC0415, E501
+        SessionModelSelectionRepository,
+    )
+
+    repo = SessionModelSelectionRepository(db)
+    try:
+        if roles is not None:
+            (role,) = roles
+            value = await repo.get(session_uuid, role)
+            return {} if value is None else {role: value}
+        return await repo.get_all(session_uuid)
+    except Exception as exc:  # noqa: BLE001 — availability guard (migration lag)
+        log.warning(
+            "selection_store_hydration_failed",
+            session_id=str(session_uuid),
+            roles=roles,
+            error=str(exc),
+            trace_id=ctx.trace_id,
+        )
+        return {}
+
+
+def _deployment_view(key: str, model: ModelDefinition, config: ModelConfig) -> dict[str, Any]:
+    """Build the picker-facing view of a single catalog deployment.
+
+    Args:
+        key: The deployment's catalog key.
+        model: The deployment's ``ModelDefinition``.
+        config: The loaded catalog (for ``placement_of``).
+
+    Returns:
+        A JSON-serializable dict of the deployment's picker-relevant fields.
+    """
+    return {
+        "key": key,
+        "id": model.id,
+        "provider": model.provider,
+        "placement": config.placement_of(key).value,
+        "kind": model.kind.value,
+        "status": model.status,
+        "summary": model.summary,
+        "context_length": model.context_length,
+        "max_tokens": model.max_tokens,
+        "supports_vision": model.supports_vision,
+        "supports_pdf_document": model.supports_pdf_document,
+        "input_cost_per_token": model.input_cost_per_token,
+        "output_cost_per_token": model.output_cost_per_token,
+    }
+
+
+def _provider_view(key: str, provider: ProviderDefinition, available: bool) -> dict[str, Any]:
+    """Build the observe-view row for a single provider.
+
+    Args:
+        key: The provider's catalog key.
+        provider: The ``ProviderDefinition``.
+        available: This provider's live/config availability (ADR-0121 §3).
+
+    Returns:
+        A JSON-serializable dict of the provider's observe-view fields.
+    """
+    return {
+        "key": key,
+        "placement": provider.placement.value,
+        "available": available,
+        "summary": provider.summary,
+        "max_concurrency": provider.max_concurrency,
+    }
+
+
+@router.get("/{session_id}/config")
+async def get_session_config(
+    request: Request,
+    session_id: str,
+    token: TokenInfo = Depends(require_scope("sessions:read")),  # noqa: B008
+    db: AsyncSession = Depends(_get_db),  # noqa: B008
+) -> dict[str, Any]:
+    """Return the model-picker + observe-view read payload (ADR-0121 §3 / FRE-918).
+
+    For every declared role: whether it is ``open`` or pinned, the effective
+    resolved binding for **this session** (selection-applied, profile-bridged
+    where the legacy Path mechanism still governs — AC-9 slice: "what the next
+    turn will actually use"), and for open roles the currently available,
+    kind-compatible candidate list (AC-5). Also returns the provider table
+    with placement and live-checked availability.
+
+    Args:
+        request: FastAPI request (injected).
+        session_id: UUID string of the session.
+        token: Validated bearer token with ``sessions:read`` scope.
+        db: Async SQLAlchemy session (injected).
+
+    Returns:
+        ``{"session_id": ..., "roles": {role: {"open", "resolved",
+        "provenance", "candidates"?}}, "providers": [...]}``.
+
+    Raises:
+        HTTPException(422): When ``session_id`` is not a valid UUID.
+        HTTPException(404): When the session does not exist or is owned by
+            another user.
+    """
+    get_rate_limiter().check(token)
+    from personal_agent.config import load_model_config  # noqa: PLC0415
+    from personal_agent.config import settings as _settings  # noqa: PLC0415
+    from personal_agent.config.model_loader import role_candidates  # noqa: PLC0415
+    from personal_agent.llm_client.provider_health import check_all_providers  # noqa: PLC0415
+    from personal_agent.service.repositories.session_repository import SessionRepository
+
+    user_id = await _require_request_user_id(request, db)
+    ctx = SystemTraceContext.new("session_api", session_id=session_id)
+
+    try:
+        uuid = UUID(session_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_parameter",
+                "message": "session_id must be a valid UUID",
+                "status": 422,
+            },
+        ) from exc
+
+    session = await SessionRepository(db).get(uuid, user_id=user_id)
+    if session is None:
+        raise not_found("session")
+
+    config = load_model_config()
+    availability = await check_all_providers(config, _settings, trace_id=ctx.trace_id)
+    stored_selections = await _fetch_selections(db, uuid, roles=None, ctx=ctx)
+
+    roles: dict[str, Any] = {}
+    for role, binding in config.roles.items():
+        resolved, provenance = _resolve_role_binding(
+            role, str(session.execution_profile), config, stored_selections.get(role)
+        )
+        entry: dict[str, Any] = {
+            "open": binding.open,
+            "resolved": resolved,
+            "provenance": provenance,
+        }
+        if binding.open:
+            entry["candidates"] = [
+                _deployment_view(key, config.models[key], config)
+                for key in role_candidates(role, config, availability)
+            ]
+        roles[role] = entry
+
+    providers = [
+        _provider_view(key, provider, availability.get(key, False))
+        for key, provider in config.providers.items()
+    ]
+
+    log.info(
+        "gateway_sessions_get_config",
+        session_id=session_id,
+        token_name=token.name,
+        user_id=str(user_id),
+        trace_id=ctx.trace_id,
+    )
+    return {"session_id": session_id, "roles": roles, "providers": providers}
 
 
 @router.patch("/{session_id}")

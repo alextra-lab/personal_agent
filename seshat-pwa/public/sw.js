@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v31-doc-vision';
+const CACHE_NAME = 'seshat-v32-model-picker';
 
 const PRECACHE_URLS = [
   '/',

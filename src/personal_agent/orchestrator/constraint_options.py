@@ -13,6 +13,13 @@ timeout, disconnect, or no active WebSocket connection.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from personal_agent.config.settings import AppConfig
+    from personal_agent.llm_client.models import ModelConfig
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,49 @@ CONSTRAINT_OPTIONS: dict[str, list[ConstraintOption]] = {
 }
 
 
+#: The constraint name whose options are computed from the ADR-0121 catalog at
+#: pause time rather than looked up from :data:`CONSTRAINT_OPTIONS` (ADR-0122 §3).
+ARTIFACT_BUILDER_CONSTRAINT = "artifact_builder"
+
+#: Constraints whose option sets are computed, not static. Membership is what the
+#: executor guard and the settings-validation surface branch on. Kept as a set (not
+#: a bare equality on the one name) so a second computed decision type — the ADR-0122
+#: pattern is designed to generalise — is a one-line addition, not a new branch.
+COMPUTED_OPTION_CONSTRAINTS: frozenset[str] = frozenset({ARTIFACT_BUILDER_CONSTRAINT})
+
+
+@dataclass(frozen=True)
+class ComputedConstraintOption:
+    """A catalog-derived option for a computed-options constraint (ADR-0122 §3).
+
+    Unlike :class:`ConstraintOption` (a static button label), an option here is a
+    catalog deployment carrying the display detail the ADR-0076 ``DecisionCard``
+    needs, so the user chooses on visible tradeoffs rather than a bare key. The
+    detail is a pure projection of the ADR-0121 catalog — never hand-typed — so it
+    cannot drift from what the model actually is.
+
+    Attributes:
+        action_id: The deployment key. Stable, persisted in preferences and sent on
+            the wire — the same contract as :attr:`ConstraintOption.action_id`.
+        label: Human-readable label rendered by the PWA (the deployment key today;
+            the PWA card ticket refines display).
+        summary: One-line intended-use string from the catalog definition.
+        input_cost_per_token: USD per input token, or ``None`` for unpriced/local.
+        output_cost_per_token: USD per output token, or ``None`` for unpriced/local.
+        context_length: Maximum context window, in tokens.
+        max_output_tokens: Maximum output tokens, or ``None`` for the provider
+            default (the large-output axis the card surfaces — FRE-478 precedent).
+    """
+
+    action_id: str
+    label: str
+    summary: str
+    input_cost_per_token: float | None
+    output_cost_per_token: float | None
+    context_length: int
+    max_output_tokens: int | None
+
+
 def option_ids(constraint: str) -> list[str]:
     """Return the valid ``action_id`` values for a constraint.
 
@@ -78,3 +128,211 @@ def default_action_id(constraint: str) -> str:
         KeyError: If ``constraint`` is not a known constraint name.
     """
     return CONSTRAINT_OPTIONS[constraint][-1].action_id
+
+
+# ── Computed-options decision type (ADR-0122 §3 / FRE-881) ────────────────────
+# The static machinery above assumes a closed option set indexed by constraint
+# name. The artifact builder's options are instead COMPUTED from the ADR-0121
+# catalog at pause time. The functions below are the widening that admits that:
+# an availability predicate, the option computation, the configured default, and
+# the two dispatchers the executor guard and the settings-validation surface call.
+
+
+def build_provider_availability(
+    config: "ModelConfig", settings: "AppConfig"
+) -> "Callable[[str], bool]":
+    """Return a synchronous provider-availability predicate (ADR-0121 §3).
+
+    Provider health here is config-derived and **synchronous**: a cloud provider is
+    available when its credential is configured (the same secret-presence signal as
+    ``llm_client.provider_health.is_provider_available`` and the
+    ``/api/inference/status`` cloud branch); the no-auth local SLM tunnel is treated
+    as available without a probe.
+
+    The authoritative per-provider health source is
+    :func:`personal_agent.llm_client.provider_health.check_all_providers` (FRE-918),
+    which is **async** because its local path does a live SLM-tunnel probe. This
+    predicate deliberately does not call it: ``resolve_options_and_default`` runs on
+    the synchronous executor-guard path, and threading async + a live probe into it
+    belongs with the build-boundary pause wiring (FRE-882 / ADR-0122 §4), which is
+    already async and owns the fail-closed dispatch. The cloud logic is identical, so
+    the two never disagree on a cloud provider; only the local live-probe refinement
+    is deferred to that seam.
+
+    Args:
+        config: The catalog whose ``providers`` mapping is consulted.
+        settings: The ``AppConfig`` holding provider credentials, read by the
+            provider's ``auth_env`` field name.
+
+    Returns:
+        A predicate ``provider_name -> bool``. Fails closed: an unknown provider
+        name is unavailable.
+    """
+
+    def _available(provider_name: str) -> bool:
+        provider = config.providers.get(provider_name)
+        if provider is None:
+            return False
+        if provider.auth_env is None:
+            return True
+        return bool(getattr(settings, provider.auth_env, None))
+
+    return _available
+
+
+def compute_artifact_builder_options(
+    config: "ModelConfig", *, is_provider_available: "Callable[[str], bool]"
+) -> list[ComputedConstraintOption]:
+    """Compute the artifact builder's options from the catalog (ADR-0122 §3, AC-6).
+
+    The option set is exactly the catalog deployments of ``kind: llm`` whose
+    provider is available — asserted in both directions by AC-6: a non-llm
+    deployment never leaks in, a deployment whose provider is down is absent, an
+    available one is present.
+
+    Args:
+        config: The ADR-0121 catalog to read deployments and detail from.
+        is_provider_available: Predicate deciding whether a deployment's provider
+            is currently usable — injected so callers (and tests) control the
+            availability source. Build the live one with
+            :func:`build_provider_availability`.
+
+    Returns:
+        The available llm deployments as :class:`ComputedConstraintOption` values,
+        in catalog (insertion) order.
+    """
+    from personal_agent.llm_client.models import ModelKind
+
+    options: list[ComputedConstraintOption] = []
+    for key, definition in config.models.items():
+        if definition.kind is not ModelKind.LLM:
+            continue
+        provider = definition.provider
+        if provider is None or not is_provider_available(provider):
+            continue
+        options.append(
+            ComputedConstraintOption(
+                action_id=key,
+                label=key,
+                summary=definition.summary,
+                input_cost_per_token=definition.input_cost_per_token,
+                output_cost_per_token=definition.output_cost_per_token,
+                context_length=definition.context_length,
+                max_output_tokens=definition.max_tokens,
+            )
+        )
+    return options
+
+
+def artifact_builder_default_key(config: "ModelConfig") -> str:
+    """Return the configured-default deployment key for the artifact builder.
+
+    The safe fallback the card carries for timeout / disconnect / no active socket
+    — the role's own ADR-0121 Layer-3 binding default (ADR-0122 §1/§4). Read from
+    the binding directly and guarded: a catalog with no ``artifact_builder`` binding
+    has no safe default to offer, so this raises rather than returning a role-name
+    string that names no deployment and would later dispatch to a non-existent model.
+
+    Note the timeout *dispatch* is not driven by this key — ADR-0122 §4 keeps the
+    no-decision path on ``get_llm_client(role_name="artifact_builder")``; this is the
+    action_id the event/card carries. Wiring the two together is the FRE-882 seam, so
+    this deliberately returns the Layer-3 binding rather than threading the (being-
+    deleted, ADR-0121) ExecutionProfile redirect.
+
+    Args:
+        config: The catalog carrying the ``artifact_builder`` role binding.
+
+    Returns:
+        The configured default deployment key.
+
+    Raises:
+        ModelConfigError: If the catalog defines no ``artifact_builder`` binding.
+    """
+    binding = config.roles.get(ARTIFACT_BUILDER_CONSTRAINT)
+    if binding is None:
+        from personal_agent.config.model_loader import ModelConfigError
+
+        raise ModelConfigError(
+            f"catalog defines no {ARTIFACT_BUILDER_CONSTRAINT!r} Layer-3 binding; "
+            "cannot resolve the artifact-builder default (ADR-0122 §4)"
+        )
+    return binding.deployment
+
+
+def resolve_options_and_default(constraint: str) -> tuple[list[str], str]:
+    """Return ``(action_ids, default_action_id)`` for a constraint — static or computed.
+
+    The single entry the executor's pause helper calls, replacing the direct
+    ``option_ids`` / ``default_action_id`` lookups so a computed constraint no
+    longer ``KeyError``s the static registry (ADR-0122 §3 executor-guard seam).
+
+    Args:
+        constraint: The constraint name.
+
+    Returns:
+        The valid action-id list and the safe-default action id. For the computed
+        path the ids are the availability-filtered catalog llm deployment keys and
+        the default is the configured builder default; note the default is kept
+        independent of the option set (it is the fail-closed fallback, and appending
+        an unavailable default would break AC-6's "provider down → absent").
+    """
+    if constraint in COMPUTED_OPTION_CONSTRAINTS:
+        from personal_agent.config import settings as live_settings
+        from personal_agent.config.model_loader import load_model_config
+
+        config = load_model_config()
+        is_available = build_provider_availability(config, live_settings)
+        options = compute_artifact_builder_options(config, is_provider_available=is_available)
+        return [opt.action_id for opt in options], artifact_builder_default_key(config)
+    return option_ids(constraint), default_action_id(constraint)
+
+
+def is_known_constraint(constraint: str) -> bool:
+    """Whether ``constraint`` is a governed constraint (static or computed)."""
+    return constraint in CONSTRAINT_OPTIONS or constraint in COMPUTED_OPTION_CONSTRAINTS
+
+
+def _valid_preference_actions_for_config(constraint: str, config: "ModelConfig") -> set[str]:
+    """Valid ``preferred_action`` values for a computed constraint, given a catalog.
+
+    Split from :func:`valid_preference_actions` so it can be unit-tested against a
+    hand-built catalog. A saved preference names a model to *always* use, so it is
+    validated on catalog membership (``kind: llm``) — deliberately **not**
+    availability-filtered, so a stored preference survives a transient provider
+    outage (the pause-time options provider is the availability-filtered surface).
+
+    Args:
+        constraint: The computed constraint name (currently ``artifact_builder``).
+        config: The catalog whose llm keys are the valid actions.
+
+    Returns:
+        ``{"always_pause"} ∪ catalog llm keys``.
+    """
+    return {"always_pause", *_catalog_llm_keys(config)}
+
+
+def valid_preference_actions(constraint: str) -> set[str]:
+    """Valid ``preferred_action`` values for a constraint (settings validation).
+
+    The computed path consults the ADR-0121 catalog (ADR-0122 §3 settings seam);
+    static constraints keep registry-based validation.
+
+    Args:
+        constraint: The constraint name.
+
+    Returns:
+        The set of accepted ``preferred_action`` values, always including the
+        reserved ``always_pause``.
+    """
+    if constraint in COMPUTED_OPTION_CONSTRAINTS:
+        from personal_agent.config.model_loader import load_model_config
+
+        return _valid_preference_actions_for_config(constraint, load_model_config())
+    return {"always_pause", *option_ids(constraint)}
+
+
+def _catalog_llm_keys(config: "ModelConfig") -> list[str]:
+    """Return the catalog deployment keys of ``kind: llm``, in catalog order."""
+    from personal_agent.llm_client.models import ModelKind
+
+    return [key for key, definition in config.models.items() if definition.kind is ModelKind.LLM]

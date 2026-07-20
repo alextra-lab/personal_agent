@@ -1508,10 +1508,12 @@ async def update_constraint_preference(
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> dict[str, str]:
-    """Upsert a standing constraint governance preference (ADR-0076).
+    """Upsert a standing constraint governance preference (ADR-0076 / ADR-0122 §3).
 
-    Validates ``preferred_action`` against the action-ID registry for the
-    named constraint, then upserts the preference for the authenticated user.
+    Validates ``preferred_action`` for the named constraint, then upserts the
+    preference for the authenticated user. Static constraints validate against the
+    action-ID registry; the computed-options constraint (``artifact_builder``)
+    validates against the ADR-0121 catalog's llm deployment keys.
 
     Args:
         data: Constraint name and preferred action.
@@ -1522,16 +1524,37 @@ async def update_constraint_preference(
         The stored constraint name and preferred action.
 
     Raises:
-        HTTPException: 422 if the constraint or action is unknown.
+        HTTPException: 422 if the constraint or action is unknown; 503 if the
+            computed constraint's catalog cannot be loaded to validate against.
     """
-    from personal_agent.orchestrator.constraint_options import CONSTRAINT_OPTIONS, option_ids
+    from personal_agent.config.model_loader import ModelConfigError
+    from personal_agent.orchestrator.constraint_options import (
+        is_known_constraint,
+        valid_preference_actions,
+    )
     from personal_agent.service.repositories.constraint_preferences_repository import (
         ConstraintPreferencesRepository,
     )
 
-    if data.constraint_name not in CONSTRAINT_OPTIONS:
+    # ADR-0122 §3: for the computed-options constraint (artifact_builder) the valid
+    # actions are ADR-0121 catalog keys, so validation consults the catalog rather
+    # than the static registry — an API contract change, not a no-op.
+    if not is_known_constraint(data.constraint_name):
         raise HTTPException(status_code=422, detail=f"unknown constraint: {data.constraint_name}")
-    valid_actions = {"always_pause", *option_ids(data.constraint_name)}
+    try:
+        valid_actions = valid_preference_actions(data.constraint_name)
+    except ModelConfigError as exc:
+        # The computed constraint consults the catalog; a catalog load/validation
+        # failure is a server condition, not bad input — surface 503 rather than a
+        # 500 that leaks an internal error past the endpoint's documented contract.
+        log.error(
+            "constraint_preference_catalog_unavailable",
+            constraint=data.constraint_name,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=503, detail="model catalog unavailable; cannot validate preference"
+        ) from exc
     if data.preferred_action not in valid_actions:
         raise HTTPException(
             status_code=422,

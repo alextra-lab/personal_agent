@@ -372,6 +372,255 @@ def test_run_once_stall_notifies_once() -> None:
     assert notifier2.events == []
 
 
+# --- FRE-922: suspected-wedge detection (surface, never kill) ---------------
+
+_BUILD_WORKTREE = "/opt/seshat/.claude/worktrees/build"
+_WEDGE_IDLE_PANE = "some earlier output\n❯\n"
+_WEDGE_BUSY_PANE = "● Building… (1m 2s · ↑ 4.1k tokens)\n❯\n"
+
+
+class _WedgeRunner(_RecordingRunner):
+    """A live build1 seat that Remote Control reports busy, with a chosen pane.
+
+    Models exactly the incident shape: a live seat whose RC status is ``busy``
+    (an orphaned background poller) while the pane text is caller-chosen — idle
+    (the wedge) or a live spinner (a genuine turn). Everything else answers so
+    the launch reaches the reuse→``seat-busy`` outcome: session present, clean
+    worktree, RC reachable.
+    """
+
+    def __init__(self, *, pane: str) -> None:
+        super().__init__()
+        self._pane = pane
+
+    def __call__(self, argv: Sequence[str]) -> _FakeRunResult:
+        self.calls.append(tuple(argv))
+        args = list(argv)
+        if args[:2] == ["tmux", "has-session"]:
+            return _FakeRunResult(returncode=0)  # session present → not absent
+        if args[:2] == ["tmux", "list-panes"]:
+            return _FakeRunResult(stdout=f"claude\t{_BUILD_WORKTREE}\n")
+        if args[:2] == ["tmux", "capture-pane"]:
+            return _FakeRunResult(stdout=self._pane)
+        if args[:2] == ["claude", "agents"]:
+            agent = {
+                "name": "cc-1build",
+                "sessionId": "s",
+                "cwd": _BUILD_WORKTREE,
+                "status": "busy",
+            }
+            return _FakeRunResult(stdout=json.dumps([agent]))
+        if "status" in args:  # git status --porcelain → clean
+            return _FakeRunResult(stdout="")
+        return _FakeRunResult()
+
+
+class _CapturingLogger:
+    def __init__(self) -> None:
+        self.warnings: list[tuple[str, dict[str, object]]] = []
+
+    def info(self, *args: object, **kwargs: object) -> None: ...
+    def warning(self, event: str, **fields: object) -> None:
+        self.warnings.append((event, fields))
+
+
+def _run_wedge(runner: _RecordingRunner, ticks: int, wedge_ticks: int = 2):  # type: ignore[no-untyped-def]
+    board = [_issue("FRE-1", "Approved", _OPUS)]
+    state: dict[str, DispatchRecord] = {}
+    wedge_counts: dict[str, int] = {}
+    notifier = _Notifier()
+    logger = _CapturingLogger()
+    for _ in range(ticks):
+        run_once(
+            ["build1"],
+            state,
+            now=0.0,
+            stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+            board_fetcher=lambda s: board,
+            runner=runner,
+            notifier=notifier,
+            persist=lambda st: None,
+            logger=logger,
+            execute=True,
+            rc_alive=lambda: True,
+            wedge_counts=wedge_counts,
+            wedge_ticks=wedge_ticks,
+        )
+    return state, wedge_counts, notifier, logger
+
+
+def _no_termination_argv(runner: _RecordingRunner) -> bool:
+    banned = {"kill", "pkill", "kill-session", "kill-pane", "kill-server", "respawn-pane"}
+    return not any(tok in banned for call in runner.calls for tok in call)
+
+
+def test_wedge_is_surfaced_past_threshold_and_never_killed() -> None:
+    """AC-2: an RC-busy + pane-idle seat is surfaced past N ticks, not auto-killed.
+
+    A single observation is ambiguous, so nothing surfaces until the count
+    exceeds ``wedge_ticks``. The crossing tick emits a distinct greppable anomaly
+    AND pings master exactly once (not the generic ``seat-busy``). The stream
+    stays eligible (no record), and NO process-termination command is ever issued.
+    """
+    runner = _WedgeRunner(pane=_WEDGE_IDLE_PANE)
+    # wedge_ticks=2 → tick3 is the crossing tick; a 4th tick must not re-notify.
+    state, wedge_counts, notifier, logger = _run_wedge(runner, ticks=4, wedge_ticks=2)
+
+    wedge_events = [e for e in notifier.events if e[0] == "dispatch_seat_wedged"]
+    assert len(wedge_events) == 1, "master is pinged exactly once per wedge episode"
+    assert wedge_events[0][1]["stream"] == "build1"
+    assert wedge_events[0][1]["ticket"] == "FRE-1"
+    # The distinct anomaly log fires on every post-threshold tick (ticks 3 and 4).
+    wedge_logs = [w for w in logger.warnings if w[0] == "dispatch_seat_wedged"]
+    assert len(wedge_logs) == 2
+    # The stream is never marked in-flight — it must dispatch the moment the
+    # wedge clears — and the counter kept climbing.
+    assert "build1" not in state
+    assert wedge_counts["build1"] == 4
+    # AC-2: detection + surfacing ONLY — the daemon never terminates a process.
+    assert _no_termination_argv(runner)
+
+
+def test_wedge_ping_is_once_per_episode_and_re_fires_on_a_new_episode() -> None:
+    """The one-shot ping throttles PER episode, not once ever.
+
+    After a wedge clears (a tick where the seat is genuinely busy resets the
+    count), a fresh wedge is a new episode and pings master again. Proves the
+    throttle is a per-episode latch that the in-memory count re-arms on reset —
+    the property the persisted-counter crossing check could not guarantee.
+    """
+    runner = _WedgeRunner(pane=_WEDGE_IDLE_PANE)
+    state: dict[str, DispatchRecord] = {}
+    wedge_counts: dict[str, int] = {}
+    notifier = _Notifier()
+
+    def _one_tick() -> None:
+        run_once(
+            ["build1"],
+            state,
+            now=0.0,
+            stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+            board_fetcher=lambda s: [_issue("FRE-1", "Approved", _OPUS)],
+            runner=runner,
+            notifier=notifier,
+            persist=lambda st: None,
+            logger=_NullLogger(),
+            execute=True,
+            rc_alive=lambda: True,
+            wedge_counts=wedge_counts,
+            wedge_ticks=2,
+        )
+
+    for _ in range(3):  # episode 1: crosses on tick 3 → one ping
+        _one_tick()
+    assert sum(e[0] == "dispatch_seat_wedged" for e in notifier.events) == 1
+    runner._pane = _WEDGE_BUSY_PANE  # seat genuinely busy → wedge clears, count reset
+    _one_tick()
+    assert wedge_counts.get("build1", 0) == 0
+    runner._pane = _WEDGE_IDLE_PANE  # episode 2: re-wedges
+    for _ in range(3):
+        _one_tick()
+    assert sum(e[0] == "dispatch_seat_wedged" for e in notifier.events) == 2
+
+
+def test_genuinely_busy_seat_is_never_mistaken_for_a_wedge() -> None:
+    """AC-3 (regression): RC-busy + a live spinner is a real turn, not a wedge.
+
+    The pane shows the in-progress spinner, so the wedge signature never fires
+    however long the seat stays busy: no anomaly, no master ping, the counter
+    stays at zero, and the generic ``seat-busy`` path is unchanged (no record,
+    stream stays eligible). A real in-flight build is never surfaced as wedged.
+    """
+    runner = _WedgeRunner(pane=_WEDGE_BUSY_PANE)
+    state, wedge_counts, notifier, logger = _run_wedge(runner, ticks=5, wedge_ticks=2)
+
+    assert not any(e[0] == "dispatch_seat_wedged" for e in notifier.events)
+    assert not any(w[0] == "dispatch_seat_wedged" for w in logger.warnings)
+    assert wedge_counts.get("build1", 0) == 0  # reset every tick
+    assert "build1" not in state  # generic seat-busy still writes no record
+    assert _no_termination_argv(runner)
+
+
+def test_stale_wedge_count_is_reset_on_a_non_wedge_decision() -> None:
+    """Codex-major: a stale sidecar count must not survive into a non-wedge tick.
+
+    A crash / daemon restart / manual recovery can leave a wedge count set while
+    the stream is actually mid-run (a ``DispatchRecord`` exists → an ``await``
+    decision). The count is cleared regardless, so it cannot later trip the
+    threshold a tick early against an unrelated episode.
+    """
+    runner = _RecordingRunner()
+    board = [_issue("FRE-786", "In Progress", _OPUS)]  # a launched record → await
+    wedge_counts = {"build1": 5}
+    run_once(
+        ["build1"],
+        {"build1": _launched_record()},
+        now=5.0,
+        stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+        board_fetcher=lambda s: board,
+        runner=runner,
+        notifier=_Notifier(),
+        persist=lambda st: None,
+        logger=_NullLogger(),
+        execute=True,
+        rc_alive=lambda: True,
+        wedge_counts=wedge_counts,
+        wedge_ticks=2,
+    )
+    assert "build1" not in wedge_counts  # cleared
+
+
+def test_blocked_launch_tick_resets_a_stale_wedge_count() -> None:
+    """A blocked tick (rc-down/kill-switch) never probes the seat → no stale count.
+
+    Only the confirmed-wedge increment skips the reset; a blocked launch resets.
+    """
+    runner = _RecordingRunner()
+    board = [_issue("FRE-1", "Approved", _OPUS)]
+    wedge_counts = {"build1": 4}
+    run_once(
+        ["build1"],
+        {},
+        now=0.0,
+        stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+        board_fetcher=lambda s: board,
+        runner=runner,
+        notifier=_Notifier(),
+        persist=lambda st: None,
+        logger=_NullLogger(),
+        execute=True,
+        rc_alive=lambda: True,
+        kill_switch_engaged=lambda: True,  # blocks the launch
+        wedge_counts=wedge_counts,
+        wedge_ticks=2,
+    )
+    assert "build1" not in wedge_counts
+    assert not any("new-session" in c for c in runner.calls)  # never launched
+
+
+def test_duplicate_streams_do_not_double_increment_the_wedge_counter() -> None:
+    """Codex-minor: a repeated ``--streams`` value must count a stream once/tick."""
+    runner = _WedgeRunner(pane=_WEDGE_IDLE_PANE)
+    board = [_issue("FRE-1", "Approved", _OPUS)]
+    wedge_counts: dict[str, int] = {}
+    run_once(
+        ["build1", "build1", "build1"],  # duplicated
+        {},
+        now=0.0,
+        stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+        board_fetcher=lambda s: board,
+        runner=runner,
+        notifier=_Notifier(),
+        persist=lambda st: None,
+        logger=_NullLogger(),
+        execute=True,
+        rc_alive=lambda: True,
+        wedge_counts=wedge_counts,
+        wedge_ticks=2,
+    )
+    assert wedge_counts["build1"] == 1  # one increment for one tick, not three
+
+
 # --- CLI -------------------------------------------------------------------
 
 

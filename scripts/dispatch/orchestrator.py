@@ -60,6 +60,7 @@ from scripts.dispatch.launcher import (
     known_streams,
     plan_launch,
     seat_state,
+    seat_wedge_signature,
     subprocess_runner,
     topology_for,
 )
@@ -98,6 +99,25 @@ DEFAULT_STALL_TIMEOUT_S: float = 3600.0
 
 # Poll interval for the daemon loop (``--loop``).
 DEFAULT_POLL_INTERVAL_S: float = 300.0
+
+# Consecutive suspected-wedge ticks to tolerate before surfacing (FRE-922, CC
+# #61568). A wedge is a seat Remote Control reports busy while its pane is idle
+# — an orphaned ``run_in_background`` poller — which makes the stream's reuse
+# dispatch return ``seat-busy`` every tick and never land. The threshold rides
+# out a one-tick RC/pane race (a genuine turn re-renders its spinner and resets
+# the count); surfacing past N (default: the 3rd consecutive tick ≈ 15 min at
+# the 300 s cadence) is fast enough to be useful, slow enough to avoid noise.
+#
+# The count is held IN-MEMORY across ticks within a daemon run and reset on
+# restart — deliberately NOT persisted. Persisting it (an early design) made the
+# one-shot master ping fragile: a restart, a changed ``--wedge-ticks``, or a
+# crash between persist-and-notify could leave the count first observed *above*
+# the crossing value, silently losing the single alert forever (code review,
+# FRE-922). In-memory, the count only ever climbs by 1 from 0 per consecutive
+# tick, so the crossing is hit exactly once and no stale value can survive. A
+# wedge outliving a restart simply re-counts (~15 min) — acceptable, and the
+# greppable warning still fires every tick meanwhile.
+DEFAULT_WEDGE_TICKS: int = 2
 
 # The only endpoint host at which Remote Control is enabled — it is disabled
 # when ``ANTHROPIC_BASE_URL`` points anywhere else (an LLM gateway/proxy),
@@ -494,6 +514,8 @@ def run_once(
     execute: bool,
     rc_alive: Callable[[], bool] | None = None,
     kill_switch_engaged: Callable[[], bool] = lambda: False,
+    wedge_counts: dict[str, int] | None = None,
+    wedge_ticks: int = DEFAULT_WEDGE_TICKS,
 ) -> dict[str, DispatchRecord]:
     """Run one orchestration tick across ``streams``, mutating and returning state.
 
@@ -517,13 +539,22 @@ def run_once(
             returns ``False``.
         kill_switch_engaged: Predicate for the kill switch (defaults to off);
             when engaged, all launches are refused.
+        wedge_counts: Per-stream consecutive suspected-wedge tick counts (FRE-922),
+            mutated in place across ticks within a daemon run (in-memory, reset on
+            restart); defaults to a throwaway map when unused.
+        wedge_ticks: Consecutive ticks to tolerate before surfacing a wedge.
 
     Returns:
         The updated state dict.
     """
     if rc_alive is None:
         rc_alive = lambda: rc_server_alive(runner)  # noqa: E731
-    for stream in streams:
+    if wedge_counts is None:
+        wedge_counts = {}
+    # De-dup while preserving order: a repeated ``--streams`` value must not
+    # double-process a stream — and, since FRE-922, must not double-increment its
+    # wedge counter and trip the threshold a tick early.
+    for stream in dict.fromkeys(streams):
         trace_id = str(uuid.uuid4())
         issues = board_fetcher(stream)
         record = state.get(stream)
@@ -560,6 +591,8 @@ def run_once(
             execute=execute,
             rc_alive=rc_alive,
             kill_switch_engaged=kill_switch_engaged,
+            wedge_counts=wedge_counts,
+            wedge_ticks=wedge_ticks,
         )
     return state
 
@@ -577,9 +610,19 @@ def _apply(
     execute: bool,
     rc_alive: Callable[[], bool],
     kill_switch_engaged: Callable[[], bool],
+    wedge_counts: dict[str, int],
+    wedge_ticks: int,
 ) -> None:
     """Apply one decision's side effects (launch / notify / record mutation)."""
     stream = decision.stream
+    # A live wedge counter only accumulates on the launch→seat-busy→wedge path
+    # (below); any other decision for this stream means it is not wedged this
+    # tick, so clear the count. Resetting on every non-wedge tick — the
+    # confirmed-wedge increment is the ONLY path that does not — keeps the
+    # per-episode count honest (a genuinely-busy or freed stream never carries a
+    # stale count into a later episode).
+    if decision.kind != "launch":
+        _reset_wedge(stream, wedge_counts)
     match decision.kind:
         case "launch":
             assert decision.ticket is not None and decision.model is not None
@@ -600,6 +643,10 @@ def _apply(
                         ticket=decision.ticket,
                         reason=blocked,
                     )
+                    # A blocked tick observes no wedge (it never probes the seat),
+                    # so it must not leave a stale count — the confirmed-wedge
+                    # increment is the ONLY path that skips the reset.
+                    _reset_wedge(stream, wedge_counts)
                     return  # no launch, no record — the stream stays eligible.
             warm = find_warm_session(stream, runner) if decision.context_keep else None
             # FRE-913: probe the seat so a LIVE one is dispatched into in-session
@@ -641,6 +688,27 @@ def _apply(
             else:
                 state.pop(stream, None)
             persist(state)
+            # FRE-922: a ``seat-busy`` outcome whose seat shows the suspected-wedge
+            # signature (RC busy while the pane is idle) is counted; past the
+            # threshold it is SURFACED — a distinct, greppable anomaly and a
+            # one-shot master ping — instead of silently re-emitting ``seat-busy``
+            # forever. Any other outcome (a real dispatch, or a genuinely-busy
+            # seat whose spinner shows) resets the count. This path NEVER kills a
+            # process: detection and surfacing only, master decides (AC-2).
+            # (``execute`` is already True here — the dry-run early return above
+            # precedes this — so the wedge check never runs in a dry-run tick.)
+            if result.outcome == "seat-busy" and seat_wedge_signature(topology_for(stream), runner):
+                _note_wedge(
+                    stream,
+                    decision.ticket,
+                    wedge_counts,
+                    wedge_ticks=wedge_ticks,
+                    trace_id=trace_id,
+                    notifier=notifier,
+                    logger=logger,
+                )
+            else:
+                _reset_wedge(stream, wedge_counts)
         case "run_complete":
             record = state.get(stream)
             if record is not None:
@@ -666,6 +734,66 @@ def _apply(
                 persist(state)
         case _:  # await / hold / skip — no state change.
             return
+
+
+def _reset_wedge(stream: str, wedge_counts: dict[str, int]) -> None:
+    """Clear a stream's in-memory suspected-wedge counter."""
+    wedge_counts.pop(stream, None)
+
+
+def _note_wedge(
+    stream: str,
+    ticket: str,
+    wedge_counts: dict[str, int],
+    *,
+    wedge_ticks: int,
+    trace_id: str,
+    notifier: Notifier,
+    logger: Logger,
+) -> None:
+    """Count a suspected-wedge tick and surface it past the threshold (FRE-922).
+
+    Increments the stream's consecutive-wedge count (in-memory; see
+    ``DEFAULT_WEDGE_TICKS``). Every tick past ``wedge_ticks`` emits a distinct,
+    greppable ``dispatch_seat_wedged`` warning (so the anomaly is durable in the
+    log stream, not lost in generic ``seat-busy`` noise). The **crossing** tick —
+    the first to exceed the threshold — additionally pings master **once**
+    (mirroring the stall throttle: actionable, not spammy). Because the count
+    climbs by exactly 1 from 0 per consecutive tick, the crossing is hit exactly
+    once — no persisted stale value can make it jump past and lose the ping.
+    Detection and surfacing only — no process is ever terminated here; master
+    decides whether to intervene (AC-2).
+
+    Args:
+        stream: The wedged stream.
+        ticket: The ticket whose dispatch the wedge is blocking.
+        wedge_counts: Per-stream counts, mutated in place.
+        wedge_ticks: Consecutive ticks tolerated before surfacing.
+        trace_id: The tick's trace id.
+        notifier: The master-notification sink (pinged once, on crossing).
+        logger: Structured logger (warns every post-threshold tick).
+    """
+    count = wedge_counts.get(stream, 0) + 1
+    wedge_counts[stream] = count
+    if count <= wedge_ticks:
+        return
+    logger.warning(
+        "dispatch_seat_wedged",
+        trace_id=trace_id,
+        stream=stream,
+        ticket=ticket,
+        consecutive_ticks=count,
+        detail="remote-control reports busy while the pane is idle — a suspected "
+        "orphaned background poller (CC #61568); dispatch is blocked",
+    )
+    if count == wedge_ticks + 1:  # crossing tick: ping master exactly once.
+        notifier(
+            "dispatch_seat_wedged",
+            trace_id=trace_id,
+            stream=stream,
+            ticket=ticket,
+            consecutive_ticks=count,
+        )
 
 
 def _record_to_json(record: DispatchRecord) -> dict[str, object]:
@@ -752,6 +880,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Flag file whose presence halts all dispatch (kill switch).",
     )
     parser.add_argument(
+        "--wedge-ticks",
+        type=int,
+        default=DEFAULT_WEDGE_TICKS,
+        help="Consecutive RC-busy+pane-idle ticks tolerated before surfacing a wedge.",
+    )
+    parser.add_argument(
         "--preflight",
         action="store_true",
         help="Check preconditions + RC liveness, report, and exit (for ExecStartPre).",
@@ -774,6 +908,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     notifier = _structlog_notifier(logger)
     state_path = Path(args.state_file)
     kill_switch_path = Path(args.kill_switch_file)
+    # In-memory across ticks within this run, reset on restart (FRE-922) — never
+    # persisted, so a stale count can never mislead the one-shot master ping.
+    wedge_counts: dict[str, int] = {}
 
     def tick() -> None:
         state = load_state(state_path)
@@ -789,6 +926,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             logger=logger,
             execute=args.execute,
             kill_switch_engaged=lambda: _kill_switch_engaged(kill_switch_path),
+            wedge_counts=wedge_counts,
+            wedge_ticks=args.wedge_ticks,
         )
 
     if args.loop:

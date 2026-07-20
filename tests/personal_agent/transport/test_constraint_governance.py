@@ -61,6 +61,26 @@ class TestActionIdRegistry:
         for name, opts in CONSTRAINT_OPTIONS.items():
             assert default_action_id(name) == opts[-1].action_id
 
+    def test_constraint_literal_admits_attachment_cost_and_artifact_builder(self) -> None:
+        """The ConstraintName literal is widened (ADR-0122 §3 / FRE-881).
+
+        Runtime proof the pre-existing ``attachment_cost`` drift is closed (it was
+        passed at the executor but absent from the closed literal) and that the new
+        computed-options constraint ``artifact_builder`` is admitted. The removal of
+        the executor's ``# type: ignore[arg-type]`` is proven separately by ``mypy``.
+        """
+        from typing import get_args
+
+        from personal_agent.transport.events import ConstraintName
+
+        members = set(get_args(ConstraintName))
+        assert members == {
+            "tool_iteration_limit",
+            "context_compression",
+            "attachment_cost",
+            "artifact_builder",
+        }
+
 
 class TestAdapterMappings:
     """Wire envelopes match the ADR-0076 protocol."""

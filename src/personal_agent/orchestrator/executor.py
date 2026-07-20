@@ -560,7 +560,7 @@ async def _maybe_pause_for_constraint(
     session_id: str,
     trace_id: str,
     user_id: UUID | None,
-    constraint: str,
+    constraint: "ConstraintName",
     context: str,
     timeout_seconds: float = 60.0,
     allow_preference: bool = True,
@@ -589,10 +589,7 @@ async def _maybe_pause_for_constraint(
     Returns:
         The resolved ``action_id`` the executor should act on.
     """
-    from personal_agent.orchestrator.constraint_options import (
-        default_action_id,
-        option_ids,
-    )
+    from personal_agent.orchestrator.constraint_options import resolve_options_and_default
     from personal_agent.transport.agui.transport import (
         emit_constraint_resolved,
         register_and_push_constraint,
@@ -600,10 +597,9 @@ async def _maybe_pause_for_constraint(
     from personal_agent.transport.agui.ws_endpoint import WaiterMetadata
     from personal_agent.transport.events import ConstraintPauseEvent
 
-    opts = option_ids(constraint)
-    default_id = default_action_id(constraint)
-
     # 1. Stored preference bypasses the pause entirely (telemetry-only record).
+    #    Checked before resolving options so a preference hit never pays for the
+    #    catalog projection a computed constraint (artifact_builder) would build.
     pref = (
         await _load_constraint_preference(
             user_id, constraint, trace_id=trace_id, session_id=session_id
@@ -621,7 +617,10 @@ async def _maybe_pause_for_constraint(
         )
         return pref
 
-    # 2. Register the waiter, push the pause event, await the decision.
+    # 2. Resolve options + safe default — computed from the ADR-0121 catalog for a
+    #    computed-options constraint (artifact_builder, ADR-0122 §3) rather than
+    #    KeyError-ing the static registry — then register the waiter and push.
+    opts, default_id = resolve_options_and_default(constraint)
     request_id = str(uuid4())
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)).isoformat()
     log.info(
@@ -640,7 +639,7 @@ async def _maybe_pause_for_constraint(
             request_id=request_id,
             session_id=session_id,
             trace_id=trace_id,
-            constraint=constraint,  # type: ignore[arg-type]
+            constraint=constraint,
             context=context,
             options=opts,
             default_option=default_id,
@@ -878,6 +877,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.llm_client.models import ModelDefinition
     from personal_agent.mcp.gateway import MCPGatewayAdapter
     from personal_agent.service.repositories.session_repository import SessionRepository
+    from personal_agent.transport.events import ConstraintName
 
 _mcp_adapter: "MCPGatewayAdapter | None" = None
 

@@ -11,6 +11,19 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
+#: The governed constraints a ``ConstraintPauseEvent`` may carry (ADR-0076 +
+#: ADR-0122 §3). Widened by FRE-881 from the original closed pair to (a) admit
+#: ``artifact_builder`` — the first computed-options decision type — and (b) close
+#: the pre-existing ``attachment_cost`` drift: that constraint was already passed
+#: at the executor's attachment-cost gate yet was absent from the literal, riding a
+#: ``# type: ignore[arg-type]`` at the pause helper. Both are now first-class.
+ConstraintName = Literal[
+    "tool_iteration_limit",
+    "context_compression",
+    "attachment_cost",
+    "artifact_builder",
+]
+
 
 @dataclass(frozen=True)
 class TextDeltaEvent:
@@ -118,15 +131,18 @@ class ConstraintPauseEvent:
     """Harness constraint about to fire — pause and request a user decision.
 
     Pushed when a governed constraint (tool iteration limit, context
-    compression) is reached and no standing preference resolves it. The PWA
-    renders a ``DecisionCard``; the agent awaits a ``CONSTRAINT_DECISION``
-    response (or the ``expires_at`` timeout) before proceeding (ADR-0076).
+    compression, attachment cost, or the artifact-builder selection) is reached
+    and no standing preference resolves it. The PWA renders a ``DecisionCard``;
+    the agent awaits a ``CONSTRAINT_DECISION`` response (or the ``expires_at``
+    timeout) before proceeding (ADR-0076 / ADR-0122 §3).
 
     Attributes:
         request_id: Unique identifier for this pause round-trip (UUID string).
         session_id: Target session identifier (used to route the event).
         trace_id: Trace context identifier for telemetry correlation.
-        constraint: Which constraint is firing.
+        constraint: Which constraint is firing (see :data:`ConstraintName`). For a
+            computed-options constraint the ``options`` are derived from the
+            ADR-0121 catalog rather than the static registry.
         context: Human-readable description of the situation.
         options: Valid ``action_id`` values the user may choose from.
         default_option: ``action_id`` applied on timeout or disconnect.
@@ -136,7 +152,7 @@ class ConstraintPauseEvent:
     request_id: str
     session_id: str
     trace_id: str
-    constraint: Literal["tool_iteration_limit", "context_compression"]
+    constraint: ConstraintName
     context: str
     options: Sequence[str]
     default_option: str

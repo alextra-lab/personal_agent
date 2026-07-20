@@ -101,6 +101,17 @@ def test_computed_options_equal_available_llm_deployments_both_directions() -> N
     assert keys <= set(config.models)
 
 
+def test_computed_options_empty_when_role_pinned() -> None:
+    """A pinned role offers nothing — matches resolve_artifact_builder_key's own
+    open-role requirement (is_selectable_binding), so a pinned config never offers
+    a card selection that would silently be overridden to the default.
+    """
+    pinned = _catalog()
+    pinned.roles["artifact_builder"] = RoleBinding(deployment="m_local", open=False)
+    options = co.compute_artifact_builder_options(pinned, is_provider_available=lambda _p: True)
+    assert options == []
+
+
 def test_computed_option_carries_catalog_display_detail() -> None:
     """The card detail (cost, context, max output, summary) is projected from the catalog."""
     config = _catalog()
@@ -145,6 +156,57 @@ def test_artifact_builder_default_key_raises_when_unbound() -> None:
     )
     with pytest.raises(ModelConfigError):
         co.artifact_builder_default_key(unbound)
+
+
+# ── resolve_artifact_builder_key — fail-closed catalog check (ADR-0122 §4, AC-4) ──
+
+
+def test_resolve_artifact_builder_key_accepts_valid_available_key() -> None:
+    config = _catalog()
+    resolved = co.resolve_artifact_builder_key(
+        "m_cloud_up", config, is_provider_available=lambda p: p in {"local_p", "cloud_up"}
+    )
+    assert resolved == "m_cloud_up"
+
+
+def test_resolve_artifact_builder_key_falls_back_on_unknown_key() -> None:
+    """AC-4(a): a key absent from the catalog substitutes the configured default."""
+    config = _catalog()
+    resolved = co.resolve_artifact_builder_key(
+        "not-a-real-model", config, is_provider_available=lambda _p: True
+    )
+    assert resolved == "m_local"  # the binding's own default, never an arbitrary model
+
+
+def test_resolve_artifact_builder_key_falls_back_on_embedding_kind() -> None:
+    """AC-4(b): a catalog key of kind embedding substitutes the configured default."""
+    config = _catalog()
+    resolved = co.resolve_artifact_builder_key(
+        "m_embed", config, is_provider_available=lambda _p: True
+    )
+    assert resolved == "m_local"
+
+
+def test_resolve_artifact_builder_key_falls_back_on_unavailable_provider() -> None:
+    """AC-4(c): a valid, kind-compatible key whose provider is down substitutes the default."""
+    config = _catalog()
+    resolved = co.resolve_artifact_builder_key(
+        "m_cloud_down", config, is_provider_available=lambda p: p != "cloud_down"
+    )
+    assert resolved == "m_local"
+
+
+def test_resolve_artifact_builder_key_never_revalidates_the_fallback_default() -> None:
+    """The substituted default is unconditional.
+
+    It is the trusted binding, not itself subject to the availability check
+    applied to the requested key.
+    """
+    config = _catalog()
+    resolved = co.resolve_artifact_builder_key(
+        "m_embed", config, is_provider_available=lambda _p: False
+    )
+    assert resolved == "m_local"
 
 
 # ── settings-validation surface (consults catalog, unfiltered by availability) ──

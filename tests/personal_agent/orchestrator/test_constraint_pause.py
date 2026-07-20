@@ -35,6 +35,7 @@ async def test_preference_applied_bypasses_pause(monkeypatch: pytest.MonkeyPatch
         context="ctx",
     )
     assert result == "continue_10"
+    assert result.resolution == "preference_applied"
     assert pushed["called"] is False
 
 
@@ -65,6 +66,7 @@ async def test_no_ws_default_no_resolution_emitted(monkeypatch: pytest.MonkeyPat
         context="ctx",
     )
     assert result == "finish_now"
+    assert result.resolution == "connection_lost"
     assert emitted == []
 
 
@@ -95,9 +97,41 @@ async def test_user_choice_emits_resolution(monkeypatch: pytest.MonkeyPatch) -> 
         context="ctx",
     )
     assert result == "continue_10"
+    assert result.resolution == "user_choice"
     assert len(emitted) == 1
     assert emitted[0]["action_id"] == "continue_10"
     assert emitted[0]["resolution"] == "user_choice"
+
+
+@pytest.mark.asyncio
+async def test_timeout_default_resolution_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A timeout is distinguishable from a user choice.
+
+    ADR-0122 §4 routes the two differently at the artifact-builder build boundary.
+    """
+
+    async def fake_load(user_id: object, constraint: str, **_kw: object) -> None:
+        return None
+
+    async def fake_push(**kwargs: object) -> dict[str, str]:
+        return {"decision": "finish_now", "resolution": "timeout_default"}
+
+    async def fake_emit(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(ex, "_load_constraint_preference", fake_load)
+    monkeypatch.setattr(f"{_TRANSPORT}.register_and_push_constraint", fake_push)
+    monkeypatch.setattr(f"{_TRANSPORT}.emit_constraint_resolved", fake_emit)
+
+    result = await ex._maybe_pause_for_constraint(
+        session_id="s1",
+        trace_id="t1",
+        user_id=uuid4(),
+        constraint="tool_iteration_limit",
+        context="ctx",
+    )
+    assert result == "finish_now"
+    assert result.resolution == "timeout_default"
 
 
 @pytest.mark.asyncio
@@ -189,3 +223,4 @@ async def test_artifact_builder_pause_carries_computed_options(
     assert event.default_option == "m_b"  # type: ignore[attr-defined]
     assert event.constraint == "artifact_builder"  # type: ignore[attr-defined]
     assert result == "m_b"
+    assert result.resolution == "user_choice"

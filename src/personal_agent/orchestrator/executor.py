@@ -564,7 +564,7 @@ async def _maybe_pause_for_constraint(
     context: str,
     timeout_seconds: float = 60.0,
     allow_preference: bool = True,
-) -> str:
+) -> "ConstraintDecision":
     """Pause and ask the user, or apply a stored preference (ADR-0076).
 
     Checks the user's standing preference first; if one is set (and not
@@ -587,9 +587,16 @@ async def _maybe_pause_for_constraint(
             (ADR-0101 §8b / FRE-691). Defaults to ``True`` (all other constraints).
 
     Returns:
-        The resolved ``action_id`` the executor should act on.
+        A :class:`~personal_agent.orchestrator.constraint_options.ConstraintDecision`
+        — a ``str`` subclass equal to the resolved ``action_id`` (existing callers
+        that pattern-match a bare string are unaffected), carrying ``.resolution``
+        for callers that must route differently for a genuine decision versus a
+        no-decision fallback (ADR-0122 §4).
     """
-    from personal_agent.orchestrator.constraint_options import resolve_options_and_default
+    from personal_agent.orchestrator.constraint_options import (
+        ConstraintDecision,
+        resolve_options_and_default,
+    )
     from personal_agent.transport.agui.transport import (
         emit_constraint_resolved,
         register_and_push_constraint,
@@ -615,7 +622,7 @@ async def _maybe_pause_for_constraint(
             trace_id=trace_id,
             session_id=session_id,
         )
-        return pref
+        return ConstraintDecision(pref, "preference_applied")
 
     # 2. Resolve options + safe default — computed from the ADR-0121 catalog for a
     #    computed-options constraint (artifact_builder, ADR-0122 §3) rather than
@@ -667,7 +674,7 @@ async def _maybe_pause_for_constraint(
             trace_id=trace_id,
             session_id=session_id,
         )
-        return default_id
+        return ConstraintDecision(default_id, "connection_lost")
 
     log.info(
         "constraint_decision_received",
@@ -711,7 +718,7 @@ async def _maybe_pause_for_constraint(
             user_id, constraint, action_id, trace_id=trace_id, session_id=session_id
         )
 
-    return action_id
+    return ConstraintDecision(action_id, resolution)
 
 
 def _build_assistant_tool_calls(
@@ -876,6 +883,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.error_classification import ClassifiedError
     from personal_agent.llm_client.models import ModelDefinition
     from personal_agent.mcp.gateway import MCPGatewayAdapter
+    from personal_agent.orchestrator.constraint_options import ConstraintDecision
     from personal_agent.service.repositories.session_repository import SessionRepository
     from personal_agent.transport.events import ConstraintName
 

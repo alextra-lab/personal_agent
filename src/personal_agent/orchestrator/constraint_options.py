@@ -188,7 +188,12 @@ def compute_artifact_builder_options(
     The option set is exactly the catalog deployments of ``kind: llm`` whose
     provider is available — asserted in both directions by AC-6: a non-llm
     deployment never leaks in, a deployment whose provider is down is absent, an
-    available one is present.
+    available one is present. When the ``artifact_builder`` role binding itself is
+    pinned (``open: false``), no deployment is ever a legal selection
+    (:func:`personal_agent.config.model_loader.is_selectable_binding`, which
+    :func:`resolve_artifact_builder_key` fail-closed-checks a card pick against) —
+    so this returns no options rather than offering choices every one of which
+    would silently be overridden to the default at build time (ADR-0122 §4).
 
     Args:
         config: The ADR-0121 catalog to read deployments and detail from.
@@ -199,9 +204,13 @@ def compute_artifact_builder_options(
 
     Returns:
         The available llm deployments as :class:`ComputedConstraintOption` values,
-        in catalog (insertion) order.
+        in catalog (insertion) order; empty when the role is pinned.
     """
     from personal_agent.llm_client.models import ModelKind
+
+    binding = config.roles.get(ARTIFACT_BUILDER_CONSTRAINT)
+    if binding is None or not binding.open:
+        return []
 
     options: list[ComputedConstraintOption] = []
     for key, definition in config.models.items():
@@ -257,6 +266,77 @@ def artifact_builder_default_key(config: "ModelConfig") -> str:
             "cannot resolve the artifact-builder default (ADR-0122 §4)"
         )
     return binding.deployment
+
+
+def resolve_artifact_builder_key(
+    selected_key: str,
+    config: "ModelConfig",
+    *,
+    is_provider_available: "Callable[[str], bool]",
+) -> str:
+    """Fail-closed catalog check for a resolved artifact-builder key (ADR-0122 §4, AC-4).
+
+    ``selected_key`` — the ``action_id`` from a card pick or a stored preference —
+    must exist in the catalog, be ``kind: llm``, belong to the (open)
+    ``artifact_builder`` role, and have an available provider. Any failure
+    substitutes the configured default — never an arbitrary model, never no model.
+    Existence/kind/open are :func:`personal_agent.config.model_loader.is_selectable_binding`'s
+    own guardrail (ADR-0121 §6); this layers provider availability on top, the same
+    signal :func:`compute_artifact_builder_options` filters the card's option set by.
+
+    Args:
+        selected_key: The resolved decision to validate.
+        config: The catalog to validate against.
+        is_provider_available: Provider-availability predicate — build the live one
+            with :func:`build_provider_availability`.
+
+    Returns:
+        ``selected_key`` when every check passes; otherwise
+        :func:`artifact_builder_default_key`'s configured default.
+    """
+    from personal_agent.config.model_loader import is_selectable_binding
+
+    if is_selectable_binding(ARTIFACT_BUILDER_CONSTRAINT, selected_key, config):
+        provider = config.models[selected_key].provider
+        if provider is not None and is_provider_available(provider):
+            return selected_key
+    return artifact_builder_default_key(config)
+
+
+class ConstraintDecision(str):
+    """A resolved constraint ``action_id``, carrying how it was resolved (ADR-0122 §4).
+
+    Compares and hashes as the plain ``action_id`` string, so
+    ``_maybe_pause_for_constraint``'s existing callers (which pattern-match a bare
+    string, e.g. ``if decision == "proceed_cloud":``) are unaffected. Only a caller
+    that must route differently for a genuine decision versus a no-decision
+    fallback — the artifact-builder build boundary, which switches between
+    ``get_llm_client_for_key`` and the role-name path — needs ``resolution``.
+
+    Attributes:
+        resolution: One of ``"preference_applied"`` (a standing preference
+            pre-resolved silently), ``"user_choice"`` (an interactive card pick),
+            ``"timeout_default"`` (no answer within the timeout),
+            ``"connection_lost"`` (no active WebSocket connection), or
+            ``"user_cancel"`` (the Stop button cancelled the pending pause).
+    """
+
+    resolution: str
+
+    def __new__(cls, action_id: str, resolution: str) -> "ConstraintDecision":
+        """Construct from the resolved ``action_id`` and how it was resolved.
+
+        Args:
+            action_id: The resolved action/deployment key — the instance's own
+                string value.
+            resolution: How resolution happened; see the class docstring.
+
+        Returns:
+            The new ``ConstraintDecision`` instance.
+        """
+        instance = super().__new__(cls, action_id)
+        instance.resolution = resolution
+        return instance
 
 
 def resolve_options_and_default(constraint: str) -> tuple[list[str], str]:

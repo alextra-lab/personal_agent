@@ -4,22 +4,25 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-19
+> **Last updated**: 2026-07-20
 
 ## 0. In flight — ADR-0121/0122 config-management chain (owner-accepted)
 
 Both ADRs **Accepted** (owner, 2026-07-19). **ADR-0121** = model catalog + selection layer, Path
-removed. **ADR-0122** = build-time artifact-builder selection. Chains approved and dispatched.
+removed. **ADR-0122** = build-time artifact-builder selection.
 
-- **FRE-916 (ADR-0121 T1) — DONE, deploy-verified live.** Single catalog; gateway loads
-  `config/models.yaml`, second catalog deleted. Sub-agent ctx 65536, compressor mini, artifact_builder
-  resolves, embedder OVH-managed.
-- **build1 head: FRE-917 (T2)** — selection store + resolver unification; carries ADR-0079's eleven
-  invariants + a Postgres migration (ask-first deploy). Then T3 918 → T4 919 → **T5 920 (seam AC-9)**.
-- **build2: FRE-881 (ADR-0122 T1)** blocked by FRE-917 → 882 → **921 (seam AC-7)**.
+- **ADR-0121 T1–T3 DONE, deploy-verified live (2026-07-20).** T1 FRE-916 (single catalog, sub-agent
+  ctx 65536, embedder OVH), T2 FRE-917 (selection store; migration 0020 applied, 1235 rows backfilled),
+  T3 FRE-918 (config read API). Gateway rebuilt + live.
+- **build1 head: FRE-919 (T4)** — telemetry migration, profile → provider+model (ES-mapping change).
+  Then **T5 FRE-920 (seam AC-9)** — PWA picker + Path removed end-to-end; also owns retiring the
+  profile-keyed `/api/inference/status` (T3 seam note).
+- **build2: FRE-881 (ADR-0122 T1)** building → 882 → **921 (seam AC-7)**.
+- **FRE-922 DONE** — worker-seat background-poller wedge fix (CC #61568); daemons restarted, detector live.
 
-Umbrellas FRE-887 / FRE-878 close only when their seams (920 / 921) prove live. Superseded + closed
-out: ADR-0118/0119, FRE-880 (canceled), FRE-883, FRE-888–892. FRE-894 holds deferred Phase-2 scope.
+Umbrellas FRE-887 / FRE-878 close only when their seams (920 / 921) prove live. Owner-fired live model
+checks for T2/T3 (turn runs selected model) recommended, not Done-blocking. Superseded + closed out:
+ADR-0118/0119, FRE-880 (canceled), FRE-883, FRE-888–892. FRE-894 holds deferred Phase-2 scope.
 
 ## 1. Reduce the backlog
 

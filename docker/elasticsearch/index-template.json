@@ -156,6 +156,7 @@
         "success":             { "type": "boolean" },
         "model_role":          { "type": "keyword" },
         "model":               { "type": "keyword" },
+        "provider":            { "type": "keyword" },
         "endpoint":            { "type": "keyword" },
         "api_type":            { "type": "keyword" },
         "input_tokens":        { "type": "long" },

@@ -503,6 +503,7 @@ class LiteLLMClient:
             role=role.value,
             model=self._litellm_model,
             endpoint=self.provider,
+            provider=self.provider,
             trace_ctx=trace_ctx,
             span_id=span_id,
             extra={
@@ -654,7 +655,11 @@ class LiteLLMClient:
                 try:
                     await cost_tracker.record_api_call(
                         provider=self.provider,
-                        model=self.model_id,
+                        # Match the canonical model_call_completed string
+                        # (ADR-0121 T4 / AC-8) rather than the bare model id —
+                        # a cost row and its telemetry counterpart must name
+                        # the same model for the same call.
+                        model=self._litellm_model,
                         input_tokens=usage.get("prompt_tokens", 0),
                         output_tokens=usage.get("completion_tokens", 0),
                         cost_usd=cost,
@@ -698,6 +703,7 @@ class LiteLLMClient:
             role=role.value,
             model=self._litellm_model,
             endpoint=self.provider,
+            provider=self.provider,
             trace_ctx=trace_ctx,
             span_id=span_id,
             latency_ms=latency_ms,

@@ -54,6 +54,7 @@ STEP_PLANNING_COMPLETED = "step_planning_completed"
 CANONICAL_MODEL_CALL_STARTED_FIELDS: frozenset[str] = frozenset(
     {
         "model",
+        "provider",
         "role",
         "endpoint",
         "trace_id",

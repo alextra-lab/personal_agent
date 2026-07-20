@@ -69,10 +69,12 @@ reviewed, none a side effect:
    is what the removed ``none|*`` cells used to capture — binding-only
    resolution, now the *only* resolution.
 2. **``sub_agent`` and ``artifact_builder`` binding default: ``qwen3.6-35b-instruct``
-   → ``claude_haiku``.** Owner-decided (2026-07-20): with one binding replacing
-   two profile-specific values, the owner chose to preserve what the (removed)
-   ``cloud`` profile provided rather than the ``local`` one.
-   ``config/model_roles.yaml``'s ``bindings:`` changed accordingly.
+   → ``claude_sonnet``.** Owner-directed (2026-07-20, at the master gate on
+   FRE-920's PR): with one binding replacing two profile-specific values,
+   neither ``local`` nor ``cloud`` profile's prior value carries forward as-is
+   — the owner picked ``claude_sonnet`` directly. ``config/model_roles.yaml``'s
+   ``bindings:`` changed accordingly; the stale, unresolved ``sub_agent`` entry
+   in the top ``roles:`` matrix (a drift trap master caught) was removed.
 3. **``artifact_builder`` no longer raises.** The old ``none|artifact_builder``
    cell recorded a raise (no profile bound, no binding fallback existed yet).
    It now always resolves via its Layer-3 binding — the fail-loud path

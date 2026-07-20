@@ -40,8 +40,11 @@ class TestRolesResolveToTheAllValue:
     @pytest.mark.parametrize(
         ("role", "expected"),
         [
+            # `sub_agent` is deliberately absent: ADR-0121 T5 (FRE-920, master
+            # gate 2026-07-20) removed its matrix entry as a stale duplicate of
+            # the Layer-3 binding — it was never actually resolved through this
+            # matrix (see TestUndeclaredRole below for the now-undeclared case).
             ("primary", "qwen3.6-35b-thinking"),
-            ("sub_agent", "qwen3.6-35b-instruct"),
             ("entity_extraction", "gpt-5.4-mini"),
             ("captains_log", "claude_sonnet"),
             ("insights", "claude_sonnet"),
@@ -73,7 +76,8 @@ class TestCompressorNoLongerDiverges:
 class TestConfigPathDefaultsToTheSingleCatalog:
     def test_config_path_none_uses_the_catalog_constant(self) -> None:
         """No settings monkeypatch: the catalog is a module constant since
-        FRE-916 phase 2 deleted settings.model_config_path."""
+        FRE-916 phase 2 deleted settings.model_config_path.
+        """
         assert resolve_role_model_key("entity_extraction") == "gpt-5.4-mini"
 
 
@@ -85,13 +89,24 @@ class TestUndeclaredRole:
     def test_artifact_builder_is_not_matrix_resolved(self) -> None:
         """ADR-0119 §2/AC-8 (FRE-879): artifact_builder is off the matrix.
 
-        It is an "open" role resolved via the ExecutionProfile
-        (config/profiles/{local,cloud}.yaml), never the matrix. The parked FRE-879 WIP's
-        first cut made it a matrix row — the exact regression this ticket corrects — so
-        this asserts it stays undeclared here.
+        It is an "open" role resolved via the Layer-3 binding
+        (config/model_roles.yaml's `bindings:` section, ADR-0121), never the matrix.
+        The parked FRE-879 WIP's first cut made it a matrix row — the exact regression
+        this ticket corrects — so this asserts it stays undeclared here.
         """
         with pytest.raises(ModelRoleError, match="not declared"):
             resolve_role_model_key("artifact_builder", config_path=_CATALOG)
+
+    def test_sub_agent_is_not_matrix_resolved(self) -> None:
+        """ADR-0121 T5 (FRE-920, master gate 2026-07-20): sub_agent is off the matrix.
+
+        Its entry here was a stale duplicate of the Layer-3 binding (a
+        two-places-for-one-role drift trap master caught at the gate) and was
+        removed; sub_agent resolves only via config/model_roles.yaml's
+        `bindings:` section, same as artifact_builder above.
+        """
+        with pytest.raises(ModelRoleError, match="not declared"):
+            resolve_role_model_key("sub_agent", config_path=_CATALOG)
 
 
 class TestMatrixMissing:

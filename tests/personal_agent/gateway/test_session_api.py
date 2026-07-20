@@ -775,8 +775,8 @@ def test_get_session_config_no_selection_row_falls_back_to_binding_default() -> 
 
     roles = resp.json()["roles"]
     assert roles["primary"]["resolved"] == "qwen3.6-35b-thinking"
-    assert roles["artifact_builder"]["resolved"] == "claude_haiku"
-    assert roles["sub_agent"]["resolved"] == "claude_haiku"
+    assert roles["artifact_builder"]["resolved"] == "claude_sonnet"
+    assert roles["sub_agent"]["resolved"] == "claude_sonnet"
 
 
 def test_get_session_config_selection_store_failure_logs_trace_id() -> None:

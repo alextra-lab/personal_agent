@@ -24,9 +24,15 @@
 # The dangling-reference half of the old guard is RETAINED
 # (config_guard.check_forbidden_role_divergence_and_dangling_refs): a role
 # pointing at a model key that no longer exists is still a real failure.
+#
+# ADR-0121 T5 (FRE-920, master gate 2026-07-20): `sub_agent`'s entry here was
+# removed — it was never resolved through this matrix (see above), and its
+# stale value (`qwen3.6-35b-instruct`) had drifted from the Layer-3 binding
+# below, a two-places-for-one-role trap master caught at the gate. `primary`
+# stays: its value here still matches its binding, so there is no drift to
+# trap, even though this matrix isn't consulted for it either.
 roles:
   primary:            { all: qwen3.6-35b-thinking }
-  sub_agent:          { all: qwen3.6-35b-instruct }
   entity_extraction:  { all: gpt-5.4-mini }
   captains_log:       { all: claude_sonnet }
   insights:           { all: claude_sonnet }
@@ -68,12 +74,13 @@ bindings:
   # deployment's 90s. The 120s only ever appeared on the no-profile path, which
   # raised anyway, and artifact_tools passes its own _draft_timeout_s() at the
   # call site regardless.
-  # ADR-0121 T5 (FRE-920): pinned to claude_haiku, not qwen3.6-35b-instruct —
-  # there is only one binding default now that ExecutionProfile is gone, and
-  # the owner chose to preserve the value the (removed) cloud profile carried.
-  # artifact_builder's real per-build choice lands with ADR-0122.
-  artifact_builder:   { deployment: claude_haiku, open: true }
-  sub_agent:          { deployment: claude_haiku }
+  # ADR-0121 T5 (FRE-920): pinned to claude_sonnet — owner-directed 2026-07-20
+  # at the master gate (there is only one binding default now that
+  # ExecutionProfile is gone, and profile-based redirection no longer
+  # applies to either role). artifact_builder's real per-build choice lands
+  # with ADR-0122.
+  artifact_builder:   { deployment: claude_sonnet, open: true }
+  sub_agent:          { deployment: claude_sonnet }
   entity_extraction:  { deployment: gpt-5.4-mini }
   captains_log:       { deployment: claude_sonnet }
   insights:           { deployment: claude_sonnet }

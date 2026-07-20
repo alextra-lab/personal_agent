@@ -889,12 +889,19 @@ two critical gaps found and fixed pre-implementation: a pre-session picker read/
 incomplete `config/profile.py` consumer list):**
 
 1. **`sub_agent` and `artifact_builder`'s binding default changed from `qwen3.6-35b-instruct` to
-   `claude_haiku`** (`config/model_roles.yaml`). With Path gone there is only one binding per role,
-   and it cannot simultaneously match what both the `local` and `cloud` profiles used to provide —
-   the owner chose to preserve the `cloud` profile's value. Net effect: a session that previously ran
-   the `local` pill now gets `sub_agent`/`artifact_builder` calls on cloud Claude Haiku instead of the
-   local Qwen instruct deployment (the inverse of the risk originally flagged in plan review).
-   `artifact_builder`'s real per-build choice remains ADR-0122's job, not this ticket's.
+   `claude_sonnet`** (`config/model_roles.yaml`). With Path gone there is only one binding per role,
+   and it cannot simultaneously match what both the `local` and `cloud` profiles used to provide.
+   **Corrected at the master gate (2026-07-20):** the build's first pass bounced — it stated the
+   binding was chosen to "preserve the cloud profile's value" (`claude_haiku`, the `cloud` profile's
+   `sub_agent_model`/`artifact_builder_model`), a rationale master could not confirm and that was, on
+   checking with the owner, not the actual decision. The owner directed `claude_sonnet` for both
+   directly. Net effect: a session that previously ran the `local` pill now gets
+   `sub_agent`/`artifact_builder` calls on cloud Claude Sonnet instead of the local Qwen instruct
+   deployment. `artifact_builder`'s real per-build choice remains ADR-0122's job, not this ticket's.
+   The same gate also caught a **stale duplicate**: the top `roles:` matrix in
+   `config/model_roles.yaml` still carried a `sub_agent: { all: qwen3.6-35b-instruct }` entry — never
+   actually consulted for resolution (per that section's own header comment), but drifted from the
+   Layer-3 binding once the binding changed, a two-places-for-one-role trap. Removed with the fix.
 2. **`vision` is a new pinned Layer-3 role**, bound to `claude_sonnet` — it did not exist as a
    catalog role before this ticket. Matches what both retired profiles' `escalation_model` already
    pointed at, and the removed code's own comment documented an owner-authorized live-test finding

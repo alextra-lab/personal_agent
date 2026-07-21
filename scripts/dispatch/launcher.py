@@ -199,6 +199,11 @@ _POLL_INTERVAL_S: float = 0.5
 # seat is not merely mid-settle and the delivery should fail closed.
 _MAX_ENTER_RESUBMITS: int = 2
 
+# Shortest rendered box prefix accepted as "this is my command, truncated".
+# Long enough to distinguish ``/clear`` / ``/model`` / ``/build`` from each other
+# and from a bare ``/``.
+_MIN_BOX_PREFIX: int = 4
+
 # The live input box: a caret followed by whatever is typed but not yet sent.
 # ``pane_state`` matches the EMPTY box (a bare caret) to decide idleness; this
 # matches the same line to read what is sitting IN it.
@@ -1013,7 +1018,13 @@ def _pending_in_box(pane_text: str, command: str) -> bool:
     contents = _box_contents(pane_text)
     if not contents:
         return False
-    return command.startswith(contents) or contents.startswith(command)
+    if contents.startswith(command):
+        return True
+    # Truncation tolerance, floored: every dispatch command begins with ``/``, so
+    # accepting any prefix would let a single stray ``/`` in the box read as
+    # "my command is pending" and earn a needless Enter. Require enough
+    # characters to actually identify the command.
+    return command.startswith(contents) and len(contents) >= _MIN_BOX_PREFIX
 
 
 def deliver_to_seat(

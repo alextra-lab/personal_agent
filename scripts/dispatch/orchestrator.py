@@ -314,9 +314,11 @@ class DispatchRecord:
         run_confirmed: The run delivered a PR (reached ``In Review`` + open PR)
             — stall-watching stops once set.
         stall_notified: A stall notification has already fired (throttle).
-        attempts: Delivery attempts consumed for this ticket. Written *before*
+        attempts: Dispatch attempts consumed for this ticket. Claimed *before*
             the attempt is made, so it survives a daemon crash mid-sequence and
-            the retry budget cannot be silently reset by a restart.
+            the retry budget cannot be silently reset by a restart. An attempt
+            that never reached the seat (a transient outcome — busy seat, dirty
+            worktree, failed create) is given back rather than counted.
     """
 
     stream: str
@@ -477,16 +479,19 @@ def _decide_delivering(
     become the unbounded per-tick re-dispatch loop the ``surfaced`` phase was
     protecting against.
     """
-    if record.attempts >= MAX_DELIVERY_ATTEMPTS:
-        return StreamDecision(
-            stream, "surface", ticket=record.ticket, reason="delivery-attempts-exhausted"
-        )
     state = _state_of(issues, record.ticket)
     normalized = state.strip().lower() if state else None
     nxt = resolve_next(issues, stream)
     still_next = normalized == "approved" and nxt is not None and nxt.identifier == record.ticket
+    # Owner-acted is checked BEFORE the budget, mirroring ``_decide_surfaced``:
+    # a ticket that has already moved on is not this stream's business, and
+    # surfacing a card for it would put a stale item in front of the owner.
     if not still_next:
         return StreamDecision(stream, "clear", ticket=record.ticket, reason="owner-acted")
+    if record.attempts >= MAX_DELIVERY_ATTEMPTS:
+        return StreamDecision(
+            stream, "surface", ticket=record.ticket, reason="delivery-attempts-exhausted"
+        )
     model = model_for_labels(nxt.labels) if nxt is not None else None
     if model is None:
         return StreamDecision(stream, "skip", ticket=record.ticket, reason="no-tier-label")
@@ -829,17 +834,16 @@ def _apply(
             new_record = _record_for_result(
                 stream, decision.ticket, result.outcome, now, attempts=attempts
             )
-            if new_record is not None:
-                state[stream] = new_record
-            else:
-                state.pop(stream, None)
-            persist(state)
-            # FRE-923: the retry gave up. Announce it ONCE, on the tick the
-            # budget is spent — the crash path emits the same event from the
-            # ``surface`` decision, so give-up is never silent whichever way it
-            # is reached. This is distinct from FRE-924's age-based escalation of
-            # an already-surfaced card: this fires at the transition, not on
-            # elapsed time.
+            # FRE-923: the retry gave up. Announce it BEFORE committing the
+            # ``surfaced`` record — persist-then-notify is exactly the window
+            # FRE-922's review condemned: a crash in between leaves a record
+            # already marked surfaced, and ``_decide_surfaced`` only ever holds
+            # or clears, so the alert would be lost forever with no path to
+            # re-fire it. Notify-then-persist can at worst repeat the alert on
+            # the retried tick, which is the survivable direction. (The
+            # ``surface`` case below and the pre-existing ``stall`` case order it
+            # the same way.) This is distinct from FRE-924's age-based escalation
+            # of an already-surfaced card: this fires at the transition.
             if result.outcome == "delivery-failed" and attempts >= MAX_DELIVERY_ATTEMPTS:
                 notifier(
                     "dispatch_delivery_exhausted",
@@ -855,6 +859,26 @@ def _apply(
                     ticket=decision.ticket,
                     attempts=attempts,
                 )
+            if new_record is not None:
+                state[stream] = new_record
+            elif (
+                prior is not None
+                and prior.phase == "delivering"
+                and prior.ticket == decision.ticket
+            ):
+                # FRE-923: a transient outcome (seat-busy / worktree-dirty /
+                # launch-failed) typed NOTHING into the seat, so it must not
+                # consume the retry budget — and it must not discard a retry
+                # already in progress. Popping here would reset ``attempts`` to
+                # zero, and a seat that alternates busy/delivery-failed across
+                # ticks would then retry FOREVER without ever escalating, which
+                # is precisely the unbounded loop the budget exists to prevent.
+                # Restore the pre-write's predecessor rather than the pre-write:
+                # an attempt that never reached the seat was never spent.
+                state[stream] = prior
+            else:
+                state.pop(stream, None)
+            persist(state)
             # FRE-922: a ``seat-busy`` outcome whose seat shows the suspected-wedge
             # signature (RC busy while the pane is idle) is counted; past the
             # threshold it is SURFACED — a distinct, greppable anomaly and a
@@ -933,7 +957,12 @@ def _apply(
             # would re-create the silent indefinite stall this ticket exists to
             # kill, just one phase along.
             record = state.get(stream)
-            if record is not None:
+            # Gated on ``execute`` so a dry-run tick stays side-effect-free — it
+            # must neither ping the owner nor mutate/persist state. (FRE-844 and
+            # the FRE-924 sibling both established this for reconcile/escalation
+            # paths; the ``launch`` case gates the same way via its early
+            # return.)
+            if record is not None and execute:
                 notifier(
                     "dispatch_delivery_exhausted",
                     trace_id=trace_id,
@@ -1110,9 +1139,22 @@ def load_state(path: Path) -> dict[str, DispatchRecord]:
     for stream, value in raw.items():
         if isinstance(value, dict):
             try:
-                state[stream] = DispatchRecord(**value)
+                record = DispatchRecord(**value)
             except TypeError:
                 continue
+            # A dataclass validates field NAMES, never their types, so a
+            # corrupted file (partial write, hand-edit) can construct a record
+            # whose ``attempts`` is a string — which then raises TypeError on the
+            # first ``>=``/``+=`` in the tick. That escapes ``run_once`` uncaught
+            # and, under the daemon's ``Restart=always``, turns one bad file into
+            # an indefinite crash-loop with dispatch fully down. Drop the record
+            # instead: the stream simply becomes eligible again, which is the
+            # same fail-safe the ``TypeError`` branch above already chooses.
+            if not isinstance(record.attempts, int) or isinstance(record.attempts, bool):
+                continue
+            if record.phase not in {"launched", "surfaced", "delivering"}:
+                continue
+            state[stream] = record
     return state
 
 

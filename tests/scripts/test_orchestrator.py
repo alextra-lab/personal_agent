@@ -33,6 +33,7 @@ from scripts.dispatch.orchestrator import (
     check_preconditions,
     decide,
     is_anthropic_endpoint,
+    load_state,
     main,
     model_for_labels,
     rc_server_alive,
@@ -1118,6 +1119,122 @@ def test_seat_busy_pops_the_prewritten_record() -> None:
     assert "build1" not in state
     # Proves it was genuinely the busy path: a mid-turn seat is never typed into.
     assert not [c for c in runner.calls if "send-keys" in c]
+
+
+def test_a_busy_seat_mid_retry_does_not_refund_the_budget_into_an_endless_loop() -> None:
+    """A transient tick must not erase a retry already in progress.
+
+    Self-review finding: the pre-write was popped wholesale on ``seat-busy``,
+    taking the accumulated ``attempts`` with it. A seat alternating
+    busy/delivery-failed across ticks would then retry FOREVER — never reaching
+    the budget, never escalating — the exact unbounded loop the budget exists to
+    prevent.
+    """
+    runner = _SeatRunner(
+        state="live", results={"capture-pane": _FakeRunResult(stdout=_WEDGE_BUSY_PANE)}
+    )
+    board = [_issue("FRE-923", "Approved", _OPUS)]
+    state = {"build1": _delivering_record("FRE-923", attempts=2)}
+    state, _ = _run(state, runner, board)
+
+    assert state["build1"].phase == "delivering"
+    assert state["build1"].attempts == 2, "a tick that typed nothing must not spend budget"
+
+
+def test_a_transient_tick_never_counts_against_the_budget() -> None:
+    """An attempt that never reached the seat was never spent.
+
+    Counting it would let a flaky-but-idle stream burn its retries without a
+    single keystroke ever being delivered.
+    """
+    runner = _SeatRunner(
+        state="live", results={"capture-pane": _FakeRunResult(stdout=_WEDGE_BUSY_PANE)}
+    )
+    board = [_issue("FRE-923", "Approved", _OPUS)]
+    state: dict[str, DispatchRecord] = {}
+    for _ in range(4):
+        state, _ = _run(state, runner, board)
+
+    assert "build1" not in state  # nothing tracked, stream stays eligible
+    assert not [c for c in runner.calls if "send-keys" in c]
+
+
+def test_exhaustion_escalation_is_gated_on_execute() -> None:
+    """A dry-run tick stays side-effect-free — no owner ping, no state mutation."""
+    runner = _SeatRunner()
+    board = [_issue("FRE-923", "Approved", _OPUS)]
+    notifier = _Notifier()
+    state = {"build1": _delivering_record("FRE-923", attempts=MAX_DELIVERY_ATTEMPTS)}
+    state, persisted = _run(state, runner, board, execute=False, notifier=notifier)
+
+    assert state["build1"].phase == "delivering"  # unchanged
+    assert notifier.events == []
+    assert persisted == []
+
+
+def test_a_ticket_the_owner_moved_on_is_cleared_not_surfaced() -> None:
+    """An exhausted budget must not put a stale card in front of the owner."""
+    issues = [_issue("FRE-923", "In Progress", _OPUS)]
+    record = _delivering_record("FRE-923", attempts=MAX_DELIVERY_ATTEMPTS)
+    d = decide("build1", issues, record, now=0.0, stall_timeout_s=60, tracked_pr_open=False)
+
+    assert d.kind == "clear"
+
+
+def test_a_corrupt_attempts_value_is_dropped_not_crash_looped(tmp_path) -> None:
+    """A bad state file must not take the whole dispatch daemon down.
+
+    A dataclass validates field names, never types, so ``attempts: "oops"``
+    constructs fine and then raises TypeError on the first comparison — which
+    escapes the tick and, under the daemon's Restart=always, becomes an
+    indefinite crash-loop with dispatch fully down.
+    """
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "build1": {
+                    "stream": "build1",
+                    "ticket": "FRE-923",
+                    "phase": "delivering",
+                    "launched_at": 0.0,
+                    "session_id": None,
+                    "attempts": "oops",
+                },
+                "build2": {
+                    "stream": "build2",
+                    "ticket": "FRE-1",
+                    "phase": "launched",
+                    "launched_at": 0.0,
+                    "session_id": None,
+                    "attempts": 1,
+                },
+            }
+        )
+    )
+    state = load_state(path)
+
+    assert "build1" not in state  # dropped, stream simply becomes eligible again
+    assert state["build2"].attempts == 1  # the healthy record survives
+
+
+def test_an_unknown_phase_is_dropped(tmp_path) -> None:
+    """A record whose phase this build cannot interpret is not trusted."""
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "build1": {
+                    "stream": "build1",
+                    "ticket": "FRE-923",
+                    "phase": "from-a-newer-version",
+                    "launched_at": 0.0,
+                    "session_id": None,
+                }
+            }
+        )
+    )
+    assert load_state(path) == {}
 
 
 def test_giving_up_on_delivery_is_announced_exactly_once() -> None:

@@ -77,7 +77,8 @@ _ANALYSIS_PATTERNS: re.Pattern[str] = re.compile(
 # TOOL_USE via _TOOL_INTENT_PATTERNS below — without it they fall through to
 # CONVERSATIONAL, whose tool-iteration budget is capped at 6 vs 25 for tool_use.
 # Precedent: FRE-256 _TOOL_INTENT_PATTERNS extension.
-_ARTIFACT_BUILD_REGEX: str = (
+# FRE-929: Now also compiled separately to emit artifact_build_intent signal.
+_ARTIFACT_BUILD_REGEX_STR: str = (
     r"(?:(?:build|make|create|generate)\s+"
     r"(?:me\s+|us\s+)?(?:an?\s+|the\s+|some\s+)?"
     r"(?:\w+\s+){0,3}?"
@@ -85,6 +86,8 @@ _ARTIFACT_BUILD_REGEX: str = (
     r"diagram|artifact|visuali[sz]ation|infographic|mock-?up|prototype|"
     r"widget|report|slide\s*show|presentation|app|html|svg|interactive))"
 )
+
+_ARTIFACT_BUILD_REGEX: re.Pattern[str] = re.compile(_ARTIFACT_BUILD_REGEX_STR, re.IGNORECASE)
 
 _TOOL_INTENT_PATTERNS: re.Pattern[str] = re.compile(
     r"(?i)"
@@ -116,8 +119,8 @@ _TOOL_INTENT_PATTERNS: re.Pattern[str] = re.compile(
     # Bare-noun error/log observation — no leading verb (e.g. "errors in elasticsearch")
     r"|(?:\berrors?\s+(?:in|from|within)\s+(?:elasticsearch|kibana|the\s+logs?|telemetry|traces?))"
     r"|(?:what\s+errors?\s+(?:are\s+)?(?:in|from)\s+(?:the\s+)?(?:logs?|elasticsearch|telemetry))"
-    # Artifact / build intent (FRE-469). See _ARTIFACT_BUILD_REGEX above for rationale.
-    r"|" + _ARTIFACT_BUILD_REGEX,
+    # Artifact / build intent (FRE-469). See _ARTIFACT_BUILD_REGEX_STR above for rationale.
+    r"|" + _ARTIFACT_BUILD_REGEX_STR,
 )
 
 _SELF_IMPROVE_PATTERNS: re.Pattern[str] = re.compile(
@@ -308,6 +311,11 @@ def classify_intent(user_message: str) -> IntentResult:
 
     # 6. Tool use
     if _TOOL_INTENT_PATTERNS.search(user_message):
+        # FRE-929: Check for artifact_build_intent separately to emit distinct signal.
+        # The artifact-build regex is still in the union (unchanged), but we now
+        # also emit this signal when it matches for better observability.
+        if _ARTIFACT_BUILD_REGEX.search(user_message):
+            signals.append("artifact_build_intent")
         signals.append("tool_intent_pattern")
         task_type = TaskType.TOOL_USE
         confidence = 0.8

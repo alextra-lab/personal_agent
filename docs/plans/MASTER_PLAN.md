@@ -6,27 +6,28 @@
 > per-ticket state → [Linear](https://linear.app/frenchforest).
 > **Last updated**: 2026-07-21
 
-## 0. ADR-0122 — AC-7 FAILED live; amendment in flight
+## 0. Gate PR #613 — first action, it has been waiting
 
-**FRE-921 is `Verify Failed`.** The first real run (2026-07-21) produced no card: the constraint
-waiter bypasses its own timeout when no socket is registered, so a momentary drop became a permanent
-silent default. Routing itself was correct end to end.
+FRE-928 (all three no-card mechanisms). CI fully green, **ungated for hours** — the watcher sent
+`/master 613` at 16:47 and the send was swallowed while the ledger recorded delivery (FRE-939, the
+second such loss today). **Run `gh pr list` rather than waiting for a trigger.**
 
-**Amendment merged** (PR #606, `d5950eed`): the card fires in `step_init` before the first LLM call,
-ordered after the existing attachment-cost gate. Awaiting owner approval, in order:
+## 0a. Decide the model caps before running AC-7
 
-- **FRE-929** (T4, Haiku) — emit a distinct artifact-build signal; the regex already exists (FRE-469)
-  but is unioned into the generic tool-intent patterns. Purely additive.
-- **FRE-930** (T5, Opus) — move the ask to turn start. Adds a *third* pause to a turn that already has
-  a documented cross-contamination bug (FRE-749); AC-14 asserts isolation.
-- **FRE-931** (T6, Sonnet) — **the seam; re-runs AC-7.** Also fixes a live defect: `_draft_max_tokens()`
-  is a flat 32768 regardless of the pick, against declared caps of 8192 / 4096 / **2048** — up to a
-  16× overshoot, and the card shows the user a number the build does not use.
-- **FRE-928** — released from hold. The amendment reduces exposure but does not repair the waiter, and
-  it is the prerequisite for AC-5's timeout leg. Ships on its own merits.
+The catalog declares `max_tokens` far below real provider ceilings — `claude_sonnet` 32768 vs **128K**,
+`claude_haiku` 4096 vs **64K**. Harmless until today; **FRE-931 now clamps to those numbers**, so a
+Haiku pick yields a ~16×-smaller artifact and the plan is sized to it. Correcting it touches the
+planning note, which lives in the system prompt — and the owner has ruled out prompt-cache-affecting
+changes pending their decision. **Not ticketed. Owner's call on approach first.**
 
-**Open question, decides FRE-931's severity:** whether exceeding our declared cap actually fails at the
-provider, or merely violates local policy. If it fails, every non-default pick is broken today.
+Running AC-7 before this produces a needlessly small artifact that will read as a sizing bug.
+
+## 0b. ADR-0122 — AC-7 is the only thing left
+
+T4–T6 (FRE-929/930/931) shipped and deployed 2026-07-21; verified in the running container. **FRE-921
+stays `Verify Failed`** until a live run passes. One artifact-build turn closes AC-7 **and** answers the
+open cache question (see `LAST_SESSION.md`) — same turn, same cost. Owner fires it; master verifies from
+telemetry.
 
 ## 0c. ADR-0123 turn progress surface — merged, tickets pending
 
@@ -47,8 +48,9 @@ survives reload → survives WS reconnect. Closes FRE-920. Unaffected by the abo
 
 ## 1. Reduce the backlog
 
-~80 Approved; most carry no stream label (parked). Live queue: build1 on FRE-925 → FRE-926; **build2 is
-idle — its eligible set is empty**, so it needs work labelled or it stays parked. Method:
+~80 Approved; most carry no stream label (parked). Live queue: build1 on FRE-928 → FRE-938 → FRE-926;
+**build2 is idle — its eligible set is empty**, so it needs work labelled or it stays parked. Awaiting
+approval and unlabelled: FRE-927, FRE-932, FRE-939. Method:
 verify per cluster, cancel the provable with a one-line reason, bring judgment calls to the owner.
 Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729–732, FRE-810/811/814) ·
 `[Thread]` placeholders that can never be Done (FRE-401/418/397) · work gated on events that never

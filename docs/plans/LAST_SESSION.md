@@ -1,87 +1,100 @@
-# Last session — 2026-07-19 → 07-21 (ADR-0121 shipped; the silent-failure family)
+# Last session — 2026-07-21 (ADR-0122 amended + shipped; a bad day for master's certainty)
 
 ## Doing / discussing (≤5 sentences)
 
-Two threads ran in parallel. **ADR-0121 (model catalog + selection layer, Path removed) went from
-Proposed to fully merged and deployed** — T1 through T5, five tickets, three gateway deploys, two
-Postgres migrations, an additive ES field. Alongside it, the session kept tripping over **silent
-failures in the seat/dispatch layer** — seven distinct modes, every one of which looked healthy from
-the outside — and three fixes came out of that (FRE-922, FRE-924 live; FRE-923 at the gate).
+Dispatch was re-enabled and the day ran hot: **ADR-0122 was amended and its whole implementation chain
+(T4/T5/T6) built, merged and deployed**, plus FRE-923 and FRE-925. Alongside it, **AC-7 failed live** on
+its first real run and a family of silent-delivery defects kept surfacing — five new tickets came out of
+one morning. **The through-line worth carrying: master was confidently wrong four separate times, and the
+owner caught every one.** Two findings exist ONLY in that conversation and are written up below — the
+**cache regression** and the **under-declared model caps**.
 
-**Start here:** dispatch is **paused** (owner-directed), and **two PRs sit ungated** — #600 (FRE-923)
-and #599 (FRE-921, the ADR-0122 AC-7 seam). No watcher trigger will arrive; the kill switch pauses the
-watcher too. See MASTER_PLAN §0–§2.
+**Start here:** PR **#613** (FRE-928) is green and **ungated for hours** — the watcher sent `/master 613`
+at 16:47 and it never arrived. Gate it first.
 
 ## Commits — the story behind the last ~15
 
-- **ADR-0121 T1 shipped as two PRs (#584, #586), not one.** The build cut scope mid-ticket and its
-  handoff called the cut "owner-approved." **It was not** — the owner had said the split should be
-  *documented* and that master would decide. Master accepted it on its own judgment (deleting
-  ExecutionProfile before the selection store existed would have broken the live Cloud pill) and
-  corrected the record. This was the **first of four** handoffs citing owner approval master could not
-  confirm.
-- **#585, #594** — ADR-0121 amendments, each landed *before* the merge that changed the design, never
-  after. AC-1(b) reassigned; AC-3 corrected (its "current behaviour" claim was factually false —
-  endpoint semaphores already capped it); AC-10 **struck as dead**; §8 corrected (the profile field was
-  never consumed anywhere, so it was removed outright rather than retained read-only).
-- **#596 (T5) was BOUNCED, and the bounce was right.** Master flagged Path-era residue in the roles
-  matrix, then — under owner pushback — talked itself out of it as "stale-but-inert." The owner
-  corrected it: *that is uncleaned dev residue, and cleanup is exactly this ticket's job.* Re-gated
-  against a sharper bar ("is the profile-keyed shape gone," not "are the symbols gone") and verified all
-  eight surviving matrix entries against their bindings — zero drift, and the one that *had* drifted was
-  the one removed.
-- **#597** — CACHE_NAME bump. FRE-920 changed the PWA shell but never bumped it; without this, installed
-  PWAs would have kept serving the old profile pill indefinitely.
-- **#589 (FRE-922), #598 (FRE-924)** — the two dispatch-reliability fixes, both deployed and verified.
+- **ADR-0122 amendment (#606)** — owner-directed: the artifact-builder card moves from the build boundary
+  to **turn start**. Master measured why: the card fired **117s** into a turn (55s perplexity + 43s silent
+  planning), by which point the owner had put the phone down and the socket dropped. The card check itself
+  takes **<1ms** — it was only ever *positioned* late.
+- **T4/T5/T6 (#608, #611, #612)** — signal → turn-start ask → budget sizing. All merged and **deployed**
+  (gateway rebuilt ~17:5x, verified inside the container, health green).
+- **ADR-0123 (#609)** — new: turn progress surface. Its finding is sharp and verified: the transport has
+  **zero** references to inference (0 vs 14 for tool events), so the system is silent precisely where it
+  works longest. Sits **upstream** of FRE-928, not parallel.
+- **#602 (FRE-925)** — the recall test, finally fixed and **Done**. Root cause was *displacement* (rows
+  crowded out of a global top-50), not "stale data matching" — a misdiagnosis four handoffs repeated.
+- **#600 (FRE-923)** — dispatch delivery atomicity, deployed and self-evidencing (`attempts=1` in the
+  first live dispatch proved the merged code was the running code).
 
 ## Worktrees — anything special
 
-- **build** (cc-1build) — on `fre-923-...`, PR #600 pushed. This seat ran a **5.8-hour build** and hit an
-  **auth expiry mid-flight**; after re-login it came back in *manual mode* and silently blocked on a
-  per-edit permission prompt. Recovered by restoring accept-edits. Work was never lost.
-- **build2** (cc-2build) — on `fre-921-...`, PR #599 pushed.
-- **adrs** (cc-adrs) — was unreachable from the owner's client while **every server-side signal said
-  healthy** (tmux up, CC running, RC registered idle). `cc-sessions restart cc-adrs` — a `claude -c`
-  resume — fixed it without losing the ADR context.
+- **build1** (cc-1build) — on FRE-928, PR **#613 open, green, UNGATED**. This is the first thing to do.
+- **build2** — idle, queue empty. The ADR-0122 chain is complete.
+- **Note:** at ~10:44 the **primary tree `/opt/seshat` was found checked out on a feature branch** with
+  build2 in detached HEAD — a build took the branch in master's tree instead of its own worktree. Master
+  restored `main`. Worth watching; not ticketed (one occurrence).
 
 ## Plan position + drift
 
-MASTER_PLAN §0 was rewritten three times as reality moved, and accomplishment-narrative crept back in
-twice; stripped again at this reset. The plan is now **forward-only**: pause state, the two ungated PRs,
-the two open seams.
+MASTER_PLAN §0 rewritten twice as reality moved. ADR-0122's chain is now shipped but the ADR **does not
+close** — AC-7 is live-only and still unproven. FRE-921 sits in **`Verify Failed`** with the full timeline.
 
-**Real drift caught at the reset gate:** FRE-916, FRE-919 and FRE-922 had been closed **Done with
-evidence** yet were sitting in **Awaiting Deploy**. Cause: master's own docs-PR *titles* carried
-`fre-XXX` tokens ("…FRE-916 done"), which **re-triggers the Linear↔GitHub integration** and reopens the
-ticket. That rule is already in memory and was violated three times in one session. All three restored.
+**Two findings that live nowhere else — read these before touching the prompt path:**
+
+1. **A cache regression master approved.** FRE-931 appends a per-turn planning note into the **system
+   prompt** (`executor.py:123`), and the system message is exactly where the cache breakpoint goes
+   (`litellm_client.py:189`, `:384`). At the gate master verified the note stays out of
+   `static_prefix_hash` — *telemetry identity* — and reported that as "caching is preserved". **Those are
+   different things.** Measured after deploy: the baseline is **fine** (prefix hash unchanged at
+   `e6ddc4b50c52f2be`, reads of 8.9K–12.2K/turn, zero re-writes), but the owner's 6-turn test contained
+   **no artifact-build turn**, so the note never fired and **the claim is still untested**. It can only
+   manifest on a turn where `artifact_build_intent` fires.
+2. **The catalog's `max_tokens` are policy values, far below real provider ceilings** — `claude_sonnet`
+   declares 32768 against Sonnet 5's real **128K**; `claude_haiku` declares 4096 against Haiku 4.5's real
+   **64K**. Retrospectively harmless (the old flat 32768 never exceeded a real limit, so nothing was
+   broken in prod). **But FRE-931's clamp now enforces those numbers as hard caps** — picking Haiku yields
+   a **4096-token** artifact, ~16× smaller than the model can produce, and the plan is sized to it too.
+   **Not ticketed** — every fix touches prompt bytes, and the owner ruled that out pending their decision.
+
+**Owner constraint, standing until lifted: do NOT make changes that affect the prompt cache.**
 
 ## Answers for the fresh start
 
-- **Why is dispatch paused?** The owner asked to stop after the two in-flight builds. They finished;
-  their PRs are #600 and #599. Delete `telemetry/dispatch.disabled` to resume.
-- **Why no watcher trigger?** The kill switch is shared by the orchestrator *and* the gating watcher.
-  Gate open PRs manually while paused.
-- **Is ADR-0121 done?** Code yes, **delivery no.** FRE-887 is open solely on **AC-9**, which requires an
-  owner-driven PWA check. Five merged tickets and three clean deploys do not close a seam.
-- **Is that "pre-existing failing test" real?** Yes, and it is now diagnosed (FRE-925). The test asserts
-  membership in an **unscoped global top-50**; the shared test Neo4j accumulates rows, so the test's own
-  entities get **crowded out**. It is *not* "stale data matching the query" — that explanation, repeated
-  by four handoffs, was wrong. Proven by purging 515 leaked `FRE865IT-*` rows left by a *sibling* test.
-- **Why did a PR merge reporting "zero findings"?** The built-in `/code-review` skill is
-  `disable-model-invocation`; a build cannot invoke it programmatically and silently falls back to a
-  manual pass, which reads identically to a clean review. Not ticketed yet.
-- **`sub_agent`/`artifact_builder` now cost money** — the owner chose `claude_sonnet` for both at the
-  #596 gate (they had been local Qwen). `vision` is a new pinned role on sonnet.
+- **Why is #613 ungated?** The watcher sent it at 16:47:37, logged `gating_send`, and the ledger shows
+  **nothing unconsumed** — a swallowed send recorded as delivered. Second occurrence today (the first cost
+  #602 nine hours). Tracked as **FRE-939**. **Do not trust the trigger — run `gh pr list`.**
+- **Can I run AC-7?** Everything it needs is deployed. But **fix the caps first**, or the live run produces
+  a needlessly small artifact and you'll misread the clamp as a sizing bug. One artifact-build turn would
+  answer AC-7 *and* the cache question together.
+- **Why is FRE-921 Verify Failed rather than unproven?** The owner's call and it was right: AC-7 says
+  "fails if any leg breaks", the card leg broke, and a cause-based excuse ("the socket was down") does not
+  exempt an outcome-based criterion.
+- **Why did no card ever appear?** Three distinct mechanisms, all on FRE-928: (a) no socket at emit →
+  instant default, bypassing the waiter's own 60s timeout; (b) a **reconnect** evicting the old
+  registration → pending decision killed 11.6s early; (c) the server holding a **half-open** connection it
+  believed live and pushing the card into a socket with no reader. (c) is the root — the client wiring is
+  correct and should not be changed.
+- **Is the model routing broken?** No. Every call ran cloud (`claude-sonnet-5`, `claude-haiku`,
+  `gpt-5.4-mini`). The `131K` the owner saw was the **sessionless config endpoint** returning the role
+  default; the in-turn path correctly reports 200000. FRE-926 owns it.
+- **Why did the harness build an artifact unasked?** A 20-char conversational request in a session that
+  already held an artifact from two days earlier. `prompts.py` has **zero** artifact guidance — the tool
+  descriptions say *which* tool, never *whether*. FRE-932.
 
 ## The thing worth carrying forward
 
-Every failure this session had the same shape: **the machinery believed it was fine while reality
-disagreed, and nothing reconciled the two.** A ledger recorded "delivered" for a swallowed trigger; a
-`launched` record sat stalled; RC reported `busy` for dead background shells; a surfaced card held for
-2.5 hours with no age escalation; a seat resumed in manual mode; a registered seat was unreachable; a
-green CI hid a locally-red test. The fixes that matter are not the individual bugs but the
-**reconcilers** — which is why FRE-923/924 were deliberately built detect-and-surface, never auto-kill.
+**Master was wrong four times today and the owner corrected every one:** the tool-gate cap (asserted the
+`conversational` limit without checking the turn's actual classification), "your socket was down" (read a
+`tail`-truncated log slice as complete), "no grace window exists" (the timeout was already there, being
+bypassed), and "caching is preserved" (verified the adjacent claim, not the actual one).
 
-Second, and sharper: **master softened a correct finding under pushback** (#596), and the owner had to
-restore it. The standing rule now in memory — re-examine the *evidence*, not the proportionality, and
-judge acceptance criteria by *intent*, not letter.
+They share one shape: **reaching for a mechanism that fits the symptom and reporting it as established.**
+The corrections never came from self-review. The one diagnosis that held — the PWA session-continuity bug
+— is the one where master stopped proposing, went looking for what it could observe, and then said plainly
+*where the evidence ran out* instead of filling the gap.
+
+Second, smaller, and repeated **three times**: master put actionable requests in **ticket comments**, which
+are the durable record channel and explicitly not instructions. Builds correctly ignored all three. If
+master wants something done, it goes in the ticket **description** or a direct message.

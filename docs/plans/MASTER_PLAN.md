@@ -6,33 +6,24 @@
 > per-ticket state → [Linear](https://linear.app/frenchforest).
 > **Last updated**: 2026-07-21
 
-## 0. DISPATCH IS PAUSED — owner-directed 2026-07-21
+## 0. Two owner-driven live checks — the only thing keeping two ADRs open
 
-`telemetry/dispatch.disabled` is engaged (proven detected: the launch-block predicate returns
-`kill-switch`). It blocks **new launches only** — in-flight seats are untouched — and it **also pauses
-the gating watcher**, so master gates open PRs manually. **Delete the file to resume.** The file
-documents its own intent.
+Both seams are fully deployed and verified as far as master can take them. Each needs **one owner turn
+on the live stack**; master cannot fire these (they cost money and write to the KG).
 
-## 1. Two PRs at the gate — first action of the next session
+- **ADR-0122 / FRE-878 — AC-7.** Ask for an artifact build with 2+ available builder deployments →
+  card shows per-option provider/cost/context/max-output → pick a **non-default** option → master
+  verifies `MODEL_CALL_COMPLETED` + cost lane corroborate the pick. Second leg: set a stored
+  preference, confirm no card appears and the build still runs on the preferred model (map the key
+  through the catalog before comparing — comparing a raw key to the emitted model is a dimension
+  error). Closes FRE-921, FRE-882, FRE-881, FRE-878.
+- **ADR-0121 / FRE-887 — AC-9.** PWA check: picker renders real candidates → switch model → next turn
+  runs on it → survives reload → survives WS reconnect. Closes FRE-920.
 
-- **#600 — FRE-923** dispatch delivery atomicity (bounded retry + swallowed-Enter repair)
-- **#599 — FRE-921** ADR-0122 T3, PWA card rendering — **the AC-7 assembled seam**
+## 1. Reduce the backlog
 
-Both pushed and awaiting master's gate. No watcher trigger will arrive (see §0).
-
-## 2. Close the two ADR seams — the only thing keeping them open
-
-- **ADR-0121 / FRE-887** — everything merged + deployed live. Open solely on **AC-9**, which needs an
-  **owner-driven PWA check**: picker renders real candidates → switch model → next turn runs on it →
-  survives reload → survives WS reconnect. FRE-920 stays Awaiting Deploy until it passes.
-- **ADR-0122 / FRE-878** — open on **AC-7**, owned by FRE-921 (PR #599 above). Needs the deployed stack.
-
-FRE-881/882 are merged but undeployed — they ride the next gateway rebuild, and have no live effect
-until the FRE-921 card UI ships.
-
-## 3. Reduce the backlog
-
-~80 Approved; most carry no stream label (parked). Dispatch queue behind the pause: build1 FRE-925 → FRE-926. Method:
+~80 Approved; most carry no stream label (parked). Live queue: build1 on FRE-925 → FRE-926; **build2 is
+idle — its eligible set is empty**, so it needs work labelled or it stays parked. Method:
 verify per cluster, cancel the provable with a one-line reason, bring judgment calls to the owner.
 Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729–732, FRE-810/811/814) ·
 `[Thread]` placeholders that can never be Done (FRE-401/418/397) · work gated on events that never
@@ -42,7 +33,7 @@ vs list-first).
 Note: the board reconciler now reads Linear (FRE-915), so drift is detectable automatically — run it
 before culling. It already found FRE-432 and FRE-875 shipped-but-stale.
 
-## 4. Questions for the owner
+## 2. Questions for the owner
 
 - **FRE-909 residual / seat hygiene** — none. Closed, all five criteria met.
 - **FRE-432 · FRE-875** — merged PRs, stale board state. Close with evidence, or is something unfinished?
@@ -56,10 +47,10 @@ before culling. It already found FRE-432 and FRE-875 shipped-but-stale.
 - **Bash-prompt stranding** — FRE-911's `acceptEdits` covers file edits only. Broader mode, allowlist,
   or detect-and-surface?
 
-## 5. Then, in order
+## 3. Then, in order
 
 Memory Recall · Telemetry residuals · Configuration Management · Linear async feedback · Seshat
-Inference. Re-sequence after 0–2.
+Inference. Re-sequence after §0.
 
 ---
 

@@ -28,6 +28,11 @@ export const CONSTRAINT_TITLES: Record<string, string> = {
   tool_iteration_limit: 'Tool call limit reached',
   context_compression: 'Context window nearly full',
   attachment_cost: 'Confirm cloud attachment cost',
+  // ADR-0122: options are catalog deployment keys, not fixed action ids — no
+  // CONSTRAINT_ACTION_LABELS entry; actionLabel()'s raw-id fallback is what
+  // the plain-pill fallback in DecisionCard uses when catalog detail is
+  // unavailable for an option.
+  artifact_builder: 'Choose the artifact builder',
 };
 
 /** Map an action_id to its display label, falling back to the raw id. */

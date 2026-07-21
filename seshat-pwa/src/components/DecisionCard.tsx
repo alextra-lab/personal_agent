@@ -3,12 +3,39 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { actionLabel, CONSTRAINT_TITLES } from '@/lib/constraint-options';
-import type { PendingConstraint } from '@/lib/types';
+import type { DeploymentView, PendingConstraint } from '@/lib/types';
 
 export interface DecisionCardProps {
   pending: PendingConstraint;
   /** Send the chosen action_id + remember flag over the WebSocket. */
   onDecide: (actionId: string, remember: boolean) => void;
+  /**
+   * Catalog deployments for the `artifact_builder` constraint (ADR-0122 T3),
+   * keyed by `DeploymentView.key` against `pending.options`. Sourced from
+   * `useSessionConfig`'s `roles.artifact_builder.candidates` — descriptive
+   * only: `pending.options` stays authoritative for which buttons render and
+   * which `action_id` gets sent, so an option missing here (a stale config
+   * poll, a different availability check) just falls back to a plain label
+   * rather than dropping the option. Ignored for every other constraint.
+   */
+  builderCandidates?: DeploymentView[];
+}
+
+function formatBuilderDetail(candidate: DeploymentView): string {
+  const parts = [
+    `${candidate.provider} · ${candidate.placement}`,
+    `${Math.round(candidate.context_length / 1000)}K context`,
+    candidate.max_tokens != null
+      ? `${Math.round(candidate.max_tokens / 1000)}K max output`
+      : 'provider default max output',
+  ];
+  if (candidate.input_cost_per_token != null) {
+    parts.push(`$${(candidate.input_cost_per_token * 1_000_000).toFixed(2)}/M in`);
+  }
+  if (candidate.output_cost_per_token != null) {
+    parts.push(`$${(candidate.output_cost_per_token * 1_000_000).toFixed(2)}/M out`);
+  }
+  return parts.join(' · ');
 }
 
 function secondsRemaining(expiresAt: string): number {
@@ -25,7 +52,7 @@ function secondsRemaining(expiresAt: string): number {
  * the countdown here is informational. The card is removed by the parent when
  * the matching CONSTRAINT_RESOLVED arrives (collapsing into a pill).
  */
-export function DecisionCard({ pending, onDecide }: DecisionCardProps) {
+export function DecisionCard({ pending, onDecide, builderCandidates }: DecisionCardProps) {
   const { constraint, context, options, expires_at } = pending;
   const [remember, setRemember] = useState(false);
   const [countdown, setCountdown] = useState(() => secondsRemaining(expires_at));
@@ -56,20 +83,59 @@ export function DecisionCard({ pending, onDecide }: DecisionCardProps) {
       <div className="mt-1 text-sm dark:text-slate-300">{context}</div>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        {options.map((actionId, i) => (
-          <button
-            key={actionId}
-            type="button"
-            onClick={() => decide(actionId)}
-            className={
-              i === 0
-                ? 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-sky-600 text-white hover:bg-sky-500'
-                : 'px-3 py-1.5 rounded-lg text-sm font-semibold border border-sky-400 text-sky-800 hover:bg-sky-100 dark:border-sky-600 dark:text-sky-200 dark:hover:bg-sky-900'
-            }
-          >
-            {actionLabel(constraint, actionId)}
-          </button>
-        ))}
+        {options.map((actionId, i) => {
+          const candidate =
+            constraint === 'artifact_builder'
+              ? builderCandidates?.find((c) => c.key === actionId)
+              : undefined;
+
+          if (candidate) {
+            return (
+              <button
+                key={actionId}
+                type="button"
+                onClick={() => decide(actionId)}
+                className={`flex flex-col items-start gap-0.5 w-full rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                  i === 0
+                    ? 'border-sky-500 bg-sky-100 dark:border-sky-500 dark:bg-sky-900/30'
+                    : 'border-sky-300 hover:bg-sky-100 dark:border-sky-700 dark:hover:bg-sky-900/20'
+                }`}
+              >
+                <span className="flex items-center gap-1.5 w-full">
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                      candidate.placement === 'local' ? 'bg-emerald-400' : 'bg-amber-400'
+                    }`}
+                  />
+                  <span className="font-semibold text-sky-900 dark:text-sky-50">{candidate.key}</span>
+                </span>
+                <span className="text-xs text-sky-700 dark:text-sky-400 pl-3">
+                  {formatBuilderDetail(candidate)}
+                </span>
+                {candidate.summary && (
+                  <span className="text-xs text-sky-600 dark:text-sky-500 pl-3 line-clamp-1">
+                    {candidate.summary}
+                  </span>
+                )}
+              </button>
+            );
+          }
+
+          return (
+            <button
+              key={actionId}
+              type="button"
+              onClick={() => decide(actionId)}
+              className={
+                i === 0
+                  ? 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-sky-600 text-white hover:bg-sky-500'
+                  : 'px-3 py-1.5 rounded-lg text-sm font-semibold border border-sky-400 text-sky-800 hover:bg-sky-100 dark:border-sky-600 dark:text-sky-200 dark:hover:bg-sky-900'
+              }
+            >
+              {actionLabel(constraint, actionId)}
+            </button>
+          );
+        })}
       </div>
 
       <label className="mt-3 flex items-center gap-2 text-xs text-sky-700 dark:text-sky-300 cursor-pointer">

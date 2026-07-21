@@ -418,6 +418,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
                   onDecide={(actionId, remember) =>
                     sendConstraintDecision(pendingConstraint.request_id, actionId, remember)
                   }
+                  builderCandidates={configRoles.artifact_builder?.candidates}
                 />
               </div>
             )}

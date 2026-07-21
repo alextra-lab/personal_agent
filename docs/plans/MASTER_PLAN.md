@@ -6,19 +6,26 @@
 > per-ticket state → [Linear](https://linear.app/frenchforest).
 > **Last updated**: 2026-07-21
 
-## 0. Two owner-driven live checks — the only thing keeping two ADRs open
+## 0. ADR-0122 — AC-7 FAILED live; amendment in flight
 
-Both seams are fully deployed and verified as far as master can take them. Each needs **one owner turn
-on the live stack**; master cannot fire these (they cost money and write to the KG).
+**FRE-921 is `Verify Failed`.** The first real run (2026-07-21) produced no card: the constraint
+waiter bypasses its own timeout when no socket is registered, so a momentary drop became a permanent
+silent default. Routing itself was correct end to end.
 
-- **ADR-0122 / FRE-878 — AC-7.** Ask for an artifact build with 2+ available builder deployments →
-  card shows per-option provider/cost/context/max-output → pick a **non-default** option → master
-  verifies `MODEL_CALL_COMPLETED` + cost lane corroborate the pick. Second leg: set a stored
-  preference, confirm no card appears and the build still runs on the preferred model (map the key
-  through the catalog before comparing — comparing a raw key to the emitted model is a dimension
-  error). Closes FRE-921, FRE-882, FRE-881, FRE-878.
-- **ADR-0121 / FRE-887 — AC-9.** PWA check: picker renders real candidates → switch model → next turn
-  runs on it → survives reload → survives WS reconnect. Closes FRE-920.
+**Owner has made the design call: the card moves to the START of the turn**, so the chosen builder's
+max-output and context are inputs to planning (cf. FRE-478, where the builder hit an output cap
+mid-generation). Measured: the card check is deterministic and takes <1ms, but sat 117s into the turn
+behind research tools — by which point the user had disengaged. **ADR-0122 amendment is with the adrs
+seat**; it decides the early-ask trigger, false-positive/negative handling, and preference interaction.
+
+- **FRE-928** (timeout bypass + stale-constant status bar) — Needs Approval, **held by master** pending
+  the amendment, which may reshape it.
+- **AC-7 re-run** is blocked until the amendment lands and ships.
+
+## 0b. ADR-0121 / FRE-887 — AC-9 still open
+
+Needs **one owner turn**: picker renders real candidates → switch model → next turn runs on it →
+survives reload → survives WS reconnect. Closes FRE-920. Unaffected by the above.
 
 ## 1. Reduce the backlog
 

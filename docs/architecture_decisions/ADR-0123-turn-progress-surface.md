@@ -35,9 +35,13 @@ worth stating precisely what exists, because the missing piece is narrower — a
 - `ToolStartEvent` / `ToolEndEvent` (`transport/events.py:42-68`) — tool name, args, result
   summary. The PWA already renders these: `ToolIndicator` (`seshat-pwa/src/components/ToolIndicator.tsx`)
   shows a spinner for running tools and a checkmark for completed ones.
-- `turn_status` `StateUpdateEvent` (`transport/agui/transport.py:248-258`), carrying live per-turn
-  fields — `context_tokens`, `tool_iteration`, `turn_cost_usd`, `topology`, `degraded`,
-  `degradations`, `compaction_count` (`observability/topology/projector.py:428-443`).
+- `turn_status` `StateUpdateEvent` (`transport/agui/transport.py:248-258`), carrying **fifteen**
+  live per-turn fields (`observability/topology/projector.py:427-447`): `context_tokens`,
+  `context_max`, `tool_iteration`, `tool_iteration_max`, `turn_cost_usd`, `trace_id`, `topology`,
+  `degraded`, `degradations`, `session_cost_usd`, `session_context_tokens`, `compaction_count`,
+  `cache_reset_count`, `quality_alert_count`, `quality_alert`. **Note `tool_iteration_max` and
+  `context_max` are already served** — the client has no need to seed a ceiling, which makes the
+  fabricated warning of §5 a pure client-side defect rather than a missing-data problem.
 
 *Only in structlog / Elasticsearch, never reaching the client:*
 - `step_planning_started` / completed (`telemetry/events.py:46`)
@@ -74,12 +78,17 @@ Ship a **turn progress surface**: an ephemeral, live view of what the turn is do
 **phase model** that finally includes inference, and built so that **unknown always looks unknown**.
 Seven parts.
 
+*(Amended after codex review — see Status Updates: the phase model carries concurrent children rather
+than claiming a single active activity, and human waits are an explicit phase excluded from the
+silence metric.)*
+
 ### 1. Model the turn as phases, not as a log of everything
 
 The organizing question is granularity: every tool call, or coarse phases? Neither alone.
 
-**A phase is the unit of the surface.** At any instant the turn is in exactly one *active phase*,
-named in language a waiting human can read:
+**A phase is the unit of the surface.** At any instant the turn has exactly one *active phase*,
+named in language a waiting human can read. A phase may contain **concurrent children** — see
+"concurrency" below, which is not an edge case but the normal shape of expansion turns:
 
 | Phase | Derived from | Example line |
 |---|---|---|
@@ -99,6 +108,30 @@ This is the honest middle: phases stop the surface degenerating into a debug log
 detail inside a phase stops it degenerating into a meaningless spinner. Anything finer than a tool
 call (individual LLM tokens of internal reasoning, per-chunk retrieval) is **noise** and is
 deliberately excluded (§4).
+
+**Concurrency: one active phase, N concurrent children.** "Exactly one active phase" would be false
+as a claim about the underlying work — `expansion_controller.py:404-419` dispatches sub-agents
+through `asyncio.gather`, genuinely concurrently, and `tools_dispatched_parallel`
+(`executor.py:4515`) does the same for tools. The model accommodates this without abandoning the
+narrative unit: **the phase is the parent; concurrent activities are its children**, each with its
+own running/completed state and elapsed time.
+
+*Researching — 3 running*
+  · *sub-agent: pricing history — 12 s*
+  · *sub-agent: competitor set — 8 s* ✓
+  · *sub-agent: regulatory context — 12 s*
+
+The parent phase ends when its last child does. This keeps one readable headline while reporting the
+concurrency honestly — and it means a fan-out turn does not present as a single opaque "Thinking"
+for its whole duration. AC-8 asserts it.
+
+**Human waits are a phase too, and they are not silence.** When the turn pauses for a decision — the
+ADR-0122 turn-start builder card, a tool approval, the attachment-cost gate — the surface shows an
+explicit *Waiting for your choice* phase. This matters for two reasons. It is honest: the system is
+not working, it is blocked on the user, and presenting that as "Thinking" would be a lie. And it
+bounds the silence metric correctly: **time spent waiting on a human is excluded from AC-2's gap
+clock**, because a gap the user is themselves responsible for closing is not a silence the system
+should be charged for.
 
 ### 2. Put inference on the transport — the actual gap
 
@@ -120,8 +153,11 @@ without which nothing else matters: a beautifully designed surface fed by a tran
 report inference would still show a blank panel for 43 seconds.
 
 **Emission is best-effort and must never affect turn correctness** — the same posture as
-`turn_status` (`projector.py:14`, "every `emit_turn_status` call is best-effort"). A failed progress
-emit is a cosmetic loss, never a failed turn. AC-6 asserts this directly.
+`turn_status` (`projector.py:14`, "every `emit_turn_status` call is best-effort"). Precisely: the
+best-effort behaviour lives in the shared `_push_event` path (`transport/agui/transport.py:95-118`),
+not in `emit_turn_status` itself, so phase events inherit it by using the same path rather than by
+re-implementing it. A failed progress emit is a cosmetic loss, never a failed turn. AC-6 asserts this
+directly.
 
 ### 3. Elapsed time is the honest signal for a long silent step
 
@@ -217,7 +253,13 @@ the pedagogic goal: seeing that an artifact build spent four minutes in the buil
 planning is exactly the kind of self-knowledge this project exists to accumulate.
 
 The summary is **derived from events already persisted** with their sequence numbers; it introduces
-no new storage and no new durable schema.
+no new **server-side** storage and no new durable schema.
+
+**One honest caveat:** the client does need somewhere to hold it. The PWA's `ChatMessage` type and
+its history hydration (`seshat-pwa/src/lib/types.ts`, `components/StreamingChat.tsx:138-154`) carry
+no phase-summary field today, so the collapsed summary needs either a client-side field populated
+from the replayed event stream or a derivation at render time. That is a real implementation cost —
+small, but it is not "free", and the seam ticket owns it.
 
 ---
 
@@ -335,6 +377,9 @@ pause survive a disconnect via the existing timeout-and-replay path, and accept 
 - **Client-side elapsed timers depend on server timestamps**, introducing a clock-skew surface that
   did not exist before. Bounded — it affects a displayed duration, never correctness.
 - **It does not make anything faster**, and there is a risk of it being read as though it did (§4).
+- **The phase model must track the pipeline's real concurrency**, so expansion fan-out and parallel
+  tool dispatch each need a child representation rather than a single line. That is more client state
+  than a flat list, and it is the part most likely to drift as the pipeline changes.
 
 ### Risks and Mitigations
 
@@ -347,6 +392,9 @@ pause survive a disconnect via the existing timeout-and-replay path, and accept 
 | Progress emission failure breaks a turn | **High** | Best-effort emission, identical posture to `turn_status` (`projector.py:14`); AC-6 asserts a turn completes with emission forced to fail |
 | The surface is read as a performance fix and latency work is deprioritised | Low | Stated explicitly as out of scope (§4); the collapsed summary (§7) in fact makes latency *more* visible, not less |
 | Phase detail leaks prompt-shaped internals to the user | Low | Only phase names and tool names are surfaced; no inference output for internal steps (§3) |
+| A fan-out turn presents as one opaque phase for minutes | Medium | Parent/child model (§1); AC-8 asserts three concurrent sub-agents render as three children with independent lifecycles |
+| A phase spins forever after a cancel or error | Medium | Terminal states resolve the active phase (`CANCELLED`/`RUN_ERROR`/`DONE` already modelled client-side); AC-9 |
+| The AC-2 gap clock penalises time spent waiting on the user | Low | `Waiting for your choice` intervals are excluded from the gap computation (§1) |
 
 ---
 
@@ -356,10 +404,10 @@ pause survive a disconnect via the existing timeout-and-replay path, and accept 
 
 - `src/personal_agent/transport/events.py` — add `PhaseStartEvent` / `PhaseEndEvent` alongside
   `ToolStartEvent`/`ToolEndEvent` (`:42-68`), with a closed phase enum.
-- `src/personal_agent/transport/agui/adapter.py` (`:56` dispatch) and
-  `src/personal_agent/transport/agui/transport.py` (`:307-331`) — serialize and enqueue the new
-  events on the existing persisted+sequenced path; best-effort, mirroring
-  `emit_turn_status` (`transport.py:248-258`).
+- `src/personal_agent/transport/agui/adapter.py` (`:56` / `:62` dispatch arms) and
+  `src/personal_agent/transport/agui/transport.py` (`:306-337`) — serialize and enqueue the new
+  events on the existing persisted+sequenced path, inheriting best-effort from `_push_event`
+  (`transport.py:95-118`) exactly as `emit_turn_status` (`:248-258`) does.
 - `src/personal_agent/orchestrator/executor.py` — emit phase boundaries around the planning
   inference step (today `step_planning_started`, `telemetry/events.py:46`, telemetry-only) and the
   final synthesis step.
@@ -385,14 +433,16 @@ continuity; a live check on the deployed stack driving a real artifact build and
 sequence end to end.
 
 **Sequencing (one PR each):**
-1. **Phase events on the transport** — event types, adapter dispatch, best-effort emission, and the
-   emitters at the planning / sub-agent / synthesis boundaries. No UI yet; AC-1, AC-2, AC-6 provable
-   from the event stream alone.
+1. **Phase events on the transport** — event types (parent phases + concurrent children + the
+   `Waiting for your choice` phase), adapter dispatch, best-effort emission, and the emitters at the
+   planning / sub-agent / synthesis boundaries and around the ADR-0122 pause. No UI yet; AC-1, AC-2,
+   AC-6, AC-8 provable from the event stream alone.
 2. **Unknown-is-unknown in the client** — remove the `tool_iteration_max: 6` seed, make absent a
    distinct state, forbid warning states derived from unreceived data. Independently valuable and
    independently testable; AC-4. Coordinate with FRE-928 criterion 4.
-3. **The live phase surface** — generalize `ToolIndicator` into the phase view with elapsed time and
-   escalating candour; reconnect via state replacement. AC-3, AC-5.
+3. **The live phase surface** — generalize `ToolIndicator` into the phase view with elapsed time,
+   escalating candour, and concurrent children; reconnect via state replacement; terminal
+   cancel/error handling. AC-3, AC-5, AC-9.
 4. **Collapsed per-turn summary** in the transcript. **(Seam ticket, AC-7.)**
 
 ---
@@ -405,25 +455,57 @@ sequence end to end.
   *Fails if* any of the three is absent — which is the state today, where a grep for `planning`,
   `artifact_draft`, or `sub_agent` across `src/personal_agent/transport/` returns nothing, so this
   fails against current code.
-- **AC-2 — No silent gap longer than the threshold on a real build turn.** *Check:* on a live
-  artifact-build turn, compute the wall-clock gaps between consecutive progress-bearing events
-  (phase start/end and tool start/end). **No gap exceeds 10 seconds** from turn start to final
-  response. *Fails if* any gap does — the measured 43-second planning silence and the multi-minute
-  build silence both fail this today. *(This is the criterion that actually encodes "the user is
-  never left wondering"; a per-event existence check would pass while a 43-second hole remained.)*
-- **AC-3 — A reconnect mid-phase resumes rather than restarts or re-narrates.** *Check:* during a
-  long phase, drop the client socket and reattach after ~30 s. On reattach: (a) the surface shows the
-  **currently active** phase, not the first phase of the turn; (b) its elapsed time reflects time
-  since the **phase started on the server**, not since reconnect — assert the displayed elapsed is
-  ≥ the disconnect duration; (c) phases that started and ended before the drop are **not** re-narrated
-  as active. *Fails if* the surface restarts its narrative, resets elapsed to zero, or replays
-  completed phases as live.
-- **AC-4 — Nothing is rendered from a fallback constant.** *Check:* mount the progress surface and
-  the turn-status gauges with **no `turn_status` received**. Every numeric gauge renders an explicit
-  unknown state; **no warning colour, near-limit treatment, or "N of M" is displayed**. Then deliver a
-  `turn_status` with a ceiling of 25 and assert the gauge reflects 25. *Fails if* any value or
-  warning state appears before data arrives — the live defect today, where `StreamingChat.tsx:177`
-  seeds a ceiling of 6 and produced an amber "4 of 6" during a turn whose real ceiling was 25.
+- **AC-2 — No silent gap longer than the threshold, closed by *semantic* events only.** *Check:* on
+  a live artifact-build turn, compute wall-clock gaps between consecutive **semantic progress
+  events** — defined as a phase start, a phase end, a child start, a child end, a tool start, or a
+  tool end. **No gap exceeds 10 seconds**, measured from turn start to final response, **excluding
+  any interval in a `Waiting for your choice` phase** (§1: a wait the user must close is not a
+  silence the system is charged for).
+  **Filler does not count.** Periodic heartbeats, timer ticks, keepalives, and repeated
+  `turn_status` emissions carrying no phase transition are explicitly **not** semantic progress
+  events and must be excluded from the gap computation. *(Without this clause the criterion is
+  trivially gameable by emitting an empty event every 5 seconds — which would satisfy the letter
+  while leaving the user exactly as uninformed as the 43-second silence did.)*
+  **Additionally**, the phase sequence observed must match the work actually performed: a turn whose
+  trace shows a planning inference, a sub-agent build, and a synthesis step must show all three as
+  distinct phases. *Fails if* any gap exceeds the threshold, if the gap is only met by non-semantic
+  filler, or if the phase sequence omits a step the trace proves ran.
+  *Why 10 seconds:* it is well below the shortest harmful silence observed (43 s, the one that lost a
+  decision) while remaining long enough that no phase boundary must be invented to meet it — every
+  boundary in the table above corresponds to real work starting or finishing. It is a threshold the
+  phase model satisfies naturally and a filler-based implementation cannot satisfy honestly.
+- **AC-3 — A reconnect mid-phase resumes rather than restarts or re-narrates.** *Check, with
+  deliberately distinct durations so no two hypotheses produce the same number:* let a phase run
+  **60 s**, then drop the client socket for **30 s**, then reattach. On reattach assert:
+  **(a)** the surface shows the **currently active** phase, not the turn's first phase;
+  **(b)** the displayed elapsed is **≈90 s** (server phase-start to now), within a 2 s tolerance —
+  **not ≈0 s** (restarted at reconnect), **not ≈30 s** (measured from the disconnect), and **not
+  ≈60 s** (frozen at drop time). Assert additionally that the phase-start timestamp the client holds
+  is **byte-equal to the server-emitted timestamp** on the persisted event;
+  **(c)** phases that started *and* ended before the drop are **not** re-narrated as active.
+  *Fails if* elapsed matches any of the three wrong hypotheses, if the client's phase-start timestamp
+  differs from the server's, or if completed phases replay as live. *(The three distinct expected
+  values are load-bearing: an earlier form of this criterion asserted only "elapsed ≥ disconnect
+  duration", which an implementation starting from reconnect-plus-a-fixed-offset satisfies without
+  ever reading the server timestamp.)*
+- **AC-4 — Absent is a distinct state from zero, not merely a hidden one.** *Check, three cases,
+  and the third is what makes it discriminating:*
+  **(a) No data.** Mount with **no `turn_status` received**: every numeric gauge renders an explicit
+  unknown treatment, and **no warning colour, near-limit treatment, or "N of M" is displayed**.
+  **(b) Real data.** Deliver a `turn_status` with `tool_iteration_max: 25` — the gauge reflects
+  **25**, proving the ceiling comes from the server (which already sends it,
+  `projector.py:427-447`).
+  **(c) A legitimate zero.** Deliver a `turn_status` with `tool_iteration: 0` — the gauge renders
+  **"0"**, visibly *different* from case (a). *(This is the discriminator: an implementation that
+  merely hides everything until some value is truthy passes (a) and (b) and **fails** (c), because a
+  real zero would be hidden as though it were missing.)*
+  Assert the distinction is **representable in the type** — the component's value prop admits an
+  explicit absent variant rather than relying on a sentinel number — so a future contributor cannot
+  reintroduce a seed without changing the type.
+  *Fails if* any value or warning appears before data arrives, if a received zero is indistinguishable
+  from absent, or if absence is encoded as a magic number. *(The live defect today:
+  `StreamingChat.tsx:177` seeds a ceiling of 6, producing an amber "4 of 6" during a turn whose real
+  ceiling was 25.)*
 - **AC-5 — A long phase reports elapsed time that advances.** *Check:* during a phase exceeding 60 s,
   the displayed elapsed value increases monotonically and is within a small tolerance of true
   wall-clock elapsed at two sampled instants at least 30 s apart. *Fails if* the value is static,
@@ -433,13 +515,30 @@ sequence end to end.
   path to raise on every call; the turn still completes and returns its normal response, and the
   failure is logged. *Fails if* a turn errors, hangs, or returns degraded output because a cosmetic
   emission failed — the best-effort posture `turn_status` already holds (`projector.py:14`).
+- **AC-8 — Concurrent work is reported as concurrent, not collapsed into one opaque phase.**
+  *Check:* drive an expansion turn that fans out to **three** sub-agents via
+  `expansion_controller.py:404-419`. The surface shows one active parent phase with **three**
+  children, each with its own running/completed state; as each finishes, its child resolves
+  independently; the parent ends only when the **last** child does. *Fails if* the three appear as a
+  single undifferentiated phase, if the parent ends when the first child does, or if only one child
+  is represented — any of which would present a multi-minute fan-out as one opaque "Thinking".
+- **AC-9 — Cancel and error terminate the surface honestly.** *Check:* (a) cancel a turn mid-phase —
+  the active phase resolves to a **cancelled** state, no phase is left spinning, and the collapsed
+  summary records the turn as cancelled with the phases that had run; (b) force a turn to fail
+  mid-phase — the active phase resolves to an **error** state and the summary records it. The client
+  already models `CANCELLED` / `RUN_ERROR` / `DONE` terminal states
+  (`seshat-pwa/src/lib/types.ts`, `hooks/useSSEStream.ts`), so all three must be handled. *Fails if*
+  a phase spins forever after a terminal event, or if the summary presents a cancelled or failed turn
+  as though it completed — a spinner that never stops is precisely the "is it broken?" signal this
+  ADR exists to remove.
 - **AC-7 (assembled seam) — the whole loop, live.** *Check:* on the deployed stack, run a real
   artifact-build turn end to end. Throughout, the surface names the active phase with advancing
   elapsed time and no gap beyond AC-2's threshold; a mid-turn reconnect resumes per AC-3; on
   completion the surface collapses to a summary listing the phases that ran with their durations and
   the tools used; and the summary's phase durations reconcile with the persisted event stream's
-  timestamps. *Fails if* any leg breaks — announced → visible → survives reconnect → collapses to an
-  accurate record.
+  timestamps. **Then repeat the run and cancel it mid-build**, asserting AC-9(a) end to end on the
+  deployed stack. *Fails if* any leg breaks — announced → visible → survives reconnect → terminates
+  honestly → collapses to an accurate record.
 
 **Seam owner:** AC-7 is owned by the **collapsed-summary ticket (step 4)** — the child where the
 assembled intent first holds. This ADR does **not** close when the live surface (step 3) merges; it
@@ -505,3 +604,35 @@ Master's caution is adopted as a structural rule (§5) rather than a style note:
 during a turn whose real ceiling was 25. Absent must be a distinct state from zero at the type level,
 and no warning may be derived from unreceived data. AC-4 asserts it; FRE-928 criterion 4 covers the
 existing instance, so the two are coordinated to fix it once.
+
+**Revised after codex review.** The central architectural claim was verified against source and
+holds. Eight blocking findings, all accepted.
+
+*Two were design gaps that changed the model.* **Concurrency:** "exactly one active phase" was false
+as a claim about the work — `expansion_controller.py:404-419` fans sub-agents out through
+`asyncio.gather`, and `tools_dispatched_parallel` does the same for tools. The model now carries one
+parent phase with N concurrent children (§1, AC-8); without this a multi-minute fan-out would have
+presented as a single opaque "Thinking", which is the exact failure the ADR exists to remove.
+**Human waits:** the ADR-0122 turn-start card now pauses the turn at its very start, and the ADR had
+not said whether that counts as a phase or whether the silence clock runs during it. It is an
+explicit `Waiting for your choice` phase, and its interval is **excluded** from AC-2 — a gap the user
+must close is not a silence the system is charged for.
+
+*Four were gameable acceptance criteria.* **AC-2** could be satisfied by emitting empty heartbeats
+every few seconds, so "progress-bearing" is now defined as a semantic phase/child/tool transition
+with filler explicitly excluded, and the 10-second threshold is justified against the 43-second
+harmful silence rather than asserted. **AC-3** asserted only "elapsed ≥ disconnect duration", which a
+reconnect-plus-offset implementation satisfies without ever reading the server timestamp; it now uses
+three deliberately distinct durations (60 s phase, 30 s drop, ≈90 s expected) so each wrong hypothesis
+produces a distinguishable number, plus timestamp equality against the persisted event. **AC-4** was
+passable by hiding everything; it now requires a received **zero** to render visibly differently from
+absent, and the distinction to be representable in the type. **AC-7** ignored terminal states; cancel
+and error are now AC-9, with the cancel leg repeated on the deployed stack — a phase spinning forever
+after a cancel is precisely the "is it broken?" signal being removed.
+
+*One was factual.* The `turn_status` payload list was a subset: it carries **fifteen** fields, not
+seven, and critically already includes `tool_iteration_max` and `context_max` — so the fabricated
+ceiling warning is a pure client-side defect, not a missing-data problem. Non-blocking: best-effort
+behaviour lives in the shared `_push_event` path rather than in `emit_turn_status` itself; several
+line citations refreshed; and the "no new storage" claim now carries its honest client-side caveat,
+since `ChatMessage` has no phase-summary field today.

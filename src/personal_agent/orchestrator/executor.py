@@ -2579,7 +2579,7 @@ async def _maybe_reinject_pending_document_continuation(ctx: ExecutionContext) -
 
 
 async def _maybe_resolve_artifact_builder(ctx: ExecutionContext) -> None:
-    """Resolve the per-build artifact-builder selection at turn start (ADR-0122 §2/§4).
+    """Resolve the per-build artifact-builder selection at turn start (ADR-0122 §2/§4/§5).
 
     Fires only when the gateway predicted an artifact build for this turn — the
     ``artifact_build_intent`` signal (FRE-929). It consults the stored preference and,
@@ -2588,7 +2588,11 @@ async def _maybe_resolve_artifact_builder(ctx: ExecutionContext) -> None:
     preference, or a safe default on timeout / no socket) lands on
     ``ctx.artifact_builder_resolution`` (authoritative, AC-10a) and on the async
     resolution carrier the build boundary reads (the tool executor receives only a
-    ``TraceContext``, ADR-0122 §4).
+    ``TraceContext``, ADR-0122 §4). It also derives the resolved deployment's
+    effective output budget and context window and stores a planning note on
+    ``ctx.artifact_builder_planning_note`` (§5/T6), so the primary can scope the
+    ``artifact_draft`` plan to what the builder can actually emit before it writes it,
+    rather than discovering the ceiling by overrunning it mid-generation.
 
     Called **after** the ``attachment_cost`` gate and **before** the gateway block:
     declining that gate short-circuits the turn, so a builder question first would be
@@ -2606,7 +2610,11 @@ async def _maybe_resolve_artifact_builder(ctx: ExecutionContext) -> None:
         ctx: The execution context; ``ctx.gateway_output.intent.signals`` carries the
             classifier signals and ``ctx.user_id`` scopes the stored preference.
     """
+    from personal_agent.config.model_loader import load_model_config  # noqa: PLC0415
     from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
+        build_provider_availability,
+        effective_artifact_builder_max_tokens,
+        resolve_effective_artifact_builder_deployment,
         set_artifact_builder_resolution,
     )
 
@@ -2631,6 +2639,26 @@ async def _maybe_resolve_artifact_builder(ctx: ExecutionContext) -> None:
         session_id=ctx.session_id,
         action_id=str(decision),
         resolution=decision.resolution,
+    )
+
+    # ADR-0122 §5/T6: thread the resolved deployment's effective output budget and
+    # context window into the planning step (the primary composes the artifact_draft
+    # `plan` argument before any tool runs) — the root-cause fix for the FRE-478
+    # class, where the plan discovered the output ceiling by overrunning it
+    # mid-generation instead of being scoped to it in advance.
+    catalog = load_model_config()
+    resolved_key = resolve_effective_artifact_builder_deployment(
+        decision, catalog, is_provider_available=build_provider_availability(catalog, settings)
+    )
+    resolved_definition = catalog.models[resolved_key]
+    effective_budget = effective_artifact_builder_max_tokens(
+        resolved_definition.max_tokens, int(settings.artifact_draft_max_tokens)
+    )
+    ctx.artifact_builder_planning_note = (
+        f"This turn's artifact builder is `{resolved_key}` — output budget "
+        f"{effective_budget} tokens, context window {resolved_definition.context_length} "
+        "tokens. If you call artifact_draft, scope the plan's length and detail so the "
+        "sub-agent can complete the document within that output budget."
     )
 
 
@@ -2802,13 +2830,15 @@ async def step_init(
     ):
         return TaskState.SYNTHESIS
 
-    # --- ADR-0122 §2/§3d/§4 (T5/FRE-930): raise the per-build artifact-builder
-    # decision at TURN START — before the first LLM call and any tool runs — off the
-    # artifact_build_intent signal the gateway emits (T4/FRE-929). The card
-    # determination depends on nothing the turn computes, so asking here (vs the build
-    # boundary) moves it from ~117 s after the request to ~0 s (the AC-7 failure).
-    # Ordered AFTER the attachment_cost gate above: declining it returns SYNTHESIS, so
-    # no build follows and a builder question first would be wasted (§3d, AC-14 a/d).
+    # --- ADR-0122 §2/§3d/§4/§5 (T5/FRE-930, T6/FRE-931): raise the per-build
+    # artifact-builder decision at TURN START — before the first LLM call and any
+    # tool runs — off the artifact_build_intent signal the gateway emits (T4/FRE-929).
+    # The card determination depends on nothing the turn computes, so asking here (vs
+    # the build boundary) moves it from ~117 s after the request to ~0 s (the AC-7
+    # failure). Ordered AFTER the attachment_cost gate above: declining it returns
+    # SYNTHESIS, so no build follows and a builder question first would be wasted
+    # (§3d, AC-14 a/d). Also derives the resolved deployment's effective output
+    # budget and context window for the planning step (§5/T6).
     await _maybe_resolve_artifact_builder(ctx)
 
     # --- Gateway-driven path: skip inline routing and memory ---
@@ -3811,15 +3841,24 @@ async def step_llm_call(
             # current user query — already inlined on the tool-request call —
             # still carries the volatile earlier in the sequence).
             # Order (ADR-0081 §D4/§D3): skill bodies + usage-directives → recalled
-            # memory → D3 salient highlights, the latter closest to the query.
+            # memory → D3 salient highlights → the ADR-0122 §5 artifact-builder
+            # planning note, the latter two closest to the query.
             _volatile_block = "\n\n".join(
-                p for p in (_skill_bodies_tail, memory_section or "", ctx.salient_highlights) if p
+                p
+                for p in (
+                    _skill_bodies_tail,
+                    memory_section or "",
+                    ctx.salient_highlights,
+                    ctx.artifact_builder_planning_note or "",
+                )
+                if p
             )
             ctx.messages = _inline_volatile_into_last_user_message(ctx.messages, _volatile_block)
         else:
             # D1/D4 head-layout (unchanged when the flag is off). VOLATILE tail
             # order: selected skill bodies → <skill_usage_directives> → recalled
-            # memory; appended after the capture so none enters static_prefix_hash.
+            # memory → the ADR-0122 §5 artifact-builder planning note; appended
+            # after the capture so none enters static_prefix_hash.
             if _skill_bodies_tail:
                 if system_prompt:
                     system_prompt = f"{system_prompt}\n\n{_skill_bodies_tail}"
@@ -3831,6 +3870,12 @@ async def step_llm_call(
                     system_prompt = f"{system_prompt}\n{memory_section}"
                 else:
                     system_prompt = memory_section
+
+            if ctx.artifact_builder_planning_note:
+                if system_prompt:
+                    system_prompt = f"{system_prompt}\n\n{ctx.artifact_builder_planning_note}"
+                else:
+                    system_prompt = ctx.artifact_builder_planning_note
 
         # Call LocalLLMClient.respond()
         # Pass previous_response_id for stateful /v1/responses API
@@ -3896,6 +3941,10 @@ async def step_llm_call(
             _component_ids.append("skill_bodies")
         if ctx.memory_context:
             _component_ids.append("memory_section")
+        if ctx.artifact_builder_planning_note:
+            # ADR-0122 §5/T6: distinct VOLATILE marker — turn-scoped, never enters
+            # static_prefix_hash.
+            _component_ids.append("artifact_builder_planning_note")
         if tool_awareness:
             _component_ids.append("tool_use_rules")
         if _decomposition_added:

@@ -815,8 +815,9 @@ _VALID_HTML = (
 class _FakeSubAgentClient:
     """Mock LLM client for sub-agent inference in artifact_draft tests."""
 
-    def __init__(self, html_content: str = _VALID_HTML) -> None:
+    def __init__(self, html_content: str = _VALID_HTML, completion_tokens: int = 500) -> None:
         self.html_content = html_content
+        self.completion_tokens = completion_tokens
         self.respond_calls: list[dict[str, Any]] = []
 
     async def respond(self, **kwargs: Any) -> dict[str, Any]:
@@ -826,7 +827,7 @@ class _FakeSubAgentClient:
             "content": self.html_content,
             "tool_calls": [],
             "reasoning_trace": None,
-            "usage": {"prompt_tokens": 100, "completion_tokens": 500},
+            "usage": {"prompt_tokens": 100, "completion_tokens": self.completion_tokens},
             "response_id": None,
             "raw": {},
         }
@@ -836,6 +837,7 @@ def _install_draft_fakes(
     monkeypatch: pytest.MonkeyPatch,
     *,
     html_content: str = _VALID_HTML,
+    completion_tokens: int = 500,
 ) -> tuple[_FakeStore, _FakeSubAgentClient]:
     """Install fakes for artifact_draft tests: R2/DB/embedding + sub-agent client.
 
@@ -849,7 +851,7 @@ def _install_draft_fakes(
     """
     store = _FakeStore()
     _install_fakes(monkeypatch, store=store)
-    client = _FakeSubAgentClient(html_content=html_content)
+    client = _FakeSubAgentClient(html_content=html_content, completion_tokens=completion_tokens)
     monkeypatch.setattr(
         "personal_agent.llm_client.factory.get_llm_client",
         lambda role_name="primary": client,
@@ -1154,6 +1156,101 @@ async def test_resolution_survives_step_init_to_gather_dispatch(
 
     assert "artifact_id" in out
     assert key_spy.calls == [("claude_sonnet", "artifact_builder")]
+
+
+@pytest.mark.asyncio
+async def test_ac13_stored_preference_end_to_end_no_pause_correct_sizing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-13, full loop: a real stored preference at turn start → no pause → correct sizing.
+
+    Drives the actual ``_maybe_pause_for_constraint`` preference branch (only
+    ``_load_constraint_preference`` is faked, not the pause helper itself), asserts
+    no ``ConstraintPauseEvent`` is ever pushed, and — via the same step_init →
+    asyncio.gather → artifact_draft path as
+    ``test_resolution_survives_step_init_to_gather_dispatch`` — that the generation
+    call's requested ``max_tokens`` equals the preferred deployment's (claude_haiku,
+    4096) derived budget, not the global constant (32768). This is the exact
+    invisible failure AC-13 exists to catch: an implementation could pass AC-12 on
+    the card path while still sizing the silent preference path off the constant.
+    """
+    from personal_agent.governance.models import Mode
+    from personal_agent.orchestrator import executor as executor_mod
+    from personal_agent.orchestrator.channels import Channel
+    from personal_agent.orchestrator.session import SessionManager
+    from personal_agent.orchestrator.types import ExecutionContext
+    from personal_agent.request_gateway.types import (
+        AssembledContext,
+        Complexity,
+        DecompositionResult,
+        DecompositionStrategy,
+        GatewayOutput,
+        GovernanceContext,
+        IntentResult,
+        TaskType,
+    )
+    from personal_agent.telemetry.trace import TraceContext
+
+    _store, client = _install_draft_fakes(monkeypatch, completion_tokens=4096)
+    monkeypatch.setattr(
+        "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
+        lambda selected_key, config, **_kw: selected_key,
+    )
+    key_spy = _KeyFactorySpy(client)
+    monkeypatch.setattr("personal_agent.llm_client.factory.get_llm_client_for_key", key_spy)
+    monkeypatch.setattr(
+        executor_mod, "_load_constraint_preference", AsyncMock(return_value="claude_haiku")
+    )
+    push_pause = AsyncMock()
+    monkeypatch.setattr(
+        "personal_agent.transport.agui.transport.register_and_push_constraint", push_pause
+    )
+
+    sm = SessionManager()
+    session_id = sm.create_session(Mode.NORMAL, Channel.CHAT)
+    trace = TraceContext.new_trace()
+    ctx = ExecutionContext(
+        session_id=session_id,
+        trace_id=trace.trace_id,
+        user_message="build me a dashboard",
+        mode=Mode.NORMAL,
+        channel=Channel.CHAT,
+        eval_mode=True,
+    )
+    ctx.gateway_output = GatewayOutput(
+        intent=IntentResult(
+            task_type=TaskType.TOOL_USE,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=["tool_intent_pattern", "artifact_build_intent"],
+        ),
+        governance=GovernanceContext(mode=Mode.NORMAL, expansion_permitted=True),
+        decomposition=DecompositionResult(strategy=DecompositionStrategy.SINGLE, reason="t"),
+        context=AssembledContext(messages=[], memory_context=None, tool_definitions=None),
+        session_id=session_id,
+        trace_id=trace.trace_id,
+    )
+
+    await executor_mod.step_init(ctx, sm, trace)
+
+    assert ctx.artifact_builder_resolution == ConstraintDecision(
+        "claude_haiku", "preference_applied"
+    )
+    push_pause.assert_not_awaited()  # no card — the preference resolved silently
+    assert ctx.artifact_builder_planning_note is not None
+    assert "claude_haiku" in ctx.artifact_builder_planning_note
+    assert "4096" in ctx.artifact_builder_planning_note
+
+    (out,) = await asyncio.gather(
+        artifact_tools.artifact_draft_executor(
+            slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+        )
+    )
+
+    assert "artifact_id" in out
+    assert key_spy.calls == [("claude_haiku", "artifact_builder")]
+    assert client.respond_calls[0]["max_tokens"] == 4096  # claude_haiku's declared cap
+    assert client.respond_calls[0]["max_tokens"] != settings.artifact_draft_max_tokens
 
 
 @pytest.mark.asyncio
@@ -1468,7 +1565,12 @@ async def test_draft_timeout_matches_primary_reasoning_model() -> None:
 async def test_artifact_draft_calls_respond_with_correct_max_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """respond() receives the configured artifact-draft max_tokens (FRE-478)."""
+    """respond() receives the effective (deployment-floored) max_tokens (ADR-0122 §5).
+
+    No turn-scoped resolution is installed, so the build renders on the configured
+    default (``claude_sonnet``, declared ``max_tokens`` 32768) — which happens to
+    equal the operator ceiling, matching the pre-T6 assertion.
+    """
     _store, client = _install_draft_fakes(monkeypatch)
 
     await artifact_tools.artifact_draft_executor(
@@ -1480,14 +1582,19 @@ async def test_artifact_draft_calls_respond_with_correct_max_tokens(
     )
 
     call = client.respond_calls[0]
-    assert call["max_tokens"] == artifact_tools._draft_max_tokens()
     assert call["max_tokens"] == settings.artifact_draft_max_tokens
+    assert call["max_tokens"] == 32768
 
 
-def test_draft_max_tokens_reads_setting(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_draft_max_tokens() resolves from settings.artifact_draft_max_tokens (FRE-478)."""
+def test_draft_max_tokens_derives_effective_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_draft_max_tokens() derives min(deployment_max_tokens, ceiling) (ADR-0122 §5, AC-12)."""
     monkeypatch.setattr(artifact_tools.settings, "artifact_draft_max_tokens", 12345)
-    assert artifact_tools._draft_max_tokens() == 12345
+    # Model below ceiling — the model wins.
+    assert artifact_tools._draft_max_tokens(4096) == 4096
+    # Model above ceiling — the ceiling wins.
+    assert artifact_tools._draft_max_tokens(32768) == 12345
+    # No declared cap (provider default) — the ceiling alone applies.
+    assert artifact_tools._draft_max_tokens(None) == 12345
 
 
 @pytest.mark.asyncio
@@ -1507,6 +1614,121 @@ async def test_artifact_draft_max_tokens_is_configurable(
     )
 
     assert client.respond_calls[0]["max_tokens"] == 24576
+
+
+# ---------------------------------------------------------------------------
+# artifact_draft — ADR-0122 §5/T6: the output budget follows the selected model
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_ac12a_model_below_ceiling_model_wins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-12(a): claude_haiku (declared max_tokens 4096) under the default 32768 ceiling.
+
+    Requests 4096, and the truncation-warning threshold is likewise 4096.
+    """
+    events: list[tuple[str, dict[str, Any]]] = []
+    _store, client = _install_draft_fakes(monkeypatch, completion_tokens=4096)
+    _spy_artifact_log(monkeypatch, events)
+    _install_builder_decision(resolution="user_choice", action_id="claude_haiku")
+    monkeypatch.setattr(
+        "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
+        lambda selected_key, config, **_kw: selected_key,
+    )
+    monkeypatch.setattr(
+        "personal_agent.llm_client.factory.get_llm_client_for_key", _KeyFactorySpy(client)
+    )
+
+    await artifact_tools.artifact_draft_executor(
+        slug="haiku-under-ceiling", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert client.respond_calls[0]["max_tokens"] == 4096
+    cap_hits = [kw for ev, kw in events if ev == "artifact_draft_output_cap_hit"]
+    assert len(cap_hits) == 1
+    assert cap_hits[0]["max_tokens"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_ac12b_model_above_ceiling_ceiling_wins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-12(b): claude_sonnet (declared max_tokens 32768) under a 2048 ceiling.
+
+    Requests 2048 — the ceiling wins.
+    """
+    monkeypatch.setattr(artifact_tools.settings, "artifact_draft_max_tokens", 2048)
+    events: list[tuple[str, dict[str, Any]]] = []
+    _store, client = _install_draft_fakes(monkeypatch, completion_tokens=2048)
+    _spy_artifact_log(monkeypatch, events)
+    _install_builder_decision(resolution="user_choice", action_id="claude_sonnet")
+    monkeypatch.setattr(
+        "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
+        lambda selected_key, config, **_kw: selected_key,
+    )
+    monkeypatch.setattr(
+        "personal_agent.llm_client.factory.get_llm_client_for_key", _KeyFactorySpy(client)
+    )
+
+    await artifact_tools.artifact_draft_executor(
+        slug="sonnet-over-ceiling", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert client.respond_calls[0]["max_tokens"] == 2048
+    cap_hits = [kw for ev, kw in events if ev == "artifact_draft_output_cap_hit"]
+    assert len(cap_hits) == 1
+    assert cap_hits[0]["max_tokens"] == 2048
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_ac13_preference_path_sizes_to_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-13: the silent preference path also sizes to the deployment, not the constant.
+
+    An implementation that pre-resolves the preference only to suppress the card,
+    without threading the deployment into the budget, would still request the global
+    constant here — this is the invisible failure AC-13 exists to catch.
+    """
+    _store, client = _install_draft_fakes(monkeypatch, completion_tokens=4096)
+    _install_builder_decision(resolution="preference_applied", action_id="claude_haiku")
+    monkeypatch.setattr(
+        "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
+        lambda selected_key, config, **_kw: selected_key,
+    )
+    monkeypatch.setattr(
+        "personal_agent.llm_client.factory.get_llm_client_for_key", _KeyFactorySpy(client)
+    )
+
+    await artifact_tools.artifact_draft_executor(
+        slug="preference-sizing", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert client.respond_calls[0]["max_tokens"] == 4096  # claude_haiku's declared cap
+    assert client.respond_calls[0]["max_tokens"] != settings.artifact_draft_max_tokens
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_no_decision_sizes_to_configured_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A no-answer resolution also sizes to the configured default's declared cap.
+
+    The role-name path ignores the carried (unconfirmed) action_id and always renders
+    on the configured default (``claude_sonnet``, 32768) — floored here by a 2048
+    ceiling — never the pre-T6 flat constant regardless of deployment.
+    """
+    monkeypatch.setattr(artifact_tools.settings, "artifact_draft_max_tokens", 2048)
+    _store, client = _install_draft_fakes(monkeypatch, completion_tokens=2048)
+    _install_builder_decision(resolution="timeout_default", action_id="claude_haiku")
+
+    await artifact_tools.artifact_draft_executor(
+        slug="timeout-sizing", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert client.respond_calls[0]["max_tokens"] == 2048
 
 
 @pytest.mark.asyncio

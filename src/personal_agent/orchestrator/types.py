@@ -416,6 +416,17 @@ class ExecutionContext:
     # reach ``artifact_draft``, which receives only a ``TraceContext``.
     artifact_builder_resolution: "ConstraintDecision | None" = None
 
+    # --- ADR-0122 §5 (T6/FRE-931) — the planning step is told the budget ---
+    # Turn-scoped guidance naming the resolved builder's effective output-token
+    # budget and context window, computed alongside ``artifact_builder_resolution``
+    # in ``_maybe_resolve_artifact_builder``. ``step_llm_call`` appends it to the
+    # VOLATILE tail of the system prompt (never the STATIC/SEMI-STATIC prefix, so it
+    # never enters ``static_prefix_hash`` — ADR-0081 §D1) so the primary scopes the
+    # ``artifact_draft`` plan to what the builder can actually emit, rather than
+    # discovering the ceiling by overrunning it mid-generation (the FRE-478 class).
+    # ``None`` when no turn-start ask ran (no ``artifact_build_intent`` signal).
+    artifact_builder_planning_note: str | None = None
+
 
 class OrchestratorStep(TypedDict):
     """Step metadata for observability.

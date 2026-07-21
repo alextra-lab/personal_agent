@@ -26,7 +26,7 @@ class TestPromptComponentTaxonomy:
         """Every component_id appended in executor._component_ids must be in the taxonomy."""
         from personal_agent.llm_client.prompt_identity import PROMPT_COMPONENT_TAXONOMY
 
-        # These are the 8 component IDs appended in executor.py:2521-2538.
+        # These are the component IDs appended in executor.py:2521-2538.
         # Update this list when the executor gains a new component.
         executor_component_ids = {
             "tool_awareness",
@@ -35,6 +35,7 @@ class TestPromptComponentTaxonomy:
             "skill_index",
             "skill_bodies",
             "memory_section",
+            "artifact_builder_planning_note",
             "tool_use_rules",
             "decomposition_instructions",
         }
@@ -68,6 +69,7 @@ class TestPromptComponentTaxonomy:
             "skill_index",
             "skill_bodies",
             "memory_section",
+            "artifact_builder_planning_note",
             "tool_use_rules",
             "decomposition_instructions",
         ):

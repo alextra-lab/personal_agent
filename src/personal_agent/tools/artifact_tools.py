@@ -804,17 +804,30 @@ def _draft_timeout_s() -> float:
     return float(settings.llm_timeout_seconds)
 
 
-def _draft_max_tokens() -> int:
-    """Output-token ceiling for the artifact-draft HTML sub-agent (FRE-478).
+def _draft_max_tokens(deployment_max_tokens: int | None) -> int:
+    """Output-token ceiling for the artifact-draft HTML sub-agent (FRE-478/ADR-0122 T6).
 
-    Resolved from config at call time so the cap is env-overridable without an
-    import-time freeze (mirrors :func:`_draft_timeout_s`). See
-    ``settings.artifact_draft_max_tokens`` for the value rationale.
+    Never requests more than the resolved deployment declares, and never exceeds the
+    operator's configured ceiling — ``min(deployment_max_tokens,
+    settings.artifact_draft_max_tokens)``. Fixes the shipped mismatch where a
+    selected Haiku build (declared ``max_tokens`` 4096) asked for the global 32768
+    regardless (AC-12). See ``settings.artifact_draft_max_tokens`` for the ceiling's
+    own value rationale.
+
+    Args:
+        deployment_max_tokens: The resolved deployment's declared ``max_tokens``
+            (``ModelDefinition.max_tokens``), or ``None`` when it declares no cap.
 
     Returns:
         Maximum output tokens for the generation call.
     """
-    return int(settings.artifact_draft_max_tokens)
+    from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
+        effective_artifact_builder_max_tokens,
+    )
+
+    return effective_artifact_builder_max_tokens(
+        deployment_max_tokens, int(settings.artifact_draft_max_tokens)
+    )
 
 
 # Detection-only regexes feeding the per-commit analytics label (ADR-0089 D1/D5).
@@ -1472,10 +1485,19 @@ async def artifact_draft_executor(
     from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
         build_provider_availability,
         get_artifact_builder_resolution,
-        resolve_artifact_builder_key,
+        resolve_effective_artifact_builder_deployment,
     )
 
     builder_decision = get_artifact_builder_resolution()
+    builder_catalog = load_model_config()
+    # ADR-0122 §5/T6: the deployment that will actually build this turn's artifact,
+    # regardless of how the decision resolved — the single input the output-token
+    # budget (below) is derived from.
+    resolved_deployment_key = resolve_effective_artifact_builder_deployment(
+        builder_decision,
+        builder_catalog,
+        is_provider_available=build_provider_availability(builder_catalog, settings),
+    )
 
     if builder_decision is None:
         # Missed prediction (§3b/AC-11): the turn-start ask never ran for this turn, yet
@@ -1492,13 +1514,7 @@ async def artifact_draft_executor(
         )
         builder_client = get_llm_client(role_name="artifact_builder")
     elif builder_decision.resolution in ("user_choice", "preference_applied"):
-        builder_catalog = load_model_config()
-        builder_key = resolve_artifact_builder_key(
-            builder_decision,
-            builder_catalog,
-            is_provider_available=build_provider_availability(builder_catalog, settings),
-        )
-        if builder_key != builder_decision:
+        if resolved_deployment_key != builder_decision:
             log.warning(
                 "artifact_builder_key_substituted",
                 trace_id=trace_id,
@@ -1506,9 +1522,11 @@ async def artifact_draft_executor(
                 slug=slug,
                 task_id=task_id,
                 requested_key=str(builder_decision),
-                substituted_key=builder_key,
+                substituted_key=resolved_deployment_key,
             )
-        builder_client = get_llm_client_for_key(builder_key, budget_role="artifact_builder")
+        builder_client = get_llm_client_for_key(
+            resolved_deployment_key, budget_role="artifact_builder"
+        )
     else:
         # Timeout / disconnected / cancelled — a decision was raised but not answered;
         # keep today's role-name path and its already-shipped default binding (FRE-879).
@@ -1527,7 +1545,7 @@ async def artifact_draft_executor(
     ]
 
     draft_timeout = _draft_timeout_s()
-    draft_max_tokens = _draft_max_tokens()
+    draft_max_tokens = _draft_max_tokens(builder_catalog.models[resolved_deployment_key].max_tokens)
 
     # --- Sub-agent inference (single attempt — FRE-511 retired the FRE-496 retry) ---
     log.info(

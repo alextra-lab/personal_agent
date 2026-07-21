@@ -126,7 +126,18 @@ export function useSSEStream(): UseSSEStreamReturn {
   const [activeTools, setActiveTools] = useState<ToolCall[]>([]);
   const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
   const [serverSelection, setServerSelection] = useState<ServerSelection | null>(null);
-  const [pendingConstraint, setPendingConstraint] = useState<PendingConstraint | null>(null);
+  // FRE-928: a QUEUE, not a single slot. Nothing stops two turns running
+  // concurrently on one session (/chat/stream is fire-and-forget), and a second
+  // pause used to overwrite the first — leaving the first card unanswerable while
+  // its server-side waiter now rides a full timeout. The oldest card is rendered;
+  // answering it advances to the next. The exposed `pendingConstraint` stays a
+  // single value so no consumer changes.
+  const [pendingConstraints, setPendingConstraints] = useState<PendingConstraint[]>([]);
+  const pendingConstraint = pendingConstraints[0] ?? null;
+
+  const dropPendingConstraint = useCallback((requestId: string) => {
+    setPendingConstraints((prev) => prev.filter((c) => c.request_id !== requestId));
+  }, []);
   const [resolvedConstraints, setResolvedConstraints] = useState<ResolvedConstraint[]>([]);
   const [cancelled, setCancelled] = useState<boolean>(false);
   const [pendingInterrupt, setPendingInterrupt] = useState<PendingInterrupt | null>(null);
@@ -271,13 +282,22 @@ export function useSSEStream(): UseSSEStreamReturn {
 
       case 'CONSTRAINT_PAUSE': {
         const data = event.data as unknown as ConstraintPauseData;
-        setPendingConstraint({
-          request_id: String(event.request_id ?? ''),
-          constraint: data.constraint,
-          context: data.context,
-          options: data.options,
-          default_option: data.default_option,
-          expires_at: data.expires_at,
+        const pauseRequestId = String(event.request_id ?? '');
+        setPendingConstraints((prev) => {
+          // Idempotent: a reconnect replays persisted events, so the same pause can
+          // arrive twice. Re-queuing it would show a duplicate card (FRE-928).
+          if (prev.some((c) => c.request_id === pauseRequestId)) return prev;
+          return [
+            ...prev,
+            {
+              request_id: pauseRequestId,
+              constraint: data.constraint,
+              context: data.context,
+              options: data.options,
+              default_option: data.default_option,
+              expires_at: data.expires_at,
+            },
+          ];
         });
         break;
       }
@@ -285,10 +305,8 @@ export function useSSEStream(): UseSSEStreamReturn {
       case 'CONSTRAINT_RESOLVED': {
         const data = event.data as unknown as ConstraintResolvedData;
         const requestId = String(event.request_id ?? '');
-        // Collapse the active card (if it matches) into a resolved pill.
-        setPendingConstraint((prev) =>
-          prev && prev.request_id === requestId ? null : prev,
-        );
+        // Collapse the matching card (anywhere in the queue) into a resolved pill.
+        dropPendingConstraint(requestId);
         setResolvedConstraints((prev) => {
           if (prev.some((r) => r.request_id === requestId)) return prev;
           return [
@@ -306,7 +324,7 @@ export function useSSEStream(): UseSSEStreamReturn {
 
       case 'CANCELLED': {
         setCancelled(true);
-        setPendingConstraint(null);
+        setPendingConstraints([]);
         isStreamingRef.current = false; // FRE-236: keep ref in sync
         setIsStreaming(false);
         break;
@@ -435,7 +453,9 @@ export function useSSEStream(): UseSSEStreamReturn {
         if (typeof window !== 'undefined' && currentSessionRef.current) {
           const ts = lastTurnStatusRef.current;
           const storageKey = `seshat-tool-state-${currentSessionRef.current}`;
-          if (ts && ts.tool_iteration > 0) {
+          // Only persist a genuinely-received reading; nulls must never be stored
+          // and read back as if they were data (FRE-928 AC-4).
+          if (ts && ts.tool_iteration !== null && ts.tool_iteration > 0) {
             localStorage.setItem(
               storageKey,
               JSON.stringify({
@@ -450,7 +470,7 @@ export function useSSEStream(): UseSSEStreamReturn {
         break;
       }
     }
-  }, []);
+  }, [dropPendingConstraint]);
 
   // --------------------------------------------------------------------------
   // Public API
@@ -488,7 +508,12 @@ export function useSSEStream(): UseSSEStreamReturn {
       setBudgetDenied(null);
       setClassifiedError(null);
       setActiveTools([]);
-      setPendingConstraint(null);
+      // FRE-928: pending constraints are deliberately NOT cleared here. A card maps to
+      // a live server-side waiter that now survives a disconnect and rides its own
+      // timeout, and nothing blocks the user from sending while one is open. Clearing
+      // would hide an answerable card whose waiter then silently times out into a
+      // default — the exact failure this ticket exists to fix. Each card clears on its
+      // own CONSTRAINT_RESOLVED (or on CANCELLED, which does resolve every waiter).
       setResolvedConstraints([]);
       setCancelled(false);
       // Note: turnStatus is intentionally NOT reset here — the status bar stays
@@ -597,9 +622,7 @@ export function useSSEStream(): UseSSEStreamReturn {
    */
   const sendConstraintDecision = useCallback(
     (requestId: string, actionId: string, remember: boolean): void => {
-      setPendingConstraint((prev) =>
-        prev && prev.request_id === requestId ? null : prev,
-      );
+      dropPendingConstraint(requestId);
       streamRef.current?.send({
         type: 'CONSTRAINT_DECISION',
         request_id: requestId,
@@ -607,7 +630,7 @@ export function useSSEStream(): UseSSEStreamReturn {
         remember,
       });
     },
-    [],
+    [dropPendingConstraint],
   );
 
   /** Send a USER_CANCEL (Stop button) to halt the current turn (ADR-0076). */

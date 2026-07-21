@@ -209,13 +209,58 @@ describe('TurnStatusBar — engagement lane tool iteration', () => {
     expect(toolSpan.className).toContain('text-slate-400');
   });
 
-  it('handles missing tool_iteration gracefully (defaults to 0)', () => {
+  it('renders unknown — not 0/0 — when tool data has not arrived', () => {
+    // Rewritten (FRE-928 AC-4 / FRE-935): "defaults to 0" was the defect. Coercing
+    // absent to 0 is what let a fabricated ceiling render as if it were live data.
     const partial = {
       ...makeStatus(),
       tool_iteration: undefined as unknown as number,
       tool_iteration_max: undefined as unknown as number,
     };
     render(<TurnStatusBar status={partial} />);
-    expect(screen.getByText(/tools 0\/0/)).toBeDefined();
+    expect(screen.queryByText(/tools 0\/0/)).toBeNull();
+    expect(screen.getByText(/tools —\/—/)).toBeDefined();
+  });
+});
+
+describe('TurnStatusBar — absent is a distinct state from zero (FRE-928 AC-4 / FRE-935)', () => {
+  // (a) no data · (b) real data · (c) a legitimate zero. (c) is the discriminator:
+  // an implementation that merely hides everything falsy passes (a) and (b) and
+  // fails (c), because a real 0 would be hidden as though it were missing.
+
+  it('(a) no tool data — explicit unknown, no N/M, no warning colour', () => {
+    render(
+      <TurnStatusBar
+        status={makeStatus({ tool_iteration: null, tool_iteration_max: null })}
+      />,
+    );
+    const toolSpan = screen.getByText(/tools/);
+    expect(toolSpan.textContent).toContain('—/—');
+    expect(toolSpan.className).not.toContain('text-amber-400');
+  });
+
+  it('(b) real data — the ceiling comes from the server, not a constant', () => {
+    render(
+      <TurnStatusBar status={makeStatus({ tool_iteration: 4, tool_iteration_max: 25 })} />,
+    );
+    expect(screen.getByText(/tools 4\/25/)).toBeDefined();
+    // The live defect: 4 of a fabricated 6 went amber; 4 of a real 25 must not.
+    expect(screen.getByText(/tools 4\/25/).className).toContain('text-slate-400');
+  });
+
+  it('(c) a legitimate zero renders as 0, visibly distinct from unknown', () => {
+    render(
+      <TurnStatusBar status={makeStatus({ tool_iteration: 0, tool_iteration_max: 25 })} />,
+    );
+    expect(screen.getByText(/tools 0\/25/)).toBeDefined();
+    expect(screen.queryByText(/tools —\/—/)).toBeNull();
+  });
+
+  it('never derives a warning colour from a half-absent pair', () => {
+    render(
+      <TurnStatusBar status={makeStatus({ tool_iteration: 9, tool_iteration_max: null })} />,
+    );
+    const toolSpan = screen.getByText(/tools/);
+    expect(toolSpan.className).not.toContain('text-amber-400');
   });
 });

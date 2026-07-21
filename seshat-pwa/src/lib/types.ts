@@ -266,8 +266,19 @@ export interface TurnStatus {
   // Engagement lane — per-harness-run, resets on next user input
   context_tokens: number;
   context_max: number;
-  tool_iteration: number;
-  tool_iteration_max: number;
+  /**
+   * Live tool iteration and its server-resolved ceiling.
+   *
+   * `null` means **not yet received** and is deliberately distinct from `0`
+   * (FRE-928 AC-4 / FRE-935): the client must never invent a ceiling. A seeded
+   * constant of 6 once rendered an amber "4 of 6" near-limit warning during a turn
+   * whose real ceiling was 25 — a warning computed from a placeholder spends the
+   * user's trust on a fiction. The server sends both fields on every turn_status,
+   * so the client has no need to guess. Typed as nullable so a seed cannot be
+   * reintroduced without changing the type.
+   */
+  tool_iteration: number | null;
+  tool_iteration_max: number | null;
   turn_cost_usd: number;
   // Session lane — persists across turns (ADR-0092 §D9)
   session_cost_usd: number;

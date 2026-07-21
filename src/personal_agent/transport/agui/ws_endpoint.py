@@ -65,7 +65,18 @@ class WaiterMetadata:
 
 @dataclass
 class _ConnectionState:
-    """Mutable state for an active WebSocket connection."""
+    """Mutable state for an active WebSocket connection.
+
+    Note the waiter dicts here serve **approval** waiters only
+    (:func:`register_waiter`). Constraint waiters are session-scoped — see
+    :data:`_session_constraint_waiters` — because a mobile client's socket drops
+    and returns constantly, and a decision must outlive its connection (FRE-928).
+
+    Liveness is not tracked here: the receiver's bounded
+    :data:`AppConfig.ws_ping_timeout_seconds` read wait is the single mechanism that
+    detects a client which stopped responding without closing (FRE-928 AC-6). A
+    second, unread "last seen" field would only invite false trust.
+    """
 
     websocket: WebSocket
     user: RequestUser
@@ -74,11 +85,41 @@ class _ConnectionState:
     waiters: dict[str, asyncio.Event] = field(default_factory=dict)
     waiter_payloads: dict[str, dict[str, Any]] = field(default_factory=dict)
     waiter_timeouts: dict[str, asyncio.Task[None]] = field(default_factory=dict)
-    waiter_metadata: dict[str, WaiterMetadata] = field(default_factory=dict)
     cancel_requested: bool = False
 
 
 _active_connections: dict[str, _ConnectionState] = {}
+
+
+@dataclass
+class _ConstraintWaiter:
+    """A pending constraint decision, owned by the session rather than a socket.
+
+    Attributes:
+        event: Set when the decision resolves (user choice, cancel, or timeout).
+        payload: Resolution payload filled in by whichever path resolves it.
+        metadata: Options/default used for validation and timeout fallback.
+        timeout_task: Background task applying the default when the timeout expires.
+    """
+
+    event: asyncio.Event
+    payload: dict[str, Any]
+    metadata: WaiterMetadata
+    timeout_task: asyncio.Task[None] | None = None
+
+
+#: Pending constraint waiters keyed ``session_id -> request_id -> waiter`` (FRE-928).
+#:
+#: Session-scoped, not connection-scoped: a brief disconnect is the *normal* condition
+#: for a mobile client, so a pending decision must survive one. The transport already
+#: persists pause events and replays them from the client's last sequence number, so a
+#: client reconnecting inside the timeout receives the card and resolves the original
+#: waiter. Only an explicit decision, a Stop press, or the timeout resolves a waiter.
+#:
+#: This is an in-process registry, which is sound because the service runs as a single
+#: uvicorn worker (no ``--workers`` in ``Dockerfile.gateway`` or ``docker-compose.cloud.yml``).
+#: Scaling to multiple workers would require moving this to shared state (e.g. Redis).
+_session_constraint_waiters: dict[str, dict[str, _ConstraintWaiter]] = {}
 
 
 def get_active_connection(session_id: str) -> _ConnectionState | None:
@@ -247,44 +288,64 @@ async def register_constraint_waiter(
         metadata: Constraint metadata (options, default) used for validation
             and timeout resolution.
         on_registered: Optional coroutine run after registration (the pause
-            event push). Not invoked when no connection is active.
+            event push). Always invoked — including when no connection is
+            active, so the event is persisted and can be replayed on reconnect.
 
     Returns:
         Resolution payload dict with at least ``decision`` and ``resolution``.
-        When no WebSocket connection is active, returns immediately with
-        ``resolution="connection_lost"`` and the default option.
+
+    Raises:
+        Exception: Whatever ``on_registered`` raises, after the waiter is
+            de-registered (a failed push must not leak a pending waiter).
     """
-    conn = _active_connections.get(session_id)
-    if conn is None:
-        return {"decision": metadata.default_option, "resolution": "connection_lost"}
+    bucket = _session_constraint_waiters.setdefault(session_id, {})
+    if request_id in bucket:
+        # Not reachable today (request_id is a per-pause UUID4), but an overwrite would
+        # orphan the first waiter: its timeout task would resolve the survivor, leaving
+        # the original awaiting forever with no timeout. Fail loudly instead.
+        raise ValueError(f"constraint waiter already registered: {session_id}/{request_id}")
 
-    event = asyncio.Event()
-    conn.waiters[request_id] = event
-    conn.waiter_payloads[request_id] = {}
-    conn.waiter_metadata[request_id] = metadata
+    waiter = _ConstraintWaiter(event=asyncio.Event(), payload={}, metadata=metadata)
+    bucket[request_id] = waiter
 
-    timeout_task = asyncio.create_task(
-        _constraint_waiter_timeout(
-            session_id, request_id, timeout_seconds, metadata.default_option
-        ),
-    )
-    conn.waiter_timeouts[request_id] = timeout_task
-
-    if on_registered is not None:
-        await on_registered()
-
+    # The try opens BEFORE the push and the timeout task: session-scoped waiters
+    # lose the accidental sweep that disconnect gave connection-scoped ones, so a
+    # cancelled executor or a failing push would otherwise leak the entry forever.
     try:
-        await event.wait()
-    finally:
-        timeout_task.cancel()
-        conn.waiters.pop(request_id, None)
-        conn.waiter_timeouts.pop(request_id, None)
-        conn.waiter_metadata.pop(request_id, None)
+        waiter.timeout_task = asyncio.create_task(
+            _constraint_waiter_timeout(
+                session_id, request_id, timeout_seconds, metadata.default_option
+            ),
+        )
 
-    payload = conn.waiter_payloads.pop(request_id, {})
+        if on_registered is not None:
+            await on_registered()
+
+        await waiter.event.wait()
+    finally:
+        if waiter.timeout_task is not None:
+            waiter.timeout_task.cancel()
+        _discard_constraint_waiter(session_id, request_id)
+
+    payload = waiter.payload
     payload.setdefault("decision", metadata.default_option)
     payload.setdefault("resolution", "user_choice")
     return payload
+
+
+def _discard_constraint_waiter(session_id: str, request_id: str) -> None:
+    """Remove a constraint waiter, dropping the session bucket once it empties."""
+    bucket = _session_constraint_waiters.get(session_id)
+    if bucket is None:
+        return
+    bucket.pop(request_id, None)
+    if not bucket:
+        _session_constraint_waiters.pop(session_id, None)
+
+
+def _get_constraint_waiter(session_id: str, request_id: str) -> _ConstraintWaiter | None:
+    """Return the pending constraint waiter for a session/request, if any."""
+    return _session_constraint_waiters.get(session_id, {}).get(request_id)
 
 
 async def _constraint_waiter_timeout(
@@ -293,18 +354,20 @@ async def _constraint_waiter_timeout(
     timeout_seconds: float,
     default_option: str,
 ) -> None:
-    """Background task that resolves a constraint waiter on timeout."""
+    """Background task that resolves a constraint waiter on timeout.
+
+    Resolves against the session registry, not the connection: the whole point of
+    the timeout is to bound a wait during which no connection may be attached
+    (FRE-928 AC-2).
+    """
     await asyncio.sleep(timeout_seconds)
-    conn = _active_connections.get(session_id)
-    if conn is None:
-        return
-    evt = conn.waiters.get(request_id)
-    if evt is not None and not evt.is_set():
-        conn.waiter_payloads[request_id] = {
+    waiter = _get_constraint_waiter(session_id, request_id)
+    if waiter is not None and not waiter.event.is_set():
+        waiter.payload = {
             "decision": default_option,
             "resolution": "timeout_default",
         }
-        evt.set()
+        waiter.event.set()
         log.info(
             "ws.constraint_waiter_timeout",
             request_id=request_id,
@@ -342,16 +405,27 @@ def _resolve_constraint_decision(
     option. Unknown/already-resolved request IDs are silently dropped by
     :func:`_resolve_waiter` (idempotency).
 
+    The waiter is looked up by **session**, so a decision arriving on a freshly
+    reconnected socket resolves the waiter registered before the drop (FRE-928 AC-5).
+
     Args:
-        conn: Active connection.
+        conn: Connection the decision arrived on (used for its ``session_id``).
         request_id: Pause round-trip identifier.
         msg: Raw inbound message dict (``decision``, ``remember``).
     """
-    meta = conn.waiter_metadata.get(request_id)
+    waiter = _get_constraint_waiter(conn.session_id, request_id)
+    if waiter is None:
+        log.debug("ws.resolve_unknown_waiter", request_id=request_id, session_id=conn.session_id)
+        return
+    if waiter.event.is_set():
+        log.debug("ws.resolve_already_set", request_id=request_id, session_id=conn.session_id)
+        return
+
+    meta = waiter.metadata
     decision = str(msg.get("decision", ""))
     remember = bool(msg.get("remember", False))
 
-    if meta is not None and decision not in meta.options:
+    if decision not in meta.options:
         log.warning(
             "ws.constraint_decision_invalid_action",
             request_id=request_id,
@@ -362,10 +436,13 @@ def _resolve_constraint_decision(
         )
         decision = meta.default_option
 
-    _resolve_waiter(
-        conn,
-        request_id,
-        {"decision": decision, "remember": remember, "resolution": "user_choice"},
+    waiter.payload = {"decision": decision, "remember": remember, "resolution": "user_choice"}
+    waiter.event.set()
+    log.info(
+        "ws.waiter_resolved",
+        request_id=request_id,
+        decision=decision,
+        session_id=conn.session_id,
     )
 
 
@@ -375,6 +452,10 @@ def _resolve_all_waiters_user_cancel(conn: _ConnectionState) -> list[str]:
     Each waiter is resolved with its registered default ``action_id`` and a
     ``user_cancel`` resolution, so any executor awaiting a constraint decision
     unblocks immediately and synthesizes from results gathered so far.
+
+    Covers **both** registries — the connection's approval waiters and the session's
+    constraint waiters. An explicit Stop is a genuine user decision, so unlike a
+    disconnect it must not leave a constraint waiter riding its timeout (FRE-928).
 
     Args:
         conn: Active connection whose waiters should be cancelled.
@@ -386,24 +467,48 @@ def _resolve_all_waiters_user_cancel(conn: _ConnectionState) -> list[str]:
     for request_id, evt in conn.waiters.items():
         if evt.is_set():
             continue
-        meta = conn.waiter_metadata.get(request_id)
-        default_option = meta.default_option if meta is not None else "timeout"
+        # Approval waiters carry no per-request metadata; "timeout" is register_waiter's
+        # own default_decision contract.
         conn.waiter_payloads[request_id] = {
-            "decision": default_option,
+            "decision": "timeout",
             "resolution": "user_cancel",
         }
         evt.set()
         resolved.append(request_id)
+
+    for request_id, waiter in _session_constraint_waiters.get(conn.session_id, {}).items():
+        if waiter.event.is_set():
+            continue
+        waiter.payload = {
+            "decision": waiter.metadata.default_option,
+            "resolution": "user_cancel",
+        }
+        waiter.event.set()
+        resolved.append(request_id)
+
     return resolved
 
 
 def _cancel_all_waiters(conn: _ConnectionState) -> None:
-    """Resolve all pending waiters with connection_lost."""
+    """Resolve pending **approval** waiters with connection_lost on disconnect.
+
+    Constraint waiters are deliberately untouched (FRE-928). They are session-scoped
+    and ride their own timeout: a mobile socket drops and returns every 30-140s, so
+    treating a momentary absence as a permanent one is what discarded live user
+    decisions. A client reconnecting inside the window is replayed the pause event and
+    resolves the original waiter; a caller with no client at all still falls back when
+    the timeout expires.
+
+    Approval waiters keep the old fail-closed-fast behaviour: that is a safety posture
+    for HITL tool approval, not the same defect.
+
+    Args:
+        conn: The connection being torn down or superseded.
+    """
     for request_id, evt in conn.waiters.items():
         if not evt.is_set():
-            meta = conn.waiter_metadata.get(request_id)
             payload: dict[str, Any] = {
-                "decision": meta.default_option if meta is not None else "connection_lost",
+                "decision": "connection_lost",
                 "reason": "WebSocket disconnected",
                 "resolution": "connection_lost",
             }
@@ -413,7 +518,6 @@ def _cancel_all_waiters(conn: _ConnectionState) -> None:
         task.cancel()
     conn.waiters.clear()
     conn.waiter_timeouts.clear()
-    conn.waiter_metadata.clear()
 
 
 # ── Per-session event queues ───────────────────────────────────────────────

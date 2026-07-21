@@ -12,6 +12,7 @@ from personal_agent.transport.agui.ws_endpoint import (
     _active_connections,
     _cancel_all_waiters,
     _ConnectionState,
+    _receiver,
     _resolve_waiter,
     get_event_queue,
     register_waiter,
@@ -135,3 +136,58 @@ class TestRegisterWaiter:
 
         assert result.decision == "timeout"
         _active_connections.pop(sid, None)
+
+
+class _HangingWebSocket:
+    """A client that stops responding without ever closing cleanly (half-open).
+
+    ``receive_text`` never returns, which is exactly what a half-open TCP socket
+    looks like to the server: no data, no disconnect, no error.
+    """
+
+    def __init__(self) -> None:
+        self.closed_with: tuple[int, str] | None = None
+
+    async def receive_text(self) -> str:
+        await asyncio.Event().wait()  # never resolves
+        raise AssertionError("unreachable")
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        self.closed_with = (code, reason)
+
+
+class TestLivenessDetection:
+    """FRE-928 AC-6 — a dead connection is detected from missed pings, not at handshake."""
+
+    @pytest.mark.asyncio
+    async def test_half_open_connection_closed_within_ping_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A client that goes silent is torn down on the bounded receive wait.
+
+        The server must not hold a half-open connection until the client's next
+        handshake — that window is what let a pause be pushed into a socket with no
+        reader. The bound is ``ws_ping_timeout_seconds``; the PWA pings every 25s, so
+        the shipped 60s default is ~2.4 missed intervals.
+        """
+        from personal_agent.transport.agui import ws_endpoint as we
+
+        monkeypatch.setattr(we.settings, "ws_ping_timeout_seconds", 0.3, raising=False)
+
+        sid = f"halfopen-{uuid4()}"
+        ws = _HangingWebSocket()
+        conn = _ConnectionState(
+            websocket=ws,  # type: ignore[arg-type]
+            user=_make_user(),
+            session_id=sid,
+            outbound_queue=asyncio.Queue(maxsize=100),
+        )
+
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await asyncio.wait_for(_receiver(conn), timeout=5.0)
+        elapsed = loop.time() - started
+
+        assert ws.closed_with is not None, "half-open connection was held, never closed"
+        assert ws.closed_with[0] == 1001
+        assert elapsed < 2.0, f"detection took {elapsed:.2f}s — not bounded by the ping timeout"

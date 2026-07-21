@@ -218,7 +218,7 @@ weeks, costs context on every session, and disagrees with the real source. Inste
 | Question | Authoritative source |
 |----------|----------------------|
 | What are we doing next, in order? | `docs/plans/MASTER_PLAN.md` (forward plans only) |
-| What did the last session decide? | `docs/plans/sessions/` → `LAST_SESSION.md` |
+| What did the last session decide? | `docs/plans/LAST_SESSION.md` |
 | What shipped, and when? | `git log` |
 | Why was this decided? | The Linear ticket's comments |
 | What is ADR-XXXX's status? | That ADR's own `Status:` header (`docs/architecture_decisions/`) |

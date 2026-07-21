@@ -642,6 +642,147 @@ def test_dirty_worktree_aborts_clear_reuse_before_any_delivery() -> None:
     assert runner.sent_text() == []
 
 
+# --- FRE-923: delivery atomicity — swallowed-Enter repair -------------------
+
+
+class _SwallowingSeat:
+    """A live seat that swallows the ``Enter`` for a chosen command N times.
+
+    Models the FRE-920 failure directly: ``send-keys -l`` deposits the command
+    text in the input box, but the follow-up ``Enter`` is consumed by a TUI still
+    re-initializing after ``/clear``, so the command sits typed-but-unsubmitted
+    (``❯ /model sonnet``) — which ``session_is_idle`` correctly reads as NOT idle.
+
+    Args:
+        swallow: The command whose Enter is swallowed.
+        times: How many Enters to swallow before accepting one.
+        stale: Text pre-loaded in the input box before delivery starts.
+    """
+
+    def __init__(self, *, swallow: str | None = None, times: int = 1, stale: str = "") -> None:
+        self.calls: list[tuple[str, ...]] = []
+        self._swallow = swallow
+        self._remaining = times
+        self._box = stale
+        self._turn = 0
+        self._build_submitted = False
+
+    def _pane(self) -> str:
+        box = f"❯ {self._box}" if self._box else "❯"
+        return f"turn {self._turn}\n{box}\n"
+
+    def __call__(self, argv: Sequence[str]) -> _FakeRunResult:
+        self.calls.append(tuple(argv))
+        args = list(argv)
+        if args[:2] == ["tmux", "has-session"]:
+            return _FakeRunResult(returncode=0)
+        if args[:2] == ["tmux", "list-panes"]:
+            return _FakeRunResult(stdout=f"claude\t{_WORKTREE}\n")
+        if args[:2] == ["tmux", "capture-pane"]:
+            return _FakeRunResult(stdout=self._pane())
+        if args[:2] == ["claude", "agents"]:
+            status = "busy" if self._build_submitted else "idle"
+            return _FakeRunResult(
+                stdout=json.dumps(
+                    [{"name": "cc-1build", "sessionId": None, "cwd": _WORKTREE, "status": status}]
+                )
+            )
+        if "send-keys" in args:
+            if "-l" in args:
+                self._box = args[-1]
+            elif args[-1] == "Enter":
+                if self._box == self._swallow and self._remaining > 0:
+                    self._remaining -= 1  # Enter swallowed: the text stays in the box.
+                else:
+                    if self._box.startswith("/build"):
+                        self._build_submitted = True
+                    self._box = ""
+                    self._turn += 1
+            elif args[-1] == "C-u":
+                self._box = ""
+        return _FakeRunResult()
+
+    def sent_text(self) -> list[str]:
+        """The literal strings send-keys typed into the seat, in order."""
+        return [call[-1] for call in self.calls if "send-keys" in call and "-l" in call]
+
+    def keys(self) -> list[str]:
+        """The non-literal keys (Enter / C-u) sent, in order."""
+        return [call[-1] for call in self.calls if "send-keys" in call and "-l" not in call]
+
+
+def test_partial_send_never_records_launched() -> None:
+    """AC-2: 2 of 3 commands landing is a delivery failure, never a dispatch.
+
+    ``/clear`` and ``/model`` are processed but the ``/build`` is never picked
+    up. Reporting that as launched is the silent failure the whole delivery path
+    exists to prevent — the orchestrator would await a run that is not happening.
+    """
+    runner = _SeatRunner(state="live", goes_busy_on_build=False)
+    plan = plan_launch("build1", "FRE-923", "sonnet", context_keep=False, seat="live")
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert result.outcome == "delivery-failed"
+    assert result.launched is False
+
+
+def test_swallowed_enter_is_resubmitted() -> None:
+    """FRE-920's exact failure self-heals in-tick: a lost Enter is re-sent.
+
+    The command is observably sitting unsubmitted in the box, so re-pressing
+    Enter is a repair, not a guess — and the whole sequence completes rather
+    than stranding the ticket.
+    """
+    runner = _SwallowingSeat(swallow="/model sonnet")
+    plan = plan_launch("build1", "FRE-923", "sonnet", context_keep=False, seat="live")
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert result.outcome == "reuse"
+    assert result.launched is True
+    assert runner.sent_text() == ["/clear", "/model sonnet", "/build FRE-923"]
+
+
+def test_enter_is_not_resubmitted_when_the_command_was_accepted() -> None:
+    """AC-3: a healthy seat gets exactly one Enter per command — no extras.
+
+    A blind re-submit would double-fire commands on every dispatch; the repair
+    must be conditioned on the command being *observably* still in the box.
+    """
+    runner = _SwallowingSeat()
+    plan = plan_launch("build1", "FRE-923", "sonnet", context_keep=False, seat="live")
+    execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert runner.keys() == ["Enter", "Enter", "Enter"]
+
+
+def test_healthy_delivery_sends_no_ctrl_u() -> None:
+    """AC-3: the happy path is byte-identical to pre-FRE-923 delivery.
+
+    ``C-u`` semantics on the Claude Code TUI are unproven (codex review), so it
+    is never sent speculatively — only when stale foreign text is observed.
+    """
+    runner = _SwallowingSeat()
+    plan = plan_launch("build1", "FRE-923", "sonnet", context_keep=False, seat="live")
+    execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert "C-u" not in runner.keys()
+
+
+def test_stale_foreign_input_is_cleared_before_typing() -> None:
+    """Residue from a previous partial dispatch is cleared, not typed onto.
+
+    FRE-920 left ``/model sonnet`` unsent in the box; typing the next command
+    without clearing would concatenate onto it and submit garbage.
+    """
+    runner = _SwallowingSeat(stale="/model sonnet")
+    plan = plan_launch("build1", "FRE-923", "sonnet", context_keep=False, seat="live")
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert "C-u" in runner.keys()
+    assert result.outcome == "reuse"
+    assert runner.sent_text() == ["/clear", "/model sonnet", "/build FRE-923"]
+
+
 # --- KEEP stays manual ------------------------------------------------------
 
 

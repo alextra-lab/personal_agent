@@ -193,6 +193,17 @@ _RC_REGISTERED_TIMEOUT_S: float = 10.0
 _DELIVERY_TIMEOUT_S: float = 10.0
 _POLL_INTERVAL_S: float = 0.5
 
+# How many times a single command's ``Enter`` may be re-sent when the command is
+# observed still sitting unsubmitted in the input box (FRE-923). Bounded because
+# the repair is a nudge, not a loop: if two extra Enters do not submit it, the
+# seat is not merely mid-settle and the delivery should fail closed.
+_MAX_ENTER_RESUBMITS: int = 2
+
+# The live input box: a caret followed by whatever is typed but not yet sent.
+# ``pane_state`` matches the EMPTY box (a bare caret) to decide idleness; this
+# matches the same line to read what is sitting IN it.
+_BOX_LINE_RE: re.Pattern[str] = re.compile(r"^\s*❯\s*(?P<text>.*?)\s*$")
+
 # Hard ceiling on any single tmux/claude/git call. Without it a wedged tmux
 # server blocks the runner — and therefore the whole dispatch tick — forever,
 # which no poll bound above can rescue.
@@ -961,6 +972,50 @@ def _poll_until(
     return False
 
 
+def _box_contents(pane_text: str) -> str:
+    """Return the text sitting unsubmitted in the seat's input box.
+
+    Reads the LAST caret line of the pane — the live input box renders below any
+    scrollback, and an earlier ``❯`` in transcript history must never be mistaken
+    for it. ``tmux capture-pane -p`` is used without ``-e``, so the text carries
+    no ANSI escapes to strip (verified live, FRE-923).
+
+    Args:
+        pane_text: The ``tmux capture-pane -p`` output.
+
+    Returns:
+        The box's contents, or ``""`` when the box is empty or unreadable.
+    """
+    for line in reversed(pane_text.splitlines()):
+        match = _BOX_LINE_RE.match(line)
+        if match:
+            return match.group("text").strip()
+    return ""
+
+
+def _pending_in_box(pane_text: str, command: str) -> bool:
+    """Whether ``command`` is observably typed-but-unsubmitted in the input box.
+
+    Deliberately tolerant rather than an exact full-line equality: a pane can
+    wrap or truncate a long command, so a rendered box holding a *prefix* of the
+    command (or a command that starts with the rendered text) still counts. The
+    match is one-directional-either-way on purpose — the dispatch commands
+    (``/clear``, ``/model <tier>``, ``/build <FRE>``) share no prefix, so this
+    cannot confuse one for another.
+
+    Args:
+        pane_text: The ``tmux capture-pane -p`` output.
+        command: The command just typed into the seat.
+
+    Returns:
+        Whether the box still holds this command, unsubmitted.
+    """
+    contents = _box_contents(pane_text)
+    if not contents:
+        return False
+    return command.startswith(contents) or contents.startswith(command)
+
+
 def deliver_to_seat(
     plan: LaunchPlan,
     runner: CommandRunner,
@@ -1014,18 +1069,45 @@ def deliver_to_seat(
     last = len(plan.deliveries) - 1
     for index, command in enumerate(plan.deliveries):
         before = _capture_pane(session, runner)
+        # Residue from an EARLIER partial dispatch (FRE-920 left `/model sonnet`
+        # unsent in the box) would otherwise be concatenated onto by the literal
+        # send below and submitted as one garbage line. Only fired on observed
+        # stale text — `C-u`'s semantics on this TUI are unproven, so it is never
+        # sent speculatively and the healthy path is byte-identical to before.
+        if _box_contents(before):
+            runner(["tmux", "send-keys", "-t", exact_pane(session), "C-u"])
+            before = _capture_pane(session, runner)
         # Literal text first, then Enter as a separate key — never let tmux
         # parse the command text itself as key names.
         runner(["tmux", "send-keys", "-t", exact_pane(session), "-l", command])
         runner(["tmux", "send-keys", "-t", exact_pane(session), "Enter"])
+        resubmits = [0]
 
-        def processed(before: str = before, is_last: bool = index == last) -> bool:
+        def processed(
+            before: str = before,
+            is_last: bool = index == last,
+            cmd: str = command,
+            resubmits: list[int] = resubmits,
+        ) -> bool:
             # The seat reporting itself busy is direct, structured evidence it
             # accepted the command and is working — stronger than any inference
             # from rendered text, and the only signal that distinguishes a
             # SUBMITTED /build from one merely echoed into the input box.
             if seat_is_busy(topology, runner) is True:
                 return True
+            pane = _capture_pane(session, runner)
+            # FRE-923: the command still sitting in the box is positive evidence
+            # its Enter was SWALLOWED — the TUI re-initializing after `/clear`
+            # eats the keypress while buffering the characters. Re-press Enter
+            # rather than waiting out a timeout that will never clear. Safe
+            # against double-submission precisely because it requires our own
+            # text to be observably unsubmitted: once it lands, the box is empty
+            # and this never fires.
+            if _pending_in_box(pane, cmd):
+                if resubmits[0] < _MAX_ENTER_RESUBMITS:
+                    resubmits[0] += 1
+                    runner(["tmux", "send-keys", "-t", exact_pane(session), "Enter"])
+                return False
             if is_last:
                 # Never accept a bare text change here: `send-keys -l` echoes the
                 # command into the input box, which changes the pane *before*
@@ -1033,7 +1115,6 @@ def deliver_to_seat(
                 # as a successful dispatch — the exact silent failure this whole
                 # function exists to prevent. Busy is the only sufficient proof.
                 return False
-            pane = _capture_pane(session, runner)
             return pane != before and session_is_idle(pane)
 
         if _poll_until(processed, timeout_s=_DELIVERY_TIMEOUT_S, sleeper=sleeper):

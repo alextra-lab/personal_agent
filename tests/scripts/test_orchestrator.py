@@ -27,6 +27,7 @@ import pytest
 from scripts.dispatch.next_resolver import IssueSnapshot
 from scripts.dispatch.orchestrator import (
     DEFAULT_STALL_TIMEOUT_S,
+    MAX_DELIVERY_ATTEMPTS,
     DispatchRecord,
     _record_for_result,
     check_preconditions,
@@ -37,6 +38,8 @@ from scripts.dispatch.orchestrator import (
     rc_server_alive,
     run_once,
 )
+
+_BUILD1_WORKTREE = ".claude/worktrees/build"
 
 
 def _issue(
@@ -107,7 +110,12 @@ class _SeatRunner(_RecordingRunner):
             return _FakeRunResult(returncode=1 if self._state == "absent" else 0)
         if args[:2] == ["tmux", "list-panes"]:
             self.calls.append(tuple(argv))
-            return _FakeRunResult(stdout="claude\n" if self._state == "live" else "bash\n")
+            # "<pane_current_command>\t<pane_current_path>" — a live seat must
+            # report BOTH, since seat_state also proves the pane sits in this
+            # stream's worktree before dispatching into it.
+            if self._state == "live":
+                return _FakeRunResult(stdout=f"claude\t{_BUILD1_WORKTREE}\n")
+            return _FakeRunResult(stdout="bash\n")
         if args[:2] == ["claude", "agents"]:
             self.calls.append(tuple(argv))
             agents = (
@@ -152,6 +160,18 @@ def _launched_record(ticket: str = "FRE-786", now: float = 0.0, **kw: object) ->
     }
     base.update(kw)
     return DispatchRecord(**base)  # type: ignore[arg-type]
+
+
+def _delivering_record(ticket: str = "FRE-923", *, attempts: int = 1) -> DispatchRecord:
+    """A record for an in-flight/failed delivery attempt (FRE-923)."""
+    return DispatchRecord(
+        stream="build1",
+        ticket=ticket,
+        phase="delivering",
+        launched_at=0.0,
+        session_id=None,
+        attempts=attempts,
+    )
 
 
 # --- model_for_labels ------------------------------------------------------
@@ -292,6 +312,7 @@ def _run(
         execute=execute,
         rc_alive=rc_alive,
         kill_switch_engaged=kill_switch_engaged or (lambda: False),
+        sleeper=_no_wait,
     )
     return result, persisted
 
@@ -984,23 +1005,159 @@ def test_run_once_launch_proceeds_when_alive_and_no_kill_switch() -> None:
 
 def test_reuse_is_an_owned_in_flight_run() -> None:
     """A live seat dispatched in-session is owned work, exactly like a launch."""
-    record = _record_for_result("build1", "FRE-913", "reuse", now=100.0)
+    record = _record_for_result("build1", "FRE-913", "reuse", now=100.0, attempts=0)
     assert record is not None
     assert record.phase == "launched"
 
 
-@pytest.mark.parametrize("outcome", ["delivery-failed", "seat-unhealthy"])
-def test_non_self_clearing_seat_failures_are_surfaced(outcome: str) -> None:
-    """FRE-913: a seat failure that needs a human must HOLD, not retry forever.
+def test_an_unusable_seat_is_surfaced_immediately() -> None:
+    """FRE-913: a seat that is not a usable claude needs a human, not a retry.
 
-    Neither of these self-clears — a seat that will not accept keystrokes, or one
-    that is not a usable claude in this worktree, stays broken until someone
-    intervenes. Writing no record would re-dispatch the same broken seat every
-    tick; ``_decide_surfaced`` holds it until the owner acts.
+    ``seat-unhealthy`` does not self-clear, and unlike ``delivery-failed``
+    (FRE-923) re-attempting cannot help — the seat is not running claude at all.
     """
-    record = _record_for_result("build1", "FRE-913", outcome, now=100.0)
+    record = _record_for_result("build1", "FRE-913", "seat-unhealthy", now=100.0, attempts=0)
     assert record is not None
     assert record.phase == "surfaced"
+
+
+# --- FRE-923: delivery atomicity — bounded retry + durable in-flight marker --
+
+
+def test_delivery_failure_retries_before_surfacing() -> None:
+    """AC-1: a dropped delivery is retryable, not an immediate terminal card.
+
+    The seat here is idle and ready — only the *delivery* dropped — so surfacing
+    a manual card on the first partial send is what stranded FRE-920 for 2.5h.
+    """
+    record = _record_for_result("build1", "FRE-923", "delivery-failed", now=100.0, attempts=1)
+    assert record is not None
+    assert record.phase == "delivering"
+    assert record.attempts == 1
+
+
+def test_delivery_failure_surfaces_after_max_attempts() -> None:
+    """AC-1: the retry is BOUNDED — it escalates rather than looping forever."""
+    record = _record_for_result(
+        "build1", "FRE-923", "delivery-failed", now=100.0, attempts=MAX_DELIVERY_ATTEMPTS
+    )
+    assert record is not None
+    assert record.phase == "surfaced"
+
+
+def test_delivering_record_redispatches_next_tick() -> None:
+    """AC-1: the next tick re-attempts the whole sequence instead of holding."""
+    issues = [_issue("FRE-923", "Approved", _OPUS)]
+    record = _delivering_record("FRE-923", attempts=1)
+    d = decide("build1", issues, record, now=0.0, stall_timeout_s=60, tracked_pr_open=False)
+
+    assert d.kind == "launch"
+    assert d.ticket == "FRE-923"
+    assert d.model == "opus"
+    assert d.reason == "retry-delivery"
+
+
+def test_delivering_record_surfaces_once_the_budget_is_spent() -> None:
+    """AC-1: an exhausted budget hands over to the human, never re-attempts."""
+    issues = [_issue("FRE-923", "Approved", _OPUS)]
+    record = _delivering_record("FRE-923", attempts=MAX_DELIVERY_ATTEMPTS)
+    d = decide("build1", issues, record, now=0.0, stall_timeout_s=60, tracked_pr_open=False)
+
+    assert d.kind == "surface"
+
+
+def test_delivering_record_clears_when_the_owner_acted() -> None:
+    """A ticket that moved on is no longer this stream's business."""
+    issues = [_issue("FRE-923", "In Progress", _OPUS)]
+    record = _delivering_record("FRE-923", attempts=1)
+    d = decide("build1", issues, record, now=0.0, stall_timeout_s=60, tracked_pr_open=False)
+
+    assert d.kind == "clear"
+
+
+def test_crash_mid_delivery_leaves_a_durable_in_flight_record() -> None:
+    """AC-1 (atomicity): the attempt is durably marked BEFORE it is made.
+
+    ``execute_plan`` is strict within one process, but a daemon crash between
+    typing ``/model`` and confirming it would otherwise leave no trace that a
+    delivery was ever in flight — the next tick would re-dispatch with a fresh
+    budget and could loop indefinitely across restarts. Persisting first is what
+    makes the attempt count survive the crash.
+    """
+    runner = _SeatRunner()  # absent seat + clean git status → create proceeds
+    board = [_issue("FRE-923", "Approved", _OPUS)]
+    state, persisted = _run({}, runner, board)
+
+    assert persisted, "the tick must persist before executing, not only after"
+    assert persisted[0]["build1"].phase == "delivering"
+    assert persisted[0]["build1"].attempts == 1
+    assert state["build1"].phase == "launched"  # reconciled once the launch lands
+
+
+def test_successful_delivery_records_launched_with_no_attempts() -> None:
+    """AC-3: a healthy dispatch ends ``launched`` and resets the retry budget."""
+    record = _record_for_result("build1", "FRE-923", "reuse", now=100.0, attempts=2)
+    assert record is not None
+    assert record.phase == "launched"
+    assert record.attempts == 0
+
+
+def test_seat_busy_pops_the_prewritten_record() -> None:
+    """The pre-write must not wedge a transient outcome.
+
+    ``seat-busy`` is self-clearing and has always written no record; now that a
+    record is written *before* execution, the transient path has to un-do it or
+    the stream would hold on a condition that resolves itself in seconds.
+    """
+    runner = _SeatRunner(
+        state="live", results={"capture-pane": _FakeRunResult(stdout=_WEDGE_BUSY_PANE)}
+    )
+    board = [_issue("FRE-923", "Approved", _OPUS)]
+    state, _ = _run({}, runner, board)
+
+    assert "build1" not in state
+    # Proves it was genuinely the busy path: a mid-turn seat is never typed into.
+    assert not [c for c in runner.calls if "send-keys" in c]
+
+
+def test_giving_up_on_delivery_is_announced_exactly_once() -> None:
+    """AC-1: the retry giving up is never silent — and never repeats.
+
+    FRE-920's whole cost was silence. A bounded retry that expires without
+    saying so would just be a quieter version of the same 2.5-hour stall.
+    """
+    # A live, idle seat that accepts keystrokes but never goes busy — i.e. the
+    # /build is never confirmed as submitted, tick after tick.
+    runner = _SeatRunner(
+        state="live", results={"capture-pane": _FakeRunResult(stdout="earlier\n❯\n")}
+    )
+    board = [_issue("FRE-923", "Approved", _OPUS)]
+    notifier = _Notifier()
+    state: dict[str, DispatchRecord] = {}
+    for tick in range(1, 6):
+        state, _ = _run(state, runner, board, now=tick * 300.0, notifier=notifier)
+
+    assert state["build1"].phase == "surfaced"
+    assert [e for e, _ in notifier.events] == ["dispatch_delivery_exhausted"]
+
+
+def test_a_crash_exhausted_budget_surfaces_instead_of_retrying_forever() -> None:
+    """AC-1: the crash path is bounded too, not just the in-process one.
+
+    A daemon that dies mid-delivery leaves a ``delivering`` record behind. Once
+    its persisted attempt count is spent, the next tick must hand over to the
+    owner — holding the record instead would rebuild the same indefinite silent
+    stall this ticket exists to kill, one phase along.
+    """
+    runner = _SeatRunner()
+    board = [_issue("FRE-923", "Approved", _OPUS)]
+    notifier = _Notifier()
+    state = {"build1": _delivering_record("FRE-923", attempts=MAX_DELIVERY_ATTEMPTS)}
+    state, _ = _run(state, runner, board, notifier=notifier)
+
+    assert state["build1"].phase == "surfaced"
+    assert [e for e, _ in notifier.events] == ["dispatch_delivery_exhausted"]
+    assert not [c for c in runner.calls if "new-session" in c]  # no further attempt
 
 
 def test_seat_busy_writes_no_record_so_the_stream_retries() -> None:
@@ -1010,7 +1167,7 @@ def test_seat_busy_writes_no_record_so_the_stream_retries() -> None:
     record would hold the stream in ``_decide_surfaced`` indefinitely, trading a
     self-healing few-minute delay for a permanent stall only the owner can clear.
     """
-    assert _record_for_result("build1", "FRE-913", "seat-busy", now=100.0) is None
+    assert _record_for_result("build1", "FRE-913", "seat-busy", now=100.0, attempts=0) is None
 
 
 def test_registration_unverified_is_still_an_in_flight_run() -> None:
@@ -1020,12 +1177,14 @@ def test_registration_unverified_is_still_an_in_flight_run() -> None:
     Recording it as ``surfaced`` would deny the live run stall detection and
     ``run_complete`` handling for work that is genuinely in flight.
     """
-    record = _record_for_result("build1", "FRE-913", "registration-unverified", now=100.0)
+    record = _record_for_result(
+        "build1", "FRE-913", "registration-unverified", now=100.0, attempts=0
+    )
     assert record is not None
     assert record.phase == "launched"
 
 
 def test_transient_errors_still_leave_the_stream_eligible() -> None:
     """A dirty worktree or a failed tmux call is retryable — no record."""
-    assert _record_for_result("build1", "FRE-913", "worktree-dirty", now=100.0) is None
-    assert _record_for_result("build1", "FRE-913", "launch-failed", now=100.0) is None
+    assert _record_for_result("build1", "FRE-913", "worktree-dirty", now=100.0, attempts=0) is None
+    assert _record_for_result("build1", "FRE-913", "launch-failed", now=100.0, attempts=0) is None

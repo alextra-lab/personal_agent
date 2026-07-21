@@ -139,6 +139,16 @@ DEFAULT_WEDGE_TICKS: int = 2
 # simply re-escalates once (age is already past threshold) — at-least-once
 # across restarts, exactly-once per (stream, ticket) episode within a run.
 DEFAULT_HELD_ESCALATION_S: float = 1800.0
+# Delivery attempts allowed for one ticket before the retry gives up and hands
+# over to the owner (FRE-923). A dropped delivery is genuinely retryable — the
+# seat is idle and ready, only the keystroke sequence dropped — so surfacing a
+# terminal card on the FIRST partial send is what stranded FRE-920 for ~2.5h.
+# Bounded rather than unlimited because a seat that refuses three full sequences
+# is not mid-settle; past that, only a human can tell what is wrong. The count is
+# PERSISTED (unlike the wedge counter, whose one-shot ping a stale value would
+# break): here the budget must survive a daemon crash mid-delivery, or a restart
+# loop would re-attempt forever with a perpetually fresh budget.
+MAX_DELIVERY_ATTEMPTS: int = 3
 
 # The only endpoint host at which Remote Control is enabled — it is disabled
 # when ``ANTHROPIC_BASE_URL`` points anywhere else (an LLM gateway/proxy),
@@ -148,7 +158,9 @@ _ANTHROPIC_API_HOST: str = "api.anthropic.com"
 # Default kill-switch flag file: its mere presence halts all dispatch.
 DEFAULT_KILL_SWITCH_FILE: str = "telemetry/dispatch.disabled"
 
-DecisionKind = Literal["launch", "await", "stall", "run_complete", "clear", "skip", "hold"]
+DecisionKind = Literal[
+    "launch", "await", "stall", "run_complete", "clear", "skip", "hold", "surface"
+]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -294,21 +306,29 @@ class DispatchRecord:
         ticket: The tracked ticket identifier.
         phase: ``launched`` = an owned in-flight session (await
             completion/stall); ``surfaced`` = a manual card was shown (KEEP /
-            manual-model-required), awaiting the owner.
+            manual-model-required), awaiting the owner; ``delivering`` = a
+            dispatch attempt is in flight or dropped mid-sequence and is
+            retryable (FRE-923).
         launched_at: Wall-clock (epoch seconds) the record was created.
         session_id: The launcher's session id, when known.
         run_confirmed: The run delivered a PR (reached ``In Review`` + open PR)
             — stall-watching stops once set.
         stall_notified: A stall notification has already fired (throttle).
+        attempts: Dispatch attempts consumed for this ticket. Claimed *before*
+            the attempt is made, so it survives a daemon crash mid-sequence and
+            the retry budget cannot be silently reset by a restart. An attempt
+            that never reached the seat (a transient outcome — busy seat, dirty
+            worktree, failed create) is given back rather than counted.
     """
 
     stream: str
     ticket: str
-    phase: Literal["launched", "surfaced"]
+    phase: Literal["launched", "surfaced", "delivering"]
     launched_at: float
     session_id: str | None
     run_confirmed: bool = False
     stall_notified: bool = False
+    attempts: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -382,6 +402,8 @@ def decide(
     """
     if record is None:
         return _decide_no_record(stream, issues)
+    if record.phase == "delivering":
+        return _decide_delivering(stream, issues, record)
     if record.phase == "surfaced":
         return _decide_surfaced(stream, issues, record)
     return _decide_launched(
@@ -443,6 +465,46 @@ def _decide_launched(
     return StreamDecision(stream, "await", ticket=record.ticket, reason="starting")
 
 
+def _decide_delivering(
+    stream: str, issues: Sequence[IssueSnapshot], record: DispatchRecord
+) -> StreamDecision:
+    """Decide for a dropped-or-in-flight delivery (``delivering``), FRE-923.
+
+    Reached one tick after a delivery dropped mid-sequence, or after the daemon
+    died mid-delivery — indistinguishable from here, and identical in what they
+    warrant: re-attempt the whole sequence while the budget holds. The seat is
+    idle and ready; only the keystrokes dropped.
+
+    Escalates to a manual card once the budget is spent, so this can never
+    become the unbounded per-tick re-dispatch loop the ``surfaced`` phase was
+    protecting against.
+    """
+    state = _state_of(issues, record.ticket)
+    normalized = state.strip().lower() if state else None
+    nxt = resolve_next(issues, stream)
+    still_next = normalized == "approved" and nxt is not None and nxt.identifier == record.ticket
+    # Owner-acted is checked BEFORE the budget, mirroring ``_decide_surfaced``:
+    # a ticket that has already moved on is not this stream's business, and
+    # surfacing a card for it would put a stale item in front of the owner.
+    if not still_next:
+        return StreamDecision(stream, "clear", ticket=record.ticket, reason="owner-acted")
+    if record.attempts >= MAX_DELIVERY_ATTEMPTS:
+        return StreamDecision(
+            stream, "surface", ticket=record.ticket, reason="delivery-attempts-exhausted"
+        )
+    model = model_for_labels(nxt.labels) if nxt is not None else None
+    if model is None:
+        return StreamDecision(stream, "skip", ticket=record.ticket, reason="no-tier-label")
+    return StreamDecision(
+        stream,
+        "launch",
+        ticket=record.ticket,
+        model=model,
+        context_keep=nxt is not None and "context:keep" in nxt.labels,
+        reason="retry-delivery",
+    )
+
+
 def _decide_surfaced(
     stream: str, issues: Sequence[IssueSnapshot], record: DispatchRecord
 ) -> StreamDecision:
@@ -483,41 +545,63 @@ def _open_pr_exists(ticket: str, runner: CommandRunner) -> bool:
     ) or bool(raw)
 
 
-def _record_for_result(stream: str, ticket: str, outcome: str, now: float) -> DispatchRecord | None:
+def _record_for_result(
+    stream: str, ticket: str, outcome: str, now: float, *, attempts: int
+) -> DispatchRecord | None:
     """Map a ``LaunchResult`` outcome to the record to store (or ``None``).
 
     A record is written **only** for an outcome that actually launches/prepares
-    an owned session (``launched``) or surfaces a manual card (``surfaced``);
-    a transient error (``worktree-dirty``/``launch-failed``) writes no record so
-    the stream stays eligible and is never falsely marked in-flight.
+    an owned session (``launched``), surfaces a manual card (``surfaced``), or
+    is a retryable dropped delivery (``delivering``); a transient error
+    (``worktree-dirty``/``launch-failed``) writes no record so the stream stays
+    eligible and is never falsely marked in-flight.
 
-    FRE-913 outcomes:
+    This reconciles the record ``_apply`` pre-wrote before executing, so a
+    ``None`` here is not merely "write nothing" — it un-does the pre-write via
+    the caller's ``state.pop`` (FRE-923).
+
+    FRE-913 / FRE-923 outcomes:
 
     - ``reuse`` (a live seat dispatched in-session) is an owned in-flight run,
-      exactly like ``launch``/``prepare``.
+      exactly like ``launch``/``prepare``. Success resets ``attempts`` to 0.
     - ``registration-unverified`` is ``launched``: the seat is running and was
       seeded with the ticket, and only its Remote-Control *name* is wrong. Its
       run needs stall detection and ``run_complete`` tracking exactly like any
       other; the wrong name is a visibility warning carried on the card.
-    - ``delivery-failed``/``seat-unhealthy`` are ``surfaced``. Neither
-      self-clears — a seat that will not accept keystrokes, or one that is not a
-      usable claude in this worktree, needs a human — and writing no record
-      would re-dispatch the same broken seat every tick.
+    - ``delivery-failed`` is ``delivering`` — **retryable** while the budget
+      holds. The seat is idle and ready; only the keystroke sequence dropped, so
+      the next tick re-attempts the whole ``/clear``→``/model``→``/build``. Past
+      ``MAX_DELIVERY_ATTEMPTS`` it escalates to ``surfaced`` (FRE-923).
+    - ``seat-unhealthy`` is ``surfaced`` immediately. Unlike a dropped delivery
+      this cannot self-heal and re-attempting cannot help — the pane is not a
+      usable claude in this worktree, so it needs a human.
     - ``seat-busy`` writes **no record**. It is the one genuinely transient
       outcome: the seat is simply mid-turn and will be idle shortly. Recording
       it as ``surfaced`` would hold the stream in ``_decide_surfaced`` forever
       over a condition that clears itself within seconds — trading a self-healing
       delay for a permanent stall that only the owner can clear.
+
+    Args:
+        stream: Dispatch stream key.
+        ticket: The dispatched ticket.
+        outcome: The ``LaunchResult`` outcome.
+        now: Wall-clock epoch seconds.
+        attempts: Delivery attempts consumed so far, including this one.
+
+    Returns:
+        The record to store, or ``None`` to leave the stream untracked.
     """
     if outcome in {"launch", "prepare", "reuse", "registration-unverified"}:
-        return DispatchRecord(stream, ticket, "launched", now, session_id=None)
+        return DispatchRecord(stream, ticket, "launched", now, session_id=None, attempts=0)
+    if outcome == "delivery-failed" and attempts < MAX_DELIVERY_ATTEMPTS:
+        return DispatchRecord(stream, ticket, "delivering", now, session_id=None, attempts=attempts)
     if outcome in {
         "manual-continuation",
         "manual-model-required",
         "delivery-failed",
         "seat-unhealthy",
     }:
-        return DispatchRecord(stream, ticket, "surfaced", now, session_id=None)
+        return DispatchRecord(stream, ticket, "surfaced", now, session_id=None, attempts=attempts)
     return None
 
 
@@ -539,6 +623,7 @@ def run_once(
     wedge_ticks: int = DEFAULT_WEDGE_TICKS,
     held_escalated: dict[str, str] | None = None,
     held_escalation_s: float = DEFAULT_HELD_ESCALATION_S,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, DispatchRecord]:
     """Run one orchestration tick across ``streams``, mutating and returning state.
 
@@ -571,6 +656,9 @@ def run_once(
             ticks (in-memory, reset on restart); defaults to a throwaway map.
         held_escalation_s: Age (seconds since first-surface) past which a still-held
             surfaced card is escalated once.
+        sleeper: The sleep seam used by the launcher's bounded delivery polls.
+            Injected so a tick is fully unit-testable without wall-clocking —
+            the delivery path polls for up to ten seconds per command.
 
     Returns:
         The updated state dict.
@@ -625,6 +713,7 @@ def run_once(
             wedge_ticks=wedge_ticks,
             held_escalated=held_escalated,
             held_escalation_s=held_escalation_s,
+            sleeper=sleeper,
         )
     return state
 
@@ -646,6 +735,7 @@ def _apply(
     wedge_ticks: int,
     held_escalated: dict[str, str],
     held_escalation_s: float,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> None:
     """Apply one decision's side effects (launch / notify / record mutation)."""
     stream = decision.stream
@@ -715,7 +805,23 @@ def _apply(
             )
             if not execute:
                 return
-            result = execute_plan(plan, runner)
+            # FRE-923: claim the attempt BEFORE making it. ``execute_plan`` is
+            # strict within one process, but it types commands one at a time and
+            # the orchestrator only persists after it returns — so a daemon crash
+            # mid-sequence would otherwise leave no trace that a delivery was ever
+            # in flight, and every restart would re-attempt with a fresh budget
+            # forever. Persisting first is what makes the retry genuinely bounded
+            # across restarts, not merely within one process.
+            prior = state.get(stream)
+            attempts = (
+                prior.attempts if prior is not None and prior.ticket == decision.ticket else 0
+            )
+            attempts += 1
+            state[stream] = DispatchRecord(
+                stream, decision.ticket, "delivering", now, session_id=None, attempts=attempts
+            )
+            persist(state)
+            result = execute_plan(plan, runner, sleeper=sleeper)
             logger.info(
                 "dispatch_execute",
                 trace_id=trace_id,
@@ -723,10 +829,53 @@ def _apply(
                 ticket=decision.ticket,
                 outcome=result.outcome,
                 launched=result.launched,
+                attempts=attempts,
             )
-            new_record = _record_for_result(stream, decision.ticket, result.outcome, now)
+            new_record = _record_for_result(
+                stream, decision.ticket, result.outcome, now, attempts=attempts
+            )
+            # FRE-923: the retry gave up. Announce it BEFORE committing the
+            # ``surfaced`` record — persist-then-notify is exactly the window
+            # FRE-922's review condemned: a crash in between leaves a record
+            # already marked surfaced, and ``_decide_surfaced`` only ever holds
+            # or clears, so the alert would be lost forever with no path to
+            # re-fire it. Notify-then-persist can at worst repeat the alert on
+            # the retried tick, which is the survivable direction. (The
+            # ``surface`` case below and the pre-existing ``stall`` case order it
+            # the same way.) This is distinct from FRE-924's age-based escalation
+            # of an already-surfaced card: this fires at the transition.
+            if result.outcome == "delivery-failed" and attempts >= MAX_DELIVERY_ATTEMPTS:
+                notifier(
+                    "dispatch_delivery_exhausted",
+                    trace_id=trace_id,
+                    stream=stream,
+                    ticket=decision.ticket,
+                    attempts=attempts,
+                )
+                logger.warning(
+                    "dispatch_delivery_exhausted",
+                    trace_id=trace_id,
+                    stream=stream,
+                    ticket=decision.ticket,
+                    attempts=attempts,
+                )
             if new_record is not None:
                 state[stream] = new_record
+            elif (
+                prior is not None
+                and prior.phase == "delivering"
+                and prior.ticket == decision.ticket
+            ):
+                # FRE-923: a transient outcome (seat-busy / worktree-dirty /
+                # launch-failed) typed NOTHING into the seat, so it must not
+                # consume the retry budget — and it must not discard a retry
+                # already in progress. Popping here would reset ``attempts`` to
+                # zero, and a seat that alternates busy/delivery-failed across
+                # ticks would then retry FOREVER without ever escalating, which
+                # is precisely the unbounded loop the budget exists to prevent.
+                # Restore the pre-write's predecessor rather than the pre-write:
+                # an attempt that never reached the seat was never spent.
+                state[stream] = prior
             else:
                 state.pop(stream, None)
             persist(state)
@@ -800,6 +949,36 @@ def _apply(
                     notifier=notifier,
                     logger=logger,
                 )
+        case "surface":
+            # FRE-923: the retry budget is spent — stop re-attempting and hand
+            # over to the owner. Only reachable when the daemon died mid-delivery
+            # (the in-process path escalates at reconcile), so it must be a real
+            # terminal transition: holding the ``delivering`` record instead
+            # would re-create the silent indefinite stall this ticket exists to
+            # kill, just one phase along.
+            record = state.get(stream)
+            # Gated on ``execute`` so a dry-run tick stays side-effect-free — it
+            # must neither ping the owner nor mutate/persist state. (FRE-844 and
+            # the FRE-924 sibling both established this for reconcile/escalation
+            # paths; the ``launch`` case gates the same way via its early
+            # return.)
+            if record is not None and execute:
+                notifier(
+                    "dispatch_delivery_exhausted",
+                    trace_id=trace_id,
+                    stream=stream,
+                    ticket=decision.ticket,
+                    attempts=record.attempts,
+                )
+                logger.warning(
+                    "dispatch_delivery_exhausted",
+                    trace_id=trace_id,
+                    stream=stream,
+                    ticket=decision.ticket,
+                    attempts=record.attempts,
+                )
+                state[stream] = dataclasses.replace(record, phase="surfaced")
+                persist(state)
         case _:  # await / skip — no state change.
             return
 
@@ -960,9 +1139,22 @@ def load_state(path: Path) -> dict[str, DispatchRecord]:
     for stream, value in raw.items():
         if isinstance(value, dict):
             try:
-                state[stream] = DispatchRecord(**value)
+                record = DispatchRecord(**value)
             except TypeError:
                 continue
+            # A dataclass validates field NAMES, never their types, so a
+            # corrupted file (partial write, hand-edit) can construct a record
+            # whose ``attempts`` is a string — which then raises TypeError on the
+            # first ``>=``/``+=`` in the tick. That escapes ``run_once`` uncaught
+            # and, under the daemon's ``Restart=always``, turns one bad file into
+            # an indefinite crash-loop with dispatch fully down. Drop the record
+            # instead: the stream simply becomes eligible again, which is the
+            # same fail-safe the ``TypeError`` branch above already chooses.
+            if not isinstance(record.attempts, int) or isinstance(record.attempts, bool):
+                continue
+            if record.phase not in {"launched", "surfaced", "delivering"}:
+                continue
+            state[stream] = record
     return state
 
 

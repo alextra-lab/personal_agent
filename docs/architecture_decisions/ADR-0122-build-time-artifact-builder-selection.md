@@ -144,7 +144,7 @@ Once a caller holds an already-resolved *key* from a card decision, it must swit
 
 ### 2. The card fires at **turn start**, before the first LLM call (amended 2026-07-21)
 
-**Owner decision.** The ask is raised in `step_init` (`orchestrator/executor.py:2570`, "Initialize:
+**Owner decision.** The ask is raised in `step_init` (`src/personal_agent/orchestrator/executor.py:2567`, "Initialize:
 determine intent and next action") — **before the turn's first LLM call and before any tool runs** —
 not at the `artifact_draft` boundary. On the measured run that moves the card from 07:03:44 to
 ~07:01:47: the user is asked while they are still holding the phone they just typed on.
@@ -152,7 +152,7 @@ not at the `artifact_draft` boundary. On the measured run that moves the card fr
 This is sound only because **the determination has no dependency on the turn's work.** The option set
 is the availability-filtered catalog (§3) and the trigger is a deterministic regex over the request
 text (§3a) — both computable in under a millisecond from `GatewayOutput`, which `step_init` already
-holds (`ctx.gateway_output`, `executor.py:2736`). Nothing the 117 seconds produced was ever an input
+holds (`ctx.gateway_output`, `executor.py:2735-2736`). Nothing the 117 seconds produced was ever an input
 to the question. Moving it earlier removes latency without removing information.
 
 Two consequences follow, and they are the amendment's real content: the trigger must now be a
@@ -174,20 +174,22 @@ ADR-0101 §8b attachment card. Everything the UX needs exists already:
 ### 3a. The trigger: an artifact-build signal the gateway already computes but discards
 
 **The regex already exists and is already in production.** `_ARTIFACT_BUILD_REGEX`
-(`request_gateway/intent.py:80-88`, FRE-469) matches build/make/create/generate against a vocabulary
+(`src/personal_agent/request_gateway/intent.py:80-87`, FRE-469) matches build/make/create/generate
+against a vocabulary
 of artifact nouns — guide, dashboard, chart, diagram, page, report, presentation, app, html, svg.
 It has been live for months.
 
 **Why the live run saw only a generic signal:** the regex is *unioned into* `_TOOL_INTENT_PATTERNS`
-(`intent.py:120`, `r"|" + _ARTIFACT_BUILD_REGEX`), so a match appends the undifferentiated
-`tool_intent_pattern` signal (`intent.py:311`) and the artifact-specific information is destroyed at
+(`intent.py:119-120`, `r"|" + _ARTIFACT_BUILD_REGEX`), so a match appends the undifferentiated
+`tool_intent_pattern` signal (`intent.py:309-311`) and the artifact-specific information is destroyed at
 the moment it is computed. The classifier *does* know; the result shape simply does not say so.
 
 **The change is therefore surgical, not a new classifier:** evaluate `_ARTIFACT_BUILD_REGEX`
 separately and append a distinct `artifact_build_intent` signal to `IntentResult.signals`. The union
 stays as-is so the tool-iteration budget (25 vs 6) is untouched — this is purely additive.
 `IntentResult` already reaches the executor inside `GatewayOutput.intent`
-(`request_gateway/types.py:182`), so no plumbing is added: `step_init` reads a field it already has.
+(`src/personal_agent/request_gateway/types.py:166-183`), so no plumbing is added: `step_init` reads a
+field it already has.
 
 **Deliberately not an LLM call.** Asking a model "will this turn build an artifact?" would add a
 hot-path inference to save a hot-path inference. The regex is deterministic, sub-millisecond, already
@@ -262,7 +264,7 @@ correct one on the merits: declining the attachment cost short-circuits the turn
 have been wasted. Asking in the other order can only ever cost the user a pointless interaction.
 
 **The ambiguous-affirmative hazard is pre-existing, documented, and must not be widened.**
-`executor.py:2464-2478` records a code-review finding from FRE-749: two pending confirmations in one
+`executor.py:2466-2477` records a code-review finding from FRE-749: two pending confirmations in one
 turn "both key off the same generic yes/affirmative detector," so a single ambiguous "yes" could
 resolve both pending states and let a priced attachment skip its gate. The fix there was to reset
 `ctx.attachment_cost_confirmed` whenever content is re-injected.
@@ -561,7 +563,7 @@ independently blocked by the turn-start decision — the primary has not run yet
 | The preference path suppresses the card but never threads the deployment into planning | **High** | Invisible failure — no card, correct model at build, plan still sized against a constant; AC-13 asserts the preference path specifically |
 | Requesting more output than the model declares (live today: Haiku's 4096 vs 32768 requested) | **High** | `min(deployment.max_tokens, settings ceiling)` (§5); AC-12 asserts the derived budget on a non-default pick in both the under- and over-shoot directions |
 | The turn-start ask lands in a momentary mobile disconnect | Medium | Exposure reduced but **not** removed — FRE-928 is the actual fix and ships independently (§6) |
-| A single ambiguous "yes" resolves both the attachment gate and the builder pick | **High** | The FRE-749 bug class (`executor.py:2464-2478`), now reachable with a third turn-start pause; ordering fixed and isolation asserted by AC-14 |
+| A single ambiguous "yes" resolves both the attachment gate and the builder pick | **High** | The FRE-749 bug class (`executor.py:2466-2477`), now reachable with a third turn-start pause; ordering fixed and isolation asserted by AC-14 |
 | A multi-artifact turn re-asks per build, reintroducing the late card | Low | One selection per turn covers every build in it (§3d); AC-10 asserts a single pause event across two builds |
 
 ---
@@ -576,12 +578,12 @@ telemetry identity on both axes (`:1473-1480`, `:1486-1489`); the cost lane
 hard caps in favour of visibility and consent).
 
 **Files affected by the amendment (steps 4–6):**
-- `src/personal_agent/request_gateway/intent.py:80-88, 120, 311` — emit a distinct
+- `src/personal_agent/request_gateway/intent.py:80-87, 119-120, 309-311` — emit a distinct
   `artifact_build_intent` signal; leave the `_TOOL_INTENT_PATTERNS` union in place.
-- `src/personal_agent/orchestrator/executor.py:2570` (`step_init`) — raise the decision here off
+- `src/personal_agent/orchestrator/executor.py:2567` (`step_init`) — raise the decision here off
   `ctx.gateway_output.intent.signals`, consult the preference, store the resolution turn-scoped;
   sequenced **after** the existing `attachment_cost` gate at `:2730` and before/alongside the gateway
-  block at `:2736`. Keep the two decisions isolated per the FRE-749 finding (`:2464-2478`).
+  block at `:2736`. Keep the two decisions isolated per the FRE-749 finding (`:2466-2477`).
 - `src/personal_agent/tools/artifact_tools.py:807-817` (`_draft_max_tokens`) — derive from the
   resolved deployment, floored by `settings.artifact_draft_max_tokens`; `:1604` — warn against the
   same effective value; the planning prompt receives the effective budget and context window.
@@ -712,18 +714,28 @@ AC-5 timeout leg** but ships on its own schedule (§6) — it must not be held f
   resolved key → tool → correct model → correct lane — **or** if a stored preference is logged and
   swallowed while the build silently falls back to the default.
 
-- **AC-10 — The ask happens before the turn does any work, and leaves nothing behind when it was
-  wrong.** *Check:* for a request matching the artifact-build vocabulary, the
-  `ConstraintPauseEvent` for `artifact_builder` is emitted **before** the turn's first
-  `MODEL_CALL_COMPLETED` and before any tool-execution event — assert on relative event ordering
-  within the trace, not on wall-clock. Additionally, on a turn where the card was answered but **no**
-  `artifact_draft` call followed, the next turn in the same session raises the card again and
-  resolves independently (the prior pick did not persist). Additionally, on a turn making **two**
-  `artifact_draft` calls, exactly **one** `ConstraintPauseEvent` for `artifact_builder` is emitted and
-  **both** builds run on the selected deployment. *Fails if* the pause is emitted after any model call
-  or tool event for that turn — which is what the build-boundary placement does, so this fails against
-  the currently deployed code — if a turn-scoped pick leaks into a subsequent turn, or if a second
-  build re-asks.
+- **AC-10 — The ask is resolved before the turn does any work, and leaves nothing behind when it was
+  wrong.** *Check, three parts:*
+  **(a) Ordering, asserted at the state machine, not across event streams.** The `artifact_builder`
+  decision is resolved **while the executor is still in `TaskState.INIT`** — i.e. `step_init`
+  (`src/personal_agent/orchestrator/executor.py:2567`) returns with the resolution already on the
+  execution context, before it transitions to `PLANNING`/`LLM_CALL`. Assert this directly in an
+  executor test: on return from `step_init`, the turn-scoped builder resolution is populated.
+  *(Deliberately **not** asserted as "the pause event precedes `MODEL_CALL_COMPLETED`": the pause is
+  an AG-UI session event carrying a Postgres `seq`, while `MODEL_CALL_COMPLETED` is a structlog
+  telemetry event on a different path — the two share no monotonic ordering primitive, so that
+  comparison could be satisfied by a test that never proves what it claims.)*
+  **(b) Live corroboration, within the one stream that is ordered.** On a real build turn, the
+  `artifact_builder` `ConstraintPauseEvent`'s session-event `seq` is lower than that of every
+  tool-execution event for the same turn.
+  **(c) No leakage, one ask per turn.** On a turn where the card was answered but **no**
+  `artifact_draft` call followed, the next turn in the same session raises the card again and resolves
+  independently. On a turn making **two** `artifact_draft` calls, exactly **one**
+  `ConstraintPauseEvent` for `artifact_builder` is emitted and **both** builds run on the selected
+  deployment.
+  *Fails if* `step_init` returns without the resolution — which is exactly what the currently deployed
+  build-boundary placement does, so (a) fails against today's code — if the pause's `seq` exceeds any
+  tool event's, if a turn-scoped pick leaks into a subsequent turn, or if a second build re-asks.
 - **AC-11 — A missed prediction degrades to the default *and says so*.** *Check:* drive a build
   through a request that does **not** match the artifact-build vocabulary (so no card is raised) but
   which nevertheless reaches `artifact_draft`; the artifact renders on the role's configured default,
@@ -731,14 +743,23 @@ AC-5 timeout leg** but ships on its own schedule (§6) — it must not be held f
   *Fails if* the build errors or hangs, **or** if it completes with no missed-prediction event —
   a silent fallback leaves the trigger permanently untunable, which is the whole reason this AC
   asserts the log rather than just the survival.
-- **AC-12 — The output budget follows the selected model, in both directions.** *Check:* with the
-  configured ceiling at 32768, (a) select `claude_haiku` (declared `max_tokens` 4096) — the
-  generation call requests **4096**, not 32768, and the truncation warning threshold is 4096; (b)
-  select a deployment declaring **more** than the ceiling — the call requests the **ceiling**, not
-  the model's larger figure. *Fails if* either case requests `settings.artifact_draft_max_tokens`
-  regardless of the pick — the live behaviour today, where selecting Haiku asks for 8× its declared
-  cap. *(Asserts the budget is correctly derived and applied, which we control — not that artifacts
-  never truncate, which we do not.)*
+- **AC-12 — The output budget follows the selected model, in both directions.** *Check, both legs
+  required, and both expressible against the live catalog by varying the ceiling rather than
+  inventing a deployment:*
+  **(a) Model below ceiling — the model wins.** With `settings.artifact_draft_max_tokens = 32768`,
+  select `claude_haiku` (declared `max_tokens` **4096**): the generation call requests **4096**, and
+  the truncation-warning threshold (`src/personal_agent/tools/artifact_tools.py:1604`) is likewise
+  4096.
+  **(b) Model above ceiling — the ceiling wins.** With `settings.artifact_draft_max_tokens` set to
+  **2048**, select `claude_sonnet` (declared `max_tokens` 32768): the call requests **2048**.
+  *(The ceiling is varied rather than the catalog because **no deployment in the live catalog exceeds
+  32768** — `claude_sonnet` 32768 is the maximum — so a leg written as "pick a model declaring more
+  than the ceiling" would be untestable as stated, and an implementation that special-cased the
+  undershoot without ever implementing the `min(...)` clamp would pass unchallenged.)*
+  *Fails if* either leg requests `settings.artifact_draft_max_tokens` regardless of the pick — the
+  live behaviour today, where selecting Haiku asks for 8× its declared cap — or if only the undershoot
+  direction is honoured. *(Asserts the budget is correctly derived and applied, which we control — not
+  that artifacts never truncate, which we do not.)*
 - **AC-13 — The silent preference path is sized correctly too.** *Check:* with a stored preference
   naming a **non-default** deployment whose `max_tokens` differs from the ceiling, run a build: no
   `ConstraintPauseEvent` is emitted, the build runs on the preferred deployment, **and** the
@@ -756,7 +777,7 @@ AC-5 timeout leg** but ships on its own schedule (§6) — it must not be held f
   configured default, never to an arbitrary candidate; (d) declining the attachment gate
   short-circuits the turn and no build occurs. *Fails if* one answer resolves both pauses, if the
   builder decision is satisfied by the generic affirmative detector, or if the ordering is reversed.
-  *(This is the FRE-749 bug class — `executor.py:2464-2478` documents a single ambiguous "yes"
+  *(This is the FRE-749 bug class — `executor.py:2466-2477` documents a single ambiguous "yes"
   resolving two pending states and letting a priced attachment skip its gate. This amendment adds a
   third turn-start pause to that same turn, so the invariant is asserted rather than argued.)*
 
@@ -792,12 +813,12 @@ when AC-7 is proven on the deployed stack. Master asserts AC-7 at the acceptance
 - `src/personal_agent/transport/events.py:139` — the closed `ConstraintPauseEvent.constraint` Literal
 - `src/personal_agent/cost_gate/__init__.py:95-117` — `budget_role_for`; the builder's own lane
   (`"artifact_builder": "artifact_builder"`) is **already live** (FRE-879), not pending
-- `src/personal_agent/request_gateway/intent.py:80-88` — `_ARTIFACT_BUILD_REGEX` (FRE-469), the
-  existing trigger; `:120` — its union into `_TOOL_INTENT_PATTERNS`, which discards the distinction;
-  `:311` — the generic `tool_intent_pattern` signal the live run observed
-- `src/personal_agent/request_gateway/types.py:182` — `GatewayOutput.intent`, the seam already
+- `src/personal_agent/request_gateway/intent.py:80-87` — `_ARTIFACT_BUILD_REGEX` (FRE-469), the
+  existing trigger; `:119-120` — its union into `_TOOL_INTENT_PATTERNS`, which discards the
+  distinction; `:309-311` — the generic `tool_intent_pattern` signal the live run observed
+- `src/personal_agent/request_gateway/types.py:166-183` — `GatewayOutput.intent`, the seam already
   carrying the signal to the executor
-- `src/personal_agent/orchestrator/executor.py:2570` — `step_init`, the turn-start insertion point
+- `src/personal_agent/orchestrator/executor.py:2567` — `step_init`, the turn-start insertion point
 - `src/personal_agent/tools/artifact_tools.py:807-817` — `_draft_max_tokens`, the global constant to
   replace; `:1604` — the truncation warning gated on the same constant
 - `config/models.yaml` — the live catalog whose declared `max_tokens` (Haiku 4096, gpt-5.4-mini 8192,
@@ -826,7 +847,7 @@ wrong on its own terms: the kind arrives with the *request*; only the *plan* arr
 plan refines size, not kind. Per-build selection is preserved; only the moment moves.
 
 Design worked through for the amendment. **The trigger** is `_ARTIFACT_BUILD_REGEX`, which already
-exists (`intent.py:80-88`, FRE-469) but is unioned into `_TOOL_INTENT_PATTERNS` (`:120`), so it emits
+exists (`intent.py:80-87`, FRE-469) but is unioned into `_TOOL_INTENT_PATTERNS` (`:119-120`), so it emits
 only the generic `tool_intent_pattern` — exactly what the live run showed. Emitting a distinct signal
 is additive: no new classifier, no new plumbing (`GatewayOutput.intent` already reaches `step_init`).
 **False positives** are harmless — the selection is turn-scoped and discarded unused. **False
@@ -851,7 +872,30 @@ it is the prerequisite for AC-5's timeout leg. AC-5's no-socket wording was corr
 asserted **no** pause event is emitted with no socket, which contradicts FRE-928's replay design.
 New: AC-10 (the ask precedes all turn work; a turn-scoped pick does not leak), AC-11 (a missed
 prediction degrades *and logs*), AC-12 (budget follows the model in both directions), AC-13 (the
-silent preference path is sized too). Sequencing steps 4–6 added; 1–3 marked shipped.
+silent preference path is sized too), AC-14 (two turn-start decisions coexist without
+contaminating each other). Sequencing steps 4–6 added; 1–3 marked shipped.
+
+**Revised after codex review of the amendment.** Two blocking findings, both accepted. **(1) AC-10's
+ordering claim was unprovable as written.** It asserted the pause event precedes the first
+`MODEL_CALL_COMPLETED`, but the pause is an AG-UI session event carrying a Postgres `seq` while
+`MODEL_CALL_COMPLETED` is a structlog telemetry event on a separate path — no shared monotonic
+primitive, so a test could satisfy the letter without proving the claim. Re-anchored on the state
+machine: the resolution must be on the context when `step_init` returns, before the transition out of
+`TaskState.INIT` — directly assertable, and it fails against the deployed build-boundary placement.
+Session-event `seq` ordering against tool events is retained as live corroboration, since those two
+*do* share a stream. **(2) AC-12's overshoot leg was untestable** — no deployment in the live catalog
+exceeds the 32768 ceiling (`claude_sonnet` at 32768 is the maximum), so "pick a model declaring more
+than the ceiling" could never be exercised and an implementation that special-cased the undershoot
+without ever writing the `min(...)` clamp would pass unchallenged. Rewritten to vary the *ceiling*
+(set it to 2048, select Sonnet) rather than invent a deployment. Non-blocking: file paths corrected to
+`src/personal_agent/…` and several cited line numbers refreshed against source (`step_init` at
+`:2567`, the FRE-749 note at `:2466-2477`, the intent regex at `:80-87`/`:119-120`/`:309-311`).
+
+**§3d and AC-14 were added before that review**, from a partial investigation log left by an earlier
+codex run that hung before reporting: `step_init` already raises the `attachment_cost` pause
+(`executor.py:2730`) immediately before the gateway block this amendment reads, so a turn can carry
+two turn-start decisions. Ordering fixed (attachment first — declining it short-circuits the turn),
+and the FRE-749 ambiguous-affirmative hazard asserted rather than argued.
 
 ### 2026-07-19 - Proposed
 **Changed By:** cc-adrs (Opus)

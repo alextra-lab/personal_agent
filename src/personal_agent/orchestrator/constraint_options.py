@@ -403,6 +403,69 @@ def reset_artifact_builder_resolution(
     _artifact_builder_resolution.reset(token)
 
 
+def resolve_effective_artifact_builder_deployment(
+    decision: "ConstraintDecision | None",
+    config: "ModelConfig",
+    *,
+    is_provider_available: "Callable[[str], bool]",
+) -> str:
+    """Return the deployment key that will actually build this turn's artifact (ADR-0122 §5/T6).
+
+    Single source of truth for "which model renders this build", regardless of how
+    the turn-start decision resolved — mirrors the dispatch ``artifact_draft`` itself
+    uses (:func:`personal_agent.tools.artifact_tools.artifact_draft_executor`): a
+    genuine decision (``user_choice`` / ``preference_applied``) resolves its key
+    fail-closed via :func:`resolve_artifact_builder_key`; a missed prediction
+    (``decision is None``) or a no-answer resolution (``timeout_default`` /
+    ``connection_lost`` / ``user_cancel``) both render on the configured default —
+    the same deployment the role-name dispatch path
+    (``get_llm_client(role_name="artifact_builder")``) resolves to. Used both to
+    derive the output-token budget (:func:`effective_artifact_builder_max_tokens`)
+    and to tell the planning step what that budget is, so the two never disagree on
+    which deployment this turn's build actually runs on.
+
+    Args:
+        decision: This turn's resolution, or ``None`` if the turn-start ask never
+            ran (no ``artifact_build_intent`` signal).
+        config: The catalog to resolve against.
+        is_provider_available: Provider-availability predicate — build the live one
+            with :func:`build_provider_availability`.
+
+    Returns:
+        A deployment key guaranteed to exist in ``config.models``.
+    """
+    if decision is not None and decision.resolution in ("user_choice", "preference_applied"):
+        return resolve_artifact_builder_key(
+            decision, config, is_provider_available=is_provider_available
+        )
+    return artifact_builder_default_key(config)
+
+
+def effective_artifact_builder_max_tokens(deployment_max_tokens: int | None, ceiling: int) -> int:
+    """Output-token budget for a resolved artifact-builder deployment (ADR-0122 §5/T6).
+
+    Never requests more than the deployment declares; never exceeds the operator's
+    configured ceiling: ``min(deployment_max_tokens, ceiling)``.
+    ``deployment_max_tokens is None`` means the deployment declares no cap (provider
+    default), so the ceiling alone applies. Shared by
+    :func:`personal_agent.tools.artifact_tools._draft_max_tokens` (the generation
+    call and the truncation-warning threshold, which both read this same value) and
+    the turn-start planning note, so neither ever sees a different number for the
+    same build.
+
+    Args:
+        deployment_max_tokens: The resolved deployment's declared ``max_tokens``
+            (``ModelDefinition.max_tokens``), or ``None``.
+        ceiling: The operator-configured ceiling (``settings.artifact_draft_max_tokens``).
+
+    Returns:
+        The effective output-token budget.
+    """
+    if deployment_max_tokens is None:
+        return ceiling
+    return min(deployment_max_tokens, ceiling)
+
+
 def resolve_options_and_default(constraint: str) -> tuple[list[str], str]:
     """Return ``(action_ids, default_action_id)`` for a constraint — static or computed.
 

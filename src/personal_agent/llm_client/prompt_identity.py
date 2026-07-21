@@ -51,6 +51,7 @@ PROMPT_COMPONENT_TAXONOMY: tuple[str, ...] = (
     "skill_index",
     "skill_bodies",
     "memory_section",
+    "artifact_builder_planning_note",
     "tool_use_rules",
     "decomposition_instructions",
 )

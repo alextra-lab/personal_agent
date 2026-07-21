@@ -263,3 +263,79 @@ def test_valid_preference_actions_artifact_builder_against_real_catalog() -> Non
     assert "claude_sonnet" in actions  # llm, unfiltered by availability
     assert "embedding" not in actions
     assert "reranker" not in actions
+
+
+# ── resolve_effective_artifact_builder_deployment (ADR-0122 §5/T6) ──────────────────
+# Single source of truth for "which deployment builds this turn's artifact", used by
+# both the output-budget derivation and the turn-start planning note.
+
+
+def test_effective_deployment_resolves_user_choice_via_fail_closed_check() -> None:
+    """A genuine card pick resolves through the same fail-closed check as the build."""
+    config = _catalog()
+    decision = co.ConstraintDecision("m_cloud_up", "user_choice")
+    resolved = co.resolve_effective_artifact_builder_deployment(
+        decision, config, is_provider_available=lambda p: p in {"local_p", "cloud_up"}
+    )
+    assert resolved == "m_cloud_up"
+
+
+def test_effective_deployment_resolves_preference_applied_via_fail_closed_check() -> None:
+    config = _catalog()
+    decision = co.ConstraintDecision("m_cloud_up", "preference_applied")
+    resolved = co.resolve_effective_artifact_builder_deployment(
+        decision, config, is_provider_available=lambda p: p in {"local_p", "cloud_up"}
+    )
+    assert resolved == "m_cloud_up"
+
+
+def test_effective_deployment_falls_back_on_invalid_user_choice() -> None:
+    """A stale/invalid card pick substitutes the configured default (AC-4)."""
+    config = _catalog()
+    decision = co.ConstraintDecision("not-a-real-model", "user_choice")
+    resolved = co.resolve_effective_artifact_builder_deployment(
+        decision, config, is_provider_available=lambda _p: True
+    )
+    assert resolved == "m_local"
+
+
+@pytest.mark.parametrize("resolution", ["timeout_default", "connection_lost", "user_cancel"])
+def test_effective_deployment_ignores_carried_key_on_no_answer(resolution: str) -> None:
+    """A no-answer resolution always renders on the configured default.
+
+    The carried action_id is never a confirmed choice, so it must not be used even
+    when it happens to name a real, available deployment.
+    """
+    config = _catalog()
+    decision = co.ConstraintDecision("m_cloud_up", resolution)
+    resolved = co.resolve_effective_artifact_builder_deployment(
+        decision, config, is_provider_available=lambda _p: True
+    )
+    assert resolved == "m_local"  # the binding's own default, not the carried key
+
+
+def test_effective_deployment_missed_prediction_uses_configured_default() -> None:
+    """``decision is None`` (the turn-start ask never ran) also uses the default."""
+    config = _catalog()
+    resolved = co.resolve_effective_artifact_builder_deployment(
+        None, config, is_provider_available=lambda _p: True
+    )
+    assert resolved == "m_local"
+
+
+# ── effective_artifact_builder_max_tokens (ADR-0122 §5/T6, AC-12) ───────────────────
+
+
+def test_effective_max_tokens_model_below_ceiling_model_wins() -> None:
+    """AC-12(a): the model's declared cap wins when it is under the ceiling."""
+    assert co.effective_artifact_builder_max_tokens(4096, 32768) == 4096
+
+
+def test_effective_max_tokens_model_above_ceiling_ceiling_wins() -> None:
+    """AC-12(b): the ceiling wins when the model's declared cap exceeds it."""
+    assert co.effective_artifact_builder_max_tokens(32768, 2048) == 2048
+
+
+def test_effective_max_tokens_no_declared_cap_uses_ceiling_alone() -> None:
+    """No declared cap (provider default) → the ceiling alone applies."""
+    assert co.effective_artifact_builder_max_tokens(None, 12345) == 12345

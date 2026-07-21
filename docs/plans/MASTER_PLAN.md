@@ -4,29 +4,35 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-20
+> **Last updated**: 2026-07-21
 
-## 0. In flight — ADR-0121/0122 config-management chain (owner-accepted)
+## 0. DISPATCH IS PAUSED — owner-directed 2026-07-21
 
-Both ADRs **Accepted** (owner, 2026-07-19). **ADR-0121** = model catalog + selection layer, Path
-removed. **ADR-0122** = build-time artifact-builder selection.
+`telemetry/dispatch.disabled` is engaged (proven detected: the launch-block predicate returns
+`kill-switch`). It blocks **new launches only** — in-flight seats are untouched — and it **also pauses
+the gating watcher**, so master gates open PRs manually. **Delete the file to resume.** The file
+documents its own intent.
 
-- **ADR-0121 T1–T4 DONE, deploy-verified live (2026-07-20).** T1 FRE-916 (single catalog, sub-agent
-  ctx 65536, embedder OVH), T2 FRE-917 (selection store; migration 0020 applied, 1235 rows backfilled),
-  T3 FRE-918 (config read API), T4 FRE-919 (telemetry profile→provider+model; migration 0021 backfilled 4297 rows). Gateway + ES live.
-- **build1 head: FRE-920 (T5, seam AC-9)** — PWA model picker + Path removed end-to-end;
-  also owns retiring the
-  profile-keyed `/api/inference/status` (T3 seam note).
-- **build2: FRE-881 (ADR-0122 T1)** building → 882 → **921 (seam AC-7)**.
-- **FRE-922 DONE** — worker-seat background-poller wedge fix (CC #61568); daemons restarted, detector live.
+## 1. Two PRs at the gate — first action of the next session
 
-Umbrellas FRE-887 / FRE-878 close only when their seams (920 / 921) prove live. Owner-fired live model
-checks for T2/T3 (turn runs selected model) recommended, not Done-blocking. Superseded + closed out:
-ADR-0118/0119, FRE-880 (canceled), FRE-883, FRE-888–892. FRE-894 holds deferred Phase-2 scope.
+- **#600 — FRE-923** dispatch delivery atomicity (bounded retry + swallowed-Enter repair)
+- **#599 — FRE-921** ADR-0122 T3, PWA card rendering — **the AC-7 assembled seam**
 
-## 1. Reduce the backlog
+Both pushed and awaiting master's gate. No watcher trigger will arrive (see §0).
 
-80 Approved, **0 currently dispatchable — no Approved ticket carries a stream label**; the rest is inventory, 24 of it predating the guardian role. Method:
+## 2. Close the two ADR seams — the only thing keeping them open
+
+- **ADR-0121 / FRE-887** — everything merged + deployed live. Open solely on **AC-9**, which needs an
+  **owner-driven PWA check**: picker renders real candidates → switch model → next turn runs on it →
+  survives reload → survives WS reconnect. FRE-920 stays Awaiting Deploy until it passes.
+- **ADR-0122 / FRE-878** — open on **AC-7**, owned by FRE-921 (PR #599 above). Needs the deployed stack.
+
+FRE-881/882 are merged but undeployed — they ride the next gateway rebuild, and have no live effect
+until the FRE-921 card UI ships.
+
+## 3. Reduce the backlog
+
+~80 Approved; most carry no stream label (parked). Dispatch queue behind the pause: build1 FRE-925 → FRE-926. Method:
 verify per cluster, cancel the provable with a one-line reason, bring judgment calls to the owner.
 Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729–732, FRE-810/811/814) ·
 `[Thread]` placeholders that can never be Done (FRE-401/418/397) · work gated on events that never
@@ -36,7 +42,7 @@ vs list-first).
 Note: the board reconciler now reads Linear (FRE-915), so drift is detectable automatically — run it
 before culling. It already found FRE-432 and FRE-875 shipped-but-stale.
 
-## 2. Questions for the owner — raise at the ADR debate
+## 4. Questions for the owner
 
 - **FRE-909 residual / seat hygiene** — none. Closed, all five criteria met.
 - **FRE-432 · FRE-875** — merged PRs, stale board state. Close with evidence, or is something unfinished?
@@ -50,7 +56,7 @@ before culling. It already found FRE-432 and FRE-875 shipped-but-stale.
 - **Bash-prompt stranding** — FRE-911's `acceptEdits` covers file edits only. Broader mode, allowlist,
   or detect-and-surface?
 
-## 3. Then, in order
+## 5. Then, in order
 
 Memory Recall · Telemetry residuals · Configuration Management · Linear async feedback · Seshat
 Inference. Re-sequence after 0–2.
@@ -72,5 +78,5 @@ Inference. Re-sequence after 0–2.
 
 ## Deploy queue
 
-FRE-884 · FRE-739 (needs FRE-740 + a live non-owner request) · FRE-866 · FRE-717 (needs organic outcome
+FRE-739 (needs FRE-740 + a live non-owner request) · FRE-717 (needs organic outcome
 input).

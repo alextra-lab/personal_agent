@@ -24,6 +24,7 @@ from personal_agent.request_gateway.types import GatewayOutput
 if TYPE_CHECKING:
     from personal_agent.error_classification import ClassifiedError
     from personal_agent.orchestrator.channels import Channel
+    from personal_agent.orchestrator.constraint_options import ConstraintDecision
     from personal_agent.orchestrator.expansion_types import ExpansionPlan, PhaseResult
     from personal_agent.orchestrator.sub_agent_types import SubAgentResult
     from personal_agent.telemetry.request_timer import RequestTimer
@@ -403,6 +404,17 @@ class ExecutionContext:
     # document-driven escalation doesn't leave the image cost-gate checking a
     # stale (pre-escalation) model key.
     document_effective_model_key: str | None = None
+
+    # --- ADR-0122 §2/§4 (T5/FRE-930) per-build artifact-builder selection ---
+    # Turn-scoped resolution of the artifact-builder DecisionCard, raised at turn
+    # start in ``step_init`` off the ``artifact_build_intent`` signal (FRE-929) —
+    # before the first LLM call, never at the build boundary (which raised it ~117 s
+    # late, the AC-7 failure). ``None`` until the turn-start ask runs; a card pick, a
+    # silent stored preference, or a safe default on timeout/no-socket all populate
+    # it. Authoritative turn-scoped state (AC-10a); the value is mirrored onto an
+    # async ``ContextVar`` (``constraint_options.set_artifact_builder_resolution``) to
+    # reach ``artifact_draft``, which receives only a ``TraceContext``.
+    artifact_builder_resolution: "ConstraintDecision | None" = None
 
 
 class OrchestratorStep(TypedDict):

@@ -128,6 +128,16 @@ systemctl status seshat-dispatch-orchestrator
   cc-<stream>`), answer any waiting prompt, or investigate a crash. The
   orchestrator never advances on silence — it advances only on the durable
   open-PR + `In Review` evidence.
+- **`dispatch_held_too_long`** (FRE-924) → a **surfaced manual card** (a KEEP /
+  manual-model-required continuation, or a `delivery-failed` / `seat-unhealthy`
+  card) has awaited the owner past the escalation threshold (default 30 min;
+  `--held-escalation-timeout`). The stream is stalled on a card that never
+  self-clears. Act on the card (attach to the seat and continue it, or clear the
+  stream's record from the state file after resolving), then the next tick's
+  non-hold decision drops the one-shot latch. Fired **once per episode** — the
+  per-tick `card-already-surfaced` decision log remains the continuous trail.
+  Escalation surfaces only: it never clears the record or kills a process. The
+  in-memory latch resets on daemon restart, so a still-held card re-escalates once.
 - **Emergency stop:** `touch telemetry/dispatch.disabled` (halts dispatch), or
   `sudo systemctl stop seshat-dispatch-orchestrator` (stops the daemon).
 

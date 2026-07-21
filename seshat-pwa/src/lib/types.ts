@@ -178,7 +178,8 @@ export interface DeploymentView {
   status: string;
   summary: string | null;
   context_length: number;
-  max_tokens: number;
+  /** Maximum output tokens, or `null` for the provider default (backend: `ModelDefinition.max_tokens: int | None`). */
+  max_tokens: number | null;
   supports_vision: boolean;
   supports_pdf_document: boolean;
   input_cost_per_token: number | null;

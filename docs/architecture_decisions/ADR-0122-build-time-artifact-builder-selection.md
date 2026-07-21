@@ -247,6 +247,45 @@ Because options now come from the ADR-0121 catalog rather than a bespoke registr
 `summary`, cost, context window, and large-output capability for free — the user chooses on visible
 detail rather than on a bare key.
 
+### 3d. Turn start is already occupied — ordering, and the ambiguous-affirmative hazard
+
+`step_init` is not empty when we arrive. It already raises a pause of its own: the
+`attachment_cost` gate (`executor.py:2730`, via `_maybe_confirm_attachment_cost` at `:1741`) fires
+for a turn carrying priced attachments, immediately **before** the gateway block this amendment reads
+(`:2736`). So a single turn can now have two turn-start decisions. That is rare — an over-threshold
+attachment *and* an artifact request — but it is reachable, and an implementer must not discover it at
+runtime.
+
+**Order: attachment cost first, builder second.** This is the existing code order and it is also the
+correct one on the merits: declining the attachment cost short-circuits the turn
+(`return TaskState.SYNTHESIS`, `:2733`), so no build follows and a builder question asked first would
+have been wasted. Asking in the other order can only ever cost the user a pointless interaction.
+
+**The ambiguous-affirmative hazard is pre-existing, documented, and must not be widened.**
+`executor.py:2464-2478` records a code-review finding from FRE-749: two pending confirmations in one
+turn "both key off the same generic yes/affirmative detector," so a single ambiguous "yes" could
+resolve both pending states and let a priced attachment skip its gate. The fix there was to reset
+`ctx.attachment_cost_confirmed` whenever content is re-injected.
+
+The builder decision is **structurally less exposed** — its options are deployment keys, not
+proceed/decline, so a bare affirmative names no option — but "less exposed" is not "immune", and this
+amendment is adding a third pause to a turn that already had this bug once. **The builder decision
+must be resolvable only by an explicit option id, never by the generic affirmative detector, and
+must never be treated as satisfied by another pause's answer.** AC-14 asserts this directly rather
+than trusting the structural argument.
+
+**One card per turn, one selection for every build in it.** A turn that builds more than one artifact
+(the tool loop permits up to 25 iterations on `tool_use`) uses the single turn-start selection for
+all of them and does **not** re-ask per build. The user chose "the builder for this turn"; re-asking
+mid-turn would reintroduce exactly the late-card behaviour being removed.
+
+**The routing fork gets no worse, and arguably better.** §8's known limitation — a build routed to the
+ADR-0086 expansion path never reaches `artifact_draft` and so never saw a card — is unchanged in
+substance, but the turn-start placement is *agnostic* to which fork the turn later takes: the card
+fires on intent, before routing is decided. On an expansion-path turn the selection simply goes unused
+(a false positive by §3b, harmless and discarded). The expansion path still does not consume a builder
+selection; that remains out of scope and tracked separately.
+
 ### 4. A stored preference suppresses the ask entirely — and still informs planning
 
 Owner-directed: **a remembered choice means the user is never asked, in either placement.** The
@@ -522,6 +561,8 @@ independently blocked by the turn-start decision — the primary has not run yet
 | The preference path suppresses the card but never threads the deployment into planning | **High** | Invisible failure — no card, correct model at build, plan still sized against a constant; AC-13 asserts the preference path specifically |
 | Requesting more output than the model declares (live today: Haiku's 4096 vs 32768 requested) | **High** | `min(deployment.max_tokens, settings ceiling)` (§5); AC-12 asserts the derived budget on a non-default pick in both the under- and over-shoot directions |
 | The turn-start ask lands in a momentary mobile disconnect | Medium | Exposure reduced but **not** removed — FRE-928 is the actual fix and ships independently (§6) |
+| A single ambiguous "yes" resolves both the attachment gate and the builder pick | **High** | The FRE-749 bug class (`executor.py:2464-2478`), now reachable with a third turn-start pause; ordering fixed and isolation asserted by AC-14 |
+| A multi-artifact turn re-asks per build, reintroducing the late card | Low | One selection per turn covers every build in it (§3d); AC-10 asserts a single pause event across two builds |
 
 ---
 
@@ -538,7 +579,9 @@ hard caps in favour of visibility and consent).
 - `src/personal_agent/request_gateway/intent.py:80-88, 120, 311` — emit a distinct
   `artifact_build_intent` signal; leave the `_TOOL_INTENT_PATTERNS` union in place.
 - `src/personal_agent/orchestrator/executor.py:2570` (`step_init`) — raise the decision here off
-  `ctx.gateway_output.intent.signals`, consult the preference, store the resolution turn-scoped.
+  `ctx.gateway_output.intent.signals`, consult the preference, store the resolution turn-scoped;
+  sequenced **after** the existing `attachment_cost` gate at `:2730` and before/alongside the gateway
+  block at `:2736`. Keep the two decisions isolated per the FRE-749 finding (`:2464-2478`).
 - `src/personal_agent/tools/artifact_tools.py:807-817` (`_draft_max_tokens`) — derive from the
   resolved deployment, floored by `settings.artifact_draft_max_tokens`; `:1604` — warn against the
   same effective value; the planning prompt receives the effective budget and context window.
@@ -587,8 +630,9 @@ steps 4–6, which move the placement and correct the sizing. AC-7 is **not** me
 5. **Move the ask to turn start** — raise the decision in `step_init` off that signal, ahead of the
    first LLM call; consult the stored preference there; carry the resolution as turn-scoped state;
    remove the build-boundary *card* while keeping the fail-closed resolution check; emit
-   `artifact_build_intent_missed` when a build is reached with no turn-scoped resolution.
-   AC-10, AC-11.
+   `artifact_build_intent_missed` when a build is reached with no turn-scoped resolution; order the
+   ask **after** the existing `attachment_cost` gate and keep the two decisions isolated (§3d).
+   AC-10, AC-11, AC-14.
 6. **Size the plan and the call to the chosen deployment** — `_draft_max_tokens()` becomes
    `min(deployment.max_tokens, settings.artifact_draft_max_tokens)`, the truncation-warning threshold
    follows it, and the planning step is given the effective budget and context window.
@@ -674,10 +718,12 @@ AC-5 timeout leg** but ships on its own schedule (§6) — it must not be held f
   `MODEL_CALL_COMPLETED` and before any tool-execution event — assert on relative event ordering
   within the trace, not on wall-clock. Additionally, on a turn where the card was answered but **no**
   `artifact_draft` call followed, the next turn in the same session raises the card again and
-  resolves independently (the prior pick did not persist). *Fails if* the pause is emitted after any
-  model call or tool event for that turn — which is what the build-boundary placement does, so this
-  fails against the currently deployed code — **or** if a turn-scoped pick leaks into a subsequent
-  turn.
+  resolves independently (the prior pick did not persist). Additionally, on a turn making **two**
+  `artifact_draft` calls, exactly **one** `ConstraintPauseEvent` for `artifact_builder` is emitted and
+  **both** builds run on the selected deployment. *Fails if* the pause is emitted after any model call
+  or tool event for that turn — which is what the build-boundary placement does, so this fails against
+  the currently deployed code — if a turn-scoped pick leaks into a subsequent turn, or if a second
+  build re-asks.
 - **AC-11 — A missed prediction degrades to the default *and says so*.** *Check:* drive a build
   through a request that does **not** match the artifact-build vocabulary (so no card is raised) but
   which nevertheless reaches `artifact_draft`; the artifact renders on the role's configured default,
@@ -700,6 +746,19 @@ AC-5 timeout leg** but ships on its own schedule (§6) — it must not be held f
   the global constant. *Fails if* the preference is pre-resolved only to suppress the card while the
   budget still comes from the constant — an implementation that passes AC-12 on the card path can
   still fail here, which is exactly why this is asserted separately.
+
+- **AC-14 — Two turn-start decisions coexist without contaminating each other.** *Check:* on a
+  single turn carrying **both** an over-threshold priced attachment and an artifact-build request,
+  (a) the `attachment_cost` decision is raised **before** the `artifact_builder` decision; (b)
+  answering the attachment gate resolves **only** it — the builder decision remains pending and is
+  still raised; (c) a bare affirmative ("yes") supplied while the builder decision is pending does
+  **not** select any deployment, and the builder decision remains unresolved or falls back to the
+  configured default, never to an arbitrary candidate; (d) declining the attachment gate
+  short-circuits the turn and no build occurs. *Fails if* one answer resolves both pauses, if the
+  builder decision is satisfied by the generic affirmative detector, or if the ordering is reversed.
+  *(This is the FRE-749 bug class — `executor.py:2464-2478` documents a single ambiguous "yes"
+  resolving two pending states and letting a priced attachment skip its gate. This amendment adds a
+  third turn-start pause to that same turn, so the invariant is asserted rather than argued.)*
 
 **Seam owner:** AC-7 is owned by the **PWA card-rendering ticket (step 4)** — the child where the
 assembled intent first holds. This ADR does not close when the decision type merges; it closes only

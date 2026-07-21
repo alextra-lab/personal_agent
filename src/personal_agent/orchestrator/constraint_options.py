@@ -12,6 +12,7 @@ timeout, disconnect, or no active WebSocket connection.
 
 from __future__ import annotations
 
+import contextvars
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -337,6 +338,69 @@ class ConstraintDecision(str):
         instance = super().__new__(cls, action_id)
         instance.resolution = resolution
         return instance
+
+
+# ── Turn-scoped artifact-builder resolution carrier (ADR-0122 §2/§4 / FRE-930) ────
+# The builder decision is raised at TURN START (``step_init``) but consumed at the
+# build boundary inside ``artifact_draft`` — which, like every tool executor,
+# receives only a ``TraceContext``, never the ``ExecutionContext``
+# (``tools/executor.py`` passes ``ctx=trace_ctx``). So the resolution crosses that
+# boundary through an async-safe ``ContextVar``, the same mechanism
+# ``config.selection`` uses for per-turn model selection and
+# ``observability.topology.seam`` uses for the topology label. ``asyncio.gather``
+# child tasks inherit the creating task's context, so a value set in ``step_init``
+# survives to an ``artifact_draft`` dispatched several tool iterations later (AC-1).
+#
+# The same resolution is also the authoritative turn-scoped state on
+# ``ExecutionContext`` (``artifact_builder_resolution``, which AC-10a asserts
+# directly); this ContextVar mirrors it purely to reach the tool boundary. ``None``
+# means the turn-start ask did not run (no ``artifact_build_intent`` signal) — a
+# missed prediction the build boundary degrades to the configured default and logs
+# (AC-11). ``step_init`` sets it and ``execute_task`` token-resets it in a ``finally``
+# so no pick outlives its turn (AC-10c).
+
+_artifact_builder_resolution: contextvars.ContextVar[ConstraintDecision | None] = (
+    contextvars.ContextVar("artifact_builder_resolution", default=None)
+)
+
+
+def set_artifact_builder_resolution(
+    resolution: ConstraintDecision | None,
+) -> contextvars.Token[ConstraintDecision | None]:
+    """Publish this turn's artifact-builder resolution for the current async context.
+
+    Args:
+        resolution: The resolved :class:`ConstraintDecision` to carry to the build
+            boundary, or ``None``.
+
+    Returns:
+        A token for :func:`reset_artifact_builder_resolution` (used by
+        ``execute_task``'s lifecycle ``finally`` and by test isolation).
+    """
+    return _artifact_builder_resolution.set(resolution)
+
+
+def get_artifact_builder_resolution() -> ConstraintDecision | None:
+    """Return this turn's artifact-builder resolution, or ``None`` if the ask never ran.
+
+    Returns:
+        The :class:`ConstraintDecision` set by ``step_init`` for the current async
+        context, or ``None`` when no turn-start ask touched the carrier (no signal, or
+        a background/direct tool call) — which the build boundary treats as a missed
+        prediction (AC-11).
+    """
+    return _artifact_builder_resolution.get()
+
+
+def reset_artifact_builder_resolution(
+    token: contextvars.Token[ConstraintDecision | None],
+) -> None:
+    """Restore the artifact-builder resolution to a prior value.
+
+    Args:
+        token: The token returned by :func:`set_artifact_builder_resolution`.
+    """
+    _artifact_builder_resolution.reset(token)
 
 
 def resolve_options_and_default(constraint: str) -> tuple[list[str], str]:

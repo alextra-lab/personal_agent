@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio  # noqa: F401 — used by _HangingClient in draft timeout test
 import base64
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -29,7 +30,11 @@ import pytest
 
 from personal_agent.config import settings
 from personal_agent.observability.artifact_envelope.spec import load_lib_manifest
-from personal_agent.orchestrator.constraint_options import ConstraintDecision
+from personal_agent.orchestrator.constraint_options import (
+    ConstraintDecision,
+    reset_artifact_builder_resolution,
+    set_artifact_builder_resolution,
+)
 from personal_agent.tools import artifact_tools
 from personal_agent.tools.executor import ToolExecutionError
 
@@ -40,6 +45,22 @@ def _ctx(user_id: UUID | None = None, session_id: UUID | None = None) -> Any:
         session_id=session_id,
         trace_id="trace-test",
     )
+
+
+@pytest.fixture(autouse=True)
+def _reset_builder_carrier() -> Iterator[None]:
+    """Token-reset the ADR-0122 T5 turn-state ContextVar around every test (isolation).
+
+    Uses a token (not a bare ``set(None)``) so a value set by one test can never leak
+    into the next; the default (``None``) is the honest state for a direct
+    ``artifact_draft`` unit call — no ``step_init`` ran — which the build boundary treats
+    as a missed prediction (AC-11).
+    """
+    token = set_artifact_builder_resolution(None)
+    try:
+        yield
+    finally:
+        reset_artifact_builder_resolution(token)
 
 
 # ---------------------------------------------------------------------------
@@ -811,30 +832,23 @@ class _FakeSubAgentClient:
         }
 
 
-def _mock_no_builder_decision(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Default the ADR-0122 §4 build-time decision to a no-op (AC-2 regression guard).
-
-    Every existing artifact_draft test predates the FRE-882 pause call and expects
-    the pre-existing role-name path (``get_llm_client(role_name="artifact_builder")``)
-    to run unconditionally. ``connection_lost`` is outside the
-    ``{"user_choice", "preference_applied"}`` allowlist, so this keeps that path —
-    tests that want the selected-key path override this mock explicitly.
-    """
-    monkeypatch.setattr(
-        "personal_agent.orchestrator.executor._maybe_pause_for_constraint",
-        AsyncMock(return_value=ConstraintDecision("unused", "connection_lost")),
-    )
-
-
 def _install_draft_fakes(
     monkeypatch: pytest.MonkeyPatch,
     *,
     html_content: str = _VALID_HTML,
 ) -> tuple[_FakeStore, _FakeSubAgentClient]:
-    """Install fakes for artifact_draft tests: R2/DB/embedding + sub-agent client."""
+    """Install fakes for artifact_draft tests: R2/DB/embedding + sub-agent client.
+
+    Since ADR-0122 T5 the builder decision is raised at TURN START, not at the build
+    boundary. A direct ``artifact_draft_executor`` call never runs ``step_init``, so the
+    resolution carrier is ``None`` (guaranteed by the autouse ``_reset_builder_carrier``
+    fixture) — a missed prediction (§3b/AC-11): the build keeps the pre-existing
+    role-name path and additionally emits ``artifact_build_intent_missed`` (an event
+    legacy assertions ignore). Tests wanting the selected-key path install a decision
+    via :func:`_install_builder_decision`.
+    """
     store = _FakeStore()
     _install_fakes(monkeypatch, store=store)
-    _mock_no_builder_decision(monkeypatch)
     client = _FakeSubAgentClient(html_content=html_content)
     monkeypatch.setattr(
         "personal_agent.llm_client.factory.get_llm_client",
@@ -942,15 +956,18 @@ async def test_artifact_draft_start_log_reports_artifact_builder_role(
 
 
 def _install_builder_decision(
-    monkeypatch: pytest.MonkeyPatch,
     *,
     resolution: str,
     action_id: str = "unused",
-) -> AsyncMock:
-    """Stub the build-time decision to a specific (action_id, resolution) pair."""
-    mock = AsyncMock(return_value=ConstraintDecision(action_id, resolution))
-    monkeypatch.setattr("personal_agent.orchestrator.executor._maybe_pause_for_constraint", mock)
-    return mock
+) -> ConstraintDecision:
+    """Publish a turn-start builder resolution on the ADR-0122 T5 carrier.
+
+    Since T5 the build boundary READS the turn-scoped resolution rather than raising a
+    pause, so tests install the resolution the way ``step_init`` would.
+    """
+    decision = ConstraintDecision(action_id, resolution)
+    set_artifact_builder_resolution(decision)
+    return decision
 
 
 class _KeyFactorySpy:
@@ -966,23 +983,206 @@ class _KeyFactorySpy:
 
 
 @pytest.mark.asyncio
-async def test_artifact_draft_pause_raised_with_artifact_builder_constraint(
+async def test_artifact_draft_does_not_raise_pause_at_build_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The build boundary raises the ADR-0076 pause with constraint='artifact_builder'."""
-    _install_draft_fakes(monkeypatch)
-    pause = _install_builder_decision(monkeypatch, resolution="connection_lost")
-    user_id = uuid4()
+    """T5: the build boundary no longer raises the pause — it reads the turn-scoped carrier.
+
+    The ask now fires at turn start (step_init); asking here raised the card ~117 s late
+    (the AC-7 failure). A card pick installed on the carrier is honoured without any
+    build-boundary pause.
+    """
+    _store, client = _install_draft_fakes(monkeypatch)
+    _install_builder_decision(resolution="user_choice", action_id="claude_sonnet")
+    monkeypatch.setattr(
+        "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
+        lambda selected_key, config, **_kw: selected_key,
+    )
+    monkeypatch.setattr(
+        "personal_agent.llm_client.factory.get_llm_client_for_key",
+        lambda model_key, budget_role="skill_routing": client,
+    )
+    pause = AsyncMock(return_value=ConstraintDecision("unused", "connection_lost"))
+    monkeypatch.setattr("personal_agent.orchestrator.executor._maybe_pause_for_constraint", pause)
 
     await artifact_tools.artifact_draft_executor(
-        slug="x", title="My Report", summary="S", plan="A plan.", ctx=_ctx(user_id=user_id)
+        slug="x", title="My Report", summary="S", plan="A plan.", ctx=_ctx()
     )
 
-    pause.assert_awaited_once()
-    kwargs = pause.await_args.kwargs
-    assert kwargs["constraint"] == "artifact_builder"
-    assert kwargs["user_id"] == user_id
-    assert "My Report" in kwargs["context"]
+    pause.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_missing_resolution_emits_intent_missed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-11: a build reached with no turn-scoped resolution degrades to the default AND logs.
+
+    The classifier never predicted this build (a false negative). The artifact renders on
+    the role's configured default (pre-card behaviour) and an ``artifact_build_intent_missed``
+    event is emitted identifying the turn, so the regex vocabulary can be tuned — never a
+    silent fallback. (The request text is not re-logged here — it already rides the
+    ``task_started`` event under the same ``trace_id``.)
+    """
+    events: list[tuple[str, dict[str, Any]]] = []
+    _store, client = _install_draft_fakes(monkeypatch)
+    _spy_artifact_log(monkeypatch, events)
+    # No resolution on the carrier — the state step_init leaves when the
+    # artifact_build_intent signal was absent (guaranteed by the autouse fixture).
+    set_artifact_builder_resolution(None)
+    key_factory = MagicMock()
+    monkeypatch.setattr("personal_agent.llm_client.factory.get_llm_client_for_key", key_factory)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert "artifact_id" in out  # build completes, never errors
+    key_factory.assert_not_called()  # never the by-key path
+    assert len(client.respond_calls) == 1  # role-name default path ran
+    missed = [kw for ev, kw in events if ev == "artifact_build_intent_missed"]
+    assert len(missed) == 1
+    assert missed[0]["slug"] == "x"  # identifies the turn's build; no raw request text
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_two_builds_share_one_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-10(c): one turn-start selection covers every build in the turn (no re-ask).
+
+    Two ``artifact_draft`` calls in the same turn both run on the single selected key.
+    """
+    _store, client = _install_draft_fakes(monkeypatch)
+    _install_builder_decision(resolution="user_choice", action_id="claude_sonnet")
+    monkeypatch.setattr(
+        "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
+        lambda selected_key, config, **_kw: selected_key,
+    )
+    key_spy = _KeyFactorySpy(client)
+    monkeypatch.setattr("personal_agent.llm_client.factory.get_llm_client_for_key", key_spy)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="a", title="A", summary="S", plan="Plan A.", ctx=_ctx()
+    )
+    await artifact_tools.artifact_draft_executor(
+        slug="b", title="B", summary="S", plan="Plan B.", ctx=_ctx()
+    )
+
+    assert key_spy.calls == [
+        ("claude_sonnet", "artifact_builder"),
+        ("claude_sonnet", "artifact_builder"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolution_survives_step_init_to_gather_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1/AC-10 (codex plan-review): the pick survives step_init → asyncio.gather → artifact_draft.
+
+    The real tool dispatch runs each call inside ``asyncio.gather`` (executor.py:4377).
+    This drives the actual carrier path — resolve at turn start, then dispatch the build in
+    a gather child task — and asserts the selected model still runs, proving the resolution
+    survives the task boundary and intervening work rather than only an immediate
+    post-``step_init`` read.
+    """
+    from personal_agent.governance.models import Mode
+    from personal_agent.orchestrator import executor as executor_mod
+    from personal_agent.orchestrator.channels import Channel
+    from personal_agent.orchestrator.session import SessionManager
+    from personal_agent.orchestrator.types import ExecutionContext
+    from personal_agent.request_gateway.types import (
+        AssembledContext,
+        Complexity,
+        DecompositionResult,
+        DecompositionStrategy,
+        GatewayOutput,
+        GovernanceContext,
+        IntentResult,
+        TaskType,
+    )
+    from personal_agent.telemetry.trace import TraceContext
+
+    _store, client = _install_draft_fakes(monkeypatch)
+    monkeypatch.setattr(
+        "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
+        lambda selected_key, config, **_kw: selected_key,
+    )
+    key_spy = _KeyFactorySpy(client)
+    monkeypatch.setattr("personal_agent.llm_client.factory.get_llm_client_for_key", key_spy)
+    monkeypatch.setattr(
+        executor_mod,
+        "_maybe_pause_for_constraint",
+        AsyncMock(return_value=ConstraintDecision("claude_sonnet", "user_choice")),
+    )
+
+    sm = SessionManager()
+    session_id = sm.create_session(Mode.NORMAL, Channel.CHAT)
+    trace = TraceContext.new_trace()
+    ctx = ExecutionContext(
+        session_id=session_id,
+        trace_id=trace.trace_id,
+        user_message="build me a dashboard",
+        mode=Mode.NORMAL,
+        channel=Channel.CHAT,
+        eval_mode=True,
+    )
+    ctx.gateway_output = GatewayOutput(
+        intent=IntentResult(
+            task_type=TaskType.TOOL_USE,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=["tool_intent_pattern", "artifact_build_intent"],
+        ),
+        governance=GovernanceContext(mode=Mode.NORMAL, expansion_permitted=True),
+        decomposition=DecompositionResult(strategy=DecompositionStrategy.SINGLE, reason="t"),
+        context=AssembledContext(messages=[], memory_context=None, tool_definitions=None),
+        session_id=session_id,
+        trace_id=trace.trace_id,
+    )
+
+    # Turn start resolves the builder (sets the carrier in this task's context).
+    await executor_mod.step_init(ctx, sm, trace)
+
+    # Later: the build runs inside asyncio.gather, exactly as step_tool_execution dispatches.
+    (out,) = await asyncio.gather(
+        artifact_tools.artifact_draft_executor(
+            slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+        )
+    )
+
+    assert "artifact_id" in out
+    assert key_spy.calls == [("claude_sonnet", "artifact_builder")]
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_resolution_does_not_leak_after_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-10(c): a resolved pick does not leak past its turn — a later build is a miss.
+
+    Mirrors the ``execute_task`` finally reset: once the carrier is cleared, a subsequent
+    build reads ``None`` and degrades to the default (missed prediction), never the prior
+    turn's pick.
+    """
+    events: list[tuple[str, dict[str, Any]]] = []
+    _store, client = _install_draft_fakes(monkeypatch)
+    _spy_artifact_log(monkeypatch, events)
+    token = set_artifact_builder_resolution(ConstraintDecision("claude_sonnet", "user_choice"))
+    key_factory = MagicMock()
+    monkeypatch.setattr("personal_agent.llm_client.factory.get_llm_client_for_key", key_factory)
+
+    # Simulate the turn ending: clear the carrier back to the pre-turn default.
+    reset_artifact_builder_resolution(token)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    key_factory.assert_not_called()  # the prior turn's pick did not leak
+    assert len(client.respond_calls) == 1  # default path
+    assert any(ev == "artifact_build_intent_missed" for ev, _ in events)
 
 
 @pytest.mark.asyncio
@@ -994,7 +1194,7 @@ async def test_artifact_draft_user_choice_uses_key_path_with_budget_role(
     Explicitly billing the artifact_builder lane (the new mis-billing risk).
     """
     _store, client = _install_draft_fakes(monkeypatch)
-    _install_builder_decision(monkeypatch, resolution="user_choice", action_id="claude_sonnet")
+    _install_builder_decision(resolution="user_choice", action_id="claude_sonnet")
     monkeypatch.setattr(
         "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
         lambda selected_key, config, **_kw: selected_key,
@@ -1018,9 +1218,7 @@ async def test_artifact_draft_preference_applied_uses_key_path(
 ) -> None:
     """A standing preference (pre-resolved silently, no card) also runs on its own key."""
     _store, client = _install_draft_fakes(monkeypatch)
-    _install_builder_decision(
-        monkeypatch, resolution="preference_applied", action_id="qwen3.6-35b-thinking"
-    )
+    _install_builder_decision(resolution="preference_applied", action_id="qwen3.6-35b-thinking")
     monkeypatch.setattr(
         "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
         lambda selected_key, config, **_kw: selected_key,
@@ -1045,7 +1243,7 @@ async def test_artifact_draft_no_decision_keeps_role_name_path(
     It keeps today's already-correct role-name path and default binding (FRE-879).
     """
     _store, client = _install_draft_fakes(monkeypatch)
-    _install_builder_decision(monkeypatch, resolution=resolution, action_id="qwen3.6-35b-instruct")
+    _install_builder_decision(resolution=resolution, action_id="qwen3.6-35b-instruct")
     key_factory = MagicMock()
     monkeypatch.setattr("personal_agent.llm_client.factory.get_llm_client_for_key", key_factory)
     monkeypatch.setattr(
@@ -1072,7 +1270,7 @@ async def test_artifact_draft_invalid_key_falls_back_and_logs_substitution(
     events: list[tuple[str, dict[str, Any]]] = []
     _store, client = _install_draft_fakes(monkeypatch)
     _spy_artifact_log(monkeypatch, events)
-    _install_builder_decision(monkeypatch, resolution="user_choice", action_id="not-a-real-model")
+    _install_builder_decision(resolution="user_choice", action_id="not-a-real-model")
     key_spy = _KeyFactorySpy(client)
     monkeypatch.setattr("personal_agent.llm_client.factory.get_llm_client_for_key", key_spy)
 
@@ -1100,7 +1298,7 @@ async def test_artifact_draft_no_substitution_log_when_key_matches(
     events: list[tuple[str, dict[str, Any]]] = []
     _store, client = _install_draft_fakes(monkeypatch)
     _spy_artifact_log(monkeypatch, events)
-    _install_builder_decision(monkeypatch, resolution="user_choice", action_id="claude_sonnet")
+    _install_builder_decision(resolution="user_choice", action_id="claude_sonnet")
     monkeypatch.setattr(
         "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
         lambda selected_key, config, **_kw: selected_key,
@@ -1652,7 +1850,6 @@ async def test_artifact_draft_subagent_timeout_raises(
 
     store = _FakeStore()
     _install_fakes(monkeypatch, store=store)
-    _mock_no_builder_decision(monkeypatch)
 
     class _HangingClient:
         async def respond(self, **kwargs: Any) -> dict[str, Any]:
@@ -1681,7 +1878,6 @@ async def test_artifact_draft_subagent_exception_raises(
     """Arbitrary sub-agent exception surfaces as ToolExecutionError with fallback guidance."""
     store = _FakeStore()
     _install_fakes(monkeypatch, store=store)
-    _mock_no_builder_decision(monkeypatch)
 
     class _FailingClient:
         async def respond(self, **kwargs: Any) -> dict[str, Any]:

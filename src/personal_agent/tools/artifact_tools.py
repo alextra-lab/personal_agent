@@ -1455,32 +1455,43 @@ async def artifact_draft_executor(
             session_id=session_id,
         )
 
-    # --- ADR-0122 §2/§4: raise the build-time artifact-builder decision through the
-    # existing ADR-0076 pause path, then acquire the resolved client. With no genuine
-    # decision (timeout / no socket / Stop-button cancel) this keeps the pre-existing
-    # role-name path and its already-correct telemetry/cost-lane identity (FRE-879,
-    # AC-2 regression guard); a card pick or a standing preference switches to the
-    # by-key call so the *selected* deployment actually runs (AC-1), fail-closed
-    # checked against the catalog first so a stale/invalid key never reaches the
-    # client factory (AC-4).
+    # --- ADR-0122 §2/§4 (T5/FRE-930): the artifact-builder decision is raised at TURN
+    # START (step_init, off the artifact_build_intent signal), NOT here — asking at this
+    # boundary raised the card ~117 s late (the AC-7 failure). This boundary now only
+    # READS the turn-scoped resolution and stays fail-closed:
+    #   • a genuine decision (card pick / stored preference) → resolve the key against
+    #     the catalog and run the SELECTED deployment by key (AC-1), substituting the
+    #     configured default for any stale/invalid key (AC-4);
+    #   • a no-answer decision (timeout / no socket / cancel) → the role-name path and
+    #     its already-correct telemetry/cost identity (FRE-879, AC-2 regression guard);
+    #   • NO turn-scoped resolution → the classifier never predicted this build (a false
+    #     negative, §3b): render on the configured default AND emit
+    #     artifact_build_intent_missed so the miss is a tunable signal, never silent (AC-11).
     from personal_agent.config.model_loader import load_model_config  # noqa: PLC0415
     from personal_agent.llm_client.factory import get_llm_client_for_key  # noqa: PLC0415
     from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
         build_provider_availability,
+        get_artifact_builder_resolution,
         resolve_artifact_builder_key,
     )
-    from personal_agent.orchestrator.executor import _maybe_pause_for_constraint  # noqa: PLC0415
 
-    user_id = getattr(ctx, "user_id", None) if ctx else None
-    builder_decision = await _maybe_pause_for_constraint(
-        session_id=session_id or "",
-        trace_id=trace_id,
-        user_id=user_id,
-        constraint="artifact_builder",
-        context=f'Choose the model to build "{title}".',
-    )
+    builder_decision = get_artifact_builder_resolution()
 
-    if builder_decision.resolution in ("user_choice", "preference_applied"):
+    if builder_decision is None:
+        # Missed prediction (§3b/AC-11): the turn-start ask never ran for this turn, yet
+        # a build was reached. Degrade to the configured default (pre-card behaviour) and
+        # log the miss so the regex vocabulary can be tuned — the turn's request text is
+        # already on the task_started log under this trace_id, so it is not re-logged here.
+        log.info(
+            "artifact_build_intent_missed",
+            trace_id=trace_id,
+            session_id=session_id,
+            slug=slug,
+            title=title,
+            task_id=task_id,
+        )
+        builder_client = get_llm_client(role_name="artifact_builder")
+    elif builder_decision.resolution in ("user_choice", "preference_applied"):
         builder_catalog = load_model_config()
         builder_key = resolve_artifact_builder_key(
             builder_decision,
@@ -1499,8 +1510,8 @@ async def artifact_draft_executor(
             )
         builder_client = get_llm_client_for_key(builder_key, budget_role="artifact_builder")
     else:
-        # Headless / timeout / disconnected / cancelled — no genuine decision, keep
-        # today's role-name path and its already-shipped default binding (FRE-879).
+        # Timeout / disconnected / cancelled — a decision was raised but not answered;
+        # keep today's role-name path and its already-shipped default binding (FRE-879).
         builder_client = get_llm_client(role_name="artifact_builder")
 
     user_prompt = (

@@ -2059,6 +2059,16 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         TaskState.SYNTHESIS: step_synthesis,
     }
 
+    # ADR-0122 §4 (FRE-930): bound the turn-scoped artifact-builder carrier to this
+    # turn's lifetime. step_init sets it; the finally reset guarantees no resolution
+    # (nor a false-positive pick) outlives the turn into a later async context (AC-10c).
+    from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
+        reset_artifact_builder_resolution,
+        set_artifact_builder_resolution,
+    )
+
+    _builder_carrier_token = set_artifact_builder_resolution(None)
+
     previous_state: TaskState | None = None
     async with observe_topology(ctx):
         try:
@@ -2290,6 +2300,10 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                         error=str(e),
                         component="executor",
                     )
+        finally:
+            # ADR-0122 §4 (FRE-930): drop the turn-scoped artifact-builder carrier so
+            # no resolution outlives this turn into a later async context (AC-10c).
+            reset_artifact_builder_resolution(_builder_carrier_token)
 
     return ctx
 
@@ -2564,6 +2578,62 @@ async def _maybe_reinject_pending_document_continuation(ctx: ExecutionContext) -
         await _clear_pending_document_continuation(ctx.session_id, trace_id=ctx.trace_id)
 
 
+async def _maybe_resolve_artifact_builder(ctx: ExecutionContext) -> None:
+    """Resolve the per-build artifact-builder selection at turn start (ADR-0122 §2/§4).
+
+    Fires only when the gateway predicted an artifact build for this turn — the
+    ``artifact_build_intent`` signal (FRE-929). It consults the stored preference and,
+    absent one, raises the ADR-0076 DecisionCard, all inside
+    :func:`_maybe_pause_for_constraint`; the resolution (a card pick, a silent
+    preference, or a safe default on timeout / no socket) lands on
+    ``ctx.artifact_builder_resolution`` (authoritative, AC-10a) and on the async
+    resolution carrier the build boundary reads (the tool executor receives only a
+    ``TraceContext``, ADR-0122 §4).
+
+    Called **after** the ``attachment_cost`` gate and **before** the gateway block:
+    declining that gate short-circuits the turn, so a builder question first would be
+    wasted (§3d). The builder decision keeps its own ``request_id``-keyed waiter and is
+    resolvable only by an explicit deployment-key option id — never satisfied by
+    another pause's answer (the FRE-749 hazard, §3d).
+
+    When there is no signal the carrier is left at its ``None`` default: a build that
+    nonetheless reaches ``artifact_draft`` degrades to the configured default and logs
+    ``artifact_build_intent_missed`` — a missed prediction (§3b, AC-11). The missed
+    turn's request text is already on the ``task_started`` log under the same
+    ``trace_id``, so the miss event need not re-log it (avoids duplicating user text).
+
+    Args:
+        ctx: The execution context; ``ctx.gateway_output.intent.signals`` carries the
+            classifier signals and ``ctx.user_id`` scopes the stored preference.
+    """
+    from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
+        set_artifact_builder_resolution,
+    )
+
+    signals = ctx.gateway_output.intent.signals if ctx.gateway_output is not None else []
+    if "artifact_build_intent" not in signals:
+        # No prediction — leave the carrier None; a build that still reaches the
+        # boundary logs a tunable miss (§3b/AC-11).
+        return
+
+    decision = await _maybe_pause_for_constraint(
+        session_id=ctx.session_id,
+        trace_id=ctx.trace_id,
+        user_id=ctx.user_id,
+        constraint="artifact_builder",
+        context="Choose the model to build this artifact.",
+    )
+    ctx.artifact_builder_resolution = decision
+    set_artifact_builder_resolution(decision)
+    log.info(
+        "artifact_builder_resolved_at_turn_start",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        action_id=str(decision),
+        resolution=decision.resolution,
+    )
+
+
 async def step_init(
     ctx: ExecutionContext, session_manager: SessionManager, trace_ctx: TraceContext
 ) -> TaskState:
@@ -2731,6 +2801,15 @@ async def step_init(
         ctx, cost_gate_blocks, native_pdf_page_count=native_pdf_page_count
     ):
         return TaskState.SYNTHESIS
+
+    # --- ADR-0122 §2/§3d/§4 (T5/FRE-930): raise the per-build artifact-builder
+    # decision at TURN START — before the first LLM call and any tool runs — off the
+    # artifact_build_intent signal the gateway emits (T4/FRE-929). The card
+    # determination depends on nothing the turn computes, so asking here (vs the build
+    # boundary) moves it from ~117 s after the request to ~0 s (the AC-7 failure).
+    # Ordered AFTER the attachment_cost gate above: declining it returns SYNTHESIS, so
+    # no build follows and a builder question first would be wasted (§3d, AC-14 a/d).
+    await _maybe_resolve_artifact_builder(ctx)
 
     # --- Gateway-driven path: skip inline routing and memory ---
     if ctx.gateway_output is not None:

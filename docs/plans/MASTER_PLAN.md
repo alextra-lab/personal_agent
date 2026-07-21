@@ -12,15 +12,21 @@
 waiter bypasses its own timeout when no socket is registered, so a momentary drop became a permanent
 silent default. Routing itself was correct end to end.
 
-**Owner has made the design call: the card moves to the START of the turn**, so the chosen builder's
-max-output and context are inputs to planning (cf. FRE-478, where the builder hit an output cap
-mid-generation). Measured: the card check is deterministic and takes <1ms, but sat 117s into the turn
-behind research tools — by which point the user had disengaged. **ADR-0122 amendment is with the adrs
-seat**; it decides the early-ask trigger, false-positive/negative handling, and preference interaction.
+**Amendment merged** (PR #606, `d5950eed`): the card fires in `step_init` before the first LLM call,
+ordered after the existing attachment-cost gate. Awaiting owner approval, in order:
 
-- **FRE-928** (timeout bypass + stale-constant status bar) — Needs Approval, **held by master** pending
-  the amendment, which may reshape it.
-- **AC-7 re-run** is blocked until the amendment lands and ships.
+- **FRE-929** (T4, Haiku) — emit a distinct artifact-build signal; the regex already exists (FRE-469)
+  but is unioned into the generic tool-intent patterns. Purely additive.
+- **FRE-930** (T5, Opus) — move the ask to turn start. Adds a *third* pause to a turn that already has
+  a documented cross-contamination bug (FRE-749); AC-14 asserts isolation.
+- **FRE-931** (T6, Sonnet) — **the seam; re-runs AC-7.** Also fixes a live defect: `_draft_max_tokens()`
+  is a flat 32768 regardless of the pick, against declared caps of 8192 / 4096 / **2048** — up to a
+  16× overshoot, and the card shows the user a number the build does not use.
+- **FRE-928** — released from hold. The amendment reduces exposure but does not repair the waiter, and
+  it is the prerequisite for AC-5's timeout leg. Ships on its own merits.
+
+**Open question, decides FRE-931's severity:** whether exceeding our declared cap actually fails at the
+provider, or merely violates local policy. If it fails, every non-default pick is broken today.
 
 ## 0b. ADR-0121 / FRE-887 — AC-9 still open
 

@@ -210,11 +210,32 @@ Full coding standards in `.claude/CLAUDE.md` § Coding Standards. Quick summary:
 - Async for all I/O; pass `TraceContext` through call chains
 - Test markers: `integration` (requires live LLM), `requires_llm_server`, `evaluation` (100+ calls) — unit tests carry no marker
 
-### Current status (as of 2026-06-08)
+### Current status — see the authoritative sources
 
-Portfolio organized as **L0–L3 substrate-pillars-vs-consumers** (`docs/specs/SESHAT_PROGRAM_ARCHITECTURE.md`, FRE-504). **Three active projects:**
+This section deliberately holds **no status narrative**. A second copy of "what's active" rots within
+weeks, costs context on every session, and disagrees with the real source. Instead:
+
+| Question | Authoritative source |
+|----------|----------------------|
+| What are we doing next, in order? | `docs/plans/MASTER_PLAN.md` (forward plans only) |
+| What did the last session decide? | `docs/plans/sessions/` → `LAST_SESSION.md` |
+| What shipped, and when? | `git log` |
+| Why was this decided? | The Linear ticket's comments |
+| What is ADR-XXXX's status? | That ADR's own `Status:` header (`docs/architecture_decisions/`) |
+| Per-ticket state | [Linear](https://linear.app/frenchforest) — FrenchForest team |
+
+Structural context that does *not* change week to week: the portfolio is organised as **L0–L3
+substrate-pillars-vs-consumers** (`docs/specs/SESHAT_PROGRAM_ARCHITECTURE.md`, FRE-504), and
+`docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md` remains the primary architecture reference.
+
+<details>
+<summary>Historical snapshot (2026-06-08) — retained for context, not maintained</summary>
+
+**Three active projects:**
 - **Telemetry Surface Audit** (L0 — ES emit↔mapping↔dashboard reconciliation, **ADR-0090**): FRE-533 1023-row inventory ✅ (14 broken Kibana panels confirmed) → 534/535 buildable → 536–539.
 - **Observability Foundation** (L0 — **ADR-0088** topology spine): 518 live-render bug ✅, 505 sub-agent audit ✅; 523/517/522 buildable; 453 eval set gated on the conversation driver FRE-541.
 - **Artifact Execution Security** (L2 — **ADR-0089** sealed-box, Implemented + Addendum A curated `/lib/` toolkit): 526 meter ✅ + 527 `/lib/` hosted+verified ✅ live; 528–532 buildable.
 
-Standing research pillars: **Memory Recall Quality** (ADR-0087 **Accepted 2026-06-27**, FRE-435) · **Seshat Inference Architecture** (ADR-0082). Recent ADRs: **0088** Accepted · **0089** Implemented · **0090** Accepted · **0091** Accepted · **0092** Implemented · **0093** Accepted (scoped) · **0094**/**0095** Proposed · **0096** Accepted (memory access model — coordinated hybrid; chain FRE-613–618 Needs-Approval) · **0097** Proposed (ingested-knowledge taxonomy, hypothesis — supersedes **0071**) · **0098** Accepted (memory substrate & lifecycle — implements 0097, supersedes 0071 arch half; build wave **FRE-637–642 Approved**, 637 head/extraction-first, 642 seam; 643 Tier-3 deferred) · **0099** Accepted (config management & validation — single-source role matrix + validator; impl chain FRE-648→649→650 Approved, 651/652 to follow; FRE-649 corrects local nano→mini drift) · **0100** Accepted (memory recall — relevance-bounded candidate generation; Phase-2 recall fix, FRE-494; vector top-k de-gate + similarity floor + recency-as-weight; impl FRE-653→654→655 **Approved**, seam FRE-655; FRE-656 embedder benchmark held) · **0101** Proposed (agent vision ingestion of uploaded attachments — turn-assembly resolution + server-side credentialed R2 fetch + capability-driven routing fail-closed; FRE-662 design; impl project "Agent Vision and Attachment Ingestion" FRE-661/664–669 Needs-Approval, seam FRE-669) · **0108** Proposed (stored-artifact vision re-processing — re-vision a stored image via credentialed re-fetch + analyze-to-text; impl FRE-743–748 Needs-Approval). _(0102–0107 not enumerated here — MASTER_PLAN is authoritative.)_ Earlier complete: Waves A–C/E/J; Wave H (FRE-375/374/376) + Wave I (FRE-403 EPIC, FRE-404–409); **ADR-0081 cache chain** (D1/D4/D2/D3) shipped + live. Waves D (deferred per FRE-214 §8.7), F, G partial. **`docs/plans/MASTER_PLAN.md` is authoritative for current priorities + sequencing.**
+Standing research pillars: **Memory Recall Quality** (ADR-0087 **Accepted 2026-06-27**, FRE-435) · **Seshat Inference Architecture** (ADR-0082). Recent ADRs: **0088** Accepted · **0089** Implemented · **0090** Accepted · **0091** Accepted · **0092** Implemented · **0093** Accepted (scoped) · **0094**/**0095** Proposed · **0096** Accepted (memory access model — coordinated hybrid; chain FRE-613–618 Needs-Approval) · **0097** Proposed (ingested-knowledge taxonomy, hypothesis — supersedes **0071**) · **0098** Accepted (memory substrate & lifecycle — implements 0097, supersedes 0071 arch half; build wave **FRE-637–642 Approved**, 637 head/extraction-first, 642 seam; 643 Tier-3 deferred) · **0099** Accepted (config management & validation — single-source role matrix + validator; impl chain FRE-648→649→650 Approved, 651/652 to follow; FRE-649 corrects local nano→mini drift) · **0100** Accepted (memory recall — relevance-bounded candidate generation; Phase-2 recall fix, FRE-494; vector top-k de-gate + similarity floor + recency-as-weight; impl FRE-653→654→655 **Approved**, seam FRE-655; FRE-656 embedder benchmark held) · **0101** Proposed (agent vision ingestion of uploaded attachments — turn-assembly resolution + server-side credentialed R2 fetch + capability-driven routing fail-closed; FRE-662 design; impl project "Agent Vision and Attachment Ingestion" FRE-661/664–669 Needs-Approval, seam FRE-669) · **0108** Proposed (stored-artifact vision re-processing — re-vision a stored image via credentialed re-fetch + analyze-to-text; impl FRE-743–748 Needs-Approval). _(0102–0107 not enumerated here — MASTER_PLAN is authoritative.)_ Earlier complete: Waves A–C/E/J; Wave H (FRE-375/374/376) + Wave I (FRE-403 EPIC, FRE-404–409); **ADR-0081 cache chain** (D1/D4/D2/D3) shipped + live. Waves D (deferred per FRE-214 §8.7), F, G partial.
+
+</details>

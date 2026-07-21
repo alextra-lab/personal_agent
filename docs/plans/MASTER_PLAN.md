@@ -28,6 +28,18 @@ ordered after the existing attachment-cost gate. Awaiting owner approval, in ord
 **Open question, decides FRE-931's severity:** whether exceeding our declared cap actually fails at the
 provider, or merely violates local policy. If it fails, every non-default pick is broken today.
 
+## 0c. ADR-0123 turn progress surface — merged, tickets pending
+
+The transport models tool execution and **not inference** (verified: zero transport references to
+planning/sub-agent/artifact_draft vs 14 for tool events). Every long silence measured today was an
+inference step, so the system is silent precisely where it works longest. Silence → disengagement →
+dropped socket → decision resolved without the user, which makes this **upstream of FRE-928**, not
+parallel. Implementation tickets follow from the adrs seat.
+
+Live condition for whoever implements: `turn_status` already carries `tool_iteration_max` and
+`context_max`, but **both are currently emitted as `0`** between turns. Absent-vs-zero (ADR-0123 §5)
+is a present defect, not a future principle.
+
 ## 0b. ADR-0121 / FRE-887 — AC-9 still open
 
 Needs **one owner turn**: picker renders real candidates → switch model → next turn runs on it →

@@ -107,6 +107,24 @@ async def _purge(service: MemoryService, prefix: str) -> None:
         )
 
 
+async def _uncrowded_limit(service: MemoryService) -> int:
+    """A ``structural_recall_arm`` limit the shared substrate cannot exceed.
+
+    The shared test Neo4j (``build-neo4j-test-1``) accumulates entities across
+    every ticket's runs, so the arm's default ``structural_arm_top_k`` (an
+    unscoped top-K ordered by recency) can crowd this test's own freshly
+    seeded rows out of the result before Python ever sees them — a post-hoc
+    prefix filter cannot recover a row Neo4j's ``LIMIT`` already dropped
+    (FRE-925). Sizing the limit to the graph's actual entity count, plus a
+    margin for concurrent writers, guarantees this test's own rows are never
+    truncated regardless of substrate size.
+    """
+    async with service.driver.session() as session:
+        result = await session.run("MATCH (e:Entity) RETURN count(e) AS c")
+        record = await result.single()
+        return record["c"] + 1000
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -183,8 +201,11 @@ async def test_class_scoped_recall_keeps_unclassified_entities(memory_service, m
     monkeypatch.setattr(get_settings(), "structural_arm_enabled", True, raising=False)
     monkeypatch.setattr(get_settings(), "structural_class_predicate_enabled", True, raising=False)
     try:
-        result = await memory_service.structural_recall_arm(entity_classes=["World"])
-        names = {e.name for e in result}
+        # FRE-925: scope to a limit the shared substrate can't exceed, then
+        # assert only on this test's own prefix — not on an unscoped top-K.
+        limit = await _uncrowded_limit(memory_service)
+        result = await memory_service.structural_recall_arm(entity_classes=["World"], limit=limit)
+        names = {e.name for e in result if e.name.startswith(prefix)}
         # The requested class AND the unclassified row survive (ADR-0115 D4 fail-open).
         assert world in names
         assert unclassified in names
@@ -208,8 +229,11 @@ async def test_open_axis_not_filtered(memory_service, monkeypatch):
     try:
         # No type predicate, no anchors: a plain closed-axis scan must not filter
         # on the free-text name axis.
-        result = await memory_service.structural_recall_arm(recency_days=30)
-        names = {e.name for e in result}
+        # FRE-925: scope to a limit the shared substrate can't exceed, then
+        # assert only on this test's own prefix — not on an unscoped top-K.
+        limit = await _uncrowded_limit(memory_service)
+        result = await memory_service.structural_recall_arm(recency_days=30, limit=limit)
+        names = {e.name for e in result if e.name.startswith(prefix)}
         assert a in names
         assert b in names
     finally:
@@ -227,8 +251,11 @@ async def test_recency_window_filters(memory_service, monkeypatch):
 
     monkeypatch.setattr(get_settings(), "structural_arm_enabled", True, raising=False)
     try:
-        result = await memory_service.structural_recall_arm(recency_days=30)
-        names = {e.name for e in result}
+        # FRE-925: scope to a limit the shared substrate can't exceed, then
+        # assert only on this test's own prefix — not on an unscoped top-K.
+        limit = await _uncrowded_limit(memory_service)
+        result = await memory_service.structural_recall_arm(recency_days=30, limit=limit)
+        names = {e.name for e in result if e.name.startswith(prefix)}
         assert recent in names
         assert stale not in names
     finally:

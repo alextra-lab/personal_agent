@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v32-model-picker';
+const CACHE_NAME = 'seshat-v33-builder-card';
 
 const PRECACHE_URLS = [
   '/',

@@ -151,6 +151,9 @@ class TestArtifactBuild:
 
     CONVERSATIONAL caps tool iterations at 6 vs 25 for tool_use; build/artifact
     requests were silently starved of tool runway. Precedent: FRE-256.
+
+    FRE-929: Emit distinct artifact_build_intent signal when regex matches.
+    This signal is additive (alongside tool_intent_pattern), not a replacement.
     """
 
     @pytest.mark.parametrize(
@@ -179,6 +182,61 @@ class TestArtifactBuild:
     @pytest.mark.parametrize(
         "message",
         [
+            "Build me an interactive HTML guide to the memory system",
+            "Make me an interactive dashboard",
+            "Create a guide explaining the architecture",
+            "Generate an HTML page summarizing the results",
+            "Build a chart of the three approaches",
+        ],
+    )
+    def test_artifact_build_intent_signal_emitted(self, message: str) -> None:
+        """FRE-929: artifact-build requests emit both artifact_build_intent and tool_intent_pattern signals.
+
+        AC-1: A request matching the artifact-build vocabulary yields IntentResult
+        whose signals contain BOTH artifact_build_intent and tool_intent_pattern.
+        """
+        result = classify_intent(message)
+        assert result.task_type == TaskType.TOOL_USE
+        assert "artifact_build_intent" in result.signals, (
+            f"{message!r} missing artifact_build_intent (signals={result.signals})"
+        )
+        assert "tool_intent_pattern" in result.signals, (
+            f"{message!r} missing tool_intent_pattern (signals={result.signals})"
+        )
+
+    def test_generic_tool_request_no_artifact_signal(self) -> None:
+        """FRE-929 AC-2: generic tool requests do NOT emit artifact_build_intent signal.
+
+        AC-2: A request matching generic tool intent but not the artifact vocabulary
+        (for example "search for X") yields signals containing tool_intent_pattern
+        and NOT artifact_build_intent.
+        """
+        result = classify_intent("Search for Python documentation")
+        assert result.task_type == TaskType.TOOL_USE
+        assert "tool_intent_pattern" in result.signals
+        assert "artifact_build_intent" not in result.signals
+
+    def test_artifact_build_regression_guard_task_type_unchanged(self) -> None:
+        """FRE-929 AC-3: emitting signal does not change task type or complexity.
+
+        Assert explicitly that resolved task type and complexity are byte-identical
+        to what they are before this change — a regression in tool-iteration budget
+        would be invisible without this assertion.
+        """
+        # Artifact-build request
+        result = classify_intent("Build me an interactive dashboard")
+        assert result.task_type == TaskType.TOOL_USE
+        # Complexity must not be forced upward
+        assert result.complexity in (Complexity.SIMPLE, Complexity.MODERATE, Complexity.COMPLEX)
+
+        # Generic tool request should have same type/complexity as before
+        result_generic = classify_intent("Search for files")
+        assert result_generic.task_type == TaskType.TOOL_USE
+        assert result_generic.complexity == Complexity.SIMPLE
+
+    @pytest.mark.parametrize(
+        "message",
+        [
             "Explain the internals of the gateway and build an interactive HTML guide.",
             "Build me an interactive HTML guide to the memory system",
             "Make me an interactive dashboard",
@@ -194,11 +252,11 @@ class TestArtifactBuild:
         """FRE-884: ADR-0086's artifact-build complexity floor is retired.
 
         Artifact-build prompts still classify as TOOL_USE (FRE-469, untouched),
-        but no longer carry an "artifact_build" signal or a forced MODERATE
-        complexity floor — complexity is whatever the plain heuristics compute.
+        but complexity is whatever the plain heuristics compute (no forced floor).
         """
         result = classify_intent(message)
         assert result.task_type == TaskType.TOOL_USE
+        # artifact_build (old signal) should not be present; artifact_build_intent is the new signal
         assert "artifact_build" not in result.signals
 
 

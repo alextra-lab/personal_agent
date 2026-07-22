@@ -23,6 +23,15 @@ is a present defect, not a future principle.
 Bounced 2026-07-22 for a missing self-review handoff (code-review + security-review + codex verdict);
 CI green. build1 to re-present. Not owner-blocking.
 
+## 0b. Session-summary KG thread — explored, awaiting a measure-first gate
+
+cc-explore writeup landed: `docs/research/2026-07-22-session-summary-kg-opportunity.md`. Findings: the
+session summary is written every turn on Sonnet, wholesale, clipped to 200 chars (discards ~88% of
+assistant text), and sits off **both** KG retrieval paths (unembedded, unprojected) — currently
+unconsumed. Shipped code (FRE-347) **inverted ADR-0024** (which deferred lazy generation). **Next step
+is the owner's:** the §C measure-first diagnostic (are there real session-outcome recall misses the
+entity/turn grains can't catch?) **before** any build. No ticket filed — decision-first.
+
 ## 1. Reduce the backlog
 
 ~80 Approved; most carry no stream label (parked). Live queue: build1 on FRE-928 → FRE-938 → FRE-926;

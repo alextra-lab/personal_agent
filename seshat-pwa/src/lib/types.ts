@@ -195,12 +195,14 @@ export interface ProviderView {
   max_concurrency: number;
 }
 
-/** Per-role entry in the config-read payload — session-scoped fields are optional. */
+/** Per-role entry in the config-read payload. */
 export interface SessionConfigRole {
   open: boolean;
-  /** Present only on the session-scoped `GET /{id}/config` read. */
+  /** Resolved deployment key — the session's live selection, or the catalog
+   *  default when there is no session (sessionless read) or no stored
+   *  selection (FRE-938). Optional only for defensive typing. */
   resolved?: string;
-  /** Present only on the session-scoped `GET /{id}/config` read. */
+  /** How `resolved` was determined — `"server-hydrated"` or `"default"`. */
   provenance?: string;
   /** Present only for `open` roles. */
   candidates?: DeploymentView[];

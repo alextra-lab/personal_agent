@@ -15,8 +15,12 @@ export interface UseSessionConfigResult {
   /**
    * True once a session-scoped read has succeeded — `roles.primary.resolved`
    * reflects the session's actual selection. False while only the sessionless
-   * fallback has loaded (a brand-new conversation with no DB row yet), so the
-   * picker can show "not yet set" instead of a stale/misleading resolved value.
+   * fallback has loaded (a brand-new conversation with no DB row yet, or no
+   * session at all). Since FRE-938 the sessionless read also resolves a
+   * catalog default per role, so `resolved` is populated either way —
+   * consumers decide per their own UI whether `false` should still suppress
+   * it (`ModelPicker` shows "not yet set"; `ObserveView` shows the default,
+   * labelled via its own "showing catalog defaults" banner).
    */
   hydrated: boolean;
   refetch: () => void;

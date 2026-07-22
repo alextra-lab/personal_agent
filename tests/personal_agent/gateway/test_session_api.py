@@ -848,3 +848,67 @@ def test_get_session_config_401_without_cf_access_header() -> None:
         resp = client.get(f"/api/v1/sessions/{sid}/config")
 
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/config — sessionless picker/observe-view read API (FRE-938)
+# ---------------------------------------------------------------------------
+
+
+def test_get_config_returns_resolved_default_for_every_role() -> None:
+    """The sessionless config resolves a default deployment for every role.
+
+    Open and pinned alike — AC-1. Before FRE-938 this endpoint omitted
+    `resolved`/`provenance` entirely, which is what drove the Observe page's
+    em-dash-for-every-role bug.
+    """
+    with patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP):
+        app = FastAPI()
+        app.include_router(create_gateway_router())
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get("/api/v1/config", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    roles = resp.json()["roles"]
+    assert roles  # the catalog declares at least one role
+    for role, entry in roles.items():
+        assert "resolved" in entry, role
+        assert entry["provenance"] == "default", role
+    # At least one pinned role is covered (not silently skipped).
+    assert any(not entry["open"] for entry in roles.values())
+
+
+def test_get_config_resolved_matches_session_scoped_no_selection_default() -> None:
+    """AC-2 — the two endpoints must not disagree about what the default is.
+
+    Compares `GET /api/v1/config`'s per-role `resolved` value against
+    `GET /sessions/{id}/config`'s value for a session with an empty selection
+    store, for every declared role. Both route through the same pure helper
+    (`_resolve_role_binding(role, config, None)`), so this holds by
+    construction rather than coincidence — this test is the proof.
+    """
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(patch(_SELECTION_GET_ALL, new_callable=AsyncMock, return_value={}))
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+        )
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            sessionless_resp = client.get("/api/v1/config", headers=_AUTH_HEADERS)
+            session_scoped_resp = client.get(
+                f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS
+            )
+
+    sessionless_roles = sessionless_resp.json()["roles"]
+    session_scoped_roles = session_scoped_resp.json()["roles"]
+    assert sessionless_roles.keys() == session_scoped_roles.keys()
+    for role in sessionless_roles:
+        assert sessionless_roles[role]["resolved"] == session_scoped_roles[role]["resolved"], role
+        assert sessionless_roles[role]["provenance"] == "default", role
+        assert session_scoped_roles[role]["provenance"] == "default", role

@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v34-unknown-tool-gauge';
+const CACHE_NAME = 'seshat-v35-session-continuity-fallback';
 
 const PRECACHE_URLS = [
   '/',

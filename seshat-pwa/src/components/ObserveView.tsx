@@ -13,8 +13,9 @@
  *    writer roles (entity_extraction, captains_log, embedding, reranker, …)
  *    show "pinned" with no candidates/provenance.
  * 2. Navigate to /observe directly (no session, e.g. a fresh tab) — falls back
- *    to the sessionless config; roles render without a resolved/provenance
- *    column (nothing to resolve without a session).
+ *    to the sessionless config, which now resolves every role to its catalog
+ *    default (FRE-938); no query param or stored key also triggers a server
+ *    lookup for the most recent session before settling on that fallback.
  * 3. Provider table shows placement (local/cloud), live availability dot, and
  *    max_concurrency for every provider in the catalog.
  * 4. "← Conversations" back link returns to the most recent session (/).
@@ -22,12 +23,12 @@
 
 'use client';
 
+import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
 import { useSessionConfig } from '@/hooks/useSessionConfig';
-
-const LAST_SESSION_KEY = 'seshat_last_session_id';
+import { LAST_SESSION_KEY, resolveLastSessionId } from '@/lib/session';
 
 function ListSkeleton() {
   return (
@@ -42,8 +43,24 @@ function ListSkeleton() {
 export function ObserveView() {
   const searchParams = useSearchParams();
   const querySessionId = searchParams.get('session') ?? undefined;
-  const lastSessionId =
-    typeof window !== 'undefined' ? (localStorage.getItem(LAST_SESSION_KEY) ?? undefined) : undefined;
+  const [lastSessionId, setLastSessionId] = useState<string | undefined>(() =>
+    typeof window !== 'undefined' ? (localStorage.getItem(LAST_SESSION_KEY) ?? undefined) : undefined,
+  );
+
+  useEffect(() => {
+    // A query param or a stored key is already known synchronously above —
+    // only ask the server when both are absent (AC-5: no added network call
+    // on the common path where the key is present).
+    if (querySessionId || lastSessionId) return;
+    let cancelled = false;
+    resolveLastSessionId().then((id) => {
+      if (!cancelled && id) setLastSessionId(id);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [querySessionId, lastSessionId]);
+
   const sessionId = querySessionId ?? lastSessionId;
 
   const { roles, providers, loading, hydrated } = useSessionConfig(sessionId);
@@ -95,7 +112,7 @@ export function ObserveView() {
                       {entry.open ? 'Open' : 'Pinned'}
                     </span>
                     <span className="font-medium text-slate-100 w-36 flex-shrink-0 truncate">{role}</span>
-                    {hydrated && entry.resolved ? (
+                    {entry.resolved ? (
                       <span className="text-slate-400 truncate">
                         {entry.resolved}
                         {entry.provenance && (

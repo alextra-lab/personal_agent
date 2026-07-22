@@ -235,3 +235,45 @@ explicitly deferred; Lane 5 reassigned; the inversion explicitly out.
 **Integration path:** adr session writes the ADR → master creates the ticket chain Phase 0 → 1 → 2 → 3,
 each its own PR, with Phase 4 filed as a gated follow-up carrying the §C diagnostic as its unblock
 condition.
+
+## E.6 Known issue — no dedicated model role for the summarizer (documented, DEFERRED)
+
+**Finding.** `second_brain/session_summary.py:131` resolves its model with
+`resolve_role_model_key("captains_log")` — it *borrows* the captains_log role. **There is no
+`session_summary` role**: absent from `config/model_roles.yaml` (both the `all` and `deployment`
+profiles), absent elsewhere in `config/`, and absent from the `config_guard._ROLE_HEADER_RE` known-role
+list (`entity_extraction | captains_log | insights | compressor | embedding | reranker`). So the model
+is **role-bound, not hardcoded** — but it has no knob of its own.
+
+**Consequence.** The summarizer's model is **not independently tunable**: changing it also changes the
+captains_log *reflection* model, because they share one role. Any model experiment for summarization is
+blocked by that shared knob.
+
+**How we got here — drift, but narrowly.** The `captains_log → claude_sonnet` binding was a
+**deliberate owner decision**: Sonnet made a large quality difference for reflection. The drift is only
+that **session summarization inherited that binding without an evaluation of its own**. The module
+docstring still carries the original intent — *"Defaults to `gpt-5.4-nano` (cheap, structured)"* —
+which is stale as a fact, but records that a cheap structured model was what the design first
+envisioned. Nobody chose Sonnet *for summarization*; it arrived by role-sharing.
+
+**The open question.** A high-quality model is doing the job today, and doing it well. The question is
+whether a **lesser model could do it**. There is precedent for empirical model selection here:
+`entity_extraction` was tested and moved nano → **gpt-5.4-mini**; and the **`compressor` role is
+gpt-5.4-mini and already performs structured summarization** (Decisions/Entities/Facts/Open Items,
+200 words) in the *live* path under latency pressure.
+
+**Prerequisites to answer it.** (a) Add a dedicated `session_summary` role — `config/model_roles.yaml`
+(both profiles), the `config_guard` known-role regex, models.yaml wiring — **defaulted to
+`claude_sonnet`** so behaviour is unchanged on landing and the experiment becomes a config flip rather
+than a code change; (b) decide whether `budget_role` stays `captains_log` (passed explicitly today at
+`:152`) or gets its own lane for clean cost attribution.
+
+**Methodological caveat.** Do **not** A/B on the *current* producer — comparing two models on
+200-char-clipped, tool-blind input measures nothing, since both receive mutilated input. Fix the
+producer first, and judge on **retrieval utility** (does the digest embed/correlate; does it support
+the Lane 3 collision check), never on whether it reads nicely.
+
+**Status: DEFERRED — explicitly NOT a Phase 0 action.** Owner direction (2026-07-22): revisit when this
+converges with **structured conversation context** (summary + facts + procedural context —
+Workstream 3), where the quality/cost tradeoff can be judged against the *assembled context* rather
+than the summary in isolation.

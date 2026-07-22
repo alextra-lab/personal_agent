@@ -120,12 +120,15 @@ async def test_step_init_populates_planning_note_with_resolved_deployment_budget
 ) -> None:
     """ADR-0122 §5/T6: the note names the resolved deployment's effective budget.
 
-    A non-default pick (claude_haiku, declared max_tokens 4096) so the note cannot
-    coincidentally match the configured default (claude_sonnet, 32768).
+    A non-default pick (gpt-5.4-mini, declared max_tokens 8192) so the note cannot
+    coincidentally match the configured default (claude_sonnet, 32768). claude_haiku
+    is no longer usable here: its declared cap is now 64000 (the real provider
+    ceiling), which the 32768 operator ceiling clamps back to 32768 — identical to
+    the default, defeating the point of a non-default pick.
     """
     sm = SessionManager()
     ctx = _ctx(sm, signals=["tool_intent_pattern", "artifact_build_intent"])
-    decision = ConstraintDecision("claude_haiku", "user_choice")
+    decision = ConstraintDecision("gpt-5.4-mini", "user_choice")
     pause = AsyncMock(return_value=decision)
     monkeypatch.setattr(executor_mod, "_maybe_pause_for_constraint", pause)
     # Bypass the live provider-availability check (no ANTHROPIC_API_KEY in the test
@@ -139,9 +142,9 @@ async def test_step_init_populates_planning_note_with_resolved_deployment_budget
     await executor_mod.step_init(ctx, sm, TraceContext.new_trace())
 
     assert ctx.artifact_builder_planning_note is not None
-    assert "claude_haiku" in ctx.artifact_builder_planning_note
-    assert "4096" in ctx.artifact_builder_planning_note
-    assert "200000" in ctx.artifact_builder_planning_note  # claude_haiku's context_length
+    assert "gpt-5.4-mini" in ctx.artifact_builder_planning_note
+    assert "8192" in ctx.artifact_builder_planning_note
+    assert "128000" in ctx.artifact_builder_planning_note  # gpt-5.4-mini's context_length
 
 
 async def test_step_init_no_planning_note_without_signal(

@@ -1169,8 +1169,8 @@ async def test_ac13_stored_preference_end_to_end_no_pause_correct_sizing(
     no ``ConstraintPauseEvent`` is ever pushed, and — via the same step_init →
     asyncio.gather → artifact_draft path as
     ``test_resolution_survives_step_init_to_gather_dispatch`` — that the generation
-    call's requested ``max_tokens`` equals the preferred deployment's (claude_haiku,
-    4096) derived budget, not the global constant (32768). This is the exact
+    call's requested ``max_tokens`` equals the preferred deployment's (gpt-5.4-mini,
+    8192) derived budget, not the global constant (32768). This is the exact
     invisible failure AC-13 exists to catch: an implementation could pass AC-12 on
     the card path while still sizing the silent preference path off the constant.
     """
@@ -1191,7 +1191,7 @@ async def test_ac13_stored_preference_end_to_end_no_pause_correct_sizing(
     )
     from personal_agent.telemetry.trace import TraceContext
 
-    _store, client = _install_draft_fakes(monkeypatch, completion_tokens=4096)
+    _store, client = _install_draft_fakes(monkeypatch, completion_tokens=8192)
     monkeypatch.setattr(
         "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
         lambda selected_key, config, **_kw: selected_key,
@@ -1199,7 +1199,7 @@ async def test_ac13_stored_preference_end_to_end_no_pause_correct_sizing(
     key_spy = _KeyFactorySpy(client)
     monkeypatch.setattr("personal_agent.llm_client.factory.get_llm_client_for_key", key_spy)
     monkeypatch.setattr(
-        executor_mod, "_load_constraint_preference", AsyncMock(return_value="claude_haiku")
+        executor_mod, "_load_constraint_preference", AsyncMock(return_value="gpt-5.4-mini")
     )
     push_pause = AsyncMock()
     monkeypatch.setattr(
@@ -1234,12 +1234,12 @@ async def test_ac13_stored_preference_end_to_end_no_pause_correct_sizing(
     await executor_mod.step_init(ctx, sm, trace)
 
     assert ctx.artifact_builder_resolution == ConstraintDecision(
-        "claude_haiku", "preference_applied"
+        "gpt-5.4-mini", "preference_applied"
     )
     push_pause.assert_not_awaited()  # no card — the preference resolved silently
     assert ctx.artifact_builder_planning_note is not None
-    assert "claude_haiku" in ctx.artifact_builder_planning_note
-    assert "4096" in ctx.artifact_builder_planning_note
+    assert "gpt-5.4-mini" in ctx.artifact_builder_planning_note
+    assert "8192" in ctx.artifact_builder_planning_note
 
     (out,) = await asyncio.gather(
         artifact_tools.artifact_draft_executor(
@@ -1248,8 +1248,8 @@ async def test_ac13_stored_preference_end_to_end_no_pause_correct_sizing(
     )
 
     assert "artifact_id" in out
-    assert key_spy.calls == [("claude_haiku", "artifact_builder")]
-    assert client.respond_calls[0]["max_tokens"] == 4096  # claude_haiku's declared cap
+    assert key_spy.calls == [("gpt-5.4-mini", "artifact_builder")]
+    assert client.respond_calls[0]["max_tokens"] == 8192  # gpt-5.4-mini's declared cap
     assert client.respond_calls[0]["max_tokens"] != settings.artifact_draft_max_tokens
 
 
@@ -1625,14 +1625,14 @@ async def test_artifact_draft_max_tokens_is_configurable(
 async def test_artifact_draft_ac12a_model_below_ceiling_model_wins(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-12(a): claude_haiku (declared max_tokens 4096) under the default 32768 ceiling.
+    """AC-12(a): gpt-5.4-mini (declared max_tokens 8192) under the default 32768 ceiling.
 
-    Requests 4096, and the truncation-warning threshold is likewise 4096.
+    Requests 8192, and the truncation-warning threshold is likewise 8192.
     """
     events: list[tuple[str, dict[str, Any]]] = []
-    _store, client = _install_draft_fakes(monkeypatch, completion_tokens=4096)
+    _store, client = _install_draft_fakes(monkeypatch, completion_tokens=8192)
     _spy_artifact_log(monkeypatch, events)
-    _install_builder_decision(resolution="user_choice", action_id="claude_haiku")
+    _install_builder_decision(resolution="user_choice", action_id="gpt-5.4-mini")
     monkeypatch.setattr(
         "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
         lambda selected_key, config, **_kw: selected_key,
@@ -1645,10 +1645,10 @@ async def test_artifact_draft_ac12a_model_below_ceiling_model_wins(
         slug="haiku-under-ceiling", title="T", summary="S", plan="A plan.", ctx=_ctx()
     )
 
-    assert client.respond_calls[0]["max_tokens"] == 4096
+    assert client.respond_calls[0]["max_tokens"] == 8192
     cap_hits = [kw for ev, kw in events if ev == "artifact_draft_output_cap_hit"]
     assert len(cap_hits) == 1
-    assert cap_hits[0]["max_tokens"] == 4096
+    assert cap_hits[0]["max_tokens"] == 8192
 
 
 @pytest.mark.asyncio
@@ -1692,8 +1692,8 @@ async def test_artifact_draft_ac13_preference_path_sizes_to_deployment(
     without threading the deployment into the budget, would still request the global
     constant here — this is the invisible failure AC-13 exists to catch.
     """
-    _store, client = _install_draft_fakes(monkeypatch, completion_tokens=4096)
-    _install_builder_decision(resolution="preference_applied", action_id="claude_haiku")
+    _store, client = _install_draft_fakes(monkeypatch, completion_tokens=8192)
+    _install_builder_decision(resolution="preference_applied", action_id="gpt-5.4-mini")
     monkeypatch.setattr(
         "personal_agent.orchestrator.constraint_options.resolve_artifact_builder_key",
         lambda selected_key, config, **_kw: selected_key,
@@ -1706,7 +1706,7 @@ async def test_artifact_draft_ac13_preference_path_sizes_to_deployment(
         slug="preference-sizing", title="T", summary="S", plan="A plan.", ctx=_ctx()
     )
 
-    assert client.respond_calls[0]["max_tokens"] == 4096  # claude_haiku's declared cap
+    assert client.respond_calls[0]["max_tokens"] == 8192  # gpt-5.4-mini's declared cap
     assert client.respond_calls[0]["max_tokens"] != settings.artifact_draft_max_tokens
 
 

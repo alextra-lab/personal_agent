@@ -534,6 +534,99 @@ def test_get_session_selection_defaults_when_no_row() -> None:
     assert body["selection_provenance"] == "default"
 
 
+# ---------------------------------------------------------------------------
+# context_max reflects the session's actual selection, not the role default
+# (FRE-943 — the meter reported 131K/Qwen for a session actually running
+# 200K/Sonnet, because the old code resolved context_max off an in-turn-only
+# ContextVar that this plain HTTP path never populates).
+# ---------------------------------------------------------------------------
+
+
+def test_get_session_context_max_reflects_session_selection() -> None:
+    """GET /sessions/{id} reports the *selected* model's window, not the role default.
+
+    Session has a stored ``claude_sonnet`` (200K) selection while the primary
+    role's default is the local Qwen model (131K) — asserts against the
+    session's real selection, failing on the pre-fix behaviour that always
+    resolved off the (empty, on this HTTP path) in-turn ContextVar.
+    """
+    db_session = AsyncMock()
+    db_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0.0)))
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="cloud")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(
+            patch(_SELECTION_GET, new_callable=AsyncMock, return_value="claude_sonnet")
+        )
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["primary_selection"] == "claude_sonnet"
+    assert body["context_max"] == 200000
+
+
+def test_get_session_context_max_defaults_when_no_selection() -> None:
+    """A session with no stored selection still resolves context_max to the role default."""
+    db_session = AsyncMock()
+    db_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0.0)))
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(patch(_SELECTION_GET, new_callable=AsyncMock, return_value=None))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["primary_selection"] == "qwen3.6-35b-thinking"
+    assert body["context_max"] == 131072
+
+
+def test_get_session_context_max_resolution_failure_surfaces_as_500() -> None:
+    """An unresolvable selection 500s instead of silently reporting the configured fallback.
+
+    FRE-943: the old resolver swallowed any failure into a debug log and
+    returned ``settings.context_window_max_tokens`` — a plausible-looking
+    wrong number that let this exact bug hide until a screenshot caught it.
+    """
+    db_session = AsyncMock()
+    db_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0.0)))
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="cloud")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(
+            patch(_SELECTION_GET, new_callable=AsyncMock, return_value="claude_sonnet")
+        )
+        stack.enter_context(
+            patch(
+                "personal_agent.config.model_loader.resolve_role_target",
+                return_value=("claude_sonnet", None),
+            )
+        )
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 500
+    # This test harness doesn't register the gateway's error-flattening handler
+    # (that's wired in the production app factory — gateway/app.py), so
+    # FastAPI's default nests our structured detail under "detail".
+    assert resp.json()["detail"]["error"] == "context_max_unresolved"
+
+
 def test_patch_selection_updates_and_emits() -> None:
     """PATCH .../selection persists an open-role selection (scoped) and emits STATE_DELTA."""
     db_session = AsyncMock()

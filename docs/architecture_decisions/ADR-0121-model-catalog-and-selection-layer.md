@@ -1,6 +1,6 @@
 # ADR-0121: Model Catalog and Selection Layer — providers, deployments, bindings; the user selects the model
 
-**Status:** Accepted — 2026-07-19 (owner). Implementation chain FRE-887 (T1–T5, seam AC-9 on FRE-920), Approved; T1 (FRE-916) phase 1 merged 2026-07-19 — see AC-1/AC-3/AC-10 amendments.
+**Status:** Implemented — 2026-07-22. Accepted 2026-07-19 (owner). Full chain FRE-887 (T1–T5, seam AC-9 on FRE-920) shipped and deployed; **AC-9 proven live on the deployed stack 2026-07-22** (owner session 0a68ec3b — the model picker replaced the Path/profile pill, the conversation loop ran the selected model and changed qwen→haiku on switch, and the selection survived multiple PWA reopens and conversation switches). Path removed end to end.
 **Date:** 2026-07-19
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** config, model-routing, provider-abstraction, pwa, human-in-the-loop, observability

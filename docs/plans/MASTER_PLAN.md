@@ -18,12 +18,10 @@ Live condition for whoever implements: `turn_status` already carries `tool_itera
 `context_max`, but **both are currently emitted as `0`** between turns. Absent-vs-zero (ADR-0123 §5)
 is a present defect, not a future principle.
 
-## 0a. ADR-0121 / FRE-887 — AC-9 still open
+## 0a. FRE-938 session-continuity — In Review (bounced)
 
-_(FRE-938 session-continuity is In Review, bounced 2026-07-22 for a missing self-review handoff.)_
-
-Needs **one owner turn**: picker renders real candidates → switch model → next turn runs on it →
-survives reload → survives WS reconnect. Closes FRE-920. Unaffected by the above.
+Bounced 2026-07-22 for a missing self-review handoff (code-review + security-review + codex verdict);
+CI green. build1 to re-present. Not owner-blocking.
 
 ## 1. Reduce the backlog
 

@@ -6,22 +6,7 @@
 > per-ticket state → [Linear](https://linear.app/frenchforest).
 > **Last updated**: 2026-07-22
 
-## 0. ADR-0122 AC-7 — live verification, the one remaining step
-
-**Everything AC-7 needs is deployed** (2026-07-22): FRE-928 reconnect-survival (#613) and the
-provider-ceiling caps fix (#616) are live in the gateway, the PWA serves `seshat-v34`, both verified
-in-container. The caps question §0a used to guard is **settled** — the catalog now states provider
-truth (`claude_sonnet` 128000, `claude_haiku` 64000) and `settings.artifact_draft_max_tokens` (32768)
-is the single clamp; a Haiku pick now sizes to 32768, not 4096.
-
-The sole remaining step is **one owner build-intent turn** from the phone. It closes AC-7, verifies
-FRE-928's five live criteria (background across the pause boundary, return inside 3 min, confirm the
-card is there and answering it drives the build), **and** answers the open cache question (see
-`LAST_SESSION.md`) — same turn. Master verifies from telemetry (`constraint_waiter_timeout`,
-`artifact_builder_default_disclosed`, prefix-hash reads) then flips **FRE-928 → Done** and
-**FRE-921 → Done/Verify Failed** accordingly. Both stay `Awaiting Deploy` / `Verify Failed` until then.
-
-## 0a. ADR-0123 turn progress surface — merged, tickets pending
+## 0. ADR-0123 turn progress surface — merged, tickets pending
 
 The transport models tool execution and **not inference** (verified: zero transport references to
 planning/sub-agent/artifact_draft vs 14 for tool events). Every long silence measured today was an
@@ -33,7 +18,7 @@ Live condition for whoever implements: `turn_status` already carries `tool_itera
 `context_max`, but **both are currently emitted as `0`** between turns. Absent-vs-zero (ADR-0123 §5)
 is a present defect, not a future principle.
 
-## 0b. ADR-0121 / FRE-887 — AC-9 still open
+## 0a. ADR-0121 / FRE-887 — AC-9 still open
 
 _(FRE-938 session-continuity is In Review, bounced 2026-07-22 for a missing self-review handoff.)_
 

@@ -86,6 +86,25 @@ reviewed, none a side effect:
    ``_resolve_document_routing_key`` for any turn carrying a raster image or a
    Tier-2 PDF. Did not exist as a Layer-3 role before T5.
 
+**Rebaselined a third time, deliberately, for the model-catalog provider-ceiling
+correction (fix/model-catalog-provider-ceilings).** One explicit, reviewed delta:
+
+1. **``claude_sonnet.max_tokens`` 32768 → 128000 and ``claude_haiku.max_tokens``
+   4096 → 64000.** The catalog declared *policy* values well below the providers'
+   real ceilings (Sonnet 5: 128K, Haiku 4.5: 64K). Inert until ADR-0122 T6
+   (FRE-931) began clamping the artifact-draft budget to
+   ``min(deployment.max_tokens, settings.artifact_draft_max_tokens)`` and feeding
+   the same number into the turn-start planning note — so a Haiku pick produced a
+   4096-token artifact, ~8× under the operator ceiling (32768) already in force.
+   The catalog now states provider truth; ``settings.artifact_draft_max_tokens``
+   remains the single policy lever. **No resolved model KEY changed** — every
+   binding still resolves to the same deployment; only the resolved definition's
+   ``max_tokens`` field moved, on the five bindings pointing at these two
+   deployments (``artifact_builder``, ``captains_log``, ``insights``,
+   ``sub_agent``, ``vision``). Effective artifact budgets are unchanged for
+   Sonnet (32768) and rise from 4096 to 32768 for Haiku — neither exceeds the
+   operator ceiling already running in production. Owner-approved 2026-07-21.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

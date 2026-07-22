@@ -1430,6 +1430,47 @@ async def _maybe_frozen_reset(ctx: ExecutionContext) -> None:
         pass  # best-effort; never block the executor turn
 
 
+def _emit_conversation_context_loaded(
+    ctx: ExecutionContext,
+    *,
+    total_messages_in_db: int,
+    messages_loaded: int,
+    messages_truncated: int,
+    estimated_tokens: int,
+) -> None:
+    """Log the per-turn record of what history ``step_init`` loaded (FRE-945).
+
+    Centralizes the emit's schema so the legacy and gateway-driven call sites cannot drift
+    apart on field names — unlike :func:`_emit_cache_reset_decision`, this helper evaluates
+    nothing; it only logs the values its callers already computed.
+
+    Args:
+        ctx: Execution context for the turn.
+        total_messages_in_db: Message count from the persisted session, before this turn's
+            message is appended (``0`` when there is no persisted session, e.g. the
+            gateway-driven path with no prior session load).
+        messages_loaded: ``len(ctx.messages)`` at the point of the call — includes this
+            turn's just-appended user message, so it is one more than
+            ``total_messages_in_db`` for a persisted session with no truncation.
+        messages_truncated: Messages dropped by ``step_init``'s own ``apply_context_window``
+            call specifically — not a measure of any trimming performed elsewhere in the
+            pipeline (e.g. gateway Stage 7 ``apply_budget``, which runs on a separate copy
+            of history before ``step_init`` ever executes). Callers on a path where
+            ``apply_context_window`` never runs report this as ``0`` — a real structural
+            fact (nothing to truncate), not a placeholder standing in for missing data.
+        estimated_tokens: Estimated token count of ``ctx.messages`` at the point of the call.
+    """
+    log.info(
+        "conversation_context_loaded",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        total_messages_in_db=total_messages_in_db,
+        messages_loaded=messages_loaded,
+        messages_truncated=messages_truncated,
+        estimated_tokens=estimated_tokens,
+    )
+
+
 def _fallback_reply_from_tool_results(ctx: ExecutionContext, *, lead: str | None = None) -> str:
     """Build a safe, user-facing reply when the model fails to synthesize after tools.
 
@@ -2919,6 +2960,33 @@ async def step_init(
         # the reset itself should run on this path is the separate, larger review that this
         # emit exists to give ground truth to.
         _emit_cache_reset_decision(ctx)
+        # FRE-945: the sibling conversation_context_loaded emit was dark for the identical
+        # reason — its call site (below apply_context_window/_maybe_frozen_reset) sits below
+        # this same branch's return. Placed here, at the top, for the same reason as the
+        # call above: it covers every gateway sub-path, including the enforced-expansion
+        # path that returns early.
+        #
+        # messages_truncated=0 here is a real structural fact, not a placeholder: this
+        # function's own apply_context_window call (the only thing that truncates within
+        # step_init) sits below the branch return and never runs on this path. It reports
+        # only step_init's own truncation action — it says nothing about gateway Stage 7
+        # (request_gateway/budget.py::apply_budget), which trims its own separate copy of
+        # history (gw.context.messages) before step_init ever executes. Read at branch
+        # entry, this describes ctx.messages as loaded-session-history-plus-this-turn's
+        # message — not the final list some sub-paths (e.g. enforced expansion) go on to
+        # append a synthesis message to afterward.
+        #
+        # estimated_tokens reads the same untrimmed ctx.messages, at the same point, as
+        # _emit_cache_reset_decision's accumulated_tokens above — the two are expected to
+        # read identically on gateway turns; see that call's comment for the untrimmed-vs-
+        # trimmed measurement-point caveat, which applies here unchanged.
+        _emit_conversation_context_loaded(
+            ctx,
+            total_messages_in_db=session_message_count,
+            messages_loaded=len(ctx.messages),
+            messages_truncated=0,
+            estimated_tokens=estimate_messages_tokens(ctx.messages),
+        )
         # Use pre-assembled memory context
         if gw.context.memory_context:
             ctx.memory_context = gw.context.memory_context
@@ -3128,10 +3196,8 @@ async def step_init(
                 estimated_tokens=estimated_tokens,
             )
 
-    log.info(
-        "conversation_context_loaded",
-        trace_id=ctx.trace_id,
-        session_id=ctx.session_id,
+    _emit_conversation_context_loaded(
+        ctx,
         total_messages_in_db=session_message_count,
         messages_loaded=len(ctx.messages),
         messages_truncated=max(0, input_messages_count - len(ctx.messages)),

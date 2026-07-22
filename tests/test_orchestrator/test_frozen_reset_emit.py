@@ -1,13 +1,17 @@
-"""The cache-reset decision emit must fire on the live (gateway-driven) turn path (FRE-944).
+"""Two step_init observability emits must fire on the live (gateway-driven) turn path.
+
+FRE-944: the cache-reset decision emit. FRE-945: the sibling ``conversation_context_loaded``
+emit, dark for the identical reason.
 
 ADR-0081 §D3 makes the scheduler's per-turn evaluation the observability surface for
 compaction: it is written to log *every* evaluation, so quality-slope inertness, ``L*``
 and — after FRE-944 — the headroom to the token ceiling stay readable even when no reset
-fires.
+fires. ``conversation_context_loaded`` is the sibling per-turn record of what history
+``step_init`` actually loaded and how much of it survived its own truncation step.
 
-It never fired in production. ``step_init``'s gateway-driven branch ends in an
-unconditional ``return``, so ``_maybe_frozen_reset`` (and the ``conversation_context_loaded``
-emit beside it) sat below the return and were unreachable on 157/157 observed turns.
+Neither ever fired in production. ``step_init``'s gateway-driven branch ends in an
+unconditional ``return``, so ``_maybe_frozen_reset`` and the ``conversation_context_loaded``
+emit beside it both sat below the return and were unreachable on 157/157 observed turns.
 
 The pre-existing coverage in ``test_frozen_reset_wiring.py`` could not catch this: it calls
 the helper directly with a hand-built context and never drives ``step_init``, so it proves
@@ -44,6 +48,7 @@ from personal_agent.request_gateway.types import (
 from personal_agent.telemetry.trace import TraceContext
 
 CACHE_RESET_DECISION = "cache_reset_decision"
+CONVERSATION_CONTEXT_LOADED = "conversation_context_loaded"
 
 
 def _capturing_log() -> tuple[MagicMock, list[tuple[str, dict[str, Any]]]]:
@@ -135,9 +140,14 @@ async def _drive_gateway_turn(
     return calls
 
 
+def _events(calls: list[tuple[str, dict[str, Any]]], event_name: str) -> list[dict[str, Any]]:
+    """Return the payloads of every ``event_name`` emit in ``calls``."""
+    return [kw for event, kw in calls if event == event_name]
+
+
 def _decisions(calls: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
     """Return the payloads of every cache-reset decision emit in ``calls``."""
-    return [kw for event, kw in calls if event == CACHE_RESET_DECISION]
+    return _events(calls, CACHE_RESET_DECISION)
 
 
 @pytest.mark.asyncio
@@ -304,3 +314,176 @@ async def test_legacy_helper_still_emits_exactly_once(monkeypatch: pytest.Monkey
     assert len(decisions) == 1
     assert "accumulated_tokens" in decisions[0]
     assert "accum_max_tokens" in decisions[0]
+
+
+@pytest.mark.asyncio
+async def test_gateway_path_emits_conversation_context_loaded_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-945 AC-1: the live gateway turn emits conversation_context_loaded, exactly once.
+
+    Red before the fix: the gateway branch returns before this emit's call site — below
+    ``apply_context_window``/``_maybe_frozen_reset`` — is ever reached, so zero events are
+    captured.
+    """
+    ctx = _gateway_ctx([{"role": "user", "content": "hello"}])
+    calls = await _drive_gateway_turn(monkeypatch, ctx)
+
+    events = _events(calls, CONVERSATION_CONTEXT_LOADED)
+    assert len(events) == 1, (
+        f"expected exactly one {CONVERSATION_CONTEXT_LOADED}, got {len(events)}"
+    )
+
+    payload = events[0]
+    assert payload["trace_id"] == "t1"
+    assert payload["session_id"] == "s1"
+    assert isinstance(payload["total_messages_in_db"], int)
+    assert isinstance(payload["messages_loaded"], int) and payload["messages_loaded"] > 0
+    assert isinstance(payload["messages_truncated"], int)
+    assert isinstance(payload["estimated_tokens"], int | float) and not isinstance(
+        payload["estimated_tokens"], bool
+    )
+
+
+@pytest.mark.asyncio
+async def test_conversation_context_loaded_messages_truncated_is_zero_on_gateway_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-945: messages_truncated is a structural zero on the gateway path.
+
+    ``step_init``'s own ``apply_context_window`` call — the only thing in this function
+    that ever truncates — sits below the branch's return and never runs here. This pins
+    that the field reports a real structural fact (0), not a fabricated stand-in value.
+    """
+    ctx = _gateway_ctx([{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])
+    calls = await _drive_gateway_turn(monkeypatch, ctx)
+
+    payload = _events(calls, CONVERSATION_CONTEXT_LOADED)[0]
+    assert payload["messages_truncated"] == 0
+
+
+@pytest.mark.asyncio
+async def test_conversation_context_loaded_total_vs_loaded_count_asymmetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-945: total_messages_in_db excludes this turn's message; messages_loaded includes it.
+
+    This asymmetry pre-dates FRE-945 — it is how the legacy emit has always behaved — and
+    must carry unchanged through the helper extraction.
+    """
+    messages = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]
+    ctx = _gateway_ctx(messages)
+    calls = await _drive_gateway_turn(monkeypatch, ctx)
+
+    payload = _events(calls, CONVERSATION_CONTEXT_LOADED)[0]
+    # The harness stubs session_manager.get_session to return None, so step_init never
+    # counts a persisted session — total_messages_in_db stays 0 regardless of the seeded
+    # ctx.messages.
+    assert payload["total_messages_in_db"] == 0
+    # ctx.messages holds the seeded history plus this turn's appended user message.
+    assert payload["messages_loaded"] == len(messages) + 1
+
+
+@pytest.mark.asyncio
+async def test_enforced_expansion_subpath_also_emits_conversation_context_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-945 AC-2: the enforced-expansion sub-path emits conversation_context_loaded too.
+
+    That sub-path returns from the middle of the gateway branch, so an emit placed just
+    before the branch's final return would leave these turns silent — the same trap
+    FRE-944's self-review caught for the sibling emit.
+    """
+    from unittest.mock import AsyncMock
+
+    from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+    async def _noop_progress(c: ExecutionContext) -> None:
+        return None
+
+    monkeypatch.setattr(ex.settings, "orchestration_mode", "enforced")
+    monkeypatch.setattr(ex, "_report_turn_progress", _noop_progress)
+
+    controller = MagicMock()
+    controller.execute = AsyncMock(
+        return_value=ExpansionResult(
+            plan=MagicMock(is_fallback=False),
+            sub_agent_results=[],
+            synthesis_context="SYN",
+            planner_cost_usd=0.0,
+        )
+    )
+    monkeypatch.setattr(
+        "personal_agent.orchestrator.expansion_controller.ExpansionController",
+        lambda: controller,
+    )
+    monkeypatch.setattr(
+        "personal_agent.llm_client.factory.get_llm_client",
+        lambda role_name=None: MagicMock(),
+    )
+
+    ctx = _gateway_ctx([{"role": "user", "content": "build X and Y"}], DecompositionStrategy.HYBRID)
+    calls = await _drive_gateway_turn(monkeypatch, ctx)
+
+    events = _events(calls, CONVERSATION_CONTEXT_LOADED)
+    assert len(events) == 1, (
+        f"expansion sub-path emitted {len(events)} {CONVERSATION_CONTEXT_LOADED} events, expected 1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_path_conversation_context_loaded_adds_no_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-945 AC-3: adding the emit changes no behaviour.
+
+    Reuses the FRE-944 no-compaction guard's forward-extension assertion style: the
+    message list stays a strict forward extension and no highlights are stashed.
+    """
+    messages = [{"role": "user", "content": "hello"}]
+    ctx = _gateway_ctx(messages)
+    await _drive_gateway_turn(monkeypatch, ctx)
+
+    assert ctx.messages[: len(messages)] == messages
+    assert len(ctx.messages) == len(messages) + 1
+    assert not ctx.salient_highlights
+
+
+def test_conversation_context_loaded_helper_emits_full_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-945: the extracted helper emits the same schema the original inline call used.
+
+    Calls the helper directly rather than driving the full legacy ``step_init`` path, which
+    would pull in memory-graph queries and session-repository plumbing outside this
+    ticket's scope. Proves the 2a extraction is behaviour-identical.
+    """
+    mock_log, calls = _capturing_log()
+    monkeypatch.setattr(ex, "log", mock_log)
+
+    ctx = ExecutionContext(
+        session_id="s1",
+        trace_id="t1",
+        user_message="hi",
+        mode=Mode.NORMAL,
+        channel=Channel.CHAT,
+    )
+
+    ex._emit_conversation_context_loaded(
+        ctx,
+        total_messages_in_db=3,
+        messages_loaded=4,
+        messages_truncated=1,
+        estimated_tokens=42,
+    )
+
+    events = _events(calls, CONVERSATION_CONTEXT_LOADED)
+    assert len(events) == 1
+    assert events[0] == {
+        "trace_id": "t1",
+        "session_id": "s1",
+        "total_messages_in_db": 3,
+        "messages_loaded": 4,
+        "messages_truncated": 1,
+        "estimated_tokens": 42,
+    }

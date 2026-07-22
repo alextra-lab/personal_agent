@@ -172,9 +172,15 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         // before the first live turn_status. Corrected by the next turn.
         if (s.context_tokens !== undefined && s.context_max !== undefined) {
           // FRE-575 (fold-in to FRE-573): restore last completed engagement tool
-          // state from localStorage so the engagement lane doesn't show 0/6 on
+          // state from localStorage so the engagement lane doesn't reset on
           // remount (e.g. after navigating to an artifact and back).
-          let restoredTool = { tool_iteration: 0, tool_iteration_max: 6 };
+          // FRE-928 AC-4 / FRE-935: with nothing stored, the lane stays UNKNOWN.
+          // It must never be seeded with an invented ceiling — a fabricated 6 once
+          // rendered an amber near-limit warning on a turn whose real ceiling was 25.
+          let restoredTool: { tool_iteration: number | null; tool_iteration_max: number | null } = {
+            tool_iteration: null,
+            tool_iteration_max: null,
+          };
           if (typeof window !== 'undefined' && sessionId) {
             try {
               const raw = localStorage.getItem(toolStateKey(sessionId));
@@ -413,7 +419,12 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             {/* Active constraint decision card (ADR-0076) */}
             {pendingConstraint && (
               <div className="px-4 py-3">
+                {/* FRE-928: key by request_id. With a queue, answering card A advances
+                    pendingConstraint straight to card B without passing through null, so
+                    React would otherwise reuse the same DecisionCard instance — and its
+                    internal one-shot `decidedRef` latch would leave B's buttons dead. */}
                 <DecisionCard
+                  key={pendingConstraint.request_id}
                   pending={pendingConstraint}
                   onDecide={(actionId, remember) =>
                     sendConstraintDecision(pendingConstraint.request_id, actionId, remember)

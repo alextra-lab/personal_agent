@@ -1714,3 +1714,72 @@ class TestStepSynthesisAttachmentDisclosure:
         await step_synthesis(ctx, session_manager, trace_ctx)
 
         assert ctx.final_reply == "Here's what I see."
+
+
+class TestStepSynthesisDecisionDisclosure:
+    """FRE-928 AC-3 — a default applied with no user decision is stated in the reply.
+
+    The proof has to be at the ``final_reply`` altitude, not on the tool-result dict:
+    tool results are serialized into a tool-role message and the user-visible text is
+    synthesized afterwards, so the primary model is free to drop a dict field. Only a
+    deterministic append proves the user is told.
+    """
+
+    @staticmethod
+    def _make_ctx() -> ExecutionContext:
+        ctx = ExecutionContext(
+            session_id="sess-928-synth",
+            trace_id="trace-928-synth",
+            user_message="build me a chart",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+        )
+        ctx.final_reply = "Here's your artifact."
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_no_decision_disclosure_reaches_final_reply(self) -> None:
+        from personal_agent.orchestrator.constraint_options import (
+            add_decision_disclosure,
+            reset_decision_disclosures,
+            start_decision_disclosures,
+        )
+
+        token = start_decision_disclosures()
+        try:
+            add_decision_disclosure(
+                "No answer was received in time, so this artifact was built with "
+                "anthropic-sonnet (the configured default)."
+            )
+            ctx = self._make_ctx()
+            trace_ctx = TraceContext(trace_id="trace-928-synth", session_id="sess-928-synth")
+            session_manager = SessionManager()
+            session_manager.create_session(Mode.NORMAL, Channel.CHAT, session_id=ctx.session_id)
+            await step_synthesis(ctx, session_manager, trace_ctx)
+        finally:
+            reset_decision_disclosures(token)
+
+        assert ctx.final_reply is not None
+        assert "Here's your artifact." in ctx.final_reply
+        assert "No answer was received in time" in ctx.final_reply
+        # AC-3 explicitly requires naming the model that ran.
+        assert "anthropic-sonnet" in ctx.final_reply
+
+    @pytest.mark.asyncio
+    async def test_no_disclosure_when_user_decided(self) -> None:
+        from personal_agent.orchestrator.constraint_options import (
+            reset_decision_disclosures,
+            start_decision_disclosures,
+        )
+
+        token = start_decision_disclosures()
+        try:
+            ctx = self._make_ctx()
+            trace_ctx = TraceContext(trace_id="trace-928-synth", session_id="sess-928-synth")
+            session_manager = SessionManager()
+            session_manager.create_session(Mode.NORMAL, Channel.CHAT, session_id=ctx.session_id)
+            await step_synthesis(ctx, session_manager, trace_ctx)
+        finally:
+            reset_decision_disclosures(token)
+
+        assert ctx.final_reply == "Here's your artifact."

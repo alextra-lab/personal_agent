@@ -1531,6 +1531,30 @@ async def artifact_draft_executor(
         # Timeout / disconnected / cancelled — a decision was raised but not answered;
         # keep today's role-name path and its already-shipped default binding (FRE-879).
         builder_client = get_llm_client(role_name="artifact_builder")
+        # FRE-928 AC-3: a default applied WITHOUT a user decision must be stated in the
+        # turn output, naming the model that ran — silence is what made the original
+        # occurrence invisible. A user_cancel IS a decision (they pressed Stop), so it
+        # is not disclosed as an unanswered default.
+        if builder_decision.resolution != "user_cancel":
+            from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
+                add_decision_disclosure,
+            )
+
+            # Name the deployment via the ADR-0122 §5/T6 single source of truth rather
+            # than recomputing the default, so the disclosure can never name a different
+            # model than the one that actually ran.
+            add_decision_disclosure(
+                f"No answer was received in time, so this artifact was built with "
+                f"{resolved_deployment_key} (the configured default)."
+            )
+            log.info(
+                "artifact_builder_default_disclosed",
+                trace_id=trace_id,
+                session_id=session_id,
+                task_id=task_id,
+                resolution=builder_decision.resolution,
+                default_key=resolved_deployment_key,
+            )
 
     user_prompt = (
         f"Title: {title}\n"

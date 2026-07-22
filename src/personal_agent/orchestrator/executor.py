@@ -559,16 +559,21 @@ async def _maybe_pause_for_constraint(
     user_id: UUID | None,
     constraint: "ConstraintName",
     context: str,
-    timeout_seconds: float = 60.0,
+    timeout_seconds: float | None = None,
     allow_preference: bool = True,
 ) -> "ConstraintDecision":
     """Pause and ask the user, or apply a stored preference (ADR-0076).
 
     Checks the user's standing preference first; if one is set (and not
     ``always_pause``) it is applied silently. Otherwise a ``CONSTRAINT_PAUSE``
-    event is pushed over the WS transport and the executor blocks until the
-    user responds, the timeout fires, or the connection drops. When no WS
-    connection is active the safe default is applied without pausing.
+    event is pushed over the WS transport and the executor blocks until the user
+    responds, the user presses Stop, or the timeout fires.
+
+    A momentary absence of a socket is **not** treated as a permanent one
+    (FRE-928): the pause is persisted and registered even with no connection
+    attached, so a client reconnecting inside the timeout is replayed the card and
+    can still answer. A caller that genuinely has no client — headless, CLI — falls
+    back to the safe default when the timeout expires.
 
     Args:
         session_id: Active session identifier.
@@ -576,7 +581,8 @@ async def _maybe_pause_for_constraint(
         user_id: Owning user UUID (None for headless usage).
         constraint: Constraint name (must be a key of ``CONSTRAINT_OPTIONS``).
         context: Human-readable description of the situation for the card.
-        timeout_seconds: Seconds before the default option auto-applies.
+        timeout_seconds: Seconds before the default option auto-applies. Defaults
+            to ``settings.constraint_pause_timeout_seconds`` when omitted.
         allow_preference: When ``False``, a stored preference is neither read nor
             written for this pause — the user is always asked and no "remember"
             choice is persisted. Used for the ``attachment_cost`` (spend)
@@ -600,6 +606,9 @@ async def _maybe_pause_for_constraint(
     )
     from personal_agent.transport.agui.ws_endpoint import WaiterMetadata
     from personal_agent.transport.events import ConstraintPauseEvent
+
+    if timeout_seconds is None:
+        timeout_seconds = settings.constraint_pause_timeout_seconds
 
     # 1. Stored preference bypasses the pause entirely (telemetry-only record).
     #    Checked before resolving options so a preference hit never pays for the
@@ -662,7 +671,10 @@ async def _maybe_pause_for_constraint(
     resolution = str(payload.get("resolution", "user_choice"))
     remember = bool(payload.get("remember", False))
 
-    # No active WS connection: silent default, no resolution event persisted.
+    # Defensive: since FRE-928 the constraint waiter no longer returns connection_lost
+    # (a disconnect leaves the waiter pending to ride its timeout), so this path is
+    # unreachable via the pause transport. Kept because the resolution Literal still
+    # admits it — but it is no longer "the no-WS path", which now times out instead.
     if resolution == "connection_lost":
         log.info(
             "constraint_no_ws_default_applied",
@@ -2064,10 +2076,14 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
     # (nor a false-positive pick) outlives the turn into a later async context (AC-10c).
     from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
         reset_artifact_builder_resolution,
+        reset_decision_disclosures,
         set_artifact_builder_resolution,
+        start_decision_disclosures,
     )
 
     _builder_carrier_token = set_artifact_builder_resolution(None)
+    # FRE-928 AC-3: same turn-scoped lifetime for no-decision disclosures.
+    _disclosure_carrier_token = start_decision_disclosures()
 
     previous_state: TaskState | None = None
     async with observe_topology(ctx):
@@ -2304,6 +2320,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
             # ADR-0122 §4 (FRE-930): drop the turn-scoped artifact-builder carrier so
             # no resolution outlives this turn into a later async context (AC-10c).
             reset_artifact_builder_resolution(_builder_carrier_token)
+            reset_decision_disclosures(_disclosure_carrier_token)
 
     return ctx
 
@@ -4758,8 +4775,15 @@ async def step_synthesis(
 
         # ADR-0101 §6 / FRE-690: guardrail alterations (downscale/drop) are disclosed
         # in the response, deterministically — never left to the model to relay.
-        if ctx.attachment_disclosures:
-            disclosure_text = "\n\n".join(f"Note: {d}" for d in ctx.attachment_disclosures)
+        # FRE-928 AC-3 extends the same rule to a constraint default applied without a
+        # user decision: silence is what made the first occurrence invisible.
+        from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
+            get_decision_disclosures,
+        )
+
+        all_disclosures = list(ctx.attachment_disclosures) + get_decision_disclosures()
+        if all_disclosures:
+            disclosure_text = "\n\n".join(f"Note: {d}" for d in all_disclosures)
             ctx.final_reply = f"{ctx.final_reply}\n\n{disclosure_text}"
 
         # Update session with new messages

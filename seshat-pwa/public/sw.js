@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v33-builder-card';
+const CACHE_NAME = 'seshat-v34-unknown-tool-gauge';
 
 const PRECACHE_URLS = [
   '/',

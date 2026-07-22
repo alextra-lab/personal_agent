@@ -285,6 +285,111 @@ describe('useSSEStream — CONSTRAINT_PAUSE / CONSTRAINT_RESOLVED', () => {
   });
 });
 
+describe('useSSEStream — concurrent constraint pauses queue (FRE-928)', () => {
+  function pushPause(requestId: string, seq: number): void {
+    pushEvent({
+      type: 'CONSTRAINT_PAUSE',
+      request_id: requestId,
+      session_id: 'session-1',
+      data: {
+        constraint: 'artifact_builder',
+        context: 'Choose the model to build this artifact.',
+        options: ['fast', 'thorough'],
+        default_option: 'fast',
+        expires_at: new Date(Date.now() + 180_000).toISOString(),
+      },
+      seq,
+    });
+  }
+
+  it('a second pause does not overwrite the first — it queues behind it', async () => {
+    // Two turns can run concurrently on one session (/chat/stream is fire-and-forget).
+    // Overwriting left the first card unanswerable while its server-side waiter rode
+    // a full timeout, silently applying a default the user never chose.
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+
+    pushPause('req-a', 1);
+    pushPause('req-b', 2);
+
+    expect(hook.result.current.pendingConstraint?.request_id).toBe('req-a');
+  });
+
+  it('answering the first card advances to the second', async () => {
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+
+    pushPause('req-a', 1);
+    pushPause('req-b', 2);
+
+    act(() => {
+      hook.result.current.sendConstraintDecision('req-a', 'thorough', false);
+    });
+
+    expect(hook.result.current.pendingConstraint?.request_id).toBe('req-b');
+  });
+
+  it('a replayed duplicate pause does not queue twice', async () => {
+    // Reconnect replays persisted events, so the same pause can arrive again.
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+
+    pushPause('req-a', 1);
+    pushPause('req-a', 1);
+
+    act(() => {
+      hook.result.current.sendConstraintDecision('req-a', 'fast', false);
+    });
+
+    expect(hook.result.current.pendingConstraint).toBeNull();
+  });
+
+  it('sending a new message does not discard a still-pending card', async () => {
+    // Self-review finding: the turn reset used to wipe the queue. A card maps to a
+    // live server waiter that now survives a disconnect, and nothing blocks sending
+    // while one is open — so clearing hid an answerable card whose waiter then timed
+    // out into a default, i.e. exactly the defect this ticket fixes.
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+
+    pushPause('req-a', 1);
+    expect(hook.result.current.pendingConstraint?.request_id).toBe('req-a');
+
+    await startTurn(hook);
+
+    expect(hook.result.current.pendingConstraint?.request_id).toBe('req-a');
+  });
+
+  it('resolving a queued card removes it from anywhere in the queue', async () => {
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+
+    pushPause('req-a', 1);
+    pushPause('req-b', 2);
+
+    // The SECOND card times out server-side and resolves while the first is showing.
+    pushEvent({
+      type: 'CONSTRAINT_RESOLVED',
+      request_id: 'req-b',
+      session_id: 'session-1',
+      data: {
+        constraint: 'artifact_builder',
+        action_id: 'fast',
+        resolution: 'timeout_default',
+      },
+      seq: 3,
+    });
+
+    expect(hook.result.current.pendingConstraint?.request_id).toBe('req-a');
+
+    act(() => {
+      hook.result.current.sendConstraintDecision('req-a', 'thorough', false);
+    });
+
+    expect(hook.result.current.pendingConstraint).toBeNull();
+  });
+});
+
 describe('useSSEStream — CANCELLED', () => {
   it('sets cancelled=true and isStreaming=false on CANCELLED', async () => {
     const hook = renderHook(() => useSSEStream());

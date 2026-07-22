@@ -16,6 +16,19 @@ function safeNum(v: number | undefined | null): number {
 }
 
 /**
+ * Coerce to a number only when one genuinely arrived.
+ *
+ * Unlike {@link safeNum}, absent stays absent — a missing value must never become
+ * `0`, because `0` is itself a legitimate reading (FRE-928 AC-4 / FRE-935).
+ */
+function presentNum(v: number | undefined | null): number | null {
+  return typeof v === 'number' && isFinite(v) ? v : null;
+}
+
+/** Rendered in place of a gauge whose value has not arrived. */
+const UNKNOWN = '—';
+
+/**
  * Two-lane persistent status bar (ADR-0092 §D9).
  *
  * Session lane (top): cumulative cost, context occupancy, ⟳ compression
@@ -47,9 +60,12 @@ export function TurnStatusBar({ status }: TurnStatusBarProps) {
     qualityAlert?.severity === 'high' ? 'text-red-400' : 'text-amber-400';
 
   // --- Engagement lane ---
-  const toolIter = safeNum(status.tool_iteration);
-  const toolIterMax = safeNum(status.tool_iteration_max);
-  const toolsAmber = toolIterMax > 0 && toolIter >= toolIterMax - 2;
+  // Absent ≠ zero: a warning colour is only ever derived from numbers the server
+  // actually sent for this turn (FRE-928 AC-4). A real `0` still renders as "0".
+  const toolIter = presentNum(status.tool_iteration);
+  const toolIterMax = presentNum(status.tool_iteration_max);
+  const toolsKnown = toolIter !== null && toolIterMax !== null;
+  const toolsAmber = toolsKnown && toolIterMax > 0 && toolIter >= toolIterMax - 2;
   const toolsColor = toolsAmber ? 'text-amber-400' : 'text-slate-400';
 
   return (
@@ -90,7 +106,7 @@ export function TurnStatusBar({ status }: TurnStatusBarProps) {
       {/* Engagement lane */}
       <div className="flex items-center gap-3">
         <span className={`font-mono flex-shrink-0 ${toolsColor}`}>
-          tools {toolIter}/{toolIterMax}
+          tools {toolsKnown ? `${toolIter}/${toolIterMax}` : `${UNKNOWN}/${UNKNOWN}`}
         </span>
       </div>
     </div>

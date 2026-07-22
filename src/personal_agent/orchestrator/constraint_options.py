@@ -466,6 +466,58 @@ def effective_artifact_builder_max_tokens(deployment_max_tokens: int | None, cei
     return min(deployment_max_tokens, ceiling)
 
 
+# ── Turn-scoped no-decision disclosure carrier (FRE-928 AC-3) ────────────────────
+# When a constraint default is applied *without* a user decision, the user must be
+# told plainly — and told which model ran. That fact is only known at the build
+# boundary (inside a tool executor), but the disclosure has to reach synthesis, which
+# appends it to ``ctx.final_reply`` deterministically rather than leaving the primary
+# model to relay it (the ADR-0101 §6 / FRE-690 precedent: a guardrail alteration the
+# model may silently drop is not a disclosure). Same ContextVar mechanism, and the
+# same reason, as the builder-resolution carrier above.
+
+_decision_disclosures: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "decision_disclosures", default=None
+)
+
+
+def start_decision_disclosures() -> contextvars.Token[list[str] | None]:
+    """Begin a fresh per-turn disclosure list for the current async context.
+
+    Returns:
+        A token for :func:`reset_decision_disclosures`, so no disclosure outlives
+        its turn.
+    """
+    return _decision_disclosures.set([])
+
+
+def add_decision_disclosure(message: str) -> None:
+    """Record a user-visible notice that a default was applied without a decision.
+
+    A no-op when no turn has started a disclosure list (a background or direct tool
+    call outside the executor's turn lifecycle).
+
+    Args:
+        message: Plain sentence shown to the user, naming the model that ran.
+    """
+    disclosures = _decision_disclosures.get()
+    if disclosures is not None:
+        disclosures.append(message)
+
+
+def get_decision_disclosures() -> list[str]:
+    """Return this turn's no-decision disclosures (empty when there are none)."""
+    return list(_decision_disclosures.get() or [])
+
+
+def reset_decision_disclosures(token: contextvars.Token[list[str] | None]) -> None:
+    """Restore the disclosure carrier to a prior value.
+
+    Args:
+        token: The token returned by :func:`start_decision_disclosures`.
+    """
+    _decision_disclosures.reset(token)
+
+
 def resolve_options_and_default(constraint: str) -> tuple[list[str], str]:
     """Return ``(action_ids, default_action_id)`` for a constraint — static or computed.
 

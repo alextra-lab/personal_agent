@@ -235,3 +235,35 @@ describe('DecisionCard — onDecide callback', () => {
     expect(onDecide).toHaveBeenCalledWith('compress_continue', false);
   });
 });
+
+describe('DecisionCard — one-shot latch is per-card, not per-instance (FRE-928)', () => {
+  it('a second card rendered in the same slot is still answerable', () => {
+    // Self-review finding: with a pending-constraint QUEUE, answering card A advances
+    // the rendered card straight to card B without passing through null. Without a
+    // `key`, React reuses the same fiber — and DecisionCard's internal `decidedRef`
+    // one-shot latch stays true, leaving every subsequent card's buttons dead.
+    const onDecideA = vi.fn();
+    const onDecideB = vi.fn();
+
+    // Deliberately NO `key` — this must hold on the component's own terms, so the
+    // fix cannot be silently undone by a caller that forgets to key the card.
+    const { rerender } = render(
+      <DecisionCard pending={TOOL_LIMIT_CONSTRAINT} onDecide={onDecideA} />,
+    );
+    fireEvent.click(screen.getByText(/Continue/i));
+    expect(onDecideA).toHaveBeenCalledTimes(1);
+
+    // Same instance reused for a different card: its latch must not carry over.
+    rerender(<DecisionCard pending={CONTEXT_CONSTRAINT} onDecide={onDecideB} />);
+    fireEvent.click(screen.getByText(/Compress and continue/i));
+    expect(onDecideB).toHaveBeenCalledTimes(1);
+  });
+
+  it('still guards double-submit within a single card', () => {
+    const onDecide = vi.fn();
+    render(<DecisionCard pending={TOOL_LIMIT_CONSTRAINT} onDecide={onDecide} />);
+    fireEvent.click(screen.getByText(/Continue/i));
+    fireEvent.click(screen.getByText(/Finish now/i));
+    expect(onDecide).toHaveBeenCalledTimes(1);
+  });
+});

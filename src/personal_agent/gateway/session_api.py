@@ -195,17 +195,8 @@ async def get_session(
     from personal_agent.orchestrator.context_window import (  # noqa: PLC0415
         estimate_messages_tokens,
     )
-    from personal_agent.orchestrator.executor import _resolve_context_max  # noqa: PLC0415
 
     result["context_tokens"] = estimate_messages_tokens(list(session.messages or []))
-    result["context_max"] = _resolve_context_max()
-    cost_scalar = (
-        await db.execute(
-            _sql_text("SELECT COALESCE(SUM(cost_usd), 0) FROM api_costs WHERE session_id = :sid"),
-            {"sid": uuid},
-        )
-    ).scalar()
-    result["cost_usd"] = float(cost_scalar or 0.0)
 
     # ADR-0121 §4: server-authoritative primary model selection + provenance, so
     # a client hydrates the picker on mount (localStorage is a cache, never the
@@ -220,6 +211,22 @@ async def get_session(
     )
     result["primary_selection"] = _resolved_primary
     result["selection_provenance"] = _selection_provenance
+
+    # FRE-943: resolve context_max against this session's actual selection
+    # (just resolved above), not the in-turn-only ContextVar that
+    # ``executor._resolve_context_max()`` reads — empty on this plain HTTP
+    # path, which is why it silently fell back to the role default (e.g.
+    # local Qwen's 131K window) for a session actually running cloud Sonnet's
+    # 200K.
+    result["context_max"] = _resolve_session_context_max(_resolved_primary, _config, ctx=ctx)
+
+    cost_scalar = (
+        await db.execute(
+            _sql_text("SELECT COALESCE(SUM(cost_usd), 0) FROM api_costs WHERE session_id = :sid"),
+            {"sid": uuid},
+        )
+    ).scalar()
+    result["cost_usd"] = float(cost_scalar or 0.0)
     return result
 
 
@@ -394,6 +401,49 @@ def _resolve_role_binding(
         return resolved, provenance
 
     return resolve_selected_deployment(role, None, config), "default"
+
+
+def _resolve_session_context_max(model_key: str, config: ModelConfig, *, ctx: TraceContext) -> int:
+    """Resolve the context window for a session's actual selected model (FRE-943).
+
+    Unlike the in-turn ``executor._resolve_context_max`` — a best-effort
+    telemetry helper that degrades to ``settings.context_window_max_tokens``
+    on any failure — this surfaces a resolution failure instead of serving a
+    plausible-looking wrong number. ``model_key`` is expected to already be
+    guardrailed (:func:`_resolve_role_binding` never returns an off-catalog
+    key), so a ``None`` definition here means the role's own binding default
+    names no catalog deployment — a real catalog misconfiguration, not a
+    transient condition to mask.
+
+    Args:
+        model_key: The session's resolved primary deployment key.
+        config: The loaded model catalog.
+        ctx: Trace context for the failure log.
+
+    Returns:
+        The resolved model's context length.
+
+    Raises:
+        HTTPException: 500 when ``model_key`` names no catalog deployment.
+    """
+    from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
+
+    _, model_def = resolve_role_target("primary", model_key=model_key, config=config)
+    if model_def is None:
+        log.error(
+            "context_max_resolve_failed",
+            model_key=model_key,
+            trace_id=ctx.trace_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "context_max_unresolved",
+                "message": f"primary selection {model_key!r} has no catalog context_length",
+                "status": 500,
+            },
+        )
+    return model_def.context_length
 
 
 async def _fetch_selections(

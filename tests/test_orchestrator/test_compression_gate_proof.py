@@ -249,17 +249,9 @@ class TestPrecedenceOrdering:
 
         assert frozen_ceiling < soft_threshold < hard_threshold
 
-    def test_soft_trigger_call_site_guard_is_closed_under_production_default(self) -> None:
-        """Documents the precondition for Finding 0's "soft trigger is dead by
-        design" claim: cache_frozen_layout_enabled defaults True in production
-        (settings.py), which makes the executor.py:4842 call-site guard
-        ``if ctx.session_id and not settings.cache_frozen_layout_enabled:``
-        evaluate False — compression_manager.maybe_trigger_compression is never
-        reached. See docs/research/2026-07-17-fre-908-compression-gate-proof.md
-        for the full call-order trace (file:line citations); this test pins
-        the settings precondition that trace depends on.
-        """
-        assert settings.cache_frozen_layout_enabled is True
+    # test_soft_trigger_call_site_guard_is_closed_under_production_default was removed
+    # with the cache_frozen_layout_enabled flag (FRE-941): the reactive soft trigger
+    # and compression_manager are deleted outright, so there is no call-site guard to pin.
 
 
 # ---------------------------------------------------------------------------

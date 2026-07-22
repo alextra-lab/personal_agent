@@ -77,10 +77,11 @@ def apply_context_window(
         session_id: Optional session identifier for telemetry.
         compressed_summary: Pre-computed summary of earlier turns from async
             compression (ADR-0038). When provided and turns are evicted, this
-            replaces the static ``[Earlier messages truncated]`` marker.
-            Dead-by-default when ``cache_frozen_layout_enabled=True`` (the
-            production default); the executor gate is in
-            ``executor.step_context_window`` (FRE-576 F4).
+            replaces the static ``[Earlier messages truncated]`` marker. The
+            executor no longer supplies one: the reactive soft-compaction path was
+            retired with the frozen-layout A/B flag (FRE-941), so compaction is the
+            scheduled frozen reset (``_maybe_frozen_reset``) and this stays ``None``
+            in production. The parameter is kept for direct/testing callers.
 
     Returns:
         Trimmed message list that fits the available budget.

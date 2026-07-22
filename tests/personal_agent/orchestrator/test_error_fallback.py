@@ -133,7 +133,6 @@ class TestExecuteTaskSafeClassifiedReply:
             return ctx_in
 
         monkeypatch.setattr(ex, "execute_task", fake_execute_task)
-        monkeypatch.setattr(ex, "compression_manager", _NoopCompressionManager())
         monkeypatch.setattr(ex, "_emit_classified_error", _noop_emit)
 
         result = await ex.execute_task_safe(ctx, session_manager=None)  # type: ignore[arg-type]
@@ -158,7 +157,6 @@ class TestExecuteTaskSafeClassifiedReply:
             return ctx_in
 
         monkeypatch.setattr(ex, "execute_task", fake_execute_task)
-        monkeypatch.setattr(ex, "compression_manager", _NoopCompressionManager())
         monkeypatch.setattr(ex, "_emit_classified_error", _noop_emit)
 
         result = await ex.execute_task_safe(ctx, session_manager=None)  # type: ignore[arg-type]
@@ -176,7 +174,6 @@ class TestExecuteTaskSafeClassifiedReply:
             return ctx_in
 
         monkeypatch.setattr(ex, "execute_task", fake_execute_task)
-        monkeypatch.setattr(ex, "compression_manager", _NoopCompressionManager())
         monkeypatch.setattr(ex, "_emit_classified_error", _noop_emit)
 
         result = await ex.execute_task_safe(ctx, session_manager=None)  # type: ignore[arg-type]
@@ -210,7 +207,6 @@ class TestExecuteTaskSafePartialWorkPreserved:
             return ctx_in
 
         monkeypatch.setattr(ex, "execute_task", fake_execute_task)
-        monkeypatch.setattr(ex, "compression_manager", _NoopCompressionManager())
         monkeypatch.setattr(ex, "_emit_classified_error", _noop_emit)
 
         result = await ex.execute_task_safe(ctx, session_manager=None)  # type: ignore[arg-type]
@@ -236,7 +232,6 @@ class TestExecuteTaskSafePartialWorkPreserved:
             return ctx_in
 
         monkeypatch.setattr(ex, "execute_task", fake_execute_task)
-        monkeypatch.setattr(ex, "compression_manager", _NoopCompressionManager())
         monkeypatch.setattr(ex, "_emit_classified_error", _noop_emit)
 
         result = await ex.execute_task_safe(ctx, session_manager=None)  # type: ignore[arg-type]
@@ -258,7 +253,6 @@ class TestExecuteTaskSafePartialWorkPreserved:
             return ctx_in
 
         monkeypatch.setattr(ex, "execute_task", fake_execute_task)
-        monkeypatch.setattr(ex, "compression_manager", _NoopCompressionManager())
         monkeypatch.setattr(ex, "_emit_classified_error", capturing_emit)
 
         await ex.execute_task_safe(ctx, session_manager=None)  # type: ignore[arg-type]
@@ -271,11 +265,6 @@ class TestExecuteTaskSafePartialWorkPreserved:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-class _NoopCompressionManager:
-    def maybe_trigger_compression(self, **_kw: object) -> None:
-        pass
 
 
 async def _noop_emit(_ctx: ExecutionContext, _classified: ClassifiedError) -> None:

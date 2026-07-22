@@ -828,9 +828,10 @@ class MemoryStalenessReviewedEvent(EventBase):
 class WithinSessionCompressionEvent(EventBase):
     """Published per within-session compression pass (Wave 4 — ADR-0061).
 
-    One event per compression pass — either the soft async path
-    (``maybe_trigger_compression``) or the hard synchronous path inside the
-    orchestrator loop.  Phase 1 has no consumer; the bus publish is
+    One event per compression pass — the hard synchronous within-session path or
+    the scheduled frozen reset inside the orchestrator loop. (The reactive soft
+    async path was retired with the frozen-layout A/B flag — FRE-941.)  Phase 1
+    has no consumer; the bus publish is
     observability + a composability hook for Phase 2's adaptive tuning
     consumer.
 

@@ -609,7 +609,7 @@ def simulate_gateway_drop(fill_levels: list[float]) -> list[DropSimResult]:
 # Designed to invoke file reads, producing ~1 800-token tool outputs per turn.
 _LIVE_TURNS: list[str] = [
     "Read the within_session_compression.py source file and explain the compress_in_place function.",
-    "Now read compression_manager.py — how does maybe_trigger_compression decide when to fire?",
+    "Now read within_session_compression.py — how does needs_hard_compression decide when to fire?",
     "Read the budget.py file in request_gateway and trace the three-phase trimming logic.",
     "Read orchestrator/context_window.py and explain estimate_messages_tokens vs estimate_message_tokens.",
     "Read orchestrator/executor.py lines 1-100 — what does the executor do before the first LLM call?",

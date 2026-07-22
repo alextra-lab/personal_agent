@@ -77,8 +77,23 @@ def _make_mock_llm_client(response: dict[str, object]) -> MagicMock:
     return mock_client
 
 
+def _sent_text(call_kwargs: dict) -> str:
+    """All text sent to the model — system_prompt plus every string message body.
+
+    Layout-agnostic: under the frozen layout (the sole layout since FRE-941)
+    volatile skill content rides the user turn rather than ``system_prompt``, so
+    injection assertions check the combined payload instead of ``system_prompt``.
+    """
+    parts = [call_kwargs.get("system_prompt") or ""]
+    for m in call_kwargs.get("messages") or []:
+        content = m.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+    return "\n".join(parts)
+
+
 class TestSkillBlockFunctionalInjection:
-    """Functional tests: drive step_llm_call and inspect the system_prompt passed to LLM."""
+    """Functional tests: drive step_llm_call and inspect the payload passed to the LLM."""
 
     @pytest.mark.asyncio
     async def test_skill_block_injected_when_flag_enabled(
@@ -94,7 +109,6 @@ class TestSkillBlockFunctionalInjection:
         from personal_agent.config import settings
         from personal_agent.telemetry.trace import TraceContext
 
-        monkeypatch.setattr(settings, "cache_frozen_layout_enabled", False)
         monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
         monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
         monkeypatch.setattr(settings, "skill_routing_model_key", "")
@@ -124,13 +138,11 @@ class TestSkillBlockFunctionalInjection:
 
             await step_llm_call(ctx, mock_session, trace_ctx)  # type: ignore[arg-type]
 
-        # Inspect the system_prompt keyword argument passed to the LLM client
+        # Inspect the combined payload passed to the LLM client (frozen layout puts
+        # the skill body on the user turn, not system_prompt).
         assert mock_llm.respond.called, "LLM client was not called"
-        call_kwargs = mock_llm.respond.call_args.kwargs
-        system_prompt_passed = call_kwargs.get("system_prompt", "")
-        assert _SENTINEL in (system_prompt_passed or ""), (
-            f"Sentinel not found in system_prompt: {system_prompt_passed!r}"
-        )
+        sent = _sent_text(mock_llm.respond.call_args.kwargs)
+        assert _SENTINEL in sent, f"Sentinel not found in sent payload: {sent!r}"
 
     @pytest.mark.asyncio
     async def test_skill_block_not_injected_when_flag_disabled(
@@ -223,7 +235,6 @@ class TestSkillNudgeInjection:
         from personal_agent.config import settings
         from personal_agent.telemetry.trace import TraceContext
 
-        monkeypatch.setattr(settings, "cache_frozen_layout_enabled", False)
         monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
         monkeypatch.setattr(settings, "skill_routing_mode", "keyword")
         monkeypatch.setattr(settings, "skill_routing_model_key", "")
@@ -258,11 +269,10 @@ class TestSkillNudgeInjection:
 
             await step_llm_call(ctx, mock_session, trace_ctx)  # type: ignore[arg-type]
 
-        call_kwargs = mock_llm.respond.call_args.kwargs
-        system_prompt = call_kwargs.get("system_prompt", "") or ""
-        assert _SENTINEL in system_prompt
-        assert _USAGE_DIRECTIVE_SENTINEL in system_prompt
-        assert system_prompt.index(_SENTINEL) < system_prompt.index(_USAGE_DIRECTIVE_SENTINEL)
+        sent = _sent_text(mock_llm.respond.call_args.kwargs)
+        assert _SENTINEL in sent
+        assert _USAGE_DIRECTIVE_SENTINEL in sent
+        assert sent.index(_SENTINEL) < sent.index(_USAGE_DIRECTIVE_SENTINEL)
 
     @pytest.mark.asyncio
     async def test_neither_directive_block_when_flag_off(

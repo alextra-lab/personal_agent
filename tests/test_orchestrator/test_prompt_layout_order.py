@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from personal_agent.config import settings
 from personal_agent.governance.models import Mode
 from personal_agent.orchestrator import Channel
 from personal_agent.orchestrator.executor import execute_task_safe
@@ -48,52 +47,9 @@ def _make_mock_client() -> AsyncMock:
     return mock
 
 
-@patch("personal_agent.llm_client.factory.get_llm_client")
-@pytest.mark.asyncio
-async def test_tool_prompt_before_memory_section(
-    mock_client_class: MagicMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """tool_prompt (STATIC) must appear before memory_section (VOLATILE) in assembled prompt.
-
-    ADR-0081 D1: the byte layout must be monotone in mutation frequency so the
-    KV-cache boundary sits after the static prefix and before the volatile tail.
-
-    Pinned to the D1/D4 head layout (cache_frozen_layout_enabled=False): under the
-    frozen layout (FRE-434, default True as of FRE-440) volatile content rides the
-    user turn, not the system head, so the memory section would not appear in
-    system_prompt. This test intentionally verifies the head-layout invariant.
-    """
-    monkeypatch.setattr(settings, "cache_frozen_layout_enabled", False)
-    mock_client = _make_mock_client()
-    mock_client_class.return_value = mock_client
-
-    session_manager = SessionManager()
-    session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
-    trace_ctx = TraceContext.new_trace()
-    ctx = ExecutionContext(
-        session_id=session_id,
-        trace_id=trace_ctx.trace_id,
-        user_message="What do you know about Python?",
-        mode=Mode.NORMAL,
-        channel=Channel.CHAT,
-        memory_context=_MEMORY_CONTEXT,
-    )
-
-    await execute_task_safe(ctx, session_manager)
-
-    call_kwargs = mock_client.respond.call_args_list[0].kwargs
-    system_prompt: str = call_kwargs.get("system_prompt", "") or ""
-
-    assert _TOOL_PROMPT_MARKER in system_prompt, "tool_prompt not found in assembled system_prompt"
-    assert _MEMORY_MARKER in system_prompt, "memory_section not found in assembled system_prompt"
-
-    tool_idx = system_prompt.index(_TOOL_PROMPT_MARKER)
-    memory_idx = system_prompt.index(_MEMORY_MARKER)
-    assert tool_idx < memory_idx, (
-        f"tool_prompt (STATIC) must appear before memory_section (VOLATILE). "
-        f"tool_idx={tool_idx}, memory_idx={memory_idx}. "
-        f"This is the ADR-0081 D1 volatility-gradient invariant."
-    )
+# NOTE: the head-layout test_tool_prompt_before_memory_section was removed with the
+# cache_frozen_layout_enabled flag (FRE-941). Under the (now sole) frozen layout the
+# memory section rides the user turn, not system_prompt — verified by test_frozen_layout.py.
 
 
 @patch("personal_agent.llm_client.factory.get_llm_client")

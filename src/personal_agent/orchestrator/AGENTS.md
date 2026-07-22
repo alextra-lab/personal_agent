@@ -20,10 +20,10 @@ Deterministic state machine for task execution with active context management.
 ```text
 orchestrator/
 ├── __init__.py              # Exports
-├── executor.py              # Main execution loop + compression trigger
+├── executor.py              # Main execution loop + frozen-reset compaction trigger
 ├── context_window.py        # Token budgeting, truncation, KV cache prefix
 ├── context_compressor.py    # LLM-based summarization of evicted turns (ADR-0038)
-├── compression_manager.py   # Async compression lifecycle + cross-turn state
+├── within_session_compression.py  # Head-middle-tail + frozen reset (ADR-0061/0081)
 ├── channels.py              # Channel definitions
 ├── session.py               # Session management
 ├── routing.py               # Intent-based routing

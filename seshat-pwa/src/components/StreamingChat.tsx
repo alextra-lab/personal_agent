@@ -7,6 +7,7 @@ import Link from 'next/link';
 
 import { getSession, getSessionMessages, setSessionSelection, type UploadedAttachment } from '@/lib/agui-client';
 import { generateUUID } from '@/lib/uuid';
+import { LAST_SESSION_KEY } from '@/lib/session';
 import { useSSEStream } from '@/hooks/useSSEStream';
 import { useSessionConfig } from '@/hooks/useSessionConfig';
 
@@ -23,7 +24,6 @@ import { SessionList } from './SessionList';
 import { ToolIndicator } from './ToolIndicator';
 import { TurnStatusBar } from './TurnStatusBar';
 
-const LAST_SESSION_KEY = 'seshat_last_session_id';
 // FRE-575 (fold-in to FRE-573): per-session key for last completed engagement tool state.
 const toolStateKey = (sid: string) => `seshat-tool-state-${sid}`;
 

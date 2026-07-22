@@ -505,8 +505,9 @@ async def get_session_config(
     404s until the session's first DB row exists (created on first message).
     A brand-new conversation has no row yet — use the sessionless
     ``GET /api/v1/config`` (:func:`get_config`) for that case; it returns the
-    same ``roles``/``providers`` shape minus the per-session ``resolved``/
-    ``provenance`` fields (ADR-0121 T5, FRE-920).
+    same ``roles``/``providers`` shape and resolves the same per-role
+    ``resolved``/``provenance`` against no stored selection (FRE-938), so the
+    two endpoints agree on what a role's default is by construction.
 
     Args:
         request: FastAPI request (injected).
@@ -592,18 +593,21 @@ async def get_config(
     A brand-new conversation has no session row yet — both
     ``GET /{session_id}/config`` and ``PATCH /{session_id}/selection`` 404
     before the first message creates one (codex plan-review finding). This
-    endpoint serves the same ``roles``/``providers`` shape with no per-session
-    resolution: for every declared role, whether it is ``open`` or pinned and,
-    for open roles, the currently available candidate list (AC-5); the
-    provider table with placement and live-checked availability.
+    endpoint serves the same ``roles``/``providers`` shape: for every
+    declared role, whether it is ``open`` or pinned, its resolved deployment
+    (there being no stored selection to apply, this is always the role's
+    catalog default — FRE-938) and, for open roles, the currently available
+    candidate list (AC-5); the provider table with placement and
+    live-checked availability.
 
     Args:
         token: Validated bearer token with ``sessions:read`` scope.
 
     Returns:
-        ``{"roles": {role: {"open", "candidates"?}}, "providers": [...]}`` —
-        the same shape as ``GET /{session_id}/config`` minus ``resolved``/
-        ``provenance`` (there is no session to resolve a selection against).
+        ``{"roles": {role: {"open", "resolved", "provenance", "candidates"?}},
+        "providers": [...]}`` — the same shape as ``GET /{session_id}/config``;
+        ``provenance`` is always ``"default"`` here since there is no session
+        to hydrate a stored selection from.
     """
     get_rate_limiter().check(token)
     from personal_agent.config import load_model_config  # noqa: PLC0415
@@ -617,7 +621,12 @@ async def get_config(
 
     roles: dict[str, Any] = {}
     for role, binding in config.roles.items():
-        entry: dict[str, Any] = {"open": binding.open}
+        resolved, provenance = _resolve_role_binding(role, config, None)
+        entry: dict[str, Any] = {
+            "open": binding.open,
+            "resolved": resolved,
+            "provenance": provenance,
+        }
         if binding.open:
             entry["candidates"] = [
                 _deployment_view(key, config.models[key], config)

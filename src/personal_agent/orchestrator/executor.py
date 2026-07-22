@@ -889,6 +889,7 @@ _tool_execution_layer: ToolExecutionLayer | None = None
 if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.error_classification import ClassifiedError
     from personal_agent.mcp.gateway import MCPGatewayAdapter
+    from personal_agent.orchestrator.cache_reset_scheduler import ResetDecision
     from personal_agent.orchestrator.constraint_options import ConstraintDecision
     from personal_agent.service.repositories.session_repository import SessionRepository
     from personal_agent.transport.events import ConstraintName
@@ -1290,28 +1291,37 @@ def _emit_cadence_monitor_doc(
     schedule_es_index(index_name, doc, doc_id=f"{trace_id}:D")
 
 
-async def _maybe_frozen_reset(ctx: ExecutionContext) -> None:
-    """Fire a scheduled frozen-prefix reset when the scheduler decides to.
+def _emit_cache_reset_decision(
+    ctx: ExecutionContext,
+) -> "tuple[ResetDecision, dict[str, Any], str] | None":
+    """Evaluate the cache-reset scheduler and log the decision. Never acts.
 
-    ADR-0081 §D3: when the run reaches the cost/quality optimum (or the token
-    ceiling), compact ``ctx.messages`` into ``[first user][assistant recap][K
-    verbatim turns]`` and stash the volatile salient highlights for this turn.
+    ADR-0081 §D3 makes this per-turn evaluation the observability surface for
+    compaction: it is emitted on *every* evaluation, reset or not, so quality-slope
+    inertness, ``L*`` and the headroom to the token ceiling stay readable even while
+    the scheduler holds. ``accumulated_tokens`` and ``accum_max_tokens`` travel on the
+    event so headroom is answerable from one document with no join (FRE-944).
+
+    Split out from :func:`_maybe_frozen_reset` so the live gateway-driven turn path can
+    evaluate and log without performing a reset — the emit was structurally unreachable
+    there, since the gateway branch of :func:`step_init` returns before the reset call
+    site (FRE-944).
 
     Args:
-        ctx: Execution context (``ctx.messages`` and ``ctx.salient_highlights``
-            are updated in place on a reset).
+        ctx: Execution context for the turn.
+
+    Returns:
+        ``(decision, scheduler_inputs, backend)``, or ``None`` when there is no session
+        to evaluate against.
     """
     if not ctx.session_id:
-        return
+        return None
 
     import math  # noqa: PLC0415
 
     from personal_agent.orchestrator.cache_reset_scheduler import (  # noqa: PLC0415
         marginal_hold_cost,
         should_reset,
-    )
-    from personal_agent.orchestrator.within_session_compression import (  # noqa: PLC0415
-        build_frozen_reset,
     )
 
     backend = _frozen_backend()
@@ -1338,10 +1348,37 @@ async def _maybe_frozen_reset(ctx: ExecutionContext) -> None:
         quality_slope=inputs.get("quality_slope", 0.0),
         marginal_hold_cost=round(_c, 2),
         turns_since_reset=inputs["turns_since_reset"],
+        # FRE-944: the headroom pair — how much the run has accumulated, and the
+        # ceiling it is measured against. Without both, the emit reports "holding"
+        # every turn and never says how near the edge we were.
+        accumulated_tokens=inputs["accumulated_tokens"],
+        accum_max_tokens=inputs["accum_max_tokens"],
     )
+    return decision, inputs, backend
+
+
+async def _maybe_frozen_reset(ctx: ExecutionContext) -> None:
+    """Fire a scheduled frozen-prefix reset when the scheduler decides to.
+
+    ADR-0081 §D3: when the run reaches the cost/quality optimum (or the token
+    ceiling), compact ``ctx.messages`` into ``[first user][assistant recap][K
+    verbatim turns]`` and stash the volatile salient highlights for this turn.
+
+    Args:
+        ctx: Execution context (``ctx.messages`` and ``ctx.salient_highlights``
+            are updated in place on a reset).
+    """
+    evaluated = _emit_cache_reset_decision(ctx)
+    if evaluated is None:
+        return
+    decision, inputs, backend = evaluated
 
     if not decision.should_reset:
         return
+
+    from personal_agent.orchestrator.within_session_compression import (  # noqa: PLC0415
+        build_frozen_reset,
+    )
 
     result = await build_frozen_reset(
         ctx.messages,
@@ -2858,6 +2895,30 @@ async def step_init(
     # --- Gateway-driven path: skip inline routing and memory ---
     if ctx.gateway_output is not None:
         gw = ctx.gateway_output
+        # FRE-944: evaluate the ADR-0081 §D3 cache-reset scheduler and emit its decision.
+        # Every branch below this point ends in a return, so the reset call site further
+        # down the function is unreachable on gateway-driven turns — which is all of them
+        # (157/157 observed over 30 days) — leaving compaction entirely unobservable.
+        # Placed at the TOP of the branch, not before one of the returns, so that every
+        # gateway sub-path emits exactly once: the enforced-expansion path returns early
+        # (mid-branch) and would otherwise stay silent, reproducing this very bug on a
+        # subset of turns. Here ctx.messages already holds the loaded session history plus
+        # this turn's user message, so the reading is the turn's real accumulation, taken
+        # at the same point on every gateway sub-path.
+        #
+        # Note the two call sites do NOT measure the same thing: this one reads UNTRIMMED
+        # history, whereas the legacy call site below runs after apply_context_window has
+        # truncated. Consumers must not compare gateway- and legacy-sourced
+        # accumulated_tokens as like-for-like. Untrimmed is the right reading here — the
+        # §D3 accumulation ceiling (cache_frozen_accum_max_ratio, 0.50) exists to schedule
+        # a reset BEFORE apply_context_window's 0.85 hard truncation backstop engages, so
+        # measuring growth post-truncation would hide exactly the pressure it watches for.
+        #
+        # Deliberately evaluate-and-log ONLY: no reset is performed and ctx.messages is not
+        # touched, keeping this to visibility with no compaction behaviour change. Whether
+        # the reset itself should run on this path is the separate, larger review that this
+        # emit exists to give ground truth to.
+        _emit_cache_reset_decision(ctx)
         # Use pre-assembled memory context
         if gw.context.memory_context:
             ctx.memory_context = gw.context.memory_context
@@ -4829,6 +4890,14 @@ async def execute_task_safe(
         # cache-aware scheduler (step_init `_maybe_frozen_reset`) subsumes it;
         # firing reactive compaction here would rewrite history off-schedule and
         # break the forward-extension.
+        # CAVEAT (FRE-944, 2026-07-22): "subsumes it" does not hold in production
+        # today. `_maybe_frozen_reset` sits below the gateway branch's unconditional
+        # return in step_init, so its reset half is unreachable on gateway-driven
+        # turns — which is all of them — and `frozen_reset_fired` is at zero. Nothing
+        # currently performs the scheduled reset the removed trigger was traded for;
+        # only the decision emit was restored (evaluate-and-log). Gateway Stage 7
+        # `apply_budget` still trims, so context is bounded, but not by this. See
+        # ADR-0092 open item 7.
 
         log.info(
             REPLY_READY,

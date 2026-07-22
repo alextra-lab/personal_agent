@@ -91,7 +91,20 @@ class AppConfig(BaseSettings):
     )
     ws_ping_timeout_seconds: int = Field(
         default=60,
-        description="Close socket if no inbound message (including PING) within this window.",
+        description=(
+            "Close socket if no inbound message (including PING) within this window. "
+            "The PWA pings every 25s, so this bounds detection of a client that stops "
+            "responding without closing cleanly at ~2.4 missed ping intervals "
+            "(FRE-928 AC-6). Keep it a comfortable multiple of the client ping period."
+        ),
+    )
+    constraint_pause_timeout_seconds: float = Field(
+        default=180.0,
+        description=(
+            "Seconds a constraint pause waits for a user decision before applying the "
+            "safe default. Sized to outlast a mobile reconnect (observed 30-140s churn, "
+            "41-52s gaps) while still bounding an unattended build (FRE-928 AC-1/AC-2)."
+        ),
     )
     ws_max_message_size: int = Field(
         default=8192,

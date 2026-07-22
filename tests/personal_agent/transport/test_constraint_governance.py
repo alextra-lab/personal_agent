@@ -21,6 +21,7 @@ from personal_agent.transport.agui.ws_endpoint import (
     _ConnectionState,
     _resolve_all_waiters_user_cancel,
     _resolve_constraint_decision,
+    _session_constraint_waiters,
     clear_cancel_flag,
     is_cancel_requested,
     register_constraint_waiter,
@@ -126,12 +127,78 @@ class TestConstraintWaiter:
     """register_constraint_waiter lifecycle: race, timeout, validation, cancel."""
 
     @pytest.mark.asyncio
-    async def test_no_connection_returns_default_connection_lost(self) -> None:
+    async def test_no_connection_registers_waiter_and_waits(self) -> None:
+        """No socket must NOT resolve instantly — it waits out the timeout (FRE-928 AC-2).
+
+        Rewritten from ``test_no_connection_returns_default_connection_lost``, which
+        encoded the defect as the contract: the old code returned ``connection_lost``
+        immediately, bypassing its own timeout. A headless/CLI caller still falls back
+        to the default, but only when the timeout actually expires.
+        """
         sid = f"no-conn-{uuid4()}"
         _active_connections.pop(sid, None)
-        payload = await register_constraint_waiter(sid, "req", 1.0, _meta())
-        assert payload["resolution"] == "connection_lost"
+
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        payload = await register_constraint_waiter(sid, "req", 0.3, _meta())
+        elapsed = loop.time() - started
+
+        assert payload["resolution"] == "timeout_default"
         assert payload["decision"] == "finish_now"
+        assert elapsed >= 0.25, f"returned instantly ({elapsed:.3f}s) — bypassed the timeout"
+        assert _session_constraint_waiters.get(sid) is None, "waiter registry leaked"
+
+    @pytest.mark.asyncio
+    async def test_no_connection_persists_pause_for_replay(self) -> None:
+        """With no socket the pause is still pushed, so a reconnect can replay it (AC-1).
+
+        Previously ``on_registered`` was skipped entirely on the no-connection path, so
+        nothing was persisted and there was nothing to replay.
+        """
+        sid = f"no-conn-push-{uuid4()}"
+        _active_connections.pop(sid, None)
+        pushed = False
+
+        async def on_registered() -> None:
+            nonlocal pushed
+            pushed = True
+
+        await register_constraint_waiter(sid, "req-p", 0.2, _meta(), on_registered=on_registered)
+        assert pushed, "pause event was never pushed/persisted — nothing to replay"
+
+    @pytest.mark.asyncio
+    async def test_pending_decision_survives_reconnect(self) -> None:
+        """A reconnect must not discard a pending decision (AC-5).
+
+        The old connection's eviction resolved the waiter as ``connection_lost``; the
+        same client returning is not a departure. The decision arriving on the NEW
+        connection must resolve the ORIGINAL waiter.
+        """
+        sid = f"reconnect-{uuid4()}"
+        old_conn = _make_conn(sid)
+        _active_connections[sid] = old_conn
+        try:
+
+            async def reconnect() -> None:
+                await asyncio.sleep(0.05)
+                # Fresh handshake evicts the old registration.
+                _cancel_all_waiters(old_conn)
+                new_conn = _make_conn(sid)
+                _active_connections[sid] = new_conn
+                await asyncio.sleep(0.05)
+                # The replayed card is answered on the new socket.
+                _resolve_constraint_decision(
+                    new_conn, "req-rc", {"decision": "continue_10", "remember": False}
+                )
+
+            task = asyncio.create_task(reconnect())
+            payload = await register_constraint_waiter(sid, "req-rc", 5.0, _meta())
+            await task
+
+            assert payload["resolution"] == "user_choice"
+            assert payload["decision"] == "continue_10"
+        finally:
+            _active_connections.pop(sid, None)
 
     @pytest.mark.asyncio
     async def test_register_before_push_no_race(self) -> None:
@@ -227,8 +294,14 @@ class TestConstraintWaiter:
             _active_connections.pop(sid, None)
 
     @pytest.mark.asyncio
-    async def test_disconnect_resolves_with_metadata_default(self) -> None:
-        """_cancel_all_waiters resolves constraint waiters with connection_lost."""
+    async def test_disconnect_does_not_resolve_constraint_waiter(self) -> None:
+        """A disconnect leaves a constraint waiter pending; it rides its timeout (AC-5).
+
+        Rewritten from ``test_disconnect_resolves_with_metadata_default``, which encoded
+        the defect as the contract. A momentary drop is the normal condition for a mobile
+        client — it must not be treated as a permanent one. ``_cancel_all_waiters`` now
+        covers approval waiters only.
+        """
         sid = f"disc-{uuid4()}"
         conn = _make_conn(sid)
         _active_connections[sid] = conn
@@ -237,14 +310,76 @@ class TestConstraintWaiter:
             async def disconnector() -> None:
                 await asyncio.sleep(0.05)
                 _cancel_all_waiters(conn)
+                _active_connections.pop(sid, None)
 
             task = asyncio.create_task(disconnector())
-            payload = await register_constraint_waiter(sid, "req-x", 5.0, _meta())
+            payload = await register_constraint_waiter(sid, "req-x", 0.4, _meta())
             await task
-            assert payload["resolution"] == "connection_lost"
+            # Falls back on the TIMEOUT, not on the disconnect.
+            assert payload["resolution"] == "timeout_default"
             assert payload["decision"] == "finish_now"
         finally:
             _active_connections.pop(sid, None)
+
+    @pytest.mark.asyncio
+    async def test_registry_cleaned_after_resolution(self) -> None:
+        """The session waiter registry must not leak entries (codex finding 2)."""
+        sid = f"leak-{uuid4()}"
+        conn = _make_conn(sid)
+        _active_connections[sid] = conn
+        try:
+
+            async def on_registered() -> None:
+                _resolve_constraint_decision(conn, "req-lk", {"decision": "continue_10"})
+
+            await register_constraint_waiter(
+                sid, "req-lk", 5.0, _meta(), on_registered=on_registered
+            )
+            assert _session_constraint_waiters.get(sid) is None
+        finally:
+            _active_connections.pop(sid, None)
+
+    @pytest.mark.asyncio
+    async def test_duplicate_request_id_rejected(self) -> None:
+        """A second waiter for the same request_id must not silently overwrite.
+
+        Security-review finding: an overwrite orphans the first waiter — its timeout
+        task resolves the survivor, leaving the original awaiting with no timeout.
+        """
+        sid = f"dupreg-{uuid4()}"
+        _active_connections.pop(sid, None)
+
+        async def register_and_hold() -> dict[str, object]:
+            return await register_constraint_waiter(sid, "req-dup", 0.5, _meta())
+
+        first = asyncio.create_task(register_and_hold())
+        await asyncio.sleep(0.05)  # let the first register
+
+        with pytest.raises(ValueError, match="already registered"):
+            await register_constraint_waiter(sid, "req-dup", 0.5, _meta())
+
+        payload = await first
+        assert payload["resolution"] == "timeout_default"
+        assert _session_constraint_waiters.get(sid) is None
+
+    @pytest.mark.asyncio
+    async def test_registry_cleaned_when_push_raises(self) -> None:
+        """A failing push must not leak a registered waiter (codex finding 2).
+
+        Session-scoped waiters lose the accidental safety net connection-scoped ones had
+        (disconnect swept them), so the cleanup must cover ``on_registered`` itself.
+        """
+        sid = f"leak-raise-{uuid4()}"
+        _active_connections.pop(sid, None)
+
+        async def on_registered() -> None:
+            raise RuntimeError("persist failed")
+
+        with pytest.raises(RuntimeError, match="persist failed"):
+            await register_constraint_waiter(
+                sid, "req-lr", 5.0, _meta(), on_registered=on_registered
+            )
+        assert _session_constraint_waiters.get(sid) is None, "waiter leaked after failed push"
 
 
 class TestCancelFlag:

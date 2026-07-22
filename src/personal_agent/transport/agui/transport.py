@@ -160,10 +160,11 @@ async def register_and_push_constraint(
 ) -> dict[str, Any]:
     """Register a constraint waiter, push the pause event, await the decision.
 
-    Registration happens before the push (race-free, ADR-0076). When no
-    WebSocket connection is active, the pause event is **not** persisted — a
-    client that will never see it should not get a replayed pause — and the
-    default option is returned with ``resolution="connection_lost"``.
+    Registration happens before the push (race-free, ADR-0076). The push runs
+    **unconditionally**, including when no WebSocket connection is attached: the
+    event is persisted, so a client reconnecting inside the timeout is replayed
+    the pause and can still answer it (FRE-928). A caller that genuinely has no
+    client — headless, CLI — falls back to the default when the timeout expires.
 
     Args:
         session_id: Target session identifier.

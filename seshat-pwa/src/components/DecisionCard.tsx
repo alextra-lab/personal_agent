@@ -56,7 +56,12 @@ export function DecisionCard({ pending, onDecide, builderCandidates }: DecisionC
   const { constraint, context, options, expires_at } = pending;
   const [remember, setRemember] = useState(false);
   const [countdown, setCountdown] = useState(() => secondsRemaining(expires_at));
-  const decidedRef = useRef(false);
+  // FRE-928: the one-shot latch is scoped to the CARD, not the component instance.
+  // With a pending-constraint queue, answering one card can advance this slot straight
+  // to the next without an unmount, and an instance-scoped latch would leave the new
+  // card's buttons permanently dead. Callers should still key by request_id; this makes
+  // the component correct either way rather than leaving a trap for the caller.
+  const decidedForRef = useRef<string | null>(null);
 
   useEffect(() => {
     const id = setInterval(() => setCountdown(secondsRemaining(expires_at)), 1000);
@@ -68,8 +73,10 @@ export function DecisionCard({ pending, onDecide, builderCandidates }: DecisionC
   const pct = Math.min(100, Math.max(0, (countdown / totalWindow) * 100));
 
   const decide = (actionId: string): void => {
-    if (decidedRef.current) return;
-    decidedRef.current = true;
+    // Read the ref at CALL time, not render time: a click does not re-render, so a
+    // render-scoped copy would stay stale and let a double-click through.
+    if (decidedForRef.current === pending.request_id) return;
+    decidedForRef.current = pending.request_id;
     onDecide(actionId, remember);
   };
 

@@ -4,32 +4,24 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-21
+> **Last updated**: 2026-07-22
 
-## 0. Gate PR #613 — first action, it has been waiting
+## 0. ADR-0122 AC-7 — live verification, the one remaining step
 
-FRE-928 (all three no-card mechanisms). CI fully green, **ungated for hours** — the watcher sent
-`/master 613` at 16:47 and the send was swallowed while the ledger recorded delivery (FRE-939, the
-second such loss today). **Run `gh pr list` rather than waiting for a trigger.**
+**Everything AC-7 needs is deployed** (2026-07-22): FRE-928 reconnect-survival (#613) and the
+provider-ceiling caps fix (#616) are live in the gateway, the PWA serves `seshat-v34`, both verified
+in-container. The caps question §0a used to guard is **settled** — the catalog now states provider
+truth (`claude_sonnet` 128000, `claude_haiku` 64000) and `settings.artifact_draft_max_tokens` (32768)
+is the single clamp; a Haiku pick now sizes to 32768, not 4096.
 
-## 0a. Decide the model caps before running AC-7
+The sole remaining step is **one owner build-intent turn** from the phone. It closes AC-7, verifies
+FRE-928's five live criteria (background across the pause boundary, return inside 3 min, confirm the
+card is there and answering it drives the build), **and** answers the open cache question (see
+`LAST_SESSION.md`) — same turn. Master verifies from telemetry (`constraint_waiter_timeout`,
+`artifact_builder_default_disclosed`, prefix-hash reads) then flips **FRE-928 → Done** and
+**FRE-921 → Done/Verify Failed** accordingly. Both stay `Awaiting Deploy` / `Verify Failed` until then.
 
-The catalog declares `max_tokens` far below real provider ceilings — `claude_sonnet` 32768 vs **128K**,
-`claude_haiku` 4096 vs **64K**. Harmless until today; **FRE-931 now clamps to those numbers**, so a
-Haiku pick yields a ~16×-smaller artifact and the plan is sized to it. Correcting it touches the
-planning note, which lives in the system prompt — and the owner has ruled out prompt-cache-affecting
-changes pending their decision. **Not ticketed. Owner's call on approach first.**
-
-Running AC-7 before this produces a needlessly small artifact that will read as a sizing bug.
-
-## 0b. ADR-0122 — AC-7 is the only thing left
-
-T4–T6 (FRE-929/930/931) shipped and deployed 2026-07-21; verified in the running container. **FRE-921
-stays `Verify Failed`** until a live run passes. One artifact-build turn closes AC-7 **and** answers the
-open cache question (see `LAST_SESSION.md`) — same turn, same cost. Owner fires it; master verifies from
-telemetry.
-
-## 0c. ADR-0123 turn progress surface — merged, tickets pending
+## 0a. ADR-0123 turn progress surface — merged, tickets pending
 
 The transport models tool execution and **not inference** (verified: zero transport references to
 planning/sub-agent/artifact_draft vs 14 for tool events). Every long silence measured today was an
@@ -42,6 +34,8 @@ Live condition for whoever implements: `turn_status` already carries `tool_itera
 is a present defect, not a future principle.
 
 ## 0b. ADR-0121 / FRE-887 — AC-9 still open
+
+_(FRE-938 session-continuity is In Review, bounced 2026-07-22 for a missing self-review handoff.)_
 
 Needs **one owner turn**: picker renders real candidates → switch model → next turn runs on it →
 survives reload → survives WS reconnect. Closes FRE-920. Unaffected by the above.

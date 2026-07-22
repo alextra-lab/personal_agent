@@ -18,10 +18,12 @@ Live condition for whoever implements: `turn_status` already carries `tool_itera
 `context_max`, but **both are currently emitted as `0`** between turns. Absent-vs-zero (ADR-0123 §5)
 is a present defect, not a future principle.
 
-## 0a. FRE-938 session-continuity — In Review (bounced)
+## 0a. Compaction repair — FRE-941 + FRE-942 fast-tracked (build2, active)
 
-Bounced 2026-07-22 for a missing self-review handoff (code-review + security-review + codex verdict);
-CI green. build1 to re-present. Not owner-blocking.
+cc-explore found within-session compaction degraded; master verified against ES and filed two Opus-tier
+bugs, owner-approved and fast-tracked to build2 (sequential): **FRE-941** (~21% failure → reverts to
+dumb truncation) then **FRE-942** (async not keeping ahead; hard≈soft triggers; folds in the ADR-0081
+§D3 / ADR-0092 `frozen_reset` divergence). PRs return to master's gate.
 
 ## 0b. Session-summary KG thread — explored, awaiting a measure-first gate
 
@@ -34,9 +36,9 @@ entity/turn grains can't catch?) **before** any build. No ticket filed — decis
 
 ## 1. Reduce the backlog
 
-~80 Approved; most carry no stream label (parked). Live queue: build1 on FRE-928 → FRE-938 → FRE-926;
-**build2 is idle — its eligible set is empty**, so it needs work labelled or it stays parked. Awaiting
-approval and unlabelled: FRE-927, FRE-932, FRE-939. Method:
+~80 Approved; most carry no stream label (parked). Live queue: build1 head = FRE-926; build2 head =
+FRE-941 → FRE-942 (compaction, fast-tracked). Awaiting approval and unlabelled: FRE-927, FRE-932,
+FRE-939. Method:
 verify per cluster, cancel the provable with a one-line reason, bring judgment calls to the owner.
 Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729–732, FRE-810/811/814) ·
 `[Thread]` placeholders that can never be Done (FRE-401/418/397) · work gated on events that never
@@ -82,5 +84,6 @@ Inference. Re-sequence after §0.
 
 ## Deploy queue
 
-FRE-739 (needs FRE-740 + a live non-owner request) · FRE-717 (needs organic outcome
-input).
+**FRE-938 (ask-first — gateway + PWA rebuild, owner-gated, NOT done)** — merged #617; handoff runbook
+on the ticket, PWA cache bumped to v35. First operational pickup. · FRE-739 (needs FRE-740 + a live
+non-owner request) · FRE-717 (needs organic outcome input).

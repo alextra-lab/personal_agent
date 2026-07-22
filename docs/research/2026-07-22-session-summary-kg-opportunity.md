@@ -158,3 +158,122 @@ recall of the same thing."
 - Origin tickets: FRE-347 / FRE-346 (G1).
 - Compaction (parked): `orchestrator/context_compressor.py`, `compression_manager.py`,
   `within_session_compression`, `compressor` role.
+
+---
+
+# E. ADDENDUM — finalized lane evaluation + phasing (decision-ready)
+
+> Added 2026-07-22 after evaluating §B against feasibility. **This section supersedes §B for scoping
+> purposes** — §B remains the design space; §E is what goes to the adr session and master.
+
+## E.1 Two feasibility findings that changed the sequencing
+
+1. **The back-edge already exists.** `(Session)-[:CONTAINS]->(Turn)-[:DISCUSSES]->(Entity)` **and** an
+   aggregated `(Session)-[:DISCUSSES]->(Entity)` (`memory/service.py:1170-1172`). ⇒ Lane 1 needs **no
+   new schema**, and Lane 3 can match on **entity overlap with no embedding at all**.
+2. **A sessions read surface already exists.** `gateway/session_api.py` — `APIRouter(prefix="/sessions")`,
+   `list_sessions()`. ⇒ Lane 6 is a field addition, not a new endpoint.
+
+**Consequence: embedding is deferrable.** It is *not* a prerequisite for the first three lanes. This is
+what makes the workstream finalizable now rather than blocked on the §C diagnostic.
+
+## E.2 Lane evaluation
+
+| Lane | Value | Harm risk | Needs embedding? | Effort | Gate |
+|---|---|---|---|---|---|
+| **6 — UX / session browser + titling** | Immediate, visible; **makes summary quality human-observable** | **Zero** (not in recall path) | No | S | none |
+| **1 — Two-stage hydration** (fact-first) | Enriches ranked facts with their session context | ~Zero (never enters the ranked pool) | No (back-edge exists) | S–M | none |
+| **3 — Anti-re-litigation** | **High** — north-star native; capability we lack entirely | Low (surfaces a nudge; false positives = noise) | **No** — entity-overlap first | M | none |
+| **2 — Gating / pre-filter** | Medium (precision + traversal cost) | **Moderate — it *removes* candidates**; a weak summary prunes good ones | Yes (or overlap) | M | diagnostic |
+| **4 — Cross-session synthesis / learning model** | **Highest ceiling**, most speculative | Low (offline/derived) | Yes | L | diagnostic + session volume |
+| **5 — Verification oracle** | Real — but it is a *verifier application* | — | — | — | **moved to Workstream 4** |
+
+## E.3 Scope split of Lane 1 (disambiguation — §B bundled three different things)
+
+§B listed three items under Lane 1 as if interchangeable. They are not, and the ADR must not inherit
+that ambiguity:
+
+- **IN SCOPE (Phase 2) — fact-first hydration.** Ranking is **unchanged**; ranked winners back-edge to
+  their `Session`; summaries are fetched *after* as additive annotation. A bad summary yields a weak
+  annotation — nothing more.
+- **SEPARATE follow-up — on-demand tool recall** (`recall_session_outcome`). A distinct small build;
+  not bundled into Phase 2.
+- **OUT OF SCOPE — progressive disclosure / "map→territory" (the inversion).** Returning summaries
+  *first* as the index and zooming into facts second is an **architectural** change, not an additive
+  one: the summary becomes the primary index, so **summary quality gates all recall** — a poor summary
+  no longer annotates badly, it *hides good facts entirely*. Requires high-quality **and** embedded
+  summaries plus real evaluation. **Deferred research**, and it converges with **Workstream 3**
+  (constructed context) — same map→territory shape. That is its home, not Workstream 1.
+
+## E.4 Phasing (what goes to master)
+
+- **Phase 0 — Fix the producer. Unconditional, no gate.** Trigger → lazy/idle per ADR-0024; input
+  policy → large input / controlled output (drop the 200-char clip); tool-awareness; output shaped for
+  the semantic-search audience. Justified **regardless of lane choice** — today it spends Sonnet every
+  turn on a clipped, tool-blind, unread artifact. Pure cost + correctness win.
+- **Phase 1 — Lane 6 (UX).** Project `session_summary` in `list_sessions` + render in the PWA.
+  Smallest, zero-risk, and it makes summary quality *visible* — a forcing function that de-risks every
+  later lane.
+- **Phase 2 — Lane 1 (fact-first hydration).** Project the field in broad recall; back-edge from ranked
+  facts to their Session; enrich after ranking. No new schema; zero pollution by construction.
+- **Phase 3 — Lane 3 (anti-re-litigation), entity-overlap first.** Highest-value capability; build on
+  the existing `Session-DISCUSSES-Entity` edges; add embedding only if overlap proves insufficient.
+- **Phase 4 — DEFERRED behind the §C diagnostic: Lanes 2 & 4.** These are what actually justify the
+  embedding + Session vector-index investment.
+- **Removed from this workstream:** Lane 5 → Workstream 4 (fact verifier).
+
+## E.5 ADR readiness — ready now
+
+The prior blocker was "which lane." The phasing dissolves it: we do not choose one lane, we **sequence
+by dependency and risk**, with the expensive/risky parts (embedding, the removing-lane, the speculative
+lane) behind an explicit gate. That is a decision with options weighed and a stated deferral rationale.
+
+**Proposed ADR scope:** *"Correct the session-summary producer and wire it to consumption in phases;
+defer embedding and the semantic lanes behind a recall-miss diagnostic."* Phases 0–3 in scope; Phase 4
+explicitly deferred; Lane 5 reassigned; the inversion explicitly out.
+
+**Integration path:** adr session writes the ADR → master creates the ticket chain Phase 0 → 1 → 2 → 3,
+each its own PR, with Phase 4 filed as a gated follow-up carrying the §C diagnostic as its unblock
+condition.
+
+## E.6 Known issue — no dedicated model role for the summarizer (documented, DEFERRED)
+
+**Finding.** `second_brain/session_summary.py:131` resolves its model with
+`resolve_role_model_key("captains_log")` — it *borrows* the captains_log role. **There is no
+`session_summary` role**: absent from `config/model_roles.yaml` (both the `all` and `deployment`
+profiles), absent elsewhere in `config/`, and absent from the `config_guard._ROLE_HEADER_RE` known-role
+list (`entity_extraction | captains_log | insights | compressor | embedding | reranker`). So the model
+is **role-bound, not hardcoded** — but it has no knob of its own.
+
+**Consequence.** The summarizer's model is **not independently tunable**: changing it also changes the
+captains_log *reflection* model, because they share one role. Any model experiment for summarization is
+blocked by that shared knob.
+
+**How we got here — drift, but narrowly.** The `captains_log → claude_sonnet` binding was a
+**deliberate owner decision**: Sonnet made a large quality difference for reflection. The drift is only
+that **session summarization inherited that binding without an evaluation of its own**. The module
+docstring still carries the original intent — *"Defaults to `gpt-5.4-nano` (cheap, structured)"* —
+which is stale as a fact, but records that a cheap structured model was what the design first
+envisioned. Nobody chose Sonnet *for summarization*; it arrived by role-sharing.
+
+**The open question.** A high-quality model is doing the job today, and doing it well. The question is
+whether a **lesser model could do it**. There is precedent for empirical model selection here:
+`entity_extraction` was tested and moved nano → **gpt-5.4-mini**; and the **`compressor` role is
+gpt-5.4-mini and already performs structured summarization** (Decisions/Entities/Facts/Open Items,
+200 words) in the *live* path under latency pressure.
+
+**Prerequisites to answer it.** (a) Add a dedicated `session_summary` role — `config/model_roles.yaml`
+(both profiles), the `config_guard` known-role regex, models.yaml wiring — **defaulted to
+`claude_sonnet`** so behaviour is unchanged on landing and the experiment becomes a config flip rather
+than a code change; (b) decide whether `budget_role` stays `captains_log` (passed explicitly today at
+`:152`) or gets its own lane for clean cost attribution.
+
+**Methodological caveat.** Do **not** A/B on the *current* producer — comparing two models on
+200-char-clipped, tool-blind input measures nothing, since both receive mutilated input. Fix the
+producer first, and judge on **retrieval utility** (does the digest embed/correlate; does it support
+the Lane 3 collision check), never on whether it reads nicely.
+
+**Status: DEFERRED — explicitly NOT a Phase 0 action.** Owner direction (2026-07-22): revisit when this
+converges with **structured conversation context** (summary + facts + procedural context —
+Workstream 3), where the quality/cost tradeoff can be judged against the *assembled context* rather
+than the summary in isolation.

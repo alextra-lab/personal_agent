@@ -840,8 +840,11 @@ class WithinSessionCompressionEvent(EventBase):
     ``"orchestrator.within_session_compression"``.
 
     Attributes:
-        trigger: ``"soft"`` (async, between turns) or ``"hard"``
-            (synchronous, mid-orchestration).
+        trigger: ``"soft"`` (async, between turns) or ``"hard"`` (synchronous,
+            mid-orchestration). ``"soft"`` has no production producer since the
+            reactive soft-compaction path was retired (FRE-941) — kept
+            representable for historical events and generic type-level tests
+            rather than narrowed to ``Literal["hard"]``.
         head_tokens: Tokens preserved in the head (system + first user msg).
         middle_tokens_in: Tokens in the middle band before pre-pass and LLM.
         middle_tokens_out: Tokens in the middle after pre-pass + LLM
@@ -1143,6 +1146,8 @@ class CompactionBMarkerEvent(EventBase):
         topology: Active topology label when known; typically ``None`` here.
         model_role: Model tier when known; typically ``None`` here.
         trigger: ``"soft"`` (async between turns) or ``"hard"`` (sync mid-turn).
+            ``"soft"`` has no production producer since FRE-941 — see
+            ``WithinSessionCompressionEvent.trigger``.
         fact_id: ``event_id`` of the ``WithinSessionCompressionEvent`` emitted
             in the same call — guarantees dedup against hydration (§D4).
     """

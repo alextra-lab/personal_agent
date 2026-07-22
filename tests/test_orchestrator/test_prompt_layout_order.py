@@ -48,8 +48,56 @@ def _make_mock_client() -> AsyncMock:
 
 
 # NOTE: the head-layout test_tool_prompt_before_memory_section was removed with the
-# cache_frozen_layout_enabled flag (FRE-941). Under the (now sole) frozen layout the
-# memory section rides the user turn, not system_prompt — verified by test_frozen_layout.py.
+# cache_frozen_layout_enabled flag (FRE-941). The replacement below drives the same
+# real execute_task_safe pipeline under the (now sole) frozen layout.
+
+
+@patch("personal_agent.llm_client.factory.get_llm_client")
+@pytest.mark.asyncio
+async def test_memory_stays_out_of_static_prefix_under_frozen_layout(
+    mock_client_class: MagicMock,
+) -> None:
+    """ADR-0081 D1/D2 cache-boundary invariant, exercised through the real pipeline.
+
+    Populated memory_context must ride the volatile user-turn block, never the
+    STATIC system_prompt — otherwise every turn perturbs the byte-stable prefix
+    and the KV-cache forward-extension property the frozen layout exists for is
+    silently lost. Complements the unit-level test_frozen_layout.py (which only
+    exercises ``_inline_volatile_into_last_user_message`` in isolation with
+    synthetic strings) with an end-to-end check through ``execute_task_safe``.
+    """
+    mock_client = _make_mock_client()
+    mock_client_class.return_value = mock_client
+
+    session_manager = SessionManager()
+    session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
+    trace_ctx = TraceContext.new_trace()
+    ctx = ExecutionContext(
+        session_id=session_id,
+        trace_id=trace_ctx.trace_id,
+        user_message="What do you know about Python?",
+        mode=Mode.NORMAL,
+        channel=Channel.CHAT,
+        memory_context=_MEMORY_CONTEXT,
+    )
+
+    await execute_task_safe(ctx, session_manager)
+
+    call_kwargs = mock_client.respond.call_args_list[0].kwargs
+    system_prompt: str = call_kwargs.get("system_prompt", "") or ""
+    sent_messages = call_kwargs.get("messages") or []
+
+    assert _MEMORY_MARKER not in system_prompt, (
+        "memory_section leaked into the STATIC system_prompt — this breaks the "
+        "ADR-0081 D1 cache-boundary invariant (byte-stable prefix)."
+    )
+    last_user_content = next(
+        m["content"] for m in reversed(sent_messages) if m.get("role") == "user"
+    )
+    assert _MEMORY_MARKER in last_user_content, (
+        "memory_section must ride the volatile current user turn under the "
+        "frozen layout (ADR-0081 D2)."
+    )
 
 
 @patch("personal_agent.llm_client.factory.get_llm_client")

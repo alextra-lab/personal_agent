@@ -68,6 +68,7 @@ def classify_compression_failure(exc: BaseException) -> str:
     """
     from personal_agent.config.model_loader import ModelConfigError, ModelRoleError
     from personal_agent.cost_gate.types import BudgetDenied
+    from personal_agent.llm_client.types import LLMRateLimit, LLMTimeout
 
     if isinstance(exc, ModelRoleError) or (
         isinstance(exc, ModelConfigError) and _is_role_config_missing(exc)
@@ -75,6 +76,14 @@ def classify_compression_failure(exc: BaseException) -> str:
         return CAUSE_ROLE_MISSING
     if isinstance(exc, BudgetDenied):
         return CAUSE_BUDGET_DENIED
+    # Typed subclasses first — the local backend (client.py) raises these directly.
+    # The cloud path (litellm_client.py) collapses every provider error into a bare
+    # LLMClientError, so the substring fallback below is a best-effort heuristic for
+    # that path only and may under-classify if a provider changes its error wording.
+    if isinstance(exc, LLMRateLimit):
+        return CAUSE_RATE_LIMITED
+    if isinstance(exc, LLMTimeout):
+        return CAUSE_TIMEOUT
     if isinstance(exc, LLMClientError):
         msg = str(exc).lower()
         if "ratelimit" in msg or "rate limit" in msg or "quota" in msg or "429" in msg:

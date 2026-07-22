@@ -131,3 +131,39 @@ serialization path) + security-review (serialization/cache-control touched). Fix
 - `compression_manager.py` deleted, no dangling imports → Step 4 grep.
 - Compressor `ModelConfigError`→graceful + `cause` dimension, reproducing test → Step 6.
 - ADR-0081 updated → Step 7.
+
+## Post-implementation self-review (code-review workflow, effort high)
+
+4 findings, all confirmed:
+
+1. **Fixed** — the deleted `test_tool_prompt_before_memory_section` was the only test
+   exercising the ADR-0081 D1 cache-boundary invariant (memory never leaks into the STATIC
+   system_prompt) through the real `execute_task_safe` pipeline; `test_frozen_layout.py` only
+   unit-tests `_inline_volatile_into_last_user_message` with synthetic strings. Replaced with
+   `test_memory_stays_out_of_static_prefix_under_frozen_layout` (same file), which drives the
+   real pipeline with populated `memory_context` and asserts both halves: memory absent from
+   `system_prompt`, present on the volatile user turn.
+2. **Not fixed — deliberate, owner-approved.** Removing `cache_frozen_layout_enabled` deletes
+   the only runtime kill-switch (revert now requires a code revert + redeploy, not an env
+   flip). This is exactly what the owner directed: the flag was A/B scaffolding for a settled
+   experiment ("we thoroughly proved the new approach was correct... that was for a/b
+   testing"), and re-adding a flag would contradict the ticket's objective. Recorded here and
+   in the PR/handoff so master doesn't read it as an oversight.
+3. **Fixed (proportionate)** — `Literal["soft", "hard"]` on `WithinSessionCompressionEvent`,
+   `CompactionBMarkerEvent`, and `WithinSessionCompressionRecord` still allows `"soft"` even
+   though this diff deletes its only producer. Full narrowing to `Literal["hard"]` would break
+   3 unrelated test files (`test_projector.py`, `test_models.py`,
+   `test_within_session_compression.py`) that still construct `trigger="soft"` events for
+   generic type-level testing — out of this ticket's surgical scope. Added a docstring note at
+   each site instead, marking `"soft"` unreachable-in-production/historical-only.
+4. **Fixed** — `classify_compression_failure` distinguished `rate_limited`/`timeout` from
+   `llm_error` by substring-matching `str(exc)`, when typed `LLMRateLimit`/`LLMTimeout`
+   subclasses already exist and the local backend (`client.py`) raises them directly. Added
+   `isinstance` checks for the typed subclasses first; substring matching remains only as a
+   fallback for the cloud path (`litellm_client.py`), which wraps every provider error into a
+   bare `LLMClientError` — documented as a heuristic, not the primary path.
+
+All quality gates re-run after fixes: `make test` (targeted + 1557-test broad sweep), `mypy`,
+`ruff-check`/`ruff-format`, `pre-commit run --all-files` — all green. Remaining test failures
+(dspy adapter live-endpoint 403, attachment/ledger Postgres permission errors) are confirmed
+pre-existing/environmental, unrelated to this diff (no import overlap, isolated repro).

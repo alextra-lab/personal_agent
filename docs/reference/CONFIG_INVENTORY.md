@@ -67,7 +67,6 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 17 | `attachment_max_total_payload_bytes` | `AGENT_ATTACHMENT_MAX_TOTAL_PAYLOAD_BYTES` | `int` | `15728640` |  | — |
 | 18 | `brainstem_sensor_poll_interval_seconds` | `AGENT_BRAINSTEM_SENSOR_POLL_INTERVAL_SECONDS` | `float` | `5.0` |  | ✅ |
 | 19 | `cache_frozen_accum_max_ratio` | `AGENT_CACHE_FROZEN_ACCUM_MAX_RATIO` | `float` | `0.5` |  | — |
-| 20 | `cache_frozen_layout_enabled` | `AGENT_CACHE_FROZEN_LAYOUT_ENABLED` | `bool` | `True` |  | ✅ |
 | 21 | `cache_quality_token_weight` | `AGENT_CACHE_QUALITY_TOKEN_WEIGHT` | `float` | `4000.0` |  | — |
 | 22 | `cache_reset_min_run_turns_cloud` | `AGENT_CACHE_RESET_MIN_RUN_TURNS_CLOUD` | `int` | `4` |  | — |
 | 23 | `cache_reset_min_run_turns_local` | `AGENT_CACHE_RESET_MIN_RUN_TURNS_LOCAL` | `int` | `12` |  | — |

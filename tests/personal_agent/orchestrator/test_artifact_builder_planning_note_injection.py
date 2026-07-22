@@ -89,36 +89,26 @@ async def _run_step_llm_call(ctx: object) -> MagicMock:
     return mock_llm
 
 
-@pytest.mark.asyncio
-async def test_planning_note_appended_to_system_prompt_head_layout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Head layout (the default): the note is appended to the system_prompt sent to the LLM."""
-    from personal_agent.config import settings
-
-    monkeypatch.setattr(settings, "cache_frozen_layout_enabled", False)
-
-    ctx = _make_ctx(planning_note=_NOTE)
-    mock_llm = await _run_step_llm_call(ctx)
-
-    call_kwargs = mock_llm.respond.call_args.kwargs
-    assert _NOTE in (call_kwargs.get("system_prompt") or "")
+# The head-layout "note appended to system_prompt" test was removed with the
+# cache_frozen_layout_enabled flag (FRE-941): under the sole frozen layout the note
+# rides the user turn (asserted by the frozen test below).
 
 
 @pytest.mark.asyncio
-async def test_no_planning_note_means_no_addition_head_layout(
+async def test_no_planning_note_means_no_addition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No note (no turn-start ask ran) → nothing about it appears in the system_prompt."""
-    from personal_agent.config import settings
-
-    monkeypatch.setattr(settings, "cache_frozen_layout_enabled", False)
-
+    """No note (no turn-start ask ran) → nothing about it appears in the sent payload."""
     ctx = _make_ctx(planning_note=None)
     mock_llm = await _run_step_llm_call(ctx)
 
     call_kwargs = mock_llm.respond.call_args.kwargs
-    assert "artifact builder" not in (call_kwargs.get("system_prompt") or "")
+    sent = (call_kwargs.get("system_prompt") or "") + "\n".join(
+        m.get("content") or ""
+        for m in (call_kwargs.get("messages") or [])
+        if isinstance(m.get("content"), str)
+    )
+    assert "artifact builder" not in sent
 
 
 @pytest.mark.asyncio
@@ -130,10 +120,6 @@ async def test_planning_note_inlined_into_user_turn_frozen_layout(
     Not the system head (ADR-0081 §D1) — so it must be asserted in the sent
     ``messages``, not ``system_prompt``.
     """
-    from personal_agent.config import settings
-
-    monkeypatch.setattr(settings, "cache_frozen_layout_enabled", True)
-
     ctx = _make_ctx(planning_note=_NOTE)
     mock_llm = await _run_step_llm_call(ctx)
 

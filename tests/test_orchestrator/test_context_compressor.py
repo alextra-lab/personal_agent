@@ -201,3 +201,156 @@ class TestCompressTurns:
         assert result1 == FALLBACK_MARKER
         assert result2 == FALLBACK_MARKER
         assert cc_module._compressor_role_missing_logged is True
+
+
+class TestClassifyCompressionFailure:
+    """FRE-941 — stable cause categorisation of compaction fallbacks."""
+
+    def test_model_role_error_is_role_missing(self) -> None:
+        from personal_agent.config.model_loader import ModelRoleError
+        from personal_agent.orchestrator.context_compressor import (
+            CAUSE_ROLE_MISSING,
+            classify_compression_failure,
+        )
+
+        assert classify_compression_failure(ModelRoleError("undeclared")) == CAUSE_ROLE_MISSING
+
+    def test_model_config_missing_role_is_role_missing(self) -> None:
+        """The runtime 'resolved key absent from catalog' error (client.py) is graceful."""
+        from personal_agent.config.model_loader import ModelConfigError
+        from personal_agent.orchestrator.context_compressor import (
+            CAUSE_ROLE_MISSING,
+            classify_compression_failure,
+        )
+
+        exc = ModelConfigError("No configuration found for role: compressor")
+        assert classify_compression_failure(exc) == CAUSE_ROLE_MISSING
+
+    def test_other_model_config_error_is_not_masked_as_role_missing(self) -> None:
+        """A genuine config-load/validation error must NOT be graceful (Codex finding 1)."""
+        from personal_agent.config.model_loader import ModelConfigError
+        from personal_agent.orchestrator.context_compressor import (
+            CAUSE_ASSEMBLY_ERROR,
+            classify_compression_failure,
+        )
+
+        exc = ModelConfigError("model catalog failed to load: invalid YAML")
+        assert classify_compression_failure(exc) == CAUSE_ASSEMBLY_ERROR
+
+    def test_budget_denied_is_budget_denied(self) -> None:
+        from datetime import datetime, timezone
+        from decimal import Decimal
+
+        from personal_agent.cost_gate.types import BudgetDenied
+        from personal_agent.orchestrator.context_compressor import (
+            CAUSE_BUDGET_DENIED,
+            classify_compression_failure,
+        )
+
+        exc = BudgetDenied(
+            role="main_inference",
+            time_window="daily",
+            current_spend=Decimal("5.0"),
+            cap=Decimal("5.0"),
+            window_resets_at=datetime.now(timezone.utc),
+        )
+        assert classify_compression_failure(exc) == CAUSE_BUDGET_DENIED
+
+    def test_rate_limited_llm_error(self) -> None:
+        from personal_agent.llm_client.types import LLMClientError
+        from personal_agent.orchestrator.context_compressor import (
+            CAUSE_RATE_LIMITED,
+            classify_compression_failure,
+        )
+
+        exc = LLMClientError(
+            "LiteLLM call failed: litellm.RateLimitError: OpenAIException - "
+            "You exceeded your current quota"
+        )
+        assert classify_compression_failure(exc) == CAUSE_RATE_LIMITED
+
+    def test_timeout_llm_error(self) -> None:
+        from personal_agent.llm_client.types import LLMClientError
+        from personal_agent.orchestrator.context_compressor import (
+            CAUSE_TIMEOUT,
+            classify_compression_failure,
+        )
+
+        assert classify_compression_failure(LLMClientError("request timed out")) == CAUSE_TIMEOUT
+
+    def test_generic_llm_error(self) -> None:
+        from personal_agent.llm_client.types import LLMClientError
+        from personal_agent.orchestrator.context_compressor import (
+            CAUSE_LLM_ERROR,
+            classify_compression_failure,
+        )
+
+        assert classify_compression_failure(LLMClientError("connection reset")) == CAUSE_LLM_ERROR
+
+    def test_unexpected_error_is_assembly_error(self) -> None:
+        from personal_agent.orchestrator.context_compressor import (
+            CAUSE_ASSEMBLY_ERROR,
+            classify_compression_failure,
+        )
+
+        assert classify_compression_failure(RuntimeError("boom")) == CAUSE_ASSEMBLY_ERROR
+
+
+class TestCompressTurnsFailureRouting:
+    """FRE-941 — role-missing is a graceful skip; real failures carry ``cause``."""
+
+    @pytest.mark.asyncio
+    async def test_model_config_error_is_graceful_skip_not_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reproducing test: a runtime compressor-role ModelConfigError must NOT emit
+        ``context_compression_failed`` — it is the graceful role-missing skip (the bug).
+        """
+        import personal_agent.orchestrator.context_compressor as cc_module
+        from personal_agent.config.model_loader import ModelConfigError
+
+        monkeypatch.setattr(cc_module, "_compressor_role_missing_logged", False)
+
+        mock_client = AsyncMock()
+        mock_client.respond.side_effect = ModelConfigError(
+            "No configuration found for role: compressor"
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.context_compressor.get_llm_client_for_key",
+                return_value=mock_client,
+            ),
+            patch.object(cc_module, "log") as mock_log,
+        ):
+            result = await compress_turns([_msg("user", "hello")], trace_id="t-1")
+
+        assert result == FALLBACK_MARKER
+        events = [call.args[0] for call in mock_log.warning.call_args_list]
+        assert "context_compression_failed" not in events
+        assert "context_compressor_role_missing" in events
+
+    @pytest.mark.asyncio
+    async def test_llm_error_emits_failed_with_cause(self) -> None:
+        """A genuine LLM failure keeps ``context_compression_failed`` and carries ``cause``."""
+        import personal_agent.orchestrator.context_compressor as cc_module
+        from personal_agent.llm_client.types import LLMClientError
+
+        mock_client = AsyncMock()
+        mock_client.respond.side_effect = LLMClientError("connection reset")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.context_compressor.get_llm_client_for_key",
+                return_value=mock_client,
+            ),
+            patch.object(cc_module, "log") as mock_log,
+        ):
+            result = await compress_turns([_msg("user", "hello")], trace_id="t-1")
+
+        assert result == FALLBACK_MARKER
+        failed = [
+            c for c in mock_log.warning.call_args_list if c.args[0] == "context_compression_failed"
+        ]
+        assert len(failed) == 1
+        assert failed[0].kwargs["cause"] == cc_module.CAUSE_LLM_ERROR

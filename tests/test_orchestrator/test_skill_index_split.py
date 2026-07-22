@@ -76,17 +76,15 @@ async def _drive(
 ) -> tuple[str, object]:
     """Run step_llm_call once; return (system_prompt, prompt_identity).
 
-    Pinned to the D1/D4 head layout (cache_frozen_layout_enabled=False): these
-    tests verify that the skill index and bodies land in the correct positions
-    within system_prompt. Under the frozen layout (default True since FRE-440)
-    volatile bodies ride the user turn, which is separately verified by
-    test_frozen_layout.py. Pin flag-off here so the D4 system_prompt ordering
-    invariants remain testable.
+    Runs under the frozen layout (the sole layout since FRE-941). The remaining
+    assertions are layout-independent: the STATIC skill index still lands in
+    system_prompt, the static-prefix-hash is invariant to body count, and the
+    component_ids are stamped regardless of layout. Volatile body *placement* on
+    the user turn is verified separately by test_frozen_layout.py.
     """
     from personal_agent.config import settings
     from personal_agent.telemetry.trace import TraceContext
 
-    monkeypatch.setattr(settings, "cache_frozen_layout_enabled", False)
     monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
     monkeypatch.setattr(settings, "skill_routing_mode", routing_mode)
     monkeypatch.setattr(settings, "skill_routing_model_key", "")
@@ -139,9 +137,15 @@ async def _drive(
 class TestSkillIndexSplit:
     """ADR-0081 D4: index → cached prefix, bodies → volatile tail."""
 
+    # The head-layout ordering tests (index-precedes-bodies / directive-rides-cached-side
+    # in system_prompt) were removed with the flag (FRE-941): under the sole frozen
+    # layout the bodies ride the user turn, not system_prompt (test_frozen_layout.py).
+    # The STATIC index still lands in system_prompt — asserted below via the invariant
+    # static-prefix-hash and component-id tests.
+
     @pytest.mark.asyncio
-    async def test_index_precedes_bodies_in_hybrid(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Stable index must appear before volatile bodies in the assembled prompt."""
+    async def test_index_lands_in_system_prompt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The STATIC skill index still lands in system_prompt under the frozen layout."""
         system_prompt, _ = await _drive(
             monkeypatch,
             routing_mode="hybrid",
@@ -149,21 +153,8 @@ class TestSkillIndexSplit:
             body_text=_BODY_MARKER,
         )
         assert _INDEX_MARKER in system_prompt
-        assert _BODY_MARKER in system_prompt
-        assert system_prompt.index(_INDEX_MARKER) < system_prompt.index(_BODY_MARKER), (
-            "Stable skill index (cached) must precede volatile skill bodies (tail)."
-        )
-
-    @pytest.mark.asyncio
-    async def test_index_directive_rides_cached_side(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """<skill_index_directive> (stable) sits with the index, before the bodies."""
-        system_prompt, _ = await _drive(
-            monkeypatch,
-            routing_mode="hybrid",
-            index_text=_INDEX_MARKER,
-            body_text=_BODY_MARKER,
-        )
-        assert system_prompt.index(_INDEX_DIRECTIVE) < system_prompt.index(_BODY_MARKER)
+        # Bodies ride the user turn, not the cached system prefix.
+        assert _BODY_MARKER not in system_prompt
 
     @pytest.mark.asyncio
     async def test_static_prefix_hash_identical_across_body_counts(

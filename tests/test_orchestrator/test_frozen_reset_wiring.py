@@ -57,19 +57,12 @@ def test_frozen_backend_defaults_local_without_profile() -> None:
     assert ex._frozen_backend() in {"local", "cloud"}
 
 
-@pytest.mark.asyncio
-async def test_maybe_frozen_reset_noop_when_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "cache_frozen_layout_enabled", False)
-    msgs = [{"role": "user", "content": "a"}]
-    ctx = _ctx(list(msgs))
-    await ex._maybe_frozen_reset(ctx)
-    assert ctx.messages == msgs
-    assert ctx.salient_highlights == ""
+# The flag-off no-op test was removed with cache_frozen_layout_enabled (FRE-941):
+# the frozen reset is now unconditional apart from the ctx.session_id guard.
 
 
 @pytest.mark.asyncio
 async def test_maybe_frozen_reset_holds_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "cache_frozen_layout_enabled", True)
     # Short history → below the min-run floor → hold.
     msgs = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]
     ctx = _ctx(list(msgs))
@@ -81,8 +74,6 @@ async def test_maybe_frozen_reset_holds_below_threshold(monkeypatch: pytest.Monk
 async def test_maybe_frozen_reset_fires_and_stashes_highlights(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "cache_frozen_layout_enabled", True)
-
     async def _fake_build_frozen_reset(messages, *, trace_id, session_id, **kw):  # type: ignore[no-untyped-def]
         return FrozenResetResult(
             messages=[{"role": "user", "content": "compacted"}],

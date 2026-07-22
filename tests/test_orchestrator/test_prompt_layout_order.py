@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from personal_agent.config import settings
 from personal_agent.governance.models import Mode
 from personal_agent.orchestrator import Channel
 from personal_agent.orchestrator.executor import execute_task_safe
@@ -48,22 +47,25 @@ def _make_mock_client() -> AsyncMock:
     return mock
 
 
+# NOTE: the head-layout test_tool_prompt_before_memory_section was removed with the
+# cache_frozen_layout_enabled flag (FRE-941). The replacement below drives the same
+# real execute_task_safe pipeline under the (now sole) frozen layout.
+
+
 @patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio
-async def test_tool_prompt_before_memory_section(
-    mock_client_class: MagicMock, monkeypatch: pytest.MonkeyPatch
+async def test_memory_stays_out_of_static_prefix_under_frozen_layout(
+    mock_client_class: MagicMock,
 ) -> None:
-    """tool_prompt (STATIC) must appear before memory_section (VOLATILE) in assembled prompt.
+    """ADR-0081 D1/D2 cache-boundary invariant, exercised through the real pipeline.
 
-    ADR-0081 D1: the byte layout must be monotone in mutation frequency so the
-    KV-cache boundary sits after the static prefix and before the volatile tail.
-
-    Pinned to the D1/D4 head layout (cache_frozen_layout_enabled=False): under the
-    frozen layout (FRE-434, default True as of FRE-440) volatile content rides the
-    user turn, not the system head, so the memory section would not appear in
-    system_prompt. This test intentionally verifies the head-layout invariant.
+    Populated memory_context must ride the volatile user-turn block, never the
+    STATIC system_prompt — otherwise every turn perturbs the byte-stable prefix
+    and the KV-cache forward-extension property the frozen layout exists for is
+    silently lost. Complements the unit-level test_frozen_layout.py (which only
+    exercises ``_inline_volatile_into_last_user_message`` in isolation with
+    synthetic strings) with an end-to-end check through ``execute_task_safe``.
     """
-    monkeypatch.setattr(settings, "cache_frozen_layout_enabled", False)
     mock_client = _make_mock_client()
     mock_client_class.return_value = mock_client
 
@@ -83,16 +85,18 @@ async def test_tool_prompt_before_memory_section(
 
     call_kwargs = mock_client.respond.call_args_list[0].kwargs
     system_prompt: str = call_kwargs.get("system_prompt", "") or ""
+    sent_messages = call_kwargs.get("messages") or []
 
-    assert _TOOL_PROMPT_MARKER in system_prompt, "tool_prompt not found in assembled system_prompt"
-    assert _MEMORY_MARKER in system_prompt, "memory_section not found in assembled system_prompt"
-
-    tool_idx = system_prompt.index(_TOOL_PROMPT_MARKER)
-    memory_idx = system_prompt.index(_MEMORY_MARKER)
-    assert tool_idx < memory_idx, (
-        f"tool_prompt (STATIC) must appear before memory_section (VOLATILE). "
-        f"tool_idx={tool_idx}, memory_idx={memory_idx}. "
-        f"This is the ADR-0081 D1 volatility-gradient invariant."
+    assert _MEMORY_MARKER not in system_prompt, (
+        "memory_section leaked into the STATIC system_prompt — this breaks the "
+        "ADR-0081 D1 cache-boundary invariant (byte-stable prefix)."
+    )
+    last_user_content = next(
+        m["content"] for m in reversed(sent_messages) if m.get("role") == "user"
+    )
+    assert _MEMORY_MARKER in last_user_content, (
+        "memory_section must ride the volatile current user turn under the "
+        "frozen layout (ADR-0081 D2)."
     )
 
 

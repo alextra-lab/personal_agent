@@ -37,7 +37,8 @@ class WithinSessionCompressionRecord:
         trace_id: Originating request trace identifier.
         session_id: Originating session identifier.
         trigger: ``"soft"`` (async between turns) or ``"hard"`` (synchronous
-            mid-orchestration).
+            mid-orchestration). ``"soft"`` has no production producer since
+            FRE-941 retired the reactive soft-compaction path.
         head_tokens: Tokens kept in the head (system + first user message).
         middle_tokens_in: Tokens in the middle band before pre-pass + LLM.
         middle_tokens_out: Tokens in the middle after compression.

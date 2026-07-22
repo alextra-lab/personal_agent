@@ -31,6 +31,83 @@ FALLBACK_MARKER = "[Earlier messages truncated]"
 
 _compressor_role_missing_logged: bool = False
 
+# Cause categories for the compaction fallback path (ADR-0092 observability, FRE-941).
+# A stable ``cause`` dimension on the fallback telemetry makes the distribution of
+# failure reasons queryable rather than an opaque count.
+CAUSE_ROLE_MISSING = "role_missing"
+CAUSE_BUDGET_DENIED = "budget_denied"
+CAUSE_EMPTY_OUTPUT = "empty_output"
+CAUSE_RATE_LIMITED = "rate_limited"
+CAUSE_TIMEOUT = "timeout"
+CAUSE_LLM_ERROR = "llm_error"
+CAUSE_ASSEMBLY_ERROR = "assembly_error"
+
+
+def _is_role_config_missing(exc: BaseException) -> bool:
+    """Return True for the runtime "compressor key resolved but absent from catalog" error.
+
+    ``LocalLLMClient.respond`` raises a base ``ModelConfigError`` with this exact
+    message shape (``client.py``) when a resolved role key has no catalog config —
+    the runtime twin of the resolve-time ``ModelRoleError``. Narrow on the message
+    so genuine config-load/validation ``ModelConfigError``s are NOT masked as a
+    graceful role-missing skip (they remain real failures).
+    """
+    return str(exc).startswith("No configuration found for role")
+
+
+def classify_compression_failure(exc: BaseException) -> str:
+    """Map a compressor exception to a stable cause category (FRE-941).
+
+    Args:
+        exc: The exception raised while producing a compression summary.
+
+    Returns:
+        One of the ``CAUSE_*`` category strings. ``role_missing`` and
+        ``budget_denied`` are expected/graceful outcomes; the remainder are
+        genuine failures.
+    """
+    from personal_agent.config.model_loader import ModelConfigError, ModelRoleError
+    from personal_agent.cost_gate.types import BudgetDenied
+    from personal_agent.llm_client.types import LLMRateLimit, LLMTimeout
+
+    if isinstance(exc, ModelRoleError) or (
+        isinstance(exc, ModelConfigError) and _is_role_config_missing(exc)
+    ):
+        return CAUSE_ROLE_MISSING
+    if isinstance(exc, BudgetDenied):
+        return CAUSE_BUDGET_DENIED
+    # Typed subclasses first — the local backend (client.py) raises these directly.
+    # The cloud path (litellm_client.py) collapses every provider error into a bare
+    # LLMClientError, so the substring fallback below is a best-effort heuristic for
+    # that path only and may under-classify if a provider changes its error wording.
+    if isinstance(exc, LLMRateLimit):
+        return CAUSE_RATE_LIMITED
+    if isinstance(exc, LLMTimeout):
+        return CAUSE_TIMEOUT
+    if isinstance(exc, LLMClientError):
+        msg = str(exc).lower()
+        if "ratelimit" in msg or "rate limit" in msg or "quota" in msg or "429" in msg:
+            return CAUSE_RATE_LIMITED
+        if "timeout" in msg or "timed out" in msg:
+            return CAUSE_TIMEOUT
+        return CAUSE_LLM_ERROR
+    return CAUSE_ASSEMBLY_ERROR
+
+
+def _log_role_missing_once(trace_id: str) -> None:
+    """Log the compressor-role-missing fallback at most once per process."""
+    global _compressor_role_missing_logged
+    if not _compressor_role_missing_logged:
+        log.warning(
+            "context_compressor_role_missing",
+            cause=CAUSE_ROLE_MISSING,
+            fallback="static_marker",
+            trace_id=trace_id,
+            remedy="Add 'compressor' role to config/model_roles.yaml to enable summarisation",
+        )
+        _compressor_role_missing_logged = True
+
+
 _COMPRESSOR_SYSTEM_PROMPT = """\
 You are a context compressor. Given a sequence of conversation messages that \
 are being evicted from the context window, produce a concise structured summary \
@@ -151,15 +228,7 @@ async def compress_turns(
     try:
         compressor_role = resolve_role_model_key("compressor")
     except ModelRoleError:
-        global _compressor_role_missing_logged
-        if not _compressor_role_missing_logged:
-            log.warning(
-                "context_compressor_role_missing",
-                fallback="static_marker",
-                trace_id=trace_id,
-                remedy="Add 'compressor' role to config/model_roles.yaml to enable summarisation",
-            )
-            _compressor_role_missing_logged = True
+        _log_role_missing_once(trace_id)
         return FALLBACK_MARKER
 
     start_ms = time.monotonic() * 1000
@@ -190,6 +259,7 @@ async def compress_turns(
         if not summary:
             log.warning(
                 "context_compression_empty_response",
+                cause=CAUSE_EMPTY_OUTPUT,
                 evicted_count=len(evicted_messages),
                 trace_id=trace_id,
             )
@@ -207,21 +277,20 @@ async def compress_turns(
         )
         return summary
 
-    except LLMClientError as exc:
-        duration_ms = time.monotonic() * 1000 - start_ms
-        log.warning(
-            "context_compression_failed",
-            error=str(exc),
-            error_type=type(exc).__name__,
-            evicted_count=len(evicted_messages),
-            duration_ms=round(duration_ms),
-            trace_id=trace_id,
-        )
-        return FALLBACK_MARKER
     except Exception as exc:
+        cause = classify_compression_failure(exc)
+        # A resolved compressor key with no catalog config (client.py raises a
+        # base ModelConfigError) is the runtime twin of the resolve-time
+        # ModelRoleError above — the same graceful, once-logged role-missing skip,
+        # not a hard failure (FRE-941). Genuine failures keep the warning event,
+        # now carrying a queryable ``cause`` dimension.
+        if cause == CAUSE_ROLE_MISSING:
+            _log_role_missing_once(trace_id)
+            return FALLBACK_MARKER
         duration_ms = time.monotonic() * 1000 - start_ms
         log.warning(
             "context_compression_failed",
+            cause=cause,
             error=str(exc),
             error_type=type(exc).__name__,
             evicted_count=len(evicted_messages),

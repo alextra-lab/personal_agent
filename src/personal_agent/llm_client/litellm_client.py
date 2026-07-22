@@ -438,7 +438,7 @@ class LiteLLMClient:
             wire_messages, wire_tools = _decorated_anthropic_copy(
                 api_messages,
                 litellm_kwargs.get("tools"),
-                frozen_layout=_settings.cache_frozen_layout_enabled,
+                frozen_layout=True,  # sole layout since FRE-941 retired the A/B flag (ADR-0081 §D2)
             )
             litellm_kwargs["messages"] = wire_messages
             if wire_tools is not None:

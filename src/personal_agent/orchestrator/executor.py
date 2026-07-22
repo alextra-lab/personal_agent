@@ -23,7 +23,6 @@ from personal_agent.llm_client.message_content import (
 )
 from personal_agent.llm_client.models import Placement
 from personal_agent.observability.topology import observe_topology
-from personal_agent.orchestrator import compression_manager
 from personal_agent.orchestrator.context_window import (
     apply_context_window,
     estimate_messages_tokens,
@@ -1297,14 +1296,12 @@ async def _maybe_frozen_reset(ctx: ExecutionContext) -> None:
     ADR-0081 §D3: when the run reaches the cost/quality optimum (or the token
     ceiling), compact ``ctx.messages`` into ``[first user][assistant recap][K
     verbatim turns]`` and stash the volatile salient highlights for this turn.
-    Strictly gated on ``cache_frozen_layout_enabled`` so the flag-off path is
-    byte-for-byte unchanged.
 
     Args:
         ctx: Execution context (``ctx.messages`` and ``ctx.salient_highlights``
             are updated in place on a reset).
     """
-    if not settings.cache_frozen_layout_enabled or not ctx.session_id:
+    if not ctx.session_id:
         return
 
     import math  # noqa: PLC0415
@@ -3039,29 +3036,19 @@ async def step_init(
     if timer:
         timer.start_span("context_window")
     try:
-        # Retrieve pre-computed compression summary if available (ADR-0038).
-        # ADR-0081 §D3 Decision 4: under the frozen layout the transient
-        # re-derivation (re-inserting a popped summary at a fixed index every
-        # turn) is itself a cache-buster and is removed — compaction becomes the
-        # scheduled reset below. apply_context_window then keeps only its pure
-        # truncation role.
-        # Dead-by-default: cache_frozen_layout_enabled=True (production default)
-        # makes _summary always None; compressed_summary is the legacy pre-ADR-0081
-        # path and maybe_trigger_compression is also gated on the same flag
-        # (FRE-576 F4).
-        _summary = (
-            compression_manager.get_summary(ctx.session_id)
-            if ctx.session_id and not settings.cache_frozen_layout_enabled
-            else None
-        )
-
+        # ADR-0081 §D3 Decision 4: under the frozen append-only layout the transient
+        # re-derivation (re-inserting a popped summary at a fixed index every turn)
+        # is a cache-buster, so it is gone — compaction is the scheduled reset below
+        # and apply_context_window keeps only its pure truncation role. (The legacy
+        # pre-ADR-0081 compression_manager summary path was retired with the
+        # cache_frozen_layout_enabled flag — FRE-941.)
         ctx.messages = apply_context_window(
             ctx.messages,
             max_tokens=settings.context_window_max_tokens,
             strategy=settings.conversation_context_strategy,
             trace_id=ctx.trace_id,
             session_id=ctx.session_id,
-            compressed_summary=_summary,
+            compressed_summary=None,
         )
 
         # ADR-0081 §D3: cache-aware compaction scheduler. When the run reaches the
@@ -3842,57 +3829,35 @@ async def step_llm_call(
         # what the static_prefix_hash covers (ADR-0081 D1 + D4).
         inner_system_before_memory = system_prompt or ""
 
-        _frozen_layout = settings.cache_frozen_layout_enabled
-        if _frozen_layout:
-            # ADR-0081 §D2 (FRE-434): frozen append-only layout. Per-turn volatile
-            # (selected skill bodies + usage-directives + recalled memory; D3
-            # salient highlights join in PR2) rides the CURRENT user turn, not the
-            # system head. message[0] stays exactly inner_system_before_memory, so
-            # the wire prefix is byte-stable and prior turns replay as a strict
-            # forward extension — the property local KV reuse requires.
-            #
-            # The block is inlined into ctx.messages in place so the history
-            # persisted at end of turn (update_session) equals the wire form
-            # sent now. _inline_… is a no-op when the block is empty or the last
-            # message is not a user turn (e.g. post-tool synthesis, where the
-            # current user query — already inlined on the tool-request call —
-            # still carries the volatile earlier in the sequence).
-            # Order (ADR-0081 §D4/§D3): skill bodies + usage-directives → recalled
-            # memory → D3 salient highlights → the ADR-0122 §5 artifact-builder
-            # planning note, the latter two closest to the query.
-            _volatile_block = "\n\n".join(
-                p
-                for p in (
-                    _skill_bodies_tail,
-                    memory_section or "",
-                    ctx.salient_highlights,
-                    ctx.artifact_builder_planning_note or "",
-                )
-                if p
+        # ADR-0081 §D2 (FRE-434): frozen append-only layout — the sole layout since
+        # the cache_frozen_layout_enabled A/B flag was retired (FRE-941; frozen won
+        # decisively, quality flat). Per-turn volatile (selected skill bodies +
+        # usage-directives + recalled memory + D3 salient highlights) rides the
+        # CURRENT user turn, not the system head. message[0] stays exactly
+        # inner_system_before_memory, so the wire prefix is byte-stable and prior
+        # turns replay as a strict forward extension — the property local KV reuse
+        # requires.
+        #
+        # The block is inlined into ctx.messages in place so the history persisted
+        # at end of turn (update_session) equals the wire form sent now. _inline_…
+        # is a no-op when the block is empty or the last message is not a user turn
+        # (e.g. post-tool synthesis, where the current user query — already inlined
+        # on the tool-request call — still carries the volatile earlier in the
+        # sequence).
+        # Order (ADR-0081 §D4/§D3): skill bodies + usage-directives → recalled
+        # memory → D3 salient highlights → the ADR-0122 §5 artifact-builder
+        # planning note, the latter two closest to the query.
+        _volatile_block = "\n\n".join(
+            p
+            for p in (
+                _skill_bodies_tail,
+                memory_section or "",
+                ctx.salient_highlights,
+                ctx.artifact_builder_planning_note or "",
             )
-            ctx.messages = _inline_volatile_into_last_user_message(ctx.messages, _volatile_block)
-        else:
-            # D1/D4 head-layout (unchanged when the flag is off). VOLATILE tail
-            # order: selected skill bodies → <skill_usage_directives> → recalled
-            # memory → the ADR-0122 §5 artifact-builder planning note; appended
-            # after the capture so none enters static_prefix_hash.
-            if _skill_bodies_tail:
-                if system_prompt:
-                    system_prompt = f"{system_prompt}\n\n{_skill_bodies_tail}"
-                else:
-                    system_prompt = _skill_bodies_tail
-
-            if memory_section:
-                if system_prompt:
-                    system_prompt = f"{system_prompt}\n{memory_section}"
-                else:
-                    system_prompt = memory_section
-
-            if ctx.artifact_builder_planning_note:
-                if system_prompt:
-                    system_prompt = f"{system_prompt}\n\n{ctx.artifact_builder_planning_note}"
-                else:
-                    system_prompt = ctx.artifact_builder_planning_note
+            if p
+        )
+        ctx.messages = _inline_volatile_into_last_user_message(ctx.messages, _volatile_block)
 
         # Call LocalLLMClient.respond()
         # Pass previous_response_id for stateful /v1/responses API
@@ -4859,27 +4824,11 @@ async def execute_task_safe(
             )
             await _emit_classified_error(ctx, classified)
 
-        # Trigger async context compression if threshold crossed (ADR-0038
-        # + ADR-0061 §D1 soft trigger).  Bus threaded through so the
-        # within-session compression event lands on
-        # ``stream:context.within_session_compressed``.
-        # ADR-0081 §D3 Decision 3: under the frozen layout the reactive 0.65 soft
-        # trigger is removed — the cache-aware scheduler (step_init) subsumes it;
+        # ADR-0081 §D3 Decision 3: the reactive 0.65 soft compaction trigger was
+        # removed with the cache_frozen_layout_enabled flag (FRE-941) — the
+        # cache-aware scheduler (step_init `_maybe_frozen_reset`) subsumes it;
         # firing reactive compaction here would rewrite history off-schedule and
         # break the forward-extension.
-        if ctx.session_id and not settings.cache_frozen_layout_enabled:
-            try:
-                from personal_agent.events.bus import get_event_bus
-
-                _soft_bus = get_event_bus()
-            except Exception:
-                _soft_bus = None
-            compression_manager.maybe_trigger_compression(
-                session_id=ctx.session_id,
-                messages=ctx.messages,
-                trace_id=ctx.trace_id,
-                bus=_soft_bus,
-            )
 
         log.info(
             REPLY_READY,

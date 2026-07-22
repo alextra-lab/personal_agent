@@ -31,6 +31,23 @@
 # below, a two-places-for-one-role trap master caught at the gate. `primary`
 # stays: its value here still matches its binding, so there is no drift to
 # trap, even though this matrix isn't consulted for it either.
+#
+# Status for the next reader (FRE-926): this matrix is NOT dead weight —
+# resolve_role_model_key() (model_loader.py) still reads this `roles:` block
+# directly, and several runtime call sites still call it for their role
+# (grep `resolve_role_model_key` under src/ before assuming a role here is
+# unused; some roles, e.g. `compressor`, resolve through it at one call site
+# and through the Layer-3-bindings resolver `resolve_role_target()` at
+# another — the split below is not a clean one-or-the-other partition).
+# `sub_agent`, `artifact_builder`, and `vision` are the only roles that never
+# touch this matrix at all; they exist solely as bindings below. Beyond those
+# runtime callers, this matrix is also read by config_guard's
+# dangling-reference check (`check_forbidden_role_divergence_and_dangling_refs`).
+# Each entry's `all:` key is a vestigial profile-era shape: ADR-0099 originally
+# needed it to hold one value per profile when `divergence: allowed`; FRE-916
+# phase 2 collapsed that axis to a single catalog, so `all:` now just means
+# "the one value" — kept because the loader and the dangling-ref check both
+# still read that key name, not because there is anything left to be "all" of.
 roles:
   primary:            { all: qwen3.6-35b-thinking }
   entity_extraction:  { all: gpt-5.4-mini }

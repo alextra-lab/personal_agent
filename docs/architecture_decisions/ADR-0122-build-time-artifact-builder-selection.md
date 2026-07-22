@@ -1,6 +1,6 @@
 # ADR-0122: Per-build artifact builder selection — choose the model before the plan is written
 
-**Status:** Accepted — 2026-07-19 (owner); **amended 2026-07-21 — the card fires at turn start, not at the build boundary** (owner-directed after the first live AC-7 run; see Status Updates). Implementation chain FRE-878 (T1–T3) shipped and deployed; the amendment adds T4–T6. Seam AC-7 is **not yet met** — it failed live on 2026-07-21.
+**Status:** Implemented — 2026-07-22. Accepted 2026-07-19 (owner); amended 2026-07-21 (the card fires at turn start, not at the build boundary — owner-directed after the first live AC-7 run; see Status Updates). Full chain T1–T6 (FRE-881/882/929/930/931 + seam FRE-921) shipped and deployed; **AC-7 proven live on the deployed stack 2026-07-22** (owner build-intent turn, session bc03cb62 / trace 44dc9b90 — card rendered through a churning socket, user picked Haiku, build sized to 32768 and persisted). AC-7's prerequisite FRE-928 (reconnect-survival) is Done. Known limitation carried forward under FRE-884 (expansion-path builds reach no card).
 **Date:** 2026-07-19
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** artifact-pipeline, model-selection, human-in-the-loop, config, observability

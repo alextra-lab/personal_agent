@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-22
+> **Last updated**: 2026-07-23
 
 ## 0. ADR-0123 turn progress surface — merged, tickets pending
 
@@ -18,27 +18,47 @@ Live condition for whoever implements: `turn_status` already carries `tool_itera
 `context_max`, but **both are currently emitted as `0`** between turns. Absent-vs-zero (ADR-0123 §5)
 is a present defect, not a future principle.
 
-## 0a. Compaction repair — FRE-941 + FRE-942 fast-tracked (build2, active)
+## 0a. Compaction — a full review is owed; visibility now exists to base it on
 
-cc-explore found within-session compaction degraded; master verified against ES and filed two Opus-tier
-bugs, owner-approved and fast-tracked to build2 (sequential): **FRE-941** (~21% failure → reverts to
-dumb truncation) then **FRE-942** (async not keeping ahead; hard≈soft triggers; folds in the ADR-0081
-§D3 / ADR-0092 `frozen_reset` divergence). PRs return to master's gate.
+**There is no working compaction path.** Proven, not suspected: the soft trigger was dead by design
+under the frozen layout and FRE-941 deleted it; the hard gate fires but provably shrinks nothing
+(`tokens_saved == 0` — any tool response large enough to cross the threshold is itself larger than the
+24k tail floor, so it is swept wholesale into the protected tail); and the frozen-reset scheduler that
+was to supersede both **had never once evaluated** — its per-turn emit was unreachable behind
+`step_init`'s gateway-branch return. Sources: `docs/research/2026-07-17-fre-908-compression-gate-proof.md`
+(executable proof) and ADR-0092 open item 7.
 
-## 0b. Session-summary KG thread — explored, awaiting a measure-first gate
+This is **latent, not live** — assembled context runs ~400–6,000 tokens against a 48,000 reset ceiling
+and a 120,000 budget ceiling, and the budget trim has never fired in 1,283 evaluations. It becomes real
+only if session lengths grow.
 
-cc-explore writeup landed: `docs/research/2026-07-22-session-summary-kg-opportunity.md`. Findings: the
-session summary is written every turn on Sonnet, wholesale, clipped to 200 chars (discards ~88% of
-assistant text), and sits off **both** KG retrieval paths (unembedded, unprojected) — currently
-unconsumed. Shipped code (FRE-347) **inverted ADR-0024** (which deferred lazy generation). **Next step
-is the owner's:** the §C measure-first diagnostic (are there real session-outcome recall misses the
-entity/turn grains can't catch?) **before** any build. No ticket filed — decision-first.
+Forward: FRE-944/FRE-945 restored the per-turn emits (live 2026-07-23), so the review can be based on
+measured headroom rather than code reading. **FRE-942 is parked** — its premise (hard≈soft trigger
+parity) rested on stale pre-June counts and named modules FRE-941 deleted; it needs an owner retarget
+onto the design change FRE-908 identifies (exempt oversized trailing messages from the tail floor, or
+target the scheduler directly), not a threshold tweak. Settle ADR-0061's status in the same decision —
+it still reads Implemented while FRE-908 proved it inert.
+
+## 0b. Session-summary workstream — ADR-0124 Accepted, chain live
+
+**ADR-0124** (Accepted 2026-07-23) supersedes the measure-first hold that previously sat here: the gate
+now applies to **Phase 4 only**, and Phases 0–3 are unblocked. Chain on build1, relations written at
+dispatch: **FRE-947** Phase 0 producer correction (AC-1–14) → **FRE-948** Phase 1 session-browser
+surface (AC-15) → **FRE-949** Phase 2a offline replay → **FRE-950** Phase 2 hydration, model-visible
+(AC-17–21) → **FRE-951** Phase 3 anti-re-litigation (AC-22 to build, AC-23 to surface). Phase 4 is
+deliberately **unfiled**, gated on AC-24.
+
+Two things master owns here. **AC-22 is the seam** — the paired evaluation holds only once Phases 0, 1
+and 2 have all landed, so the ADR does not close because its last child merges. And the ADR carries a
+standing condition worth enforcing at every gate: *do not invent a consumer to justify an artifact* —
+if Phase 1 shows the digest conveys nothing useful, stopping is the correct outcome.
 
 ## 1. Reduce the backlog
 
-~80 Approved; most carry no stream label (parked). Live queue: build1 head = FRE-926; build2 head =
-FRE-941 → FRE-942 (compaction, fast-tracked). Awaiting approval and unlabelled: FRE-927, FRE-932,
-FRE-939. Method:
+~80 Approved; most carry no stream label (parked). Live queue: **build1 = the ADR-0124 chain, head
+FRE-947**; **build2 idle** (nothing labelled). Awaiting approval and unlabelled: FRE-927, FRE-932,
+FRE-939 (the swallowed-send class — still Urgent, still unexplained; the tmux 3.7b upgrade was for an
+owner-facing terminal-emulation bug and is **not** a fix for it). Method:
 verify per cluster, cancel the provable with a one-line reason, bring judgment calls to the owner.
 Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729–732, FRE-810/811/814) ·
 `[Thread]` placeholders that can never be Done (FRE-401/418/397) · work gated on events that never

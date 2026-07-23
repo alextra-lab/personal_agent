@@ -88,7 +88,9 @@ async def test_create_conversation_participated_in_after_turn_merge() -> None:
     await service.create_conversation(turn, user_id=uuid4(), visibility="group")
 
     indices = {
-        "turn_merge": next(i for i, c in enumerate(captured_cypher) if "MERGE (t:Turn {turn_id:" in c),
+        "turn_merge": next(
+            i for i, c in enumerate(captured_cypher) if "MERGE (t:Turn {turn_id:" in c
+        ),
         "participated": next(i for i, c in enumerate(captured_cypher) if "PARTICIPATED_IN" in c),
         "entity_loop": next(i for i, c in enumerate(captured_cypher) if "DISCUSSES" in c),
     }

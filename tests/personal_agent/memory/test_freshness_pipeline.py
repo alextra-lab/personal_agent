@@ -69,7 +69,9 @@ async def test_query_memory_event_reaches_consumer_neo4j_batch() -> None:
     assert captured[0].trace_id == "trace-pipe"
     assert set(captured[0].entity_ids) >= {"Alpha", "Beta"}
 
-    consumer = FreshnessConsumer(driver=consumer_driver, batch_window_seconds=60.0, batch_max_events=50)
+    consumer = FreshnessConsumer(
+        driver=consumer_driver, batch_window_seconds=60.0, batch_max_events=50
+    )
     await consumer.handle(captured[0])
     await consumer._flush()
 

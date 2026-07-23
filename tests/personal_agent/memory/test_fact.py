@@ -64,14 +64,17 @@ class TestPromotionCandidate:
 class TestPromotionResult:
     def test_success(self) -> None:
         result = PromotionResult(
-            promoted_count=3, skipped_count=7,
-            facts_created=["f1", "f2", "f3"], errors=[],
+            promoted_count=3,
+            skipped_count=7,
+            facts_created=["f1", "f2", "f3"],
+            errors=[],
         )
         assert result.success is True
 
     def test_partial_failure(self) -> None:
         result = PromotionResult(
-            promoted_count=2, skipped_count=5,
+            promoted_count=2,
+            skipped_count=5,
             facts_created=["f1", "f2"],
             errors=["Entity X: Neo4j write failed"],
         )

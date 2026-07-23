@@ -1205,10 +1205,14 @@ class MemoryService:
         (minutes), and the next sweep corrects it because the session becomes dirty
         again. This is a **staleness bound, not linearisability**.
 
-        Also used for a below-floor skip, with ``label`` and ``digest`` left None:
-        that is a completed projection with an empty result, and it must advance
-        freshness through the same predicate or a turn landing mid-skip would be
-        marked clean.
+        **Only for a successful generation.** A below-floor or unregenerable session
+        goes through :meth:`mark_session_projection_clean` instead. Routing a skip
+        through here would write ``label=None``/``digest=None`` over a previously good
+        digest and overwrite ``turn_count`` with a deflated recount — reintroducing
+        the exact clobber bug ADR-0124 exists to remove, in a new field. That is not
+        hypothetical: captures age out under retention while ``Session`` nodes persist
+        forever, so a resumed session normally has fewer captures on disk than turns
+        in the graph.
 
         Args:
             session_id: Session to publish for.
@@ -1217,8 +1221,8 @@ class MemoryService:
             generated_at: Freshness stamp to publish.
             turn_count: Recount from the captures this digest was built from
                 (ADR-0124 AC-7).
-            label: The session label, or None for a skip.
-            digest: The structured digest, or None for a skip.
+            label: The session label.
+            digest: The structured digest.
             trace_id: Trace identifier for log correlation (ADR-0074 §I3).
 
         Returns:
@@ -1281,6 +1285,91 @@ class MemoryService:
                 reason="session advanced since the sweep read it",
                 expected_ended_at=expected_ended_at.isoformat(),
             )
+        return accepted
+
+    async def mark_session_projection_clean(
+        self,
+        session_id: str,
+        *,
+        expected_ended_at: datetime,
+        generated_at: datetime,
+        trace_id: str | None = None,
+    ) -> bool:
+        """Advance freshness for a session that yielded no digest, touching nothing else.
+
+        Two cases reach here, and neither is a failure:
+
+        * **Below the minimum-turns floor** — a genuine single-turn session, which
+          ADR-0124 D2 deliberately gives no digest because every ``Turn`` already
+          carries its own summary and a one-turn session digest would be a diverging
+          artifact describing the same event.
+        * **Unregenerable** — the session's captures are no longer on disk. Retention
+          purges captures while ``Session`` nodes persist indefinitely, so this is the
+          normal state of any older session, not an edge case.
+
+        Both are *completed projections with an empty result*, so freshness advances —
+        otherwise they stay dirty forever and AC-2 can never pass. But this writes
+        **only** freshness and the failure state. It deliberately touches neither
+        ``session_label``/``session_digest`` nor ``turn_count``:
+
+        * Writing None over a previously good digest is data loss dressed as a clean
+          projection — the clobber bug ADR-0124 exists to remove, in a new field.
+        * A below-floor read is **not a reliable recount**. One surviving capture from
+          a six-turn session reads as "1", and writing that would shrink a correct
+          ``turn_count``. The stored value comes from consolidation, which saw the
+          turns when they were still on disk, and is the better number. This failure
+          would also be self-concealing, since AC-7 compares ``turn_count`` against a
+          recount and this write would have corrupted both sides of that comparison.
+
+        ``turn_count`` is written only by :meth:`write_session_digest`, where the read
+        genuinely produced the digest it describes.
+
+        Args:
+            session_id: Session to mark clean.
+            expected_ended_at: ``ended_at`` as captured when the sweep read it. Uses
+                the same predicate as the digest write, so a turn landing mid-sweep
+                refuses this too.
+            generated_at: Freshness stamp to publish.
+            trace_id: Trace identifier for log correlation (ADR-0074 §I3).
+
+        Returns:
+            True if accepted; False if refused because the session advanced.
+        """
+        if not self.connected or not self.driver:
+            log.warning("neo4j_not_connected", trace_id=trace_id, session_id=session_id)
+            return False
+
+        try:
+            async with self.driver.session() as db_session:
+                result = await db_session.run(
+                    """
+                    MATCH (s:Session {session_id: $session_id})
+                    WHERE s.ended_at = $expected_ended_at
+                    SET s.summary_generated_at = $generated_at,
+                        s.summary_failure_reason = null,
+                        s.summary_attempt_count = 0
+                    RETURN s.session_id AS session_id
+                    """,
+                    session_id=session_id,
+                    expected_ended_at=expected_ended_at.isoformat(),
+                    generated_at=generated_at.isoformat(),
+                )
+                accepted = await result.single() is not None
+        except Exception as e:
+            log.error(
+                "session_projection_clean_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return False
+
+        log.info(
+            "session_projection_marked_clean" if accepted else "session_projection_clean_refused",
+            session_id=session_id,
+            trace_id=trace_id,
+        )
         return accepted
 
     async def record_session_summary_failure(
@@ -1379,8 +1468,13 @@ class MemoryService:
             trace_id: Trace identifier for log correlation (ADR-0074 §I3).
 
         Returns:
-            Rows of ``session_id``, ``started_at``, ``ended_at`` — oldest-stale first,
-            so a backlog drains in the order it accumulated.
+            Rows of ``session_id``, ``started_at``, ``ended_at`` — fewest-attempts
+            first, then oldest-stale, so a backlog drains in the order it accumulated
+            **without** letting repeatedly-failing sessions monopolise the window.
+            Ordering by ``ended_at`` alone lets a session that fails for a
+            transient-classified reason it will never recover from sit at the head of
+            the queue forever, starving every newer session and re-sending its full
+            payload on every sweep.
         """
         if not self.connected or not self.driver:
             log.warning("neo4j_not_connected", trace_id=trace_id)
@@ -1403,7 +1497,7 @@ class MemoryService:
                     RETURN s.session_id AS session_id,
                            s.started_at  AS started_at,
                            s.ended_at    AS ended_at
-                    ORDER BY s.ended_at ASC
+                    ORDER BY coalesce(s.summary_attempt_count, 0) ASC, s.ended_at ASC
                     LIMIT $limit
                     """,
                     cutoff=cutoff,

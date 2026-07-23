@@ -568,23 +568,38 @@ class BrainstemScheduler:
             )
             return
 
-        accepted = await self.memory_service.write_session_digest(
-            session_id,
-            expected_ended_at=expected_ended_at,
-            generated_at=datetime.now(timezone.utc),
-            turn_count=len(captures),
-            label=outcome.label,
-            digest=outcome.digest,
-            trace_id=trace_id,
-        )
+        if outcome.status is SessionSummaryStatus.SKIPPED_BELOW_FLOOR:
+            # No digest to publish. Advance freshness ONLY — never write
+            # label/digest=None over a session that already carries a good digest,
+            # and never write a deflated recount over a correct turn_count. Captures
+            # age out under retention while Session nodes live forever, so "fewer
+            # captures than turns" is the normal state of an older session, not a
+            # sign that it had none.
+            accepted = await self.memory_service.mark_session_projection_clean(
+                session_id,
+                expected_ended_at=expected_ended_at,
+                generated_at=datetime.now(timezone.utc),
+                trace_id=trace_id,
+            )
+            if accepted:
+                result["no_captures" if not captures else "skipped"] += 1
+        else:
+            accepted = await self.memory_service.write_session_digest(
+                session_id,
+                expected_ended_at=expected_ended_at,
+                generated_at=datetime.now(timezone.utc),
+                turn_count=len(captures),
+                label=outcome.label,
+                digest=outcome.digest,
+                trace_id=trace_id,
+            )
+            if accepted:
+                result["generated"] += 1
+
         if not accepted:
             # The session took a turn mid-generation. It is dirty again, and the
             # next sweep picks it up — no retry here, which would race the same way.
             result["refused"] += 1
-        elif outcome.status is SessionSummaryStatus.SKIPPED_BELOW_FLOOR:
-            result["no_captures" if not captures else "skipped"] += 1
-        else:
-            result["generated"] += 1
 
     async def _trigger_consolidation(self, *, trace_id: str | None = None) -> None:
         """Trigger second brain consolidation and publish consolidation.completed.

@@ -239,6 +239,7 @@ def read_captures(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     limit: int = 100,
+    session_id: str | None = None,
 ) -> list[TaskCapture]:
     """Read captures from disk.
 
@@ -246,6 +247,11 @@ def read_captures(
         start_date: Optional start date filter
         end_date: Optional end date filter
         limit: Maximum number of captures to return
+        session_id: Optional session filter, applied **inside** the scan so that
+            ``limit`` bounds the matching captures rather than the captures
+            examined. Filtering after the fact would let a busy window's other
+            sessions consume the whole budget and silently drop the target
+            session's earliest turns (FRE-947).
 
     Returns:
         List of task captures
@@ -284,6 +290,8 @@ def read_captures(
                 if data.get("user_id") is None:
                     data["user_id"] = "00000000-0000-0000-0000-000000000000"
                 capture = TaskCapture(**data)
+                if session_id is not None and capture.session_id != session_id:
+                    continue
                 captures.append(capture)
 
                 if len(captures) >= limit:
@@ -293,6 +301,10 @@ def read_captures(
                     "capture_read_failed",
                     file_path=str(json_file),
                     error=str(e),
+                    # ADR-0074 §I3: threaded now that the scan is session-scoped.
+                    # An unreadable capture inside a session's own read is a hole in
+                    # that session's evidence, so it must be attributable to it.
+                    session_id=session_id,
                 )
 
     return captures
@@ -322,8 +334,14 @@ def read_session_captures(
         session_id: Session whose captures to read.
         started_at: The session's first-turn timestamp.
         ended_at: The session's last-turn timestamp.
-        limit: Safety bound on captures scanned. Sessions max out around 17 turns,
-            so this exists to stop a pathological read, not to shape results.
+        limit: Safety bound on captures **matching this session**, not on captures
+            examined — the filter is applied inside the scan. Sessions max out
+            around 17 turns, so this exists to stop a pathological read, not to
+            shape results. Bounding the scan instead would silently drop the
+            session's earliest turns whenever the date window happened to hold
+            more than ``limit`` captures across all sessions, and the producer
+            would then assert an untruncated transcript over an incomplete one —
+            precisely the silent truncation ADR-0124 forbids.
 
     Returns:
         The session's captures sorted by timestamp ascending. Empty if none are
@@ -331,12 +349,10 @@ def read_session_captures(
         not an error.
     """
     window = timedelta(days=1)
-    scanned = read_captures(
+    matching = read_captures(
         start_date=started_at - window,
         end_date=ended_at + window,
         limit=limit,
+        session_id=session_id,
     )
-    return sorted(
-        (c for c in scanned if c.session_id == session_id),
-        key=lambda c: c.timestamp,
-    )
+    return sorted(matching, key=lambda c: c.timestamp)

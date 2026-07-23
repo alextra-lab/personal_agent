@@ -86,6 +86,22 @@ _FALLBACK_CONTEXT_LENGTH = 32_000
 #: One retry on a validation failure (ADR-0124 Risks — "validator with one retry").
 _MAX_GENERATION_ATTEMPTS = 2
 
+#: Output ceiling for the call. The digest is bounded at ~250 tokens and the label
+#: at 90 characters, so this is generous headroom for the JSON envelope — and it
+#: keeps the cost gate's pre-call reservation proportionate to the real spend.
+_MAX_OUTPUT_TOKENS = 2_048
+
+#: Safety factor on the pre-dispatch token estimate. ``estimate_tokens`` uses
+#: cl100k_base, which systematically undercounts Anthropic tokenisation, and the
+#: undercount widens on the non-English and structured payloads full tool output
+#: now carries. An estimate that lands just under the true limit turns into a
+#: provider 400 on every attempt, which the failure taxonomy classifies as a
+#: transient model error and therefore retries forever.
+_TOKEN_ESTIMATE_SAFETY_FACTOR = 1.2
+
+#: Cap on the ``detail`` field of a failure event (see :func:`_failed`).
+_MAX_FAILURE_DETAIL_CHARS = 500
+
 _SYSTEM_PROMPT = """\
 You write structured session digests for an agent's long-term memory.
 
@@ -215,11 +231,29 @@ def _tool_block(index: int, result: dict[str, Any]) -> tuple[str, list[str]]:
 
     block = (
         f"  [{index}] {name}  status={status}\n"
-        f"      arguments: {arguments}\n"
-        f"      error: {error}\n"
-        f"      output: {payload}"
+        f"      arguments: {_neutralise_delimiters(arguments)}\n"
+        f"      error: {_neutralise_delimiters(error)}\n"
+        f"      output: {_neutralise_delimiters(payload)}"
     )
     return block, notes
+
+
+def _neutralise_delimiters(text: str) -> str:
+    """Defuse forged transcript structure in attacker-influenceable content.
+
+    Turn headers and the missing-evidence banner are plain text, and tool payloads
+    now carry web pages and file contents this system did not author. Without this,
+    a crafted page can forge a turn boundary or fake the evidence-unavailable
+    declaration and thereby restructure the transcript the summariser reasons over.
+
+    This does not make the prompt injection-proof — nothing at this layer does, and
+    ADR-0124 gates automatic consumption on AC-21 in Phase 2 for that reason. It
+    removes the cheap structural forgery, which is worth doing now because digests
+    written today are durable and Phase 2 inherits whatever this stores.
+    """
+    return text.replace("--- Turn ", "--- turn ").replace(
+        "SOME EVIDENCE IS UNAVAILABLE", "some evidence is unavailable"
+    )
 
 
 def _format_turn(index: int, capture: TaskCapture) -> tuple[str, list[str]]:
@@ -228,10 +262,10 @@ def _format_turn(index: int, capture: TaskCapture) -> tuple[str, list[str]]:
     parts = [
         f"--- Turn {index} (capture_id: {capture.trace_id}) ---",
         "User:",
-        capture.user_message or "",
+        _neutralise_delimiters(capture.user_message or ""),
         "",
         "Assistant:",
-        capture.assistant_response or "",
+        _neutralise_delimiters(capture.assistant_response or ""),
     ]
     if capture.assistant_response is None:
         notes.append(f"turn {index} has no recorded assistant response")
@@ -459,6 +493,11 @@ async def _call_model(
             role=ModelRole.PRIMARY,
             messages=[{"role": "user", "content": prompt}],
             system_prompt=_system_prompt(),
+            # Without this the client falls back to the deployment's max_tokens
+            # (128k) for an artifact bounded at ~250 tokens, and the cost gate
+            # reserves against that ceiling on every call — exhausting a shared
+            # budget lane far faster than the actual spend warrants.
+            max_tokens=_MAX_OUTPUT_TOKENS,
             trace_ctx=SystemTraceContext.new("session_summary", session_id=session_id),
         )
         return response.get("content", "") or ""
@@ -474,7 +513,7 @@ async def _call_model(
         ],
         system_prompt=None,
         tools=None,
-        max_tokens=2048,
+        max_tokens=_MAX_OUTPUT_TOKENS,
         max_retries=0,
         timeout_s=120.0,
         priority=InferencePriority.BACKGROUND,
@@ -502,7 +541,10 @@ def _failed(
         session_id=session_id,
         trace_id=trace_id,
         failure_reason=reason.value,
-        detail=detail,
+        # Truncated: `detail` can carry a repr of model output or a provider error
+        # body, both derived from session content. A failure reason is diagnostic;
+        # it is not a channel for shipping session text into the log index.
+        detail=detail[:_MAX_FAILURE_DETAIL_CHARS],
     )
     return SessionSummaryOutcome(status=SessionSummaryStatus.FAILED, failure_reason=reason)
 
@@ -544,6 +586,13 @@ async def generate_session_digest(
         return SessionSummaryOutcome(status=SessionSummaryStatus.SKIPPED_BELOW_FLOOR)
 
     settings = get_settings()
+    if not settings.session_summary_enabled:
+        # Checked here as well as in the sweep: this is half the governance point
+        # ADR-0124 D2 names, and it must hold for any caller — an operator-run
+        # eval or backfill included — not only for the scheduled path.
+        log.info("session_summary_disabled_by_settings", session_id=session_id, trace_id=trace_id)
+        return SessionSummaryOutcome(status=SessionSummaryStatus.SKIPPED_BELOW_FLOOR)
+
     model_config = load_model_config()
     role_name = resolve_role_model_key("session_summary")
     model_def = model_config.models.get(role_name)
@@ -553,7 +602,7 @@ async def generate_session_digest(
 
     # Pre-dispatch, so a doomed session costs an estimate and a log line rather
     # than a model call (ADR-0124 AC-5). Never silently truncate.
-    estimated_tokens = _estimate_input_tokens(prompt)
+    estimated_tokens = int(_estimate_input_tokens(prompt) * _TOKEN_ESTIMATE_SAFETY_FACTOR)
     limit = _input_token_limit(model_def.context_length if model_def else None)
     if estimated_tokens > limit:
         return _failed(

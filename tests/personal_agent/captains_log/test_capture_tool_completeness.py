@@ -145,3 +145,55 @@ def test_es_normaliser_does_not_invent_an_arguments_field() -> None:
     normalised = normalize_capture_doc_for_es(doc)
 
     assert "arguments" not in normalised["tool_results"][0]
+
+
+def test_session_filter_is_applied_inside_the_scan(tmp_path, monkeypatch) -> None:
+    """M-3 — `limit` must bound MATCHING captures, not captures examined.
+
+    read_captures walks date directories newest-first. Filtering by session after
+    the scan let a busy window's other sessions consume the whole budget, silently
+    dropping the target session's EARLIEST turns — while the producer went on to
+    assert "Full transcript follows. Nothing has been truncated." That is exactly
+    the silent truncation ADR-0124 forbids, and it fabricates contradictions.
+    """
+    import json as _json
+    from datetime import datetime, timedelta, timezone
+    from uuid import uuid4
+
+    from personal_agent.captains_log import capture as cap
+
+    day = tmp_path / "2026-07-20"
+    day.mkdir(parents=True)
+    base = datetime(2026, 7, 20, 10, 0, tzinfo=timezone.utc)
+
+    def _write(trace_id: str, session_id: str, minute: int) -> None:
+        (day / f"{trace_id}.json").write_text(
+            _json.dumps(
+                {
+                    "trace_id": trace_id,
+                    "session_id": session_id,
+                    "timestamp": (base + timedelta(minutes=minute)).isoformat(),
+                    "user_message": f"m{minute}",
+                    "assistant_response": "ok",
+                    "outcome": "completed",
+                    "user_id": str(uuid4()),
+                    "tool_results": [],
+                }
+            )
+        )
+
+    # The target session's two turns, plus plenty of noise from other sessions.
+    _write("target-a", "target", 1)
+    _write("target-b", "target", 9)
+    for i in range(20):
+        _write(f"noise-{i:02d}", f"other-{i}", 2 + i % 5)
+
+    monkeypatch.setattr(cap, "_get_captures_dir", lambda: tmp_path)
+
+    got = cap.read_session_captures(
+        "target", started_at=base, ended_at=base + timedelta(minutes=9), limit=5
+    )
+
+    assert [c.trace_id for c in got] == ["target-a", "target-b"], (
+        "both turns must survive a limit that the noise sessions would otherwise consume"
+    )

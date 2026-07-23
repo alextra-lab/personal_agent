@@ -214,7 +214,9 @@ def test_query_body_includes_entity_hint_match() -> None:
     must = body["query"]["bool"]["must"]
     # The third must-clause is the entity-hint disjunction
     text_clauses = must[-1]["bool"]["should"]
-    targets = {clause["match_phrase"][next(iter(clause["match_phrase"]))] for clause in text_clauses}
+    targets = {
+        clause["match_phrase"][next(iter(clause["match_phrase"]))] for clause in text_clauses
+    }
     assert "Postgres" in targets
     assert "Neo4j" in targets
 

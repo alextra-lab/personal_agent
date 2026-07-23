@@ -239,19 +239,15 @@ async def test_floor_skip_advances_freshness_through_the_same_predicate() -> Non
     """
     service, captured = _make_service_with_mock(single_returns={"session_id": "sess-1"})
 
-    accepted = await service.write_session_digest(
+    accepted = await service.mark_session_projection_clean(
         "sess-1",
         expected_ended_at=_ENDED_AT,
         generated_at=_ENDED_AT,
-        turn_count=1,
-        label=None,
-        digest=None,
     )
 
     assert accepted is True
     cypher, params = captured[0]
     assert "WHERE s.ended_at = $expected_ended_at" in cypher
-    assert params["digest"] is None and params["label"] is None
     assert params["generated_at"] == _ENDED_AT.isoformat()
 
 
@@ -260,14 +256,70 @@ async def test_floor_skip_write_is_refused_when_ended_at_moved() -> None:
     """The race codex flagged: a second turn landing mid-skip must refuse the skip."""
     service, _ = _make_service_with_mock(single_returns=None)
 
-    accepted = await service.write_session_digest(
+    accepted = await service.mark_session_projection_clean(
         "sess-1",
         expected_ended_at=_ENDED_AT,
         generated_at=_ENDED_AT,
-        turn_count=1,
     )
 
     assert accepted is False
+
+
+@pytest.mark.asyncio
+async def test_marking_clean_never_touches_the_stored_digest() -> None:
+    """The regression the pre-PR review caught: this is the clobber bug in a new field.
+
+    A session digested weeks ago, resumed today after retention purged its old
+    captures, reads below the floor. Writing label/digest=None here would erase a
+    perfectly good digest — exactly what ADR-0124 exists to stop `session_summary`
+    doing, reintroduced via `session_label`/`session_digest`.
+    """
+    service, captured = _make_service_with_mock(single_returns={"session_id": "sess-1"})
+
+    await service.mark_session_projection_clean(
+        "sess-1", expected_ended_at=_ENDED_AT, generated_at=_ENDED_AT
+    )
+
+    cypher, params = captured[0]
+    for untouched in ("session_label", "session_digest"):
+        assert f"s.{untouched} =" not in cypher
+        assert untouched not in params
+
+
+@pytest.mark.asyncio
+async def test_unregenerable_session_keeps_its_turn_count() -> None:
+    """A read that found nothing is not evidence the session had no turns.
+
+    Measured on the live graph: all 59 multi-turn sessions have zero captures on
+    disk. Writing `turn_count=0` for them would destroy the correct value for every
+    one — and AC-7 could not catch it, because AC-7 compares `turn_count` against a
+    recount and this write would have corrupted both sides.
+    """
+    service, captured = _make_service_with_mock(single_returns={"session_id": "sess-1"})
+
+    await service.mark_session_projection_clean(
+        "sess-1", expected_ended_at=_ENDED_AT, generated_at=_ENDED_AT
+    )
+
+    cypher, params = captured[0]
+    assert "s.turn_count" not in cypher
+    assert "turn_count" not in params
+    # Freshness still advances, or the session is re-swept forever.
+    assert "s.summary_generated_at = $generated_at" in cypher
+
+
+@pytest.mark.asyncio
+async def test_marking_clean_still_clears_prior_failure_state() -> None:
+    """A session that failed, then became unregenerable, must not look terminally failed."""
+    service, captured = _make_service_with_mock(single_returns={"session_id": "sess-1"})
+
+    await service.mark_session_projection_clean(
+        "sess-1", expected_ended_at=_ENDED_AT, generated_at=_ENDED_AT
+    )
+
+    cypher = captured[0][0]
+    assert "s.summary_failure_reason = null" in cypher
+    assert "s.summary_attempt_count = 0" in cypher
 
 
 # --------------------------------------------------------------------------

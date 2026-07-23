@@ -121,6 +121,23 @@ class _FakeMemory:
         self.writes.append({"session_id": session_id, "label": label, "digest": digest})
         return True
 
+    async def mark_session_projection_clean(
+        self,
+        session_id: str,
+        *,
+        expected_ended_at: datetime,
+        generated_at: datetime,
+        trace_id=None,
+    ) -> bool:
+        session = self.sessions[session_id]
+        if session["ended_at"] != expected_ended_at:
+            return False
+        session["summary_generated_at"] = generated_at
+        session["summary_failure_reason"] = None
+        session["summary_attempt_count"] = 0
+        # Deliberately touches neither session_label/session_digest nor turn_count.
+        return True
+
     async def record_session_summary_failure(
         self, session_id: str, *, expected_ended_at: datetime, failure_reason: str, trace_id=None
     ) -> bool:
@@ -295,8 +312,10 @@ async def test_below_floor_session_does_not_stay_dirty_forever(
 
     session = memory.sessions["sess-1"]
     assert session["summary_generated_at"] is not None, "freshness must advance"
-    assert session["session_digest"] is None, "AC-7: no digest for a single-turn session"
-    assert session["session_label"] is None
+    # Never written at all, rather than written as None — the skip path must not
+    # touch these fields, or it would clobber a digest a prior sweep had produced.
+    assert session.get("session_digest") is None, "AC-7: no digest for a single-turn session"
+    assert session.get("session_label") is None
     assert await memory.find_dirty_idle_sessions(idle_threshold_seconds=_IDLE, max_attempts=2) == []
 
 
@@ -503,6 +522,74 @@ async def test_unregenerable_session_is_counted_separately_from_a_floor_skip(
     assert result["skipped"] == 0
     # Still marked clean: a session whose evidence is gone must not be re-read forever.
     assert memory.sessions["sess-1"]["summary_generated_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_resumed_session_with_purged_captures_keeps_its_digest(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regression the pre-PR review caught, end to end.
+
+    A 6-turn session was digested weeks ago. Retention has since purged its captures.
+    The user resumes it with one new turn, so ended_at advances and it is dirty
+    again — but only the new turn's capture survives on disk, putting the read below
+    the floor. The sweep must advance freshness WITHOUT erasing the good digest or
+    shrinking turn_count from 6.
+
+    Before the fix this wrote label=None, digest=None, turn_count=1 — the clobber bug
+    ADR-0124 exists to remove, reintroduced in the fields that replaced it.
+    """
+    session = _session(ended_minutes_ago=30, turns=6)
+    session["summary_generated_at"] = _now() - timedelta(days=14)
+    session["session_label"] = "Elasticsearch shard triage"
+    session["session_digest"] = SessionDigest(
+        decisions=[DigestItem(text="Rejected date sharding.", basis="user_statement")]
+    )
+    memory = _FakeMemory({"sess-1": session})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+
+    _patch_producer(
+        monkeypatch,
+        SessionSummaryOutcome(status=SessionSummaryStatus.SKIPPED_BELOW_FLOOR),
+        captures_by_session={"sess-1": [_capture("sess-1", _now() - timedelta(minutes=30))]},
+    )
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    survived = memory.sessions["sess-1"]
+    assert survived["session_label"] == "Elasticsearch shard triage", "digest label erased"
+    assert survived["session_digest"] is not None, "a good digest was clobbered"
+    assert survived["turn_count"] == 6, "turn_count shrank to the purged-capture recount"
+    # ...and it is still marked clean, so it is not re-swept forever.
+    assert survived["summary_generated_at"] > _now() - timedelta(minutes=1)
+
+
+@pytest.mark.asyncio
+async def test_first_sweep_does_not_zero_turn_count_across_the_legacy_corpus(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Measured live: all 59 multi-turn graph sessions have zero captures on disk.
+
+    On first deploy every one of them is dirty and unregenerable. Writing a recount
+    of 0 would destroy the correct turn_count for the whole corpus — and AC-7 could
+    not detect it, since AC-7 compares turn_count against a recount and both sides
+    would have been corrupted by the same write.
+    """
+    memory = _FakeMemory(
+        {f"sess-{i}": _session(ended_minutes_ago=60 + i, turns=3 + i) for i in range(5)}
+    )
+    scheduler.memory_service = memory  # type: ignore[assignment]
+    _patch_producer(
+        monkeypatch,
+        SessionSummaryOutcome(status=SessionSummaryStatus.SKIPPED_BELOW_FLOOR),
+        captures_by_session={},  # nothing on disk for any of them
+    )
+
+    result = await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert result["no_captures"] == 5
+    for i in range(5):
+        assert memory.sessions[f"sess-{i}"]["turn_count"] == 3 + i
 
 
 @pytest.mark.asyncio

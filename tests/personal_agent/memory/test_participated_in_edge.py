@@ -146,6 +146,4 @@ async def test_participated_in_skipped_when_person_missing(
         record = await result.single()
 
     assert record is not None
-    assert record["cnt"] == 0, (
-        f"Expected 0 edges when :Person is absent, got {record['cnt']}"
-    )
+    assert record["cnt"] == 0, f"Expected 0 edges when :Person is absent, got {record['cnt']}"

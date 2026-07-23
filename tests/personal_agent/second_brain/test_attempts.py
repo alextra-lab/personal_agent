@@ -54,7 +54,9 @@ async def _cleanup(trace_id) -> AsyncIterator[None]:  # noqa: ANN001
     try:
         yield
         async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM consolidation_attempts WHERE trace_id = $1", trace_id)
+            await conn.execute(
+                "DELETE FROM consolidation_attempts WHERE trace_id = $1", trace_id
+            )
     finally:
         await pool.close()
 
@@ -108,8 +110,7 @@ async def test_subsequent_attempts_increment(trace_id, cleanup_pool: asyncpg.Poo
 
 @pytest.mark.asyncio
 async def test_distinct_roles_have_independent_counters(
-    trace_id,
-    cleanup_pool: asyncpg.Pool,  # noqa: ANN001
+    trace_id, cleanup_pool: asyncpg.Pool  # noqa: ANN001
 ) -> None:
     """Different roles for the same trace_id each start at 1."""
     started = datetime.now(timezone.utc)
@@ -134,4 +135,6 @@ async def test_budget_denied_records_denial_reason(trace_id) -> None:  # noqa: A
         denial_reason="cap_exceeded",
     )
     assert n == 1
-    assert (await previous_attempt_count(trace_id=trace_id, role="entity_extraction")) == 1
+    assert (
+        await previous_attempt_count(trace_id=trace_id, role="entity_extraction")
+    ) == 1

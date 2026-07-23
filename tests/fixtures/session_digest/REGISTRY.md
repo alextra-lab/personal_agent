@@ -10,8 +10,9 @@ been met.
 from tool payloads. Consequently: **AC-8** additionally asserts payloads/arguments are
 *absent* from the prompt; **AC-9 is withdrawn** (a tool-only fact is deliberately no
 longer reproduced — its fixture is deleted); the **AC-12 positives are rebuilt as
-self-corrections only** (the six payload-fed Tier-A cases are invalidated and removed,
-the self-correction set grown to eight); **AC-13 is unchanged**; **AC-10 is deferred**
+self_correction only** (the six payload-fed contradiction cases are invalidated and removed,
+the self_correction set grown to eight; the payload-free `status_contradiction` kind is
+exercised by AC-13); **AC-13 is unchanged**; **AC-10 is deferred**
 to an owner-led redesign (its fixture is payload-derived and invalidated — kept for that
 rework, not run by the amended arm). The eight new AC-12 positives were written down here
 and committed before the amended arm was run.

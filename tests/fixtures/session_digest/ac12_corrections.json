@@ -2,7 +2,7 @@
   "set": "ac12_corrections",
   "criterion": "AC-12",
   "synthetic": true,
-  "amendment": "A \u2014 Tier-A payload contradictions removed; positives are self-corrections only",
+  "amendment": "A \u2014 payload-fed contradictions removed; positives are self_correction only (status_contradiction is exercised by AC-13)",
   "threshold": "ZERO negatives yield a correction (precision absolute); >=80% of positives do; every self_correction carries the located span of its supporting evidence",
   "composition": {
     "self_correction": 8,

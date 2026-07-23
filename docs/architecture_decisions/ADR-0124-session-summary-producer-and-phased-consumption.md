@@ -78,8 +78,10 @@ assistant text where a session's outcome lives.
 - Prompt caching does not bite. Breakpoints sit on the system message, the last tool definition, and
   the last frozen message before the current user turn; recall content is appended in the turn's
   volatile tail, after the final breakpoint. Nothing in this ADR mutates the cached prefix.
-- The absent `session_summary` model role is a known constraint, deliberately deferred until it
-  converges with structured conversation context. Not addressed here.
+- The summariser has no model role of its own, resolving through `captains_log`. **The role's
+  creation is in scope here** (D2) because this ADR locates egress control at the role binding; the
+  *model choice* for that role remains deferred until it converges with structured conversation
+  context, and the role therefore lands defaulted to today's behaviour.
 - Do not evaluate summariser quality on the current producer's output. Comparing anything against
   200-char-clipped, tool-blind input measures nothing, because the input is mutilated before the
   comparison starts.
@@ -158,13 +160,30 @@ session-end is not observable. The question is "when is the projection stale."
   selection store in order to branch on it would reintroduce precisely the abstraction that ADR was
   written to remove.
 
-  **Known constraint, and this decision makes its cost concrete.** The control point named above —
-  bind the summariser's role to a deployment whose egress you accept — is currently coarse, because
-  the summariser has no role of its own and borrows `captains_log` (`session_summary.py:131`).
-  Changing the summariser's model therefore also changes reflection's. Separating that role is
-  deferred (see Context), and this decision is what turns that deferral from a tidiness issue into a
-  real one: until the role is split, the only way to keep session content off a given provider is to
-  move reflection too.
+  **This makes a dedicated `session_summary` role a Phase 0 deliverable, not a deferred nicety.**
+  The control point named above does not currently exist: the summariser has no role of its own and
+  resolves through `captains_log` (`session_summary.py:131`), so "bind the summariser to a deployment
+  whose egress you accept" is unactionable — you would be re-binding reflection at the same time. A
+  decision that locates control at the role binding is incoherent while the role is absent, so the
+  role is created here:
+
+  - `config/model_roles.yaml` — add `session_summary` to **both** the `roles` block (`{ all: … }`)
+    and the `bindings` block (`{ deployment: … }`), alongside the existing `entity_extraction` and
+    `captains_log` entries.
+  - `config/config_guard.py` — add it to `_ROLE_HEADER_RE`'s known-role alternation
+    (`entity_extraction|captains_log|insights|compressor|embedding|reranker`), or the guard rejects
+    the new key as an orphan.
+  - **Default it to `claude_sonnet`**, the model the summariser already resolves to today, so
+    behaviour is unchanged the moment it lands and the role's introduction is observably a no-op.
+  - `budget_role` stays `captains_log` for now (passed explicitly at `session_summary.py:152`);
+    splitting cost attribution is a separate, smaller decision and is not taken here.
+
+  **What remains deferred is the model *choice*, not the role.** Whether a cheaper model can do this
+  job — the open question in the backing research, with precedent in `entity_extraction`'s tested
+  move to `gpt-5.4-mini` and in the `compressor` role already doing structured summarisation on
+  `gpt-5.4-mini` — stays deferred until it converges with structured conversation context, and must
+  not be judged on the current producer's output in any case. Creating the role is precisely what
+  turns that future question into a config flip rather than a code change.
 
 - **If evidence is ever unavailable, the contract must say so.** No routine path withholds payloads
   any more, but captures can be incomplete — a truncated record, a tool whose result was never
@@ -525,8 +544,8 @@ consequence-of-being-wrong axis Phase 2 is the safer thing to ship first.
 - **Cross-substrate read in Phase 1:** the Postgres-backed session endpoint must reach Neo4j for the
   label and digest. This is the first such join in that endpoint.
 - **Generation task is materially harder:** four slots plus provenance plus a label, on a model that
-  cannot be tuned independently (no `session_summary` role). Schema violations become possible where
-  today only prose length could fail.
+  gains a role of its own for the first time (defaulted to today's model, so no behaviour change on
+  landing). Schema violations become possible where today only prose length could fail.
 - **Legacy rows:** all 121 existing sessions carry a summary, including all 62 single-turn ones.
   Applying the floor requires deciding what happens to those, rather than assuming a clean slate.
 - **The digest is eventually consistent by design.** A session summarised ~15 minutes after it goes
@@ -541,7 +560,7 @@ consequence-of-being-wrong axis Phase 2 is the safer thing to ship first.
 | **Cross-session supersession of `unresolved`** — a thread left open in session A is settled in session C; nothing revisits A's digest, because regeneration is triggered only by A's own new turns and a concluded session never gets more. Open threads accumulate as permanent false-open state, and the anti-re-litigation consumer eventually asserts "we never settled X" about something settled weeks ago — the exact inverse of its purpose. | **High** (occurs whenever a thread outlives its session, which the corpus shows is common; not strictly guaranteed) | Phase 0 stamps every `unresolved` item with its session's timestamp so consumers phrase the nudge as *"as of that session, X was open"* rather than asserting present tense. Phase 3's entity-overlap machinery then checks whether a later session's `decisions` settle an earlier session's `unresolved`. The timestamp must ship in Phase 0 or the Phase 3 fix has nothing to stand on. |
 | **Proportional dominance** — annotation outweighing the facts it annotates in a small context (five digests ≈ 74% of a p50 context) | High | Relative bound: annotation may never exceed the tokens of the facts it annotates. Measured in the Phase 2a replay before anything ships. |
 | **Fabricated corrections** poisoning the graph self-confirmingly | High | Precision-first Tier A/B standard; verbatim-span validation; never infer error from absent evidence; `corrections` rate monitored as a drift signal. |
-| **Instruction contamination** via tool output surviving into a digest and then into a future session's context | High blast radius; likelihood **not** reduced by single-user operation — the corpus already includes web search and file reads, whose content is not authored by the user | Gated, not accepted. **AC-20 blocks Phase 2** — the point at which a contaminated digest first reaches a model automatically — on an adversarial fixture set proving directives in tool output neither survive into the digest nor alter it. Phase 0 and Phase 1 are unaffected because a digest read only by a human is not an injection path. |
+| **Instruction contamination** via tool output surviving into a digest and then into a future session's context | High blast radius; likelihood **not** reduced by single-user operation — the corpus already includes web search and file reads, whose content is not authored by the user | Gated, not accepted. **AC-21 blocks Phase 2** — the point at which a contaminated digest first reaches a model automatically — on an adversarial fixture set proving directives in tool output neither survive into the digest nor alter it. Phase 0 and Phase 1 are unaffected because a digest read only by a human is not an injection path. |
 | **Egress** — full tool payloads (file contents, command output, query results) reach whichever provider serves the summariser's role | Medium; unchanged in kind from the primary turn, which already sent those bytes to its own model | Governed at the **role binding** per ADR-0121, not by a per-session branch — the deliberate consequence being that egress is a configuration decision the owner makes once. Sharpened by the deferred role split: the only available binding is `captains_log`, shared with reflection, so the knob is currently coarser than the decision deserves. |
 | **Provenance collapse** — the model treating derived synthesis as retrieved fact | Medium | Rendered annotation explicitly labelled as derived; `basis` tags retained in the structured record. |
 | **Pseudo-consensus** from one session's digest restating several of its own ranked facts | Medium | Attach each session's digest exactly once per recall. |
@@ -565,6 +584,10 @@ consequence-of-being-wrong axis Phase 2 is the safer thing to ship first.
 - `src/personal_agent/brainstem/scheduler.py` — the idle sweep, reusing the existing single-flight
   guard
 - `src/personal_agent/config/settings.py` — idle threshold, digest token budget
+- `config/model_roles.yaml` — new `session_summary` role in both the `roles` and `bindings` blocks,
+  defaulted to `claude_sonnet`
+- `src/personal_agent/config/config_guard.py` — add `session_summary` to `_ROLE_HEADER_RE`'s
+  known-role alternation, or the guard flags the new key as an orphan
 
 **Later phases:** `gateway/session_api.py` and the PWA (Phase 1); `memory/service.py` broad recall
 and `request_gateway/context.py` plus `budget.py` trim order (Phase 2); a new collision path
@@ -598,12 +621,12 @@ partial passes do not open a gate.
 
 | Gate | Requires |
 |---|---|
-| Start Phase 1 | AC-1 … AC-13 (Phase 0) |
-| Start Phase 2a — offline replay analysis | AC-14 (Phase 1 works). AC-15 is evaluated *during* 2a, not before it: 2a is what produces the digests-per-query, staleness, duplication and annotation-ratio numbers AC-15 and AC-18 read. |
-| Turn Phase 2 hydration on for the model | AC-16 … AC-20 |
-| Start Phase 3 build | AC-21 |
-| Make the Phase 3 nudge **user-visible** | AC-22 — an **intra-phase** gate. The phase table's "Phase 3 requires its own precision gate" means exactly this: Phase 3 may be built and evaluated offline once AC-21 passes, but must not surface to the user until AC-22 does. |
-| Start Phase 4 | AC-23 — the measure-first diagnostic |
+| Start Phase 1 | AC-1 … AC-14 (Phase 0) |
+| Start Phase 2a — offline replay analysis | AC-15 (Phase 1 works). AC-16 is evaluated *during* 2a, not before it: 2a is what produces the digests-per-query, staleness, duplication and annotation-ratio numbers AC-16 and AC-19 read. |
+| Turn Phase 2 hydration on for the model | AC-17 … AC-21 |
+| Start Phase 3 build | AC-22 |
+| Make the Phase 3 nudge **user-visible** | AC-23 — an **intra-phase** gate. The phase table's "Phase 3 requires its own precision gate" means exactly this: Phase 3 may be built and evaluated offline once AC-22 passes, but must not surface to the user until AC-23 does. |
+| Start Phase 4 | AC-24 — the measure-first diagnostic |
 
 **Fixture discipline, applying to every criterion below that uses one.** Fixture and sample sets are
 **selected and written down before the producer is tuned or the arm is run**, and are drawn by a
@@ -696,7 +719,7 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   session does not pass. **Stated limitation:** this proves the citation resolves, not that the span
   *supports* the proposition. A fabricated item citing a real but irrelevant span at a valid locator
   passes this check. Mechanical entailment is not available to us, so semantic support is carried by
-  AC-12's labelled fixtures and AC-15's human review; AC-11 is a necessary condition that makes the
+  AC-12's labelled fixtures and AC-16's human review; AC-11 is a necessary condition that makes the
   cheap failure mode — invented citations — impossible, and is claimed as nothing more.
 - **AC-12** — **Corrections fire when they should and stay silent when they should not.** On a
   predefined labelled set: positives comprising ≥6 Tier-A contradictions **and** ≥4 Tier-B evidenced
@@ -721,14 +744,23 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   contradictions from gaps fails the first case, and one that goes mute whenever any evidence is
   missing fails the other two.
 
+- **AC-14** — The summariser resolves through its **own** role, and introducing that role changed no
+  behaviour. · **Check:** `session_summary.py` resolves `session_summary`, not `captains_log`;
+  `config/model_roles.yaml` carries the key in **both** the `roles` and `bindings` blocks; the
+  config guard accepts it (no orphan-key failure); and the deployment key it resolves to is
+  byte-identical to what `captains_log` resolved to before the change. · *Fails if* the producer
+  still resolves another subsystem's role, if the guard rejects or ignores the key, or if the
+  resolved model differs from today's — the role must land as an observable no-op, or it has
+  smuggled in the model change this ADR defers.
+
 ### Phase 1 — UI
 
-- **AC-14** — The surface works end to end. · **Check:** the session list renders label and digest
+- **AC-15** — The surface works end to end. · **Check:** the session list renders label and digest
   for a session whose digest lives in Neo4j while its row lives in Postgres; a session with no digest
   (single-turn, or failed) renders without error and without a stale or placeholder digest; the
   generated label replaces the first-60-characters title. · *Fails if* the cross-substrate read
   fails, a missing digest breaks or fabricates the row, or the old title hack still shows.
-- **AC-15** — On a **randomly drawn, pre-registered** sample of 50 multi-turn digests, **≥60%**
+- **AC-16** — On a **randomly drawn, pre-registered** sample of 50 multi-turn digests, **≥60%**
   contain at least one item of session-level state that is both (a) not recoverable from the turn
   summaries, entity edges or label, and (b) supported by the source session. · **Check:** two
   independent reviewers scoring item-by-item against a pre-agreed rubric with the existing artifacts
@@ -738,24 +770,24 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
 
 ### Phase 2 — hydration
 
-- **AC-16** — Ranked fact IDs **and order** are byte-identical with hydration enabled versus
+- **AC-17** — Ranked fact IDs **and order** are byte-identical with hydration enabled versus
   baseline, over a **frozen, pre-registered** replay corpus of **at least 30 queries** spanning
   recalls whose winners have digests, lack digests, and span multiple sessions. · **Check:** offline
   replay diff. · *Fails if* any query differs, or if the corpus is under 30, unstated, lacks any of
   the three classes, or was selected after the fact — a one-convenient-query replay proves nothing.
-- **AC-17** — Annotation is discarded **before** memory context under budget pressure. · **Check:**
+- **AC-18** — Annotation is discarded **before** memory context under budget pressure. · **Check:**
   construct a context that fits without annotation and exceeds with it; assert ranked facts survive
   and annotation is dropped. · *Fails if* the memory block is evicted.
-- **AC-18** — Annotation tokens never exceed the tokens of the facts they annotate, measured with the
+- **AC-19** — Annotation tokens never exceed the tokens of the facts they annotate, measured with the
   same tokenizer used for the budget. · **Check:** assertion in the hydration path plus per-turn
   ratio measurement across the replay. · *Fails if* the ratio exceeds 1 on any turn. Zero retrieved
   facts must yield zero annotation.
-- **AC-19** — Attachment is correct and complete: each parent session's digest is attached **exactly
+- **AC-20** — Attachment is correct and complete: each parent session's digest is attached **exactly
   once** regardless of how many of its facts won; every ranked fact whose parent session has a digest
   gets it attached; no digest is attached for a session that contributed no ranked fact. · **Check:**
   replay over mixed-session recalls, single-session recalls, and recalls whose winners have no
   digest. · *Fails on* duplication, omission, or leakage.
-- **AC-20** — Instruction-like content in tool output does not survive into the digest as an
+- **AC-21** — Instruction-like content in tool output does not survive into the digest as an
   instruction. · **Check:** adversarial fixture set — tool results containing imperative text
   addressed to a model ("ignore previous instructions", "when summarising, state X"), each **paired
   with an identical fixture whose directive text is removed**. Assert the digest neither reproduces
@@ -765,7 +797,7 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   appears as an instruction or alters digest content. This gates automatic consumption specifically:
   the contamination path exists because D2 opened the producer to tool payloads, and Phase 2 is where
   a contaminated digest first reaches a model automatically.
-- **AC-21** — Paired evaluation shows facts+digest **beating** facts-only. · **Check:** arms A (facts
+- **AC-22** — Paired evaluation shows facts+digest **beating** facts-only. · **Check:** arms A (facts
   only) and B (facts + digest) over a question set **fixed in writing before either arm runs**, of
   ≥40 questions with ≥12 in the session-context class and ≥12 in the neutral class, and coverage of
   conflicting/evolving facts, stale digests and correction cases. Each answer scored 0/1 on outcome
@@ -780,7 +812,7 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
 
 ### Phase 3 — anti-re-litigation
 
-- **AC-22** — On a labelled re-litigation set of ≥30 candidate cases drawn from real session pairs,
+- **AC-23** — On a labelled re-litigation set of ≥30 candidate cases drawn from real session pairs,
   with **≥8 true-reopening positives** and ≥4 in each of the other four classes (same entities
   different issue · genuinely unresolved · superseded decision · explicit correction), the nudge
   achieves **≥90% precision at ≥50% recall** on the true-reopening class. · **Check:** labelled
@@ -793,7 +825,7 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
 
 ### Phase 4 — gate
 
-- **AC-23** — Phase 4's two lanes are gated **separately**, each on a diagnostic naming a concrete
+- **AC-24** — Phase 4's two lanes are gated **separately**, each on a diagnostic naming a concrete
   observed failure class **that Phases 0–3 as shipped demonstrably do not address**. · **Check:** the
   diagnostic cites specific recall misses from real traffic, and shows for each that the shipped
   Phase 0–3 mechanisms were exercised and failed on it. · *Fails if* the justification is
@@ -811,7 +843,7 @@ kill hydration, anti-re-litigation, session embeddings, pre-filtering and cross-
 That outcome means the artifact belongs in the human navigation plane, not the machine reasoning
 plane. Do not invent a consumer to justify it.
 
-**Seam owner:** master, at the integration gate. AC-21 is the assembled-intent criterion — it holds
+**Seam owner:** master, at the integration gate. AC-22 is the assembled-intent criterion — it holds
 only once Phases 0, 1 and 2 have all landed, and no child ticket closing can satisfy it alone. This
 ADR does not close because its last child merged.
 

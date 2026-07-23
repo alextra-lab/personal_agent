@@ -170,11 +170,17 @@ jobs:
       - name: mypy
         run: uv run mypy src/
 
+      # Pin ruff to the version the project resolves to (uv.lock: 0.15.15), matching
+      # local `make ruff-check`/`make ruff-format`. Unpinned `uv tool run ruff` pulls
+      # the latest, which drifted: a new ruff release reformatted markdown code-blocks
+      # and turned CI red on pre-existing, unchanged src/**/AGENTS.md files (FRE-953).
+      # (ruff is a dev *extra*, not synced by `uv sync`, so `uv tool run` — not
+      # `uv run` — is required; the version pin is what makes it deterministic.)
       - name: ruff check
-        run: uv tool run ruff check src/
+        run: uv tool run ruff@0.15.15 check src/
 
       - name: ruff format (check only)
-        run: uv tool run ruff format --check src/
+        run: uv tool run ruff@0.15.15 format --check src/
 
   # ── Telemetry surface reconciliation (ADR-0090 D5, GATE) ─────────────────────
   # Hermetic static check: ES index templates ↔ Kibana dashboard NDJSON + trap-class

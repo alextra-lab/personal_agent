@@ -1,0 +1,51 @@
+{
+  "generated_at": "2026-07-23T19:31:20.728591+00:00",
+  "synthetic_fixtures": true,
+  "note": "Fixture sets are pre-registered synthetic supplements, labelled as such per ADR-0124's corpus-feasibility rule: the real corpus holds zero multi-turn sessions with captures on disk. See tests/fixtures/session_digest/REGISTRY.md.",
+  "criteria": [
+    {
+      "criterion": "AC-8",
+      "passed": true,
+      "cases": 3,
+      "failures": []
+    },
+    {
+      "criterion": "AC-12",
+      "passed": true,
+      "precision_note": "absolute \u2014 any false positive fails the criterion",
+      "false_positives": [],
+      "recall": 1.0,
+      "true_positives": 8,
+      "positives_total": 8,
+      "missed": [],
+      "tier_b_missing_evidence_span": [],
+      "errored": []
+    },
+    {
+      "criterion": "AC-13",
+      "passed": true,
+      "results": [
+        {
+          "case_id": "payload_absent",
+          "expected": "no_correction",
+          "corrections_emitted": 0,
+          "ok": true
+        },
+        {
+          "case_id": "status_visible",
+          "expected": "correction",
+          "corrections_emitted": 1,
+          "ok": true
+        },
+        {
+          "case_id": "self_correction",
+          "expected": "correction",
+          "corrections_emitted": 1,
+          "ok": true
+        }
+      ],
+      "failures": [],
+      "errored": []
+    }
+  ]
+}

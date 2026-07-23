@@ -1,10 +1,20 @@
-# Session-digest fixture registry (ADR-0124 Phase 0, FRE-947)
+# Session-digest fixture registry (ADR-0124 Phase 0, FRE-947 → FRE-953 / Amendment A)
 
 **Pre-registered.** This file and every fixture it lists were written and committed
 **before** the producer was tuned and **before** any evaluation arm was run. ADR-0124's
 fixture discipline: sets are selected by a stated rule and written down in advance,
 never chosen after seeing output. A criterion evaluated on a post-hoc sample has not
 been met.
+
+**Amendment A (FRE-953) update.** The producer is now built from the conversation, not
+from tool payloads. Consequently: **AC-8** additionally asserts payloads/arguments are
+*absent* from the prompt; **AC-9 is withdrawn** (a tool-only fact is deliberately no
+longer reproduced — its fixture is deleted); the **AC-12 positives are rebuilt as
+self-corrections only** (the six payload-fed Tier-A cases are invalidated and removed,
+the self-correction set grown to eight); **AC-13 is unchanged**; **AC-10 is deferred**
+to an owner-led redesign (its fixture is payload-derived and invalidated — kept for that
+rework, not run by the amended arm). The eight new AC-12 positives were written down here
+and committed before the amended arm was run.
 
 ---
 
@@ -38,11 +48,10 @@ different, mostly single-turn set (553 sessions, 13 multi-turn, 2 with tool resu
 
 **Consequences, stated rather than worked around:**
 
-1. **The real corpus cannot supply AC-9, AC-10, AC-12 or AC-13.** AC-9 alone wants
-   ≥5 multi-turn sessions across different tools, each holding a decision-relevant
-   fact present only in tool output; there are 2 candidate sessions in total, and
-   neither carries tool arguments. AC-12 wants ≥6 Tier-A contradictions and ≥4 Tier-B
-   evidenced self-corrections, which do not exist in a 13-session pool.
+1. **The real corpus cannot supply AC-10, AC-12 or AC-13.** AC-12 (amended) wants ≥8
+   evidenced self-corrections and ≥12 Tier-C negatives, which do not exist in a
+   13-session pool; AC-10 and AC-13 are likewise unsupplied. (AC-9's corpus problem is
+   moot — the criterion is withdrawn.)
 2. ADR-0124 anticipates exactly this: *"If the corpus cannot supply it, that is a
    finding to surface, not a reason to shrink the criterion — the permitted response
    is a pre-registered synthetic supplement, labelled as such in the result."* Every
@@ -73,48 +82,50 @@ exact production path — `build_prompt`, the parser, and
 
 ## 3. The sets
 
-### `ac8_input_completeness.json` — AC-8
+### `ac8_input_completeness.json` — AC-8 *(amended)*
 Three sessions exercising the input dimensions AC-8 names: a multi-result turn, a
 failed call, and a long assistant response. Includes one gate-blocked and one
-malformed-argument invocation, which exist in a capture only after this ticket's
-capture-completeness fix.
+malformed-argument invocation.
 
-*Ground truth:* the assembled prompt must contain every turn, the full untruncated
-user and assistant text of each, and for every invocation its name, arguments, status,
-error and payload.
+*Ground truth (Amendment A):* the assembled prompt must contain every turn, the full
+untruncated user and assistant text of each, and for every invocation its name, status
+and error — **and must NOT contain any tool payload or tool argument**. The absence
+direction is the one that catches a regression back to payload-feeding, so the scorer
+asserts it both structurally (no `output:`/`arguments:` block is rendered) and by value
+(no distinctive payload/argument token leaks). The fixture captures still carry payloads
+and arguments (storage is unchanged); the criterion is about what reaches the prompt.
 
-### `ac9_tool_only_facts.json` — AC-9
-**5 sessions**, one per distinct tool: `query_elasticsearch`, `read_file`,
-`web_search`, `search_memory`, `system_metrics_snapshot`. Each contains exactly one
-decision-relevant fact present **only** in tool output and never restated in the
-assistant text — so a narration-only producer cannot reproduce it.
+### `ac9_tool_only_facts.json` — AC-9 *(WITHDRAWN — fixture deleted)*
+Withdrawn by Amendment A: it required a fact present only in tool output to reach the
+digest, which the amendment deliberately prevents (an unnarrated fact is not part of
+the conversation and so is not the user's memory). The fixture is removed and the
+criterion must not be evidenced.
 
-*Ground truth:* `expected_fact` per session, plus the locator it must be citable at.
-Facts are chosen to be consequential for the session outcome, so marginal-utility
-filtering is not a legitimate reason to omit them.
+### `ac10_basis_labelling.json` — AC-10 *(DEFERRED — invalidated, owner-led redesign)*
+**40 items** across 8 sessions, labelled with their true `basis`. **Invalidated by
+Amendment A:** the balance was built around payload-derived `tool_evidence` labels the
+producer can no longer emit, and the harness scores agreement by token overlap on the
+assumption of ~one emitted item per label, which a ~250-token digest violates by design
+(FRE-953 open question). The fixture is retained for the owner-led redesign and is **not
+run by the amended arm** (reachable only via `--set ac10`).
 
-*Threshold:* the digest reproduces the fact in **all 5**.
+### `ac12_corrections.json` — AC-12 *(amended)*
+**20 cases**, ground truth fixed per case.
 
-### `ac10_basis_labelling.json` — AC-10
-**40 items** across 8 sessions, labelled with their true `basis`, deliberately
-balanced so no single value can dominate: 10 `tool_evidence`, 10 `user_statement`,
-10 `assistant_reasoning`, 10 `mixed`.
+*Positives (8 `self_correction`)* — the assistant corrected the record within the
+conversation, and the supporting evidence lives in a field the producer is actually
+given, never a tool payload:
+- **4** backed by a visible **tool error** (the assistant asserted success/a value, the
+  tool's own error line denies it, and the assistant self-corrects on the next turn);
+- **4** backed by the **conversation text** (the user supplies the correcting fact and
+  the assistant self-corrects, evidence cited from `user_text`).
 
-*Thresholds:* agreement with labelled truth **≥85%**, and **no single emitted tag
-exceeding 60%** of emissions. The balanced ground truth is what makes the second
-threshold meaningful — a collapse onto one value cannot be excused as matching a
-skewed truth.
+Each positive carries a `reference_correction` — a hand-authored span/locator +
+evidence-span/locator that resolves — pre-validated offline by
+`tests/personal_agent/memory/test_session_digest_validator.py` before any paid run, so
+an un-citable positive cannot silently turn into an `errored` case.
 
-### `ac12_corrections.json` — AC-12
-**22 cases**, ground truth fixed per case.
-
-*Positives (10):*
-- **6 Tier-A** direct contradictions — authoritative evidence contradicts the same
-  proposition the assistant asserted.
-- **4 Tier-B** evidenced self-corrections — the assistant corrected the record within
-  the session, with evidence in the capture.
-
-*Negatives (12 Tier-C)*, spanning the full range D3 names — and each is a case a
+*Negatives (12 Tier-C)*, unchanged, spanning the full range D3 names — each a case a
 careless producer would plausibly flag:
 - 3 weak/partial conflict
 - 3 failed or incomplete tool calls
@@ -123,7 +134,7 @@ careless producer would plausibly flag:
 - 2 disagreement with a subjective judgment
 
 *Thresholds:* **zero** negatives yield a correction (precision is absolute), **≥80%**
-of positives do, and every emitted Tier-B correction carries the located span of its
+of positives do, and every emitted `self_correction` carries the located span of its
 **supporting evidence**, not merely of the self-correction sentence.
 
 ### `ac13_missing_evidence.json` — AC-13

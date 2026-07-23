@@ -193,7 +193,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0108](ADR-0108-stored-artifact-vision-reprocessing.md) | Stored-Artifact Vision Re-processing (analyze-to-text, explicit tool) | Proposed |
 | [ADR-0109](ADR-0109-entity-taxonomy-redesign.md) | Entity & Relationship Taxonomy — V1 (inherited) → V2 (first principled derivation) | Accepted |
 
-### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0123)
+### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0124)
 
 | ADR | Title | Status |
 |-----|-------|--------|
@@ -211,6 +211,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md) | Model Catalog and Selection Layer — Providers, Deployments, Bindings; the User Selects the Model | Accepted |
 | [ADR-0122](ADR-0122-build-time-artifact-builder-selection.md) | Per-Build Artifact Builder Selection — Choose the Model Before the Plan Is Written | Accepted (amended 2026-07-21 — card at turn start) |
 | [ADR-0123](ADR-0123-turn-progress-surface.md) | Turn Progress Surface — Make the Wait Legible, So the User Stays Attached | Proposed |
+| [ADR-0124](ADR-0124-session-summary-producer-and-phased-consumption.md) | Session-Summary Producer Correction and Phased Consumption | Proposed |
 
 ### Supplementary
 

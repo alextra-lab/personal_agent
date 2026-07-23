@@ -56,9 +56,8 @@ if Phase 1 shows the digest conveys nothing useful, stopping is the correct outc
 ## 1. Reduce the backlog
 
 ~80 Approved; most carry no stream label (parked). Live queue: **build1 = the ADR-0124 chain, head
-FRE-947**; **build2 idle** (nothing labelled). Awaiting approval and unlabelled: FRE-927, FRE-932,
-FRE-939 (the swallowed-send class — still Urgent, still unexplained; the tmux 3.7b upgrade was for an
-owner-facing terminal-emulation bug and is **not** a fix for it). Method:
+FRE-947** (PR #636 open at the gate); **build2 = FRE-942** (compaction decision, retargeted 07-23).
+Awaiting approval and unlabelled: FRE-927, FRE-932. Method:
 verify per cluster, cancel the provable with a one-line reason, bring judgment calls to the owner.
 Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729–732, FRE-810/811/814) ·
 `[Thread]` placeholders that can never be Done (FRE-401/418/397) · work gated on events that never

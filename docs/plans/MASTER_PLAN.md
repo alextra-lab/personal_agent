@@ -18,56 +18,29 @@ Live condition for whoever implements: `turn_status` already carries `tool_itera
 `context_max`, but **both are currently emitted as `0`** between turns. Absent-vs-zero (ADR-0123 §5)
 is a present defect, not a future principle.
 
-## 0a. Compaction — hard gate repaired; the reset-action gap remains
+## 0a. Compaction — reset-action gap (behavioural), unscheduled
 
-**The hard gate now works.** FRE-942 (merged #640, deployed + verified 2026-07-23) gave the tail band a
-**ceiling** (`within_session_max_tail_ratio`, 0.35): it had a floor but no ceiling, so a run of large
-trailing tool results accumulated an unbounded verbatim tail — measured at 44% zero-or-negative net
-reduction across 289 real compactions, worst case 2.65× the window. The FRE-908 zero-reduction proof test
-is now inverted to assert real reduction. The ADR-0085 intra-turn digest was weighed and **rejected** on
-data (no current tool emits a result above the tail floor; largest since 2026-06-01 is 19,848 tokens).
-ADR-0061 status **corrected** (§D3 amendment) and ADR-0092 open item #6 **Resolved** — both closed with
-that ticket. The soft trigger stays retired (FRE-941).
+The hard-gate ceiling shipped (FRE-942); what remains is behavioural: the frozen-reset **action**
+(ADR-0092 item **#7**) is unreachable on gateway turns and never fires in production. Per-turn emits are
+now live (FRE-944/945), so a decision can be based on measured headroom. **Decide whether to make the
+reset action fire after real per-turn data accumulates** — unfiled by intent. Whole surface is latent
+(assembled context ~400–6,000 tokens vs a 48,000 reset ceiling; budget trim never fired in 1,283
+evals) — real only if sessions grow. **FRE-954** (Needs Approval, Sonnet) — a `build_frozen_reset`
+sanitiser fixed-point defect, parked behind the never-firing reset action.
 
-**Still open — behavioural, not doc:** the frozen-reset *action* (ADR-0092 item **#7**) is unreachable on
-gateway turns, and FRE-908's finding that the reset path never fires in production stands. FRE-944/945
-restored the per-turn emits (live 2026-07-23), so there is now measured headroom to base a decision on.
-Whether to make the reset action fire is unscheduled and unfiled — decide after real per-turn data
-accumulates.
+## 0b. Session-summary workstream — Phase 1 gated on AC-10 (owner-led)
 
-This whole surface is **latent, not live** — assembled context runs ~400–6,000 tokens against a 48,000
-reset ceiling and a 120,000 budget ceiling, and the budget trim has never fired in 1,283 evaluations. It
-becomes real only if session lengths grow. **FRE-954** (Needs Approval, Sonnet) — a `build_frozen_reset`
-sanitiser fixed-point defect surfaced during FRE-942, guarded by a strict xfail, latent behind the
-never-firing reset action.
-
-## 0b. Session-summary workstream — Phase 0 LIVE (conversation-scoped); Phase 1 gated on AC-10
-
-**Phase 0 is deployed and Done** (2026-07-23, gateway `e86386be`). The producer summarises the
-**conversation** — full user + assistant text plus tool **metadata only** (name, status, error), no
-payloads, no arguments — with corrections narrowed to two payload-free kinds (`self_correction` +
-`status_contradiction`; ADR-0124 Amendment A #638, reconciled #643). FRE-947 (#636) shipped the
-producer/clobber-fix/schema/sweep/role; FRE-953 (#642) narrowed it to conversation scope; both
-deployed together, AC-14 no-op verified, 59 multi-turn count intact across the first sweep. Tool
-payloads continue to be **captured and stored** (disk + `agent-captains-captures-*`, full `output` in
-`_source`, `index: false`) for a future verification oracle; only their delivery to the summariser
-stopped.
-
-**Phase 1 (FRE-948) is shut on AC-10**, and Amendment A did not dissolve it: its fixtures were
-payload-derived (now invalid) *and* its harness scores agreement by token overlap assuming ~one emitted
-item per label, against a digest bounded at ~250 tokens. **Redesign is owner-led and unfiled by
-intent** — do not file a measurement ticket for a criterion whose subject may still move. This is the
-one genuinely open item in the workstream. Chain behind it: FRE-948 → FRE-949 (Phase 2a replay) →
-FRE-950 (Phase 2 hydration) → FRE-951 (Phase 3 anti-re-litigation); Phase 4 unfiled, gated on AC-24.
+Phase 0 is live (conversation-scoped producer; ADR-0124 + Amendment A). **The one open item is the
+AC-10 measurement redesign, which gates Phase 1 (FRE-948).** Its old fixtures were payload-derived (now
+invalid) and its harness scored by token overlap assuming ~one emitted item per label, against a
+~250-token digest. **Redesign is owner-led and unfiled by intent** — do not file a ticket for a
+criterion whose subject may still move. Chain behind it: FRE-948 → FRE-949 (Phase 2a replay) → FRE-950
+(Phase 2 hydration) → FRE-951 (Phase 3); Phase 4 unfiled, gated on AC-24.
 
 **AC-22 is the seam** master owns — the paired evaluation holds only once Phases 0, 1 and 2 have all
 landed, so the ADR does not close when its last child merges. Standing condition at every gate: *do not
 invent a consumer to justify an artifact* — if Phase 1 shows the digest conveys nothing useful,
 stopping is correct.
-
-**Live residual:** the first prod sweep budget-denied all 11 eligible sessions (`captains_log` lane
-exhausted), so no payload-free digest has been *observed* in prod yet — pending budget reset. The
-producer is eval-proven (AC-8/12/13 passed live). Not a risk, a pending observation.
 
 ## 1. Reduce the backlog
 

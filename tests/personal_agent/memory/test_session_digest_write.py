@@ -25,10 +25,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
+import orjson
 import pytest
 
 from personal_agent.memory.models import SessionNode
 from personal_agent.memory.service import MemoryService
+from personal_agent.memory.session_digest import (
+    DigestItem,
+    SessionDigest,
+    SummaryFailureReason,
+)
 
 _ENDED_AT = datetime(2026, 7, 23, 10, 0, 0, tzinfo=timezone.utc)
 _STARTED_AT = datetime(2026, 7, 23, 9, 0, 0, tzinfo=timezone.utc)
@@ -125,3 +131,271 @@ async def test_create_session_does_not_write_digest_fields() -> None:
     ):
         assert owned_by_the_sweep not in cypher
         assert owned_by_the_sweep not in params
+
+
+# --------------------------------------------------------------------------
+# AC-6 — the atomic conditional write
+# --------------------------------------------------------------------------
+
+
+def _digest() -> SessionDigest:
+    return SessionDigest(
+        decisions=[DigestItem(text="Deferred the reindex.", basis="user_statement")]
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_predicates_the_mutation_on_the_captured_ended_at() -> None:
+    """The comparison and the mutation must be ONE statement.
+
+    A re-read followed by an unconditional write leaves a TOCTOU window in which a
+    new turn lands and a digest built from already-stale captures gets published.
+    """
+    service, captured = _make_service_with_mock(single_returns={"session_id": "sess-1"})
+
+    await service.write_session_digest(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        generated_at=_ENDED_AT,
+        turn_count=3,
+        label="A label",
+        digest=_digest(),
+    )
+
+    assert len(captured) == 1, "the check and the write must not be two statements"
+    cypher, params = captured[0]
+    assert "WHERE s.ended_at = $expected_ended_at" in cypher
+    assert params["expected_ended_at"] == _ENDED_AT.isoformat()
+    # And the mutation is in that same statement.
+    assert "SET s.session_label" in cypher
+
+
+@pytest.mark.asyncio
+async def test_stale_writer_is_refused() -> None:
+    """AC-6: the loser's write is REFUSED, not merely overwritten.
+
+    This is what discriminates the implementation. A read-then-write would return
+    True here — the MATCH would find the session and set it — so asserting on the
+    return value distinguishes atomic refusal from a lucky ordering, which merely
+    observing a surviving property value cannot do.
+    """
+    # single() returns None => the MATCH matched nothing => the predicate refused.
+    service, _ = _make_service_with_mock(single_returns=None)
+
+    accepted = await service.write_session_digest(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        generated_at=_ENDED_AT,
+        turn_count=3,
+        label="A label",
+        digest=_digest(),
+    )
+
+    assert accepted is False
+
+
+@pytest.mark.asyncio
+async def test_accepted_write_reports_true() -> None:
+    service, _ = _make_service_with_mock(single_returns={"session_id": "sess-1"})
+
+    accepted = await service.write_session_digest(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        generated_at=_ENDED_AT,
+        turn_count=3,
+        label="A label",
+        digest=_digest(),
+    )
+
+    assert accepted is True
+
+
+@pytest.mark.asyncio
+async def test_digest_is_stored_as_a_json_string() -> None:
+    """Neo4j node properties cannot hold nested maps."""
+    service, captured = _make_service_with_mock(single_returns={"session_id": "sess-1"})
+
+    await service.write_session_digest(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        generated_at=_ENDED_AT,
+        turn_count=3,
+        label="A label",
+        digest=_digest(),
+    )
+
+    stored = captured[0][1]["digest"]
+    assert isinstance(stored, str)
+    assert orjson.loads(stored)["decisions"][0]["text"] == "Deferred the reindex."
+
+
+@pytest.mark.asyncio
+async def test_floor_skip_advances_freshness_through_the_same_predicate() -> None:
+    """D-b: a below-floor skip is a completed projection with an empty result.
+
+    It must advance freshness — otherwise a single-turn session is permanently dirty
+    and AC-2 can never pass — but through the SAME conditional write, or a turn
+    landing mid-skip would be marked clean.
+    """
+    service, captured = _make_service_with_mock(single_returns={"session_id": "sess-1"})
+
+    accepted = await service.write_session_digest(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        generated_at=_ENDED_AT,
+        turn_count=1,
+        label=None,
+        digest=None,
+    )
+
+    assert accepted is True
+    cypher, params = captured[0]
+    assert "WHERE s.ended_at = $expected_ended_at" in cypher
+    assert params["digest"] is None and params["label"] is None
+    assert params["generated_at"] == _ENDED_AT.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_floor_skip_write_is_refused_when_ended_at_moved() -> None:
+    """The race codex flagged: a second turn landing mid-skip must refuse the skip."""
+    service, _ = _make_service_with_mock(single_returns=None)
+
+    accepted = await service.write_session_digest(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        generated_at=_ENDED_AT,
+        turn_count=1,
+    )
+
+    assert accepted is False
+
+
+# --------------------------------------------------------------------------
+# AC-4 — a failure is inert and loud
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_failure_is_inert_and_loud() -> None:
+    """AC-4's four-way assertion, at the write layer.
+
+    Stored digest and label unchanged; freshness does not advance; a failure event
+    is emitted; the session stays eligible for retry.
+    """
+    service, captured = _make_service_with_mock(single_returns={"attempts": 1})
+
+    recorded = await service.record_session_summary_failure(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        failure_reason=SummaryFailureReason.BUDGET_DENIED.value,
+    )
+
+    assert recorded is True
+    cypher, params = captured[0]
+    # Inert: the artifacts and the freshness stamp are untouched.
+    for untouched in ("session_label", "session_digest", "summary_generated_at"):
+        assert f"s.{untouched} =" not in cypher
+    # Loud + retryable: the reason is stored and the attempt counter advances.
+    assert "s.summary_failure_reason = $failure_reason" in cypher
+    assert "s.summary_attempt_count = coalesce(s.summary_attempt_count, 0) + 1" in cypher
+    assert params["failure_reason"] == "budget_denied"
+
+
+@pytest.mark.asyncio
+async def test_failure_record_is_also_predicated_on_ended_at() -> None:
+    """A failure record must not clobber a concurrent successful write."""
+    service, captured = _make_service_with_mock(single_returns={"attempts": 1})
+
+    await service.record_session_summary_failure(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        failure_reason=SummaryFailureReason.MODEL_ERROR.value,
+    )
+
+    assert "WHERE s.ended_at = $expected_ended_at" in captured[0][0]
+
+
+@pytest.mark.asyncio
+async def test_a_successful_write_clears_prior_failure_state() -> None:
+    """Otherwise a session that recovers still looks terminally failed."""
+    service, captured = _make_service_with_mock(single_returns={"session_id": "sess-1"})
+
+    await service.write_session_digest(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        generated_at=_ENDED_AT,
+        turn_count=3,
+        label="A label",
+        digest=_digest(),
+    )
+
+    cypher = captured[0][0]
+    assert "s.summary_failure_reason = null" in cypher
+    assert "s.summary_attempt_count = 0" in cypher
+
+
+# --------------------------------------------------------------------------
+# AC-7 — turn_count is written from a recount
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_turn_count_is_written_from_the_recount() -> None:
+    """AC-7: turn_count on a swept session equals a recount from its captures."""
+    service, captured = _make_service_with_mock(single_returns={"session_id": "sess-1"})
+
+    await service.write_session_digest(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        generated_at=_ENDED_AT,
+        turn_count=7,
+        label="A label",
+        digest=_digest(),
+    )
+
+    assert captured[0][1]["turn_count"] == 7
+    assert "s.turn_count = $turn_count" in captured[0][0]
+
+
+# --------------------------------------------------------------------------
+# AC-2 — the dirty-and-idle scan
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dirty_scan_includes_the_is_null_disjunct() -> None:
+    """AC-2 names this explicitly.
+
+    In Cypher a comparison against NULL yields NULL and the row is silently dropped,
+    so a never-summarised session escapes a bare `<` scan — the exact sessions the
+    check exists to find.
+    """
+    service, captured = _make_service_with_mock()
+    service.driver.session.return_value.__aenter__.return_value.run.return_value.data = AsyncMock(
+        return_value=[]
+    )
+
+    await service.find_dirty_idle_sessions(idle_threshold_seconds=900.0, max_attempts=2)
+
+    cypher = captured[0][0]
+    assert "s.summary_generated_at IS NULL" in cypher
+    assert "s.summary_generated_at < s.ended_at" in cypher
+
+
+@pytest.mark.asyncio
+async def test_dirty_scan_excludes_only_terminal_failures() -> None:
+    """Transient reasons must keep coming back; deterministic ones may go terminal."""
+    service, captured = _make_service_with_mock()
+    service.driver.session.return_value.__aenter__.return_value.run.return_value.data = AsyncMock(
+        return_value=[]
+    )
+
+    await service.find_dirty_idle_sessions(idle_threshold_seconds=900.0, max_attempts=2)
+
+    cypher, params = captured[0]
+    assert "NOT (s.summary_failure_reason IN $terminal_reasons" in cypher
+    assert "coalesce(s.summary_attempt_count, 0) >= $max_attempts" in cypher
+    assert "budget_denied" not in params["terminal_reasons"], (
+        "a budget denial is transient by nature and must never be terminal"
+    )
+    assert "oversized_input" in params["terminal_reasons"]

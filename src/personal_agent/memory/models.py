@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
+from personal_agent.memory.session_digest import SessionDigest
 from personal_agent.memory.weight import KnowledgeWeight
 
 
@@ -197,7 +198,32 @@ class SessionNode(BaseModel):
     ended_at: datetime  # Timestamp of the last turn
     turn_count: int = 0
     dominant_entities: list[str] = Field(default_factory=list)
+    # ADR-0124 (FRE-947): the FRE-347 prose summary. NO LONGER WRITTEN — superseded
+    # by session_label + session_digest. Historical rows keep their value
+    # deliberately: they are the only pre-correction corpus, and the minimum-turns
+    # floor applies only to sessions summarised after ADR-0124 Phase 0 shipped,
+    # discriminated by summary_generated_at. Read for legacy display only.
     session_summary: str | None = None
+    # ADR-0124 D3 — the two artifacts, stored independently. The label is useful in
+    # states where the digest is not: absent under the single-turn floor, and
+    # withheld after a generation failure.
+    session_label: str | None = None
+    session_digest: SessionDigest | None = None
+    # ADR-0124 D1 — derived freshness. Dirty is
+    # `summary_generated_at IS NULL OR summary_generated_at < ended_at`; there is no
+    # summary_dirty column, no revision counter and no Postgres migration, because
+    # the lifecycle state lives in the same substrate as the artifact it describes.
+    #
+    # It means PROJECTION FRESHNESS, not "a digest exists": a session deliberately
+    # skipped under the minimum-turns floor is a *completed* projection with an empty
+    # result, so it advances. Only a failure leaves it behind.
+    summary_generated_at: datetime | None = None
+    # ADR-0124 terminal-failure rule. A session is excluded from the population
+    # checks only when it carries BOTH a stored reason and an attempt count at or
+    # above the retry limit — and only for a deterministic reason, since a budget
+    # denial is transient by nature and never terminal.
+    summary_failure_reason: str | None = None
+    summary_attempt_count: int = 0
     # FRE-229: visibility scope
     visibility: str = Visibility.PUBLIC
 

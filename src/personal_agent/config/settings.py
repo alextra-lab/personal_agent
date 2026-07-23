@@ -2179,15 +2179,77 @@ class AppConfig(BaseSettings):
         ),
     )
 
-    # FRE-347 / FRE-346 G1: session-level narrative summariser
+    # FRE-347 / FRE-346 G1, corrected by ADR-0124 Phase 0 (FRE-947)
     session_summary_enabled: bool = Field(
         default=True,
         alias="AGENT_SESSION_SUMMARY_ENABLED",
         description=(
-            "Generate prose summaries for sessions during consolidation so cross-session "
-            "recall surfaces narrative context, not just entity facts. Uses the "
-            "captains_log model role and the captains_log budget cap. "
+            "Generate the session label and structured digest for quiet sessions. "
+            "Runs on the idle sweep, not on every consolidation pass (ADR-0124 D1). "
+            "Uses the session_summary model role and the captains_log budget cap. "
             "Env var: AGENT_SESSION_SUMMARY_ENABLED"
+        ),
+    )
+
+    session_summary_idle_threshold_seconds: float = Field(
+        default=900.0,
+        ge=60.0,
+        alias="AGENT_SESSION_SUMMARY_IDLE_THRESHOLD_SECONDS",
+        description=(
+            "How long a session must be quiet before its digest is regenerated "
+            "(ADR-0124 D1, starting 10-15 minutes). Sessions are Postgres rows that "
+            "resume indefinitely and session-end is not observable, so the trigger "
+            "asks 'when is the projection stale', not 'when did the session end'. "
+            "Env var: AGENT_SESSION_SUMMARY_IDLE_THRESHOLD_SECONDS"
+        ),
+    )
+
+    session_summary_sweep_interval_seconds: float = Field(
+        default=300.0,
+        ge=30.0,
+        alias="AGENT_SESSION_SUMMARY_SWEEP_INTERVAL_SECONDS",
+        description=(
+            "How often the idle sweep looks for dirty-and-idle sessions. Independent "
+            "of the idle threshold: the interval bounds detection lag, the threshold "
+            "decides eligibility. "
+            "Env var: AGENT_SESSION_SUMMARY_SWEEP_INTERVAL_SECONDS"
+        ),
+    )
+
+    session_summary_max_attempts: int = Field(
+        default=2,
+        ge=1,
+        alias="AGENT_SESSION_SUMMARY_MAX_ATTEMPTS",
+        description=(
+            "Failed sweeps before a deterministically-failing session is treated as a "
+            "recorded terminal failure and excluded from the population checks "
+            "(ADR-0124 AC-2/AC-7). Only deterministic reasons can go terminal — a "
+            "budget denial is transient by nature and stays retryable forever. "
+            "Env var: AGENT_SESSION_SUMMARY_MAX_ATTEMPTS"
+        ),
+    )
+
+    session_digest_target_tokens: int = Field(
+        default=180,
+        ge=1,
+        alias="AGENT_SESSION_DIGEST_TARGET_TOKENS",
+        description=(
+            "Target size of the rendered digest (ADR-0124 D3). Length is bounded by "
+            "marginal utility rather than characters, and is NOT proportional to turn "
+            "count. Starting value, to be set empirically by a compression curve. "
+            "Env var: AGENT_SESSION_DIGEST_TARGET_TOKENS"
+        ),
+    )
+
+    session_digest_max_tokens: int = Field(
+        default=250,
+        ge=1,
+        alias="AGENT_SESSION_DIGEST_MAX_TOKENS",
+        description=(
+            "Hard ceiling on the rendered digest (ADR-0124 D3). Exceeding it fails "
+            "validation and costs the one retry, because an over-long digest displaces "
+            "the retrieved evidence it exists to annotate. "
+            "Env var: AGENT_SESSION_DIGEST_MAX_TOKENS"
         ),
     )
 

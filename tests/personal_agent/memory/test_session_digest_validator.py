@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from personal_agent.captains_log.capture import TaskCapture
-from personal_agent.second_brain.session_digest import (
+from personal_agent.memory.session_digest import (
     Correction,
     DigestItem,
     Locator,

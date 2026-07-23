@@ -39,12 +39,18 @@ import re
 from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from personal_agent.captains_log.capture import TaskCapture
-from personal_agent.llm_client.token_counter import estimate_tokens
+if TYPE_CHECKING:  # pragma: no cover — typing only
+    from personal_agent.captains_log.capture import TaskCapture
+
+# This module is deliberately a LEAF: `SessionNode` (memory/models.py) holds a
+# `SessionDigest`, so anything this imports at module scope would become a
+# dependency of the memory models. `TaskCapture` is therefore typing-only —
+# locator resolution reads four attributes off it and needs no runtime import —
+# and the tokenizer is imported inside the one function that counts.
 
 # The four provenance tags an item may carry (ADR-0124 D3).
 BasisTag = Literal["tool_evidence", "user_statement", "assistant_reasoning", "mixed"]
@@ -392,4 +398,6 @@ def digest_token_count(digest: SessionDigest) -> int:
     Returns:
         Estimated tokens under the same tokenizer the budget path uses.
     """
+    from personal_agent.llm_client.token_counter import estimate_tokens  # noqa: PLC0415
+
     return estimate_tokens(render_digest(digest))

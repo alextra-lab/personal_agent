@@ -63,7 +63,8 @@ _SAFE_VALUE_RE = re.compile(r"^(\$\{.*\}|<.*>)$")
 # A per-profile role-assignment header (ADR-0099 D1 stage 2, FRE-650, retired these from
 # config/*.yaml — role assignment lives only in config/model_roles.yaml).
 _ROLE_HEADER_RE = re.compile(
-    r"^\s*(entity_extraction|captains_log|insights|compressor|embedding|reranker)_role\s*:"
+    r"^\s*(entity_extraction|captains_log|session_summary|insights|compressor|embedding"
+    r"|reranker)_role\s*:"
 )
 
 # Files scanned for committed secrets, relative to a fixture/repo root.

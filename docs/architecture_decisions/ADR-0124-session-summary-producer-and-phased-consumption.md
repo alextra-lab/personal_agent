@@ -1,6 +1,6 @@
 # ADR-0124: Session-summary producer correction and phased consumption
 
-**Status:** Accepted — 2026-07-23 (owner). Implementation chain FRE-947 → FRE-948 → FRE-949 → FRE-950 → FRE-951; Phase 4 unfiled, gated on AC-24.
+**Status:** Accepted — 2026-07-23 (owner), **amended 2026-07-23 (Amendment A — conversation-scoped input; tool payloads removed from D2, Tier-A corrections removed from D3).** Implementation chain FRE-947 → FRE-948 → FRE-949 → FRE-950 → FRE-951; Phase 4 unfiled, gated on AC-24.
 **Date:** 2026-07-23
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** memory, second-brain, knowledge-graph, retrieval, telemetry, privacy
@@ -136,14 +136,17 @@ session-end is not observable. The question is "when is the projection stale."
   `session_summary`, or the next turn after a sweep will NULL the fresh digest. This also fixes the
   live clobber bug.
 
-### D2 — What it reads: everything, unconditionally
+### D2 — What it reads: the whole conversation *(narrowed by Amendment A)*
 
 - Full user text and full assistant text, all turns. The 200-char clip and the 20-turn cap are
   removed outright.
-- **Full tool results** — name, arguments, status, error and payload. No per-result cap, no
-  summariser-specific input ceiling.
-- **Egress is governed by the role binding, not by a per-session branch.** The producer reads full
-  tool payloads for every session, unconditionally. Whatever it reads goes to whichever model backs
+- **Tool activity as metadata** — name, status, error. **No payloads** (Amendment A). Bounded by
+  construction, so no per-result cap and no summariser-specific input ceiling are needed.
+- **Egress is governed by the role binding, not by a per-session branch.** *(Amendment A: with tool
+  payloads removed, the producer's input is conversation text the primary model already processed, so
+  there is no new egress path at all. The role decision below stands on its own merits — an
+  independently tunable summariser — and the reasoning is kept for the record.)* The producer reads
+  the whole conversation for every session, unconditionally. Whatever it reads goes to whichever model backs
   its role — so the question "do these bytes leave the machine?" is answered by *which deployment
   that role is bound to*, and it is answered once, in configuration, rather than re-decided per
   session.
@@ -204,7 +207,7 @@ session-end is not observable. The question is "when is the projection stale."
   two turns, genuine session-level relation appears that neither turn expresses alone ("A was
   rejected after X was discovered; B was chosen"). This removes 51% of generations.
 
-### D3 — What it emits: two artifacts, four optional slots, verifiable provenance
+### D3 — What it emits: two artifacts, four optional slots, verifiable provenance *(corrections narrowed by Amendment A)*
 
 The producer emits **two artifacts in one call, stored independently**:
 
@@ -237,11 +240,11 @@ evidence-versus-interpretation invariant from a prompt instruction into a machin
 
 **Error-flagging is precision-first, deliberately asymmetric.** A missed error is recoverable from
 raw evidence; a false error writes self-confirming state into the graph and feeds its own
-supposed correction into future reasoning. Two tiers may be asserted, and nothing else:
+supposed correction into future reasoning. One tier may be asserted, and nothing else (Tier A removed — see Amendment A):
 
-- **Tier A — direct contradiction.** Authoritative evidence contradicts the *same proposition* the
-  agent asserted. A Tier-A correction carries **two** located spans: the contradicted claim in the
-  assistant text, and the contradicting evidence.
+- **Tier A — direct contradiction. REMOVED by Amendment A.** Adjudicating narration against tool
+  evidence is verification, and belongs to the fact-verifier workstream (§D4), which this ADR had
+  already scoped it out to. It was the only consumer of the tool payloads D2 used to supply.
 - **Tier B — explicit evidenced self-correction.** The agent itself corrected the record within the
   session, and the correction is supported by evidence in the capture. Carries the located span of
   the self-correction.
@@ -251,12 +254,10 @@ incomplete tool calls, multiple defensible readings, state that legitimately cha
 disagreement with a subjective judgment or recommendation. These belong in `unresolved`, or are
 omitted. **Never infer error from absent evidence.**
 
-Note that neither tier depends on payloads being present: a contradiction between "the command
-succeeded" and a recorded error *status* is Tier A on status alone, and Tier B needs only the
-session's own text. This matters wherever a capture is incomplete — corrections available from
-status, error or self-correction remain legitimate, and a producer must not suppress them merely
-because some payload is missing. What it must never do is assert a correction that depends on
-content it was not given.
+Tier B needs only the session's own text, so it survives the removal of payloads intact. This
+matters wherever a capture is incomplete: a self-correction the user saw remains legitimate to
+record, and a producer must not suppress it merely because some other evidence is missing. What it
+must never do is assert a correction that depends on content it was not given.
 
 **Compute state, generate meaning.** Turn count, duration, tool invocation and success/failure
 counts, and `dominant_entities` are queryable and remain structured properties. They are never
@@ -336,6 +337,123 @@ context; Phase 3 changes behaviour.** A bad annotation is noise the model may ig
 index and facts are zoomed into second. That makes digest quality gate *all* recall — a poor digest
 would no longer annotate badly, it would hide good facts entirely. It converges with the constructed-context
 workstream and belongs there. The verification-oracle lane moves to the fact-verifier workstream.
+
+---
+
+---
+
+## Amendment A — 2026-07-23: the digest is built from the conversation, not from tool payloads
+
+**Status of this amendment:** Accepted, same day as the ADR, before the Phase-0 behaviour reached
+steady state. It **narrows D2 and D3**; D1 and D4 are untouched. Raised by the owner during
+deployment of FRE-947.
+
+### What was wrong
+
+The original D2 fed the summariser **full tool payloads**. The sole thing that consumed them was
+D3's `corrections` slot, whose Tier A rule adjudicates the agent's narration against tool evidence.
+Every other slot — `established`, `decisions`, `unresolved` — is built from the conversation.
+
+That is a **verification** capability, and this ADR had already scoped verification *out*: §D4
+states plainly that "the verification-oracle lane moves to the fact-verifier workstream." The ADR
+therefore contradicted its own boundary — it exported the verification lane and then re-imported the
+expensive half of it through a slot definition. The design debate that produced Tier A argued the
+"two independent witnesses" case persuasively and was never held against the boundary already drawn.
+
+The owner's framing is the correcting one, and it is the more fundamental statement: **the knowledge
+graph is the user's memory.** What a person retains from a session is the conversation — what was
+asked, what came back, what was decided. Tool output reached the user *through* the assistant's
+response; that narration is what shaped their understanding and is therefore what belongs in memory.
+A fact the assistant never surfaced was never learned, and is not a memory to record.
+
+### The corrected policy
+
+**D2 is narrowed.** The producer reads:
+
+- **full user text and full assistant text, every turn** — unchanged, and still the substantive fix
+  (the 200-character clip discarded ~89% of assistant text);
+- **tool activity as metadata only** — name, status, error. Bounded, conversational, and it preserves
+  real episode content such as the 27 `nonexistent_tool` invocations in the corpus, a signal that
+  lives entirely in names and statuses;
+- **no tool payloads.**
+
+**D3 is narrowed.** `corrections` keeps **Tier B only** — an explicit, evidenced self-correction made
+*within the conversation*. The user saw it; it is part of the episode. **Tier A is removed** and
+belongs to the verification workstream. Tier C is unchanged: still never a correction.
+
+The absent-evidence rule survives untouched and now covers a wider case: captures can be incomplete,
+and a summariser comparing narration against evidence will read absence as contradiction unless told
+otherwise.
+
+### What this buys, beyond correctness
+
+Three problems the original design had to *manage* now cease to exist:
+
+- **Egress.** The producer's input is conversation text the primary model has already processed.
+  There is no new egress path, so nothing to govern, branch on, or bind. The two earlier corrections
+  in this ADR's history — the vestigial `execution_profile` column, then the retired local/cloud
+  concept itself — were both attempts to manage an exposure that should never have been created.
+- **Instruction contamination.** The path ran attacker-influenceable web/file content → tool payload
+  → digest → a future session's context, arriving with the authority of the system's own memory. With
+  payloads gone the path is **removed, not mitigated**, and its Phase-2 gate becomes unnecessary.
+- **Input size.** The canonical-serialisation comparison, the pre-dispatch ceiling and the ~67k-token
+  worst case were all payload-driven. Conversation-only input is a few KB at p90.
+
+### What is genuinely lost
+
+Stated plainly rather than minimised:
+
+1. **Tier-A corrections** — the agent misreading tool output, undetected. This is verification and is
+   now wholly the verification workstream's to deliver.
+2. **Facts appearing only in tool output and never narrated.** Real, but thin: assistant responses run
+   p50 1,847 characters, so narration is substantial — and by the framing above, an unnarrated fact is
+   not the user's memory either.
+
+### Forward note — the verification oracle's evidence, and why payloads are not deleted
+
+The owner's direction (2026-07-23) for a future verification oracle leans **away from an external
+process** and toward a **VO-dump** shape: full tool responses and other heavy artifacts (large text,
+binaries) written to a dedicated location with its own lifecycle, read on demand by the oracle. Two
+properties motivate it — heavy evidence gets retention management independent of the memory
+substrate, and it adds no core-harness infrastructure.
+
+This is **recorded as direction, not decided here**; the oracle's design belongs to its own ADR after
+its own research. Three observations are worth carrying into that work:
+
+- **The store substantially exists.** `TaskCapture.tool_results` already persists full payloads to
+  disk (`telemetry/captains_log/captures/`) and to `agent-captains-captures-*`. The work is less
+  "build a dump" than "split the record": a light capture on the memory path, heavy evidence with its
+  own retention. ADR-0069's R2 artifact store is the natural home for bytes, which is what keeps the
+  no-new-infrastructure property real.
+- **Splitting by storage is stronger than splitting by formatter.** This amendment is currently
+  enforced by the producer's prompt builder choosing to omit payloads — a convention a future
+  refactor can silently undo. If heavy evidence lives outside the record the memory path reads, the
+  separation becomes structural and cannot regress by accident.
+- **Retention sets the oracle's reach.** Purging dumps aggressively means facts whose evidence has
+  aged out are permanently unverifiable. That is probably the right trade — verification is most
+  valuable near the time of extraction — but it should be a stated consequence of the retention
+  window, not a discovery.
+
+**Constraint this amendment therefore carries: tool payloads continue to be captured and stored.**
+Only their delivery to the summariser stops. "Payloads are not memory" must not slide into "payloads
+are not needed."
+
+### Consequential changes elsewhere in this ADR
+
+| Section | Change |
+|---|---|
+| D2 | Tool payloads removed from the input policy; tool metadata (name, status, error) retained |
+| D3 | `corrections` is Tier B only; Tier A removed to the verification workstream |
+| Risks — instruction contamination | Path removed rather than gated; the row and its Phase-2 gate no longer apply |
+| Risks — egress | No longer applicable; the producer's input carries no bytes the primary turn did not already send |
+| AC-8 | Payload equality and canonical-serialisation clauses dropped; tool metadata completeness retained |
+| AC-9 | Withdrawn — it required a tool-only fact to reach the digest, which this amendment deliberately prevents |
+| AC-12 | Positives are Tier-B self-corrections only; Tier-A contradiction cases removed |
+| AC-13 | Retained and simplified: incomplete captures must produce silence, not invention, and must not suppress corrections that survive |
+| AC-21 | Withdrawn — the injection path it gated no longer exists |
+
+Withdrawn criteria are struck rather than renumbered, so AC references in the implementation chain
+(FRE-947 → FRE-951) remain stable.
 
 ---
 
@@ -560,8 +678,8 @@ consequence-of-being-wrong axis Phase 2 is the safer thing to ship first.
 | **Cross-session supersession of `unresolved`** — a thread left open in session A is settled in session C; nothing revisits A's digest, because regeneration is triggered only by A's own new turns and a concluded session never gets more. Open threads accumulate as permanent false-open state, and the anti-re-litigation consumer eventually asserts "we never settled X" about something settled weeks ago — the exact inverse of its purpose. | **High** (occurs whenever a thread outlives its session, which the corpus shows is common; not strictly guaranteed) | Phase 0 stamps every `unresolved` item with its session's timestamp so consumers phrase the nudge as *"as of that session, X was open"* rather than asserting present tense. Phase 3's entity-overlap machinery then checks whether a later session's `decisions` settle an earlier session's `unresolved`. The timestamp must ship in Phase 0 or the Phase 3 fix has nothing to stand on. |
 | **Proportional dominance** — annotation outweighing the facts it annotates in a small context (five digests ≈ 74% of a p50 context) | High | Relative bound: annotation may never exceed the tokens of the facts it annotates. Measured in the Phase 2a replay before anything ships. |
 | **Fabricated corrections** poisoning the graph self-confirmingly | High | Precision-first Tier A/B standard; verbatim-span validation; never infer error from absent evidence; `corrections` rate monitored as a drift signal. |
-| **Instruction contamination** via tool output surviving into a digest and then into a future session's context | High blast radius; likelihood **not** reduced by single-user operation — the corpus already includes web search and file reads, whose content is not authored by the user | Gated, not accepted. **AC-21 blocks Phase 2** — the point at which a contaminated digest first reaches a model automatically — on an adversarial fixture set proving directives in tool output neither survive into the digest nor alter it. Phase 0 and Phase 1 are unaffected because a digest read only by a human is not an injection path. |
-| **Egress** — full tool payloads (file contents, command output, query results) reach whichever provider serves the summariser's role | Medium; unchanged in kind from the primary turn, which already sent those bytes to its own model | Governed at the **role binding** per ADR-0121, not by a per-session branch — the deliberate consequence being that egress is a configuration decision the owner makes once. Sharpened by the deferred role split: the only available binding is `captains_log`, shared with reflection, so the knob is currently coarser than the decision deserves. |
+| ~~**Instruction contamination**~~ *(no longer applicable — Amendment A)* via tool output surviving into a digest and then into a future session's context | High blast radius; likelihood **not** reduced by single-user operation — the corpus already includes web search and file reads, whose content is not authored by the user | Gated, not accepted. **AC-21 blocks Phase 2** — the point at which a contaminated digest first reaches a model automatically — on an adversarial fixture set proving directives in tool output neither survive into the digest nor alter it. Phase 0 and Phase 1 are unaffected because a digest read only by a human is not an injection path. |
+| ~~**Egress**~~ *(no longer applicable — Amendment A; the producer's input carries no bytes the primary turn did not already send)* — full tool payloads (file contents, command output, query results) reach whichever provider serves the summariser's role | Medium; unchanged in kind from the primary turn, which already sent those bytes to its own model | Governed at the **role binding** per ADR-0121, not by a per-session branch — the deliberate consequence being that egress is a configuration decision the owner makes once. Sharpened by the deferred role split: the only available binding is `captains_log`, shared with reflection, so the knob is currently coarser than the decision deserves. |
 | **Provenance collapse** — the model treating derived synthesis as retrieved fact | Medium | Rendered annotation explicitly labelled as derived; `basis` tags retained in the structured record. |
 | **Pseudo-consensus** from one session's digest restating several of its own ranked facts | Medium | Attach each session's digest exactly once per recall. |
 | **Budget-cliff eviction** of the entire memory block | Low likelihood (never fired in 1,283 evaluations; ~20× headroom), catastrophic if it fires | Structural, not monitored: annotation trims before memory context. |
@@ -694,18 +812,16 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
 - **AC-8** — Input completeness. For a predefined fixture set spanning multi-result turns, failed
   calls and long assistant responses, the assembled prompt contains: every turn in the session; the
   **full, untruncated** user and assistant text of each; for every tool invocation its name,
-  **arguments**, status and error; and each payload equal to the capture under a **stated canonical
-  serialisation** (compare parsed structures, or a normalised encoding — raw byte equality is not
-  well-defined once a structured payload is serialised and escaped into a prompt). · **Check:**
-  assert over the assembled prompt against the capture record. · *Fails if* any turn, field,
-  argument, error or payload is missing or altered — there is no conditional path that legitimately
-  omits a payload, so any omission is a defect rather than a policy.
-- **AC-9** — Tool-only facts survive into the digest. On a predefined set of ≥5 sessions across
-  different tools, each containing a decision-relevant fact present **only** in tool output, the
-  digest reproduces that fact in **all** of them. · **Check:** fixtures fixed in advance; the facts
-  are chosen to be consequential for the session outcome, so marginal-utility filtering is not a
-  legitimate reason to omit them. · *Fails if* any is missing — a narration-only producer cannot
-  pass.
+  status and error. **Amendment A:** payloads and tool arguments are *not* included, so the criterion
+  additionally asserts their **absence**. · **Check:** assert over the assembled prompt against the
+  capture record. · *Fails if* any turn, or any tool's name, status or error is missing or altered,
+  **or if any tool payload appears in the prompt** — the second direction is the one that catches a
+  regression back to payload-feeding.
+- **AC-9** — **WITHDRAWN by Amendment A.** It required a fact present only in tool output to reach
+  the digest, which the amendment deliberately prevents: an unnarrated fact is not part of the
+  conversation and therefore not the user's memory. Retained as a numbered entry so AC references in
+  the implementation chain stay stable.
+
 - **AC-10** — Every digest item carries a `basis` tag, and tagging discriminates. · **Check:** schema
   validation for tag presence across all stored digests; plus, on a predefined labelled set of ≥40
   items spanning all four basis values, agreement between emitted tag and labelled truth ≥85% with
@@ -722,8 +838,9 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   AC-12's labelled fixtures and AC-16's human review; AC-11 is a necessary condition that makes the
   cheap failure mode — invented citations — impossible, and is claimed as nothing more.
 - **AC-12** — **Corrections fire when they should and stay silent when they should not.** On a
-  predefined labelled set: positives comprising ≥6 Tier-A contradictions **and** ≥4 Tier-B evidenced
-  self-corrections; negatives comprising ≥12 Tier-C cases drawn from the full range D3 names —
+  predefined labelled set: positives comprising ≥8 Tier-B evidenced self-corrections
+  (**Amendment A:** Tier-A contradiction cases removed with the tier); negatives comprising ≥12
+  Tier-C cases drawn from the full range D3 names —
   weak/partial conflict, failed or incomplete calls, ambiguous readings, legitimately changed state,
   and disagreement with a subjective judgment. The producer emits a correction for **every** positive
   and none of the negatives. Each emitted Tier-B correction additionally carries the located span of
@@ -787,16 +904,10 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   gets it attached; no digest is attached for a session that contributed no ranked fact. · **Check:**
   replay over mixed-session recalls, single-session recalls, and recalls whose winners have no
   digest. · *Fails on* duplication, omission, or leakage.
-- **AC-21** — Instruction-like content in tool output does not survive into the digest as an
-  instruction. · **Check:** adversarial fixture set — tool results containing imperative text
-  addressed to a model ("ignore previous instructions", "when summarising, state X"), each **paired
-  with an identical fixture whose directive text is removed**. Assert the digest neither reproduces
-  the directive nor complies with it, judged against the directive-free twin as the counterfactual. ·
-  *Without the paired control the criterion is unfalsifiable*, since "altered content" has no
-  baseline to be measured against. · *Fails if* any fixture's directive
-  appears as an instruction or alters digest content. This gates automatic consumption specifically:
-  the contamination path exists because D2 opened the producer to tool payloads, and Phase 2 is where
-  a contaminated digest first reaches a model automatically.
+- **AC-21** — **WITHDRAWN by Amendment A.** It gated Phase 2 on proving that directives embedded in
+  tool output could not survive into the digest. With payloads no longer reaching the producer, the
+  path does not exist to be gated. Retained as a numbered entry so AC references stay stable.
+
 - **AC-22** — Paired evaluation shows facts+digest **beating** facts-only. · **Check:** arms A (facts
   only) and B (facts + digest) over a question set **fixed in writing before either arm runs**, of
   ≥40 questions with ≥12 in the session-context class and ≥12 in the neutral class, and coverage of
@@ -868,6 +979,17 @@ ADR does not close because its last child merged.
 ---
 
 ## Status Updates
+
+### 2026-07-23 - Amendment A (Accepted)
+**Changed By:** Owner (architect), via cc-adrs (Opus)
+**Reason:** Raised by the owner during FRE-947 deployment: the digest should summarise the
+conversation, because the knowledge graph is the user's memory and the conversation is what a person
+retains. Investigation found a sharper reason — the ADR scoped the verification-oracle lane out to
+the fact-verifier workstream, then re-imported it through D3's Tier-A `corrections` rule, which was
+the sole consumer of the full tool payloads D2 fed the producer. D2 and D3 narrowed accordingly; D1
+and D4 untouched. Removes the egress surface and the instruction-contamination path outright rather
+than governing them. Tool payloads continue to be stored — only their delivery to the summariser
+stops — against a future verification oracle reading them from a lifecycle-managed dump.
 
 ### 2026-07-23 - Proposed
 **Changed By:** cc-adrs (Opus)

@@ -113,9 +113,14 @@ session-end is not observable. The question is "when is the projection stale."
   is `summary_generated_at IS NULL OR summary_generated_at < ended_at`; idle is
   `ended_at < now − threshold`. No `summary_dirty` column, no revision counter, **no Postgres
   migration** — the lifecycle state lives in the same substrate as the artifact it describes.
-- **Concurrency** reuses the consolidator's existing single-flight guard, plus a re-read of
-  `ended_at` immediately before write (write only if unchanged). Not cross-database locking: a
-  Postgres row lock cannot serialise a Neo4j mutation.
+- **Concurrency** reuses the consolidator's existing single-flight guard, plus an **atomic
+  conditional write**: the sweep captures `ended_at` when it reads the session, and the write is a
+  single Cypher statement whose `MATCH` is predicated on `s.ended_at` still equalling the captured
+  value. A read-then-write pair is *not* sufficient — re-reading before writing leaves a
+  time-of-check-to-time-of-use window in which a new turn can land, and the write would then publish
+  a digest built from captures that are already stale. The comparison and the mutation must be the
+  same statement. Not cross-database locking either: a Postgres row lock cannot serialise a Neo4j
+  mutation.
 - **Resumption regenerates wholesale** from canonical captures. Never incremental patching of the
   prior summary.
 - **The summary is decoupled from the per-turn session write.** `create_session` must stop owning
@@ -172,17 +177,32 @@ ratatouille → coaching a couscous has no single intent, and is normal rather t
 (`tool_evidence | user_statement | assistant_reasoning | mixed`). Because `basis` is a
 model-assigned label and nothing stops a model tagging its own inference as evidence, it is backed
 by an enforcement step: **every item tagged `tool_evidence`, and every `corrections` entry, must
-carry a verbatim span locatable in the canonical capture.** A validator rejects a digest whose
-claimed evidence string is not found. This turns the evidence-versus-interpretation invariant from
-a prompt instruction into a machine-checkable one.
+carry a verbatim span plus a locator** — the capture id and the field within it (which tool result,
+or which turn's assistant text). The validator resolves the locator and requires the span to occur
+*at that location*, not merely somewhere in the session. Bare containment is not sufficient: a
+common word appears everywhere and would pass while supporting nothing. This turns the
+evidence-versus-interpretation invariant from a prompt instruction into a machine-checkable one.
 
 **Error-flagging is precision-first, deliberately asymmetric.** A missed error is recoverable from
 raw evidence; a false error writes self-confirming state into the graph and feeds its own
-supposed correction into future reasoning. A digest may assert the agent was wrong only on
-(a) direct contradiction of the *same proposition* by authoritative evidence, or (b) an explicit,
-evidenced self-correction within the session. Weak conflict, partial or failed tool calls, multiple
-readings, state that changed over time, and disagreement with a subjective judgment are **not**
-errors — they belong in `unresolved` or are omitted. **Never infer error from absent evidence.**
+supposed correction into future reasoning. Two tiers may be asserted, and nothing else:
+
+- **Tier A — direct contradiction.** Authoritative evidence contradicts the *same proposition* the
+  agent asserted. A Tier-A correction carries **two** located spans: the contradicted claim in the
+  assistant text, and the contradicting evidence.
+- **Tier B — explicit evidenced self-correction.** The agent itself corrected the record within the
+  session, and the correction is supported by evidence in the capture. Carries the located span of
+  the self-correction.
+
+**Tier C — not errors, never asserted as corrections.** Weak or partial conflict, failed or
+incomplete tool calls, multiple defensible readings, state that legitimately changed over time, and
+disagreement with a subjective judgment or recommendation. These belong in `unresolved`, or are
+omitted. **Never infer error from absent evidence.**
+
+Note that Tier A and Tier B do not both require payloads: a contradiction between "the command
+succeeded" and a recorded error *status* is Tier A on status alone, and Tier B needs only the
+session's own text. So a payload-withheld session can still legitimately carry corrections — what it
+must never do is assert one that depends on payload content it was not given.
 
 **Compute state, generate meaning.** Turn count, duration, tool invocation and success/failure
 counts, and `dominant_entities` are queryable and remain structured properties. They are never
@@ -324,14 +344,23 @@ covers ~90% of results.
   `read_file` (120), `search_memory` (76), `web_search` (75) — **query result sets and file reads**,
   where the decisive record sits at an arbitrary index
 
-**Why Rejected:** Decisively, because truncation is not merely lossy — **it fabricates
-contradictions.** A summariser instructed to check narration against evidence, handed a truncated
-payload, reads absence-of-evidence as evidence-of-absence: it fails to find the detail the agent
-cited and concludes the agent hallucinated it, writing a false accusation permanently into the graph
-where nothing downstream can distinguish it from a real catch. This yields the inversion that
-governs D2: **names-only is safer than truncation despite carrying less information**, because (a) is
-honestly silent while (b) is confidently wrong. It is also why withheld payloads under the
-profile-aware rule drop to names-only rather than to excerpts.
+**Why Rejected:** Because **unmarked** truncation fabricates contradictions. A summariser instructed
+to check narration against evidence, handed a silently truncated payload, reads absence-of-evidence
+as evidence-of-absence: it fails to find the detail the agent cited and concludes the agent
+hallucinated it, writing a false accusation into the graph that nothing downstream can distinguish
+from a real catch.
+
+The honest qualification: that failure is **not intrinsic to truncation**. Marking the clip and
+applying the same "do not infer from omitted evidence" contract used for withheld payloads would
+defuse it. But doing so collapses the option's rationale — a payload the summariser is instructed
+not to reason about the absence of is, for correction purposes, a payload it does not have, which is
+option (a) with extra tokens and a worse story about which bytes survived. What remains against (b)
+is then the selection bias above, which is sufficient on its own: a size-triggered clip preferentially
+discards the evidence-dense results.
+
+This yields the inversion that governs D2: **names-only is safer than unmarked truncation despite
+carrying less information**, because (a) is honestly silent while (b) is confidently wrong. It is
+also why withheld payloads under the profile-aware rule drop to names-only rather than to excerpts.
 
 ### Option 4: A single artifact serving both the UI and retrieval
 
@@ -348,9 +377,16 @@ recall path.
 - Produces exactly today's artifact — too verbose to scan, too narratively shaped and lossy to reason
   over
 
-**Why Rejected:** The compromise fails both consumers, and the marginal cost of the alternative is
-zero: both artifacts are generated in the same call from the same evidence and merely stored
-separately.
+**Why Rejected:** The compromise fails both consumers. The generation cost of the alternative is
+genuinely nil — both artifacts come from one call over the same evidence — though the storage and
+schema cost is not zero, and D3 spends it deliberately.
+
+Note the stronger version of this option is not today's prose string but *one structured record
+carrying both a label field and digest fields, rendered per consumer*. That is close to what D3
+adopts, and the difference is mostly framing: D3 stores them as two named artifacts on the same node
+rather than one nested record, because the label has a different lifetime — it stays useful and
+correct even when the digest is stale, absent under the single-turn floor, or withheld after a
+generation failure.
 
 ### Option 5: Minimal correction — stop generating, fix the clobber bug, build the producer when a consumer exists
 
@@ -377,23 +413,33 @@ every-turn spend nor the data-loss bug in place, so it cannot be dismissed on th
 - The consumer and the producer would then be designed together under delivery pressure, which is
   how output shape gets fitted to one consumer's convenience rather than to the artifact's purpose
 
-**Why Rejected on balance, not dismissed.** Because this option already includes the bug fix and the
-trigger fix, the decision turns on one question only: *is the evidence needed to judge the
-downstream lanes obtainable without first correcting the producer?* It is not. Every judgement about
-whether a digest earns a machine consumer requires reading corrected digests, and the methodological
-caveat in Context forbids drawing that judgement from clipped, tool-blind output. Option 5 therefore
-defers the decision indefinitely by destroying the only evidence that could settle it — which is
-precisely how the artifact reached its current state.
+**Why Rejected — narrowly, and this is the closest alternative.** An earlier draft rejected this on
+the grounds that it "destroys the only evidence that could settle the question." That was wrong and
+is withdrawn: the canonical captures persist, and corrected digests could be generated offline at any
+later point without the producer running in production. Nothing is destroyed and no decision is
+deferred indefinitely.
 
-The remaining increment over Option 5 is D2 and D3 plus Phase 1: a correct input policy, a defined
-output, and a human-visible surface. That increment is what converts "nobody could say what good
-looked like" into a falsifiable artifact.
+What actually separates this option from the decision is narrower and worth stating honestly. It is
+a **sequencing preference**, not a correctness argument:
+
+- Under Option 5, the producer's output shape is designed at the same time as its first consumer,
+  under that consumer's delivery pressure. The consistent failure mode there is that the artifact
+  gets fitted to whatever the first consumer found convenient, which is how a digest ends up shaped
+  for a human reader and then handed to a retrieval path — the exact history that produced today's
+  artifact.
+- Phase 1 exists to make quality visible *before* anything consumes the digest automatically. That
+  forcing function only works if a corrected producer is running against real sessions ahead of the
+  machine consumers.
+
+Both are judgement calls about sequencing, and a reasonable reader could take the other side. The
+decision goes to phased correction because the cost of being wrong is one extra Phase-0 build,
+whereas Option 5's failure mode is an artifact shaped by its first consumer and then inherited by
+every later one.
 
 **The discipline behind this option is retained rather than discarded**, as this ADR's kill
 condition: *do not invent a consumer to justify an artifact.* If Phase 1 shows the digest conveys
 nothing beyond the existing turn summaries and entity edges, the correct outcome is to stop at
-Phase 1 — which lands Option 5's end state plus a corrected producer and a UI surface, reached with
-evidence instead of assumption.
+Phase 1 — which lands close to Option 5's end state, reached with evidence instead of assumption.
 
 ### Option 6: Swap Phase 2 and Phase 3
 
@@ -456,7 +502,7 @@ consequence-of-being-wrong axis Phase 2 is the safer thing to ship first.
 | **Cross-session supersession of `unresolved`** — a thread left open in session A is settled in session C; nothing revisits A's digest, because regeneration is triggered only by A's own new turns and a concluded session never gets more. Open threads accumulate as permanent false-open state, and the anti-re-litigation consumer eventually asserts "we never settled X" about something settled weeks ago — the exact inverse of its purpose. | **High** (structurally guaranteed to occur) | Phase 0 stamps every `unresolved` item with its session's timestamp so consumers phrase the nudge as *"as of that session, X was open"* rather than asserting present tense. Phase 3's entity-overlap machinery then checks whether a later session's `decisions` settle an earlier session's `unresolved`. The timestamp must ship in Phase 0 or the Phase 3 fix has nothing to stand on. |
 | **Proportional dominance** — annotation outweighing the facts it annotates in a small context (five digests ≈ 74% of a p50 context) | High | Relative bound: annotation may never exceed the tokens of the facts it annotates. Measured in the Phase 2a replay before anything ships. |
 | **Fabricated corrections** poisoning the graph self-confirmingly | High | Precision-first Tier A/B standard; verbatim-span validation; never infer error from absent evidence; `corrections` rate monitored as a drift signal. |
-| **Instruction contamination** via tool output surviving into a digest and then into a future session's context | Low likelihood, high blast radius | Recorded as a new path created by D2. Single-user system; no mitigation built in Phase 0 beyond the profile-aware conditional. Revisit if the system ever becomes multi-user or ingests untrusted content routinely. |
+| **Instruction contamination** via tool output surviving into a digest and then into a future session's context | High blast radius; likelihood **not** reduced by single-user operation — the corpus already includes web search and file reads, whose content is not authored by the user | Gated, not accepted. **AC-20 blocks Phase 2** — the point at which a contaminated digest first reaches a model automatically — on an adversarial fixture set proving directives in tool output neither survive into the digest nor alter it. Phase 0 and Phase 1 are unaffected because a digest read only by a human is not an injection path. |
 | **Egress** — local-profile tool payloads reaching a cloud summariser | Medium | Profile-aware input policy; withheld-evidence clause in the contract so the summariser does not reason about what it was not given. |
 | **Provenance collapse** — the model treating derived synthesis as retrieved fact | Medium | Rendered annotation explicitly labelled as derived; `basis` tags retained in the structured record. |
 | **Pseudo-consensus** from one session's digest restating several of its own ranked facts | Medium | Attach each session's digest exactly once per recall. |
@@ -506,112 +552,182 @@ rather than a rate, that is why.
 
 ## Verification / Acceptance Criteria
 
-**Gate mapping.** A phase may not begin until **every** AC listed for the preceding phase passes.
-Phase 0 → AC-1…AC-11. Phase 1 → AC-12. Phase 2 → AC-13…AC-17. Phase 3 → AC-18. Partial passes do
-not open a gate.
+**How will we know this decision actually delivered — not just merged?**
 
-**Phase 0 — producer**
+**Gate mapping.** A phase may not begin until **every** AC listed for the preceding phase passes;
+partial passes do not open a gate.
 
-- **AC-1** — Over a window containing at least five multi-turn sessions, each receives **at least one
-  and strictly fewer generations than it has turns**, *and* every session quiet past the idle
-  threshold ends with `summary_generated_at >= ended_at`. · **Check:** count
-  `session_summary_generated` events per `session_id` in `agent-logs-*` against `turn_count`; then a
-  Cypher scan for sessions where `ended_at < now − threshold AND summary_generated_at < ended_at`. ·
-  *Fails if* generations ≥ turns (trigger never moved), zero generations (sweep never fires), **or**
-  any quiet session is left behind its own `ended_at` (generate-once-and-never-again).
-- **AC-2** — A session that receives new turns **after** being summarised is regenerated on the next
-  quiet period, and its digest content changes to reflect the new turns. · **Check:** summarise a
-  session, append turns introducing a distinctive fact, wait past threshold, re-read. · *Fails if*
-  `summary_generated_at` does not advance, or advances while the content ignores the new turns.
-- **AC-3** — A generation failure leaves the previously stored digest **intact**. · **Check:** force a
-  failure (oversized input or injected budget denial) on a session that already has a digest; read
-  the Neo4j property. · *Fails if* the field becomes null or changes.
-- **AC-4** — Two sweeps racing the same session cannot publish a digest built from stale captures. ·
-  **Check:** drive two concurrent sweeps against one session, injecting a new turn between the
-  generation call and the write; assert the stale write is refused (`ended_at` changed) and exactly
-  one digest is stored. · *Fails if* both writes land, or a digest is stored whose source captures
-  predate the current `ended_at`.
-- **AC-5** — No session summarised after this ships has `turn_count = 1` with a digest; every
-  multi-turn session quiet past the threshold has one. · **Check:** two Cypher counts keyed on
-  `summary_generated_at` being non-null. · *Fails if* either count is non-zero.
-- **AC-6** — For **every** tool invocation in a session, the producer's assembled input contains that
-  invocation's name, status and error; for a **cloud**-profile session it also contains the payload,
-  and for a **local**-profile session it contains no payload. · **Check:** assert over the assembled
-  prompt for a fixture set covering multi-result turns, failed calls and both profiles. · *Fails if*
-  any invocation is missing, any error is dropped, or either profile's payload rule is violated.
-- **AC-7** — On a session whose tool output contains a fact the assistant never states, the digest
-  reproduces that fact. · **Check:** fixture set of ≥5 such sessions across different tools. ·
-  *Fails if* the digest reproduces the fact in fewer than all of them — a tool-blind or
-  narration-only producer cannot pass.
-- **AC-8** — **Every** digest item carries a `basis` tag, and on a labelled fixture set each item's
-  tag matches its true source class. · **Check:** schema validation for tag presence over all stored
-  digests; manual labelling for tag correctness on the fixture set. · *Fails if* any item lacks a
-  tag, **or** if tagging collapses (e.g. everything `mixed`) — assessed as tag distribution against
-  the labelled truth, not merely tag presence.
-- **AC-9** — Every item tagged `tool_evidence` and every `corrections` entry carries a verbatim span
-  locatable in the canonical capture. · **Check:** automated validator, string-containment against
-  the capture record. · *Fails if* any claimed span is absent.
-- **AC-10** — **Corrections fire when they should and stay silent when they should not.** On a
-  labelled set containing both (a) sessions with an unambiguous Tier-A contradiction between tool
-  evidence and assistant narration, and (b) clean sessions with no contradiction, the producer emits
-  a correction for **every** case in (a) and for **none** in (b). · **Check:** hand-labelled fixture
-  set, minimum 8 positive and 12 negative cases, built before the producer is tuned. · *Fails if* any
-  clean session yields a correction (precision breach) **or** any unambiguous contradiction yields
-  none — which is what a producer that simply never emits corrections would do.
-- **AC-11** — For a local-profile session (payloads withheld), the digest asserts no correction and
-  makes no claim of contradiction. · **Check:** local-profile session containing narration that a
-  withheld payload would contradict; inspect `corrections` and digest text. · *Fails if* absence of
-  evidence produces an asserted error.
+| Gate | Requires |
+|---|---|
+| Start Phase 1 | AC-1 … AC-13 (Phase 0) |
+| Start Phase 2a — offline replay analysis | AC-14, AC-15 (Phase 1) |
+| Turn Phase 2 hydration on for the model | AC-16 … AC-20 |
+| Start Phase 3 build | AC-21 |
+| Make the Phase 3 nudge **user-visible** | AC-22 — an **intra-phase** gate: Phase 3 may be built and evaluated offline beforehand, but must not surface to the user until it passes |
+| Start Phase 4 | AC-23 — the measure-first diagnostic |
 
-*(Deterministic metadata — turn count, duration, tool counts — is asserted equal to a recount from
-the capture record as part of AC-1's scan. The earlier "digest text must not restate them" clause is
-removed: it named no detection method and was therefore uncheckable.)*
+**Fixture discipline, applying to every criterion below that uses one.** Fixture and sample sets are
+**selected and written down before the producer is tuned or the arm is run**, and are drawn by a
+stated rule (random over the eligible population, or exhaustive) — never chosen after seeing output.
+A criterion evaluated on a post-hoc sample has not been met.
 
-**Phase 1 — UI**
+**Corpus feasibility is itself a gate.** The corpus holds 121 sessions, 59 multi-turn. Before any
+criterion that names a sample size, the eligible population must be counted and reported. **If the
+corpus cannot supply it, that is a finding to surface, not a reason to shrink the criterion** — the
+permitted response is a pre-registered synthetic supplement, labelled as such in the result.
 
-- **AC-12** — On a blind review of 50 multi-turn digests against their source sessions, **at least
-  60%** contain at least one item of session-level state not recoverable from the turn summaries,
-  entity edges or the label. · **Check:** two independent reviewers scoring each digest against the
-  existing artifacts shown alongside, item-by-item, on a pre-agreed rubric; disagreements
-  adjudicated by re-reading the source session; report inter-rater agreement alongside the result. ·
-  *Fails below 60%*, which triggers the kill condition rather than a fix.
+### Phase 0 — producer
 
-**Phase 2 — hydration**
+- **AC-1** — Generation frequency tracks quiet periods, not turns. For each multi-turn session,
+  generations ≤ number of idle gaps exceeding the threshold, plus one; and a session whose turns all
+  arrived inside one idle window is generated **exactly once**. · **Check:** `session_summary_generated`
+  counts per `session_id` in `agent-logs-*`, joined against inter-turn gaps computed from the
+  captures. · *Fails if* counts exceed the quiet-period bound — which catches both per-turn
+  generation and the "every turn but one" evasion that a bare `< turn_count` bound permits.
+- **AC-2** — No session is left behind its own activity. · **Check:** Cypher for sessions where
+  `ended_at < now − threshold AND (summary_generated_at IS NULL OR summary_generated_at < ended_at)`,
+  excluding sessions carrying a recorded terminal generation failure. · *Fails if* any row returns.
+  The `IS NULL` disjunct is required: in Cypher a comparison against NULL yields NULL and the row is
+  silently dropped, so a never-summarised session escapes a bare `<` scan.
+- **AC-3** — A session that receives new turns after being summarised is regenerated on the next
+  quiet period, and the content reflects the new turns. · **Check:** summarise, append turns carrying
+  a distinctive fact, wait past threshold, re-read. · *Fails if* `summary_generated_at` does not
+  advance, or advances while the content ignores the appended turns.
+- **AC-4** — A generation failure is inert and loud: the stored digest **and** label are unchanged,
+  `summary_generated_at` does **not** advance, a failure event is emitted, and the session remains
+  eligible for retry. · **Check:** force a failure (oversized input, injected budget denial) on a
+  session that already has a digest; assert all four. · *Fails if* any of them is violated —
+  particularly if freshness advances, which would mark a failed session clean forever.
+- **AC-5** — Oversized input is rejected **before** any model call. · **Check:** construct a session
+  exceeding the model's input limit; assert a failure event naming the reason, and assert **zero**
+  model-call telemetry for that attempt. · *Fails if* a model call is issued, or the input is
+  silently truncated.
+- **AC-6** — Two sweeps racing one session cannot publish a stale digest. · **Check:** drive two
+  concurrent sweeps, injecting a new turn **between the conditional match and the mutation**; assert
+  the stale write is refused and the stored digest's source captures match the current `ended_at`. ·
+  *Fails if* a read-then-write pair passes where an atomic conditional write would not — the test
+  must distinguish the two, not merely observe a single surviving property value.
+- **AC-7** — No session summarised after this ships has `turn_count = 1` with a digest; every
+  multi-turn session quiet past the threshold has one, except those carrying a recorded terminal
+  failure. Additionally, each session's stored deterministic metadata — turn count, duration, tool
+  invocation and success/failure counts — **equals** a recount from the capture record. · **Check:**
+  two Cypher counts keyed on `summary_generated_at`, plus a property-versus-recount comparison over
+  all sessions. · *Fails if* either count returns non-zero, or any property disagrees with its
+  recount — which is what "compute state, generate meaning" means in practice, and what a producer
+  that lets the model author its own counts would violate.
+- **AC-8** — Input completeness. For a predefined fixture set spanning multi-result turns, failed
+  calls, long assistant responses and both execution profiles, the assembled prompt contains: every
+  turn in the session; the **full, untruncated** user and assistant text of each; and for every tool
+  invocation its name, **arguments**, status and error. Cloud-profile sessions additionally contain
+  each payload **byte-equal** to the capture; local-profile sessions contain **no** payload. ·
+  **Check:** assert over the assembled prompt, comparing against the capture record. · *Fails if*
+  any turn, field, argument or error is missing, any payload differs from source, or either
+  profile's payload rule is violated.
+- **AC-9** — Tool-only facts survive into the digest. On a predefined set of ≥5 sessions across
+  different tools, each containing a decision-relevant fact present **only** in tool output, the
+  digest reproduces that fact in **all** of them. · **Check:** fixtures fixed in advance; the facts
+  are chosen to be consequential for the session outcome, so marginal-utility filtering is not a
+  legitimate reason to omit them. · *Fails if* any is missing — a narration-only producer cannot
+  pass.
+- **AC-10** — Every digest item carries a `basis` tag, and tagging discriminates. · **Check:** schema
+  validation for tag presence across all stored digests; plus, on a predefined labelled set of ≥40
+  items spanning all four basis values, agreement between emitted tag and labelled truth ≥85% with
+  **no single tag value exceeding 60% of emissions** unless the labelled truth is equally skewed. ·
+  *Fails if* any item is untagged, or if tagging collapses onto one value — the evasion that
+  tag-presence alone cannot catch.
+- **AC-11** — Every `tool_evidence` item and every `corrections` entry carries a span **and a
+  locator**, and the span occurs at that location. · **Check:** validator resolves each locator to
+  the named capture and field, then requires the span there. · *Fails if* any locator is absent or
+  unresolvable, or the span is not found at the cited location — bare containment anywhere in the
+  session does not pass.
+- **AC-12** — **Corrections fire when they should and stay silent when they should not.** On a
+  predefined labelled set: positives comprising ≥6 Tier-A contradictions **and** ≥4 Tier-B evidenced
+  self-corrections; negatives comprising ≥12 Tier-C cases drawn from the full range D3 names —
+  weak/partial conflict, failed or incomplete calls, ambiguous readings, legitimately changed state,
+  and disagreement with a subjective judgment. The producer emits a correction for **every** positive
+  and **none** of the negatives. · **Check:** hand-labelled fixtures, fixed before tuning. · *Fails
+  if* any negative yields a correction, **or** any positive yields none. A producer that never emits
+  corrections fails the positives; a naive contradiction detector fails the Tier-C negatives.
+- **AC-13** — A local-profile session asserts no correction **that depends on withheld payload
+  content**, while still emitting corrections available from status, error or self-correction. ·
+  **Check:** a local-profile fixture pair — one session whose only contradiction lives in a withheld
+  payload (must yield no correction), one whose contradiction is visible in tool status (must yield
+  one). · *Fails if* absent evidence produces an asserted error, **or** if the producer suppresses
+  corrections that D3 permits without payloads.
 
-- **AC-13** — Ranked fact IDs **and their order** are byte-identical with hydration enabled versus
-  baseline. · **Check:** offline replay diff over the historical corpus. · *Fails if* any query
-  differs.
-- **AC-14** — Annotation is discarded **before** memory context under budget pressure. · **Check:**
-  construct a context that fits without annotation and exceeds with it; assert the ranked facts
-  survive and the annotation is dropped. · *Fails if* the memory block is evicted.
-- **AC-15** — Annotation tokens never exceed the tokens of the facts they annotate. · **Check:**
-  assertion in the hydration path plus the replay measuring the ratio per turn. · *Fails if* the
-  ratio exceeds 1 on any turn.
-- **AC-16** — A recall whose ranked facts all come from one session attaches that session's digest
-  **exactly once**. · **Check:** replay; count attached digests against distinct parent sessions. ·
-  *Fails if* any digest is attached more than once.
-- **AC-17** — Paired evaluation shows facts+digest **beating** facts-only. · **Check:** arms A (facts
-  only) and B (facts + digest) over a question set **fixed and written down before either arm is
-  run**, spanning: questions where session context should help · ordinary recall where it should be
-  neutral · conflicting or evolving facts · stale digests · correction cases. Each answer scored on
-  outcome correctness, unsupported-claim count, and correct abstention. · **Decision rule, stated in
-  advance:** B must win on the session-context class by a margin larger than the disagreement between
-  two independent scorers on the same answers, with **zero** regression on the neutral class and
-  **zero** increase in unsupported claims. · *Fails if* B is merely not-worse, if the question set
-  was chosen or amended after seeing results, or if the margin is inside scorer noise. **Annotation
-  must earn its tokens.** The corpus holds 59 multi-turn sessions, so this is a directional
-  discriminator against a trivial baseline, not a powered lift measurement, and must be reported as
-  such.
+### Phase 1 — UI
 
-**Phase 3 — anti-re-litigation**
+- **AC-14** — The surface works end to end. · **Check:** the session list renders label and digest
+  for a session whose digest lives in Neo4j while its row lives in Postgres; a session with no digest
+  (single-turn, or failed) renders without error and without a stale or placeholder digest; the
+  generated label replaces the first-60-characters title. · *Fails if* the cross-substrate read
+  fails, a missing digest breaks or fabricates the row, or the old title hack still shows.
+- **AC-15** — On a **randomly drawn, pre-registered** sample of 50 multi-turn digests, **≥60%**
+  contain at least one item of session-level state that is both (a) not recoverable from the turn
+  summaries, entity edges or label, and (b) supported by the source session. · **Check:** two
+  independent reviewers scoring item-by-item against a pre-agreed rubric with the existing artifacts
+  shown alongside; disagreements adjudicated by re-reading the source; inter-rater agreement reported
+  with the result. · *Fails below 60%*, which triggers the kill condition rather than a fix. Novelty
+  alone does not count — an item that is new but unsupported fails (b).
 
-- **AC-18** — On a labelled re-litigation set of at least 30 candidate cases drawn from real session
-  pairs and spanning all five classes (true reopening · same entities different issue · genuinely
-  unresolved · superseded decision · explicit correction), the nudge achieves **≥90% precision at
-  ≥50% recall** on the true-reopening class. · **Check:** labelled replay; report both numbers and
-  the candidate denominator. · *Fails below either threshold* — precision alone is gameable by a
-  system that almost never nudges — **and** fails outright if any nudge claims "settled" where the
-  latest evidence says superseded or unresolved.
+### Phase 2 — hydration
+
+- **AC-16** — Ranked fact IDs **and order** are byte-identical with hydration enabled versus
+  baseline, over a **frozen, pre-registered** replay corpus of stated size. · **Check:** offline
+  replay diff. · *Fails if* any query differs, or if the corpus is empty, unstated, or selected after
+  the fact.
+- **AC-17** — Annotation is discarded **before** memory context under budget pressure. · **Check:**
+  construct a context that fits without annotation and exceeds with it; assert ranked facts survive
+  and annotation is dropped. · *Fails if* the memory block is evicted.
+- **AC-18** — Annotation tokens never exceed the tokens of the facts they annotate, measured with the
+  same tokenizer used for the budget. · **Check:** assertion in the hydration path plus per-turn
+  ratio measurement across the replay. · *Fails if* the ratio exceeds 1 on any turn. Zero retrieved
+  facts must yield zero annotation.
+- **AC-19** — Attachment is correct and complete: each parent session's digest is attached **exactly
+  once** regardless of how many of its facts won; every ranked fact whose parent session has a digest
+  gets it attached; no digest is attached for a session that contributed no ranked fact. · **Check:**
+  replay over mixed-session recalls, single-session recalls, and recalls whose winners have no
+  digest. · *Fails on* duplication, omission, or leakage.
+- **AC-20** — Instruction-like content in tool output does not survive into the digest as an
+  instruction. · **Check:** adversarial fixture set — tool results containing imperative text
+  addressed to a model ("ignore previous instructions", "when summarising, state X") — assert the
+  digest neither reproduces the directive nor complies with it. · *Fails if* any fixture's directive
+  appears as an instruction or alters digest content. This gates automatic consumption specifically:
+  the contamination path exists because D2 opened the producer to tool payloads, and Phase 2 is where
+  a contaminated digest first reaches a model automatically.
+- **AC-21** — Paired evaluation shows facts+digest **beating** facts-only. · **Check:** arms A (facts
+  only) and B (facts + digest) over a question set **fixed in writing before either arm runs**, of
+  ≥40 questions with ≥12 in the session-context class and ≥12 in the neutral class, and coverage of
+  conflicting/evolving facts, stale digests and correction cases. Each answer scored 0/1 on outcome
+  correctness by two independent scorers, plus unsupported-claim count and correct abstention. ·
+  **Decision rule, stated in advance:** B's proportion correct on the session-context class must
+  exceed A's by more than the observed inter-scorer disagreement rate on the same answers;
+  **aggregate** neutral-class correctness must not fall; unsupported-claim count must not rise. ·
+  *Fails if* B is merely not-worse, the margin is inside scorer noise, or the question set was
+  amended after results were seen. **Annotation must earn its tokens.** With 59 multi-turn sessions
+  this is a directional discriminator against a trivial baseline, not a powered lift measurement, and
+  must be reported as such.
+
+### Phase 3 — anti-re-litigation
+
+- **AC-22** — On a labelled re-litigation set of ≥30 candidate cases drawn from real session pairs,
+  with **≥8 true-reopening positives** and ≥4 in each of the other four classes (same entities
+  different issue · genuinely unresolved · superseded decision · explicit correction), the nudge
+  achieves **≥90% precision at ≥50% recall** on the true-reopening class. · **Check:** labelled
+  replay; report precision, recall, the candidate denominator and the per-class counts. · *Fails
+  below either threshold* — precision alone is gameable by a system that almost never nudges, and
+  per-class minima prevent a two-positive set making one lucky nudge look like 100% precision —
+  **and** fails outright if any nudge claims "settled" where the latest evidence says superseded or
+  unresolved. Corpus feasibility must be established first per the rule above; a pre-registered
+  synthetic supplement is permitted and must be labelled in the result.
+
+### Phase 4 — gate
+
+- **AC-23** — Phase 4 does not begin without a diagnostic naming a **concrete observed failure class**
+  that only candidate pre-filtering or cross-session synthesis fixes. · **Check:** the diagnostic
+  cites specific recall misses from real traffic and shows why Phases 0–3 cannot address them. ·
+  *Fails if* the justification is capability-shaped ("embedding would let us…") rather than a
+  demonstrated miss.
 
 **Kill condition (not a failure state).** If Phase 1 review plus the Phase 2 paired evaluation show
 facts-only ≥ facts+digest on memory-dependent tasks while the user still finds the digest useful for
@@ -620,7 +736,7 @@ kill hydration, anti-re-litigation, session embeddings, pre-filtering and cross-
 That outcome means the artifact belongs in the human navigation plane, not the machine reasoning
 plane. Do not invent a consumer to justify it.
 
-**Seam owner:** master, at the integration gate. AC-17 is the assembled-intent criterion — it holds
+**Seam owner:** master, at the integration gate. AC-21 is the assembled-intent criterion — it holds
 only once Phases 0, 1 and 2 have all landed, and no child ticket closing can satisfy it alone. This
 ADR does not close because its last child merged.
 

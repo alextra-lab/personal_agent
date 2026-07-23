@@ -1,5 +1,11 @@
 # The session-summary gem: from broken artifact to KG opportunity
 
+> **Superseded for decisions by [ADR-0124](../architecture_decisions/ADR-0124-session-summary-producer-and-phased-consumption.md)** (Proposed, 2026-07-23). This document remains
+> the backing research and the design space; ADR-0124 is where the decisions live. Note that
+> ADR-0124 corrects two claims made here — §E.1.2 ("a sessions read surface already exists ⇒ Lane 6
+> is a field addition"): the sessions endpoint reads Postgres only and the summary lives in Neo4j,
+> so it is a cross-substrate read; and §E.4's cost framing, which measurement puts at ~5 calls/day.
+>
 > **Status:** exploration complete, design undeveloped — the germ. A fresh session reads this and goes
 > straight to deep design. **By:** cc-explore (read-only). **Date:** 2026-07-22.
 > **Origin:** master's every-turn re-summarization flag (`telemetry/explore_task_session_summary_2026-07-22.md`).

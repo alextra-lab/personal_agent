@@ -10,7 +10,7 @@ This directory contains Architecture Decision Records for the Personal Agent (Se
 |-----|-------|--------|
 | [ADR-0001](ADR-0001-project-init.md) | Initialize Personal Local Agent Project | Accepted |
 | [ADR-0002](ADR-0002-orchestrator-style.md) | Orchestrator Style: Deterministic Graph + Embedded Agents | Accepted |
-| [ADR-0003](ADR-0003-model-stack.md) | Local Model Stack for Personal Agent MVP | Accepted |
+| [ADR-0003](ADR-0003-model-stack.md) | Local Model Stack for Personal Agent MVP | Superseded by ADR-0008 / ADR-0031 / ADR-0033 + Redesign v2 |
 | [ADR-0004](ADR-0004-telemetry-and-metrics.md) | Telemetry & Metrics Implementation Strategy | Accepted |
 | [ADR-0005](ADR-0005-governance-config-and-modes.md) | Governance Configuration & Operational Modes | Accepted |
 | [ADR-0006](ADR-0006-orchestrator-runtime-structure.md) | Orchestrator Runtime Structure & Execution Model | Accepted |
@@ -21,7 +21,7 @@ This directory contains Architecture Decision Records for the Personal Agent (Se
 | ADR | Title | Status |
 |-----|-------|--------|
 | [ADR-0008](ADR-0008-hybrid-tool-calling-strategy.md) | Hybrid Tool Calling Strategy for Reasoning Models | Accepted |
-| [ADR-0008b](ADR-0008-model-stack-course-correction.md) | Model Stack Course Correction (Dec 2025 Research) | Accepted |
+| [ADR-0008b](ADR-0008-model-stack-course-correction.md) | Model Stack Course Correction (Dec 2025 Research) | Superseded by Cognitive Architecture Redesign v2 |
 | [ADR-0009](ADR-0009-streaming-vs-non-streaming-responses.md) | Streaming vs Non-Streaming LLM Responses | Accepted |
 | [ADR-0010](ADR-0010-structured-llm-outputs-via-pydantic.md) | Structured LLM Outputs via Pydantic Models | Accepted |
 | [ADR-0011](ADR-0011-mcp-gateway-integration.md) | MCP Gateway Integration for Tool Expansion | Accepted |
@@ -82,7 +82,7 @@ This directory contains Architecture Decision Records for the Personal Agent (Se
 | ADR | Title | Status |
 |-----|-------|--------|
 | [ADR-0051](ADR-0051-cloud-profile-orchestrator-dispatch.md) | Cloud Profile Orchestrator Dispatch via ContextVar | Accepted (Implemented) |
-| [ADR-0052](ADR-0052-seshat-owner-identity-primitive.md) | Seshat Owner Identity Primitive | Proposed |
+| [ADR-0052](ADR-0052-seshat-owner-identity-primitive.md) | Seshat Owner Identity Primitive | Accepted (amended 2026-05-09) |
 | [ADR-0053](ADR-0053-gate-feedback-monitoring.md) | Deterministic Gate Feedback-Loop Monitoring Framework | Parked (scheduled — FRE-582 / FRE-589) |
 | [ADR-0062](ADR-0062-tool-loop-gate.md) | Tool Loop Gate — Per-Tool FSM-Based Loop Detection | Accepted (Implemented) |
 
@@ -111,7 +111,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0057](ADR-0057-insights-pattern-analysis.md) | Insights & Pattern Analysis Stream | Accepted (Implemented) |
 | [ADR-0058](ADR-0058-self-improvement-pipeline-stream.md) | Self-Improvement Pipeline Stream | Accepted (Implemented) |
 | [ADR-0059](ADR-0059-context-quality-stream.md) | Context Quality Stream | Accepted (Implemented) |
-| [ADR-0060](ADR-0060-knowledge-graph-quality-stream.md) | Knowledge Graph Quality Stream | Accepted |
+| [ADR-0060](ADR-0060-knowledge-graph-quality-stream.md) | Knowledge Graph Quality Stream | Superseded (2026-07-02) |
 
 ### Context, Tools & Governance (ADR-0061 – ADR-0068)
 
@@ -121,7 +121,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0062](ADR-0062-tool-loop-gate.md) | Tool Loop Gate — Per-Tool FSM-Based Loop Detection | Accepted (Implemented) |
 | [ADR-0063](ADR-0063-primitive-tools-action-boundary-governance.md) | Primitive Tools & Action-Boundary Governance | Accepted (Implemented) |
 | [ADR-0064](ADR-0064-inbound-user-identity-cloudflare-access.md) | Inbound User Identity via Cloudflare Access | Accepted (Implemented) |
-| [ADR-0065](ADR-0065-cost-check-gate.md) | Cost Check Gate — Atomic Reservation, Layered Budgets, Retry Telemetry | Accepted |
+| [ADR-0065](ADR-0065-cost-check-gate.md) | Cost Check Gate — Atomic Reservation, Layered Budgets, Retry Telemetry | Superseded by ADR-0120 (2026-07-16) |
 | [ADR-0066](ADR-0066-skill-routing-defaults-and-feedback-loop.md) | Skill Routing Defaults, Library-Size Threshold, and Missing-Skill Feedback Loop | Accepted |
 | [ADR-0067](ADR-0067-reflection-surfacing-in-context-assembly.md) | Reflection Surfacing in Context Assembly | Accepted |
 | [ADR-0067b](ADR-0067-skill-nudge-injection.md) | Skill Nudge Injection | Accepted |
@@ -138,10 +138,10 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-0071](ADR-0071-two-source-one-gate-memory-model.md) | Two-Source One-Gate Memory Model | Proposed |
+| [ADR-0071](ADR-0071-two-source-one-gate-memory-model.md) | Two-Source One-Gate Memory Model | Superseded by ADR-0097 + ADR-0098 |
 | [ADR-0072](ADR-0072-test-prod-substrate-isolation.md) | Test/Eval Substrate Isolation | Accepted |
-| [ADR-0073](ADR-0073-cross-fact-constraint-layer.md) | Cross-Fact Constraint Layer for Memory Pipeline | Proposed |
-| [ADR-0074](ADR-0074-end-to-end-traceability.md) | End-to-End Traceability and Observability Joinability | Proposed |
+| [ADR-0073](ADR-0073-cross-fact-constraint-layer.md) | Cross-Fact Constraint Layer for Memory Pipeline | Implemented (FRE-374) |
+| [ADR-0074](ADR-0074-end-to-end-traceability.md) | End-to-End Traceability and Observability Joinability | Accepted |
 
 ### Transport & Harness Governance (ADR-0075 – ADR-0077)
 
@@ -158,18 +158,18 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0078](ADR-0078-prompt-management-observability.md) | Prompt Management & Observability | Proposed (P0+P1 shipped — FRE-404/405) |
 | [ADR-0079](ADR-0079-session-execution-profile-ownership.md) | Server-Authoritative Session Execution Profile | Implemented; subject superseded by ADR-0121 (invariants inherited) |
 | [ADR-0080](ADR-0080-thinking-control-policy.md) | Model-Aware Thinking-Control Policy | Implemented (FRE-417, PR #107) |
-| [ADR-0081](ADR-0081-cache-aware-context-layout-and-compaction.md) | Cache-Aware Context Layout & Compaction | Proposed |
+| [ADR-0081](ADR-0081-cache-aware-context-layout-and-compaction.md) | Cache-Aware Context Layout & Compaction | Implemented — 2026-05-29 (flag retired 2026-07-22, FRE-941) |
 
 ### Routing, Pedagogy & Memory (ADR-0082 – ADR-0089)
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-0082](ADR-0082-tier-aware-model-selection-for-single-tasks.md) | Tier-Aware Model Selection for SINGLE-Strategy Tasks | Proposed (partially superseded by ADR-0084) |
-| [ADR-0083](ADR-0083-adaptive-limits-and-error-recovery.md) | Adaptive Limits & Error Recovery: Layer 3 SLM Health Observability | Proposed |
+| [ADR-0082](ADR-0082-tier-aware-model-selection-for-single-tasks.md) | Tier-Aware Model Selection for SINGLE-Strategy Tasks | Partially superseded by ADR-0084 (D1 plumbing stands) |
+| [ADR-0083](ADR-0083-adaptive-limits-and-error-recovery.md) | Adaptive Limits & Error Recovery: Layer 3 SLM Health Observability | Accepted |
 | [ADR-0084](ADR-0084-pedagogical-architecture-socratic-tutor-layer.md) | Pedagogical Architecture: Socratic Tutor Layer, Result Type Taxonomy, Delegation Policy | Accepted |
 | [ADR-0085](ADR-0085-intra-turn-tool-result-compression.md) | Intra-Turn Tool-Result Compression (Insertion-Time Digest + Exact Re-Expand) | Parked (dormant, flag-off) |
-| [ADR-0086](ADR-0086-hybrid-decompose-routing-for-artifact-builds.md) | HYBRID/DECOMPOSE Routing for High-Complexity Artifact Builds | Proposed |
-| [ADR-0087](ADR-0087-memory-recall-quality-measurement-program.md) | Memory-Recall Quality: A Measurement-First Program (Diagnose → Gate → Architecture) | Proposed |
+| [ADR-0086](ADR-0086-hybrid-decompose-routing-for-artifact-builds.md) | HYBRID/DECOMPOSE Routing for High-Complexity Artifact Builds | Retired 2026-07-15 (FRE-884) — superseded by ADR-0118 |
+| [ADR-0087](ADR-0087-memory-recall-quality-measurement-program.md) | Memory-Recall Quality: A Measurement-First Program (Diagnose → Gate → Architecture) | Accepted — 2026-06-27 |
 | [ADR-0088](ADR-0088-execution-topology-observability-contract.md) | Execution Topology Observability Contract (Trace-Scoped Spine for Status, Cost, Loud Degradation) | Accepted |
 | [ADR-0089](ADR-0089-artifact-execution-security-model.md) | Artifact Execution Security Model (Sandbox the Execution, Don't Sanitize the Output) | Implemented (supersedes ADR-0070 D7 + FRE-500) |
 | [ADR-0090](ADR-0090-telemetry-surface-contract.md) | Telemetry Surface Contract (Emit ↔ Mapping ↔ Dashboard Reconciliation) | Accepted |
@@ -181,19 +181,19 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0096](ADR-0096-memory-access-model-coordinated-hybrid.md) | Memory Access Model: Coordinated Hybrid (Ambient Floor + On-Demand Retrieval) | Accepted |
 | [ADR-0097](ADR-0097-ingested-knowledge-taxonomy.md) | Ingested-Knowledge Taxonomy (hypothesis) | Proposed (supersedes ADR-0071) |
 | [ADR-0098](ADR-0098-memory-substrate-and-lifecycle-architecture.md) | Memory Substrate & Lifecycle Architecture (Core/Docs topology; living-knowledge model) | Accepted |
-| [ADR-0099](ADR-0099-configuration-management-and-validation.md) | Configuration Management & Validation (single-source role matrix + validator) | Accepted; amended by ADR-0121 |
+| [ADR-0099](ADR-0099-configuration-management-and-validation.md) | Configuration Management & Validation (single-source role matrix + validator) | Implemented; amended by ADR-0121 |
 | [ADR-0100](ADR-0100-relevance-bounded-recall.md) | Memory Recall — Relevance-Bounded Candidate Generation | Accepted |
 | [ADR-0101](ADR-0101-agent-vision-ingestion.md) | Agent Vision Ingestion of Uploaded Images | Accepted |
 | [ADR-0102](ADR-0102-document-ingestion.md) | Document Ingestion (PDF) — tiered, capability-routed | Accepted |
 | [ADR-0103](ADR-0103-recall-no-clean-floor-structural-separation.md) | Recall is Retrieval — No Clean Similarity Floor; Separation is Structural | Accepted |
 | [ADR-0104](ADR-0104-multi-path-retrieval-rank-fusion.md) | Multi-Path Retrieval with Rank Fusion | Proposed |
 | [ADR-0105](ADR-0105-convergent-self-improvement-pipeline-and-system-graph.md) | Convergent Self-Improvement Pipeline & Isolated System Graph | Accepted |
-| [ADR-0106](ADR-0106-system-user-knowledge-boundary-dispatch-observe-ground.md) | The System/User Knowledge Boundary — Dispatch by Output Kind, Observe, Ground | Accepted |
+| [ADR-0106](ADR-0106-system-user-knowledge-boundary-dispatch-observe-ground.md) | The System/User Knowledge Boundary — Dispatch by Output Kind, Observe, Ground | Superseded by ADR-0115 (2026-07-11) |
 | [ADR-0107](ADR-0107-user-identity-resolution-and-log-propagation.md) | User Identity Resolution for Claims + Trace/Log Identity Propagation | Accepted |
 | [ADR-0108](ADR-0108-stored-artifact-vision-reprocessing.md) | Stored-Artifact Vision Re-processing (analyze-to-text, explicit tool) | Proposed |
 | [ADR-0109](ADR-0109-entity-taxonomy-redesign.md) | Entity & Relationship Taxonomy — V1 (inherited) → V2 (first principled derivation) | Accepted |
 
-### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0123)
+### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0124)
 
 | ADR | Title | Status |
 |-----|-------|--------|
@@ -208,9 +208,10 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0118](ADR-0118-artifact-builder-model-selection.md) | Model-Selection Layer for Open Roles — User-Selectable Artifact Builder (Phase 1) | Superseded by ADR-0121 + ADR-0122 |
 | [ADR-0119](ADR-0119-config-management-interface.md) | Config-Management Interface (Phase 1) — Observe + Open-Role Model Selection | Superseded by ADR-0121 |
 | [ADR-0120](ADR-0120-cost-governance-visibility-consent.md) | Cost Governance — Visibility + Consent (supersedes ADR-0065) | Proposed |
-| [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md) | Model Catalog and Selection Layer — Providers, Deployments, Bindings; the User Selects the Model | Accepted |
-| [ADR-0122](ADR-0122-build-time-artifact-builder-selection.md) | Per-Build Artifact Builder Selection — Choose the Model Before the Plan Is Written | Accepted (amended 2026-07-21 — card at turn start) |
+| [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md) | Model Catalog and Selection Layer — Providers, Deployments, Bindings; the User Selects the Model | Implemented — 2026-07-22 |
+| [ADR-0122](ADR-0122-build-time-artifact-builder-selection.md) | Per-Build Artifact Builder Selection — Choose the Model Before the Plan Is Written | Implemented — 2026-07-22 (amended 2026-07-21 — card at turn start) |
 | [ADR-0123](ADR-0123-turn-progress-surface.md) | Turn Progress Surface — Make the Wait Legible, So the User Stays Attached | Proposed |
+| [ADR-0124](ADR-0124-session-summary-producer-and-phased-consumption.md) | Session-Summary Producer Correction and Phased Consumption | Proposed |
 
 ### Supplementary
 

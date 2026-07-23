@@ -181,189 +181,6 @@ def ac8() -> dict[str, Any]:
 
 
 # ==========================================================================
-# AC-9 — tool-only facts survive into the digest
-# ==========================================================================
-
-
-def ac9() -> dict[str, Any]:
-    """Five sessions, one per tool, each with one decision-relevant tool-only fact.
-
-    The discriminating property: the fact appears ONLY in tool output and is never
-    restated in the assistant text, so a narration-only producer — which is what the
-    pre-FRE-947 producer structurally was — cannot reproduce any of them.
-    """
-    cases = []
-
-    # 1. query_elasticsearch — the retention window that decides the migration.
-    cases.append(
-        {
-            "case_id": "es_retention_window",
-            "tool": "query_elasticsearch",
-            "expected_fact": "retention is 7 days, not the assumed 30",
-            "expected_locator": {"capture_id": "ac9-es-t1", "field": "tool_result[0].output"},
-            "captures": [
-                _capture(
-                    "ac9-es",
-                    1,
-                    user="can we migrate the log index next month?",
-                    # Note: the assistant never states the 7-day number.
-                    assistant="I checked the current ILM policy. There is a constraint we "
-                    "should work around before scheduling the migration.",
-                    tools=[
-                        _tool(
-                            "query_elasticsearch",
-                            output='{"policy": "agent-logs", "delete": {"min_age": "7d"}}',
-                            arguments={"index": "agent-logs-*", "query": "ilm/policy"},
-                        )
-                    ],
-                ),
-                _capture(
-                    "ac9-es",
-                    2,
-                    user="so should we schedule it?",
-                    assistant="Let's defer until the constraint is resolved.",
-                ),
-            ],
-        }
-    )
-
-    # 2. read_file — the pinned version that blocks the upgrade.
-    cases.append(
-        {
-            "case_id": "pinned_dependency_version",
-            "tool": "read_file",
-            "expected_fact": "neo4j driver is pinned to 5.26",
-            "expected_locator": {"capture_id": "ac9-file-t1", "field": "tool_result[0].output"},
-            "captures": [
-                _capture(
-                    "ac9-file",
-                    1,
-                    user="can we upgrade to the new driver?",
-                    assistant="I read the lockfile. There is a pin that decides this.",
-                    tools=[
-                        _tool(
-                            "read_file",
-                            output='[[package]]\nname = "neo4j"\nversion = "5.26.0"\n',
-                            arguments={"path": "uv.lock"},
-                        )
-                    ],
-                ),
-                _capture(
-                    "ac9-file",
-                    2,
-                    user="what should we do?",
-                    assistant="Unpin it first, then upgrade in a separate change.",
-                ),
-            ],
-        }
-    )
-
-    # 3. web_search — the deprecation date that sets the deadline.
-    cases.append(
-        {
-            "case_id": "api_deprecation_date",
-            "tool": "web_search",
-            "expected_fact": "the v1 endpoint is removed on 2026-11-01",
-            "expected_locator": {"capture_id": "ac9-web-t1", "field": "tool_result[0].output"},
-            "captures": [
-                _capture(
-                    "ac9-web",
-                    1,
-                    user="is the v1 API going away?",
-                    assistant="Yes, there is a published removal date we need to plan around.",
-                    tools=[
-                        _tool(
-                            "web_search",
-                            output="Changelog: the v1 completions endpoint will be removed "
-                            "on 2026-11-01. Migrate to v2 before that date.",
-                            arguments={"query": "v1 completions endpoint removal date"},
-                        )
-                    ],
-                ),
-                _capture(
-                    "ac9-web",
-                    2,
-                    user="do we have time?",
-                    assistant="Enough, if we start the migration this quarter.",
-                ),
-            ],
-        }
-    )
-
-    # 4. search_memory — the prior decision that makes this a re-litigation.
-    cases.append(
-        {
-            "case_id": "prior_rejected_approach",
-            "tool": "search_memory",
-            "expected_fact": "sharding by date was already rejected for skew",
-            "expected_locator": {"capture_id": "ac9-mem-t1", "field": "tool_result[0].output"},
-            "captures": [
-                _capture(
-                    "ac9-mem",
-                    1,
-                    user="should we shard the index by date?",
-                    assistant="We have discussed this before. Let me check what was decided.",
-                    tools=[
-                        _tool(
-                            "search_memory",
-                            output="Session 2026-06-14: sharding by date was rejected because "
-                            "write skew concentrated on the newest shard.",
-                            arguments={"query": "index sharding strategy"},
-                        )
-                    ],
-                ),
-                _capture(
-                    "ac9-mem",
-                    2,
-                    user="ok, what instead?",
-                    assistant="Shard by hash of the trace id.",
-                ),
-            ],
-        }
-    )
-
-    # 5. system_metrics_snapshot — the headroom that decides the batch size.
-    cases.append(
-        {
-            "case_id": "memory_headroom",
-            "tool": "system_metrics_snapshot",
-            "expected_fact": "only 1.2 GiB of RAM is free",
-            "expected_locator": {"capture_id": "ac9-metrics-t1", "field": "tool_result[0].output"},
-            "captures": [
-                _capture(
-                    "ac9-metrics",
-                    1,
-                    user="can we run the backfill with a large batch?",
-                    assistant="I checked the host. Available memory is the binding constraint.",
-                    tools=[
-                        _tool(
-                            "system_metrics_snapshot",
-                            output='{"mem_total_gib": 10.0, "mem_available_gib": 1.2, '
-                            '"cpu_count": 8}',
-                            arguments={},
-                        )
-                    ],
-                ),
-                _capture(
-                    "ac9-metrics",
-                    2,
-                    user="so what batch size?",
-                    assistant="Keep it small and stream the results.",
-                ),
-            ],
-        }
-    )
-
-    return {
-        "set": "ac9_tool_only_facts",
-        "criterion": "AC-9",
-        "synthetic": True,
-        "threshold": "the digest reproduces the expected fact in ALL cases",
-        "cases": cases,
-    }
-
-
-# ==========================================================================
 # AC-10 — basis tagging discriminates
 # ==========================================================================
 
@@ -473,40 +290,42 @@ def ac10() -> dict[str, Any]:
 # ==========================================================================
 
 
-def _tier_a(case_id: str, claim: str, evidence: str, topic: str) -> dict[str, Any]:
-    """A direct contradiction: evidence contradicts the SAME proposition asserted."""
+def _self_correction(
+    case_id: str,
+    *,
+    t1_user: str,
+    t1_assistant: str,
+    t2_user: str,
+    t2_assistant: str,
+    span: str,
+    evidence_span: str,
+    evidence_field: tuple[str, str],
+    tool: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """An evidenced self-correction (Amendment A).
+
+    The agent fixed the record within the conversation, and the supporting evidence
+    lives in a field the producer is GIVEN — a tool error or the conversation text —
+    never a tool payload.
+
+    ``reference_correction`` records a hand-authored citation that resolves; it is
+    pre-validated offline (test_session_digest_validator.py) so an un-citable positive
+    cannot silently become an ``errored`` case in the paid arm.
+    """
+    sid = f"ac12-{case_id}"
     return {
         "case_id": case_id,
         "expected": "correction",
-        "tier": "A",
+        "tier": "self_correction",
+        "reference_correction": {
+            "span": span,
+            "locator": {"capture_id": f"{sid}-t2", "field": "assistant_text"},
+            "evidence_span": evidence_span,
+            "evidence_locator": {"capture_id": evidence_field[0], "field": evidence_field[1]},
+        },
         "captures": [
-            _capture(
-                f"ac12-{case_id}",
-                1,
-                user=f"check {topic}",
-                assistant=claim,
-                tools=[_tool("query_elasticsearch", output=evidence, arguments={"q": topic})],
-            ),
-            _capture(f"ac12-{case_id}", 2, user="anything else?", assistant="That is all for now."),
-        ],
-    }
-
-
-def _tier_b(case_id: str, wrong: str, correction: str, evidence: str, topic: str) -> dict[str, Any]:
-    """An evidenced self-correction: the agent fixed the record, evidence supports it."""
-    return {
-        "case_id": case_id,
-        "expected": "correction",
-        "tier": "B",
-        "captures": [
-            _capture(f"ac12-{case_id}", 1, user=f"what is {topic}?", assistant=wrong),
-            _capture(
-                f"ac12-{case_id}",
-                2,
-                user="are you sure?",
-                assistant=correction,
-                tools=[_tool("read_file", output=evidence, arguments={"path": f"/etc/{topic}"})],
-            ),
+            _capture(sid, 1, user=t1_user, assistant=t1_assistant, tools=[tool] if tool else None),
+            _capture(sid, 2, user=t2_user, assistant=t2_assistant),
         ],
     }
 
@@ -524,75 +343,118 @@ def _tier_c(case_id: str, kind: str, captures: list[dict[str, Any]]) -> dict[str
 def ac12() -> dict[str, Any]:
     cases: list[dict[str, Any]] = []
 
-    # --- 6 Tier-A: direct contradictions -----------------------------------
+    # --- 8 self-corrections (Amendment A) ----------------------------------
+    # 4 backed by a visible tool error; the assistant asserted success, the tool's own
+    # error line denies it, and the assistant self-corrects on the next turn.
     cases += [
-        _tier_a(
-            "a1_cluster_status",
-            "The cluster is green and every shard is assigned.",
-            '{"status": "red", "unassigned_shards": 4}',
-            "cluster health",
+        _self_correction(
+            "b1_migration",
+            t1_user="did the migration apply?",
+            t1_assistant="Yes, the migration applied cleanly and the sessions table is ready.",
+            t2_user="are you sure it succeeded?",
+            t2_assistant="Correcting myself — it did not apply; the migration failed.",
+            span="it did not apply; the migration failed",
+            evidence_span="relation sessions already exists",
+            evidence_field=("ac12-b1_migration-t1", "tool_result[0].error"),
+            tool=_tool(
+                "run_migration",
+                success=False,
+                error="exit code 1: relation sessions already exists",
+                arguments={"path": "migrations/004.sql"},
+            ),
         ),
-        _tier_a(
-            "a2_doc_count",
-            "The index holds roughly 10,000 documents.",
-            '{"docs_count": 2276}',
-            "index size",
+        _self_correction(
+            "b2_deploy",
+            t1_user="did the deploy go out?",
+            t1_assistant="The deploy went through and the new image is live.",
+            t2_user="is it really live?",
+            t2_assistant="I need to correct that — the deploy failed because the image was not found.",
+            span="the deploy failed because the image was not found",
+            evidence_span="manifest unknown: image not found",
+            evidence_field=("ac12-b2_deploy-t1", "tool_result[0].error"),
+            tool=_tool(
+                "deploy_service",
+                success=False,
+                error="manifest unknown: image not found",
+                arguments={"tag": "v2.3.1"},
+            ),
         ),
-        _tier_a(
-            "a3_budget_state",
-            "We are well under the daily cap with plenty of headroom.",
-            '{"daily_cap_usd": 2.50, "spend_usd": 2.49, "denied": true}',
-            "budget state",
+        _self_correction(
+            "b3_index",
+            t1_user="create the index",
+            t1_assistant="I created the index and it is ready to receive writes.",
+            t2_user="did it create cleanly?",
+            t2_assistant="That was wrong — the index already existed, so nothing was created.",
+            span="the index already existed, so nothing was created",
+            evidence_span="resource already exists exception: index agent-logs",
+            evidence_field=("ac12-b3_index-t1", "tool_result[0].error"),
+            tool=_tool(
+                "create_index",
+                success=False,
+                error="resource already exists exception: index agent-logs",
+                arguments={"index": "agent-logs"},
+            ),
         ),
-        _tier_a(
-            "a4_embedding_dims",
-            "The embedder returns 768-dimensional vectors.",
-            '{"model": "managed-8b", "dimensions": 1024}',
-            "embedder config",
-        ),
-        _tier_a(
-            "a5_command_success",
-            "The migration command completed successfully.",
-            '{"exit_code": 1, "stderr": "relation already exists"}',
-            "migration run",
-        ),
-        _tier_a(
-            "a6_retention",
-            "Logs are retained for thirty days.",
-            '{"policy": "agent-logs", "delete": {"min_age": "7d"}}',
-            "retention policy",
+        _self_correction(
+            "b4_write",
+            t1_user="save the config",
+            t1_assistant="The config file was written successfully.",
+            t2_user="confirm it saved?",
+            t2_assistant="Correcting myself: it did not save, permission was denied.",
+            span="it did not save, permission was denied",
+            evidence_span="EACCES permission denied opening /etc/app.conf",
+            evidence_field=("ac12-b4_write-t1", "tool_result[0].error"),
+            tool=_tool(
+                "write_file",
+                success=False,
+                error="EACCES permission denied opening /etc/app.conf",
+                arguments={"path": "/etc/app.conf"},
+            ),
         ),
     ]
 
-    # --- 4 Tier-B: evidenced self-corrections ------------------------------
+    # 4 backed by the conversation text; the user supplies the correcting fact and the
+    # assistant self-corrects, evidence cited from user_text.
     cases += [
-        _tier_b(
-            "b1_port",
-            "The gateway listens on port 9000.",
-            "Correction: I was wrong, it listens on 9001 in this deployment.",
-            "AGENT_SERVICE_PORT=9001",
-            "gateway port",
+        _self_correction(
+            "b5_port",
+            t1_user="what port does the gateway use?",
+            t1_assistant="The gateway listens on port 9000.",
+            t2_user="The env file I am reading says AGENT_SERVICE_PORT=9001.",
+            t2_assistant="You are right — I was wrong, it listens on 9001, not 9000.",
+            span="I was wrong, it listens on 9001, not 9000",
+            evidence_span="AGENT_SERVICE_PORT=9001",
+            evidence_field=("ac12-b5_port-t2", "user_text"),
         ),
-        _tier_b(
-            "b2_driver",
-            "The Neo4j driver is on 5.28.",
-            "I need to correct that — the lockfile pins 5.26.0.",
-            'name = "neo4j"\nversion = "5.26.0"',
-            "driver version",
+        _self_correction(
+            "b6_driver",
+            t1_user="what version is the neo4j driver?",
+            t1_assistant="The Neo4j driver is pinned at 5.28.",
+            t2_user="The lockfile shows neo4j version 5.26.0.",
+            t2_assistant="Correcting myself — the driver is 5.26.0; I misremembered.",
+            span="the driver is 5.26.0",
+            evidence_span="neo4j version 5.26.0",
+            evidence_field=("ac12-b6_driver-t2", "user_text"),
         ),
-        _tier_b(
-            "b3_role",
-            "Entity extraction runs on Sonnet.",
-            "That was wrong. The role matrix binds it to gpt-5.4-mini.",
-            "entity_extraction:  { all: gpt-5.4-mini }",
-            "role binding",
+        _self_correction(
+            "b7_floor",
+            t1_user="what is the similarity floor?",
+            t1_assistant="The similarity floor is 0.5.",
+            t2_user="My notes say the configured floor is 0.35.",
+            t2_assistant="You are correct — I was wrong, the floor is 0.35.",
+            span="I was wrong, the floor is 0.35",
+            evidence_span="the configured floor is 0.35",
+            evidence_field=("ac12-b7_floor-t2", "user_text"),
         ),
-        _tier_b(
-            "b4_threshold",
-            "The similarity floor is 0.5.",
-            "Correcting myself: the configured floor is 0.35.",
-            "AGENT_RECALL_SIMILARITY_FLOOR=0.35",
-            "similarity floor",
+        _self_correction(
+            "b8_role",
+            t1_user="what model does entity extraction use?",
+            t1_assistant="Entity extraction runs on Sonnet.",
+            t2_user="The role matrix binds entity_extraction to gpt-5.4-mini.",
+            t2_assistant="That was my mistake — entity extraction runs on gpt-5.4-mini, not Sonnet.",
+            span="entity extraction runs on gpt-5.4-mini, not Sonnet",
+            evidence_span="binds entity_extraction to gpt-5.4-mini",
+            evidence_field=("ac12-b8_role-t2", "user_text"),
         ),
     ]
 
@@ -863,11 +725,19 @@ def ac12() -> dict[str, Any]:
         "set": "ac12_corrections",
         "criterion": "AC-12",
         "synthetic": True,
+        "amendment": "A — Tier-A payload contradictions removed; positives are self-corrections only",
         "threshold": (
             "ZERO negatives yield a correction (precision absolute); >=80% of positives do; "
-            "every Tier-B correction carries the located span of its supporting evidence"
+            "every self_correction carries the located span of its supporting evidence"
         ),
-        "composition": {"tier_a": 6, "tier_b": 4, "tier_c": 12},
+        "composition": {"self_correction": 8, "tier_c_negative": 12},
+        "note": (
+            "Every positive's supporting evidence lives in a field the producer is actually given "
+            "(a tool error or the conversation text) — never a tool payload, which Amendment A no "
+            "longer feeds. reference_correction records a hand-authored citation that resolves; "
+            "tests/personal_agent/memory/test_session_digest_validator.py asserts each resolves "
+            "before the paid arm runs."
+        ),
         "cases": cases,
     }
 
@@ -981,7 +851,6 @@ def ac13() -> dict[str, Any]:
 
 if __name__ == "__main__":
     _write("ac8_input_completeness", ac8())
-    _write("ac9_tool_only_facts", ac9())
     _write("ac10_basis_labelling", ac10())
     _write("ac12_corrections", ac12())
     _write("ac13_missing_evidence", ac13())

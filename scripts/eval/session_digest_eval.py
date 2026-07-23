@@ -1,4 +1,4 @@
-"""Run the pre-registered session-digest fixture sets (ADR-0124 AC-9/10/12/13, FRE-947).
+"""Run the pre-registered session-digest fixture sets (ADR-0124, FRE-953 / Amendment A).
 
 Runs the **real** producer — the same ``generate_session_digest`` the sweep calls, on
 the ``session_summary`` role's live deployment — against the frozen fixture sets in
@@ -9,9 +9,15 @@ The fixture sets and their labels are fixed in ``REGISTRY.md`` and were committe
 before this script was first run. Do not edit a set to improve a result: a criterion
 evaluated on a post-hoc sample has not been met.
 
-    uv run python scripts/eval/session_digest_eval.py            # every set
-    uv run python scripts/eval/session_digest_eval.py --set ac9  # one set
-    uv run python scripts/eval/session_digest_eval.py --dry-run  # no model calls
+**Amendment A scope.** The amended arm proves **AC-8** (metadata present, payloads and
+arguments absent), **AC-12** (self-correction recall + Tier-C precision) and **AC-13**
+(missing evidence). **AC-9 is withdrawn** and removed. **AC-10** is deferred to an
+owner-led redesign (its fixture is invalidated by the amendment), so it is not run by
+default and is reachable only via ``--set ac10``.
+
+    uv run python scripts/eval/session_digest_eval.py            # ac8, ac12, ac13
+    uv run python scripts/eval/session_digest_eval.py --set ac12 # one set
+    uv run python scripts/eval/session_digest_eval.py --dry-run  # no model calls (AC-8)
 
 This writes nothing to any substrate. It reads fixtures from disk and calls the model.
 """
@@ -23,6 +29,7 @@ import asyncio
 import collections
 import json
 import pathlib
+import re
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -42,11 +49,14 @@ _FIXTURES = pathlib.Path(__file__).parent.parent.parent / "tests" / "fixtures" /
 
 _SETS = {
     "ac8": "ac8_input_completeness",
-    "ac9": "ac9_tool_only_facts",
     "ac10": "ac10_basis_labelling",
     "ac12": "ac12_corrections",
     "ac13": "ac13_missing_evidence",
 }
+
+#: Not run by default: AC-10's fixture is invalidated by Amendment A and its redesign is
+#: owner-led (FRE-953 open question). Reachable via ``--set ac10`` for the future rework.
+_DEFERRED = {"ac10"}
 
 
 def _load(name: str) -> dict[str, Any]:
@@ -59,10 +69,6 @@ def _captures(case: dict[str, Any]) -> list[TaskCapture]:
 
 def _all_items(digest: SessionDigest) -> list[Any]:
     return [*digest.established, *digest.decisions, *digest.unresolved, *digest.corrections]
-
-
-def _digest_text(digest: SessionDigest) -> str:
-    return " ".join(item.text for item in _all_items(digest)).lower()
 
 
 def _case_session_id(case_id: str) -> str:
@@ -97,12 +103,41 @@ async def _run_case(case: dict[str, Any]) -> tuple[str, SessionDigest | None, st
 # ==========================================================================
 
 
+def _leak_probes(value: object) -> list[str]:
+    """Distinctive tokens (len > 6) from a payload/argument value, for leak detection."""
+    if value is None:
+        return []
+    text = value if isinstance(value, str) else json.dumps(value)
+    return [tok for tok in re.split(r"[\s{}\[\]\"',:]+", text) if len(tok) > 6]
+
+
 def score_ac8(payload: dict[str, Any]) -> dict[str, Any]:
-    """Assert prompt completeness directly against the capture records."""
+    """AC-8 (Amendment A): metadata present, payloads and arguments absent.
+
+    The absence direction is the one that catches a regression back to payload-feeding,
+    so it is scored explicitly — structurally (the ``output:``/``arguments:`` block
+    labels must be gone) and by value (no distinctive payload/argument token appears,
+    unless it legitimately also occurs in the visible name/status/error/conversation).
+    """
     failures: list[str] = []
     for case in payload["cases"]:
         captures = _captures(case)
         prompt = build_prompt(captures)
+
+        # Content that is legitimately visible — a probe that also occurs here is not a
+        # leak (a file path echoed in a tool error, say).
+        visible = " ".join(
+            [
+                *(c.user_message or "" for c in captures),
+                *(c.assistant_response or "" for c in captures),
+                *(
+                    f"{r.get('tool_name', '')} {r.get('error') or ''}"
+                    for c in captures
+                    for r in c.tool_results
+                ),
+            ]
+        )
+
         for capture in captures:
             if f"capture_id: {capture.trace_id}" not in prompt:
                 failures.append(f"{case['case_id']}: turn {capture.trace_id} missing")
@@ -111,24 +146,24 @@ def score_ac8(payload: dict[str, Any]) -> dict[str, Any]:
             if capture.assistant_response and capture.assistant_response not in prompt:
                 failures.append(f"{case['case_id']}: assistant text truncated")
             for result in capture.tool_results:
+                # Presence: name, status, error.
                 if result["tool_name"] not in prompt:
                     failures.append(f"{case['case_id']}: tool {result['tool_name']} missing")
                 if result.get("error") and result["error"] not in prompt:
                     failures.append(f"{case['case_id']}: tool error missing")
-                if "arguments" in result and result["arguments"]:
-                    rendered = (
-                        result["arguments"]
-                        if isinstance(result["arguments"], str)
-                        else json.dumps(result["arguments"])
-                    )
-                    # Compare parsed structure, not raw bytes (AC-8's canonical
-                    # serialisation clause).
-                    if not isinstance(result["arguments"], str):
-                        for key in result["arguments"]:
-                            if f'"{key}"' not in prompt:
-                                failures.append(f"{case['case_id']}: argument {key} missing")
-                    elif rendered not in prompt:
-                        failures.append(f"{case['case_id']}: raw arguments missing")
+                # Absence: no distinctive payload/argument token leaks.
+                for probe in _leak_probes(result.get("output")) + _leak_probes(
+                    result.get("arguments")
+                ):
+                    if probe not in visible and probe in prompt:
+                        failures.append(f"{case['case_id']}: leaked payload/argument {probe!r}")
+
+        # Absence: the block labels a payload/argument render would emit are gone.
+        if "\n      output:" in prompt:
+            failures.append(f"{case['case_id']}: an output: block was rendered")
+        if "\n      arguments:" in prompt:
+            failures.append(f"{case['case_id']}: an arguments: block was rendered")
+
     return {
         "criterion": "AC-8",
         "passed": not failures,
@@ -138,42 +173,8 @@ def score_ac8(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 # ==========================================================================
-# AC-9 — tool-only facts survive
-# ==========================================================================
-
-
-async def score_ac9(payload: dict[str, Any]) -> dict[str, Any]:
-    reproduced, missing, errored = [], [], []
-    for case in payload["cases"]:
-        case_id, digest, failure = await _run_case(case)
-        if digest is None:
-            errored.append({"case_id": case_id, "reason": failure})
-            continue
-        text = _digest_text(digest)
-        # The fact is judged reproduced when its distinguishing token survives —
-        # the value that appears ONLY in tool output.
-        needles = [
-            t.strip(",.\"'").lower()
-            for t in case["expected_fact"].split()
-            if any(ch.isdigit() for ch in t) or len(t) > 6
-        ]
-        hit = any(n in text for n in needles)
-        (reproduced if hit else missing).append(
-            {"case_id": case_id, "tool": case["tool"], "expected": case["expected_fact"]}
-        )
-    total = len(payload["cases"])
-    return {
-        "criterion": "AC-9",
-        "passed": len(reproduced) == total,
-        "reproduced": len(reproduced),
-        "total": total,
-        "missing": missing,
-        "errored": errored,
-    }
-
-
-# ==========================================================================
-# AC-10 — basis tagging discriminates
+# AC-10 — basis tagging discriminates (DEFERRED — Amendment A invalidated the
+# fixture; the harness is retained for the owner-led redesign, run only via --set)
 # ==========================================================================
 
 
@@ -248,9 +249,9 @@ async def score_ac12(payload: dict[str, Any]) -> dict[str, Any]:
         else:
             if fired:
                 true_positives.append({"case_id": case_id, "tier": case["tier"]})
-                # AC-12 additionally requires a Tier-B correction to carry the located
+                # AC-12 additionally requires a self-correction to carry the located
                 # span of its SUPPORTING EVIDENCE, not merely of the self-correction.
-                if case["tier"] == "B":
+                if case["tier"] == "self_correction":
                     for correction in fired:
                         if not correction.evidence_span or not correction.evidence_locator:
                             missing_evidence_span.append(case_id)
@@ -356,7 +357,7 @@ async def main() -> int:
         "criteria": [],
     }
 
-    wanted = [args.only] if args.only else sorted(_SETS)
+    wanted = [args.only] if args.only else [s for s in sorted(_SETS) if s not in _DEFERRED]
 
     if "ac8" in wanted:
         report["criteria"].append(score_ac8(_load(_SETS["ac8"])))
@@ -365,7 +366,6 @@ async def main() -> int:
         gate = await _open_cost_gate()
         try:
             scorers = {
-                "ac9": score_ac9,
                 "ac10": score_ac10,
                 "ac12": score_ac12,
                 "ac13": score_ac13,

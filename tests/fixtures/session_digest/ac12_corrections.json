@@ -2,49 +2,62 @@
   "set": "ac12_corrections",
   "criterion": "AC-12",
   "synthetic": true,
-  "threshold": "ZERO negatives yield a correction (precision absolute); >=80% of positives do; every Tier-B correction carries the located span of its supporting evidence",
+  "amendment": "A \u2014 Tier-A payload contradictions removed; positives are self-corrections only",
+  "threshold": "ZERO negatives yield a correction (precision absolute); >=80% of positives do; every self_correction carries the located span of its supporting evidence",
   "composition": {
-    "tier_a": 6,
-    "tier_b": 4,
-    "tier_c": 12
+    "self_correction": 8,
+    "tier_c_negative": 12
   },
+  "note": "Every positive's supporting evidence lives in a field the producer is actually given (a tool error or the conversation text) \u2014 never a tool payload, which Amendment A no longer feeds. reference_correction records a hand-authored citation that resolves; tests/personal_agent/memory/test_session_digest_validator.py asserts each resolves before the paid arm runs.",
   "cases": [
     {
-      "case_id": "a1_cluster_status",
+      "case_id": "b1_migration",
       "expected": "correction",
-      "tier": "A",
+      "tier": "self_correction",
+      "reference_correction": {
+        "span": "it did not apply; the migration failed",
+        "locator": {
+          "capture_id": "ac12-b1_migration-t2",
+          "field": "assistant_text"
+        },
+        "evidence_span": "relation sessions already exists",
+        "evidence_locator": {
+          "capture_id": "ac12-b1_migration-t1",
+          "field": "tool_result[0].error"
+        }
+      },
       "captures": [
         {
-          "trace_id": "ac12-a1_cluster_status-t1",
-          "session_id": "ac12-a1_cluster_status",
+          "trace_id": "ac12-b1_migration-t1",
+          "session_id": "ac12-b1_migration",
           "timestamp": "2026-07-20T10:05:00+00:00",
-          "user_message": "check cluster health",
-          "assistant_response": "The cluster is green and every shard is assigned.",
+          "user_message": "did the migration apply?",
+          "assistant_response": "Yes, the migration applied cleanly and the sessions table is ready.",
           "steps": [],
           "tools_used": [
-            "query_elasticsearch"
+            "run_migration"
           ],
           "outcome": "completed",
           "user_id": "00000000-0000-0000-0000-000000000001",
           "tool_results": [
             {
-              "tool_name": "query_elasticsearch",
-              "success": true,
-              "output": "{\"status\": \"red\", \"unassigned_shards\": 4}",
-              "error": null,
+              "tool_name": "run_migration",
+              "success": false,
+              "output": null,
+              "error": "exit code 1: relation sessions already exists",
               "latency_ms": 14.0,
               "arguments": {
-                "q": "cluster health"
+                "path": "migrations/004.sql"
               }
             }
           ]
         },
         {
-          "trace_id": "ac12-a1_cluster_status-t2",
-          "session_id": "ac12-a1_cluster_status",
+          "trace_id": "ac12-b1_migration-t2",
+          "session_id": "ac12-b1_migration",
           "timestamp": "2026-07-20T10:10:00+00:00",
-          "user_message": "anything else?",
-          "assistant_response": "That is all for now.",
+          "user_message": "are you sure it succeeded?",
+          "assistant_response": "Correcting myself \u2014 it did not apply; the migration failed.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
@@ -54,41 +67,53 @@
       ]
     },
     {
-      "case_id": "a2_doc_count",
+      "case_id": "b2_deploy",
       "expected": "correction",
-      "tier": "A",
+      "tier": "self_correction",
+      "reference_correction": {
+        "span": "the deploy failed because the image was not found",
+        "locator": {
+          "capture_id": "ac12-b2_deploy-t2",
+          "field": "assistant_text"
+        },
+        "evidence_span": "manifest unknown: image not found",
+        "evidence_locator": {
+          "capture_id": "ac12-b2_deploy-t1",
+          "field": "tool_result[0].error"
+        }
+      },
       "captures": [
         {
-          "trace_id": "ac12-a2_doc_count-t1",
-          "session_id": "ac12-a2_doc_count",
+          "trace_id": "ac12-b2_deploy-t1",
+          "session_id": "ac12-b2_deploy",
           "timestamp": "2026-07-20T10:05:00+00:00",
-          "user_message": "check index size",
-          "assistant_response": "The index holds roughly 10,000 documents.",
+          "user_message": "did the deploy go out?",
+          "assistant_response": "The deploy went through and the new image is live.",
           "steps": [],
           "tools_used": [
-            "query_elasticsearch"
+            "deploy_service"
           ],
           "outcome": "completed",
           "user_id": "00000000-0000-0000-0000-000000000001",
           "tool_results": [
             {
-              "tool_name": "query_elasticsearch",
-              "success": true,
-              "output": "{\"docs_count\": 2276}",
-              "error": null,
+              "tool_name": "deploy_service",
+              "success": false,
+              "output": null,
+              "error": "manifest unknown: image not found",
               "latency_ms": 14.0,
               "arguments": {
-                "q": "index size"
+                "tag": "v2.3.1"
               }
             }
           ]
         },
         {
-          "trace_id": "ac12-a2_doc_count-t2",
-          "session_id": "ac12-a2_doc_count",
+          "trace_id": "ac12-b2_deploy-t2",
+          "session_id": "ac12-b2_deploy",
           "timestamp": "2026-07-20T10:10:00+00:00",
-          "user_message": "anything else?",
-          "assistant_response": "That is all for now.",
+          "user_message": "is it really live?",
+          "assistant_response": "I need to correct that \u2014 the deploy failed because the image was not found.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
@@ -98,41 +123,53 @@
       ]
     },
     {
-      "case_id": "a3_budget_state",
+      "case_id": "b3_index",
       "expected": "correction",
-      "tier": "A",
+      "tier": "self_correction",
+      "reference_correction": {
+        "span": "the index already existed, so nothing was created",
+        "locator": {
+          "capture_id": "ac12-b3_index-t2",
+          "field": "assistant_text"
+        },
+        "evidence_span": "resource already exists exception: index agent-logs",
+        "evidence_locator": {
+          "capture_id": "ac12-b3_index-t1",
+          "field": "tool_result[0].error"
+        }
+      },
       "captures": [
         {
-          "trace_id": "ac12-a3_budget_state-t1",
-          "session_id": "ac12-a3_budget_state",
+          "trace_id": "ac12-b3_index-t1",
+          "session_id": "ac12-b3_index",
           "timestamp": "2026-07-20T10:05:00+00:00",
-          "user_message": "check budget state",
-          "assistant_response": "We are well under the daily cap with plenty of headroom.",
+          "user_message": "create the index",
+          "assistant_response": "I created the index and it is ready to receive writes.",
           "steps": [],
           "tools_used": [
-            "query_elasticsearch"
+            "create_index"
           ],
           "outcome": "completed",
           "user_id": "00000000-0000-0000-0000-000000000001",
           "tool_results": [
             {
-              "tool_name": "query_elasticsearch",
-              "success": true,
-              "output": "{\"daily_cap_usd\": 2.50, \"spend_usd\": 2.49, \"denied\": true}",
-              "error": null,
+              "tool_name": "create_index",
+              "success": false,
+              "output": null,
+              "error": "resource already exists exception: index agent-logs",
               "latency_ms": 14.0,
               "arguments": {
-                "q": "budget state"
+                "index": "agent-logs"
               }
             }
           ]
         },
         {
-          "trace_id": "ac12-a3_budget_state-t2",
-          "session_id": "ac12-a3_budget_state",
+          "trace_id": "ac12-b3_index-t2",
+          "session_id": "ac12-b3_index",
           "timestamp": "2026-07-20T10:10:00+00:00",
-          "user_message": "anything else?",
-          "assistant_response": "That is all for now.",
+          "user_message": "did it create cleanly?",
+          "assistant_response": "That was wrong \u2014 the index already existed, so nothing was created.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
@@ -142,41 +179,53 @@
       ]
     },
     {
-      "case_id": "a4_embedding_dims",
+      "case_id": "b4_write",
       "expected": "correction",
-      "tier": "A",
+      "tier": "self_correction",
+      "reference_correction": {
+        "span": "it did not save, permission was denied",
+        "locator": {
+          "capture_id": "ac12-b4_write-t2",
+          "field": "assistant_text"
+        },
+        "evidence_span": "EACCES permission denied opening /etc/app.conf",
+        "evidence_locator": {
+          "capture_id": "ac12-b4_write-t1",
+          "field": "tool_result[0].error"
+        }
+      },
       "captures": [
         {
-          "trace_id": "ac12-a4_embedding_dims-t1",
-          "session_id": "ac12-a4_embedding_dims",
+          "trace_id": "ac12-b4_write-t1",
+          "session_id": "ac12-b4_write",
           "timestamp": "2026-07-20T10:05:00+00:00",
-          "user_message": "check embedder config",
-          "assistant_response": "The embedder returns 768-dimensional vectors.",
+          "user_message": "save the config",
+          "assistant_response": "The config file was written successfully.",
           "steps": [],
           "tools_used": [
-            "query_elasticsearch"
+            "write_file"
           ],
           "outcome": "completed",
           "user_id": "00000000-0000-0000-0000-000000000001",
           "tool_results": [
             {
-              "tool_name": "query_elasticsearch",
-              "success": true,
-              "output": "{\"model\": \"managed-8b\", \"dimensions\": 1024}",
-              "error": null,
+              "tool_name": "write_file",
+              "success": false,
+              "output": null,
+              "error": "EACCES permission denied opening /etc/app.conf",
               "latency_ms": 14.0,
               "arguments": {
-                "q": "embedder config"
+                "path": "/etc/app.conf"
               }
             }
           ]
         },
         {
-          "trace_id": "ac12-a4_embedding_dims-t2",
-          "session_id": "ac12-a4_embedding_dims",
+          "trace_id": "ac12-b4_write-t2",
+          "session_id": "ac12-b4_write",
           "timestamp": "2026-07-20T10:10:00+00:00",
-          "user_message": "anything else?",
-          "assistant_response": "That is all for now.",
+          "user_message": "confirm it saved?",
+          "assistant_response": "Correcting myself: it did not save, permission was denied.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
@@ -186,103 +235,27 @@
       ]
     },
     {
-      "case_id": "a5_command_success",
+      "case_id": "b5_port",
       "expected": "correction",
-      "tier": "A",
-      "captures": [
-        {
-          "trace_id": "ac12-a5_command_success-t1",
-          "session_id": "ac12-a5_command_success",
-          "timestamp": "2026-07-20T10:05:00+00:00",
-          "user_message": "check migration run",
-          "assistant_response": "The migration command completed successfully.",
-          "steps": [],
-          "tools_used": [
-            "query_elasticsearch"
-          ],
-          "outcome": "completed",
-          "user_id": "00000000-0000-0000-0000-000000000001",
-          "tool_results": [
-            {
-              "tool_name": "query_elasticsearch",
-              "success": true,
-              "output": "{\"exit_code\": 1, \"stderr\": \"relation already exists\"}",
-              "error": null,
-              "latency_ms": 14.0,
-              "arguments": {
-                "q": "migration run"
-              }
-            }
-          ]
+      "tier": "self_correction",
+      "reference_correction": {
+        "span": "I was wrong, it listens on 9001, not 9000",
+        "locator": {
+          "capture_id": "ac12-b5_port-t2",
+          "field": "assistant_text"
         },
-        {
-          "trace_id": "ac12-a5_command_success-t2",
-          "session_id": "ac12-a5_command_success",
-          "timestamp": "2026-07-20T10:10:00+00:00",
-          "user_message": "anything else?",
-          "assistant_response": "That is all for now.",
-          "steps": [],
-          "tools_used": [],
-          "outcome": "completed",
-          "user_id": "00000000-0000-0000-0000-000000000001",
-          "tool_results": []
+        "evidence_span": "AGENT_SERVICE_PORT=9001",
+        "evidence_locator": {
+          "capture_id": "ac12-b5_port-t2",
+          "field": "user_text"
         }
-      ]
-    },
-    {
-      "case_id": "a6_retention",
-      "expected": "correction",
-      "tier": "A",
+      },
       "captures": [
         {
-          "trace_id": "ac12-a6_retention-t1",
-          "session_id": "ac12-a6_retention",
+          "trace_id": "ac12-b5_port-t1",
+          "session_id": "ac12-b5_port",
           "timestamp": "2026-07-20T10:05:00+00:00",
-          "user_message": "check retention policy",
-          "assistant_response": "Logs are retained for thirty days.",
-          "steps": [],
-          "tools_used": [
-            "query_elasticsearch"
-          ],
-          "outcome": "completed",
-          "user_id": "00000000-0000-0000-0000-000000000001",
-          "tool_results": [
-            {
-              "tool_name": "query_elasticsearch",
-              "success": true,
-              "output": "{\"policy\": \"agent-logs\", \"delete\": {\"min_age\": \"7d\"}}",
-              "error": null,
-              "latency_ms": 14.0,
-              "arguments": {
-                "q": "retention policy"
-              }
-            }
-          ]
-        },
-        {
-          "trace_id": "ac12-a6_retention-t2",
-          "session_id": "ac12-a6_retention",
-          "timestamp": "2026-07-20T10:10:00+00:00",
-          "user_message": "anything else?",
-          "assistant_response": "That is all for now.",
-          "steps": [],
-          "tools_used": [],
-          "outcome": "completed",
-          "user_id": "00000000-0000-0000-0000-000000000001",
-          "tool_results": []
-        }
-      ]
-    },
-    {
-      "case_id": "b1_port",
-      "expected": "correction",
-      "tier": "B",
-      "captures": [
-        {
-          "trace_id": "ac12-b1_port-t1",
-          "session_id": "ac12-b1_port",
-          "timestamp": "2026-07-20T10:05:00+00:00",
-          "user_message": "what is gateway port?",
+          "user_message": "what port does the gateway use?",
           "assistant_response": "The gateway listens on port 9000.",
           "steps": [],
           "tools_used": [],
@@ -291,43 +264,42 @@
           "tool_results": []
         },
         {
-          "trace_id": "ac12-b1_port-t2",
-          "session_id": "ac12-b1_port",
+          "trace_id": "ac12-b5_port-t2",
+          "session_id": "ac12-b5_port",
           "timestamp": "2026-07-20T10:10:00+00:00",
-          "user_message": "are you sure?",
-          "assistant_response": "Correction: I was wrong, it listens on 9001 in this deployment.",
+          "user_message": "The env file I am reading says AGENT_SERVICE_PORT=9001.",
+          "assistant_response": "You are right \u2014 I was wrong, it listens on 9001, not 9000.",
           "steps": [],
-          "tools_used": [
-            "read_file"
-          ],
+          "tools_used": [],
           "outcome": "completed",
           "user_id": "00000000-0000-0000-0000-000000000001",
-          "tool_results": [
-            {
-              "tool_name": "read_file",
-              "success": true,
-              "output": "AGENT_SERVICE_PORT=9001",
-              "error": null,
-              "latency_ms": 14.0,
-              "arguments": {
-                "path": "/etc/gateway port"
-              }
-            }
-          ]
+          "tool_results": []
         }
       ]
     },
     {
-      "case_id": "b2_driver",
+      "case_id": "b6_driver",
       "expected": "correction",
-      "tier": "B",
+      "tier": "self_correction",
+      "reference_correction": {
+        "span": "the driver is 5.26.0",
+        "locator": {
+          "capture_id": "ac12-b6_driver-t2",
+          "field": "assistant_text"
+        },
+        "evidence_span": "neo4j version 5.26.0",
+        "evidence_locator": {
+          "capture_id": "ac12-b6_driver-t2",
+          "field": "user_text"
+        }
+      },
       "captures": [
         {
-          "trace_id": "ac12-b2_driver-t1",
-          "session_id": "ac12-b2_driver",
+          "trace_id": "ac12-b6_driver-t1",
+          "session_id": "ac12-b6_driver",
           "timestamp": "2026-07-20T10:05:00+00:00",
-          "user_message": "what is driver version?",
-          "assistant_response": "The Neo4j driver is on 5.28.",
+          "user_message": "what version is the neo4j driver?",
+          "assistant_response": "The Neo4j driver is pinned at 5.28.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
@@ -335,86 +307,41 @@
           "tool_results": []
         },
         {
-          "trace_id": "ac12-b2_driver-t2",
-          "session_id": "ac12-b2_driver",
+          "trace_id": "ac12-b6_driver-t2",
+          "session_id": "ac12-b6_driver",
           "timestamp": "2026-07-20T10:10:00+00:00",
-          "user_message": "are you sure?",
-          "assistant_response": "I need to correct that \u2014 the lockfile pins 5.26.0.",
-          "steps": [],
-          "tools_used": [
-            "read_file"
-          ],
-          "outcome": "completed",
-          "user_id": "00000000-0000-0000-0000-000000000001",
-          "tool_results": [
-            {
-              "tool_name": "read_file",
-              "success": true,
-              "output": "name = \"neo4j\"\nversion = \"5.26.0\"",
-              "error": null,
-              "latency_ms": 14.0,
-              "arguments": {
-                "path": "/etc/driver version"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "case_id": "b3_role",
-      "expected": "correction",
-      "tier": "B",
-      "captures": [
-        {
-          "trace_id": "ac12-b3_role-t1",
-          "session_id": "ac12-b3_role",
-          "timestamp": "2026-07-20T10:05:00+00:00",
-          "user_message": "what is role binding?",
-          "assistant_response": "Entity extraction runs on Sonnet.",
+          "user_message": "The lockfile shows neo4j version 5.26.0.",
+          "assistant_response": "Correcting myself \u2014 the driver is 5.26.0; I misremembered.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
           "user_id": "00000000-0000-0000-0000-000000000001",
           "tool_results": []
-        },
-        {
-          "trace_id": "ac12-b3_role-t2",
-          "session_id": "ac12-b3_role",
-          "timestamp": "2026-07-20T10:10:00+00:00",
-          "user_message": "are you sure?",
-          "assistant_response": "That was wrong. The role matrix binds it to gpt-5.4-mini.",
-          "steps": [],
-          "tools_used": [
-            "read_file"
-          ],
-          "outcome": "completed",
-          "user_id": "00000000-0000-0000-0000-000000000001",
-          "tool_results": [
-            {
-              "tool_name": "read_file",
-              "success": true,
-              "output": "entity_extraction:  { all: gpt-5.4-mini }",
-              "error": null,
-              "latency_ms": 14.0,
-              "arguments": {
-                "path": "/etc/role binding"
-              }
-            }
-          ]
         }
       ]
     },
     {
-      "case_id": "b4_threshold",
+      "case_id": "b7_floor",
       "expected": "correction",
-      "tier": "B",
+      "tier": "self_correction",
+      "reference_correction": {
+        "span": "I was wrong, the floor is 0.35",
+        "locator": {
+          "capture_id": "ac12-b7_floor-t2",
+          "field": "assistant_text"
+        },
+        "evidence_span": "the configured floor is 0.35",
+        "evidence_locator": {
+          "capture_id": "ac12-b7_floor-t2",
+          "field": "user_text"
+        }
+      },
       "captures": [
         {
-          "trace_id": "ac12-b4_threshold-t1",
-          "session_id": "ac12-b4_threshold",
+          "trace_id": "ac12-b7_floor-t1",
+          "session_id": "ac12-b7_floor",
           "timestamp": "2026-07-20T10:05:00+00:00",
-          "user_message": "what is similarity floor?",
+          "user_message": "what is the similarity floor?",
           "assistant_response": "The similarity floor is 0.5.",
           "steps": [],
           "tools_used": [],
@@ -423,29 +350,59 @@
           "tool_results": []
         },
         {
-          "trace_id": "ac12-b4_threshold-t2",
-          "session_id": "ac12-b4_threshold",
+          "trace_id": "ac12-b7_floor-t2",
+          "session_id": "ac12-b7_floor",
           "timestamp": "2026-07-20T10:10:00+00:00",
-          "user_message": "are you sure?",
-          "assistant_response": "Correcting myself: the configured floor is 0.35.",
+          "user_message": "My notes say the configured floor is 0.35.",
+          "assistant_response": "You are correct \u2014 I was wrong, the floor is 0.35.",
           "steps": [],
-          "tools_used": [
-            "read_file"
-          ],
+          "tools_used": [],
           "outcome": "completed",
           "user_id": "00000000-0000-0000-0000-000000000001",
-          "tool_results": [
-            {
-              "tool_name": "read_file",
-              "success": true,
-              "output": "AGENT_RECALL_SIMILARITY_FLOOR=0.35",
-              "error": null,
-              "latency_ms": 14.0,
-              "arguments": {
-                "path": "/etc/similarity floor"
-              }
-            }
-          ]
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "b8_role",
+      "expected": "correction",
+      "tier": "self_correction",
+      "reference_correction": {
+        "span": "entity extraction runs on gpt-5.4-mini, not Sonnet",
+        "locator": {
+          "capture_id": "ac12-b8_role-t2",
+          "field": "assistant_text"
+        },
+        "evidence_span": "binds entity_extraction to gpt-5.4-mini",
+        "evidence_locator": {
+          "capture_id": "ac12-b8_role-t2",
+          "field": "user_text"
+        }
+      },
+      "captures": [
+        {
+          "trace_id": "ac12-b8_role-t1",
+          "session_id": "ac12-b8_role",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "what model does entity extraction use?",
+          "assistant_response": "Entity extraction runs on Sonnet.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac12-b8_role-t2",
+          "session_id": "ac12-b8_role",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "The role matrix binds entity_extraction to gpt-5.4-mini.",
+          "assistant_response": "That was my mistake \u2014 entity extraction runs on gpt-5.4-mini, not Sonnet.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
         }
       ]
     },

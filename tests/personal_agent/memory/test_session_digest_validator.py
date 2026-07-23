@@ -14,6 +14,8 @@ does-it-appear-somewhere check while supporting nothing.
 
 from __future__ import annotations
 
+import json
+import pathlib
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -228,36 +230,38 @@ def test_fails_when_span_is_elsewhere_in_the_session() -> None:
 
 
 # --------------------------------------------------------------------------
-# Corrections — two located spans (Tier A) / evidence span (Tier B)
+# Corrections — a claim span + an evidence span, both located (ADR-0124 D3,
+# Amendment A: status_contradiction cites tool status/error; self_correction cites
+# supporting evidence in the conversation).
 # --------------------------------------------------------------------------
 
 
-def test_tier_a_correction_requires_both_spans_to_resolve() -> None:
+def test_status_contradiction_requires_both_spans_to_resolve() -> None:
     captures = _captures()
     correction = Correction(
-        text="Narration said the cluster was green; the query returned red.",
+        text="Narration said the read succeeded; the tool errored.",
         basis="tool_evidence",
-        tier="A",
+        tier="status_contradiction",
         # The contradicted claim, in the assistant text...
         span="The cluster is green",
         locator=Locator(capture_id="cap-1", field="assistant_text"),
-        # ...and the contradicting evidence.
-        evidence_span='"status": "red"',
-        evidence_locator=Locator(capture_id="cap-1", field="tool_result[0].output"),
+        # ...and the denying tool error.
+        evidence_span="ENOENT: /etc/missing.conf",
+        evidence_locator=Locator(capture_id="cap-1", field="tool_result[1].error"),
     )
     assert validate_digest_provenance(SessionDigest(corrections=[correction]), captures) == []
 
 
-def test_tier_a_correction_fails_when_the_evidence_span_does_not_resolve() -> None:
+def test_status_contradiction_fails_when_the_evidence_span_does_not_resolve() -> None:
     captures = _captures()
     correction = Correction(
-        text="Narration said green; evidence said red.",
+        text="Narration said success; the tool error says otherwise.",
         basis="tool_evidence",
-        tier="A",
+        tier="status_contradiction",
         span="The cluster is green",
         locator=Locator(capture_id="cap-1", field="assistant_text"),
-        evidence_span='"status": "yellow"',  # never appears
-        evidence_locator=Locator(capture_id="cap-1", field="tool_result[0].output"),
+        evidence_span="EACCES: permission denied",  # never appears
+        evidence_locator=Locator(capture_id="cap-1", field="tool_result[1].error"),
     )
     violations = validate_digest_provenance(SessionDigest(corrections=[correction]), captures)
     assert len(violations) == 1
@@ -274,7 +278,7 @@ def test_correction_is_checked_regardless_of_basis_tag() -> None:
     correction = Correction(
         text="Unsupported claim of an error.",
         basis="assistant_reasoning",
-        tier="B",
+        tier="self_correction",
         span="I was wrong about the shard count",  # nowhere in the session
         locator=Locator(capture_id="cap-2", field="assistant_text"),
         evidence_span="Four shards are unassigned.",
@@ -315,3 +319,49 @@ def test_empty_digest_renders_empty_and_costs_nothing() -> None:
     assert digest.is_empty()
     assert render_digest(digest) == ""
     assert digest_token_count(digest) == 0
+
+
+# --------------------------------------------------------------------------
+# AC-12 fixture pre-validation (FRE-953 / Amendment A)
+# --------------------------------------------------------------------------
+
+
+def test_ac12_positive_fixtures_have_a_resolving_reference_citation() -> None:
+    """Every AC-12 self-correction positive must carry a citable, resolvable evidence
+    span in a field the producer can SEE (a tool error or the conversation), before the
+    paid arm runs.
+
+    Codex plan-review, FRE-953: if a positive's supporting evidence lived only in a tool
+    payload (which Amendment A no longer feeds), the producer could not cite it — and a
+    provenance failure rejects the whole digest, so the case would read as ``errored``
+    rather than a true positive and AC-12 would fail on a fixture flaw, not a producer
+    one. This asserts a valid citation exists — a necessary condition for the arm.
+    """
+    fixture = json.loads(
+        (
+            pathlib.Path(__file__).parents[3]
+            / "tests"
+            / "fixtures"
+            / "session_digest"
+            / "ac12_corrections.json"
+        ).read_text(encoding="utf-8")
+    )
+    positives = [c for c in fixture["cases"] if c["expected"] == "correction"]
+    assert len(positives) >= 8, "AC-12 (amended) requires at least 8 self-correction positives"
+
+    for case in positives:
+        ref = case["reference_correction"]
+        captures = [TaskCapture(**c) for c in case["captures"]]
+        correction = Correction(
+            text="reference citation",
+            basis="assistant_reasoning",
+            tier=case["tier"],
+            span=ref["span"],
+            locator=Locator(**ref["locator"]),
+            evidence_span=ref["evidence_span"],
+            evidence_locator=Locator(**ref["evidence_locator"]),
+        )
+        violations = validate_digest_provenance(SessionDigest(corrections=[correction]), captures)
+        assert violations == [], (
+            f"{case['case_id']}: reference citation does not resolve: {violations}"
+        )

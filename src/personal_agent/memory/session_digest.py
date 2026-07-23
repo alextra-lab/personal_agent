@@ -55,18 +55,26 @@ if TYPE_CHECKING:  # pragma: no cover — typing only
 # The four provenance tags an item may carry (ADR-0124 D3).
 BasisTag = Literal["tool_evidence", "user_statement", "assistant_reasoning", "mixed"]
 
-# Only two correction tiers may ever be asserted (ADR-0124 D3):
-#   A — direct contradiction: authoritative evidence contradicts the SAME
-#       proposition the agent asserted. Carries two located spans.
-#   B — explicit evidenced self-correction: the agent corrected the record within
-#       the session and the correction is supported by evidence in the capture.
+# The two correction kinds that may be asserted (ADR-0124 D3, as narrowed by
+# Amendment A). Both rest ONLY on content the producer is actually given — the
+# conversation and tool *metadata* — never on a tool payload:
+#   self_correction     — the agent corrected the record within the session and the
+#                         correction is supported by evidence visible in the capture.
+#   status_contradiction — the agent's narration is denied by a tool's own status or
+#                         error line (e.g. "the command succeeded" while the tool
+#                         errored). The payload-free survivor of the old "Tier A":
+#                         Amendment A removed the payload-fed verification lane, but
+#                         AC-13's status_visible case requires this metadata-only path.
 # Everything else (weak/partial conflict, failed or incomplete calls, ambiguous
-# readings, legitimately changed state, disagreement with a subjective judgment)
-# is Tier C and is NEVER a correction — it belongs in `unresolved`, or is omitted.
-CorrectionTier = Literal["A", "B"]
+# readings, legitimately changed state, disagreement with a subjective judgment) is
+# NEVER a correction — it belongs in `unresolved`, or is omitted.
+CorrectionTier = Literal["self_correction", "status_contradiction"]
 
 # Locator field grammar. Deliberately closed and machine-resolvable: an open
 # free-text locator is unverifiable, which would defeat the point of requiring one.
+# The validator stays permissive over both tool fields; the *producer's prompt*
+# (Amendment A) advertises only ``.error``, since it is no longer given payloads and so
+# cannot faithfully cite ``tool_result[N].output``.
 _TOOL_FIELD_RE = re.compile(r"^tool_result\[(\d+)\]\.(output|error)$")
 _USER_FIELD = "user_text"
 _ASSISTANT_FIELD = "assistant_text"
@@ -167,7 +175,7 @@ class UnresolvedItem(DigestItem):
 
 
 class Correction(DigestItem):
-    """A high-confidence contradiction between evidence and narration.
+    """A high-confidence contradiction between narration and the conversation.
 
     Usually empty. **That scarcity is a feature and a monitoring signal**, not an
     under-performing slot — a rising corrections rate is drift, not diligence.
@@ -177,14 +185,17 @@ class Correction(DigestItem):
     state into the graph and feeds its own supposed correction into future
     reasoning.
 
-    For Tier A, the inherited ``span``/``locator`` cite the **contradicted claim in
-    the assistant text** and ``evidence_*`` cite the **contradicting evidence** —
-    the two located spans ADR-0124 requires. For Tier B, ``span``/``locator`` cite
-    the self-correction and ``evidence_*`` cite what supports it.
+    Both kinds rest only on content the producer is given — never a tool payload
+    (Amendment A). The inherited ``span``/``locator`` cite the **claim** (the
+    self-correction sentence, or the contradicted narration) and ``evidence_*`` cite
+    what supports it (the visible supporting evidence, or the tool status/error that
+    denies the narration).
 
     Attributes:
-        tier: ``A`` (direct contradiction) or ``B`` (evidenced self-correction).
-        evidence_span: Verbatim supporting evidence.
+        tier: ``self_correction`` (the agent corrected the record within the
+            session) or ``status_contradiction`` (narration denied by a tool's own
+            status/error line).
+        evidence_span: Verbatim supporting evidence, from a field the producer saw.
         evidence_locator: Where that evidence lives.
     """
 

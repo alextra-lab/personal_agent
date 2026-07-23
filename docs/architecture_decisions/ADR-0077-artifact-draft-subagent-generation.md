@@ -1,6 +1,6 @@
 # ADR-0077: Artifact Draft — Sub-Agent HTML Generation
 
-**Status:** Proposed
+**Status:** Implemented — 2026-05-27 (PR #84, merged; `tools/artifact_tools.py` + tests + governance/model config). *Status line corrected 2026-07-23: it had remained "Proposed" since authoring while the index already recorded the merge.*
 **Date:** 2026-05-27
 **Supersedes:** —
 **Related:** ADR-0070 (Output Channel Model), ADR-0033 (Model Taxonomy), ADR-0044 (Execution Profiles), ADR-0069 (R2 Artifact Substrate), ADR-0074 (End-to-End Traceability)

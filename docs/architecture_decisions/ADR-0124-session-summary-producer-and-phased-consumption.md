@@ -67,7 +67,7 @@ assistant text where a session's outcome lives.
 - *"A sessions read surface already exists, so the UI lane is a field addition."* `gateway/session_api.py:100`
   `list_sessions` reads **Postgres only** (`SessionRepository.list_recent`). The `sessions` table
   has no summary column (`service/models.py:204-232`) and `title` is synthesised as the first 60
-  characters of the first user message (`:799`). The summary lives in Neo4j. Phase 1 is a
+  characters of the first user message (`session_api.py:799`, `_extract_title`). The summary lives in Neo4j. Phase 1 is a
   cross-substrate read, not a projection.
 - *"It spends a cloud model every turn"* is structurally true but materially small: ~5 calls/day at
   ~1k prompt tokens is cents per month. **Phase 0's justification is correctness and unblocking, not
@@ -352,27 +352,48 @@ recall path.
 zero: both artifacts are generated in the same call from the same evidence and merely stored
 separately.
 
-### Option 5: Turn the producer off entirely until a consumer exists
+### Option 5: Minimal correction — stop generating, fix the clobber bug, build the producer when a consumer exists
 
-**Description:** Stop generating. Build the producer when the first consumer is actually being built.
+**Description:** Land only the two unambiguous defects: stop calling the summariser on every
+consolidation pass, and stop `create_session` writing `session_summary` unconditionally. Leave the
+field unpopulated. Design and build the producer at the moment the first consumer is actually being
+written.
+
+This is deliberately stated as the *strong* version of "turn it off." It leaves neither the
+every-turn spend nor the data-loss bug in place, so it cannot be dismissed on those grounds.
 
 **Pros:**
-- Strictly dominates on cost — the artifact is currently unread
-- Spends no design effort on an artifact with no consumer
-- Honest: an unconsumed artifact is a liability, not an asset
+- Strictly dominates on cost — the artifact is currently unread, and this stops paying for it
+- Fixes the live data-loss bug immediately, with a diff a fraction of Phase 0's size
+- Spends no design effort on output shape, provenance or slots until a consumer's needs are known
+- Honest: an unconsumed artifact is a liability, and this ADR's own kill condition concedes the
+  artifact may never earn a machine consumer
 
 **Cons:**
-- Forfeits the forcing function — Phase 1 makes quality human-visible before anything consumes it
-  automatically
-- Leaves the clobber bug and the every-turn trigger in place
-- Produces no corpus with which to judge whether downstream lanes are worth building
+- Forfeits the forcing function — Phase 1 makes quality human-visible *before* anything consumes it
+  automatically, which is what de-risks every later phase
+- Produces no corpus of corrected digests, so the decision about whether downstream lanes are worth
+  building would be taken on the same absence of evidence that produced today's situation
+- The consumer and the producer would then be designed together under delivery pressure, which is
+  how output shape gets fitted to one consumer's convenience rather than to the artifact's purpose
 
-**Why Rejected on balance, not dismissed.** The producer fix is small, has standalone value
-(it stops the every-turn spend, fixes a live data-loss bug, and yields inspectable artifacts), and
-generates the dataset needed to decide whether any downstream lane deserves to exist. But the
-underlying discipline is retained as this ADR's kill condition: **do not invent a consumer to
-justify an artifact.** If Phase 1 shows the digest conveys nothing beyond existing turn summaries
-and entity edges, stop there.
+**Why Rejected on balance, not dismissed.** Because this option already includes the bug fix and the
+trigger fix, the decision turns on one question only: *is the evidence needed to judge the
+downstream lanes obtainable without first correcting the producer?* It is not. Every judgement about
+whether a digest earns a machine consumer requires reading corrected digests, and the methodological
+caveat in Context forbids drawing that judgement from clipped, tool-blind output. Option 5 therefore
+defers the decision indefinitely by destroying the only evidence that could settle it — which is
+precisely how the artifact reached its current state.
+
+The remaining increment over Option 5 is D2 and D3 plus Phase 1: a correct input policy, a defined
+output, and a human-visible surface. That increment is what converts "nobody could say what good
+looked like" into a falsifiable artifact.
+
+**The discipline behind this option is retained rather than discarded**, as this ADR's kill
+condition: *do not invent a consumer to justify an artifact.* If Phase 1 shows the digest conveys
+nothing beyond the existing turn summaries and entity edges, the correct outcome is to stop at
+Phase 1 — which lands Option 5's end state plus a corrected producer and a UI surface, reached with
+evidence instead of assumption.
 
 ### Option 6: Swap Phase 2 and Phase 3
 
@@ -485,73 +506,112 @@ rather than a rate, that is why.
 
 ## Verification / Acceptance Criteria
 
+**Gate mapping.** A phase may not begin until **every** AC listed for the preceding phase passes.
+Phase 0 → AC-1…AC-11. Phase 1 → AC-12. Phase 2 → AC-13…AC-17. Phase 3 → AC-18. Partial passes do
+not open a gate.
+
 **Phase 0 — producer**
 
-- **AC-1** — A multi-turn session receives **at least one and strictly fewer generations than it has
-  turns** over its lifetime. · **Check:** count `session_summary_generated` events per `session_id`
-  in `agent-logs-*` against that session's `turn_count` in Neo4j. · *Fails if* any multi-turn session
-  shows generations ≥ turns (trigger not moved) **or** zero generations (sweep not firing).
-- **AC-2** — A generation failure leaves the previously stored digest **intact**. · **Check:** force a
+- **AC-1** — Over a window containing at least five multi-turn sessions, each receives **at least one
+  and strictly fewer generations than it has turns**, *and* every session quiet past the idle
+  threshold ends with `summary_generated_at >= ended_at`. · **Check:** count
+  `session_summary_generated` events per `session_id` in `agent-logs-*` against `turn_count`; then a
+  Cypher scan for sessions where `ended_at < now − threshold AND summary_generated_at < ended_at`. ·
+  *Fails if* generations ≥ turns (trigger never moved), zero generations (sweep never fires), **or**
+  any quiet session is left behind its own `ended_at` (generate-once-and-never-again).
+- **AC-2** — A session that receives new turns **after** being summarised is regenerated on the next
+  quiet period, and its digest content changes to reflect the new turns. · **Check:** summarise a
+  session, append turns introducing a distinctive fact, wait past threshold, re-read. · *Fails if*
+  `summary_generated_at` does not advance, or advances while the content ignores the new turns.
+- **AC-3** — A generation failure leaves the previously stored digest **intact**. · **Check:** force a
   failure (oversized input or injected budget denial) on a session that already has a digest; read
   the Neo4j property. · *Fails if* the field becomes null or changes.
-- **AC-3** — No session summarised after this ships has `turn_count = 1` with a digest; every
+- **AC-4** — Two sweeps racing the same session cannot publish a digest built from stale captures. ·
+  **Check:** drive two concurrent sweeps against one session, injecting a new turn between the
+  generation call and the write; assert the stale write is refused (`ended_at` changed) and exactly
+  one digest is stored. · *Fails if* both writes land, or a digest is stored whose source captures
+  predate the current `ended_at`.
+- **AC-5** — No session summarised after this ships has `turn_count = 1` with a digest; every
   multi-turn session quiet past the threshold has one. · **Check:** two Cypher counts keyed on
   `summary_generated_at` being non-null. · *Fails if* either count is non-zero.
-- **AC-4** — The digest can reference content that appears **only** in a tool result and nowhere in
-  the assistant text. · **Check:** replay a session whose tool output contains a distinctive token
-  the assistant never echoes; assert the token can surface in the digest. · *Fails if* the digest can
-  only ever contain assistant-narrated content — which a tool-blind producer cannot avoid.
-- **AC-5** — Every item tagged `tool_evidence` and every `corrections` entry carries a verbatim span
-  present in the canonical capture. · **Check:** automated validator over all stored digests,
-  string-containment against the capture record. · *Fails if* any claimed span is absent.
-- **AC-6** — On a labelled set of sessions containing **no** contradiction between evidence and
-  narration, `corrections` is empty. · **Check:** manual labelling of a stratified sample; assert. ·
-  *Fails if* any clean session yields a correction.
-- **AC-7** — For a local-profile session (payloads withheld), the digest asserts no correction and
-  makes no claim of contradiction. · **Check:** run a local-profile session with narration; inspect
-  `corrections` and the digest text. · *Fails if* absence of evidence produces an asserted error.
-- **AC-8** — Structured properties (turn count, duration, tool counts) **equal** the values computed
-  deterministically from captures. · **Check:** compare node properties against a recount from the
-  capture record. · *Fails if* any property disagrees, or if the generated digest text restates them.
-- **AC-9** — A digest whose session received turns after generation is **mechanically detectable as
-  stale** by a consumer without re-reading captures. · **Check:** append a turn to a summarised
-  session; assert `summary_generated_at < ended_at` and that a consumer marks it stale. · *Fails if*
-  staleness is not detectable from stored state.
+- **AC-6** — For **every** tool invocation in a session, the producer's assembled input contains that
+  invocation's name, status and error; for a **cloud**-profile session it also contains the payload,
+  and for a **local**-profile session it contains no payload. · **Check:** assert over the assembled
+  prompt for a fixture set covering multi-result turns, failed calls and both profiles. · *Fails if*
+  any invocation is missing, any error is dropped, or either profile's payload rule is violated.
+- **AC-7** — On a session whose tool output contains a fact the assistant never states, the digest
+  reproduces that fact. · **Check:** fixture set of ≥5 such sessions across different tools. ·
+  *Fails if* the digest reproduces the fact in fewer than all of them — a tool-blind or
+  narration-only producer cannot pass.
+- **AC-8** — **Every** digest item carries a `basis` tag, and on a labelled fixture set each item's
+  tag matches its true source class. · **Check:** schema validation for tag presence over all stored
+  digests; manual labelling for tag correctness on the fixture set. · *Fails if* any item lacks a
+  tag, **or** if tagging collapses (e.g. everything `mixed`) — assessed as tag distribution against
+  the labelled truth, not merely tag presence.
+- **AC-9** — Every item tagged `tool_evidence` and every `corrections` entry carries a verbatim span
+  locatable in the canonical capture. · **Check:** automated validator, string-containment against
+  the capture record. · *Fails if* any claimed span is absent.
+- **AC-10** — **Corrections fire when they should and stay silent when they should not.** On a
+  labelled set containing both (a) sessions with an unambiguous Tier-A contradiction between tool
+  evidence and assistant narration, and (b) clean sessions with no contradiction, the producer emits
+  a correction for **every** case in (a) and for **none** in (b). · **Check:** hand-labelled fixture
+  set, minimum 8 positive and 12 negative cases, built before the producer is tuned. · *Fails if* any
+  clean session yields a correction (precision breach) **or** any unambiguous contradiction yields
+  none — which is what a producer that simply never emits corrections would do.
+- **AC-11** — For a local-profile session (payloads withheld), the digest asserts no correction and
+  makes no claim of contradiction. · **Check:** local-profile session containing narration that a
+  withheld payload would contradict; inspect `corrections` and digest text. · *Fails if* absence of
+  evidence produces an asserted error.
+
+*(Deterministic metadata — turn count, duration, tool counts — is asserted equal to a recount from
+the capture record as part of AC-1's scan. The earlier "digest text must not restate them" clause is
+removed: it named no detection method and was therefore uncheckable.)*
 
 **Phase 1 — UI**
 
-- **AC-10** — On a blind review of ~50 multi-turn digests against their source sessions, a
-  meaningful fraction convey session-level state **not already present** in the turn summaries,
-  entity edges or the label. · **Check:** blind human review with the existing artifacts shown
-  alongside. · *Fails if* the digest is routinely redundant — which triggers the kill condition
-  below rather than a fix.
+- **AC-12** — On a blind review of 50 multi-turn digests against their source sessions, **at least
+  60%** contain at least one item of session-level state not recoverable from the turn summaries,
+  entity edges or the label. · **Check:** two independent reviewers scoring each digest against the
+  existing artifacts shown alongside, item-by-item, on a pre-agreed rubric; disagreements
+  adjudicated by re-reading the source session; report inter-rater agreement alongside the result. ·
+  *Fails below 60%*, which triggers the kill condition rather than a fix.
 
 **Phase 2 — hydration**
 
-- **AC-11** — Ranked fact IDs **and their order** are byte-identical with hydration enabled versus
+- **AC-13** — Ranked fact IDs **and their order** are byte-identical with hydration enabled versus
   baseline. · **Check:** offline replay diff over the historical corpus. · *Fails if* any query
   differs.
-- **AC-12** — Annotation is discarded **before** memory context under budget pressure. · **Check:**
+- **AC-14** — Annotation is discarded **before** memory context under budget pressure. · **Check:**
   construct a context that fits without annotation and exceeds with it; assert the ranked facts
   survive and the annotation is dropped. · *Fails if* the memory block is evicted.
-- **AC-13** — Annotation tokens never exceed the tokens of the facts they annotate. · **Check:**
+- **AC-15** — Annotation tokens never exceed the tokens of the facts they annotate. · **Check:**
   assertion in the hydration path plus the replay measuring the ratio per turn. · *Fails if* the
   ratio exceeds 1 on any turn.
-- **AC-14** — A recall whose ranked facts all come from one session attaches that session's digest
+- **AC-16** — A recall whose ranked facts all come from one session attaches that session's digest
   **exactly once**. · **Check:** replay; count attached digests against distinct parent sessions. ·
   *Fails if* any digest is attached more than once.
-- **AC-15** — Paired evaluation shows facts+digest **beating** facts-only on a predefined
-  session-context task class, with no regression in baseline factual correctness and no increase in
-  unsupported claims. · **Check:** paired replay, arms A (facts only) / B (facts + digest), scored on
-  outcome recall, error preservation, evidence fidelity, unresolved-state recall. · *Fails if* B is
-  merely not-worse. **Annotation must earn its tokens.**
+- **AC-17** — Paired evaluation shows facts+digest **beating** facts-only. · **Check:** arms A (facts
+  only) and B (facts + digest) over a question set **fixed and written down before either arm is
+  run**, spanning: questions where session context should help · ordinary recall where it should be
+  neutral · conflicting or evolving facts · stale digests · correction cases. Each answer scored on
+  outcome correctness, unsupported-claim count, and correct abstention. · **Decision rule, stated in
+  advance:** B must win on the session-context class by a margin larger than the disagreement between
+  two independent scorers on the same answers, with **zero** regression on the neutral class and
+  **zero** increase in unsupported claims. · *Fails if* B is merely not-worse, if the question set
+  was chosen or amended after seeing results, or if the margin is inside scorer noise. **Annotation
+  must earn its tokens.** The corpus holds 59 multi-turn sessions, so this is a directional
+  discriminator against a trivial baseline, not a powered lift measurement, and must be reported as
+  such.
 
 **Phase 3 — anti-re-litigation**
 
-- **AC-16** — ≥90% precision on a labelled re-litigation set (true reopening · same entities
-  different issue · genuinely unresolved · superseded decision · explicit correction) before any
-  nudge is user-visible. · **Check:** labelled replay set. · *Fails below 90%, and* fails outright if
-  any nudge claims "settled" where the latest evidence says superseded or unresolved.
+- **AC-18** — On a labelled re-litigation set of at least 30 candidate cases drawn from real session
+  pairs and spanning all five classes (true reopening · same entities different issue · genuinely
+  unresolved · superseded decision · explicit correction), the nudge achieves **≥90% precision at
+  ≥50% recall** on the true-reopening class. · **Check:** labelled replay; report both numbers and
+  the candidate denominator. · *Fails below either threshold* — precision alone is gameable by a
+  system that almost never nudges — **and** fails outright if any nudge claims "settled" where the
+  latest evidence says superseded or unresolved.
 
 **Kill condition (not a failure state).** If Phase 1 review plus the Phase 2 paired evaluation show
 facts-only ≥ facts+digest on memory-dependent tasks while the user still finds the digest useful for
@@ -560,7 +620,7 @@ kill hydration, anti-re-litigation, session embeddings, pre-filtering and cross-
 That outcome means the artifact belongs in the human navigation plane, not the machine reasoning
 plane. Do not invent a consumer to justify it.
 
-**Seam owner:** master, at the integration gate. AC-15 is the assembled-intent criterion — it holds
+**Seam owner:** master, at the integration gate. AC-17 is the assembled-intent criterion — it holds
 only once Phases 0, 1 and 2 have all landed, and no child ticket closing can satisfy it alone. This
 ADR does not close because its last child merged.
 
@@ -579,7 +639,8 @@ ADR does not close because its last child merged.
 - Write path and clobber bug: `src/personal_agent/memory/service.py:1133-1148`
 - Trigger: `src/personal_agent/brainstem/scheduler.py:262-302`
 - Budget trimming: `src/personal_agent/request_gateway/budget.py:187-320`
-- Session read surface: `src/personal_agent/gateway/session_api.py:99-133`, `service/models.py:204-232`
+- Session read surface: `src/personal_agent/gateway/session_api.py:99-133` (`list_sessions`, Postgres-only) and `gateway/session_api.py:799-814` (`_extract_title`, the first-60-characters hack)
+- Postgres session row (no summary column): `src/personal_agent/service/models.py:204-232`
 
 ---
 

@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-07-23T12:13:07.408965+00:00",
+  "synthetic_fixtures": true,
+  "note": "Fixture sets are pre-registered synthetic supplements, labelled as such per ADR-0124's corpus-feasibility rule: the real corpus holds zero multi-turn sessions with captures on disk. See tests/fixtures/session_digest/REGISTRY.md.",
+  "criteria": [
+    {
+      "criterion": "AC-8",
+      "passed": true,
+      "cases": 3,
+      "failures": []
+    },
+    {
+      "criterion": "AC-10",
+      "passed": false,
+      "agreement": 0.364,
+      "matched_comparisons": 11,
+      "dominant_tag_share": 0.667,
+      "tag_distribution": {
+        "tool_evidence": 16,
+        "assistant_reasoning": 7,
+        "mixed": 1
+      },
+      "errored": []
+    },
+    {
+      "criterion": "AC-12",
+      "passed": false,
+      "precision_note": "absolute \u2014 any false positive fails the criterion",
+      "false_positives": [
+        {
+          "case_id": "c12_subjective_priority",
+          "tier_c_kind": "subjective_disagreement",
+          "emitted": [
+            "Assistant assessed the issue as low priority, but queried severity data labeled it 'high'"
+          ]
+        }
+      ],
+      "recall": 1.0,
+      "true_positives": 10,
+      "positives_total": 10,
+      "missed": [],
+      "tier_b_missing_evidence_span": [],
+      "errored": []
+    },
+    {
+      "criterion": "AC-13",
+      "passed": true,
+      "results": [
+        {
+          "case_id": "payload_absent",
+          "expected": "no_correction",
+          "corrections_emitted": 0,
+          "ok": true
+        },
+        {
+          "case_id": "status_visible",
+          "expected": "correction",
+          "corrections_emitted": 1,
+          "ok": true
+        },
+        {
+          "case_id": "self_correction",
+          "expected": "correction",
+          "corrections_emitted": 1,
+          "ok": true
+        }
+      ],
+      "failures": [],
+      "errored": []
+    },
+    {
+      "criterion": "AC-9",
+      "passed": true,
+      "reproduced": 5,
+      "total": 5,
+      "missing": [],
+      "errored": []
+    }
+  ]
+}

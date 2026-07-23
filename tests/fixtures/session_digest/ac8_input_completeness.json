@@ -1,0 +1,169 @@
+{
+  "set": "ac8_input_completeness",
+  "criterion": "AC-8",
+  "synthetic": true,
+  "cases": [
+    {
+      "case_id": "multi_result_turn",
+      "captures": [
+        {
+          "trace_id": "ac8-multi-t1",
+          "session_id": "ac8-multi",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "check the cluster and the config",
+          "assistant_response": "The cluster is green and the config parsed.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch",
+            "read_file"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"status\": \"red\", \"unassigned_shards\": 4}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "index": "agent-logs-*",
+                "size": 10
+              }
+            },
+            {
+              "tool_name": "read_file",
+              "success": true,
+              "output": "retention_days: 30\nshards: 3",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "path": "/etc/seshat/retention.yaml"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac8-multi-t2",
+          "session_id": "ac8-multi",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "and the shard count?",
+          "assistant_response": "Four are unassigned.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "failed_and_undispatched_calls",
+      "captures": [
+        {
+          "trace_id": "ac8-failed-t1",
+          "session_id": "ac8-failed",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "read the missing config",
+          "assistant_response": "I could not read that file.",
+          "steps": [],
+          "tools_used": [
+            "read_file",
+            "query_elasticsearch",
+            "read_file"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "read_file",
+              "success": false,
+              "output": null,
+              "error": "ENOENT: /etc/seshat/missing.yaml",
+              "latency_ms": 14.0,
+              "arguments": {
+                "path": "/etc/seshat/missing.yaml"
+              }
+            },
+            {
+              "tool_name": "query_elasticsearch",
+              "success": false,
+              "output": null,
+              "error": "malformed argument JSON: Expecting ',' delimiter",
+              "latency_ms": 14.0,
+              "arguments": "{\"index\": \"agent-logs-*\""
+            },
+            {
+              "tool_name": "read_file",
+              "success": false,
+              "output": null,
+              "error": "blocked by loop gate: block_identity",
+              "latency_ms": 14.0,
+              "arguments": {
+                "path": "/etc/seshat/missing.yaml"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac8-failed-t2",
+          "session_id": "ac8-failed",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "try another path",
+          "assistant_response": "That one does not exist.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "long_assistant_response",
+      "captures": [
+        {
+          "trace_id": "ac8-long-t1",
+          "session_id": "ac8-long",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "run the reindex and report",
+          "assistant_response": "The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green. The reindex completed. Every shard reallocated cleanly and the cluster returned to green.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": {
+                "acknowledged": true,
+                "shards_moved": 12
+              },
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "action": "reindex",
+                "index": "agent-logs-2026.07"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac8-long-t2",
+          "session_id": "ac8-long",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "how long did it take?",
+          "assistant_response": "About four minutes.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    }
+  ]
+}

@@ -21,10 +21,14 @@ log = get_logger(__name__)
 def normalize_capture_doc_for_es(doc: dict[str, Any]) -> dict[str, Any]:
     """Ensure capture document conforms to ES captains-captures mapping.
 
-    The index template maps tool_results[].output as ``text`` (index: false).
-    Tool outputs can be dicts, lists, or other non-string types which ES
-    rejects for a text field. This normalizer JSON-serializes any non-string
-    output so it always arrives as a plain string.
+    The index template maps ``tool_results[].output`` and ``tool_results[].arguments``
+    as ``text`` (index: false). Both can be dicts, lists, or other non-string types
+    which ES rejects for a text field, so this normalizer JSON-serializes them.
+
+    ``arguments`` in particular **must** be stringified rather than left as a dict
+    (FRE-947): the mapping declares ``dynamic: true`` at its root, so an object of
+    arbitrary tool-specific keys would be dynamically mapped one field per key and
+    walk the index into the 1000-field limit.
 
     Args:
         doc: Capture document (e.g. from TaskCapture.model_dump(mode="json")).
@@ -39,9 +43,10 @@ def normalize_capture_doc_for_es(doc: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(item, dict):
             normalized.append({"value": str(item)})
             continue
-        output = item.get("output")
-        if not isinstance(output, str):
-            item = {**item, "output": json.dumps(output, default=str)}
+        for field in ("output", "arguments"):
+            value = item.get(field)
+            if field in item and not isinstance(value, str):
+                item = {**item, field: json.dumps(value, default=str)}
         normalized.append(item)
     return {**doc, "tool_results": normalized}
 

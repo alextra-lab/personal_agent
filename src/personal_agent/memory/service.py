@@ -47,6 +47,10 @@ from personal_agent.memory.models import (
     Stance,
     TurnNode,
 )
+from personal_agent.memory.session_digest import (
+    TERMINAL_ELIGIBLE_REASONS,
+    SessionDigest,
+)
 from personal_agent.memory.supersession import (
     ClaimRecord,
     SupersessionAction,
@@ -1111,8 +1115,20 @@ class MemoryService:
     async def create_session(self, session_node: SessionNode, trace_id: str | None = None) -> bool:
         """Create or update a Session node in the graph.
 
+        Owns only the properties derived from the turn stream itself: timestamps,
+        ``turn_count`` and ``dominant_entities``.
+
+        It deliberately does **not** write ``session_summary``, ``session_label``,
+        ``session_digest`` or ``summary_generated_at`` (ADR-0124 D1). Those belong to
+        the idle sweep, which publishes them through
+        :meth:`write_session_digest`'s conditional write. Setting them here — as this
+        method did for ``session_summary`` before FRE-947 — makes every turn clobber
+        the previous digest, so a transient generation failure erased a good summary
+        and a fresh sweep result survived only until the session's next turn.
+
         Args:
-            session_node: Session to create or update.
+            session_node: Session to create or update. Its digest-related fields are
+                ignored by this method.
             trace_id: Optional request trace identifier for log correlation
                 (ADR-0074 §I3). Callers should pass the consolidation/request
                 trace_id when available; ``None`` is acceptable for batch flows.
@@ -1136,15 +1152,13 @@ class MemoryService:
                     SET s.started_at = $started_at,
                         s.ended_at = $ended_at,
                         s.turn_count = $turn_count,
-                        s.dominant_entities = $dominant_entities,
-                        s.session_summary = $session_summary
+                        s.dominant_entities = $dominant_entities
                     """,
                     session_id=session_node.session_id,
                     started_at=session_node.started_at.isoformat(),
                     ended_at=session_node.ended_at.isoformat(),
                     turn_count=session_node.turn_count,
                     dominant_entities=session_node.dominant_entities,
-                    session_summary=session_node.session_summary,
                 )
                 log.info(
                     "session_created",
@@ -1162,6 +1176,344 @@ class MemoryService:
                 session_id=session_node.session_id,
             )
             return False
+
+    async def write_session_digest(
+        self,
+        session_id: str,
+        *,
+        expected_ended_at: datetime,
+        generated_at: datetime,
+        turn_count: int,
+        label: str | None = None,
+        digest: SessionDigest | None = None,
+        trace_id: str | None = None,
+    ) -> bool:
+        """Publish a digest, but only if the session has not moved (ADR-0124 D1/AC-6).
+
+        The comparison against the captured ``ended_at`` and the mutation are the
+        **same Cypher statement**. A read-then-write pair is not sufficient:
+        re-reading before writing leaves a time-of-check-to-time-of-use window in
+        which a new turn can land, and the write would then publish a digest built
+        from captures that are already stale. Cross-database locking is not an
+        option either — a Postgres row lock cannot serialise a Neo4j mutation.
+
+        **What this does and does not guarantee.** It prevents publishing once a
+        *known* newer turn has landed, i.e. once consolidation has advanced
+        ``ended_at``. It cannot prevent a race against a turn captured but not yet
+        consolidated, because ``ended_at`` does not yet reflect it. That residual
+        window is the consolidation lag (seconds) against the idle threshold
+        (minutes), and the next sweep corrects it because the session becomes dirty
+        again. This is a **staleness bound, not linearisability**.
+
+        **Only for a successful generation.** A below-floor or unregenerable session
+        goes through :meth:`mark_session_projection_clean` instead. Routing a skip
+        through here would write ``label=None``/``digest=None`` over a previously good
+        digest and overwrite ``turn_count`` with a deflated recount — reintroducing
+        the exact clobber bug ADR-0124 exists to remove, in a new field. That is not
+        hypothetical: captures age out under retention while ``Session`` nodes persist
+        forever, so a resumed session normally has fewer captures on disk than turns
+        in the graph.
+
+        Args:
+            session_id: Session to publish for.
+            expected_ended_at: ``ended_at`` as captured when the sweep read the
+                session. The write is refused if it no longer matches.
+            generated_at: Freshness stamp to publish.
+            turn_count: Recount from the captures this digest was built from
+                (ADR-0124 AC-7).
+            label: The session label.
+            digest: The structured digest.
+            trace_id: Trace identifier for log correlation (ADR-0074 §I3).
+
+        Returns:
+            True if the write was accepted; False if it was **refused** because the
+            session advanced. False is a normal outcome, not an error.
+        """
+        if not self.connected or not self.driver:
+            log.warning("neo4j_not_connected", trace_id=trace_id, session_id=session_id)
+            return False
+
+        try:
+            async with self.driver.session() as db_session:
+                result = await db_session.run(
+                    """
+                    MATCH (s:Session {session_id: $session_id})
+                    WHERE s.ended_at = $expected_ended_at
+                    SET s.session_label = $label,
+                        s.session_digest = $digest,
+                        s.summary_generated_at = $generated_at,
+                        s.turn_count = $turn_count,
+                        s.summary_failure_reason = null,
+                        s.summary_attempt_count = 0
+                    RETURN s.session_id AS session_id
+                    """,
+                    session_id=session_id,
+                    expected_ended_at=expected_ended_at.isoformat(),
+                    generated_at=generated_at.isoformat(),
+                    turn_count=turn_count,
+                    label=label,
+                    digest=orjson.dumps(digest.model_dump(mode="json")).decode()
+                    if digest is not None
+                    else None,
+                )
+                accepted = await result.single() is not None
+        except Exception as e:
+            log.error(
+                "session_digest_write_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return False
+
+        if accepted:
+            log.info(
+                "session_digest_written",
+                session_id=session_id,
+                trace_id=trace_id,
+                turn_count=turn_count,
+                has_digest=digest is not None,
+            )
+        else:
+            # Loud, because a silently-dropped write is indistinguishable from a
+            # sweep that never ran.
+            log.info(
+                "session_digest_write_refused",
+                session_id=session_id,
+                trace_id=trace_id,
+                reason="session advanced since the sweep read it",
+                expected_ended_at=expected_ended_at.isoformat(),
+            )
+        return accepted
+
+    async def mark_session_projection_clean(
+        self,
+        session_id: str,
+        *,
+        expected_ended_at: datetime,
+        generated_at: datetime,
+        trace_id: str | None = None,
+    ) -> bool:
+        """Advance freshness for a session that yielded no digest, touching nothing else.
+
+        Two cases reach here, and neither is a failure:
+
+        * **Below the minimum-turns floor** — a genuine single-turn session, which
+          ADR-0124 D2 deliberately gives no digest because every ``Turn`` already
+          carries its own summary and a one-turn session digest would be a diverging
+          artifact describing the same event.
+        * **Unregenerable** — the session's captures are no longer on disk. Retention
+          purges captures while ``Session`` nodes persist indefinitely, so this is the
+          normal state of any older session, not an edge case.
+
+        Both are *completed projections with an empty result*, so freshness advances —
+        otherwise they stay dirty forever and AC-2 can never pass. But this writes
+        **only** freshness and the failure state. It deliberately touches neither
+        ``session_label``/``session_digest`` nor ``turn_count``:
+
+        * Writing None over a previously good digest is data loss dressed as a clean
+          projection — the clobber bug ADR-0124 exists to remove, in a new field.
+        * A below-floor read is **not a reliable recount**. One surviving capture from
+          a six-turn session reads as "1", and writing that would shrink a correct
+          ``turn_count``. The stored value comes from consolidation, which saw the
+          turns when they were still on disk, and is the better number. This failure
+          would also be self-concealing, since AC-7 compares ``turn_count`` against a
+          recount and this write would have corrupted both sides of that comparison.
+
+        ``turn_count`` is written only by :meth:`write_session_digest`, where the read
+        genuinely produced the digest it describes.
+
+        Args:
+            session_id: Session to mark clean.
+            expected_ended_at: ``ended_at`` as captured when the sweep read it. Uses
+                the same predicate as the digest write, so a turn landing mid-sweep
+                refuses this too.
+            generated_at: Freshness stamp to publish.
+            trace_id: Trace identifier for log correlation (ADR-0074 §I3).
+
+        Returns:
+            True if accepted; False if refused because the session advanced.
+        """
+        if not self.connected or not self.driver:
+            log.warning("neo4j_not_connected", trace_id=trace_id, session_id=session_id)
+            return False
+
+        try:
+            async with self.driver.session() as db_session:
+                result = await db_session.run(
+                    """
+                    MATCH (s:Session {session_id: $session_id})
+                    WHERE s.ended_at = $expected_ended_at
+                    SET s.summary_generated_at = $generated_at,
+                        s.summary_failure_reason = null,
+                        s.summary_attempt_count = 0
+                    RETURN s.session_id AS session_id
+                    """,
+                    session_id=session_id,
+                    expected_ended_at=expected_ended_at.isoformat(),
+                    generated_at=generated_at.isoformat(),
+                )
+                accepted = await result.single() is not None
+        except Exception as e:
+            log.error(
+                "session_projection_clean_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return False
+
+        log.info(
+            "session_projection_marked_clean" if accepted else "session_projection_clean_refused",
+            session_id=session_id,
+            trace_id=trace_id,
+        )
+        return accepted
+
+    async def record_session_summary_failure(
+        self,
+        session_id: str,
+        *,
+        expected_ended_at: datetime,
+        failure_reason: str,
+        trace_id: str | None = None,
+    ) -> bool:
+        """Record a failed generation attempt — inert and loud (ADR-0124 AC-4).
+
+        Deliberately does **not** touch ``session_label``, ``session_digest`` or
+        ``summary_generated_at``. The stored artifacts stay exactly as they were, and
+        freshness does not advance, so the session remains dirty and eligible for
+        retry. Advancing freshness here would mark a failed session clean forever —
+        the precise failure AC-4 exists to catch.
+
+        Predicated on ``expected_ended_at`` for the same reason the success path is:
+        a failure record must not clobber a concurrent successful write.
+
+        Args:
+            session_id: Session whose attempt failed.
+            expected_ended_at: ``ended_at`` as captured when the sweep read it.
+            failure_reason: A :class:`SummaryFailureReason` value.
+            trace_id: Trace identifier for log correlation (ADR-0074 §I3).
+
+        Returns:
+            True if the record was accepted; False if refused or unavailable.
+        """
+        if not self.connected or not self.driver:
+            log.warning("neo4j_not_connected", trace_id=trace_id, session_id=session_id)
+            return False
+
+        try:
+            async with self.driver.session() as db_session:
+                result = await db_session.run(
+                    """
+                    MATCH (s:Session {session_id: $session_id})
+                    WHERE s.ended_at = $expected_ended_at
+                    SET s.summary_failure_reason = $failure_reason,
+                        s.summary_attempt_count = coalesce(s.summary_attempt_count, 0) + 1
+                    RETURN s.summary_attempt_count AS attempts
+                    """,
+                    session_id=session_id,
+                    expected_ended_at=expected_ended_at.isoformat(),
+                    failure_reason=failure_reason,
+                )
+                row = await result.single()
+        except Exception as e:
+            log.error(
+                "session_summary_failure_record_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return False
+
+        if row is None:
+            return False
+
+        log.warning(
+            "session_summary_failure_recorded",
+            session_id=session_id,
+            trace_id=trace_id,
+            failure_reason=failure_reason,
+            attempt_count=row["attempts"],
+        )
+        return True
+
+    async def find_dirty_idle_sessions(
+        self,
+        *,
+        idle_threshold_seconds: float,
+        max_attempts: int,
+        limit: int = 25,
+        trace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Find sessions whose digest projection is stale and whose turns have stopped.
+
+        Dirty is ``summary_generated_at IS NULL OR summary_generated_at < ended_at``.
+        **The ``IS NULL`` disjunct is required** (ADR-0124 AC-2): in Cypher a
+        comparison against NULL yields NULL and the row is silently dropped, so a
+        never-summarised session escapes a bare ``<`` scan entirely.
+
+        Sessions carrying a **recorded terminal failure** are excluded — a stored
+        deterministic reason *and* an attempt count at or above the retry limit.
+        Transient reasons (a budget denial above all) are never terminal, so those
+        sessions keep coming back until they succeed.
+
+        Args:
+            idle_threshold_seconds: How long a session must be quiet to be eligible.
+            max_attempts: Attempt count at which a deterministic failure goes terminal.
+            limit: Maximum sessions to return in one sweep.
+            trace_id: Trace identifier for log correlation (ADR-0074 §I3).
+
+        Returns:
+            Rows of ``session_id``, ``started_at``, ``ended_at`` — fewest-attempts
+            first, then oldest-stale, so a backlog drains in the order it accumulated
+            **without** letting repeatedly-failing sessions monopolise the window.
+            Ordering by ``ended_at`` alone lets a session that fails for a
+            transient-classified reason it will never recover from sit at the head of
+            the queue forever, starving every newer session and re-sending its full
+            payload on every sweep.
+        """
+        if not self.connected or not self.driver:
+            log.warning("neo4j_not_connected", trace_id=trace_id)
+            return []
+
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=idle_threshold_seconds)
+        ).isoformat()
+
+        try:
+            async with self.driver.session() as db_session:
+                result = await db_session.run(
+                    """
+                    MATCH (s:Session)
+                    WHERE s.ended_at < $cutoff
+                      AND (s.summary_generated_at IS NULL
+                           OR s.summary_generated_at < s.ended_at)
+                      AND NOT (s.summary_failure_reason IN $terminal_reasons
+                               AND coalesce(s.summary_attempt_count, 0) >= $max_attempts)
+                    RETURN s.session_id AS session_id,
+                           s.started_at  AS started_at,
+                           s.ended_at    AS ended_at
+                    ORDER BY coalesce(s.summary_attempt_count, 0) ASC, s.ended_at ASC
+                    LIMIT $limit
+                    """,
+                    cutoff=cutoff,
+                    terminal_reasons=sorted(TERMINAL_ELIGIBLE_REASONS),
+                    max_attempts=max_attempts,
+                    limit=limit,
+                )
+                return list(await result.data())
+        except Exception as e:
+            log.error(
+                "find_dirty_idle_sessions_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+            )
+            return []
 
     async def link_session_turns(self, session_id: str, trace_id: str | None = None) -> int:
         """Wire all Turn nodes for a session into an ordered sequence.

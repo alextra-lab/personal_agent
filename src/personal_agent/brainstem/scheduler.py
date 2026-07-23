@@ -35,6 +35,34 @@ log = get_logger(__name__)
 settings = get_settings()
 
 
+def _parse_graph_timestamp(value: object) -> datetime | None:
+    """Coerce a Neo4j-returned timestamp to an aware ``datetime``.
+
+    Timestamps are stored as ISO strings, but the driver may hand back a native
+    temporal type depending on how a node was written, so both are accepted. A
+    naive value is assumed UTC — everything in the graph is written that way, and
+    treating it as local time would silently shift idle-threshold arithmetic.
+
+    Args:
+        value: The raw property value.
+
+    Returns:
+        An aware datetime, or ``None`` when the value is unusable.
+    """
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    elif hasattr(value, "to_native"):
+        parsed = value.to_native()
+    else:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 def _new_scheduler_trace_id(source: str) -> str:
     """Mint a system-scoped trace id for one scheduler operation (ADR-0074 §I3).
 
@@ -106,6 +134,10 @@ class BrainstemScheduler:
         self._started_at: datetime | None = None
         self._last_health_emit: tuple[int, int, int, int] | None = None
         self._lifecycle_task: asyncio.Task[None] | None = None
+        # ADR-0124 D1 (FRE-947): the session-digest idle sweep. Its own single-flight
+        # guard, following the consolidation guard's pattern.
+        self._session_summary_task: asyncio.Task[None] | None = None
+        self._summary_sweep_in_progress = False
         self.metrics_daemon = metrics_daemon
 
         # Data lifecycle (Phase 2.3)
@@ -191,19 +223,24 @@ class BrainstemScheduler:
 
         # Data lifecycle loop (hourly disk check, daily archive, weekly purge)
         self._lifecycle_task = asyncio.create_task(self._lifecycle_loop())
+        # Session-digest idle sweep (ADR-0124 D1)
+        self._session_summary_task = asyncio.create_task(self._session_summary_sweep_loop())
 
     async def stop(self) -> None:
         """Stop the scheduler."""
         stop_trace_id = _new_scheduler_trace_id("scheduler.lifecycle")
         self.running = False
         pending_tasks = [
-            task for task in (self._lifecycle_task,) if task is not None and not task.done()
+            task
+            for task in (self._lifecycle_task, self._session_summary_task)
+            if task is not None and not task.done()
         ]
         for task in pending_tasks:
             task.cancel()
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
         self._lifecycle_task = None
+        self._session_summary_task = None
 
         queries = getattr(self.quality_monitor, "_queries", None)
         if isinstance(queries, TelemetryQueries):
@@ -386,6 +423,183 @@ class BrainstemScheduler:
                 trace_id=trace_id,
             )
             return False
+
+    async def _session_summary_sweep_loop(self) -> None:
+        """Periodically regenerate digests for sessions that have gone quiet.
+
+        The trigger is deliberately **not** "when did the session end" — sessions are
+        Postgres rows with ``last_active_at`` that resume indefinitely, and
+        session-end is not observable. The question the sweep asks is "when is the
+        projection stale", which is answerable from state the graph already holds.
+        """
+        while self.running:
+            try:
+                await asyncio.sleep(settings.session_summary_sweep_interval_seconds)
+                if not self.running:
+                    break
+                await self.run_session_summary_sweep(
+                    trace_id=_new_scheduler_trace_id("scheduler.session_summary")
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 — a sweep must never kill its loop
+                log.error(
+                    "session_summary_sweep_loop_error",
+                    error=str(e),
+                    exc_info=True,
+                    trace_id=_new_scheduler_trace_id("scheduler.session_summary"),
+                )
+
+    async def run_session_summary_sweep(self, *, trace_id: str) -> dict[str, int]:
+        """Regenerate digests for every dirty-and-idle session (ADR-0124 D1).
+
+        Each session is regenerated **wholesale** from its canonical captures and
+        published through an atomic conditional write, so a sweep can never overwrite
+        a session that received a turn while the model was thinking.
+
+        Args:
+            trace_id: Trace identifier of this sweep (ADR-0074 §I3), threaded into
+                generation, the write, and every structured log below.
+
+        Returns:
+            Counts of ``considered``, ``generated``, ``skipped``, ``no_captures``,
+            ``failed`` and ``refused``. Returned rather than logged alone so tests
+            and the post-deploy population check read the same numbers.
+
+            ``no_captures`` is broken out from ``skipped`` deliberately. Both mark a
+            session clean, but they mean opposite things: a floor skip is "this
+            session does not warrant a digest", whereas ``no_captures`` is "its
+            evidence is no longer on disk". Retention purges captures while
+            ``Session`` nodes persist indefinitely, so a legacy session is normally
+            unregenerable — and folding the two together would let a sweep that
+            digested *nothing* report the same shape as one that correctly applied
+            the floor.
+        """
+        result = {
+            "considered": 0,
+            "generated": 0,
+            "skipped": 0,
+            "no_captures": 0,
+            "failed": 0,
+            "refused": 0,
+        }
+
+        if not settings.session_summary_enabled or self.memory_service is None:
+            return result
+
+        if self._summary_sweep_in_progress:
+            log.debug("session_summary_sweep_already_in_progress", trace_id=trace_id)
+            return result
+
+        # A consolidation pass is itself advancing `ended_at`, so sweeping across one
+        # would just generate writes the conditional predicate then refuses.
+        if self._consolidation_in_progress:
+            log.debug("session_summary_sweep_deferred_to_consolidation", trace_id=trace_id)
+            return result
+
+        self._summary_sweep_in_progress = True
+        try:
+            sessions = await self.memory_service.find_dirty_idle_sessions(
+                idle_threshold_seconds=settings.session_summary_idle_threshold_seconds,
+                max_attempts=settings.session_summary_max_attempts,
+                trace_id=trace_id,
+            )
+            result["considered"] = len(sessions)
+
+            for row in sessions:
+                await self._sweep_one_session(row, result=result, trace_id=trace_id)
+        finally:
+            self._summary_sweep_in_progress = False
+
+        if result["considered"]:
+            log.info("session_summary_sweep_completed", **result, trace_id=trace_id)
+        return result
+
+    async def _sweep_one_session(
+        self, row: dict[str, Any], *, result: dict[str, int], trace_id: str
+    ) -> None:
+        """Regenerate and publish one session's digest, updating ``result`` in place."""
+        from personal_agent.captains_log.capture import read_session_captures  # noqa: PLC0415
+        from personal_agent.memory.session_digest import SessionSummaryStatus  # noqa: PLC0415
+        from personal_agent.second_brain.session_summary import (  # noqa: PLC0415
+            generate_session_digest,
+        )
+
+        assert self.memory_service is not None  # guarded by the caller
+
+        session_id = row["session_id"]
+        started_at = _parse_graph_timestamp(row["started_at"])
+        # Captured BEFORE generation, and the write is predicated on it still holding.
+        # Re-reading it after generation would reintroduce exactly the
+        # time-of-check-to-time-of-use window the conditional write exists to close.
+        expected_ended_at = _parse_graph_timestamp(row["ended_at"])
+        if started_at is None or expected_ended_at is None:
+            log.warning(
+                "session_summary_sweep_unparseable_timestamps",
+                session_id=session_id,
+                trace_id=trace_id,
+            )
+            return
+
+        captures = read_session_captures(
+            session_id, started_at=started_at, ended_at=expected_ended_at
+        )
+        if not captures:
+            log.info(
+                "session_summary_no_captures_on_disk",
+                session_id=session_id,
+                trace_id=trace_id,
+                reason="captures purged by retention; session cannot be regenerated",
+            )
+
+        outcome = await generate_session_digest(
+            captures, session_id=session_id, ended_at=expected_ended_at, trace_id=trace_id
+        )
+
+        if outcome.status is SessionSummaryStatus.FAILED:
+            result["failed"] += 1
+            await self.memory_service.record_session_summary_failure(
+                session_id,
+                expected_ended_at=expected_ended_at,
+                failure_reason=(
+                    outcome.failure_reason.value if outcome.failure_reason else "unknown"
+                ),
+                trace_id=trace_id,
+            )
+            return
+
+        if outcome.status is SessionSummaryStatus.SKIPPED_BELOW_FLOOR:
+            # No digest to publish. Advance freshness ONLY — never write
+            # label/digest=None over a session that already carries a good digest,
+            # and never write a deflated recount over a correct turn_count. Captures
+            # age out under retention while Session nodes live forever, so "fewer
+            # captures than turns" is the normal state of an older session, not a
+            # sign that it had none.
+            accepted = await self.memory_service.mark_session_projection_clean(
+                session_id,
+                expected_ended_at=expected_ended_at,
+                generated_at=datetime.now(timezone.utc),
+                trace_id=trace_id,
+            )
+            if accepted:
+                result["no_captures" if not captures else "skipped"] += 1
+        else:
+            accepted = await self.memory_service.write_session_digest(
+                session_id,
+                expected_ended_at=expected_ended_at,
+                generated_at=datetime.now(timezone.utc),
+                turn_count=len(captures),
+                label=outcome.label,
+                digest=outcome.digest,
+                trace_id=trace_id,
+            )
+            if accepted:
+                result["generated"] += 1
+
+        if not accepted:
+            # The session took a turn mid-generation. It is dirty again, and the
+            # next sweep picks it up — no retry here, which would race the same way.
+            result["refused"] += 1
 
     async def _trigger_consolidation(self, *, trace_id: str | None = None) -> None:
         """Trigger second brain consolidation and publish consolidation.completed.

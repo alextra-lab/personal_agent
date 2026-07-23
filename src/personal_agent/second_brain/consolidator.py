@@ -34,7 +34,6 @@ from personal_agent.second_brain.attempts import (
     record_consolidation_attempt,
 )
 from personal_agent.second_brain.entity_extraction import extract_entities_and_relationships
-from personal_agent.second_brain.session_summary import generate_session_summary
 from personal_agent.sysgraph import get_default_sysgraph_repo
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.trace import SystemTraceContext
@@ -423,20 +422,18 @@ class SecondBrainConsolidator:
                 # dominant_entities is populated by _update_session_dominant_entities()
                 # after MERGE via a graph query — captures don't carry key_entities directly.
 
-                # FRE-347: generate the session-level prose summary before MERGE.
-                # Returns None on any failure (budget, timeout, model error) so consolidation
-                # never blocks; the next pass retries.
-                summary = await generate_session_summary(
-                    ordered, session_id=session_id, trace_id=trace_id
-                )
-
+                # ADR-0124 D1 (FRE-947): the summariser is NO LONGER called here.
+                # Generation is a derived read model driven by the idle sweep
+                # (brainstem/scheduler.py), not a per-turn side effect of
+                # consolidation — ADR-0024's original resolution, which the FRE-347
+                # implementation inverted. This pass owns only the turn-derived
+                # properties; the digest, label and freshness stamp are the sweep's.
                 session_node = SessionNode(
                     session_id=session_id,
                     started_at=ordered[0].timestamp,
                     ended_at=ordered[-1].timestamp,
                     turn_count=len(ordered),
                     dominant_entities=[],  # Populated by link_session_turns via graph query
-                    session_summary=summary,
                 )
                 created = await self.memory_service.create_session(session_node, trace_id=trace_id)
                 if created:

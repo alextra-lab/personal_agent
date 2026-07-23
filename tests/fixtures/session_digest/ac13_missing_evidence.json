@@ -1,0 +1,140 @@
+{
+  "set": "ac13_missing_evidence",
+  "criterion": "AC-13",
+  "synthetic": true,
+  "threshold": "payload_absent yields NO correction; status_visible and self_correction each yield ONE",
+  "cases": [
+    {
+      "case_id": "payload_absent",
+      "expected": "no_correction",
+      "why": "the only possible contradiction lives in a payload the capture does not hold; absence of evidence is not evidence of absence",
+      "captures": [
+        {
+          "trace_id": "ac13-absent-t1",
+          "session_id": "ac13-absent",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "check the cluster",
+          "assistant_response": "The cluster is green and all shards are assigned.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": null,
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "index": "agent-logs-*"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac13-absent-t2",
+          "session_id": "ac13-absent",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "anything to worry about?",
+          "assistant_response": "Not that I saw.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "status_visible",
+      "expected": "correction",
+      "why": "a contradiction between 'the command succeeded' and a recorded error status is Tier A on status alone, and must not be suppressed merely because a payload is missing",
+      "captures": [
+        {
+          "trace_id": "ac13-status-t1",
+          "session_id": "ac13-status",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "run the migration",
+          "assistant_response": "The migration ran successfully with no errors.",
+          "steps": [],
+          "tools_used": [
+            "read_file"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "read_file",
+              "success": false,
+              "output": null,
+              "error": "exit code 1: relation already exists",
+              "latency_ms": 14.0,
+              "arguments": {
+                "path": "migrations/003.sql"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac13-status-t2",
+          "session_id": "ac13-status",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "so we are done?",
+          "assistant_response": "We should be.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "self_correction",
+      "expected": "correction",
+      "why": "Tier B needs only the session's own text plus supporting evidence",
+      "captures": [
+        {
+          "trace_id": "ac13-self-t1",
+          "session_id": "ac13-self",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "what port does the gateway use?",
+          "assistant_response": "It listens on port 9000.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac13-self-t2",
+          "session_id": "ac13-self",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "are you certain?",
+          "assistant_response": "I was wrong \u2014 the deployment config sets it to 9001.",
+          "steps": [],
+          "tools_used": [
+            "read_file"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "read_file",
+              "success": true,
+              "output": "AGENT_SERVICE_PORT=9001",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "path": ".env"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

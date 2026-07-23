@@ -803,6 +803,50 @@ def _gate_blocked_result(
     }
 
 
+def _record_undispatched_invocation(
+    ctx: ExecutionContext,
+    *,
+    tool_name: str,
+    arguments: dict[str, Any] | str,
+    error: str,
+) -> None:
+    """Record a tool invocation that never reached dispatch (ADR-0124 AC-8, FRE-947).
+
+    Three paths abandon a tool call before it is dispatched — malformed argument
+    JSON, a loop-gate block, and an exception escaping the dispatcher. Each already
+    appends a hint to the *transcript* so the model can recover, but before FRE-947
+    none of them touched ``ctx.tool_results``, which is what
+    ``TaskCapture.tool_results`` is built from. A blocked or malformed invocation
+    was therefore invisible to the capture, and to everything reading it.
+
+    ADR-0124 AC-8 requires the summariser's prompt to carry **every** tool
+    invocation with its name, arguments, status and error. An invocation the
+    capture never recorded cannot be recovered later, so it is recorded here.
+
+    The one behavioural consumer of ``ctx.tool_results`` is
+    :func:`_fallback_reply_from_tool_results`, which renders these as
+    ``- <tool>: failed (<error>)`` — correct under its existing contract, and
+    strictly better than the previous silence.
+
+    Args:
+        ctx: Execution context whose ``tool_results`` list is appended to.
+        tool_name: The tool that was invoked.
+        arguments: Parsed arguments, or the raw argument string when parsing is
+            what failed.
+        error: Why the invocation never ran.
+    """
+    ctx.tool_results.append(
+        {
+            "tool_name": tool_name,
+            "success": False,
+            "output": None,
+            "error": error,
+            "latency_ms": 0.0,
+            "arguments": arguments,
+        }
+    )
+
+
 # Entity type keywords for recall intent (ADR-0025) — map words to graph entity_type.
 # Values are the ADR-0109 V2 10-type taxonomy (FRE-794); location/person/organization are
 # stable across V1->V2, the rest were remapped from the retired Technology/Topic/Concept.
@@ -4570,6 +4614,13 @@ async def step_tool_execution(
                     ),
                 }
             )
+            # FRE-947: the raw string, since parsing it is what failed.
+            _record_undispatched_invocation(
+                ctx,
+                tool_name=tool_name,
+                arguments=arguments_str,
+                error=f"malformed argument JSON: {e}",
+            )
             continue
 
         # Gate pre-check (sequential — FSM state mutations happen here)
@@ -4593,6 +4644,12 @@ async def step_tool_execution(
             GateDecision.BLOCK_CONSECUTIVE,
         ):
             tool_results.append(_gate_blocked_result(tool_call_id, tool_name, gate_result))
+            _record_undispatched_invocation(
+                ctx,
+                tool_name=tool_name,
+                arguments=arguments,
+                error=f"blocked by loop gate: {gate_result.decision.value}",
+            )
             continue
 
         allowed_plans.append(
@@ -4665,6 +4722,12 @@ async def step_tool_execution(
                     ),
                 }
             )
+            _record_undispatched_invocation(
+                ctx,
+                tool_name=plan["tool_name"],
+                arguments=plan["arguments"],
+                error=f"dispatch raised {type(raw).__name__}: {raw}",
+            )
             continue
 
         dr: dict[str, Any] = raw
@@ -4713,6 +4776,10 @@ async def step_tool_execution(
                 "output": dr["tool_layer_output"],
                 "error": dr["tool_layer_error"],
                 "latency_ms": dr["latency_ms"],
+                # FRE-947 (ADR-0124 AC-8): the summariser's prompt must carry each
+                # invocation's arguments. They previously survived only in the
+                # intra-turn digest sidecar and were dropped before the capture.
+                "arguments": plan["arguments"],
             }
         )
         ctx.steps.append(

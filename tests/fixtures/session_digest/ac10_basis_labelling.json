@@ -1,0 +1,970 @@
+{
+  "set": "ac10_basis_labelling",
+  "criterion": "AC-10",
+  "synthetic": true,
+  "threshold": "agreement >= 85%; no single emitted tag > 60% of emissions",
+  "label_distribution": {
+    "tool_evidence": 10,
+    "user_statement": 10,
+    "assistant_reasoning": 10,
+    "mixed": 10
+  },
+  "cases": [
+    {
+      "case_id": "ac10-s0",
+      "captures": [
+        {
+          "trace_id": "ac10-s0-t1",
+          "session_id": "ac10-s0",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "check shard allocation",
+          "assistant_response": "I looked it up and reported below.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"unassigned_shards\": \"4\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "check shard allocation"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s0-t2",
+          "session_id": "ac10-s0",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "note that shard allocation",
+          "assistant_response": "Understood, I will keep that in mind.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s0-t3",
+          "session_id": "ac10-s0",
+          "timestamp": "2026-07-20T10:15:00+00:00",
+          "user_message": "what do you think about shard allocation?",
+          "assistant_response": "Reasoning from the structure alone, shard allocation implies a trade-off.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s0-t4",
+          "session_id": "ac10-s0",
+          "timestamp": "2026-07-20T10:20:00+00:00",
+          "user_message": "given shard allocation, what should we do?",
+          "assistant_response": "Combining what you said with the lookup, the answer follows.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"unassigned_shards\": \"4\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "given shard allocation, what should we do?"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s0-t5",
+          "session_id": "ac10-s0",
+          "timestamp": "2026-07-20T10:25:00+00:00",
+          "user_message": "check retention policy",
+          "assistant_response": "I looked it up and reported below.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"min_age\": \"7d\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "check retention policy"
+              }
+            }
+          ]
+        }
+      ],
+      "labelled_items": [
+        {
+          "content": "unassigned_shards is 4",
+          "true_basis": "tool_evidence"
+        },
+        {
+          "content": "the user stated shard allocation",
+          "true_basis": "user_statement"
+        },
+        {
+          "content": "the assistant inferred a trade-off in shard allocation",
+          "true_basis": "assistant_reasoning"
+        },
+        {
+          "content": "shard allocation combined with the measurement",
+          "true_basis": "mixed"
+        },
+        {
+          "content": "min_age is 7d",
+          "true_basis": "tool_evidence"
+        }
+      ]
+    },
+    {
+      "case_id": "ac10-s1",
+      "captures": [
+        {
+          "trace_id": "ac10-s1-t1",
+          "session_id": "ac10-s1",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "note that retention policy",
+          "assistant_response": "Understood, I will keep that in mind.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s1-t2",
+          "session_id": "ac10-s1",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "what do you think about retention policy?",
+          "assistant_response": "Reasoning from the structure alone, retention policy implies a trade-off.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s1-t3",
+          "session_id": "ac10-s1",
+          "timestamp": "2026-07-20T10:15:00+00:00",
+          "user_message": "given retention policy, what should we do?",
+          "assistant_response": "Combining what you said with the lookup, the answer follows.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"min_age\": \"7d\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "given retention policy, what should we do?"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s1-t4",
+          "session_id": "ac10-s1",
+          "timestamp": "2026-07-20T10:20:00+00:00",
+          "user_message": "check driver version",
+          "assistant_response": "I looked it up and reported below.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"version\": \"5.26.0\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "check driver version"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s1-t5",
+          "session_id": "ac10-s1",
+          "timestamp": "2026-07-20T10:25:00+00:00",
+          "user_message": "note that driver version",
+          "assistant_response": "Understood, I will keep that in mind.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ],
+      "labelled_items": [
+        {
+          "content": "the user stated retention policy",
+          "true_basis": "user_statement"
+        },
+        {
+          "content": "the assistant inferred a trade-off in retention policy",
+          "true_basis": "assistant_reasoning"
+        },
+        {
+          "content": "retention policy combined with the measurement",
+          "true_basis": "mixed"
+        },
+        {
+          "content": "version is 5.26.0",
+          "true_basis": "tool_evidence"
+        },
+        {
+          "content": "the user stated driver version",
+          "true_basis": "user_statement"
+        }
+      ]
+    },
+    {
+      "case_id": "ac10-s2",
+      "captures": [
+        {
+          "trace_id": "ac10-s2-t1",
+          "session_id": "ac10-s2",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "what do you think about driver version?",
+          "assistant_response": "Reasoning from the structure alone, driver version implies a trade-off.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s2-t2",
+          "session_id": "ac10-s2",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "given driver version, what should we do?",
+          "assistant_response": "Combining what you said with the lookup, the answer follows.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"version\": \"5.26.0\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "given driver version, what should we do?"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s2-t3",
+          "session_id": "ac10-s2",
+          "timestamp": "2026-07-20T10:15:00+00:00",
+          "user_message": "check memory headroom",
+          "assistant_response": "I looked it up and reported below.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"mem_available_gib\": \"1.2\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "check memory headroom"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s2-t4",
+          "session_id": "ac10-s2",
+          "timestamp": "2026-07-20T10:20:00+00:00",
+          "user_message": "note that memory headroom",
+          "assistant_response": "Understood, I will keep that in mind.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s2-t5",
+          "session_id": "ac10-s2",
+          "timestamp": "2026-07-20T10:25:00+00:00",
+          "user_message": "what do you think about memory headroom?",
+          "assistant_response": "Reasoning from the structure alone, memory headroom implies a trade-off.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ],
+      "labelled_items": [
+        {
+          "content": "the assistant inferred a trade-off in driver version",
+          "true_basis": "assistant_reasoning"
+        },
+        {
+          "content": "driver version combined with the measurement",
+          "true_basis": "mixed"
+        },
+        {
+          "content": "mem_available_gib is 1.2",
+          "true_basis": "tool_evidence"
+        },
+        {
+          "content": "the user stated memory headroom",
+          "true_basis": "user_statement"
+        },
+        {
+          "content": "the assistant inferred a trade-off in memory headroom",
+          "true_basis": "assistant_reasoning"
+        }
+      ]
+    },
+    {
+      "case_id": "ac10-s3",
+      "captures": [
+        {
+          "trace_id": "ac10-s3-t1",
+          "session_id": "ac10-s3",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "given memory headroom, what should we do?",
+          "assistant_response": "Combining what you said with the lookup, the answer follows.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"mem_available_gib\": \"1.2\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "given memory headroom, what should we do?"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s3-t2",
+          "session_id": "ac10-s3",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "check index size",
+          "assistant_response": "I looked it up and reported below.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"docs_count\": \"2276\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "check index size"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s3-t3",
+          "session_id": "ac10-s3",
+          "timestamp": "2026-07-20T10:15:00+00:00",
+          "user_message": "note that index size",
+          "assistant_response": "Understood, I will keep that in mind.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s3-t4",
+          "session_id": "ac10-s3",
+          "timestamp": "2026-07-20T10:20:00+00:00",
+          "user_message": "what do you think about index size?",
+          "assistant_response": "Reasoning from the structure alone, index size implies a trade-off.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s3-t5",
+          "session_id": "ac10-s3",
+          "timestamp": "2026-07-20T10:25:00+00:00",
+          "user_message": "given index size, what should we do?",
+          "assistant_response": "Combining what you said with the lookup, the answer follows.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"docs_count\": \"2276\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "given index size, what should we do?"
+              }
+            }
+          ]
+        }
+      ],
+      "labelled_items": [
+        {
+          "content": "memory headroom combined with the measurement",
+          "true_basis": "mixed"
+        },
+        {
+          "content": "docs_count is 2276",
+          "true_basis": "tool_evidence"
+        },
+        {
+          "content": "the user stated index size",
+          "true_basis": "user_statement"
+        },
+        {
+          "content": "the assistant inferred a trade-off in index size",
+          "true_basis": "assistant_reasoning"
+        },
+        {
+          "content": "index size combined with the measurement",
+          "true_basis": "mixed"
+        }
+      ]
+    },
+    {
+      "case_id": "ac10-s4",
+      "captures": [
+        {
+          "trace_id": "ac10-s4-t1",
+          "session_id": "ac10-s4",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "check reranker latency",
+          "assistant_response": "I looked it up and reported below.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"p95_ms\": \"310\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "check reranker latency"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s4-t2",
+          "session_id": "ac10-s4",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "note that reranker latency",
+          "assistant_response": "Understood, I will keep that in mind.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s4-t3",
+          "session_id": "ac10-s4",
+          "timestamp": "2026-07-20T10:15:00+00:00",
+          "user_message": "what do you think about reranker latency?",
+          "assistant_response": "Reasoning from the structure alone, reranker latency implies a trade-off.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s4-t4",
+          "session_id": "ac10-s4",
+          "timestamp": "2026-07-20T10:20:00+00:00",
+          "user_message": "given reranker latency, what should we do?",
+          "assistant_response": "Combining what you said with the lookup, the answer follows.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"p95_ms\": \"310\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "given reranker latency, what should we do?"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s4-t5",
+          "session_id": "ac10-s4",
+          "timestamp": "2026-07-20T10:25:00+00:00",
+          "user_message": "check embedding width",
+          "assistant_response": "I looked it up and reported below.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"dimensions\": \"1024\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "check embedding width"
+              }
+            }
+          ]
+        }
+      ],
+      "labelled_items": [
+        {
+          "content": "p95_ms is 310",
+          "true_basis": "tool_evidence"
+        },
+        {
+          "content": "the user stated reranker latency",
+          "true_basis": "user_statement"
+        },
+        {
+          "content": "the assistant inferred a trade-off in reranker latency",
+          "true_basis": "assistant_reasoning"
+        },
+        {
+          "content": "reranker latency combined with the measurement",
+          "true_basis": "mixed"
+        },
+        {
+          "content": "dimensions is 1024",
+          "true_basis": "tool_evidence"
+        }
+      ]
+    },
+    {
+      "case_id": "ac10-s5",
+      "captures": [
+        {
+          "trace_id": "ac10-s5-t1",
+          "session_id": "ac10-s5",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "note that embedding width",
+          "assistant_response": "Understood, I will keep that in mind.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s5-t2",
+          "session_id": "ac10-s5",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "what do you think about embedding width?",
+          "assistant_response": "Reasoning from the structure alone, embedding width implies a trade-off.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s5-t3",
+          "session_id": "ac10-s5",
+          "timestamp": "2026-07-20T10:15:00+00:00",
+          "user_message": "given embedding width, what should we do?",
+          "assistant_response": "Combining what you said with the lookup, the answer follows.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"dimensions\": \"1024\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "given embedding width, what should we do?"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s5-t4",
+          "session_id": "ac10-s5",
+          "timestamp": "2026-07-20T10:20:00+00:00",
+          "user_message": "check budget cap",
+          "assistant_response": "I looked it up and reported below.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"daily_cap_usd\": \"2.50\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "check budget cap"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s5-t5",
+          "session_id": "ac10-s5",
+          "timestamp": "2026-07-20T10:25:00+00:00",
+          "user_message": "note that budget cap",
+          "assistant_response": "Understood, I will keep that in mind.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ],
+      "labelled_items": [
+        {
+          "content": "the user stated embedding width",
+          "true_basis": "user_statement"
+        },
+        {
+          "content": "the assistant inferred a trade-off in embedding width",
+          "true_basis": "assistant_reasoning"
+        },
+        {
+          "content": "embedding width combined with the measurement",
+          "true_basis": "mixed"
+        },
+        {
+          "content": "daily_cap_usd is 2.50",
+          "true_basis": "tool_evidence"
+        },
+        {
+          "content": "the user stated budget cap",
+          "true_basis": "user_statement"
+        }
+      ]
+    },
+    {
+      "case_id": "ac10-s6",
+      "captures": [
+        {
+          "trace_id": "ac10-s6-t1",
+          "session_id": "ac10-s6",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "what do you think about budget cap?",
+          "assistant_response": "Reasoning from the structure alone, budget cap implies a trade-off.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s6-t2",
+          "session_id": "ac10-s6",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "given budget cap, what should we do?",
+          "assistant_response": "Combining what you said with the lookup, the answer follows.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"daily_cap_usd\": \"2.50\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "given budget cap, what should we do?"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s6-t3",
+          "session_id": "ac10-s6",
+          "timestamp": "2026-07-20T10:15:00+00:00",
+          "user_message": "check cache hit rate",
+          "assistant_response": "I looked it up and reported below.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"hit_ratio\": \"0.62\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "check cache hit rate"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s6-t4",
+          "session_id": "ac10-s6",
+          "timestamp": "2026-07-20T10:20:00+00:00",
+          "user_message": "note that cache hit rate",
+          "assistant_response": "Understood, I will keep that in mind.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s6-t5",
+          "session_id": "ac10-s6",
+          "timestamp": "2026-07-20T10:25:00+00:00",
+          "user_message": "what do you think about cache hit rate?",
+          "assistant_response": "Reasoning from the structure alone, cache hit rate implies a trade-off.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ],
+      "labelled_items": [
+        {
+          "content": "the assistant inferred a trade-off in budget cap",
+          "true_basis": "assistant_reasoning"
+        },
+        {
+          "content": "budget cap combined with the measurement",
+          "true_basis": "mixed"
+        },
+        {
+          "content": "hit_ratio is 0.62",
+          "true_basis": "tool_evidence"
+        },
+        {
+          "content": "the user stated cache hit rate",
+          "true_basis": "user_statement"
+        },
+        {
+          "content": "the assistant inferred a trade-off in cache hit rate",
+          "true_basis": "assistant_reasoning"
+        }
+      ]
+    },
+    {
+      "case_id": "ac10-s7",
+      "captures": [
+        {
+          "trace_id": "ac10-s7-t1",
+          "session_id": "ac10-s7",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "given cache hit rate, what should we do?",
+          "assistant_response": "Combining what you said with the lookup, the answer follows.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"hit_ratio\": \"0.62\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "given cache hit rate, what should we do?"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s7-t2",
+          "session_id": "ac10-s7",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "check consolidation lag",
+          "assistant_response": "I looked it up and reported below.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"lag_seconds\": \"45\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "check consolidation lag"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac10-s7-t3",
+          "session_id": "ac10-s7",
+          "timestamp": "2026-07-20T10:15:00+00:00",
+          "user_message": "note that consolidation lag",
+          "assistant_response": "Understood, I will keep that in mind.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s7-t4",
+          "session_id": "ac10-s7",
+          "timestamp": "2026-07-20T10:20:00+00:00",
+          "user_message": "what do you think about consolidation lag?",
+          "assistant_response": "Reasoning from the structure alone, consolidation lag implies a trade-off.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac10-s7-t5",
+          "session_id": "ac10-s7",
+          "timestamp": "2026-07-20T10:25:00+00:00",
+          "user_message": "given consolidation lag, what should we do?",
+          "assistant_response": "Combining what you said with the lookup, the answer follows.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"lag_seconds\": \"45\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "given consolidation lag, what should we do?"
+              }
+            }
+          ]
+        }
+      ],
+      "labelled_items": [
+        {
+          "content": "cache hit rate combined with the measurement",
+          "true_basis": "mixed"
+        },
+        {
+          "content": "lag_seconds is 45",
+          "true_basis": "tool_evidence"
+        },
+        {
+          "content": "the user stated consolidation lag",
+          "true_basis": "user_statement"
+        },
+        {
+          "content": "the assistant inferred a trade-off in consolidation lag",
+          "true_basis": "assistant_reasoning"
+        },
+        {
+          "content": "consolidation lag combined with the measurement",
+          "true_basis": "mixed"
+        }
+      ]
+    }
+  ]
+}

@@ -52,6 +52,12 @@ roles:
   primary:            { all: qwen3.6-35b-thinking }
   entity_extraction:  { all: gpt-5.4-mini }
   captains_log:       { all: claude_sonnet }
+  # ADR-0124 D2 (FRE-947): the session summariser's own role. It previously
+  # borrowed captains_log, which made "bind the summariser to a deployment whose
+  # egress you accept" unactionable — you would have re-bound reflection at the
+  # same time. Defaulted to captains_log's current value so introducing the role
+  # is an observable no-op (AC-14); the model CHOICE stays deferred.
+  session_summary:    { all: claude_sonnet }
   insights:           { all: claude_sonnet }
   embedding:          { all: embedding }
   compressor:         { all: gpt-5.4-mini }
@@ -100,6 +106,10 @@ bindings:
   sub_agent:          { deployment: claude_sonnet }
   entity_extraction:  { deployment: gpt-5.4-mini }
   captains_log:       { deployment: claude_sonnet }
+  # ADR-0124 D2 (FRE-947): pinned — no `open: true`. The summariser reads full
+  # tool payloads unconditionally, so this binding IS the egress decision, and it
+  # is the owner's to make once in configuration rather than a user's to flip.
+  session_summary:    { deployment: claude_sonnet }
   insights:           { deployment: claude_sonnet }
   compressor:         { deployment: gpt-5.4-mini }
   embedding:          { deployment: embedding }

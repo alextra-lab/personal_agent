@@ -121,6 +121,13 @@ session-end is not observable. The question is "when is the projection stale."
   a digest built from captures that are already stale. The comparison and the mutation must be the
   same statement. Not cross-database locking either: a Postgres row lock cannot serialise a Neo4j
   mutation.
+
+  **What this does and does not guarantee.** It prevents publishing a digest once a *known* newer
+  turn has landed — i.e. once consolidation has advanced `ended_at`. It cannot prevent a race against
+  a turn that has been captured but not yet consolidated, because `ended_at` does not yet reflect it.
+  That residual window is the consolidation lag (seconds) against the idle threshold (10–15 minutes),
+  so it is bounded and small, and the next sweep corrects it because the session becomes dirty again.
+  This is a staleness bound, not a linearisability claim, and should not be described as one.
 - **Resumption regenerates wholesale** from canonical captures. Never incremental patching of the
   prior summary.
 - **The summary is decoupled from the per-turn session write.** `create_session` must stop owning
@@ -133,12 +140,24 @@ session-end is not observable. The question is "when is the projection stale."
   removed outright.
 - **Full tool results** — name, arguments, status, error and payload. No per-result cap, no
   summariser-specific input ceiling.
-- **Profile-aware egress.** Sessions carry an `execution_profile` of `local` or `cloud`
-  (`service/models.py:228`). For a cloud-profile session the tool bytes already reached a cloud
-  provider when the primary model called the tool, so the summariser adds no exposure. For a
-  **local-profile session those bytes have never left the machine**, and shipping them to a cloud
-  summariser in a background job the user never sees is a new egress path. Local-profile sessions
-  therefore contribute tool **name, arguments, status and error only — never payload.**
+- **Egress-aware input, keyed on where the session's primary model actually ran.** If the session's
+  primary model was a **cloud** deployment, the tool bytes already reached a cloud provider when that
+  model called the tool, so the summariser adds no exposure and receives full payloads. If it was a
+  **local** deployment, those bytes have never left the machine, and shipping them to a cloud
+  summariser in a background job the user never sees is a *new* egress path — so such sessions
+  contribute tool **name, arguments, status and error only, never payload.**
+
+  **The discriminator is the resolved primary deployment's provider, not `SessionModel.execution_profile`.**
+  That column exists (`service/models.py:228`) but is **vestigial**: it is hard-coded to `"local"` at
+  both creation sites and read back by nothing, having been formally retired by ADR-0121 T5 (FRE-920)
+  when the selection store became the source of truth (`service/app.py:290` says so in comment). An
+  earlier draft of this ADR keyed the rule on that column; had it shipped, every session would have
+  been classified local, every payload withheld, and D2's full-input policy silently negated.
+  Resolution is therefore: the session's `session_model_selections` row for `role='primary'` →
+  deployment key → the catalog's provider for that deployment; and where no row exists (legacy
+  sessions, or a role resolving through its binding default), the role's configured default binding.
+  **Fail closed:** if the provider cannot be resolved for a session, treat it as local and withhold
+  payloads.
 - **When payload is withheld, the contract must say so** — *"tool payloads were unavailable for this
   session; do not infer contradiction from their absence"* — or the summariser commits the
   fabrication error described in D3 against its own missing evidence.
@@ -337,8 +356,10 @@ covers ~90% of results.
 - Cheap and deterministic
 
 **Cons:**
-- **Selection bias:** large results are large because they are evidence-dense, so a size-triggered
-  clip targets precisely the material that could contradict the agent
+- **Selection bias:** large results are plausibly large *because* they carry more distinct records,
+  so a size-triggered clip preferentially discards the material most able to contradict the agent.
+  Stated as a mechanism, not a measurement — we have result-size distributions but have not measured
+  evidence density against size, and the argument should not be read as though we had
 - The head/tail justification comes from log compaction, where errors cluster at initialisation and
   in trailing stack traces. This corpus is `self_telemetry_query` (161), `query_elasticsearch` (133),
   `read_file` (120), `search_memory` (76), `web_search` (75) — **query result sets and file reads**,
@@ -384,9 +405,10 @@ schema cost is not zero, and D3 spends it deliberately.
 Note the stronger version of this option is not today's prose string but *one structured record
 carrying both a label field and digest fields, rendered per consumer*. That is close to what D3
 adopts, and the difference is mostly framing: D3 stores them as two named artifacts on the same node
-rather than one nested record, because the label has a different lifetime — it stays useful and
-correct even when the digest is stale, absent under the single-turn floor, or withheld after a
-generation failure.
+rather than one nested record, because the label is useful in states where the digest is not: absent
+under the single-turn floor, and withheld after a generation failure. (An earlier draft also claimed
+the label "stays correct when the digest is stale" — that is false and withdrawn: both are generated
+from the same captures at the same moment and go stale together.)
 
 ### Option 5: Minimal correction — stop generating, fix the clobber bug, build the producer when a consumer exists
 
@@ -499,7 +521,7 @@ consequence-of-being-wrong axis Phase 2 is the safer thing to ship first.
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| **Cross-session supersession of `unresolved`** — a thread left open in session A is settled in session C; nothing revisits A's digest, because regeneration is triggered only by A's own new turns and a concluded session never gets more. Open threads accumulate as permanent false-open state, and the anti-re-litigation consumer eventually asserts "we never settled X" about something settled weeks ago — the exact inverse of its purpose. | **High** (structurally guaranteed to occur) | Phase 0 stamps every `unresolved` item with its session's timestamp so consumers phrase the nudge as *"as of that session, X was open"* rather than asserting present tense. Phase 3's entity-overlap machinery then checks whether a later session's `decisions` settle an earlier session's `unresolved`. The timestamp must ship in Phase 0 or the Phase 3 fix has nothing to stand on. |
+| **Cross-session supersession of `unresolved`** — a thread left open in session A is settled in session C; nothing revisits A's digest, because regeneration is triggered only by A's own new turns and a concluded session never gets more. Open threads accumulate as permanent false-open state, and the anti-re-litigation consumer eventually asserts "we never settled X" about something settled weeks ago — the exact inverse of its purpose. | **High** (occurs whenever a thread outlives its session, which the corpus shows is common; not strictly guaranteed) | Phase 0 stamps every `unresolved` item with its session's timestamp so consumers phrase the nudge as *"as of that session, X was open"* rather than asserting present tense. Phase 3's entity-overlap machinery then checks whether a later session's `decisions` settle an earlier session's `unresolved`. The timestamp must ship in Phase 0 or the Phase 3 fix has nothing to stand on. |
 | **Proportional dominance** — annotation outweighing the facts it annotates in a small context (five digests ≈ 74% of a p50 context) | High | Relative bound: annotation may never exceed the tokens of the facts it annotates. Measured in the Phase 2a replay before anything ships. |
 | **Fabricated corrections** poisoning the graph self-confirmingly | High | Precision-first Tier A/B standard; verbatim-span validation; never infer error from absent evidence; `corrections` rate monitored as a drift signal. |
 | **Instruction contamination** via tool output surviving into a digest and then into a future session's context | High blast radius; likelihood **not** reduced by single-user operation — the corpus already includes web search and file reads, whose content is not authored by the user | Gated, not accepted. **AC-20 blocks Phase 2** — the point at which a contaminated digest first reaches a model automatically — on an adversarial fixture set proving directives in tool output neither survive into the digest nor alter it. Phase 0 and Phase 1 are unaffected because a digest read only by a human is not an injection path. |
@@ -507,7 +529,7 @@ consequence-of-being-wrong axis Phase 2 is the safer thing to ship first.
 | **Provenance collapse** — the model treating derived synthesis as retrieved fact | Medium | Rendered annotation explicitly labelled as derived; `basis` tags retained in the structured record. |
 | **Pseudo-consensus** from one session's digest restating several of its own ranked facts | Medium | Attach each session's digest exactly once per recall. |
 | **Budget-cliff eviction** of the entire memory block | Low likelihood (never fired in 1,283 evaluations; ~20× headroom), catastrophic if it fires | Structural, not monitored: annotation trims before memory context. |
-| **Schema violation** producing no digest at all | Medium | Validator with one retry and a defined degradation; a malformed response must not silently become a missing summary. |
+| **Schema violation** producing no digest at all | Medium | Validator with one retry; on second failure the attempt is recorded as a failure per the terminal-failure rule (reason stored, session stays dirty, counted in population-check output) rather than silently yielding no digest. AC-4 covers the inert-and-loud behaviour; the retry count itself is an implementation choice, not a load-bearing decision. |
 
 ---
 
@@ -560,16 +582,24 @@ partial passes do not open a gate.
 | Gate | Requires |
 |---|---|
 | Start Phase 1 | AC-1 … AC-13 (Phase 0) |
-| Start Phase 2a — offline replay analysis | AC-14, AC-15 (Phase 1) |
+| Start Phase 2a — offline replay analysis | AC-14 (Phase 1 works). AC-15 is evaluated *during* 2a, not before it: 2a is what produces the digests-per-query, staleness, duplication and annotation-ratio numbers AC-15 and AC-18 read. |
 | Turn Phase 2 hydration on for the model | AC-16 … AC-20 |
 | Start Phase 3 build | AC-21 |
-| Make the Phase 3 nudge **user-visible** | AC-22 — an **intra-phase** gate: Phase 3 may be built and evaluated offline beforehand, but must not surface to the user until it passes |
+| Make the Phase 3 nudge **user-visible** | AC-22 — an **intra-phase** gate. The phase table's "Phase 3 requires its own precision gate" means exactly this: Phase 3 may be built and evaluated offline once AC-21 passes, but must not surface to the user until AC-22 does. |
 | Start Phase 4 | AC-23 — the measure-first diagnostic |
 
 **Fixture discipline, applying to every criterion below that uses one.** Fixture and sample sets are
 **selected and written down before the producer is tuned or the arm is run**, and are drawn by a
 stated rule (random over the eligible population, or exhaustive) — never chosen after seeing output.
 A criterion evaluated on a post-hoc sample has not been met.
+
+**"Recorded terminal failure" is a defined, reported state, not an escape hatch.** A session may be
+excluded from the population checks only if it carries a stored failure reason *and* an attempt
+count at or above the retry limit. Oversize input is terminal only once it has been retried and
+failed deterministically; a budget denial is never terminal, since it is transient by nature (this
+is why AC-4 requires failures to stay retryable). **Every population check reports the count and
+reasons of excluded sessions alongside its result** — so an implementation that marks sessions
+terminal to make a check pass makes that visible in the same output rather than hiding it.
 
 **Corpus feasibility is itself a gate.** The corpus holds 121 sessions, 59 multi-turn. Before any
 criterion that names a sample size, the eligible population must be counted and reported. **If the
@@ -582,8 +612,11 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   generations ≤ number of idle gaps exceeding the threshold, plus one; and a session whose turns all
   arrived inside one idle window is generated **exactly once**. · **Check:** `session_summary_generated`
   counts per `session_id` in `agent-logs-*`, joined against inter-turn gaps computed from the
-  captures. · *Fails if* counts exceed the quiet-period bound — which catches both per-turn
-  generation and the "every turn but one" evasion that a bare `< turn_count` bound permits.
+  captures. Additionally, for a fixture session the **first** generation occurs no earlier than the
+  idle threshold after its last turn. · *Fails if* counts exceed the quiet-period bound — which
+  catches both per-turn generation and the "every turn but one" evasion a bare `< turn_count` bound
+  permits — **or** if generation fires before the threshold elapses, which an eager implementation
+  satisfying only the count bound would do.
 - **AC-2** — No session is left behind its own activity. · **Check:** Cypher for sessions where
   `ended_at < now − threshold AND (summary_generated_at IS NULL OR summary_generated_at < ended_at)`,
   excluding sessions carrying a recorded terminal generation failure. · *Fails if* any row returns.
@@ -603,18 +636,21 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   model-call telemetry for that attempt. · *Fails if* a model call is issued, or the input is
   silently truncated.
 - **AC-6** — Two sweeps racing one session cannot publish a stale digest. · **Check:** drive two
-  concurrent sweeps, injecting a new turn **between the conditional match and the mutation**; assert
-  the stale write is refused and the stored digest's source captures match the current `ended_at`. ·
-  *Fails if* a read-then-write pair passes where an atomic conditional write would not — the test
-  must distinguish the two, not merely observe a single surviving property value.
+  concurrent sweeps against one session whose `ended_at` advances between the two sweeps' reads;
+  assert the sweep holding the older captured value has its write **refused**, and that
+  `summary_generated_at` reflects only the winning write. · *Fails if* both writes are accepted, or
+  if the implementation is a re-read followed by an unconditional write — the test must distinguish
+  those two, so it asserts refusal of the loser rather than merely observing that one value survives
+  in a single property.
 - **AC-7** — No session summarised after this ships has `turn_count = 1` with a digest; every
   multi-turn session quiet past the threshold has one, except those carrying a recorded terminal
-  failure. Additionally, each session's stored deterministic metadata — turn count, duration, tool
-  invocation and success/failure counts — **equals** a recount from the capture record. · **Check:**
-  two Cypher counts keyed on `summary_generated_at`, plus a property-versus-recount comparison over
-  all sessions. · *Fails if* either count returns non-zero, or any property disagrees with its
-  recount — which is what "compute state, generate meaning" means in practice, and what a producer
-  that lets the model author its own counts would violate.
+  failure. Additionally, `turn_count` on each session summarised after this ships **equals** a
+  recount from its captures. · **Check:** two Cypher counts keyed on `summary_generated_at`, plus a
+  property-versus-recount comparison scoped to those sessions. · *Fails if* either count returns
+  non-zero, or any `turn_count` disagrees with its recount. Scoped deliberately: `SessionNode`
+  carries `turn_count` today but not duration or tool success/failure counts, and D3's
+  compute-don't-generate rule does not by itself justify adding aggregate columns or backfilling
+  history — if those properties are added later, this criterion extends to them then.
 - **AC-8** — Input completeness. For a predefined fixture set spanning multi-result turns, failed
   calls, long assistant responses and both execution profiles, the assembled prompt contains: every
   turn in the session; the **full, untruncated** user and assistant text of each; and for every tool
@@ -624,7 +660,9 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   any turn, field, argument or error is missing, any payload differs from source, or either
   profile's payload rule is violated.
 - **AC-9** — Tool-only facts survive into the digest. On a predefined set of ≥5 sessions across
-  different tools, each containing a decision-relevant fact present **only** in tool output, the
+  different tools **whose primary ran on a cloud deployment** (a local-profile fixture is excluded by
+  construction — D2 withholds its payloads, so the fact would be unavailable), each containing a
+  decision-relevant fact present **only** in tool output, the
   digest reproduces that fact in **all** of them. · **Check:** fixtures fixed in advance; the facts
   are chosen to be consequential for the session outcome, so marginal-utility filtering is not a
   legitimate reason to omit them. · *Fails if* any is missing — a narration-only producer cannot
@@ -639,21 +677,33 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   locator**, and the span occurs at that location. · **Check:** validator resolves each locator to
   the named capture and field, then requires the span there. · *Fails if* any locator is absent or
   unresolvable, or the span is not found at the cited location — bare containment anywhere in the
-  session does not pass.
+  session does not pass. **Stated limitation:** this proves the citation resolves, not that the span
+  *supports* the proposition. A fabricated item citing a real but irrelevant span at a valid locator
+  passes this check. Mechanical entailment is not available to us, so semantic support is carried by
+  AC-12's labelled fixtures and AC-15's human review; AC-11 is a necessary condition that makes the
+  cheap failure mode — invented citations — impossible, and is claimed as nothing more.
 - **AC-12** — **Corrections fire when they should and stay silent when they should not.** On a
   predefined labelled set: positives comprising ≥6 Tier-A contradictions **and** ≥4 Tier-B evidenced
   self-corrections; negatives comprising ≥12 Tier-C cases drawn from the full range D3 names —
   weak/partial conflict, failed or incomplete calls, ambiguous readings, legitimately changed state,
   and disagreement with a subjective judgment. The producer emits a correction for **every** positive
-  and **none** of the negatives. · **Check:** hand-labelled fixtures, fixed before tuning. · *Fails
-  if* any negative yields a correction, **or** any positive yields none. A producer that never emits
-  corrections fails the positives; a naive contradiction detector fails the Tier-C negatives.
+  and none of the negatives. Each emitted Tier-B correction additionally carries the located span of
+  the **supporting evidence**, not merely of the self-correction sentence. · **Check:** hand-labelled
+  fixtures, fixed before tuning. · *Fails if* **any** negative yields a correction (precision is
+  absolute here), or if fewer than **80%** of positives yield one, or if any Tier-B correction lacks
+  its evidence span. The recall floor is 80% rather than 100% deliberately: D3 accepts that a missed
+  error is recoverable, so demanding perfect recall would contradict the precision-first stance and
+  penalise a justifiably conservative producer. It is not 0% because that is the degenerate
+  never-emit implementation this criterion exists to catch.
 - **AC-13** — A local-profile session asserts no correction **that depends on withheld payload
   content**, while still emitting corrections available from status, error or self-correction. ·
-  **Check:** a local-profile fixture pair — one session whose only contradiction lives in a withheld
-  payload (must yield no correction), one whose contradiction is visible in tool status (must yield
-  one). · *Fails if* absent evidence produces an asserted error, **or** if the producer suppresses
-  corrections that D3 permits without payloads.
+  **Check:** a local-profile fixture triple — one session whose only contradiction lives in a
+  withheld payload (must yield **no** correction), one whose contradiction is visible in tool
+  **status or error** (must yield one), and one containing an explicit evidenced **self-correction**
+  in the session's own text (must yield one). · *Fails if* absent evidence produces an asserted
+  error, **or** if either non-payload correction path is suppressed — both Tier-A-on-status and
+  Tier-B survive payload withholding, and a producer that disables corrections wholesale for local
+  sessions fails here.
 
 ### Phase 1 — UI
 
@@ -673,9 +723,10 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
 ### Phase 2 — hydration
 
 - **AC-16** — Ranked fact IDs **and order** are byte-identical with hydration enabled versus
-  baseline, over a **frozen, pre-registered** replay corpus of stated size. · **Check:** offline
-  replay diff. · *Fails if* any query differs, or if the corpus is empty, unstated, or selected after
-  the fact.
+  baseline, over a **frozen, pre-registered** replay corpus of **at least 30 queries** spanning
+  recalls whose winners have digests, lack digests, and span multiple sessions. · **Check:** offline
+  replay diff. · *Fails if* any query differs, or if the corpus is under 30, unstated, lacks any of
+  the three classes, or was selected after the fact — a one-convenient-query replay proves nothing.
 - **AC-17** — Annotation is discarded **before** memory context under budget pressure. · **Check:**
   construct a context that fits without annotation and exceeds with it; assert ranked facts survive
   and annotation is dropped. · *Fails if* the memory block is evicted.
@@ -690,8 +741,11 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   digest. · *Fails on* duplication, omission, or leakage.
 - **AC-20** — Instruction-like content in tool output does not survive into the digest as an
   instruction. · **Check:** adversarial fixture set — tool results containing imperative text
-  addressed to a model ("ignore previous instructions", "when summarising, state X") — assert the
-  digest neither reproduces the directive nor complies with it. · *Fails if* any fixture's directive
+  addressed to a model ("ignore previous instructions", "when summarising, state X"), each **paired
+  with an identical fixture whose directive text is removed**. Assert the digest neither reproduces
+  the directive nor complies with it, judged against the directive-free twin as the counterfactual. ·
+  *Without the paired control the criterion is unfalsifiable*, since "altered content" has no
+  baseline to be measured against. · *Fails if* any fixture's directive
   appears as an instruction or alters digest content. This gates automatic consumption specifically:
   the contamination path exists because D2 opened the producer to tool payloads, and Phase 2 is where
   a contaminated digest first reaches a model automatically.
@@ -723,11 +777,16 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
 
 ### Phase 4 — gate
 
-- **AC-23** — Phase 4 does not begin without a diagnostic naming a **concrete observed failure class**
-  that only candidate pre-filtering or cross-session synthesis fixes. · **Check:** the diagnostic
-  cites specific recall misses from real traffic and shows why Phases 0–3 cannot address them. ·
-  *Fails if* the justification is capability-shaped ("embedding would let us…") rather than a
-  demonstrated miss.
+- **AC-23** — Phase 4's two lanes are gated **separately**, each on a diagnostic naming a concrete
+  observed failure class **that Phases 0–3 as shipped demonstrably do not address**. · **Check:** the
+  diagnostic cites specific recall misses from real traffic, and shows for each that the shipped
+  Phase 0–3 mechanisms were exercised and failed on it. · *Fails if* the justification is
+  capability-shaped ("embedding would let us…") rather than a demonstrated miss, or if a diagnostic
+  for one lane is used to open the other — candidate pre-filtering and cross-session synthesis are
+  different mechanisms with different risks, and a miss that synthesis would fix is not evidence for
+  a filter that *removes* candidates. Deliberately **not** phrased as "only these two mechanisms
+  could fix it": proving a negative over unknown alternatives is not achievable, and the gate is
+  about demonstrated need, not exclusivity.
 
 **Kill condition (not a failure state).** If Phase 1 review plus the Phase 2 paired evaluation show
 facts-only ≥ facts+digest on memory-dependent tasks while the user still finds the digest useful for

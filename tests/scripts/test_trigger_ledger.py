@@ -587,20 +587,6 @@ def test_reconcile_skips_queued_entry_leaving_it_re_offerable() -> None:
     assert snapshot_unconsumed(result) == (entry,)
 
 
-def test_reconcile_retry_returning_queued_stays_unconsumed() -> None:
-    """A retry that lands in a busy pane is recorded, never closed out."""
-    ledger, _ = _record({}, now=100.0)  # never attempted — safe to retry
-    spy = _Spy(outcome="queued")
-    result = reconcile(
-        ledger, now=200.0, execute_pending=spy, persist=lambda _l: None, logger=_NullLogger()
-    )
-    assert len(spy.calls) == 1
-    entry = result["master:412:abc123"]
-    assert entry.queued_at == 200.0
-    assert entry.sent_at is None
-    assert entry.consumed_at is None
-
-
 def test_queued_at_survives_a_save_load_round_trip(tmp_path: Path) -> None:
     """The discriminator must be durable — it is only useful across a restart."""
     ledger, _ = _record({}, now=100.0)

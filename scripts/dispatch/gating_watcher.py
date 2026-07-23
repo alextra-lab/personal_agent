@@ -1031,13 +1031,31 @@ def _kill_switch_engaged(path: Path) -> bool:
     return path.exists()
 
 
+def _is_superseded(
+    entry: trigger_ledger.LedgerEntry, unconfirmed: Mapping[str, trigger_ledger.LedgerEntry]
+) -> bool:
+    """Return whether a newer unconfirmed trigger covers the same PR and seat.
+
+    Strictly newer by ``created_at``, so of any two entries exactly one is
+    superseded and never both. A tie is impossible in practice — ``decide``
+    yields at most one trigger per PR per tick — and a tie would leave both
+    live, which is the safe direction.
+    """
+    return any(
+        other.created_at > entry.created_at
+        and other.ticket == entry.ticket
+        and other.target_pane == entry.target_pane
+        for other in unconfirmed.values()
+    )
+
+
 def resolve_queued_triggers(
     ledger: trigger_ledger.Ledger,
     *,
     now: float,
     open_pr_numbers: Collection[str],
     pr_closed: Callable[[str], bool | None],
-    reoffer: Callable[[trigger_ledger.LedgerEntry], trigger_ledger.SendOutcome],
+    reoffer: Callable[[trigger_ledger.LedgerEntry], trigger_ledger.IdleGatedOutcome],
     escalation_s: float,
     escalated: set[str],
     ledger_persist: Callable[[trigger_ledger.Ledger], None],
@@ -1085,7 +1103,9 @@ def resolve_queued_triggers(
             short-circuits the authoritative read — the PR is definitively open.
         pr_closed: Authoritative per-PR state read; ``None`` means undetermined
             and is always treated as "keep the entry".
-        reoffer: Re-attempts one entry's delivery. Must be idle-gated.
+        reoffer: Re-attempts one entry's delivery. Must be **idle-gated**,
+            which the type enforces — a re-offer that could inject into a busy
+            pane is the send loop this pass exists to avoid.
         escalation_s: Age past which a still-unconfirmed entry is surfaced.
         escalated: In-memory one-shot latch of already-surfaced event ids,
             mutated in place.
@@ -1097,14 +1117,31 @@ def resolve_queued_triggers(
         The updated ledger, and the event ids whose delivery was confirmed this
         pass (the caller arms its own dedup store from these).
     """
+    unconfirmed = {
+        event_id: entry
+        for event_id, entry in ledger.items()
+        if entry.queued_at is not None
+        and entry.sent_at is None
+        and entry.consumed_at is None
+        and entry.surfaced_at is None
+    }
     delivered: list[str] = []
-    for event_id, entry in list(ledger.items()):
-        if (
-            entry.queued_at is None
-            or entry.sent_at is not None
-            or entry.consumed_at is not None
-            or entry.surfaced_at is not None
-        ):
+    for event_id, entry in unconfirmed.items():
+        if _is_superseded(entry, unconfirmed):
+            # A newer unconfirmed trigger for the same PR and seat exists, so
+            # this one is stale. Reached by an ordinary re-push while the target
+            # is busy: the dedup key carries the head SHA, so a new SHA mints a
+            # SECOND entry while the first is still unconfirmed. Both carry the
+            # same "/master <pr>" text, and without this both would be re-offered
+            # in the same pass once the pane frees — and the second capture-pane
+            # still reads idle microseconds after the first injection, so the
+            # duplicate lands. Retire the stale one instead: exactly one
+            # outstanding notification per PR per seat, however many re-pushes.
+            ledger = trigger_ledger.mark_consumed(ledger, event_id, now)
+            ledger_persist(ledger)
+            logger.info(
+                "gating_queued_superseded", trace_id=trace_id, event_id=event_id, pr=entry.ticket
+            )
             continue
 
         if (
@@ -1228,7 +1265,7 @@ def run_once(
     if queued_escalated is None:
         queued_escalated = set()
 
-    def _retry_pending(entry: trigger_ledger.LedgerEntry) -> trigger_ledger.SendOutcome:
+    def _retry_pending(entry: trigger_ledger.LedgerEntry) -> trigger_ledger.IdleGatedOutcome:
         return send_to_session(entry.target_pane, entry.command, runner)
 
     if execute:

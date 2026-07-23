@@ -74,6 +74,9 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Literal, Protocol
 
+# What an **idle-gated** send can return: a busy pane is skipped outright, so
+# there is no such thing as an unconfirmed idle-gated delivery.
+IdleGatedOutcome = Literal["sent", "busy", "absent"]
 SendOutcome = Literal["sent", "busy", "absent", "queued"]
 Transport = Literal["channel", "send_keys"]
 
@@ -253,7 +256,7 @@ def reconcile(
     ledger: Ledger,
     *,
     now: float,
-    execute_pending: Callable[[LedgerEntry], SendOutcome],
+    execute_pending: Callable[[LedgerEntry], IdleGatedOutcome],
     persist: Callable[[Ledger], None],
     logger: Logger,
 ) -> Ledger:
@@ -268,9 +271,12 @@ def reconcile(
     Args:
         ledger: The current ledger.
         now: Wall-clock epoch seconds.
-        execute_pending: Retries a never-attempted entry's send. Mirrors
-            ``send_to_session``'s contract (``sent``/``busy``/``absent``); a
-            raised exception is treated as an unresolvable retry failure.
+        execute_pending: Retries a never-attempted entry's send. Must be
+            **idle-gated**, which the type enforces: an unconfirmed
+            (``queued``) delivery has no correct handling here — this loop
+            would close it out as an abandoned non-send, which is precisely
+            the FRE-939 bug. A raised exception is treated as an unresolvable
+            retry failure.
         persist: Persists the ledger after each entry's transition.
         logger: Structured logger.
 
@@ -316,13 +322,6 @@ def reconcile(
             ledger = mark_consumed(ledger, event_id, now)
             persist(ledger)
             logger.info("trigger_ledger_reconcile_completed", event_id=event_id)
-        elif outcome == "queued":
-            # An unconfirmed delivery (FRE-939) -- issued into a busy pane, so
-            # it must stay unconsumed and re-offerable rather than being closed
-            # out as an abandoned non-send below.
-            ledger = mark_queued(ledger, event_id, now)
-            persist(ledger)
-            logger.warning("trigger_ledger_reconcile_queued", event_id=event_id)
         else:
             # Confirmed non-attempt (busy/absent) -- abandon, eligible for a
             # fresh attempt next tick (record_pending never suppresses an

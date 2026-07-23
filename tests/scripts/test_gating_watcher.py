@@ -2132,3 +2132,57 @@ def test_queued_untouched_in_dry_run() -> None:
     )
     assert ledger["master:412:abc1234def5678"].consumed_at is None
     assert runner.calls == []
+
+
+def test_queued_repush_supersedes_the_stale_entry_no_duplicate_send() -> None:
+    """A re-push while master is busy must not queue a second poke for one PR.
+
+    The dedup key carries the head SHA, so a new SHA mints a SECOND unconfirmed
+    entry while the first is still outstanding. Both carry the same
+    ``/master 412`` text. Without superseding, both are re-offered in the same
+    pass once the pane frees — and the second capture-pane still reads idle
+    microseconds after the first injection, so the duplicate lands.
+    """
+    ledger = _queued_entry(created_at=100.0, event_id="master:412:shaA")
+    ledger.update(_queued_entry(created_at=150.0, event_id="master:412:shaB"))
+    runner = _idle_runner()
+    run_once(
+        {},
+        now=200.0,
+        board_fetcher=lambda: [_pr(head_sha="shaB")],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    # The stale entry is retired without a send; only the newest is delivered.
+    assert ledger["master:412:shaA"].consumed_at is not None
+    assert ledger["master:412:shaA"].sent_at is None
+    assert ledger["master:412:shaB"].sent_at == 200.0
+    assert [c for c in runner.calls if c[:2] == ("tmux", "send-keys")] == [
+        ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 412"),
+        ("tmux", "send-keys", "-t", "=cc-master:0.0", "Enter"),
+    ]
+
+
+def test_queued_entries_for_different_prs_are_not_superseded() -> None:
+    """Supersession is per (PR, seat) — an unrelated PR is never retired."""
+    ledger = _queued_entry(created_at=100.0, ticket="412", event_id="master:412:shaA")
+    ledger.update(_queued_entry(created_at=150.0, ticket="500", event_id="master:500:shaC"))
+    run_once(
+        {},
+        now=200.0,
+        board_fetcher=lambda: [_pr(), _pr(number=500)],
+        session_resolver=_no_session,
+        runner=_busy_runner(),
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert ledger["master:412:shaA"].consumed_at is None
+    assert ledger["master:500:shaC"].consumed_at is None

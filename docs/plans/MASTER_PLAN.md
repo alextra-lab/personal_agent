@@ -33,30 +33,48 @@ and a 120,000 budget ceiling, and the budget trim has never fired in 1,283 evalu
 only if session lengths grow.
 
 Forward: FRE-944/FRE-945 restored the per-turn emits (live 2026-07-23), so the review can be based on
-measured headroom rather than code reading. **FRE-942 is parked** — its premise (hard≈soft trigger
-parity) rested on stale pre-June counts and named modules FRE-941 deleted; it needs an owner retarget
-onto the design change FRE-908 identifies (exempt oversized trailing messages from the tail floor, or
-target the scheduler directly), not a threshold tweak. Settle ADR-0061's status in the same decision —
-it still reads Implemented while FRE-908 proved it inert.
+measured headroom rather than code reading. **FRE-942 was retargeted by master 2026-07-23 (owner-directed)
+and is building on build2** — its original premise (hard≈soft trigger parity) rested on stale pre-June
+counts and named modules FRE-941 deleted; it now targets the design change FRE-908 identifies (exempt
+oversized trailing messages from the tail floor, or target the scheduler directly), not a threshold
+tweak. It settles ADR-0061's status in the same decision — that ADR still reads Implemented while
+FRE-908 proved it inert.
 
-## 0b. Session-summary workstream — ADR-0124 Accepted, chain live
+## 0b. Session-summary workstream — Amendment A landed; Phase 0 needs a correction before it deploys
 
-**ADR-0124** (Accepted 2026-07-23) supersedes the measure-first hold that previously sat here: the gate
-now applies to **Phase 4 only**, and Phases 0–3 are unblocked. Chain on build1, relations written at
-dispatch: **FRE-947** Phase 0 producer correction (AC-1–14) → **FRE-948** Phase 1 session-browser
-surface (AC-15) → **FRE-949** Phase 2a offline replay → **FRE-950** Phase 2 hydration, model-visible
-(AC-17–21) → **FRE-951** Phase 3 anti-re-litigation (AC-22 to build, AC-23 to surface). Phase 4 is
-deliberately **unfiled**, gated on AC-24.
+**ADR-0124 Amendment A** (Accepted 2026-07-23, #638) narrows the producer to **conversation scope**:
+full user + assistant text plus tool **metadata only** (name, status, error) — no payloads, no
+arguments — and `corrections` keeps **Tier B alone**. Tier A was the sole payload consumer and
+re-imported the verification lane D4 had already scoped out to the fact-verifier workstream. Three
+problems cease to exist rather than being managed: egress, instruction contamination (path removed,
+its Phase-2 gate unnecessary), and payload-driven input size. **AC-9 and AC-21 are withdrawn**; AC-8
+reverses to assert payload *absence*; AC-12 positives are Tier-B only.
 
-Two things master owns here. **AC-22 is the seam** — the paired evaluation holds only once Phases 0, 1
-and 2 have all landed, so the ADR does not close because its last child merges. And the ADR carries a
-standing condition worth enforcing at every gate: *do not invent a consumer to justify an artifact* —
-if Phase 1 shows the digest conveys nothing useful, stopping is the correct outcome.
+Chain on build1: **FRE-947** Phase 0 (merged #636, **Awaiting Deploy, deploy held**) → **FRE-953**
+Amendment-A producer narrowing (**Needs Approval** — blocks everything below; carries FRE-947's deploy)
+→ **FRE-948** Phase 1 session-browser surface (AC-15) → **FRE-949** Phase 2a offline replay →
+**FRE-950** Phase 2 hydration (AC-17–20) → **FRE-951** Phase 3 anti-re-litigation (AC-22 build, AC-23
+surface). Phase 4 remains **unfiled**, gated on AC-24.
+
+**Phase 1 is shut on AC-10** and the amendment did not dissolve it: its fixtures were payload-derived
+(now invalid) *and* its harness scores agreement by token overlap assuming ~one emitted item per label,
+against a digest bounded at ~250 tokens. Redesign is owner-led and **unfiled by intent** — do not file
+a measurement ticket for a criterion whose subject may still move.
+
+Two things master owns. **AC-22 is the seam** — the paired evaluation holds only once Phases 0, 1 and 2
+have all landed, so the ADR does not close because its last child merges. And the standing condition,
+enforced at every gate: *do not invent a consumer to justify an artifact* — if Phase 1 shows the digest
+conveys nothing useful, stopping is the correct outcome.
+
+**Constraint carried from the amendment:** tool payloads continue to be captured and stored (disk +
+`agent-captains-captures-*`). Only their delivery to the summariser stops. A future verification oracle
+reads that evidence — ES holds 2,815 capture docs back to 2026-04-15 with full `output` in `_source`
+(`index: false`, so retrievable, not searchable); the on-disk set the summariser reads is 65 files.
 
 ## 1. Reduce the backlog
 
-~80 Approved; most carry no stream label (parked). Live queue: **build1 = the ADR-0124 chain, head
-FRE-947** (PR #636 open at the gate); **build2 = FRE-942** (compaction decision, retargeted 07-23).
+~80 Approved; most carry no stream label (parked). Live queue: **build1 = empty** (FRE-947 merged;
+FRE-948 parked pending FRE-953 approval); **build2 = FRE-942** (compaction decision, retargeted 07-23).
 Awaiting approval and unlabelled: FRE-927, FRE-932. Method:
 verify per cluster, cancel the provable with a one-line reason, bring judgment calls to the owner.
 Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729–732, FRE-810/811/814) ·
@@ -104,5 +122,8 @@ Inference. Re-sequence after §0.
 ## Deploy queue
 
 **FRE-938 (ask-first — gateway + PWA rebuild, owner-gated, NOT done)** — merged #617; handoff runbook
-on the ticket, PWA cache bumped to v35. First operational pickup. · FRE-739 (needs FRE-740 + a live
-non-owner request) · FRE-717 (needs organic outcome input).
+on the ticket, PWA cache bumped to v35. First operational pickup. · **FRE-947 (ask-first — gateway
+rebuild; HELD until FRE-953 lands, then deployed once with it)** — runbook on the ticket; first sweep
+is expected to generate zero digests (the on-disk capture corpus is empty of eligible sessions), and
+the multi-turn session count must be unchanged afterwards or roll back. · FRE-739 (needs FRE-740 + a
+live non-owner request) · FRE-717 (needs organic outcome input).

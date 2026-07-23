@@ -1,6 +1,6 @@
 # ADR-0124: Session-summary producer correction and phased consumption
 
-**Status:** Proposed
+**Status:** Accepted — 2026-07-23 (owner). Implementation chain FRE-947 → FRE-948 → FRE-949 → FRE-950 → FRE-951; Phase 4 unfiled, gated on AC-24.
 **Date:** 2026-07-23
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** memory, second-brain, knowledge-graph, retrieval, telemetry, privacy

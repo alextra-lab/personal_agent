@@ -211,7 +211,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md) | Model Catalog and Selection Layer — Providers, Deployments, Bindings; the User Selects the Model | Implemented — 2026-07-22 |
 | [ADR-0122](ADR-0122-build-time-artifact-builder-selection.md) | Per-Build Artifact Builder Selection — Choose the Model Before the Plan Is Written | Implemented — 2026-07-22 (amended 2026-07-21 — card at turn start) |
 | [ADR-0123](ADR-0123-turn-progress-surface.md) | Turn Progress Surface — Make the Wait Legible, So the User Stays Attached | Proposed |
-| [ADR-0124](ADR-0124-session-summary-producer-and-phased-consumption.md) | Session-Summary Producer Correction and Phased Consumption | Proposed |
+| [ADR-0124](ADR-0124-session-summary-producer-and-phased-consumption.md) | Session-Summary Producer Correction and Phased Consumption | Accepted |
 
 ### Supplementary
 

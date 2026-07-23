@@ -1,0 +1,989 @@
+{
+  "set": "ac12_corrections",
+  "criterion": "AC-12",
+  "synthetic": true,
+  "threshold": "ZERO negatives yield a correction (precision absolute); >=80% of positives do; every Tier-B correction carries the located span of its supporting evidence",
+  "composition": {
+    "tier_a": 6,
+    "tier_b": 4,
+    "tier_c": 12
+  },
+  "cases": [
+    {
+      "case_id": "a1_cluster_status",
+      "expected": "correction",
+      "tier": "A",
+      "captures": [
+        {
+          "trace_id": "ac12-a1_cluster_status-t1",
+          "session_id": "ac12-a1_cluster_status",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "check cluster health",
+          "assistant_response": "The cluster is green and every shard is assigned.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"status\": \"red\", \"unassigned_shards\": 4}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "cluster health"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-a1_cluster_status-t2",
+          "session_id": "ac12-a1_cluster_status",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "anything else?",
+          "assistant_response": "That is all for now.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "a2_doc_count",
+      "expected": "correction",
+      "tier": "A",
+      "captures": [
+        {
+          "trace_id": "ac12-a2_doc_count-t1",
+          "session_id": "ac12-a2_doc_count",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "check index size",
+          "assistant_response": "The index holds roughly 10,000 documents.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"docs_count\": 2276}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "index size"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-a2_doc_count-t2",
+          "session_id": "ac12-a2_doc_count",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "anything else?",
+          "assistant_response": "That is all for now.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "a3_budget_state",
+      "expected": "correction",
+      "tier": "A",
+      "captures": [
+        {
+          "trace_id": "ac12-a3_budget_state-t1",
+          "session_id": "ac12-a3_budget_state",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "check budget state",
+          "assistant_response": "We are well under the daily cap with plenty of headroom.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"daily_cap_usd\": 2.50, \"spend_usd\": 2.49, \"denied\": true}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "budget state"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-a3_budget_state-t2",
+          "session_id": "ac12-a3_budget_state",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "anything else?",
+          "assistant_response": "That is all for now.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "a4_embedding_dims",
+      "expected": "correction",
+      "tier": "A",
+      "captures": [
+        {
+          "trace_id": "ac12-a4_embedding_dims-t1",
+          "session_id": "ac12-a4_embedding_dims",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "check embedder config",
+          "assistant_response": "The embedder returns 768-dimensional vectors.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"model\": \"managed-8b\", \"dimensions\": 1024}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "embedder config"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-a4_embedding_dims-t2",
+          "session_id": "ac12-a4_embedding_dims",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "anything else?",
+          "assistant_response": "That is all for now.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "a5_command_success",
+      "expected": "correction",
+      "tier": "A",
+      "captures": [
+        {
+          "trace_id": "ac12-a5_command_success-t1",
+          "session_id": "ac12-a5_command_success",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "check migration run",
+          "assistant_response": "The migration command completed successfully.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"exit_code\": 1, \"stderr\": \"relation already exists\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "migration run"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-a5_command_success-t2",
+          "session_id": "ac12-a5_command_success",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "anything else?",
+          "assistant_response": "That is all for now.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "a6_retention",
+      "expected": "correction",
+      "tier": "A",
+      "captures": [
+        {
+          "trace_id": "ac12-a6_retention-t1",
+          "session_id": "ac12-a6_retention",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "check retention policy",
+          "assistant_response": "Logs are retained for thirty days.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"policy\": \"agent-logs\", \"delete\": {\"min_age\": \"7d\"}}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "q": "retention policy"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-a6_retention-t2",
+          "session_id": "ac12-a6_retention",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "anything else?",
+          "assistant_response": "That is all for now.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "b1_port",
+      "expected": "correction",
+      "tier": "B",
+      "captures": [
+        {
+          "trace_id": "ac12-b1_port-t1",
+          "session_id": "ac12-b1_port",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "what is gateway port?",
+          "assistant_response": "The gateway listens on port 9000.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac12-b1_port-t2",
+          "session_id": "ac12-b1_port",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "are you sure?",
+          "assistant_response": "Correction: I was wrong, it listens on 9001 in this deployment.",
+          "steps": [],
+          "tools_used": [
+            "read_file"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "read_file",
+              "success": true,
+              "output": "AGENT_SERVICE_PORT=9001",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "path": "/etc/gateway port"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "b2_driver",
+      "expected": "correction",
+      "tier": "B",
+      "captures": [
+        {
+          "trace_id": "ac12-b2_driver-t1",
+          "session_id": "ac12-b2_driver",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "what is driver version?",
+          "assistant_response": "The Neo4j driver is on 5.28.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac12-b2_driver-t2",
+          "session_id": "ac12-b2_driver",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "are you sure?",
+          "assistant_response": "I need to correct that \u2014 the lockfile pins 5.26.0.",
+          "steps": [],
+          "tools_used": [
+            "read_file"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "read_file",
+              "success": true,
+              "output": "name = \"neo4j\"\nversion = \"5.26.0\"",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "path": "/etc/driver version"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "b3_role",
+      "expected": "correction",
+      "tier": "B",
+      "captures": [
+        {
+          "trace_id": "ac12-b3_role-t1",
+          "session_id": "ac12-b3_role",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "what is role binding?",
+          "assistant_response": "Entity extraction runs on Sonnet.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac12-b3_role-t2",
+          "session_id": "ac12-b3_role",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "are you sure?",
+          "assistant_response": "That was wrong. The role matrix binds it to gpt-5.4-mini.",
+          "steps": [],
+          "tools_used": [
+            "read_file"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "read_file",
+              "success": true,
+              "output": "entity_extraction:  { all: gpt-5.4-mini }",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "path": "/etc/role binding"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "b4_threshold",
+      "expected": "correction",
+      "tier": "B",
+      "captures": [
+        {
+          "trace_id": "ac12-b4_threshold-t1",
+          "session_id": "ac12-b4_threshold",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "what is similarity floor?",
+          "assistant_response": "The similarity floor is 0.5.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac12-b4_threshold-t2",
+          "session_id": "ac12-b4_threshold",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "are you sure?",
+          "assistant_response": "Correcting myself: the configured floor is 0.35.",
+          "steps": [],
+          "tools_used": [
+            "read_file"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "read_file",
+              "success": true,
+              "output": "AGENT_RECALL_SIMILARITY_FLOOR=0.35",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "path": "/etc/similarity floor"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "c1_approximate_number",
+      "expected": "no_correction",
+      "tier_c_kind": "weak_partial_conflict",
+      "captures": [
+        {
+          "trace_id": "ac12-c1-t1",
+          "session_id": "ac12-c1",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "how many turns?",
+          "assistant_response": "A bit over two thousand turns.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"turns\": 2276}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {}
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-c1-t2",
+          "session_id": "ac12-c1",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "thanks",
+          "assistant_response": "Anytime.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "c2_rounded_latency",
+      "expected": "no_correction",
+      "tier_c_kind": "weak_partial_conflict",
+      "captures": [
+        {
+          "trace_id": "ac12-c2-t1",
+          "session_id": "ac12-c2",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "reranker latency?",
+          "assistant_response": "Around 300 milliseconds at p95.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"p95_ms\": 310}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {}
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-c2-t2",
+          "session_id": "ac12-c2",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "acceptable?",
+          "assistant_response": "Yes, within budget.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "c3_partial_scope",
+      "expected": "no_correction",
+      "tier_c_kind": "weak_partial_conflict",
+      "captures": [
+        {
+          "trace_id": "ac12-c3-t1",
+          "session_id": "ac12-c3",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "are all indices healthy?",
+          "assistant_response": "The ones I checked are healthy.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"checked\": [\"agent-logs\"], \"status\": \"green\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {}
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-c3-t2",
+          "session_id": "ac12-c3",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "check the rest later",
+          "assistant_response": "Will do.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "c4_failed_call",
+      "expected": "no_correction",
+      "tier_c_kind": "failed_or_incomplete_call",
+      "captures": [
+        {
+          "trace_id": "ac12-c4-t1",
+          "session_id": "ac12-c4",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "read the config",
+          "assistant_response": "I could not read it; the file is missing.",
+          "steps": [],
+          "tools_used": [
+            "read_file"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "read_file",
+              "success": false,
+              "output": null,
+              "error": "ENOENT: /etc/missing.yaml",
+              "latency_ms": 14.0,
+              "arguments": {
+                "path": "/etc/missing.yaml"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-c4-t2",
+          "session_id": "ac12-c4",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "ok",
+          "assistant_response": "Let me know the right path.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "c5_timeout",
+      "expected": "no_correction",
+      "tier_c_kind": "failed_or_incomplete_call",
+      "captures": [
+        {
+          "trace_id": "ac12-c5-t1",
+          "session_id": "ac12-c5",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "search the web",
+          "assistant_response": "The search timed out, so I have nothing to report.",
+          "steps": [],
+          "tools_used": [
+            "web_search"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "web_search",
+              "success": false,
+              "output": null,
+              "error": "upstream timeout after 30s",
+              "latency_ms": 14.0,
+              "arguments": {
+                "query": "neo4j sharding"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-c5-t2",
+          "session_id": "ac12-c5",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "retry?",
+          "assistant_response": "Worth one retry.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "c6_empty_result",
+      "expected": "no_correction",
+      "tier_c_kind": "failed_or_incomplete_call",
+      "captures": [
+        {
+          "trace_id": "ac12-c6-t1",
+          "session_id": "ac12-c6",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "find prior decisions on sharding",
+          "assistant_response": "Nothing came back, so I cannot say whether it was discussed.",
+          "steps": [],
+          "tools_used": [
+            "search_memory"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "search_memory",
+              "success": true,
+              "output": "[]",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "query": "sharding"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-c6-t2",
+          "session_id": "ac12-c6",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "ok",
+          "assistant_response": "We can decide fresh.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "c7_ambiguous_unit",
+      "expected": "no_correction",
+      "tier_c_kind": "ambiguous_reading",
+      "captures": [
+        {
+          "trace_id": "ac12-c7-t1",
+          "session_id": "ac12-c7",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "how big is the index?",
+          "assistant_response": "About two gigabytes.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"size\": 2048}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {}
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-c7-t2",
+          "session_id": "ac12-c7",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "ok",
+          "assistant_response": "Let me know if you need exact bytes.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "c8_ambiguous_referent",
+      "expected": "no_correction",
+      "tier_c_kind": "ambiguous_reading",
+      "captures": [
+        {
+          "trace_id": "ac12-c8-t1",
+          "session_id": "ac12-c8",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "is it enabled?",
+          "assistant_response": "Yes, that setting is on.",
+          "steps": [],
+          "tools_used": [
+            "read_file"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "read_file",
+              "success": true,
+              "output": "reranker_enabled: true\nfusion_enabled: false",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "path": "config.yaml"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-c8-t2",
+          "session_id": "ac12-c8",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "good",
+          "assistant_response": "Anything else?",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "c9_state_changed",
+      "expected": "no_correction",
+      "tier_c_kind": "legitimately_changed_state",
+      "captures": [
+        {
+          "trace_id": "ac12-c9-t1",
+          "session_id": "ac12-c9",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "cluster status?",
+          "assistant_response": "It is red with unassigned shards.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"status\": \"red\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {}
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-c9-t2",
+          "session_id": "ac12-c9",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "and now, after the reallocation?",
+          "assistant_response": "It has recovered to green.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"status\": \"green\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {}
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "c10_spend_grew",
+      "expected": "no_correction",
+      "tier_c_kind": "legitimately_changed_state",
+      "captures": [
+        {
+          "trace_id": "ac12-c10-t1",
+          "session_id": "ac12-c10",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "spend so far?",
+          "assistant_response": "About one dollar.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"spend_usd\": 1.02}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {}
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-c10-t2",
+          "session_id": "ac12-c10",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "and after the batch?",
+          "assistant_response": "It has risen to two dollars.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"spend_usd\": 2.05}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {}
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "c11_subjective_recommendation",
+      "expected": "no_correction",
+      "tier_c_kind": "subjective_disagreement",
+      "captures": [
+        {
+          "trace_id": "ac12-c11-t1",
+          "session_id": "ac12-c11",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "should we shard by date?",
+          "assistant_response": "I would not recommend it; hash sharding is cleaner here.",
+          "steps": [],
+          "tools_used": [
+            "search_memory"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "search_memory",
+              "success": true,
+              "output": "Date sharding is a common and widely used strategy.",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {
+                "query": "sharding"
+              }
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-c11-t2",
+          "session_id": "ac12-c11",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "I disagree",
+          "assistant_response": "That is a fair position.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    },
+    {
+      "case_id": "c12_subjective_priority",
+      "expected": "no_correction",
+      "tier_c_kind": "subjective_disagreement",
+      "captures": [
+        {
+          "trace_id": "ac12-c12-t1",
+          "session_id": "ac12-c12",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "is this urgent?",
+          "assistant_response": "I would treat it as low priority.",
+          "steps": [],
+          "tools_used": [
+            "query_elasticsearch"
+          ],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": [
+            {
+              "tool_name": "query_elasticsearch",
+              "success": true,
+              "output": "{\"error_rate\": 0.001, \"severity_label\": \"high\"}",
+              "error": null,
+              "latency_ms": 14.0,
+              "arguments": {}
+            }
+          ]
+        },
+        {
+          "trace_id": "ac12-c12-t2",
+          "session_id": "ac12-c12",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "I think it is urgent",
+          "assistant_response": "Then we escalate.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
+    }
+  ]
+}

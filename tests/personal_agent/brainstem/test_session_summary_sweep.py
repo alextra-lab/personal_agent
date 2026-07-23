@@ -473,9 +473,36 @@ async def test_sweep_without_a_memory_service_is_a_no_op(
         "considered": 0,
         "generated": 0,
         "skipped": 0,
+        "no_captures": 0,
         "failed": 0,
         "refused": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_unregenerable_session_is_counted_separately_from_a_floor_skip(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retention purges captures while Session nodes persist — measured on the live
+    graph at 59/59 multi-turn sessions unregenerable (FRE-947).
+
+    Both outcomes mark the session clean, but conflating them would let a sweep that
+    digested nothing report the same shape as one that correctly applied the floor.
+    """
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+    _patch_producer(
+        monkeypatch,
+        SessionSummaryOutcome(status=SessionSummaryStatus.SKIPPED_BELOW_FLOOR),
+        captures_by_session={"sess-1": []},
+    )
+
+    result = await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert result["no_captures"] == 1
+    assert result["skipped"] == 0
+    # Still marked clean: a session whose evidence is gone must not be re-read forever.
+    assert memory.sessions["sess-1"]["summary_generated_at"] is not None
 
 
 @pytest.mark.asyncio

@@ -462,11 +462,27 @@ class BrainstemScheduler:
                 generation, the write, and every structured log below.
 
         Returns:
-            Counts of ``considered``, ``generated``, ``skipped``, ``failed`` and
-            ``refused``. Returned rather than logged alone so tests and the
-            post-deploy population check read the same numbers.
+            Counts of ``considered``, ``generated``, ``skipped``, ``no_captures``,
+            ``failed`` and ``refused``. Returned rather than logged alone so tests
+            and the post-deploy population check read the same numbers.
+
+            ``no_captures`` is broken out from ``skipped`` deliberately. Both mark a
+            session clean, but they mean opposite things: a floor skip is "this
+            session does not warrant a digest", whereas ``no_captures`` is "its
+            evidence is no longer on disk". Retention purges captures while
+            ``Session`` nodes persist indefinitely, so a legacy session is normally
+            unregenerable — and folding the two together would let a sweep that
+            digested *nothing* report the same shape as one that correctly applied
+            the floor.
         """
-        result = {"considered": 0, "generated": 0, "skipped": 0, "failed": 0, "refused": 0}
+        result = {
+            "considered": 0,
+            "generated": 0,
+            "skipped": 0,
+            "no_captures": 0,
+            "failed": 0,
+            "refused": 0,
+        }
 
         if not settings.session_summary_enabled or self.memory_service is None:
             return result
@@ -528,6 +544,13 @@ class BrainstemScheduler:
         captures = read_session_captures(
             session_id, started_at=started_at, ended_at=expected_ended_at
         )
+        if not captures:
+            log.info(
+                "session_summary_no_captures_on_disk",
+                session_id=session_id,
+                trace_id=trace_id,
+                reason="captures purged by retention; session cannot be regenerated",
+            )
 
         outcome = await generate_session_digest(
             captures, session_id=session_id, ended_at=expected_ended_at, trace_id=trace_id
@@ -559,7 +582,7 @@ class BrainstemScheduler:
             # next sweep picks it up — no retry here, which would race the same way.
             result["refused"] += 1
         elif outcome.status is SessionSummaryStatus.SKIPPED_BELOW_FLOOR:
-            result["skipped"] += 1
+            result["no_captures" if not captures else "skipped"] += 1
         else:
             result["generated"] += 1
 

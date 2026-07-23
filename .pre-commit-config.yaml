@@ -37,7 +37,7 @@ repos:
         pass_filenames: false
         always_run: true
       - id: check-adr-index
-        name: ADR index — every ADR file indexed, no orphan rows (next_adr --check)
+        name: ADR index — files indexed, statuses match, no orphan rows (next_adr --check)
         entry: uv run python scripts/next_adr.py --check
         language: system
         files: ^docs/architecture_decisions/.*$

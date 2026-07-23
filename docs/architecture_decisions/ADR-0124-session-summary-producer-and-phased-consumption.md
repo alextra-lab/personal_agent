@@ -1,6 +1,6 @@
 # ADR-0124: Session-summary producer correction and phased consumption
 
-**Status:** Accepted — 2026-07-23 (owner), **amended 2026-07-23 (Amendment A — conversation-scoped input; tool payloads removed from D2, Tier-A corrections removed from D3).** Implementation chain FRE-947 → FRE-948 → FRE-949 → FRE-950 → FRE-951; Phase 4 unfiled, gated on AC-24.
+**Status:** Accepted — 2026-07-23 (owner), **amended 2026-07-23 (Amendment A — conversation-scoped input; tool payloads removed from D2; D3 corrections narrowed to the two payload-free kinds `self_correction` + `status_contradiction`, the payload-fed adjudication removed — see the D3 reconciliation note).** Implementation chain FRE-947 → FRE-948 → FRE-949 → FRE-950 → FRE-951; Phase 4 unfiled, gated on AC-24.
 **Date:** 2026-07-23
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** memory, second-brain, knowledge-graph, retrieval, telemetry, privacy
@@ -240,24 +240,30 @@ evidence-versus-interpretation invariant from a prompt instruction into a machin
 
 **Error-flagging is precision-first, deliberately asymmetric.** A missed error is recoverable from
 raw evidence; a false error writes self-confirming state into the graph and feeds its own
-supposed correction into future reasoning. One tier may be asserted, and nothing else (Tier A removed — see Amendment A):
+supposed correction into future reasoning. Two **payload-free** kinds may be asserted, and nothing
+else (the tier names are self-describing values, not `A`/`B` — see Amendment A and its reconciliation
+note below):
 
-- **Tier A — direct contradiction. REMOVED by Amendment A.** Adjudicating narration against tool
-  evidence is verification, and belongs to the fact-verifier workstream (§D4), which this ADR had
-  already scoped it out to. It was the only consumer of the tool payloads D2 used to supply.
-- **Tier B — explicit evidenced self-correction.** The agent itself corrected the record within the
-  session, and the correction is supported by evidence in the capture. Carries the located span of
-  the self-correction.
+- **`self_correction` — explicit evidenced self-correction** (was "Tier B"). The agent itself
+  corrected the record within the session, and the correction is supported by evidence *in the
+  conversation*. Carries the located span of the self-correction.
+- **`status_contradiction` — narration denied by a tool's own status or error** (the payload-free
+  survivor of the old "Tier A"). The assistant asserted an outcome that the tool's recorded status or
+  error contradicts *on the status alone* — e.g. "the command succeeded" against a recorded failure.
+  This needs no payload, so it is not verification and does not leave with the payload-fed half; it is
+  the kind **AC-13 requires** to still fire. Carries the located span of the contradicting status/error.
 
 **Tier C — not errors, never asserted as corrections.** Weak or partial conflict, failed or
 incomplete tool calls, multiple defensible readings, state that legitimately changed over time, and
 disagreement with a subjective judgment or recommendation. These belong in `unresolved`, or are
 omitted. **Never infer error from absent evidence.**
 
-Tier B needs only the session's own text, so it survives the removal of payloads intact. This
-matters wherever a capture is incomplete: a self-correction the user saw remains legitimate to
-record, and a producer must not suppress it merely because some other evidence is missing. What it
-must never do is assert a correction that depends on content it was not given.
+Both surviving kinds need only the session's own text and tool *metadata* (status/error), so they
+survive the removal of payloads intact. This matters wherever a capture is incomplete: a correction
+available from the conversation or from a tool's status remains legitimate to record, and a producer
+must not suppress it merely because some payload is missing. What it must never do is assert a
+correction that depends on payload content it was not given — which is precisely the payload-fed
+adjudication Amendment A removed to the verification workstream.
 
 **Compute state, generate meaning.** Turn count, duration, tool invocation and success/failure
 counts, and `dominant_entities` are queryable and remain structured properties. They are never
@@ -377,9 +383,21 @@ A fact the assistant never surfaced was never learned, and is not a memory to re
   lives entirely in names and statuses;
 - **no tool payloads.**
 
-**D3 is narrowed.** `corrections` keeps **Tier B only** — an explicit, evidenced self-correction made
-*within the conversation*. The user saw it; it is part of the episode. **Tier A is removed** and
-belongs to the verification workstream. Tier C is unchanged: still never a correction.
+**D3 is narrowed.** `corrections` drops the **payload-fed** adjudication and keeps only the two
+**payload-free** kinds — `self_correction` (was Tier B) and `status_contradiction` (narration denied
+by a tool's own status/error, the survivor of the old Tier A). Both are grounded *within the
+conversation and tool metadata* the user's episode contains; the verification lane that reads full
+payloads leaves for the fact-verifier workstream. Tier C is unchanged: still never a correction.
+
+> **Reconciliation note (2026-07-23, owner-approved during FRE-953).** The paragraphs above and the
+> table below originally read *"Tier B only / Tier A removed."* That was an over-statement: this
+> amendment kept **AC-13**, which explicitly requires the `status_visible` case — narration denied by
+> a tool's status/error with no self-correction — to still yield a correction, and that case is
+> payload-free. "Remove Tier A" therefore means *remove the payload-fed half of it*, not remove
+> status-based contradiction. The two surviving kinds are renamed to self-describing values
+> (`self_correction`, `status_contradiction`) so nothing is mislabelled, and the shipped producer
+> (FRE-953) carries exactly these two. The withdrawal of the payload-fed verification lane is
+> unchanged.
 
 The absent-evidence rule survives untouched and now covers a wider case: captures can be incomplete,
 and a summariser comparing narration against evidence will read absence as contradiction unless told
@@ -403,8 +421,10 @@ Three problems the original design had to *manage* now cease to exist:
 
 Stated plainly rather than minimised:
 
-1. **Tier-A corrections** — the agent misreading tool output, undetected. This is verification and is
-   now wholly the verification workstream's to deliver.
+1. **Payload-fed contradictions** — the agent misreading a tool *payload* (as opposed to its status),
+   undetected. This is verification and is now wholly the verification workstream's to deliver. Note
+   the narrower, payload-free `status_contradiction` case is **retained** (it fires on tool status/error
+   alone — see the D3 reconciliation note); only the payload-reading half leaves.
 2. **Facts appearing only in tool output and never narrated.** Real, but thin: assistant responses run
    p50 1,847 characters, so narration is substantial — and by the framing above, an unnarrated fact is
    not the user's memory either.
@@ -443,13 +463,13 @@ are not needed."
 | Section | Change |
 |---|---|
 | D2 | Tool payloads removed from the input policy; tool metadata (name, status, error) retained |
-| D3 | `corrections` is Tier B only; Tier A removed to the verification workstream |
+| D3 | `corrections` keeps two payload-free kinds — `self_correction` (was Tier B) and `status_contradiction` (payload-free survivor of Tier A, required by AC-13); the payload-fed adjudication leaves for the verification workstream (see the D3 reconciliation note) |
 | Risks — instruction contamination | Path removed rather than gated; the row and its Phase-2 gate no longer apply |
 | Risks — egress | No longer applicable; the producer's input carries no bytes the primary turn did not already send |
 | AC-8 | Payload equality and canonical-serialisation clauses dropped; tool metadata completeness retained |
 | AC-9 | Withdrawn — it required a tool-only fact to reach the digest, which this amendment deliberately prevents |
-| AC-12 | Positives are Tier-B self-corrections only; Tier-A contradiction cases removed |
-| AC-13 | Retained and simplified: incomplete captures must produce silence, not invention, and must not suppress corrections that survive |
+| AC-12 | Positives are `self_correction` cases only (≥8); the payload-fed contradiction cases are removed. `status_contradiction` is exercised by AC-13, not AC-12 |
+| AC-13 | Retained: incomplete captures must produce silence, not invention, and must not suppress the corrections that survive — specifically the `status_contradiction` (`status_visible`) case, which fires on tool status/error alone |
 | AC-21 | Withdrawn — the injection path it gated no longer exists |
 
 Withdrawn criteria are struck rather than renumbered, so AC references in the implementation chain
@@ -677,7 +697,7 @@ consequence-of-being-wrong axis Phase 2 is the safer thing to ship first.
 |------|----------|------------|
 | **Cross-session supersession of `unresolved`** — a thread left open in session A is settled in session C; nothing revisits A's digest, because regeneration is triggered only by A's own new turns and a concluded session never gets more. Open threads accumulate as permanent false-open state, and the anti-re-litigation consumer eventually asserts "we never settled X" about something settled weeks ago — the exact inverse of its purpose. | **High** (occurs whenever a thread outlives its session, which the corpus shows is common; not strictly guaranteed) | Phase 0 stamps every `unresolved` item with its session's timestamp so consumers phrase the nudge as *"as of that session, X was open"* rather than asserting present tense. Phase 3's entity-overlap machinery then checks whether a later session's `decisions` settle an earlier session's `unresolved`. The timestamp must ship in Phase 0 or the Phase 3 fix has nothing to stand on. |
 | **Proportional dominance** — annotation outweighing the facts it annotates in a small context (five digests ≈ 74% of a p50 context) | High | Relative bound: annotation may never exceed the tokens of the facts it annotates. Measured in the Phase 2a replay before anything ships. |
-| **Fabricated corrections** poisoning the graph self-confirmingly | High | Precision-first Tier A/B standard; verbatim-span validation; never infer error from absent evidence; `corrections` rate monitored as a drift signal. |
+| **Fabricated corrections** poisoning the graph self-confirmingly | High | Precision-first correction standard (`self_correction` + `status_contradiction`, both payload-free); verbatim-span validation; never infer error from absent evidence; `corrections` rate monitored as a drift signal. |
 | ~~**Instruction contamination**~~ *(no longer applicable — Amendment A)* via tool output surviving into a digest and then into a future session's context | High blast radius; likelihood **not** reduced by single-user operation — the corpus already includes web search and file reads, whose content is not authored by the user | Gated, not accepted. **AC-21 blocks Phase 2** — the point at which a contaminated digest first reaches a model automatically — on an adversarial fixture set proving directives in tool output neither survive into the digest nor alter it. Phase 0 and Phase 1 are unaffected because a digest read only by a human is not an injection path. |
 | ~~**Egress**~~ *(no longer applicable — Amendment A; the producer's input carries no bytes the primary turn did not already send)* — full tool payloads (file contents, command output, query results) reach whichever provider serves the summariser's role | Medium; unchanged in kind from the primary turn, which already sent those bytes to its own model | Governed at the **role binding** per ADR-0121, not by a per-session branch — the deliberate consequence being that egress is a configuration decision the owner makes once. Sharpened by the deferred role split: the only available binding is `captains_log`, shared with reflection, so the knob is currently coarser than the decision deserves. |
 | **Provenance collapse** — the model treating derived synthesis as retrieved fact | Medium | Rendered annotation explicitly labelled as derived; `basis` tags retained in the structured record. |
@@ -838,15 +858,16 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   AC-12's labelled fixtures and AC-16's human review; AC-11 is a necessary condition that makes the
   cheap failure mode — invented citations — impossible, and is claimed as nothing more.
 - **AC-12** — **Corrections fire when they should and stay silent when they should not.** On a
-  predefined labelled set: positives comprising ≥8 Tier-B evidenced self-corrections
-  (**Amendment A:** Tier-A contradiction cases removed with the tier); negatives comprising ≥12
+  predefined labelled set: positives comprising ≥8 `self_correction` positives (evidenced
+  self-corrections; **Amendment A:** the payload-fed contradiction cases are removed with the payload
+  lane — `status_contradiction` is exercised by AC-13, not here); negatives comprising ≥12
   Tier-C cases drawn from the full range D3 names —
   weak/partial conflict, failed or incomplete calls, ambiguous readings, legitimately changed state,
   and disagreement with a subjective judgment. The producer emits a correction for **every** positive
-  and none of the negatives. Each emitted Tier-B correction additionally carries the located span of
+  and none of the negatives. Each emitted `self_correction` additionally carries the located span of
   the **supporting evidence**, not merely of the self-correction sentence. · **Check:** hand-labelled
   fixtures, fixed before tuning. · *Fails if* **any** negative yields a correction (precision is
-  absolute here), or if fewer than **80%** of positives yield one, or if any Tier-B correction lacks
+  absolute here), or if fewer than **80%** of positives yield one, or if any `self_correction` lacks
   its evidence span. The recall floor is 80% rather than 100% deliberately: D3 accepts that a missed
   error is recoverable, so demanding perfect recall would contradict the precision-first stance and
   penalise a justifiably conservative producer. It is not 0% because that is the degenerate

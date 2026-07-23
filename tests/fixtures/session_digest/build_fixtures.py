@@ -725,7 +725,7 @@ def ac12() -> dict[str, Any]:
         "set": "ac12_corrections",
         "criterion": "AC-12",
         "synthetic": True,
-        "amendment": "A — Tier-A payload contradictions removed; positives are self-corrections only",
+        "amendment": "A — payload-fed contradictions removed; positives are self_correction only (status_contradiction is exercised by AC-13)",
         "threshold": (
             "ZERO negatives yield a correction (precision absolute); >=80% of positives do; "
             "every self_correction carries the located span of its supporting evidence"
@@ -797,8 +797,8 @@ def ac13() -> dict[str, Any]:
                 "expected": "correction",
                 "why": (
                     "a contradiction between 'the command succeeded' and a recorded error "
-                    "status is Tier A on status alone, and must not be suppressed merely "
-                    "because a payload is missing"
+                    "status is a status_contradiction on status alone, and must not be suppressed "
+                    "merely because a payload is missing"
                 ),
                 "captures": [
                     _capture(
@@ -822,7 +822,7 @@ def ac13() -> dict[str, Any]:
             {
                 "case_id": "self_correction",
                 "expected": "correction",
-                "why": "Tier B needs only the session's own text plus supporting evidence",
+                "why": "a self_correction needs only the session's own text plus supporting evidence",
                 "captures": [
                     _capture(
                         "ac13-self",

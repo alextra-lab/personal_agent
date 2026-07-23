@@ -1,0 +1,19 @@
+{
+  "generated_at": "2026-07-23T12:17:40.618350+00:00",
+  "synthetic_fixtures": true,
+  "note": "Fixture sets are pre-registered synthetic supplements, labelled as such per ADR-0124's corpus-feasibility rule: the real corpus holds zero multi-turn sessions with captures on disk. See tests/fixtures/session_digest/REGISTRY.md.",
+  "criteria": [
+    {
+      "criterion": "AC-12",
+      "passed": true,
+      "precision_note": "absolute \u2014 any false positive fails the criterion",
+      "false_positives": [],
+      "recall": 1.0,
+      "true_positives": 10,
+      "positives_total": 10,
+      "missed": [],
+      "tier_b_missing_evidence_span": [],
+      "errored": []
+    }
+  ]
+}

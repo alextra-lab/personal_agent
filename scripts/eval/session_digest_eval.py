@@ -24,6 +24,7 @@ import collections
 import json
 import pathlib
 import sys
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -64,12 +65,24 @@ def _digest_text(digest: SessionDigest) -> str:
     return " ".join(item.text for item in _all_items(digest)).lower()
 
 
+def _case_session_id(case_id: str) -> str:
+    """Derive a stable UUID session id from a readable case id.
+
+    Production session ids are UUID strings and the cost-gate reservation path
+    parses them as such, so a readable fixture id ("payload_absent") fails before
+    the model is ever called. Deriving one keeps the report readable while the
+    producer sees exactly the shape it sees in production — uuid5, so a case's id is
+    identical across runs and its spend is attributable.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"fre-947-eval/{case_id}"))
+
+
 async def _run_case(case: dict[str, Any]) -> tuple[str, SessionDigest | None, str | None]:
     """Generate for one case. Returns (case_id, digest, failure_reason)."""
     captures = _captures(case)
     outcome = await generate_session_digest(
         captures,
-        session_id=case["case_id"],
+        session_id=_case_session_id(case["case_id"]),
         ended_at=captures[-1].timestamp,
         trace_id=f"eval-{case['case_id']}",
     )
@@ -299,6 +312,28 @@ async def score_ac13(payload: dict[str, Any]) -> dict[str, Any]:
 # ==========================================================================
 
 
+async def _open_cost_gate() -> Any:
+    """Register a CostGate so the producer's paid calls can reserve and commit budget.
+
+    A standalone script never runs the service's startup hook, so without this every
+    call raises ``No CostGate registered`` and the whole arm reports ``model_error``
+    — which is what the first run of this harness did. Reusing the real gate rather
+    than stubbing it keeps the eval's spend on the same ledger as production's, so
+    the arm is visible in the budget surface rather than invisible to it.
+    """
+    from personal_agent.config import settings  # noqa: PLC0415
+    from personal_agent.cost_gate import (  # noqa: PLC0415
+        CostGate,
+        load_budget_config,
+        set_default_gate,
+    )
+
+    gate = CostGate(config=load_budget_config(), db_url=settings.database_url)
+    await gate.connect()
+    set_default_gate(gate)
+    return gate
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--set", dest="only", choices=sorted(_SETS), help="run one set")
@@ -327,10 +362,19 @@ async def main() -> int:
         report["criteria"].append(score_ac8(_load(_SETS["ac8"])))
 
     if not args.dry_run:
-        scorers = {"ac9": score_ac9, "ac10": score_ac10, "ac12": score_ac12, "ac13": score_ac13}
-        for key in wanted:
-            if key in scorers:
-                report["criteria"].append(await scorers[key](_load(_SETS[key])))
+        gate = await _open_cost_gate()
+        try:
+            scorers = {
+                "ac9": score_ac9,
+                "ac10": score_ac10,
+                "ac12": score_ac12,
+                "ac13": score_ac13,
+            }
+            for key in wanted:
+                if key in scorers:
+                    report["criteria"].append(await scorers[key](_load(_SETS[key])))
+        finally:
+            await gate.disconnect()
 
     print(json.dumps(report, indent=2))
     if args.out:

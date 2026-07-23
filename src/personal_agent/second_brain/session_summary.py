@@ -147,6 +147,21 @@ tool call, text with several defensible readings, state that legitimately change
 over time, or disagreement with a subjective judgment or recommendation. Those \
 belong in unresolved, or are omitted. NEVER infer an error from absent evidence.
 
+Before asserting Tier A, apply the SAME-PROPOSITION test explicitly. A correction \
+requires the evidence to contradict the very thing the assistant asserted, not a \
+neighbouring one. In particular:
+- A JUDGMENT is not a factual claim. "I would treat this as low priority", "I \
+recommend X", "that seems fine", a severity or priority assessment, a suggested \
+course of action — none of these are contradicted by data carrying a different \
+label or rating. The assistant asserted what it would DO; the data reports what \
+something IS. Those are different propositions, so this is Tier C, never Tier A.
+- An APPROXIMATION is not a wrong number. "about two thousand" against 2,276, or \
+"around 300ms" against 310ms, agree.
+- A SCOPED claim is not a universal one. "the ones I checked are healthy" is not \
+contradicted by an unchecked index being unhealthy.
+If you cannot name the single proposition that the assistant asserted and the \
+evidence denies, in those words, there is no Tier-A correction to make.
+
 LENGTH — include an item only if its future value exceeds the cost of displacing \
 retrieved evidence. Aim for about __TARGET_TOKENS__ tokens across the whole digest \
 and never exceed __MAX_TOKENS__. Digest length is NOT proportional to turn count.

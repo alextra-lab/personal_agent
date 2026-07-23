@@ -1111,8 +1111,20 @@ class MemoryService:
     async def create_session(self, session_node: SessionNode, trace_id: str | None = None) -> bool:
         """Create or update a Session node in the graph.
 
+        Owns only the properties derived from the turn stream itself: timestamps,
+        ``turn_count`` and ``dominant_entities``.
+
+        It deliberately does **not** write ``session_summary``, ``session_label``,
+        ``session_digest`` or ``summary_generated_at`` (ADR-0124 D1). Those belong to
+        the idle sweep, which publishes them through
+        :meth:`write_session_digest`'s conditional write. Setting them here — as this
+        method did for ``session_summary`` before FRE-947 — makes every turn clobber
+        the previous digest, so a transient generation failure erased a good summary
+        and a fresh sweep result survived only until the session's next turn.
+
         Args:
-            session_node: Session to create or update.
+            session_node: Session to create or update. Its digest-related fields are
+                ignored by this method.
             trace_id: Optional request trace identifier for log correlation
                 (ADR-0074 §I3). Callers should pass the consolidation/request
                 trace_id when available; ``None`` is acceptable for batch flows.
@@ -1136,15 +1148,13 @@ class MemoryService:
                     SET s.started_at = $started_at,
                         s.ended_at = $ended_at,
                         s.turn_count = $turn_count,
-                        s.dominant_entities = $dominant_entities,
-                        s.session_summary = $session_summary
+                        s.dominant_entities = $dominant_entities
                     """,
                     session_id=session_node.session_id,
                     started_at=session_node.started_at.isoformat(),
                     ended_at=session_node.ended_at.isoformat(),
                     turn_count=session_node.turn_count,
                     dominant_entities=session_node.dominant_entities,
-                    session_summary=session_node.session_summary,
                 )
                 log.info(
                     "session_created",

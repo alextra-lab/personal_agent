@@ -6,7 +6,7 @@ the second brain for deep reflection.
 """
 
 import pathlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -296,3 +296,47 @@ def read_captures(
                 )
 
     return captures
+
+
+def read_session_captures(
+    session_id: str,
+    *,
+    started_at: datetime,
+    ended_at: datetime,
+    limit: int = 1000,
+) -> list[TaskCapture]:
+    """Read one session's captures, ordered oldest first (ADR-0124 D1, FRE-947).
+
+    The idle sweep regenerates a digest **wholesale from canonical captures** —
+    never by patching the previous digest — so it needs every turn of one session,
+    not a recent slice across all of them. Wholesale regeneration is
+    ``f(canonical captures)`` rather than ``f(previous digest, delta)``, which is
+    self-correcting: a bad generation is fixed by the next sweep instead of
+    becoming a permanent input to every later one.
+
+    The date window is derived from the session's own span and widened by a day at
+    each end, because captures are filed under a UTC date directory and a session
+    can straddle midnight.
+
+    Args:
+        session_id: Session whose captures to read.
+        started_at: The session's first-turn timestamp.
+        ended_at: The session's last-turn timestamp.
+        limit: Safety bound on captures scanned. Sessions max out around 17 turns,
+            so this exists to stop a pathological read, not to shape results.
+
+    Returns:
+        The session's captures sorted by timestamp ascending. Empty if none are
+        on disk — which is a real condition (retention may have removed them),
+        not an error.
+    """
+    window = timedelta(days=1)
+    scanned = read_captures(
+        start_date=started_at - window,
+        end_date=ended_at + window,
+        limit=limit,
+    )
+    return sorted(
+        (c for c in scanned if c.session_id == session_id),
+        key=lambda c: c.timestamp,
+    )

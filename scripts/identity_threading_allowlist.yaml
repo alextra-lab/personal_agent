@@ -76,6 +76,6 @@
 #     FRE-864 ADR-0115 D2 class SET-clause block inserted above, then FRE-866 the
 #     structural arm's class predicate params/block inserted above). ---
 - path: src/personal_agent/memory/service.py
-  line: 1449  # FRE-866: +16 from the class predicate params/block inserted above (was 1433)
+  line: 1459  # FRE-947: +10 from create_session's clobber-fix docstring above (was 1449)
   pattern: cypher_merge
   reason: "dynamic on_create_clauses set origination; static analyzer can't see joined props (FP)"

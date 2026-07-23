@@ -116,7 +116,8 @@
             "success": { "type": "boolean" },
             "error": { "type": "text" },
             "latency_ms": { "type": "float" },
-            "output": { "type": "text", "index": false }
+            "output": { "type": "text", "index": false },
+            "arguments": { "type": "text", "index": false }
           }
         },
         "spec_task": { "type": "text" },

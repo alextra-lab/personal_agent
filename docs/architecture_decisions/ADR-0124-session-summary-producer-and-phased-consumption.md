@@ -134,33 +134,47 @@ session-end is not observable. The question is "when is the projection stale."
   `session_summary`, or the next turn after a sweep will NULL the fresh digest. This also fixes the
   live clobber bug.
 
-### D2 — What it reads: everything, with one privacy conditional
+### D2 — What it reads: everything, unconditionally
 
 - Full user text and full assistant text, all turns. The 200-char clip and the 20-turn cap are
   removed outright.
 - **Full tool results** — name, arguments, status, error and payload. No per-result cap, no
   summariser-specific input ceiling.
-- **Egress-aware input, keyed on where the session's primary model actually ran.** If the session's
-  primary model was a **cloud** deployment, the tool bytes already reached a cloud provider when that
-  model called the tool, so the summariser adds no exposure and receives full payloads. If it was a
-  **local** deployment, those bytes have never left the machine, and shipping them to a cloud
-  summariser in a background job the user never sees is a *new* egress path — so such sessions
-  contribute tool **name, arguments, status and error only, never payload.**
+- **Egress is governed by the role binding, not by a per-session branch.** The producer reads full
+  tool payloads for every session, unconditionally. Whatever it reads goes to whichever model backs
+  its role — so the question "do these bytes leave the machine?" is answered by *which deployment
+  that role is bound to*, and it is answered once, in configuration, rather than re-decided per
+  session.
 
-  **The discriminator is the resolved primary deployment's provider, not `SessionModel.execution_profile`.**
-  That column exists (`service/models.py:228`) but is **vestigial**: it is hard-coded to `"local"` at
-  both creation sites and read back by nothing, having been formally retired by ADR-0121 T5 (FRE-920)
-  when the selection store became the source of truth (`service/app.py:290` says so in comment). An
-  earlier draft of this ADR keyed the rule on that column; had it shipped, every session would have
-  been classified local, every payload withheld, and D2's full-input policy silently negated.
-  Resolution is therefore: the session's `session_model_selections` row for `role='primary'` →
-  deployment key → the catalog's provider for that deployment; and where no row exists (legacy
-  sessions, or a role resolving through its binding default), the role's configured default binding.
-  **Fail closed:** if the provider cannot be resolved for a session, treat it as local and withhold
-  payloads.
-- **When payload is withheld, the contract must say so** — *"tool payloads were unavailable for this
-  session; do not infer contradiction from their absence"* — or the summariser commits the
-  fabrication error described in D3 against its own missing evidence.
+  This is deliberate, and it replaces an earlier draft of this ADR that branched per session on
+  `SessionModel.execution_profile` (local vs cloud). That draft was wrong twice over. Mechanically,
+  the column is **vestigial** — hard-coded to `"local"` at both creation sites, read back by nothing,
+  formally retired by ADR-0121 T5 (FRE-920) when the model-selection store became the source of
+  truth (`service/app.py:290` records this in comment); had it shipped, every session would have
+  classified local, every payload would have been withheld, and this decision would have silently
+  negated itself. More importantly it was wrong **conceptually**: ADR-0121 removed the execution
+  "Path" and made the user select models and roles directly, so where a given model is served is no
+  longer a construct the system exposes or reasons about. Re-deriving a local/cloud binary from the
+  selection store in order to branch on it would reintroduce precisely the abstraction that ADR was
+  written to remove.
+
+  **Known constraint, and this decision makes its cost concrete.** The control point named above —
+  bind the summariser's role to a deployment whose egress you accept — is currently coarse, because
+  the summariser has no role of its own and borrows `captains_log` (`session_summary.py:131`).
+  Changing the summariser's model therefore also changes reflection's. Separating that role is
+  deferred (see Context), and this decision is what turns that deferral from a tidiness issue into a
+  real one: until the role is split, the only way to keep session content off a given provider is to
+  move reflection too.
+
+- **If evidence is ever unavailable, the contract must say so.** No routine path withholds payloads
+  any more, but captures can be incomplete — a truncated record, a tool whose result was never
+  stored, a capture written during a failure. Whenever the producer's input is missing evidence it
+  would normally have, the prompt must state it — *"tool payloads were unavailable for this session;
+  do not infer contradiction from their absence"* — or the summariser commits the fabrication error
+  described in D3 against its own missing evidence. The rule survives the removal of the per-session
+  branch because its cause was never the branch: it is that absence of evidence is not evidence of
+  absence, and a summariser comparing narration against evidence will read one as the other unless
+  told otherwise.
 - **Oversized input fails visibly.** Estimate tokens before dispatch; if the model's real limit
   would be exceeded, raise and record the reason. Never silently truncate. The check is
   pre-dispatch, so a doomed session costs an estimate and a log line, not a model call. Log on
@@ -218,10 +232,12 @@ incomplete tool calls, multiple defensible readings, state that legitimately cha
 disagreement with a subjective judgment or recommendation. These belong in `unresolved`, or are
 omitted. **Never infer error from absent evidence.**
 
-Note that Tier A and Tier B do not both require payloads: a contradiction between "the command
+Note that neither tier depends on payloads being present: a contradiction between "the command
 succeeded" and a recorded error *status* is Tier A on status alone, and Tier B needs only the
-session's own text. So a payload-withheld session can still legitimately carry corrections — what it
-must never do is assert one that depends on payload content it was not given.
+session's own text. This matters wherever a capture is incomplete — corrections available from
+status, error or self-correction remain legitimate, and a producer must not suppress them merely
+because some payload is missing. What it must never do is assert a correction that depends on
+content it was not given.
 
 **Compute state, generate meaning.** Turn count, duration, tool invocation and success/failure
 counts, and `dominant_entities` are queryable and remain structured properties. They are never
@@ -381,7 +397,8 @@ discards the evidence-dense results.
 
 This yields the inversion that governs D2: **names-only is safer than unmarked truncation despite
 carrying less information**, because (a) is honestly silent while (b) is confidently wrong. It is
-also why withheld payloads under the profile-aware rule drop to names-only rather than to excerpts.
+also why, wherever evidence is genuinely unavailable, the producer is told it is absent rather than
+handed a partial substitute.
 
 ### Option 4: A single artifact serving both the UI and retrieval
 
@@ -503,8 +520,8 @@ consequence-of-being-wrong axis Phase 2 is the safer thing to ship first.
 ### Negative Consequences
 
 - **Complexity increase:** a new sweep worker, a derived-freshness predicate, a two-artifact
-  structured output with per-item provenance, a span validator, and a profile-aware input
-  conditional. Today's producer is a single prompt.
+  structured output with per-item provenance, and a span validator. Today's producer is a single
+  prompt.
 - **Cross-substrate read in Phase 1:** the Postgres-backed session endpoint must reach Neo4j for the
   label and digest. This is the first such join in that endpoint.
 - **Generation task is materially harder:** four slots plus provenance plus a label, on a model that
@@ -525,7 +542,7 @@ consequence-of-being-wrong axis Phase 2 is the safer thing to ship first.
 | **Proportional dominance** — annotation outweighing the facts it annotates in a small context (five digests ≈ 74% of a p50 context) | High | Relative bound: annotation may never exceed the tokens of the facts it annotates. Measured in the Phase 2a replay before anything ships. |
 | **Fabricated corrections** poisoning the graph self-confirmingly | High | Precision-first Tier A/B standard; verbatim-span validation; never infer error from absent evidence; `corrections` rate monitored as a drift signal. |
 | **Instruction contamination** via tool output surviving into a digest and then into a future session's context | High blast radius; likelihood **not** reduced by single-user operation — the corpus already includes web search and file reads, whose content is not authored by the user | Gated, not accepted. **AC-20 blocks Phase 2** — the point at which a contaminated digest first reaches a model automatically — on an adversarial fixture set proving directives in tool output neither survive into the digest nor alter it. Phase 0 and Phase 1 are unaffected because a digest read only by a human is not an injection path. |
-| **Egress** — local-profile tool payloads reaching a cloud summariser | Medium | Profile-aware input policy; withheld-evidence clause in the contract so the summariser does not reason about what it was not given. |
+| **Egress** — full tool payloads (file contents, command output, query results) reach whichever provider serves the summariser's role | Medium; unchanged in kind from the primary turn, which already sent those bytes to its own model | Governed at the **role binding** per ADR-0121, not by a per-session branch — the deliberate consequence being that egress is a configuration decision the owner makes once. Sharpened by the deferred role split: the only available binding is `captains_log`, shared with reflection, so the knob is currently coarser than the decision deserves. |
 | **Provenance collapse** — the model treating derived synthesis as retrieved fact | Medium | Rendered annotation explicitly labelled as derived; `basis` tags retained in the structured record. |
 | **Pseudo-consensus** from one session's digest restating several of its own ranked facts | Medium | Attach each session's digest exactly once per recall. |
 | **Budget-cliff eviction** of the entire memory block | Low likelihood (never fired in 1,283 evaluations; ~20× headroom), catastrophic if it fires | Structural, not monitored: annotation trims before memory context. |
@@ -538,7 +555,7 @@ consequence-of-being-wrong axis Phase 2 is the safer thing to ship first.
 **Files affected (Phase 0):**
 
 - `src/personal_agent/second_brain/session_summary.py` — input policy, two-artifact structured
-  output, provenance tags, pre-dispatch token check, profile-aware conditional
+  output, provenance tags, pre-dispatch token check
 - `src/personal_agent/second_brain/consolidator.py` — stop calling the summariser per pass
 - `src/personal_agent/memory/service.py` — `create_session` must stop writing `session_summary`
   (**the clobber fix — prerequisite, lands first or together**); new `summary_generated_at`; sweep
@@ -652,17 +669,16 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   compute-don't-generate rule does not by itself justify adding aggregate columns or backfilling
   history — if those properties are added later, this criterion extends to them then.
 - **AC-8** — Input completeness. For a predefined fixture set spanning multi-result turns, failed
-  calls, long assistant responses and both execution profiles, the assembled prompt contains: every
-  turn in the session; the **full, untruncated** user and assistant text of each; and for every tool
-  invocation its name, **arguments**, status and error. Cloud-profile sessions additionally contain
-  each payload **byte-equal** to the capture; local-profile sessions contain **no** payload. ·
-  **Check:** assert over the assembled prompt, comparing against the capture record. · *Fails if*
-  any turn, field, argument or error is missing, any payload differs from source, or either
-  profile's payload rule is violated.
+  calls and long assistant responses, the assembled prompt contains: every turn in the session; the
+  **full, untruncated** user and assistant text of each; for every tool invocation its name,
+  **arguments**, status and error; and each payload equal to the capture under a **stated canonical
+  serialisation** (compare parsed structures, or a normalised encoding — raw byte equality is not
+  well-defined once a structured payload is serialised and escaped into a prompt). · **Check:**
+  assert over the assembled prompt against the capture record. · *Fails if* any turn, field,
+  argument, error or payload is missing or altered — there is no conditional path that legitimately
+  omits a payload, so any omission is a defect rather than a policy.
 - **AC-9** — Tool-only facts survive into the digest. On a predefined set of ≥5 sessions across
-  different tools **whose primary ran on a cloud deployment** (a local-profile fixture is excluded by
-  construction — D2 withholds its payloads, so the fact would be unavailable), each containing a
-  decision-relevant fact present **only** in tool output, the
+  different tools, each containing a decision-relevant fact present **only** in tool output, the
   digest reproduces that fact in **all** of them. · **Check:** fixtures fixed in advance; the facts
   are chosen to be consequential for the session outcome, so marginal-utility filtering is not a
   legitimate reason to omit them. · *Fails if* any is missing — a narration-only producer cannot
@@ -695,15 +711,15 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   error is recoverable, so demanding perfect recall would contradict the precision-first stance and
   penalise a justifiably conservative producer. It is not 0% because that is the degenerate
   never-emit implementation this criterion exists to catch.
-- **AC-13** — A local-profile session asserts no correction **that depends on withheld payload
-  content**, while still emitting corrections available from status, error or self-correction. ·
-  **Check:** a local-profile fixture triple — one session whose only contradiction lives in a
-  withheld payload (must yield **no** correction), one whose contradiction is visible in tool
-  **status or error** (must yield one), and one containing an explicit evidenced **self-correction**
-  in the session's own text (must yield one). · *Fails if* absent evidence produces an asserted
-  error, **or** if either non-payload correction path is suppressed — both Tier-A-on-status and
-  Tier-B survive payload withholding, and a producer that disables corrections wholesale for local
-  sessions fails here.
+- **AC-13** — Missing evidence produces silence, not invention, and does not suppress corrections
+  that survive it. · **Check:** a fixture triple built on captures with deliberately incomplete
+  records — one whose only possible contradiction lives in a payload absent from the capture (must
+  yield **no** correction), one whose contradiction is visible in tool **status or error** (must
+  yield one), one containing an explicit evidenced **self-correction** in the session's own text
+  (must yield one). · *Fails if* absent evidence produces an asserted error, **or** if either
+  non-payload correction path is suppressed. Both directions matter: a producer that invents
+  contradictions from gaps fails the first case, and one that goes mute whenever any evidence is
+  missing fails the other two.
 
 ### Phase 1 — UI
 

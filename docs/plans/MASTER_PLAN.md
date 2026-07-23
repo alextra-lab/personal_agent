@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-23
+> **Last updated**: 2026-07-23 (FRE-942 deployed; ADR-0124 Amendment A + FRE-953)
 
 ## 0. ADR-0123 turn progress surface — merged, tickets pending
 
@@ -18,27 +18,28 @@ Live condition for whoever implements: `turn_status` already carries `tool_itera
 `context_max`, but **both are currently emitted as `0`** between turns. Absent-vs-zero (ADR-0123 §5)
 is a present defect, not a future principle.
 
-## 0a. Compaction — a full review is owed; visibility now exists to base it on
+## 0a. Compaction — hard gate repaired; the reset-action gap remains
 
-**There is no working compaction path.** Proven, not suspected: the soft trigger was dead by design
-under the frozen layout and FRE-941 deleted it; the hard gate fires but provably shrinks nothing
-(`tokens_saved == 0` — any tool response large enough to cross the threshold is itself larger than the
-24k tail floor, so it is swept wholesale into the protected tail); and the frozen-reset scheduler that
-was to supersede both **had never once evaluated** — its per-turn emit was unreachable behind
-`step_init`'s gateway-branch return. Sources: `docs/research/2026-07-17-fre-908-compression-gate-proof.md`
-(executable proof) and ADR-0092 open item 7.
+**The hard gate now works.** FRE-942 (merged #640, deployed + verified 2026-07-23) gave the tail band a
+**ceiling** (`within_session_max_tail_ratio`, 0.35): it had a floor but no ceiling, so a run of large
+trailing tool results accumulated an unbounded verbatim tail — measured at 44% zero-or-negative net
+reduction across 289 real compactions, worst case 2.65× the window. The FRE-908 zero-reduction proof test
+is now inverted to assert real reduction. The ADR-0085 intra-turn digest was weighed and **rejected** on
+data (no current tool emits a result above the tail floor; largest since 2026-06-01 is 19,848 tokens).
+ADR-0061 status **corrected** (§D3 amendment) and ADR-0092 open item #6 **Resolved** — both closed with
+that ticket. The soft trigger stays retired (FRE-941).
 
-This is **latent, not live** — assembled context runs ~400–6,000 tokens against a 48,000 reset ceiling
-and a 120,000 budget ceiling, and the budget trim has never fired in 1,283 evaluations. It becomes real
-only if session lengths grow.
+**Still open — behavioural, not doc:** the frozen-reset *action* (ADR-0092 item **#7**) is unreachable on
+gateway turns, and FRE-908's finding that the reset path never fires in production stands. FRE-944/945
+restored the per-turn emits (live 2026-07-23), so there is now measured headroom to base a decision on.
+Whether to make the reset action fire is unscheduled and unfiled — decide after real per-turn data
+accumulates.
 
-Forward: FRE-944/FRE-945 restored the per-turn emits (live 2026-07-23), so the review can be based on
-measured headroom rather than code reading. **FRE-942 was retargeted by master 2026-07-23 (owner-directed)
-and is building on build2** — its original premise (hard≈soft trigger parity) rested on stale pre-June
-counts and named modules FRE-941 deleted; it now targets the design change FRE-908 identifies (exempt
-oversized trailing messages from the tail floor, or target the scheduler directly), not a threshold
-tweak. It settles ADR-0061's status in the same decision — that ADR still reads Implemented while
-FRE-908 proved it inert.
+This whole surface is **latent, not live** — assembled context runs ~400–6,000 tokens against a 48,000
+reset ceiling and a 120,000 budget ceiling, and the budget trim has never fired in 1,283 evaluations. It
+becomes real only if session lengths grow. **FRE-954** (Needs Approval, Sonnet) — a `build_frozen_reset`
+sanitiser fixed-point defect surfaced during FRE-942, guarded by a strict xfail, latent behind the
+never-firing reset action.
 
 ## 0b. Session-summary workstream — Amendment A landed; Phase 0 needs a correction before it deploys
 
@@ -115,7 +116,8 @@ Inference. Re-sequence after §0.
 
 ## To fix, unscheduled
 
-- **ADR-0061 status is known-false** — reads "Implemented"; proven inert by FRE-908. Fix or retire.
+- **Frozen-reset action never fires on gateway turns** (ADR-0092 #7) — behavioural gap; see §0a. Decide
+  after per-turn headroom data accumulates. FRE-954 (sanitiser fixed-point) sits behind it.
 - **FRE-912** — narrowed, not fixed; parked-Approved. See §2.
 - **Worker seats strand on non-edit prompts** — see §2.
 

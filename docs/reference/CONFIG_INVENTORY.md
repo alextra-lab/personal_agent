@@ -44,7 +44,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 
 <!-- AUTOGEN:AppConfig START — regenerate via scripts/audit/config_inventory.py generate -->
 
-**312 typed scalar/path parameters** live in `src/personal_agent/config/settings.py` (`AppConfig`, a pydantic `BaseSettings` with `env_prefix="AGENT_"`). Every field is read through the process-wide `from personal_agent.config import settings` singleton (`settings.<field>`), so the **reader** is uniformly that accessor; **validation** is pydantic type coercion at load (`AppConfig()` raises `ValidationError` on a bad value). The **Env var** column shows `AGENT_<FIELD>` (the prefix+name form, **always valid**); where a field also declares an `alias=`, that alias is shown after `·` as an **additional** accepted spelling — empirically both bind (e.g. `debug` accepts `AGENT_DEBUG` *and* `APP_DEBUG`). A field's default is overridable by either; the *profile-divergence* for scalars is the set of `docker-compose*.yml` `environment:` blocks that override it (see §8).
+**313 typed scalar/path parameters** live in `src/personal_agent/config/settings.py` (`AppConfig`, a pydantic `BaseSettings` with `env_prefix="AGENT_"`). Every field is read through the process-wide `from personal_agent.config import settings` singleton (`settings.<field>`), so the **reader** is uniformly that accessor; **validation** is pydantic type coercion at load (`AppConfig()` raises `ValidationError` on a bad value). The **Env var** column shows `AGENT_<FIELD>` (the prefix+name form, **always valid**); where a field also declares an `alias=`, that alias is shown after `·` as an **additional** accepted spelling — empirically both bind (e.g. `debug` accepts `AGENT_DEBUG` *and* `APP_DEBUG`). A field's default is overridable by either; the *profile-divergence* for scalars is the set of `docker-compose*.yml` `environment:` blocks that override it (see §8).
 
 | # | Field (`settings.X`) | Env var | Type | Default | Secret | In `.env.example` |
 |---|---|---|---|---|---|---|
@@ -350,16 +350,17 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 300 | `within_session_compression_enabled` | `AGENT_WITHIN_SESSION_COMPRESSION_ENABLED` | `bool` | `True` |  | — |
 | 301 | `within_session_compression_refire_after_messages` | `AGENT_WITHIN_SESSION_COMPRESSION_REFIRE_AFTER_MESSAGES` | `int` | `4` |  | — |
 | 302 | `within_session_hard_threshold_ratio` | `AGENT_WITHIN_SESSION_HARD_THRESHOLD_RATIO` | `float` | `0.85` |  | — |
-| 303 | `within_session_min_tail_ratio` | `AGENT_WITHIN_SESSION_MIN_TAIL_RATIO` | `float` | `0.25` |  | — |
-| 304 | `within_session_pre_pass_threshold_tokens` | `AGENT_WITHIN_SESSION_PRE_PASS_THRESHOLD_TOKENS` | `int` | `800` |  | — |
-| 305 | `worker_global_timeout_seconds` | `AGENT_WORKER_GLOBAL_TIMEOUT_SECONDS` | `float` | `180.0` |  | — |
-| 306 | `worker_timeout_seconds` | `AGENT_WORKER_TIMEOUT_SECONDS` | `float` | `60.0` |  | — |
-| 307 | `ws_event_queue_size` | `AGENT_WS_EVENT_QUEUE_SIZE` | `int` | `500` |  | — |
-| 308 | `ws_event_ttl_hours` | `AGENT_WS_EVENT_TTL_HOURS` | `int` | `24` |  | — |
-| 309 | `ws_max_message_size` | `AGENT_WS_MAX_MESSAGE_SIZE` | `int` | `8192` |  | — |
-| 310 | `ws_ping_timeout_seconds` | `AGENT_WS_PING_TIMEOUT_SECONDS` | `int` | `60` |  | — |
-| 311 | `ws_rate_limit_per_second` | `AGENT_WS_RATE_LIMIT_PER_SECOND` | `int` | `20` |  | — |
-| 312 | `ws_ticket_ttl_seconds` | `AGENT_WS_TICKET_TTL_SECONDS` | `int` | `30` |  | — |
+| 303 | `within_session_max_tail_ratio` | `AGENT_WITHIN_SESSION_MAX_TAIL_RATIO` | `float` | `0.35` |  | — |
+| 304 | `within_session_min_tail_ratio` | `AGENT_WITHIN_SESSION_MIN_TAIL_RATIO` | `float` | `0.25` |  | — |
+| 305 | `within_session_pre_pass_threshold_tokens` | `AGENT_WITHIN_SESSION_PRE_PASS_THRESHOLD_TOKENS` | `int` | `800` |  | — |
+| 306 | `worker_global_timeout_seconds` | `AGENT_WORKER_GLOBAL_TIMEOUT_SECONDS` | `float` | `180.0` |  | — |
+| 307 | `worker_timeout_seconds` | `AGENT_WORKER_TIMEOUT_SECONDS` | `float` | `60.0` |  | — |
+| 308 | `ws_event_queue_size` | `AGENT_WS_EVENT_QUEUE_SIZE` | `int` | `500` |  | — |
+| 309 | `ws_event_ttl_hours` | `AGENT_WS_EVENT_TTL_HOURS` | `int` | `24` |  | — |
+| 310 | `ws_max_message_size` | `AGENT_WS_MAX_MESSAGE_SIZE` | `int` | `8192` |  | — |
+| 311 | `ws_ping_timeout_seconds` | `AGENT_WS_PING_TIMEOUT_SECONDS` | `int` | `60` |  | — |
+| 312 | `ws_rate_limit_per_second` | `AGENT_WS_RATE_LIMIT_PER_SECOND` | `int` | `20` |  | — |
+| 313 | `ws_ticket_ttl_seconds` | `AGENT_WS_TICKET_TTL_SECONDS` | `int` | `30` |  | — |
 
 ### Orphan `AGENT_*` keys in `.env.example` (1)
 
@@ -367,11 +368,11 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 
 - `AGENT_HOST`
 
-### AppConfig fields not documented in `.env.example` (117)
+### AppConfig fields not documented in `.env.example` (118)
 
 Fields with no matching env-var line in `.env.example` — the coverage gap ADR-0099 D4 flags as a *policy* finding (undocumented config surface):
 
-<details><summary>117 undocumented fields</summary>
+<details><summary>118 undocumented fields</summary>
 
 - `artifact_envelope_probe_enabled`
 - `artifact_envelope_probe_timeout_s`
@@ -480,6 +481,7 @@ Fields with no matching env-var line in `.env.example` — the coverage gap ADR-
 - `within_session_compression_enabled`
 - `within_session_compression_refire_after_messages`
 - `within_session_hard_threshold_ratio`
+- `within_session_max_tail_ratio`
 - `within_session_min_tail_ratio`
 - `within_session_pre_pass_threshold_tokens`
 - `worker_global_timeout_seconds`

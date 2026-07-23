@@ -138,6 +138,20 @@ Net effect: the hard trigger fires in the scenario it was designed for, but the 
 not the one that helps in that scenario. It only has room to act on the accumulation pattern the frozen-reset
 scheduler already handles first.
 
+> **Addendum 2026-07-23 (FRE-942) — confirmed at scale, and fixed.** This finding used one synthetic
+> single-message spike. FRE-942 pulled the production record: 289 real
+> `within_session_compression_completed` events (`agent-logs-*`, reproduced by
+> `scripts/audit/fre942_compaction_census.py`) show the general form of the same defect — **44%
+> achieved zero-or-negative net reduction**, and the worst left a **254,484-token post-compaction
+> working set (2.65× the 96,000 window)** with a 254,071-token verbatim tail. The root cause is
+> `_extract_tail`'s two floors and **no ceiling**: `min_turns` keeps admitting large trailing messages
+> after `min_tokens` is met. FRE-942 gave the tail a ceiling (`within_session_max_tail_ratio`) and made
+> it a bounded, user-anchored, contiguous suffix; the oversized bulk now falls to the middle band where
+> the pre-pass replaces it. The test in this file that asserted zero reduction
+> (`test_compress_in_place_cannot_shrink_a_tail_resident_spike`) was renamed and inverted to assert
+> real reduction — the same defect→fix documentation pattern FRE-910 used for AC-4. See the ADR-0061
+> §D3 amendment.
+
 ## Order-of-operations trace (AC-3, narrative)
 
 1. **Turn entry**, before the LLM-call loop starts: `_maybe_frozen_reset` (`executor.py:1264`, called from

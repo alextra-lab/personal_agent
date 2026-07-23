@@ -124,24 +124,32 @@ class TestHardGateFiresAtProductionScale:
         assert wsc.needs_hard_compression(messages, max_tokens) is True
 
     @pytest.mark.asyncio
-    async def test_compress_in_place_cannot_shrink_a_tail_resident_spike(
+    async def test_compress_in_place_now_shrinks_a_tail_resident_spike(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The gate fires, but it cannot shrink the very message that tripped it.
+        """FRE-942 — the spike the gate fires for is now actually reduced.
 
-        This is a real (and initially unexpected) finding, not an assertion of
-        intent: the tail band is preserved verbatim by design (``_extract_tail``
-        docstring) and its own token floor
-        (``within_session_min_tail_ratio × context_window_max_tokens`` = 0.25 ×
-        96000 = 24,000) is far below what a single tool response needs to reach
-        to trip the hard gate (~81,600) from a modest pre-turn baseline. So any
-        tool response big enough to single-handedly cross the hard threshold is,
-        by construction, also big enough to satisfy the tail's own floor on its
-        own — it is swept wholesale into the protected tail and never reaches
-        the pre-pass/summariser step that only operates on the middle band.
-        ADR-0061 §D1 cites "large tool responses spiking mid-turn" as the hard
-        trigger's own rationale; this fixture is exactly that scenario, and
-        ``compress_in_place`` produces ~0 reduction on it.
+        **This assertion is inverted from the one FRE-908 checked in**, and the
+        inversion is the point. FRE-908 measured that ``compress_in_place``
+        achieved *zero* reduction here (``tokens_saved == 0``,
+        ``middle_tokens_out == middle_tokens_in``, output the same size as
+        input): the tail band was preserved verbatim with a token floor
+        (0.25 × 96,000 = 24,000) but **no ceiling**, so any tool response big
+        enough to single-handedly cross the hard threshold (~81,600) was, by
+        construction, also big enough to satisfy the tail's floor on its own —
+        swept wholesale into the protected tail, never reaching the pre-pass or
+        summariser, both of which only operate on the middle band. ADR-0061 §D1
+        cites "large tool responses spiking mid-turn" as the hard trigger's own
+        rationale, so the gate fired and did nothing in its own design scenario.
+
+        FRE-942 gave the tail a ceiling and made it a user-anchored contiguous
+        suffix. The oversized tool message now exceeds the ceiling and carries
+        no user turn, so it falls to the middle band, where
+        ``_pre_pass_tool_outputs`` replaces it with a one-line descriptor. Same
+        fixture, same gate, real reduction.
+
+        (Same pattern as this file's AC-4 test, which FRE-910 renamed and flipped
+        once the durability gap it documented was closed.)
         """
         monkeypatch.setattr(
             "personal_agent.telemetry.within_session_compression._default_output_dir",
@@ -151,6 +159,7 @@ class TestHardGateFiresAtProductionScale:
         max_tokens = settings.context_window_max_tokens
         hard_threshold = int(settings.within_session_hard_threshold_ratio * max_tokens)
         tail_floor = int(settings.within_session_min_tail_ratio * max_tokens)
+        tail_ceiling = int(settings.within_session_max_tail_ratio * max_tokens)
         pre_messages = self._pre_turn_messages()
         pre_tokens = estimate_messages_tokens(pre_messages)
         needed_tokens = hard_threshold - pre_tokens + 2000
@@ -184,13 +193,92 @@ class TestHardGateFiresAtProductionScale:
             )
 
         assert record.trigger == "hard"
-        # The spike alone exceeds the tail floor, so it lands entirely in tail.
-        assert record.tail_tokens > tail_floor
-        # Nothing in the (tiny) middle band was large enough to pre-pass, and
-        # the spike itself was never eligible — so no reduction is achieved.
-        assert record.middle_tokens_out == record.middle_tokens_in
-        assert record.tokens_saved == 0
-        assert estimate_messages_tokens(compressed) == input_tokens
+        # The spike no longer hides in the protected tail: the ceiling bounds the
+        # band, and the spike carries no user turn to anchor one.
+        assert record.tail_tokens <= tail_ceiling
+        # It therefore reaches the pre-pass, which replaces it with a descriptor.
+        assert record.pre_pass_replacements >= 1
+        assert record.middle_tokens_out < record.middle_tokens_in
+        assert record.tokens_saved > 0
+        # And the working set genuinely shrinks — below the gate that fired.
+        assert estimate_messages_tokens(compressed) < input_tokens
+        assert estimate_messages_tokens(compressed) < hard_threshold
+        # Guard against the regression this ticket fixed: the old code returned a
+        # tail larger than its own floor because the floor had no ceiling.
+        assert record.tail_tokens < tail_floor
+
+
+class TestAccumulatedTailIsBounded:
+    """FRE-942 — the shape the *production* records actually show.
+
+    FRE-908's Finding 3 reproduced one oversized trailing message. The 289 real
+    compaction records in ``agent-logs-*`` (reproducible via
+    ``scripts/audit/fre942_compaction_census.py``) show the general form: 44% of
+    passes achieved zero-or-negative net reduction, and the worst left a
+    post-compaction working set of 254,484 tokens — 2.65x the 96,000-token window —
+    with ``tail_tokens = 254,071``.
+
+    The cause is that ``_extract_tail`` enforced two floors (``min_tokens``,
+    ``min_turns``) and **no ceiling**: ``min_turns`` kept pulling messages in after
+    the token floor was already satisfied, with no bound on any of them. Several
+    merely-large trailing results therefore accumulated into a verbatim-preserved
+    band many times the window.
+    """
+
+    @pytest.mark.asyncio
+    async def test_several_large_trailing_results_do_not_escape_into_the_tail(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "personal_agent.telemetry.within_session_compression._default_output_dir",
+            lambda: tmp_path,
+        )
+
+        max_tokens = settings.context_window_max_tokens
+        tail_ceiling = int(settings.within_session_max_tail_ratio * max_tokens)
+
+        # Four trailing tool rounds, each individually well under the old 24,000
+        # tail floor — so none of them is the "oversized single message" FRE-908
+        # found. Together they are what the production records show.
+        messages: list[dict[str, Any]] = [
+            _msg("system", "system prompt"),
+            _msg("user", "start the task"),
+        ]
+        for i in range(5):
+            messages.append(_msg("user", f"step {i}"))
+            messages.extend(_tool_pair(f"call-{i}", _big_tool_body(20_000)))
+
+        input_tokens = estimate_messages_tokens(messages)
+        assert wsc.needs_hard_compression(messages, max_tokens) is True
+
+        async def fake_compress_turns(
+            msgs: list, trace_id: str = "", session_id: str | None = None
+        ) -> str:
+            return FALLBACK_MARKER
+
+        with patch(
+            "personal_agent.orchestrator.context_compressor.compress_turns",
+            side_effect=fake_compress_turns,
+        ):
+            compressed, record = await wsc.compress_in_place(
+                messages,
+                trace_id="t-accum",
+                session_id="s-accum",
+                trigger="hard",
+                bus=None,
+            )
+
+        # The band that grew without bound is now bounded.
+        assert record.tail_tokens <= tail_ceiling
+        # The results that no longer fit the tail reached the pre-pass instead.
+        assert record.pre_pass_replacements >= 1
+        assert record.tokens_saved > 0
+        # And the pass actually did its job: the working set drops back under the
+        # gate that fired it, which is what the production records never achieved.
+        assert estimate_messages_tokens(compressed) < input_tokens
+        assert estimate_messages_tokens(compressed) < int(
+            settings.within_session_hard_threshold_ratio * max_tokens
+        )
 
 
 # ---------------------------------------------------------------------------

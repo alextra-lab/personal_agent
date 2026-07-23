@@ -43,10 +43,24 @@ suppressed iff ``now - last_sent < ttl(kind)``:
   a busy worker is mid-build and must not be interrupted; a busy target is
   skipped + logged, retried next tick.
 - **master** triggers are **unconditional** — idle detection over ``capture-pane``
-  is not reliable enough to gate on (it kept the watcher from ever informing a
+  is not reliable enough to *gate* on (it kept the watcher from ever informing a
   busy master), so ``/master <id>`` is always sent and Claude Code queues it if
   master is mid-turn. Master then decides whether to act on it now or after the
   current task. The dedup store (long master TTL) still prevents re-sends.
+
+**Unconfirmed delivery (FRE-939).** "Claude Code queues it" is a hope, not an
+observation: a master trigger sent mid-turn was returning ``sent`` and being
+booked as delivered-and-consumed, so when the keys *were* lost nothing surfaced,
+nothing retried, and PR 602 sat ungated for nine hours. The pane is therefore
+captured on the master path too — **as evidence, never as a gate** (the send is
+still unconditional; FRE-845's dropped-dispatch regression is not reintroduced).
+A busy pane yields ``queued``: keys injected, receipt unobserved. Such an entry
+is deliberately **not** consumed and does **not** arm the 6 h dedup TTL, so it
+stays visible to the existing unconsumed-trigger read, and ``resolve_queued_triggers``
+resolves it each tick — consume it once its PR is authoritatively closed,
+re-offer it into a now-idle pane, or surface it once past a bounded age. There
+is no blind retry: the re-offer is idle-gated, so a still-busy target costs zero
+keystrokes.
 
 The watcher only *actuates* the trigger; master's and worker's own gates re-read
 live state and remain authoritative.
@@ -92,7 +106,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
-from typing import ContextManager, Literal, Protocol
+from typing import ContextManager, Literal, Protocol, overload
 
 import structlog
 
@@ -149,6 +163,14 @@ _CONTEXT_PRESSURE_NUDGE = (
     "Do NOT run prepare-reset / checkpoint / /clear unless the owner explicitly instructs it — "
     "the reset decision is the owner's alone, never auto-run on this nudge."
 )
+
+# Age past which a still-unconfirmed gating trigger (injected into a busy pane,
+# receipt never observed — FRE-939) is surfaced to the owner, once. Same value
+# and reasoning as orchestrator.DEFAULT_HELD_ESCALATION_S: a fair window for a
+# gate to complete without a premature alarm, and far short of the nine hours PR
+# 602 sat ungated. Age-based rather than tick-based because the ledger entry
+# carries a durable timestamp, so age is the honest, cadence-independent signal.
+DEFAULT_QUEUED_ESCALATION_S: float = 1800.0  # 30 min
 
 # Poll interval for the daemon loop. Cheap — the watcher holds no LLM context.
 DEFAULT_POLL_INTERVAL_S: float = 60.0
@@ -716,6 +738,44 @@ def _fetch_pr_detail(number: int, runner: CommandRunner) -> PullRequest | None:
     )
 
 
+def pr_is_closed(number: str, runner: CommandRunner) -> bool | None:
+    """Read one PR's state authoritatively via ``gh``.
+
+    Deliberately a *per-PR* read rather than a membership test against the tick's
+    open-PR list. That list is not an authoritative inventory: ``fetch_open_prs``
+    caps enumeration at ``_OPEN_PR_LIMIT`` and silently omits any PR whose detail
+    read failed. Treating absence from it as closure would let one transient
+    ``gh`` failure consume an unconfirmed trigger — and, since ``prune_ledger``
+    evicts a consumed numeric entry whose PR is not open, destroy it permanently
+    and silently. That is the FRE-939 failure mode wearing a different hat.
+
+    Args:
+        number: The PR number as a string (a ledger ``ticket``).
+        runner: The command runner seam (shells ``gh``).
+
+    Returns:
+        ``True`` when the PR is definitively ``CLOSED``/``MERGED``, ``False``
+        when definitively ``OPEN``, and ``None`` when the state could not be
+        determined (command failure, unparseable output, unknown state) — the
+        caller must treat ``None`` as "keep the entry", never as closure.
+    """
+    result = runner(["gh", "pr", "view", number, "--json", "state"])
+    if result.returncode != 0:
+        return None
+    try:
+        data: object = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    state = str(data.get("state") or "").upper()
+    if state in ("CLOSED", "MERGED"):
+        return True
+    if state == "OPEN":
+        return False
+    return None
+
+
 def fetch_issue_labels(ticket: str, api_key: str) -> frozenset[str]:
     """Fetch an issue's label names from Linear via GraphQL.
 
@@ -752,10 +812,44 @@ def fetch_issue_labels(ticket: str, api_key: str) -> frozenset[str]:
     return frozenset(node["name"] for node in issue["labels"]["nodes"])
 
 
+@overload
 def send_to_session(
-    session: str, command: str, runner: CommandRunner, require_idle: bool = True
-) -> Literal["sent", "absent", "busy"]:
+    session: str,
+    command: str,
+    runner: CommandRunner,
+    require_idle: Literal[True] = ...,
+    *,
+    on_queued: Callable[[], None] | None = ...,
+) -> Literal["sent", "busy", "absent"]: ...
+
+
+@overload
+def send_to_session(
+    session: str,
+    command: str,
+    runner: CommandRunner,
+    require_idle: bool = ...,
+    *,
+    on_queued: Callable[[], None] | None = ...,
+) -> trigger_ledger.SendOutcome: ...
+
+
+def send_to_session(
+    session: str,
+    command: str,
+    runner: CommandRunner,
+    require_idle: bool = True,
+    *,
+    on_queued: Callable[[], None] | None = None,
+) -> trigger_ledger.SendOutcome:
     """Inject ``command`` into ``session`` if it exists (and, when required, idle).
+
+    Typed as two overloads so an **idle-gated** send can never be typed as
+    ``queued``: gating on idle means a busy pane is skipped outright, so there
+    is no such thing as an unconfirmed idle-gated delivery. That keeps callers
+    which only ever gate on idle — ``send_keys_whitelist``, this module's own
+    reconcile retry — structurally unable to receive a ``queued`` outcome and
+    mishandle it by closing the entry out (which is the FRE-939 bug).
 
     Args:
         session: The target tmux session.
@@ -766,30 +860,51 @@ def send_to_session(
             triggers so a build mid-turn is never interrupted. When ``False``,
             inject regardless of pane state: Claude Code queues the keys if the
             session is mid-turn. Used for the **master** trigger — idle detection
-            over ``capture-pane`` is not reliable enough to gate on (it kept the
+            over ``capture-pane`` is not reliable enough to *gate* on (it kept the
             watcher from ever informing a busy master), so master is always poked
             with ``/master <id>`` and the owner/master decides whether to act on
             it now or after the current task.
+        on_queued: Called once, **after** the pane reads busy and **before** the
+            keystrokes are injected, on the ``require_idle=False`` path only.
+            The caller uses it to durably record the unconfirmed delivery
+            (FRE-939). The ordering lives here rather than at the call site so
+            it cannot be forgotten: a durable "queued" record written *after*
+            injection leaves a crash window whose on-disk shape is
+            indistinguishable from an ambiguous mid-send crash, which
+            ``trigger_ledger.reconcile`` marks terminally ``surfaced`` —
+            permanently disabling delivery for that PR.
 
     Returns:
-        ``sent`` when the keys were injected; ``absent`` when the session does
-        not exist; ``busy`` when ``require_idle`` and the pane is not idle — the
-        latter two perform no injection.
+        ``sent`` when the keys were injected into a pane observed **idle**;
+        ``queued`` when they were injected into a **busy** pane (issued, receipt
+        unobserved — ``require_idle=False`` only); ``absent`` when the session
+        does not exist; ``busy`` when ``require_idle`` and the pane is not idle.
+        The last two perform no injection.
     """
     # Exact-match targets throughout (FRE-909): a dead seat must resolve to
     # nothing, never to a name-extension seat (cc-build -> cc-build2), which
     # would inject this command into a DIFFERENT worker mid-build.
     if runner(["tmux", "has-session", "-t", exact_session(session)]).returncode != 0:
         return "absent"
-    if require_idle:
-        pane = runner(["tmux", "capture-pane", "-t", exact_pane(session), "-p"])
-        if not session_is_idle(pane.stdout):
+    # The pane is now captured on BOTH paths (FRE-939). It still only *gates*
+    # the require_idle path; for master it is read-only evidence, used to stop
+    # booking an unobserved send as a confirmed delivery. Master delivery stays
+    # unconditional — FRE-845's regression (a false-busy reading dropping the
+    # dispatch outright) is not reintroduced: a false busy here costs at most a
+    # duplicate poke later, never a lost one.
+    pane = runner(["tmux", "capture-pane", "-t", exact_pane(session), "-p"])
+    outcome: trigger_ledger.SendOutcome = "sent"
+    if not session_is_idle(pane.stdout):
+        if require_idle:
             return "busy"
+        outcome = "queued"
+        if on_queued is not None:
+            on_queued()
     # Send the literal text, then Enter as a separate key — never let tmux parse
     # the command text as key names.
     runner(["tmux", "send-keys", "-t", exact_pane(session), "-l", command])
     runner(["tmux", "send-keys", "-t", exact_pane(session), "Enter"])
-    return "sent"
+    return outcome
 
 
 ChannelOutcome = Literal["delivered", "unreachable"]
@@ -916,6 +1031,162 @@ def _kill_switch_engaged(path: Path) -> bool:
     return path.exists()
 
 
+def _is_superseded(
+    entry: trigger_ledger.LedgerEntry, unconfirmed: Mapping[str, trigger_ledger.LedgerEntry]
+) -> bool:
+    """Return whether a newer unconfirmed trigger covers the same PR and seat.
+
+    Strictly newer by ``created_at``, so of any two entries exactly one is
+    superseded and never both. A tie is impossible in practice — ``decide``
+    yields at most one trigger per PR per tick — and a tie would leave both
+    live, which is the safe direction.
+    """
+    return any(
+        other.created_at > entry.created_at
+        and other.ticket == entry.ticket
+        and other.target_pane == entry.target_pane
+        for other in unconfirmed.values()
+    )
+
+
+def resolve_queued_triggers(
+    ledger: trigger_ledger.Ledger,
+    *,
+    now: float,
+    open_pr_numbers: Collection[str],
+    pr_closed: Callable[[str], bool | None],
+    reoffer: Callable[[trigger_ledger.LedgerEntry], trigger_ledger.IdleGatedOutcome],
+    escalation_s: float,
+    escalated: set[str],
+    ledger_persist: Callable[[trigger_ledger.Ledger], None],
+    logger: Logger,
+    trace_id: str,
+) -> tuple[trigger_ledger.Ledger, tuple[str, ...]]:
+    """Resolve every unconfirmed (``queued``) ledger entry (FRE-939).
+
+    An entry reaches this pass when its command was injected into a **busy**
+    pane: issued, but receipt never observed. Each such entry is either closed
+    out as moot, re-delivered into a now-idle pane, or — past a bounded age —
+    surfaced to the owner. It is never dropped, and never blind-retried into a
+    busy pane.
+
+    Per entry, in order:
+
+    1. **Obsolete → consume.** A PR-ticketed entry whose PR is *authoritatively*
+       closed/merged is moot (master acted, or the PR went away). Absence from
+       ``open_pr_numbers`` alone is never sufficient — see ``pr_is_closed``. A
+       non-numeric ticket (a context-pressure nudge keyed by session) has no PR
+       to close against and is never judged obsolete here.
+    2. **Re-offer, idle-gated.** ``reoffer`` injects only into an idle pane, so a
+       still-busy target costs **zero keystrokes**. That is what keeps this from
+       becoming the send loop the ticket forbids: there is no per-tick
+       re-injection and no backoff timer to mistune. It is idle-*gated*, not
+       race-free — the pane can turn busy between the capture and the send-keys,
+       the same narrow pre-existing window every worker delivery carries.
+    3. **Escalate by age, once.** Age is measured from ``created_at``, which
+       ``record_pending`` writes exactly once; nothing on the re-offer path
+       rewrites it, so repeated attempts cannot reset the clock (the FRE-927
+       defect, avoided by construction rather than by discipline).
+
+    ``escalated`` is an **in-memory** one-shot latch, deliberately not persisted
+    — the FRE-922/FRE-924 lesson: a persisted crossing state can be
+    first-observed already past its trigger after a restart and silently lose
+    the single alert forever. In memory it gives exactly-once per daemon run and
+    at-least-once across restarts, which is the correct direction to fail for an
+    alert. ``mark_surfaced`` is deliberately unused: it is terminal-pending and
+    never auto-retried, which would kill the re-offer above.
+
+    Args:
+        ledger: The current ledger.
+        now: Wall-clock epoch seconds.
+        open_pr_numbers: PR numbers seen open this tick (as strings). A hit here
+            short-circuits the authoritative read — the PR is definitively open.
+        pr_closed: Authoritative per-PR state read; ``None`` means undetermined
+            and is always treated as "keep the entry".
+        reoffer: Re-attempts one entry's delivery. Must be **idle-gated**,
+            which the type enforces — a re-offer that could inject into a busy
+            pane is the send loop this pass exists to avoid.
+        escalation_s: Age past which a still-unconfirmed entry is surfaced.
+        escalated: In-memory one-shot latch of already-surfaced event ids,
+            mutated in place.
+        ledger_persist: Persists the ledger after each transition.
+        logger: Structured logger.
+        trace_id: The tick's trace id.
+
+    Returns:
+        The updated ledger, and the event ids whose delivery was confirmed this
+        pass (the caller arms its own dedup store from these).
+    """
+    unconfirmed = {
+        event_id: entry
+        for event_id, entry in ledger.items()
+        if entry.queued_at is not None
+        and entry.sent_at is None
+        and entry.consumed_at is None
+        and entry.surfaced_at is None
+    }
+    delivered: list[str] = []
+    for event_id, entry in unconfirmed.items():
+        if _is_superseded(entry, unconfirmed):
+            # A newer unconfirmed trigger for the same PR and seat exists, so
+            # this one is stale. Reached by an ordinary re-push while the target
+            # is busy: the dedup key carries the head SHA, so a new SHA mints a
+            # SECOND entry while the first is still unconfirmed. Both carry the
+            # same "/master <pr>" text, and without this both would be re-offered
+            # in the same pass once the pane frees — and the second capture-pane
+            # still reads idle microseconds after the first injection, so the
+            # duplicate lands. Retire the stale one instead: exactly one
+            # outstanding notification per PR per seat, however many re-pushes.
+            ledger = trigger_ledger.mark_consumed(ledger, event_id, now)
+            ledger_persist(ledger)
+            logger.info(
+                "gating_queued_superseded", trace_id=trace_id, event_id=event_id, pr=entry.ticket
+            )
+            continue
+
+        if (
+            entry.ticket.isdigit()
+            and entry.ticket not in open_pr_numbers
+            and pr_closed(entry.ticket) is True
+        ):
+            ledger = trigger_ledger.mark_consumed(ledger, event_id, now)
+            ledger_persist(ledger)
+            logger.info(
+                "gating_queued_obsolete", trace_id=trace_id, event_id=event_id, pr=entry.ticket
+            )
+            continue
+
+        outcome = reoffer(entry)
+        if outcome == "sent":
+            ledger = trigger_ledger.mark_sent(ledger, event_id, now)
+            ledger_persist(ledger)
+            ledger = trigger_ledger.mark_consumed(ledger, event_id, now)
+            ledger_persist(ledger)
+            delivered.append(event_id)
+            logger.info(
+                "gating_queued_redelivered",
+                trace_id=trace_id,
+                event_id=event_id,
+                pr=entry.ticket,
+                session=entry.target_pane,
+            )
+            continue
+
+        if now - entry.created_at >= escalation_s and event_id not in escalated:
+            escalated.add(event_id)
+            logger.warning(
+                "gating_trigger_unconfirmed_too_long",
+                trace_id=trace_id,
+                event_id=event_id,
+                pr=entry.ticket,
+                session=entry.target_pane,
+                command=entry.command,
+                age_s=round(now - entry.created_at, 1),
+                reoffer_outcome=outcome,
+            )
+    return ledger, tuple(delivered)
+
+
 def run_once(
     state: dict[str, float],
     *,
@@ -936,6 +1207,8 @@ def run_once(
     context_pressure_ttl_s: float = DEFAULT_CONTEXT_PRESSURE_TTL_S,
     channel_poster: Callable[[int, str, str], ChannelOutcome] = post_channel_event,
     channel_secret: str | None = None,
+    queued_escalated: set[str] | None = None,
+    queued_escalation_s: float = DEFAULT_QUEUED_ESCALATION_S,
 ) -> dict[str, float]:
     """Run one watcher tick, mutating and returning the dedup store.
 
@@ -971,6 +1244,12 @@ def run_once(
             (``load_channel_secret()`` in production). ``None`` falls back to
             send-keys for every channel-mode trigger this tick, exactly like
             an unreachable channel.
+        queued_escalated: In-memory one-shot latch of unconfirmed-trigger event
+            ids already surfaced (FRE-939), held across ticks by the caller.
+            ``None`` allocates a fresh set — correct for a one-shot ``--once``
+            run, which surfaces at most once by definition.
+        queued_escalation_s: Age past which a still-unconfirmed trigger is
+            surfaced to the owner.
 
     Returns:
         The updated dedup store.
@@ -979,18 +1258,48 @@ def run_once(
     if kill_switch_engaged():
         logger.warning("gating_blocked", trace_id=trace_id, reason="kill-switch")
         return state
-    if ledger is None:
-        ledger = {}
+    # A non-optional local: the queued-record hook below mutates this through a
+    # closure, and a nested `nonlocal` write invalidates any narrowing of the
+    # optional parameter itself.
+    tick_ledger: trigger_ledger.Ledger = {} if ledger is None else ledger
+    if queued_escalated is None:
+        queued_escalated = set()
 
-    def _retry_pending(entry: trigger_ledger.LedgerEntry) -> trigger_ledger.SendOutcome:
+    def _retry_pending(entry: trigger_ledger.LedgerEntry) -> trigger_ledger.IdleGatedOutcome:
         return send_to_session(entry.target_pane, entry.command, runner)
 
     if execute:
-        ledger = trigger_ledger.reconcile(
-            ledger, now=now, execute_pending=_retry_pending, persist=ledger_persist, logger=logger
+        tick_ledger = trigger_ledger.reconcile(
+            tick_ledger,
+            now=now,
+            execute_pending=_retry_pending,
+            persist=ledger_persist,
+            logger=logger,
         )
 
     prs = board_fetcher()
+
+    # Unconfirmed deliveries (FRE-939) resolve BEFORE this tick's decisions: a
+    # re-offer that lands here arms the dedup store, so ``classify_pr`` below
+    # correctly suppresses the same PR instead of racing it in one tick.
+    if execute:
+        tick_ledger, redelivered = resolve_queued_triggers(
+            tick_ledger,
+            now=now,
+            open_pr_numbers={str(pr.number) for pr in prs},
+            pr_closed=lambda number: pr_is_closed(number, runner),
+            reoffer=_retry_pending,
+            escalation_s=queued_escalation_s,
+            escalated=queued_escalated,
+            ledger_persist=ledger_persist,
+            logger=logger,
+            trace_id=trace_id,
+        )
+        if redelivered:
+            for event_id in redelivered:
+                state[event_id] = now
+            persist(state)
+
     triggers = decide(
         prs,
         session_resolver=session_resolver,
@@ -1014,8 +1323,8 @@ def run_once(
             continue
         if not execute:
             continue
-        ledger, record_outcome = trigger_ledger.record_pending(
-            ledger,
+        tick_ledger, record_outcome = trigger_ledger.record_pending(
+            tick_ledger,
             event_id=trigger.dedup_key,
             source=trigger.reason,
             target_pane=trigger.session,
@@ -1025,15 +1334,15 @@ def run_once(
             now=now,
             ttl_s=trigger.ttl_s,
         )
-        ledger_persist(ledger)
+        ledger_persist(tick_ledger)
         if record_outcome == "duplicate":
             logger.warning(
-                "gating_skip", trace_id=trace_id, reason="ledger-duplicate", pr=trigger.pr
+                "gating_skip", trace_id=trace_id, reason="tick_ledger-duplicate", pr=trigger.pr
             )
             continue
-        ledger = trigger_ledger.mark_send_started(ledger, trigger.dedup_key, now)
-        ledger_persist(ledger)
-        outcome: Literal["sent", "absent", "busy"] | None = None
+        tick_ledger = trigger_ledger.mark_send_started(tick_ledger, trigger.dedup_key, now)
+        ledger_persist(tick_ledger)
+        outcome: trigger_ledger.SendOutcome | None = None
         if trigger.mode == "channel":
             if channel_secret is None:
                 logger.warning(
@@ -1052,8 +1361,10 @@ def run_once(
                 # The ONLY place transport ever becomes "channel" -- called
                 # exactly once, only on confirmed delivery. See
                 # trigger_ledger.LedgerEntry.transport's docstring.
-                ledger = trigger_ledger.mark_transport(ledger, trigger.dedup_key, "channel")
-                ledger_persist(ledger)
+                tick_ledger = trigger_ledger.mark_transport(
+                    tick_ledger, trigger.dedup_key, "channel"
+                )
+                ledger_persist(tick_ledger)
                 outcome = "sent"
             elif channel_secret is not None:
                 logger.warning(
@@ -1066,10 +1377,40 @@ def run_once(
         # share this single call site -- transport stays at its untouched
         # "send_keys" default in both cases; there is nothing to correct.
         if outcome is None:
+            event_id = trigger.dedup_key
+            target = trigger.session
+
+            def _record_queued(event_id: str = event_id) -> None:
+                # Runs BEFORE the keystrokes (see send_to_session's on_queued):
+                # the durable record of an unconfirmed delivery must never trail
+                # the injection it describes.
+                nonlocal tick_ledger
+                tick_ledger = trigger_ledger.mark_queued(tick_ledger, event_id, now)
+                ledger_persist(tick_ledger)
+
             outcome = send_to_session(
-                trigger.session, trigger.command, runner, require_idle=trigger.kind != "master"
+                target,
+                trigger.command,
+                runner,
+                require_idle=trigger.kind != "master",
+                on_queued=_record_queued,
             )
-        if outcome == "sent":
+        if outcome == "queued":
+            # Injected into a busy pane -- delivery issued, receipt NOT observed
+            # (FRE-939). Deliberately none of the "sent" bookkeeping below: no
+            # mark_sent, no dedup-store write (an unconfirmed send must not
+            # suppress the PR for the 6h master TTL), no mark_consumed. The
+            # entry stays unconsumed so the existing surfacing read sees it and
+            # resolve_queued_triggers re-offers it next tick.
+            logger.warning(
+                "gating_send_unconfirmed",
+                trace_id=trace_id,
+                pr=trigger.pr,
+                session=trigger.session,
+                command=trigger.command,
+                reason="target-busy",
+            )
+        elif outcome == "sent":
             logger.info(
                 "gating_send",
                 trace_id=trace_id,
@@ -1077,12 +1418,12 @@ def run_once(
                 session=trigger.session,
                 command=trigger.command,
             )
-            ledger = trigger_ledger.mark_sent(ledger, trigger.dedup_key, now)
-            ledger_persist(ledger)
+            tick_ledger = trigger_ledger.mark_sent(tick_ledger, trigger.dedup_key, now)
+            ledger_persist(tick_ledger)
             state[trigger.dedup_key] = now
             persist(state)
-            ledger = trigger_ledger.mark_consumed(ledger, trigger.dedup_key, now)
-            ledger_persist(ledger)
+            tick_ledger = trigger_ledger.mark_consumed(tick_ledger, trigger.dedup_key, now)
+            ledger_persist(tick_ledger)
         else:
             logger.warning(
                 "gating_skip",
@@ -1093,8 +1434,8 @@ def run_once(
             )
             # Abandoned, not sent -- record_pending never suppresses this on a
             # future attempt (no TTL window applies to a non-send).
-            ledger = trigger_ledger.mark_consumed(ledger, trigger.dedup_key, now)
-            ledger_persist(ledger)
+            tick_ledger = trigger_ledger.mark_consumed(tick_ledger, trigger.dedup_key, now)
+            ledger_persist(tick_ledger)
 
     for session, pct in context_pressure(context_reader(), context_pressure_threshold):
         logger.info("context_pressure", trace_id=trace_id, session=session, pct=round(pct, 1))
@@ -1104,8 +1445,8 @@ def run_once(
         if _suppressed(state, key, now, context_pressure_ttl_s):
             continue
         command = _CONTEXT_PRESSURE_NUDGE.format(pct=round(pct))
-        ledger, record_outcome = trigger_ledger.record_pending(
-            ledger,
+        tick_ledger, record_outcome = trigger_ledger.record_pending(
+            tick_ledger,
             event_id=key,
             source="context-pressure",
             target_pane=session,
@@ -1115,34 +1456,34 @@ def run_once(
             now=now,
             ttl_s=context_pressure_ttl_s,
         )
-        ledger_persist(ledger)
+        ledger_persist(tick_ledger)
         if record_outcome == "duplicate":
             logger.warning(
                 "context_pressure_skip",
                 trace_id=trace_id,
                 session=session,
-                reason="ledger-duplicate",
+                reason="tick_ledger-duplicate",
             )
             continue
-        ledger = trigger_ledger.mark_send_started(ledger, key, now)
-        ledger_persist(ledger)
+        tick_ledger = trigger_ledger.mark_send_started(tick_ledger, key, now)
+        ledger_persist(tick_ledger)
         outcome = send_to_session(session, command, runner)
         if outcome == "sent":
             logger.info(
                 "context_pressure_send", trace_id=trace_id, session=session, pct=round(pct, 1)
             )
-            ledger = trigger_ledger.mark_sent(ledger, key, now)
-            ledger_persist(ledger)
+            tick_ledger = trigger_ledger.mark_sent(tick_ledger, key, now)
+            ledger_persist(tick_ledger)
             state[key] = now
             persist(state)
-            ledger = trigger_ledger.mark_consumed(ledger, key, now)
-            ledger_persist(ledger)
+            tick_ledger = trigger_ledger.mark_consumed(tick_ledger, key, now)
+            ledger_persist(tick_ledger)
         else:
             logger.warning(
                 "context_pressure_skip", trace_id=trace_id, session=session, reason=outcome
             )
-            ledger = trigger_ledger.mark_consumed(ledger, key, now)
-            ledger_persist(ledger)
+            tick_ledger = trigger_ledger.mark_consumed(tick_ledger, key, now)
+            ledger_persist(tick_ledger)
 
     pruned = prune_state(
         state,
@@ -1286,6 +1627,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Context-pressure percent threshold for the master nudge "
         "(env AGENT_CONTEXT_PRESSURE_THRESHOLD, default 70).",
     )
+    parser.add_argument(
+        "--queued-escalation-timeout",
+        type=float,
+        default=DEFAULT_QUEUED_ESCALATION_S,
+        help="Seconds after which a still-unconfirmed gating trigger is surfaced (FRE-939).",
+    )
     args = parser.parse_args(argv)
 
     api_key = load_linear_key()
@@ -1305,6 +1652,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     resolver = _resolver(api_key, logger)
     ledger_retention_s = args.ledger_retention_days * 86400.0
     channel_secret = load_channel_secret()
+    # One-shot unconfirmed-trigger alert latch, held across ticks for the life of
+    # this daemon run and never persisted (FRE-939; the FRE-922/924 lesson —
+    # a persisted crossing state can be first-observed already past its trigger
+    # after a restart and silently lose the single alert forever).
+    queued_escalated: set[str] = set()
 
     def tick() -> None:
         state = load_state(state_path)
@@ -1336,6 +1688,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             context_reader=_master_context_reader,
             context_pressure_threshold=args.context_pressure_threshold,
             channel_secret=channel_secret,
+            queued_escalated=queued_escalated,
+            queued_escalation_s=args.queued_escalation_timeout,
         )
         if not board_fetched:
             return  # kill-switch halted the tick before the board was read

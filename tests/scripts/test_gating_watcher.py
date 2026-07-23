@@ -619,8 +619,12 @@ def test_send_busy_session_skips() -> None:
 
 
 def test_send_master_injects_regardless_of_busy_pane() -> None:
-    """Master triggers (require_idle=False) send even into a busy pane and never
-    consult capture-pane for an idle check — Claude Code queues the keys.
+    """Master triggers (require_idle=False) still send into a busy pane.
+
+    FRE-845's decision is intact — the scrape never *gates* master delivery, so
+    a busy (or falsely-busy) pane can never drop the poke. What changed with
+    FRE-939 is only the report: the pane IS now captured, and a busy one yields
+    ``queued`` (issued, receipt unobserved) rather than a false ``sent``.
     """
     runner = _RecordingRunner(
         {
@@ -628,13 +632,51 @@ def test_send_master_injects_regardless_of_busy_pane() -> None:
             ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_BUSY_PANE),
         }
     )
-    assert send_to_session("cc-master", "/master 1", runner, require_idle=False) == "sent"
-    assert not any(call[:2] == ("tmux", "capture-pane") for call in runner.calls)
+    assert send_to_session("cc-master", "/master 1", runner, require_idle=False) == "queued"
     send_keys = [call for call in runner.calls if call[:2] == ("tmux", "send-keys")]
     assert send_keys == [
         ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 1"),
         ("tmux", "send-keys", "-t", "=cc-master:0.0", "Enter"),
     ]
+
+
+def test_send_master_on_queued_hook_fires_before_any_keystroke() -> None:
+    """FRE-939 (codex review #2): the durable queued record precedes injection.
+
+    Writing it after the send leaves a crash window whose on-disk shape is the
+    ambiguous mid-send state, which ``reconcile`` marks terminally ``surfaced``
+    — permanently disabling delivery for that PR. Ordering is enforced inside
+    ``send_to_session`` so no call site can get it wrong.
+    """
+    runner = _RecordingRunner(
+        {
+            ("tmux", "has-session"): _FakeRunResult(returncode=0),
+            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_BUSY_PANE),
+        }
+    )
+    keystrokes_at_hook: list[int] = []
+    send_to_session(
+        "cc-master",
+        "/master 1",
+        runner,
+        require_idle=False,
+        on_queued=lambda: keystrokes_at_hook.append(
+            len([c for c in runner.calls if c[:2] == ("tmux", "send-keys")])
+        ),
+    )
+    assert keystrokes_at_hook == [0]  # called exactly once, before any send-keys
+
+
+def test_send_idle_pane_never_calls_the_queued_hook() -> None:
+    hook_calls: list[int] = []
+    send_to_session(
+        "cc-master",
+        "/master 1",
+        _idle_runner(),
+        require_idle=False,
+        on_queued=lambda: hook_calls.append(1),
+    )
+    assert hook_calls == []
 
 
 def test_send_idle_session_injects() -> None:
@@ -900,9 +942,13 @@ def test_run_once_ledger_untouched_for_unroutable_worker() -> None:
 
 
 def test_run_once_master_sends_even_on_busy_session() -> None:
-    # Master triggers bypass the idle guard (require_idle=False): the send goes
-    # through even into a busy pane, and Claude Code queues it. (Workers still
-    # abandon-on-busy and retry — send_to_session's require_idle default.)
+    """FRE-845 no-regression: a busy master pane never *withholds* the poke.
+
+    Master delivery stays unconditional — the scrape informs the ledger, it does
+    not gate the send. (Workers still abandon-on-busy and retry —
+    ``send_to_session``'s ``require_idle`` default.) What the busy pane costs is
+    only the *claim* of delivery; see the FRE-939 section below.
+    """
     runner = _RecordingRunner(
         {
             ("tmux", "has-session"): _FakeRunResult(returncode=0),
@@ -922,9 +968,8 @@ def test_run_once_master_sends_even_on_busy_session() -> None:
         ledger=ledger,
         ledger_persist=ledger.update,
     )
-    entry = ledger["master:412:abc1234def5678"]
-    assert entry.sent_at is not None  # sent despite the busy pane
-    assert entry.consumed_at is not None
+    sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
+    assert ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 412") in sends
 
 
 def test_run_once_reconciles_pending_ledger_entry_before_new_decisions() -> None:
@@ -1716,3 +1761,428 @@ def test_run_once_dry_run_does_not_actuate_pending_ledger_entry() -> None:
     # Ledger entry untouched: still pending, never consumed
     assert ledger["master:999:deadbeef"].sent_at is None
     assert ledger["master:999:deadbeef"].consumed_at is None
+
+
+# --- FRE-939: a busy-pane master send is never recorded as delivered --------
+
+
+def test_run_once_master_busy_pane_leaves_entry_unconsumed() -> None:
+    """AC-1: a gating send issued while master is mid-turn is not consumed.
+
+    The FRE-939 regression: the master path skipped the pane capture entirely
+    and reported ``sent`` whenever the tmux session merely existed, so a send
+    into a mid-turn pane was booked as a confirmed delivery -- no unconsumed
+    entry to surface, no re-offer, nothing anywhere reporting a problem. PR 602
+    sat ungated for nine hours on exactly this.
+
+    The keys still go in (master delivery stays unconditional -- FRE-845); only
+    the *claim of delivery* is withheld.
+    """
+    runner = _RecordingRunner(
+        {
+            ("tmux", "has-session"): _FakeRunResult(returncode=0),
+            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_BUSY_PANE),
+        }
+    )
+    ledger: dict = {}
+    state: dict[str, float] = {}
+    run_once(
+        state,
+        now=100.0,
+        board_fetcher=lambda: [_pr()],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    entry = ledger["master:412:abc1234def5678"]
+    assert entry.queued_at is not None  # busy pane recorded, not hidden
+    assert entry.sent_at is None  # delivery never observed
+    assert entry.consumed_at is None  # stays unconsumed -> surfaceable
+    assert snapshot_unconsumed(ledger) == (entry,)
+    # The 6h master dedup TTL is NOT armed -- an unconfirmed send must not
+    # suppress the PR for six hours.
+    assert state == {}
+    # ...and the keystrokes still went in.
+    assert ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 412") in runner.calls
+
+
+def _busy_runner(pr_state: str = "OPEN") -> _RecordingRunner:
+    """A tmux runner whose pane always reads busy, with a canned ``gh pr view``."""
+    return _RecordingRunner(
+        {
+            ("tmux", "has-session"): _FakeRunResult(returncode=0),
+            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_BUSY_PANE),
+            ("gh", "pr", "view"): _FakeRunResult(
+                returncode=0, stdout=json.dumps({"state": pr_state})
+            ),
+        }
+    )
+
+
+def _queued_entry(
+    *, created_at: float = 100.0, ticket: str = "412", event_id: str = "master:412:abc1234def5678"
+) -> dict:
+    """A ledger holding one unconfirmed (busy-pane) master trigger."""
+    from scripts.dispatch.trigger_ledger import mark_queued, mark_send_started, record_pending
+
+    ledger, _ = record_pending(
+        {},
+        event_id=event_id,
+        source="master-ready",
+        target_pane=MASTER_SESSION,
+        ticket=ticket,
+        command=f"/master {ticket}",
+        preconditions={"head_sha": "abc1234def5678"},
+        now=created_at,
+        ttl_s=21600.0,
+    )
+    ledger = mark_send_started(ledger, event_id, created_at)
+    return dict(mark_queued(ledger, event_id, created_at))
+
+
+class _CapturingLogger:
+    def __init__(self) -> None:
+        self.infos: list[tuple[str, dict]] = []
+        self.warnings: list[tuple[str, dict]] = []
+
+    def info(self, event: str, **fields: object) -> None:
+        self.infos.append((event, dict(fields)))
+
+    def warning(self, event: str, **fields: object) -> None:
+        self.warnings.append((event, dict(fields)))
+
+
+def test_run_once_master_idle_pane_single_delivery_and_consume() -> None:
+    """AC-4: the healthy path is unchanged — one delivery, one consumed entry."""
+    runner = _idle_runner()
+    ledger: dict = {}
+    state: dict[str, float] = {}
+    run_once(
+        state,
+        now=100.0,
+        board_fetcher=lambda: [_pr()],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    entry = ledger["master:412:abc1234def5678"]
+    assert entry.sent_at is not None
+    assert entry.consumed_at is not None
+    assert entry.queued_at is None
+    assert snapshot_unconsumed(ledger) == ()
+    assert state == {"master:412:abc1234def5678": 100.0}
+    # Exactly one delivery: no additional keystrokes anywhere on this path.
+    assert [c for c in runner.calls if c[:2] == ("tmux", "send-keys")] == [
+        ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 412"),
+        ("tmux", "send-keys", "-t", "=cc-master:0.0", "Enter"),
+    ]
+
+
+def test_queued_reoffered_when_pane_goes_idle() -> None:
+    """AC-3: an unconfirmed trigger is re-offered once the target frees up."""
+    ledger = _queued_entry()
+    runner = _idle_runner()
+    state: dict[str, float] = {}
+    run_once(
+        state,
+        now=200.0,
+        board_fetcher=lambda: [_pr()],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    entry = ledger["master:412:abc1234def5678"]
+    assert entry.sent_at == 200.0  # delivery now observed
+    assert entry.consumed_at is not None
+    assert snapshot_unconsumed(ledger) == ()
+    # The dedup TTL is armed only now, on the confirmed delivery...
+    assert state == {"master:412:abc1234def5678": 200.0}
+    # ...which also suppresses a second send for the same PR in this same tick.
+    assert [c for c in runner.calls if c[:2] == ("tmux", "send-keys")] == [
+        ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 412"),
+        ("tmux", "send-keys", "-t", "=cc-master:0.0", "Enter"),
+    ]
+
+
+def test_queued_busy_reoffer_sends_no_keys() -> None:
+    """AC-3 / the forbidden send loop: a still-busy target costs zero keystrokes."""
+    ledger = _queued_entry()
+    runner = _busy_runner()
+    run_once(
+        {},
+        now=200.0,
+        board_fetcher=lambda: [_pr()],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
+    entry = ledger["master:412:abc1234def5678"]
+    assert entry.consumed_at is None  # still unconfirmed, still surfaceable
+    assert entry.sent_at is None
+
+
+def test_queued_escalates_once_naming_pr() -> None:
+    """AC-2: surfaced exactly once past the threshold, naming the PR."""
+    ledger = _queued_entry(created_at=100.0)
+    escalated: set[str] = set()
+
+    def _tick(now: float) -> _CapturingLogger:
+        logger = _CapturingLogger()
+        run_once(
+            {},
+            now=now,
+            board_fetcher=lambda: [_pr()],
+            session_resolver=_no_session,
+            runner=_busy_runner(),
+            persist=lambda _s: None,
+            logger=logger,
+            execute=True,
+            ledger=ledger,
+            ledger_persist=ledger.update,
+            queued_escalated=escalated,
+            queued_escalation_s=1800.0,
+        )
+        return logger
+
+    def _alerts(logger: _CapturingLogger) -> list[dict]:
+        return [f for event, f in logger.warnings if event == "gating_trigger_unconfirmed_too_long"]
+
+    assert _alerts(_tick(now=1000.0)) == []  # under threshold — quiet
+    fired = _alerts(_tick(now=1900.0))  # 1800s past created_at
+    assert len(fired) == 1
+    assert fired[0]["pr"] == "412"
+    assert fired[0]["session"] == MASTER_SESSION
+    assert _alerts(_tick(now=5000.0)) == []  # latched — never a second alert
+
+
+def test_queued_age_clock_not_reset_by_reoffer() -> None:
+    """AC-2 / FRE-927: repeated attempts cannot reset the age clock.
+
+    ``created_at`` is written once by ``record_pending``; nothing on the
+    re-offer path rewrites it, so the escalation still fires on the ORIGINAL
+    clock after several busy re-offer attempts.
+    """
+    ledger = _queued_entry(created_at=100.0)
+    escalated: set[str] = set()
+    logger = _CapturingLogger()
+    for now in (500.0, 1000.0, 1500.0, 1900.0):
+        logger = _CapturingLogger()
+        run_once(
+            {},
+            now=now,
+            board_fetcher=lambda: [_pr()],
+            session_resolver=_no_session,
+            runner=_busy_runner(),
+            persist=lambda _s: None,
+            logger=logger,
+            execute=True,
+            ledger=ledger,
+            ledger_persist=ledger.update,
+            queued_escalated=escalated,
+            queued_escalation_s=1800.0,
+        )
+    assert ledger["master:412:abc1234def5678"].created_at == 100.0
+    fired = [f for event, f in logger.warnings if event == "gating_trigger_unconfirmed_too_long"]
+    assert len(fired) == 1
+    assert fired[0]["age_s"] == 1800.0
+
+
+# --- FRE-939 codex review #1: obsolescence needs an authoritative read ------
+
+
+def test_queued_consumed_when_pr_authoritatively_merged() -> None:
+    ledger = _queued_entry()
+    runner = _busy_runner(pr_state="MERGED")
+    run_once(
+        {},
+        now=200.0,
+        board_fetcher=lambda: [],  # PR gone from the open list
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert ledger["master:412:abc1234def5678"].consumed_at is not None
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
+
+
+def test_queued_absent_from_list_but_pr_read_fails_keeps_entry() -> None:
+    """A transient ``gh`` failure must never destroy an unconfirmed trigger.
+
+    Absence from the tick's open-PR list is not evidence of closure: the
+    enumeration is capped and silently drops any PR whose detail read failed.
+    Consuming on that would let one bad ``gh`` call consume the entry — and
+    ``prune_ledger`` then evicts it, because its PR is not in the open list.
+    Silent, permanent loss: the FRE-939 failure mode in a new costume.
+    """
+    ledger = _queued_entry()
+    runner = _RecordingRunner(
+        {
+            ("tmux", "has-session"): _FakeRunResult(returncode=0),
+            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_BUSY_PANE),
+            ("gh", "pr", "view"): _FakeRunResult(returncode=1, stdout=""),
+        }
+    )
+    run_once(
+        {},
+        now=200.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert ledger["master:412:abc1234def5678"].consumed_at is None
+
+
+def test_queued_absent_from_list_and_pr_open_keeps_entry() -> None:
+    ledger = _queued_entry()
+    run_once(
+        {},
+        now=200.0,
+        board_fetcher=lambda: [],  # capped/failed enumeration...
+        session_resolver=_no_session,
+        runner=_busy_runner(pr_state="OPEN"),  # ...but the PR is really open
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert ledger["master:412:abc1234def5678"].consumed_at is None
+
+
+def test_queued_open_pr_in_list_needs_no_authoritative_read() -> None:
+    """A PR present in the tick's list is definitively open — no extra gh call."""
+    ledger = _queued_entry()
+    runner = _busy_runner()
+    run_once(
+        {},
+        now=200.0,
+        board_fetcher=lambda: [_pr()],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert not any(c[:3] == ("gh", "pr", "view") for c in runner.calls)
+
+
+def test_queued_non_pr_ticket_is_never_judged_obsolete() -> None:
+    """A context-pressure entry is session-keyed — it has no PR to close against."""
+    ledger = _queued_entry(ticket="cc-master", event_id="ctxpressure:cc-master")
+    runner = _busy_runner(pr_state="MERGED")
+    run_once(
+        {},
+        now=200.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+        context_pressure_threshold=999.0,  # no new nudge this tick
+    )
+    assert ledger["ctxpressure:cc-master"].consumed_at is None
+    assert not any(c[:3] == ("gh", "pr", "view") for c in runner.calls)
+
+
+def test_queued_untouched_in_dry_run() -> None:
+    ledger = _queued_entry()
+    runner = _busy_runner()
+    run_once(
+        {},
+        now=5000.0,
+        board_fetcher=lambda: [_pr()],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=False,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert ledger["master:412:abc1234def5678"].consumed_at is None
+    assert runner.calls == []
+
+
+def test_queued_repush_supersedes_the_stale_entry_no_duplicate_send() -> None:
+    """A re-push while master is busy must not queue a second poke for one PR.
+
+    The dedup key carries the head SHA, so a new SHA mints a SECOND unconfirmed
+    entry while the first is still outstanding. Both carry the same
+    ``/master 412`` text. Without superseding, both are re-offered in the same
+    pass once the pane frees — and the second capture-pane still reads idle
+    microseconds after the first injection, so the duplicate lands.
+    """
+    ledger = _queued_entry(created_at=100.0, event_id="master:412:shaA")
+    ledger.update(_queued_entry(created_at=150.0, event_id="master:412:shaB"))
+    runner = _idle_runner()
+    run_once(
+        {},
+        now=200.0,
+        board_fetcher=lambda: [_pr(head_sha="shaB")],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    # The stale entry is retired without a send; only the newest is delivered.
+    assert ledger["master:412:shaA"].consumed_at is not None
+    assert ledger["master:412:shaA"].sent_at is None
+    assert ledger["master:412:shaB"].sent_at == 200.0
+    assert [c for c in runner.calls if c[:2] == ("tmux", "send-keys")] == [
+        ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 412"),
+        ("tmux", "send-keys", "-t", "=cc-master:0.0", "Enter"),
+    ]
+
+
+def test_queued_entries_for_different_prs_are_not_superseded() -> None:
+    """Supersession is per (PR, seat) — an unrelated PR is never retired."""
+    ledger = _queued_entry(created_at=100.0, ticket="412", event_id="master:412:shaA")
+    ledger.update(_queued_entry(created_at=150.0, ticket="500", event_id="master:500:shaC"))
+    run_once(
+        {},
+        now=200.0,
+        board_fetcher=lambda: [_pr(), _pr(number=500)],
+        session_resolver=_no_session,
+        runner=_busy_runner(),
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert ledger["master:412:shaA"].consumed_at is None
+    assert ledger["master:500:shaC"].consumed_at is None

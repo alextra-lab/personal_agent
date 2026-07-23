@@ -111,7 +111,10 @@ def test_ac3_send_keys_never_delivers_into_a_name_extension_seat() -> None:
     runner = _Recorder(returncode=0)
     outcome = send_to_session(_DEAD_SEAT, "/master 42", runner, require_idle=False)
 
-    assert outcome == "sent"
+    # The recorder returns an empty pane, which reads busy (fail-safe), so a
+    # require_idle=False send is delivered-but-unconfirmed (FRE-939). Either
+    # outcome injects the keys — this test is about WHERE they land.
+    assert outcome == "queued"
     targets = _targets(runner.calls)
     # Every target is exact-matched...
     assert all(t.startswith("=") for t in targets), targets

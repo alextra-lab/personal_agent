@@ -275,6 +275,38 @@ mark consumed. A crash lands in one of three distinguishable places, each handle
 A busy/absent target (the existing injection-safety skip) is recorded as **abandoned**, not
 ambiguous — it is immediately eligible for a fresh attempt next tick, same as before this ticket.
 
+#### Unconfirmed delivery — the `queued` state (FRE-939)
+
+A **master** trigger is sent unconditionally (it is never gated on the idle scrape), so it can land
+in a pane that is mid-turn. Until FRE-939 that was booked as a confirmed delivery, which is how PR
+602 sat ungated for nine hours with nothing to surface and nothing to retry. Such an entry now
+carries `queued_at`: the keys went in, but receipt was never observed. It is a **fourth** state, not
+one of the three crash states above — `reconcile()` deliberately leaves it alone.
+
+Each tick, every `queued` entry is resolved in this order:
+
+1. **Its PR is authoritatively closed or merged** (a per-PR `gh pr view`, *not* mere absence from the
+   tick's open-PR list — that list is capped and drops PRs whose detail read failed) → consumed,
+   logged `gating_queued_obsolete`.
+2. **Re-offered into an idle pane** → confirmed, consumed, logged `gating_queued_redelivered`. The
+   re-offer *is* idle-gated, so a still-busy master costs **zero** keystrokes — there is no retry
+   loop and no backoff timer.
+3. **Still unconfirmed past `--queued-escalation-timeout`** (default 30 min, measured from the first
+   attempt and unresettable by later ones) → surfaced once as
+   `gating_trigger_unconfirmed_too_long`, naming the PR.
+
+**What to check when you see that alert.** `journalctl -u seshat-gating-watcher | grep
+gating_trigger_unconfirmed_too_long` for the PR, then
+`/opt/seshat/.venv/bin/python -m scripts.dispatch.trigger_ledger --unconsumed` — a `[queued]` row
+names the PR and target seat. The usual cause is a master seat that has been busy or wedged since the
+first attempt; the fix is to free the seat, after which the next tick re-offers on its own. Nothing
+needs to be replayed by hand, and the entry must not be deleted from the ledger — deleting it is the
+one action that reintroduces the silent drop.
+
+The alert latch is **in-memory**: exactly once per daemon run, and a restart may re-alert an entry
+still past its threshold. That is deliberate (the FRE-922/924 lesson — a persisted crossing state can
+be first-observed already past its trigger and silently lose the alert forever).
+
 **Reconciliation runs every tick**, immediately after the kill-switch check and before any new
 board decision — so "restart" and "the tick after a crash" are the same code path. Duplicate or
 replayed events dedupe against the ledger itself (folding in the trigger's own TTL window), so a
@@ -283,7 +315,7 @@ lost write to the TTL dict above can never cause a same-tick double-send.
 **Retention.** `--ledger-retention-days` (default 7) prunes only *consumed* entries past that age
 or whose PR has closed (PR-ticketed entries only — a session-keyed entry like the context-pressure
 nudge's, FRE-848, has no PR to close against, so it ages out by the retention window alone). An
-unconsumed entry — pending or surfaced — is **never** pruned regardless of age; a `surfaced_at`
+unconsumed entry — pending, queued, or surfaced — is **never** pruned regardless of age; a `surfaced_at`
 entry sits in the ledger file until an owner clears it (no automated clearing mechanism yet — that
 is out of scope for FRE-829, tracked under FRE-832).
 

@@ -25,6 +25,7 @@ from scripts.dispatch.trigger_ledger import (
     load_ledger,
     main,
     mark_consumed,
+    mark_queued,
     mark_send_started,
     mark_sent,
     mark_surfaced,
@@ -557,3 +558,60 @@ def test_main_requires_unconsumed_flag(tmp_path: Path) -> None:
     path = tmp_path / "trigger_ledger.json"
     with pytest.raises(SystemExit):
         main(["--ledger-file", str(path), "--json"])
+
+
+# --- FRE-939: unconfirmed delivery is a fourth state, not a crash state -----
+
+
+def test_reconcile_skips_queued_entry_leaving_it_re_offerable() -> None:
+    """A busy-pane send must not be mistaken for an ambiguous mid-send crash.
+
+    Both leave ``send_started_at`` set and ``sent_at`` unset, so without the
+    ``queued_at`` discriminator ``reconcile`` marks this terminally ``surfaced``
+    — never auto-retried — and delivery for that PR is disabled forever. That is
+    the FRE-939 bug reappearing one state along, which is exactly why the queued
+    record is written *before* the keystrokes.
+    """
+    ledger, _ = _record({}, now=100.0)
+    ledger = mark_send_started(ledger, "master:412:abc123", 100.0)
+    ledger = mark_queued(ledger, "master:412:abc123", 100.0)  # crash happens right here
+    spy = _Spy(outcome="sent")
+    result = reconcile(
+        ledger, now=200.0, execute_pending=spy, persist=lambda _l: None, logger=_NullLogger()
+    )
+    assert spy.calls == []  # not reconcile's to retry — the resolution pass owns it
+    entry = result["master:412:abc123"]
+    assert entry.surfaced_at is None  # NOT terminal
+    assert entry.consumed_at is None  # still unconsumed, still surfaceable
+    assert entry.queued_at == 100.0
+    assert snapshot_unconsumed(result) == (entry,)
+
+
+def test_queued_at_survives_a_save_load_round_trip(tmp_path: Path) -> None:
+    """The discriminator must be durable — it is only useful across a restart."""
+    ledger, _ = _record({}, now=100.0)
+    ledger = mark_send_started(ledger, "master:412:abc123", 100.0)
+    ledger = mark_queued(ledger, "master:412:abc123", 100.0)
+    path = tmp_path / "trigger_ledger.json"
+    save_ledger(path, ledger)
+    assert load_ledger(path, _NullLogger())["master:412:abc123"].queued_at == 100.0
+
+
+def test_prune_never_drops_an_unconfirmed_entry_for_a_closed_pr() -> None:
+    """An unconsumed entry is retained regardless of PR state — never a silent drop."""
+    ledger, _ = _record({}, now=100.0)
+    ledger = mark_send_started(ledger, "master:412:abc123", 100.0)
+    ledger = mark_queued(ledger, "master:412:abc123", 100.0)
+    pruned = prune_ledger(ledger, now=10_000_000.0, retention_s=1.0, open_prs=[])
+    assert "master:412:abc123" in pruned
+
+
+def test_cli_labels_an_unconfirmed_entry_queued(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    """The owner-facing read distinguishes unconfirmed from never-attempted."""
+    ledger, _ = _record({}, now=100.0)
+    ledger = mark_send_started(ledger, "master:412:abc123", 100.0)
+    ledger = mark_queued(ledger, "master:412:abc123", 100.0)
+    path = tmp_path / "trigger_ledger.json"
+    save_ledger(path, ledger)
+    assert main(["--ledger-file", str(path), "--unconsumed"]) == 0
+    assert "[queued]" in capsys.readouterr().out

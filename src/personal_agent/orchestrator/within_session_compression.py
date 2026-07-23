@@ -89,68 +89,65 @@ def _extract_tail(
     *,
     min_tokens: int,
     min_turns: int,
+    max_tokens: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Return the tail band: trailing messages totalling ≥ min_tokens AND ≥ min_turns.
+    """Return the tail band as a bounded, user-anchored, contiguous suffix.
 
-    Per ADR-0061 §D3 — walk backwards from the end, accumulating messages
-    until both invariants hold.  Never crosses into the head band.
+    Per ADR-0061 §D3 as amended by FRE-942. Precedence, highest first:
 
-    Tool-pair invariant: when a kept ``role="tool"`` message references a
-    ``tool_call_id`` whose matching assistant ``tool_calls`` message lies
-    further back, that assistant message is pulled into the tail too.
-    Without this, ``_sanitize_tool_pairs`` (``context_window.py``) would
-    silently drop the orphaned tool reply when the assembled compressed
-    output is fed to the LLM.
+    1. **Contiguity.** The result is always a suffix ``messages[start:]`` with
+       ``start >= head_len``. Callers derive the middle boundary as
+       ``len(messages) - len(tail)``, which is only sound for a contiguous suffix.
+    2. **User-alignment.** ``start`` is advanced to the first ``user`` turn at or
+       after the walk's stopping point, so the recap→tail seam stays alternating
+       and no orphaned assistant/tool prefix is handed to the assembler. If no user
+       turn is available, the tail is ``[]`` (the whole band falls to the middle).
+       Because an assistant/tool pair never straddles a user turn, a user-anchored
+       suffix can never contain a ``tool`` message whose assistant lies outside it —
+       which is why the old backward tool-pair repair is gone (FRE-942).
+    3. **Ceiling.** When ``max_tokens`` is set, the backward walk stops before a
+       message that would push the running total past it — *unless* the tail is
+       still empty, so a single oversized trailing message is never dropped outright
+       (it may later fall to the middle at step 2 if it carries no user turn). The
+       exemption is one *message*, not one semantic turn.
+    4. **Floors.** ``min_tokens`` / ``min_turns`` bound the *walk*, not the returned
+       value: the ceiling may stop the walk before either is met, and user-alignment
+       may trim the result below either afterwards. Both are best-effort.
 
     Args:
         messages: Full working message list.
-        head_len: Number of leading messages already claimed by the head;
-            the tail walk stops at this index.
-        min_tokens: Tail token floor.
-        min_turns: Tail turn-count floor.
+        head_len: Number of leading messages already claimed by the head; the walk
+            never crosses this index.
+        min_tokens: Tail token floor (best-effort — see rule 4).
+        min_turns: Tail turn-count floor (best-effort — see rule 4).
+        max_tokens: Optional tail ceiling. ``None`` disables the bound (legacy
+            behaviour); ``<= 0`` collapses to the single-message exemption.
 
     Returns:
-        Tail slice, in original order.  Length ≥ min(min_turns,
-        len(messages) - head_len); token sum ≥ min_tokens unless the
-        available middle+tail is smaller than the floor.
+        A contiguous, user-anchored suffix in original order, or ``[]``.
     """
     if head_len >= len(messages):
         return []
 
-    available_indices = list(range(head_len, len(messages)))
-    tail_idx_set: set[int] = set()
+    total = len(messages)
+    start = total
     used_tokens = 0
-
-    for idx in reversed(available_indices):
-        if used_tokens >= min_tokens and len(tail_idx_set) >= min_turns:
+    for idx in range(total - 1, head_len - 1, -1):
+        candidate = estimate_message_tokens(messages[idx])
+        # Ceiling — skipped only while the tail is still empty (start == total),
+        # so the most recent message is always admitted.
+        if max_tokens is not None and start < total and used_tokens + candidate > max_tokens:
             break
-        tail_idx_set.add(idx)
-        used_tokens += estimate_message_tokens(messages[idx])
+        start = idx
+        used_tokens += candidate
+        if used_tokens >= min_tokens and (total - start) >= min_turns:
+            break
 
-    # Tool-pair safety: pull in any assistant message whose tool_calls back
-    # a tool message we already kept.
-    needed_tool_ids: set[str] = set()
-    for idx in tail_idx_set:
-        msg = messages[idx]
-        if msg.get("role") == "tool":
-            tool_call_id = msg.get("tool_call_id")
-            if tool_call_id:
-                needed_tool_ids.add(str(tool_call_id))
-
-    if needed_tool_ids:
-        for idx in available_indices:
-            if idx in tail_idx_set:
-                continue
-            msg = messages[idx]
-            if msg.get("role") != "assistant":
-                continue
-            for tc in msg.get("tool_calls") or []:
-                tc_id = tc.get("id") if isinstance(tc, dict) else None
-                if tc_id and str(tc_id) in needed_tool_ids:
-                    tail_idx_set.add(idx)
-                    break
-
-    return [messages[i] for i in sorted(tail_idx_set)]
+    # User-alignment — advance to the first user turn in the selected band.
+    for idx in range(start, total):
+        if messages[idx].get("role") == "user":
+            return messages[idx:]
+    return []
 
 
 def _assemble_compressed(
@@ -212,18 +209,6 @@ class FrozenResetResult:
     narrative: str
 
 
-def _tail_starting_on_user(tail: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Trim leading non-user messages so the band starts on a user turn.
-
-    Keeps the ``[first user] → [assistant recap] → [user …]`` seam alternating
-    (ADR-0081 §D2 Decision 5). Returns an empty list if the tail has no user turn.
-    """
-    for i, msg in enumerate(tail):
-        if msg.get("role") == "user":
-            return tail[i:]
-    return []
-
-
 def _bound_highlights(narrative: str, max_chars: int) -> str:
     """Return a hard-bounded distillation of *narrative* for the volatile tail.
 
@@ -244,6 +229,7 @@ async def build_frozen_reset(
     session_id: str,
     pre_pass_threshold_tokens: int | None = None,
     min_tail_tokens: int | None = None,
+    max_tail_tokens: int | None = None,
     min_tail_turns: int = 4,
     salient_highlights_max_chars: int = 1200,
 ) -> FrozenResetResult:
@@ -264,6 +250,8 @@ async def build_frozen_reset(
             threshold.
         min_tail_tokens: Absolute tail floor; defaults to
             ``within_session_min_tail_ratio · context_window_max_tokens``.
+        max_tail_tokens: Absolute tail ceiling; defaults to
+            ``within_session_max_tail_ratio · context_window_max_tokens`` (FRE-942).
         min_tail_turns: Minimum verbatim tail turns to keep.
         salient_highlights_max_chars: Hard bound on the volatile highlights.
 
@@ -280,11 +268,24 @@ async def build_frozen_reset(
         if min_tail_tokens is not None
         else int(settings.within_session_min_tail_ratio * settings.context_window_max_tokens)
     )
+    tail_token_ceiling = (
+        max_tail_tokens
+        if max_tail_tokens is not None
+        else int(settings.within_session_max_tail_ratio * settings.context_window_max_tokens)
+    )
 
     head = _extract_head(messages)
     head_len = len(head)
-    tail = _extract_tail(messages, head_len, min_tokens=tail_token_floor, min_turns=min_tail_turns)
-    tail = _tail_starting_on_user(tail)
+    # _extract_tail returns a user-anchored contiguous suffix (FRE-942), so it
+    # already starts on a user turn — the former _tail_starting_on_user pass is
+    # folded into the walk.
+    tail = _extract_tail(
+        messages,
+        head_len,
+        min_tokens=tail_token_floor,
+        min_turns=min_tail_turns,
+        max_tokens=tail_token_ceiling,
+    )
     tail_idx_start = len(messages) - len(tail) if tail else len(messages)
     middle = messages[head_len:tail_idx_start]
 
@@ -356,6 +357,7 @@ async def compress_in_place(
     bus: "EventBus | None" = None,
     pre_pass_threshold_tokens: int | None = None,
     min_tail_tokens: int | None = None,
+    max_tail_tokens: int | None = None,
     min_tail_turns: int = 4,
 ) -> tuple[list[dict[str, Any]], WithinSessionCompressionRecord]:
     """Compress *messages* using head-middle-tail with deterministic pre-pass.
@@ -386,6 +388,10 @@ async def compress_in_place(
             the floor is computed as
             ``int(settings.within_session_min_tail_ratio *
             settings.context_window_max_tokens)``.
+        max_tail_tokens: Absolute override for the tail ceiling (FRE-942). When
+            ``None``, computed as
+            ``int(settings.within_session_max_tail_ratio *
+            settings.context_window_max_tokens)``.
         min_tail_turns: Hard floor on the number of trailing messages
             kept in the tail.
 
@@ -402,19 +408,24 @@ async def compress_in_place(
         if min_tail_tokens is not None
         else int(settings.within_session_min_tail_ratio * settings.context_window_max_tokens)
     )
+    tail_token_ceiling = (
+        max_tail_tokens
+        if max_tail_tokens is not None
+        else int(settings.within_session_max_tail_ratio * settings.context_window_max_tokens)
+    )
 
     head = _extract_head(messages)
     head_len = len(head)
+    # _extract_tail already returns a user-anchored contiguous suffix (FRE-942), so
+    # the assistant-role summary never lands immediately before another assistant
+    # message and the former _tail_starting_on_user pass is unnecessary.
     tail = _extract_tail(
         messages,
         head_len,
         min_tokens=tail_token_floor,
         min_turns=min_tail_turns,
+        max_tokens=tail_token_ceiling,
     )
-    # Trim any leading non-user messages from the tail so the assistant-role
-    # summary never lands immediately before another assistant message.
-    # Matches the build_frozen_reset behaviour (FRE-576 F2).
-    tail = _tail_starting_on_user(tail)
     tail_idx_start = len(messages) - len(tail) if tail else len(messages)
     middle = messages[head_len:tail_idx_start]
 

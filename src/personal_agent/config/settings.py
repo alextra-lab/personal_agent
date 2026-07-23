@@ -982,6 +982,22 @@ class AppConfig(BaseSettings):
             "for head and middle when context_window_max_tokens was 2048."
         ),
     )
+    within_session_max_tail_ratio: float = Field(
+        default=0.35,
+        gt=0.0,
+        lt=1.0,
+        description=(
+            "Upper bound on the preserved tail band as a fraction of "
+            "context_window_max_tokens (ADR-0061 §D3, FRE-942). The tail used to "
+            "have a floor (within_session_min_tail_ratio) but no ceiling, so a run "
+            "of large trailing tool results could accumulate a verbatim tail many "
+            "times the window (a real production compaction preserved 254,071 "
+            "tokens in a 96,000 window). The ceiling bounds that accumulation; a "
+            "single message that alone exceeds it is still kept, so the most recent "
+            "message is never dropped outright. Must exceed "
+            "within_session_min_tail_ratio."
+        ),
+    )
     within_session_pre_pass_threshold_tokens: int = Field(
         default=800,
         ge=0,
@@ -2455,6 +2471,14 @@ class AppConfig(BaseSettings):
                 f"within_session_min_tail_ratio={self.within_session_min_tail_ratio}, "
                 f"absolute_tail={absolute_tail}, head_middle_budget={head_middle_budget}. "
                 "Lower the ratio, raise the window, or both."
+            )
+        # FRE-942: the tail ceiling must sit above its floor, or the bound would
+        # contradict the guaranteed minimum and the walk's precedence is undefined.
+        if self.within_session_max_tail_ratio <= self.within_session_min_tail_ratio:
+            raise ValueError(
+                "within_session_max_tail_ratio must exceed within_session_min_tail_ratio: "
+                f"max={self.within_session_max_tail_ratio}, "
+                f"min={self.within_session_min_tail_ratio}."
             )
         return self
 

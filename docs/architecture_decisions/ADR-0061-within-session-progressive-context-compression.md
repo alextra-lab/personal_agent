@@ -1,6 +1,6 @@
 # ADR-0061: Within-Session Progressive Context Compression (head-middle-tail)
 
-**Status:** Accepted — Implemented 2026-05-01 (FRE-251)
+**Status:** Accepted — Implemented 2026-05-01 (FRE-251); soft trigger retired 2026-07-22 (FRE-941); hard trigger repaired 2026-07-23 (FRE-942 — the tail band had a floor but no ceiling, so a run of large trailing tool results accumulated a verbatim tail up to 2.65× the window and the pass achieved zero net reduction; see §D3 amendment)
 **Date:** 2026-05-01
 **Deciders:** Project owner
 **Depends on:** ADR-0038 (Context Compressor Model), ADR-0041 (Event Bus — Redis Streams), ADR-0043 (Three-Layer Architectural Separation), ADR-0047 (Context Management & Observability), ADR-0054 (Feedback Stream Bus Convention)
@@ -113,6 +113,39 @@ def _extract_tail(
 Walk from the end backwards, accumulating messages until both invariants hold. Default floor: `min_tail_tokens = 2000`, `min_turns = 4`. A turn that contains both an assistant `tool_calls` message and the corresponding `role="tool"` reply is kept as a unit — the tail walker pulls the assistant message in if its `tool_call_id` is referenced by a kept tool message, even if the token floor was already met. This avoids producing orphaned tool-pair fragments that `_sanitize_tool_pairs` (`context_window.py:225`) would later drop.
 
 Turn count is a coarse measure but stops the tail from being a single 4 000-token tool dump in degenerate cases. Token count is the primary measure for normal traffic.
+
+> **Amendment 2026-07-23 (FRE-942) — the tail needs a ceiling, and it outranks `min_turns`.**
+> The original design above has two floors (`min_tokens`, `min_turns`) and **no upper bound**. That
+> is the defect: `min_turns` keeps pulling messages in *after* `min_tokens` is already satisfied, with
+> no cap on any single message or on the total, so a run of large trailing tool results accumulates a
+> verbatim-preserved tail of unbounded size. Measured across 289 real production compactions
+> (`agent-logs-*`, reproduced by `scripts/audit/fre942_compaction_census.py`): **44% achieved
+> zero-or-negative net reduction**, and the worst left a **post-compaction working set of 254,484
+> tokens — 2.65× the 96,000-token window** with a 254,071-token tail. The hard trigger fired and
+> shrank nothing in exactly the "large tool responses spiking mid-turn" scenario §D1 cites as its own
+> rationale, because the offending bulk was swept into the protected tail (FRE-908 Finding 3 saw the
+> single-message form of this; the production data shows the general accumulation form).
+>
+> The fix gives the tail a ceiling — `within_session_max_tail_ratio` (default 0.35 → 33,600 of 96,000)
+> — and makes `_extract_tail` a **bounded, user-anchored, contiguous suffix**. Precedence, highest
+> first: **contiguity → user-alignment → ceiling → floors.** The turn floor (`min_turns`) that this
+> section justified as *"stops the tail from being a single 4 000-token tool dump"* is now **outranked
+> by the ceiling**: the ceiling stops the walk before the floors are met, so a single dump can no
+> longer *become* the tail at all — the §D3 intent is better served by the bound than by the floor.
+> The backward tool-pair repair described above is **deleted**: a contiguous suffix that begins on a
+> `user` turn cannot contain a `tool` message whose assistant lies outside it (an assistant/tool pair
+> never straddles a user turn), so the repair is unnecessary by construction — which also removes a
+> live defect where the post-repair user-alignment pass re-orphaned the assistant the repair had just
+> pulled in.
+>
+> **Residual, stated plainly.** The ceiling bounds *accumulation*. A **single** message that alone
+> exceeds the ceiling is still preserved verbatim if it is the most recent message (the exemption that
+> keeps the ceiling from ever deleting the latest turn); if it carries no user turn it instead falls to
+> the middle band and is replaced by a one-line descriptor by the pre-pass (§D4). Either way the hard
+> gate is *not* claimed to be unconditionally repaired for a lone super-oversized message — Stage 7 /
+> `apply_budget` remains the final backstop for that case. Proof: `TestExtractTailContract` and the
+> inverted `test_compression_gate_proof.py` case that FRE-908 checked in asserting zero reduction, now
+> asserting real reduction.
 
 ### D4: Pre-pass rules — deterministic, before the LLM
 

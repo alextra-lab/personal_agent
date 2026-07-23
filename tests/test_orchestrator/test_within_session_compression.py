@@ -149,7 +149,11 @@ class TestExtractTail:
         tail = wsc._extract_tail(messages, head_len=0, min_tokens=2000, min_turns=2)
         assert len(tail) == 4
 
-    def test_pulls_in_assistant_for_tool_pair(self) -> None:
+    def test_tool_pair_kept_via_contiguity_not_repair(self) -> None:
+        # FRE-942 deleted the backward tool-pair repair: a user-anchored contiguous
+        # suffix keeps a tool message together with its assistant because the walk
+        # extends back to the user turn that opened them, never by reaching across
+        # the middle for a non-contiguous assistant.
         messages = [
             _msg("user", "ask"),
             _msg(
@@ -159,11 +163,9 @@ class TestExtractTail:
             ),
             _msg("tool", "result", tool_call_id="tc-1"),
         ]
-        # Tail floor of 1 token + 1 turn would normally only pull the tool msg.
-        tail = wsc._extract_tail(messages, head_len=0, min_tokens=1, min_turns=1)
-        roles = [m["role"] for m in tail]
-        assert "assistant" in roles
-        assert "tool" in roles
+        tail = wsc._extract_tail(messages, head_len=0, min_tokens=1, min_turns=3)
+        assert tail == messages
+        assert tail[0]["role"] == "user"
 
     def test_tail_does_not_cross_head_boundary(self) -> None:
         messages = [_msg("system", "head")] + [_msg("user", "x" * 50) for _ in range(5)]
@@ -171,6 +173,154 @@ class TestExtractTail:
         # Even though floors are huge, tail can never include the head msg.
         assert all(m["role"] != "system" for m in tail)
         assert len(tail) == 5
+
+
+class TestExtractTailContract:
+    """FRE-942 — the bounded contiguous-suffix contract.
+
+    The tail band used to have two floors and no ceiling, which let it grow without
+    bound: a real production compaction preserved a 254,071-token tail verbatim inside
+    a 96,000-token window (see ``scripts/audit/fre942_compaction_census.py``). One
+    clause per numbered rule in the ADR-0061 §D3 amendment; precedence is
+    contiguity → user-alignment → ceiling → floors.
+    """
+
+    def _tokens(self, messages: list[dict[str, Any]]) -> int:
+        return estimate_messages_tokens(messages)
+
+    def test_result_is_always_a_contiguous_suffix(self) -> None:
+        """Rule 1 — callers derive the middle boundary as ``len(messages) - len(tail)``
+        (``within_session_compression.py``), which is only sound for a contiguous
+        suffix. The old tool-pair repair could insert an arbitrarily distant earlier
+        index, making the same message appear in *both* the middle and the tail.
+        """
+        messages = [
+            _msg("user", "ask"),
+            _msg(
+                "assistant",
+                "",
+                tool_calls=[{"id": "tc-far", "function": {"name": "f", "arguments": "{}"}}],
+            ),
+        ]
+        for i in range(6):
+            messages.append(_msg("user", f"u{i}"))
+            messages.append(_msg("assistant", f"a{i}"))
+        messages.append(_msg("tool", "X" * 400, tool_call_id="tc-far"))
+
+        tail = wsc._extract_tail(messages, head_len=0, min_tokens=10, min_turns=2)
+
+        assert tail == messages[len(messages) - len(tail) :]
+
+    def test_returns_empty_when_no_user_turn_is_available(self) -> None:
+        """Rule 2 — a tail that cannot start on a user turn is dropped entirely rather
+        than handed to the assembler with a dangling assistant/tool prefix.
+        """
+        messages = [
+            _msg("user", "ask"),
+            _msg("assistant", "reply"),
+            _msg("assistant", "trailing"),
+        ]
+        tail = wsc._extract_tail(messages, head_len=2, min_tokens=1, min_turns=1)
+        assert tail == []
+
+    def test_ceiling_bounds_the_accumulated_tail(self) -> None:
+        """Rule 3 — the production failure shape: several large trailing results whose
+        sum dwarfs the window. The ceiling must stop the walk; before FRE-942 the
+        ``min_turns`` floor forced all of them in.
+        """
+        messages = [_msg("user", "ask")]
+        for i in range(4):
+            messages.append(_msg("user", f"step {i}"))
+            messages.append(_msg("tool", "x" * 40_000, tool_call_id=f"tc-{i}"))
+
+        tail = wsc._extract_tail(
+            messages, head_len=0, min_tokens=2_000, min_turns=4, max_tokens=12_000
+        )
+
+        assert self._tokens(tail) <= 12_000
+        assert len(tail) < len(messages)
+
+    def test_single_message_is_exempt_from_the_ceiling(self) -> None:
+        """Rule 3's exception — one oversized message may exceed the ceiling, so the
+        bound can never delete the most recent message outright. The exemption is one
+        *message*, not one semantic turn.
+        """
+        messages = [_msg("user", "ask"), _msg("user", "x" * 80_000)]
+        tail = wsc._extract_tail(messages, head_len=0, min_tokens=1, min_turns=1, max_tokens=100)
+        assert tail == messages[-1:]
+        assert self._tokens(tail) > 100
+
+    def test_user_alignment_outranks_both_floors(self) -> None:
+        """Rule 4 — floors bound the *walk*, not the returned value. Forward alignment
+        runs afterwards and may drop messages that satisfied them.
+        """
+        messages = [
+            _msg("user", "ask"),
+            _msg("user", "x" * 4_000),
+            _msg("assistant", "y" * 4_000),
+            _msg("assistant", "z" * 4_000),
+        ]
+        tail = wsc._extract_tail(messages, head_len=1, min_tokens=1, min_turns=3)
+        # The walk satisfied min_turns=3; alignment keeps only the user-anchored run.
+        assert tail == messages[1:]
+        assert all(m["role"] != "system" for m in tail)
+
+    def test_ceiling_never_strands_a_tool_message_from_its_assistant(self) -> None:
+        """Rule 6 — the backing assistant must PRECEDE its tool message in the returned
+        list. Asserting order, not merely that the id appears somewhere: both
+        ``_sanitize_tool_pairs`` and the wire sanitiser match ids globally, so an
+        id-presence check would pass on a mis-ordered band.
+        """
+        messages = [_msg("user", "ask")]
+        for i in range(5):
+            messages.append(_msg("user", f"step {i}"))
+            messages.append(
+                _msg(
+                    "assistant",
+                    "",
+                    tool_calls=[{"id": f"tc-{i}", "function": {"name": "f", "arguments": "{}"}}],
+                )
+            )
+            messages.append(_msg("tool", "x" * 8_000, tool_call_id=f"tc-{i}"))
+
+        tail = wsc._extract_tail(
+            messages, head_len=0, min_tokens=1_000, min_turns=2, max_tokens=6_000
+        )
+
+        seen_call_ids: set[str] = set()
+        for msg in tail:
+            if msg.get("role") == "assistant":
+                for call in msg.get("tool_calls") or []:
+                    seen_call_ids.add(str(call["id"]))
+            if msg.get("role") == "tool":
+                assert str(msg["tool_call_id"]) in seen_call_ids, (
+                    "tool message appears before the assistant that issued it"
+                )
+
+    @pytest.mark.parametrize(
+        ("max_tokens", "min_turns"),
+        [(0, 4), (-1, 4), (10, 0)],
+        ids=["zero_ceiling", "negative_ceiling", "zero_turn_floor"],
+    )
+    def test_degenerate_inputs_still_return_a_valid_suffix(
+        self, max_tokens: int, min_turns: int
+    ) -> None:
+        """Rule 5 — the settings validator makes these unreachable from configuration,
+        but the pure helper must stay total rather than raise or loop.
+        """
+        messages = [_msg("user", "ask"), _msg("user", "x" * 2_000)]
+        tail = wsc._extract_tail(
+            messages, head_len=0, min_tokens=50, min_turns=min_turns, max_tokens=max_tokens
+        )
+        assert tail == messages[len(messages) - len(tail) :]
+
+    def test_ceiling_below_the_floor_lets_the_ceiling_win(self) -> None:
+        """Rule 5 — ``max_tokens < min_tokens`` is accepted; the bound simply wins."""
+        messages = [_msg("user", f"u{i}") for i in range(8)] + [_msg("user", "x" * 4_000)]
+        tail = wsc._extract_tail(
+            messages, head_len=0, min_tokens=10_000, min_turns=8, max_tokens=600
+        )
+        assert self._tokens(tail) <= 600 or len(tail) == 1
 
 
 # ---------------------------------------------------------------------------

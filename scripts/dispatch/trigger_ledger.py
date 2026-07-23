@@ -26,6 +26,22 @@ distinguishable places, each demanding a different response.
   ``"sent"``); the crash was purely in the post-send bookkeeping. Closed out
   directly (``mark_consumed``) — never replayed.
 
+**Unconfirmed delivery — the fourth state (FRE-939).** ``queued_at`` marks an
+entry whose command *was* injected but into a **busy** pane, so receipt was
+never observed. This is deliberately NOT one of the three crash states: the send
+demonstrably completed (no ambiguity about partial keystrokes), only the target's
+*receipt* is unknown, and the entry must stay re-offerable rather than becoming
+terminal. ``reconcile`` therefore skips it — the caller's own resolution pass
+owns it (``gating_watcher.resolve_queued_triggers``), re-offering into an idle
+pane and escalating by age.
+
+``queued_at`` is written **before** the keystrokes are injected, never after the
+send returns. Writing it after would leave an ordinary crash window — keys in,
+``queued_at`` not yet durable — whose on-disk shape is exactly the
+``send_started_at``-set/``sent_at``-None ambiguous state above, so ``reconcile``
+would mark it terminally ``surfaced`` and delivery for that PR would be disabled
+forever: a fresh variant of the bug FRE-939 exists to close.
+
 **Dedup folds in the trigger's own TTL window.** ``record_pending`` refuses a
 duplicate write while an entry is unconsumed (still in-flight, or surfaced and
 awaiting the owner) *and* refuses a fresh write for ``ttl_s`` after a
@@ -58,7 +74,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Literal, Protocol
 
-SendOutcome = Literal["sent", "busy", "absent"]
+SendOutcome = Literal["sent", "busy", "absent", "queued"]
 Transport = Literal["channel", "send_keys"]
 
 
@@ -91,6 +107,10 @@ class LedgerEntry:
         send_started_at: Set immediately before the send attempt; ``None``
             means the send was never attempted.
         sent_at: Set only after the send is confirmed to have succeeded.
+        queued_at: Set when the command was injected into a **busy** pane, so
+            delivery was issued but never observed (FRE-939). Written before
+            the keystrokes, never after. Mutually exclusive with ``sent_at``:
+            the same attempt cannot be both observed and unobserved.
         consumed_at: Set once bookkeeping is fully closed (sent or abandoned).
         surfaced_at: Set when reconciliation cannot safely resolve the entry —
             terminal-pending, requires owner intervention, never auto-retried.
@@ -115,6 +135,7 @@ class LedgerEntry:
     created_at: float
     send_started_at: float | None = None
     sent_at: float | None = None
+    queued_at: float | None = None
     consumed_at: float | None = None
     surfaced_at: float | None = None
     transport: Transport = "send_keys"
@@ -187,6 +208,19 @@ def mark_sent(ledger: Ledger, event_id: str, now: float) -> Ledger:
     return updated
 
 
+def mark_queued(ledger: Ledger, event_id: str, now: float) -> Ledger:
+    """Record that the command is about to be injected into a **busy** pane.
+
+    Call this *before* the keystrokes are sent (FRE-939) — see the module
+    docstring for why the ordering is load-bearing. The entry deliberately
+    stays unconsumed: delivery was issued but never observed, so it remains
+    re-offerable and surfaceable.
+    """
+    updated = dict(ledger)
+    updated[event_id] = dataclasses.replace(updated[event_id], queued_at=now)
+    return updated
+
+
 def mark_consumed(ledger: Ledger, event_id: str, now: float) -> Ledger:
     """Close out an entry's bookkeeping (sent, or abandoned without sending)."""
     updated = dict(ledger)
@@ -252,6 +286,12 @@ def reconcile(
             persist(ledger)
             logger.info("trigger_ledger_reconcile_consumed_known_sent", event_id=event_id)
             continue
+        if entry.queued_at is not None:
+            # Injected into a busy pane -- delivery issued but never observed
+            # (FRE-939). NOT a crash artifact, so the ambiguity branch below
+            # must not claim it: that would mark it terminally ``surfaced`` and
+            # kill the re-offer. The caller's resolution pass owns this entry.
+            continue
         if entry.send_started_at is not None:
             # Crash occurred *during* the send call -- genuinely ambiguous.
             ledger = mark_surfaced(ledger, event_id, now)
@@ -276,6 +316,13 @@ def reconcile(
             ledger = mark_consumed(ledger, event_id, now)
             persist(ledger)
             logger.info("trigger_ledger_reconcile_completed", event_id=event_id)
+        elif outcome == "queued":
+            # An unconfirmed delivery (FRE-939) -- issued into a busy pane, so
+            # it must stay unconsumed and re-offerable rather than being closed
+            # out as an abandoned non-send below.
+            ledger = mark_queued(ledger, event_id, now)
+            persist(ledger)
+            logger.warning("trigger_ledger_reconcile_queued", event_id=event_id)
         else:
             # Confirmed non-attempt (busy/absent) -- abandon, eligible for a
             # fresh attempt next tick (record_pending never suppresses an
@@ -330,6 +377,7 @@ def load_ledger(path: Path, logger: Logger) -> Ledger:
             created_at=float(fields.get("created_at", 0.0)),
             send_started_at=fields.get("send_started_at"),
             sent_at=fields.get("sent_at"),
+            queued_at=fields.get("queued_at"),
             consumed_at=fields.get("consumed_at"),
             surfaced_at=fields.get("surfaced_at"),
             transport=transport,
@@ -406,6 +454,7 @@ def _entry_to_json(entry: LedgerEntry) -> dict[str, object]:
         "created_at": entry.created_at,
         "send_started_at": entry.send_started_at,
         "sent_at": entry.sent_at,
+        "queued_at": entry.queued_at,
         "surfaced_at": entry.surfaced_at,
         "transport": entry.transport,
     }
@@ -470,7 +519,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("none")
     else:
         for entry in entries:
-            state = "surfaced" if entry.surfaced_at is not None else "pending"
+            if entry.surfaced_at is not None:
+                state = "surfaced"
+            elif entry.queued_at is not None:
+                state = "queued"  # injected into a busy pane, receipt unconfirmed
+            else:
+                state = "pending"
             print(f"{entry.event_id} [{state}] ticket={entry.ticket} target={entry.target_pane}")
     return 0
 

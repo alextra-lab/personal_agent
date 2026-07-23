@@ -25,9 +25,17 @@ terminal injection + an idle-scrape**, implemented by the external `gating_watch
 The scrape is the fragile part. A screen-shape heuristic over a rendered TUI, it has been **repeatedly,
 expensively wrong**: FRE-825 (it *never* matched real Remote Control panes) and FRE-845 (it
 *false-flagged an idle master as busy*, dropping a dispatch — since fixed by making master delivery
-unconditional: `gating_watcher.py` now gates on the scrape for **worker** triggers only,
-`require_idle = trigger.kind != "master"` at `gating_watcher.py:869`). It still gates every worker
+unconditional: `gating_watcher.py` gates on the scrape for **worker** triggers only,
+`require_idle = trigger.kind != "master"`). It still gates every worker
 delivery, and every RC/TUI rendering change risks re-breaking it. **Retiring the scrape is the prize.**
+
+> **FRE-939 (2026-07-23).** Master delivery remains unconditional — the scrape still never *gates* it.
+> But the master path now *reads* the pane as evidence: a send into a busy pane is recorded as
+> `queued` (issued, receipt unobserved) rather than booked as a confirmed delivery. Assuming delivery
+> is what let PR 602 sit ungated for nine hours with nothing to surface and nothing to retry. This
+> makes the scrape's *unreliability* cheap on the master path in both directions: a false-busy costs
+> at most a duplicate poke, never a lost one — which is a further argument for the channel cutover
+> below, where delivery is confirmed rather than inferred from a rendered TUI at all.
 
 **The mechanism that removes it now exists.** Claude Code **MCP Channels** (research preview, ≥ v2.1.80)
 push an external event straight into a *running* session as a `<channel source="…">` tag — purpose-built

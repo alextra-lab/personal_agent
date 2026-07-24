@@ -319,3 +319,82 @@ class TestExpansionCostRollup:
         assert ctx.turn_cost_usd == pytest.approx(0.0)
         # Progress is reported at dispatch-start and after expansion (both with no rollup).
         assert progress_calls == [pytest.approx(0.0), pytest.approx(0.0)]
+
+
+class TestEnforcedExpansionClientRole:
+    """FRE-958 regression guard.
+
+    The enforced HYBRID/DECOMPOSE path must build its ExpansionController client
+    for the ``sub_agent`` role — both the planner call (expansion_controller.py)
+    and every dispatched sub-agent (sub_agent.py) request ``role=SUB_AGENT``.
+    Building it for ``primary`` instead (the FRE-958 bug) hands the dispatch
+    phase a client resolved for the wrong role/placement, which for a
+    cloud-bound sub_agent silently dials the local SLM base URL and dies.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "strategy",
+        [DecompositionStrategy.HYBRID, DecompositionStrategy.DECOMPOSE],
+    )
+    async def test_enforced_expansion_builds_sub_agent_role_client(
+        self, monkeypatch: pytest.MonkeyPatch, strategy: DecompositionStrategy
+    ) -> None:
+        """Enforced-mode step_init requests the sub_agent role client.
+
+        Requests get_llm_client(role_name="sub_agent"), never "primary", for
+        both HYBRID and DECOMPOSE strategies.
+        """
+        import personal_agent.orchestrator.executor as ex
+        from personal_agent.llm_client.types import ModelRole
+        from personal_agent.orchestrator.channels import Channel
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        from personal_agent.orchestrator.types import ExecutionContext, TaskState
+        from personal_agent.telemetry.trace import TraceContext
+
+        monkeypatch.setattr(ex.settings, "orchestration_mode", "enforced")
+
+        gw = GatewayOutput(
+            intent=IntentResult(
+                task_type=TaskType.CONVERSATIONAL,
+                complexity=Complexity.SIMPLE,
+                confidence=0.9,
+                signals=[],
+            ),
+            governance=GovernanceContext(mode=Mode.NORMAL, expansion_permitted=True),
+            decomposition=DecompositionResult(strategy=strategy, reason="test"),
+            context=AssembledContext(
+                messages=[{"role": "user", "content": "build X and Y"}],
+                memory_context=None,
+                tool_definitions=None,
+            ),
+            session_id="s1",
+            trace_id="t1",
+        )
+        ctx = ExecutionContext(
+            session_id="s1",
+            trace_id="t1",
+            user_message="build X and Y",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=gw,
+        )
+
+        controller = MagicMock()
+        controller.execute = AsyncMock(return_value=ExpansionResult())
+        monkeypatch.setattr(
+            "personal_agent.orchestrator.expansion_controller.ExpansionController",
+            lambda: controller,
+        )
+
+        get_llm_client_spy = MagicMock(return_value=MagicMock())
+        monkeypatch.setattr("personal_agent.llm_client.factory.get_llm_client", get_llm_client_spy)
+
+        session_manager = MagicMock()
+        session_manager.get_session = MagicMock(return_value=None)
+        trace_ctx = TraceContext(trace_id="t1", session_id="s1")
+
+        state = await ex.step_init(ctx, session_manager, trace_ctx)
+
+        assert state == TaskState.LLM_CALL
+        get_llm_client_spy.assert_called_once_with(role_name=ModelRole.SUB_AGENT.value)

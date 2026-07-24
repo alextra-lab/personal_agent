@@ -698,6 +698,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 log.info("neo4j_entity_class_index_ensured")
             except Exception as cls_idx_e:
                 log.warning("neo4j_entity_class_index_setup_failed", error=str(cls_idx_e))
+            # Ensure Session.session_id index (ADR-0124 Phase 1 / FRE-948). Idempotent;
+            # the session-browser digest read makes this label scan user-facing and
+            # unconditional on every session-list page load.
+            try:
+                await memory_service.ensure_session_id_index()
+                log.info("neo4j_session_id_index_ensured")
+            except Exception as sid_idx_e:
+                log.warning("neo4j_session_id_index_setup_failed", error=str(sid_idx_e))
             # Bootstrap owner identity (FRE-213 / ADR-0052) — idempotent, no-op when empty
             if settings.owner_name and settings.agent_owner_email:
                 try:

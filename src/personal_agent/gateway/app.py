@@ -19,6 +19,7 @@ Example (standalone production)::
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
 
@@ -33,6 +34,7 @@ from personal_agent.gateway.route_trace_api import router as route_trace_router
 from personal_agent.gateway.session_api import config_router
 from personal_agent.gateway.session_api import router as session_router
 from personal_agent.gateway.sub_agent_capture_api import router as sub_agent_capture_router
+from personal_agent.memory.session_digest import SessionDigestView
 from personal_agent.telemetry import get_logger
 from personal_agent.transport.agui.ws_endpoint import ws_router as transport_router
 
@@ -166,6 +168,14 @@ async def _gateway_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             if await memory_service.connect():
                 app.state.knowledge_graph = _KnowledgeGraphAdapter(memory_service)
                 log.info("gateway_neo4j_connected")
+                # ADR-0124 Phase 1 / FRE-948: idempotent, mirrors service/app.py's startup
+                # index bootstrap so the standalone gateway (cloud, :9001) also has it —
+                # not only the combined local-mode app where service/app.py's lifespan runs.
+                try:
+                    await memory_service.ensure_session_id_index()
+                    log.info("gateway_neo4j_session_id_index_ensured")
+                except Exception as idx_exc:
+                    log.warning("gateway_neo4j_session_id_index_setup_failed", error=str(idx_exc))
             else:
                 log.warning("gateway_neo4j_unavailable")
         except Exception as exc:
@@ -334,6 +344,23 @@ class _KnowledgeGraphAdapter:
             :class:`~personal_agent.memory.models.MemoryQueryResult`.
         """
         result: Any = await self._service.query_memory(query)
+        return result
+
+    async def get_session_digest_views(
+        self, session_ids: Sequence[str], *, trace_id: str | None = None
+    ) -> dict[str, SessionDigestView]:
+        """Delegate to MemoryService's batch session-digest read (ADR-0124 Phase 1).
+
+        Args:
+            session_ids: Postgres session ids for the current page.
+            trace_id: Trace identifier for log correlation.
+
+        Returns:
+            ``{session_id: SessionDigestView}`` for sessions with a label/digest.
+        """
+        result: dict[str, SessionDigestView] = await self._service.get_session_digest_views(
+            session_ids, trace_id=trace_id
+        )
         return result
 
 

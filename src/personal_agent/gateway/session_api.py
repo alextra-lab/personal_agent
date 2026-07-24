@@ -7,6 +7,7 @@ the resolved user_id so a holder of the bearer token cannot read another
 user's data — closes the cross-user data leak fixed in this hotfix.
 """
 
+import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 from uuid import UUID
@@ -20,6 +21,7 @@ from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.rate_limiting import get_rate_limiter
 from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition, ProviderDefinition
+from personal_agent.memory.session_digest import SessionDigestView
 from personal_agent.service.auth import _CF_EMAIL_HEADER, _get_user_with_display_name
 from personal_agent.service.models import SessionSelectionUpdate
 from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
@@ -27,6 +29,11 @@ from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+#: Bound on how long the optional Neo4j digest-hydration enrichment (ADR-0124
+#: Phase 1) may take before the previously Neo4j-independent list/get endpoints
+#: degrade to no label/digest rather than hang on an unreachable graph.
+_DIGEST_HYDRATION_TIMEOUT_SECONDS = 3.0
 
 #: Sessionless config read (ADR-0121 T5, FRE-920) — no ``/sessions`` prefix,
 #: mounted directly under ``/api/v1`` alongside ``router`` so a brand-new
@@ -129,7 +136,10 @@ async def list_sessions(
 
     repo = SessionRepository(db)
     sessions = await repo.list_recent(limit, user_id=user_id)
-    return [_session_to_dict(s) for s in sessions]
+    digest_views = await _fetch_session_digest_views(
+        request, [str(s.session_id) for s in sessions], ctx=ctx
+    )
+    return [_session_to_dict(s, digest_views.get(str(s.session_id))) for s in sessions]
 
 
 @router.get("/{session_id}")
@@ -186,7 +196,8 @@ async def get_session(
     if session is None:
         raise not_found("session")
 
-    result = _session_to_dict(session)
+    digest_views = await _fetch_session_digest_views(request, [str(uuid)], ctx=ctx)
+    result = _session_to_dict(session, digest_views.get(str(uuid)))
     # FRE-426: server-authoritative context + cost so the PWA status bar is
     # populated on mount / session switch — before the first turn_status of the
     # next turn (kills the "blank meters until I run a turn" gap).
@@ -483,6 +494,43 @@ async def _fetch_selections(
             "selection_store_hydration_failed",
             session_id=str(session_uuid),
             roles=roles,
+            error=str(exc),
+            trace_id=ctx.trace_id,
+        )
+        return {}
+
+
+async def _fetch_session_digest_views(
+    request: Request, session_ids: list[str], *, ctx: TraceContext
+) -> dict[str, SessionDigestView]:
+    """Fetch label+digest views for a page of sessions, degrading to {} on any failure.
+
+    Mirrors :func:`_fetch_selections`'s degrade-gracefully contract. The read is
+    additionally time-bounded: this endpoint was previously Neo4j-independent, so
+    an unreachable (not merely erroring) graph must not hang it.
+
+    Args:
+        request: Incoming FastAPI request (for app-state ``knowledge_graph``).
+        session_ids: Postgres session ids on the current page.
+        ctx: Trace context for correlation.
+
+    Returns:
+        ``{session_id: SessionDigestView}``; empty when the graph is disabled,
+        unavailable, too slow, or the read fails — callers degrade to no
+        label/digest rather than 500ing.
+    """
+    kg = getattr(request.app.state, "knowledge_graph", None)
+    if kg is None or not session_ids:
+        return {}
+    try:
+        return await asyncio.wait_for(
+            kg.get_session_digest_views(session_ids, trace_id=ctx.trace_id),
+            timeout=_DIGEST_HYDRATION_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001 — availability guard; also catches TimeoutError
+        log.warning(
+            "session_digest_view_hydration_failed",
+            session_ids=session_ids,
             error=str(exc),
             trace_id=ctx.trace_id,
         )
@@ -814,14 +862,19 @@ def _extract_title(messages: list[dict[str, Any]]) -> str | None:
     return None
 
 
-def _session_to_dict(session: Any) -> dict[str, Any]:
+def _session_to_dict(session: Any, digest_view: SessionDigestView | None = None) -> dict[str, Any]:
     """Serialise a ``SessionModel`` to a plain dict.
 
     Args:
         session: SQLAlchemy ``SessionModel`` instance.
+        digest_view: The session's Neo4j-sourced label/digest projection
+            (ADR-0124 Phase 1), when already fetched by the caller. ``None``
+            (the default) yields ``session_label``/``session_digest`` both
+            ``None`` — the shape every pre-Phase-1 caller of this helper keeps.
 
     Returns:
-        Dict with serialised session fields including a derived ``title``.
+        Dict with serialised session fields including a derived ``title`` and
+        the Phase-1 ``session_label``/``session_digest`` fields.
     """
     msgs = list(session.messages or [])
     return {
@@ -833,4 +886,6 @@ def _session_to_dict(session: Any) -> dict[str, Any]:
         "message_count": len(msgs),
         "turn_count": sum(1 for m in msgs if m.get("role") == "user"),
         "title": _extract_title(msgs),
+        "session_label": digest_view.label if digest_view else None,
+        "session_digest": digest_view.digest_text if digest_view else None,
     }

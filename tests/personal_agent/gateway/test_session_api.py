@@ -1005,3 +1005,246 @@ def test_get_config_resolved_matches_session_scoped_no_selection_default() -> No
         assert sessionless_roles[role]["resolved"] == session_scoped_roles[role]["resolved"], role
         assert sessionless_roles[role]["provenance"] == "default", role
         assert session_scoped_roles[role]["provenance"] == "default", role
+
+
+# ---------------------------------------------------------------------------
+# Session label + digest surfacing (ADR-0124 Phase 1, FRE-948)
+# ---------------------------------------------------------------------------
+
+
+def test_list_sessions_includes_label_and_digest_when_graph_has_them() -> None:
+    """GET /sessions includes session_label/session_digest for sessions the graph has them for."""
+    from personal_agent.memory.session_digest import SessionDigestView
+
+    db_session = AsyncMock()
+    sid_with_digest = str(uuid4())
+    sid_without = str(uuid4())
+    s1 = _make_session_model(session_id=sid_with_digest)
+    s2 = _make_session_model(session_id=sid_without)
+
+    mock_kg = AsyncMock()
+    mock_kg.get_session_digest_views = AsyncMock(
+        return_value={
+            sid_with_digest: SessionDigestView(
+                label="A generated label", digest_text="Established: \n- a fact"
+            )
+        }
+    )
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(
+            patch(
+                "personal_agent.service.repositories.session_repository.SessionRepository.list_recent",
+                new_callable=AsyncMock,
+                return_value=[s1, s2],
+            )
+        )
+        app = _build_app_with_db_factory(db_session)
+        app.state.knowledge_graph = mock_kg
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get("/api/v1/sessions", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    data = {row["session_id"]: row for row in resp.json()}
+    assert data[sid_with_digest]["session_label"] == "A generated label"
+    assert data[sid_with_digest]["session_digest"] == "Established: \n- a fact"
+    assert data[sid_without]["session_label"] is None
+    assert data[sid_without]["session_digest"] is None
+
+
+def test_list_sessions_no_digest_yet_renders_without_error() -> None:
+    """A knowledge_graph present but with nothing generated yet degrades to None, not an error."""
+    db_session = AsyncMock()
+    s1 = _make_session_model()
+
+    mock_kg = AsyncMock()
+    mock_kg.get_session_digest_views = AsyncMock(return_value={})
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(
+            patch(
+                "personal_agent.service.repositories.session_repository.SessionRepository.list_recent",
+                new_callable=AsyncMock,
+                return_value=[s1],
+            )
+        )
+        app = _build_app_with_db_factory(db_session)
+        app.state.knowledge_graph = mock_kg
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get("/api/v1/sessions", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data[0]["session_label"] is None
+    assert data[0]["session_digest"] is None
+
+
+def test_list_sessions_knowledge_graph_none_skips_enrichment() -> None:
+    """app.state.knowledge_graph is None (today's default) — unchanged 200, both fields None.
+
+    Regression guard: every pre-existing test in this file builds the app with
+    ``_build_app_with_db_factory``, which sets ``knowledge_graph = None`` — this
+    proves that default keeps working after Phase 1's enrichment was wired in.
+    """
+    db_session = AsyncMock()
+    s1 = _make_session_model()
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(
+            patch(
+                "personal_agent.service.repositories.session_repository.SessionRepository.list_recent",
+                new_callable=AsyncMock,
+                return_value=[s1],
+            )
+        )
+        app = _build_app_with_db_factory(db_session)
+        assert app.state.knowledge_graph is None
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get("/api/v1/sessions", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data[0]["session_label"] is None
+    assert data[0]["session_digest"] is None
+
+
+def test_list_sessions_digest_hydration_failure_logs_trace_id_and_degrades() -> None:
+    """A graph read failure degrades to no label/digest, logs trace_id, and stays 200."""
+    import structlog.testing
+
+    db_session = AsyncMock()
+    s1 = _make_session_model()
+
+    mock_kg = AsyncMock()
+    mock_kg.get_session_digest_views = AsyncMock(side_effect=RuntimeError("boom"))
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(
+            patch(
+                "personal_agent.service.repositories.session_repository.SessionRepository.list_recent",
+                new_callable=AsyncMock,
+                return_value=[s1],
+            )
+        )
+        app = _build_app_with_db_factory(db_session)
+        app.state.knowledge_graph = mock_kg
+        with structlog.testing.capture_logs() as captured:
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.get("/api/v1/sessions", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data[0]["session_label"] is None
+    failure_log = next(e for e in captured if e.get("event") == "session_digest_view_hydration_failed")
+    assert failure_log.get("trace_id")
+
+
+def test_list_sessions_digest_hydration_times_out_and_degrades() -> None:
+    """A hung graph read degrades to no label/digest within the hydration timeout, not a hang."""
+    import asyncio
+
+    db_session = AsyncMock()
+    s1 = _make_session_model()
+
+    async def _hang(*_args: object, **_kwargs: object) -> dict[str, object]:
+        await asyncio.sleep(10)
+        return {}
+
+    mock_kg = AsyncMock()
+    mock_kg.get_session_digest_views = _hang
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(
+            patch(
+                "personal_agent.service.repositories.session_repository.SessionRepository.list_recent",
+                new_callable=AsyncMock,
+                return_value=[s1],
+            )
+        )
+        stack.enter_context(
+            patch("personal_agent.gateway.session_api._DIGEST_HYDRATION_TIMEOUT_SECONDS", 0.05)
+        )
+        app = _build_app_with_db_factory(db_session)
+        app.state.knowledge_graph = mock_kg
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get("/api/v1/sessions", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data[0]["session_label"] is None
+
+
+def test_get_session_includes_label_and_digest_when_graph_has_them() -> None:
+    """GET /sessions/{id} also enriches (Step 4 fold-in: same helper as list_sessions)."""
+    from personal_agent.memory.session_digest import SessionDigestView
+
+    db_session = AsyncMock()
+    db_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0.0)))
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    mock_kg = AsyncMock()
+    mock_kg.get_session_digest_views = AsyncMock(
+        return_value={sid: SessionDigestView(label="A label", digest_text="Decisions: \n- x")}
+    )
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(patch(_SELECTION_GET_ALL, new_callable=AsyncMock, return_value={}))
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+        )
+        app = _build_app_with_db_factory(db_session)
+        app.state.knowledge_graph = mock_kg
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session_label"] == "A label"
+    assert body["session_digest"] == "Decisions: \n- x"
+
+
+def test_get_session_adapter_delegation_is_real() -> None:
+    """Exercises the real _KnowledgeGraphAdapter.get_session_digest_views delegation.
+
+    Every other test here mocks app.state.knowledge_graph directly (a mock standing
+    in for the whole adapter). This test instead wires a real
+    _KnowledgeGraphAdapter around a stub MemoryService, so the adapter's own
+    delegating method is what actually runs.
+    """
+    from personal_agent.gateway.app import _KnowledgeGraphAdapter
+    from personal_agent.memory.session_digest import SessionDigestView
+
+    db_session = AsyncMock()
+    db_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0.0)))
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    fake_memory_service = AsyncMock()
+    fake_memory_service.get_session_digest_views = AsyncMock(
+        return_value={sid: SessionDigestView(label="Adapter label", digest_text=None)}
+    )
+    real_adapter = _KnowledgeGraphAdapter(fake_memory_service)
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(patch(_SELECTION_GET_ALL, new_callable=AsyncMock, return_value={}))
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+        )
+        app = _build_app_with_db_factory(db_session)
+        app.state.knowledge_graph = real_adapter
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    assert resp.json()["session_label"] == "Adapter label"
+    fake_memory_service.get_session_digest_views.assert_awaited_once()

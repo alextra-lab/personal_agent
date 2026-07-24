@@ -555,11 +555,17 @@ prompt. Amendment B stops feeding tool data to the *generator*; it does not stop
    kept; it is verification and now leaves wholly to the oracle, which reads the same status/error
    from the durable turn records. **The interim is acknowledged and accepted, not gated:** until the
    oracle ships, a status-contradicted false narration is simply unflagged by the digest. This is
-   deliberate — the summariser is not a verification surface (that is the point of Amendment B), the
-   raw status/error stays durably captured for the oracle, and no Phase-0 or Phase-1 consumer acts on
-   a `corrections` entry (anti-re-litigation is Phase 3, gated separately on its own precision bar).
-   Gating the human-visible Phase 1 browser on a verification oracle would reintroduce the very
-   scope-crossing this amendment removes; the loss is a smaller digest, not a live exposure.
+   deliberate — the summariser is not a verification surface (that is the point of Amendment B), and
+   the raw status/error stays durably captured for the oracle. Crucially the loss is
+   **under-annotation, never misinformation**: a missing correction makes a digest *smaller*, not
+   *false*. No Phase-0/1 consumer reads `corrections` at all; and when **Phase 2** later attaches
+   digests to retrieved facts, it only *adds* annotation and **cannot alter which facts win** (AC-17),
+   so an absent status-contradiction note leaves the model with less commentary, not a wrong fact —
+   and the digest was never a verification *guarantee* even with `status_contradiction` (corrections
+   are precision-first and recall-floored by design). If the owner later wants that signal in
+   annotations, it is the oracle's to supply and Phase 2 can consume the oracle's output. Gating the
+   human-visible Phase 1 browser — or fact-first Phase 2 ranking — on a verification oracle would
+   reintroduce the very scope-crossing this amendment removes.
 2. **The un-narrated tool signal** Amendment A valued — e.g. the 27 `nonexistent_tool` invocations
    that "live in names and statuses." By Amendment B's stricter principle this is not memory: an
    agent-internal tool failure the user never saw is not part of what they retained. Where it *was*
@@ -597,15 +603,16 @@ Amendment B's own acceptance is discriminating and outcome-level, not a restatem
 
 - **No retired value survives where a digest is produced or stored — over a non-empty, complete
   population.** Let the post-amendment population be every digest with `summary_generated_at` later
-  than the Amendment-B deploy timestamp. AC-2 and AC-7 already require that population to be
-  **non-empty and complete** (every eligible multi-turn session quiet past the threshold carries a
-  digest). Over it, **zero** items carry `basis = tool_evidence` and **zero** `corrections` entries
-  carry `status_contradiction`. · **Check:** a Cypher scan of `session_digest` records filtered by
-  `summary_generated_at > <deploy timestamp>`, run only after AC-2/AC-7 confirm the population is
-  populated. · *Fails if* any such item exists — a build that edited the prose but left the schema
-  enum or the producer prompt intact would produce one — **or if the population is empty**, which
-  would let the scan pass vacuously while the producer is dead; this criterion inherits AC-2/AC-7's
-  non-emptiness rather than passing around it.
+  than the Amendment-B deploy timestamp. **AC-7 supplies completeness** (every eligible multi-turn
+  session quiet past the threshold carries a digest); **non-emptiness is required here** — the
+  population must contain at least the eligible multi-turn sessions summarised in the measurement
+  window, and if the live corpus supplies none, a pre-registered synthetic supplement per the
+  **Corpus-feasibility** gate above, labelled as such. Over that population, **zero** items carry
+  `basis = tool_evidence` and **zero** `corrections` entries carry `status_contradiction`. ·
+  **Check:** a Cypher scan of `session_digest` records filtered by
+  `summary_generated_at > <deploy timestamp>`. · *Fails if* any such item exists — a build that edited
+  the prose but left the schema enum or the producer prompt intact would produce one — **or if the
+  population is empty**, which would let the scan pass vacuously while the producer is dead.
 - **The prompt is conversation-only.** AC-8 (as amended) asserts the assembled prompt contains no tool
   name, status, error, argument or payload. · *Fails if* any tool-derived token appears — the
   regression back to feeding tool data to the generator.
@@ -1021,7 +1028,8 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   and disagreement with a subjective judgment. The producer emits a correction for the positives — at
   or above the recall floor stated below — and for **none** of the negatives (precision is absolute;
   recall is floored, not perfect — see the fail rule). Each emitted `self_correction` additionally carries the located span of
-  the **supporting evidence** in the conversation, not merely of the self-correction sentence. ·
+  the **supporting evidence** in the conversation — the assistant's own corrective text that grounds
+  it, the same span D3 requires — not a bare assertion that a correction occurred. ·
   **Check:** hand-labelled
   fixtures, fixed before tuning. · *Fails if* **any** negative yields a correction (precision is
   absolute here), or if fewer than **80%** of positives yield one, or if any `self_correction` lacks

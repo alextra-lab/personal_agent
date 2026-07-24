@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS api_costs (
     model VARCHAR(100) NOT NULL,
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd DECIMAL(10, 6) NOT NULL DEFAULT 0,
+    cost_usd DECIMAL(18, 12) NOT NULL DEFAULT 0,  -- widened FRE-974: sub-$0.000001 vendor costs (OVH/Voyage) need more headroom than the original DECIMAL(10,6)
     cache_read_input_tokens INTEGER,         -- FRE-437: Anthropic cache-read tier (NULL = n/a)
     cache_creation_input_tokens INTEGER,     -- FRE-437: Anthropic cache-creation tier (NULL = n/a)
     trace_id UUID NOT NULL,

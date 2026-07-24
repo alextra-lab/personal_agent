@@ -459,6 +459,119 @@ class TestVoyagePrimary:
         assert applied[0].kwargs["fallback"] is False
 
     @pytest.mark.asyncio
+    async def test_voyage_success_records_cost_from_usage(self) -> None:
+        """FRE-974: a Voyage response carrying usage.total_tokens -> a cost row + event."""
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {
+            "data": [{"index": 0, "relevance_score": 0.5}],
+            "usage": {"total_tokens": 250},
+        }
+        client = AsyncMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        client.post = AsyncMock(return_value=resp)
+
+        mock_record = AsyncMock()
+        with (
+            patch(
+                "personal_agent.memory.reranker._get_reranker_config",
+                return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
+            ),
+            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.get_settings") as mock_settings,
+            patch("personal_agent.memory.reranker.record_vendor_cost", mock_record),
+            patch(
+                "personal_agent.memory.reranker._get_reranker_pricing",
+                return_value=0.00000005,
+            ),
+            patch("personal_agent.memory.reranker.log") as mock_log,
+        ):
+            mock_settings.return_value.reranker_enabled = True
+            mock_settings.return_value.reranker_input_cap = 25
+            mock_settings.return_value.voyage_api_key = "test-voyage-key"
+            await rerank("q", ["a"], top_k=5, trace_id="tr-1", session_id="se-1")
+
+        mock_record.assert_awaited_once()
+        kwargs = mock_record.await_args.kwargs
+        assert kwargs["provider"] == "voyage"
+        assert kwargs["tokens"] == 250
+        assert kwargs["cost_usd"] == pytest.approx(250 * 0.00000005)
+        assert kwargs["trace_id"] == "tr-1"
+        assert kwargs["session_id"] == "se-1"
+
+        applied = [
+            c for c in mock_log.info.call_args_list if c.args and c.args[0] == "reranker_applied"
+        ]
+        assert applied[0].kwargs["provider"] == "voyage"
+        assert applied[0].kwargs["cost_usd"] == pytest.approx(250 * 0.00000005)
+
+    @pytest.mark.asyncio
+    async def test_voyage_success_no_usage_skips_cost(self) -> None:
+        """No usage field in the Voyage response -> no cost row, cost_usd=None in the event."""
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"data": [{"index": 0, "relevance_score": 0.5}]}
+        client = AsyncMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        client.post = AsyncMock(return_value=resp)
+
+        mock_record = AsyncMock()
+        with (
+            patch(
+                "personal_agent.memory.reranker._get_reranker_config",
+                return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
+            ),
+            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.get_settings") as mock_settings,
+            patch("personal_agent.memory.reranker.record_vendor_cost", mock_record),
+            patch("personal_agent.memory.reranker.log") as mock_log,
+        ):
+            mock_settings.return_value.reranker_enabled = True
+            mock_settings.return_value.reranker_input_cap = 25
+            mock_settings.return_value.voyage_api_key = "test-voyage-key"
+            await rerank("q", ["a"], top_k=5)
+
+        mock_record.assert_not_awaited()
+        applied = [
+            c for c in mock_log.info.call_args_list if c.args and c.args[0] == "reranker_applied"
+        ]
+        assert applied[0].kwargs["cost_usd"] is None
+
+    @pytest.mark.asyncio
+    async def test_voyage_success_malformed_usage_skips_cost_without_raising(self) -> None:
+        """A non-numeric/negative usage.total_tokens must never raise -- results still return."""
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {
+            "data": [{"index": 0, "relevance_score": 0.5}],
+            "usage": {"total_tokens": "not-a-number"},
+        }
+        client = AsyncMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        client.post = AsyncMock(return_value=resp)
+
+        mock_record = AsyncMock()
+        with (
+            patch(
+                "personal_agent.memory.reranker._get_reranker_config",
+                return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
+            ),
+            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.get_settings") as mock_settings,
+            patch("personal_agent.memory.reranker.record_vendor_cost", mock_record),
+        ):
+            mock_settings.return_value.reranker_enabled = True
+            mock_settings.return_value.reranker_input_cap = 25
+            mock_settings.return_value.voyage_api_key = "test-voyage-key"
+            results = await rerank("q", ["a"], top_k=5)
+
+        mock_record.assert_not_awaited()
+        assert len(results) == 1
+
+    @pytest.mark.asyncio
     async def test_voyage_api_key_never_logged(self) -> None:
         client = self._mock_client([{"index": 0, "relevance_score": 0.5}])
         with (
@@ -481,6 +594,53 @@ class TestVoyagePrimary:
 
 class TestFallbackToMacTunnel:
     """FRE-851 — Voyage failure/timeout falls back to the Mac-tunnel 4B, then passthrough."""
+
+    @pytest.mark.asyncio
+    async def test_fallback_success_records_no_cost(self) -> None:
+        """FRE-974: the free local fallback must never be billed — provider tag flips, cost stays None."""
+        fallback_resp = MagicMock()
+        fallback_resp.raise_for_status = MagicMock()
+        fallback_resp.json.return_value = {
+            "results": [{"index": 0, "relevance_score": 0.6}],
+            "usage": {"total_tokens": 999},  # even if present, must not be billed
+        }
+
+        client = AsyncMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        client.post = AsyncMock(side_effect=[httpx.ConnectError("voyage down"), fallback_resp])
+
+        mock_record = AsyncMock()
+        with (
+            patch(
+                "personal_agent.memory.reranker._get_reranker_config",
+                return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
+            ),
+            patch(
+                "personal_agent.memory.reranker._get_reranker_fallback_config",
+                return_value=("Qwen/Qwen3-Reranker-4B-mxfp8", "https://slm.example.com/v1"),
+            ),
+            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch(
+                "personal_agent.memory.reranker.cf_access_service_token_headers",
+                return_value=dict(_CF_HEADERS),
+            ),
+            patch("personal_agent.memory.reranker.get_settings") as mock_settings,
+            patch("personal_agent.memory.reranker.record_vendor_cost", mock_record),
+            patch("personal_agent.memory.reranker.log") as mock_log,
+        ):
+            mock_settings.return_value.reranker_enabled = True
+            mock_settings.return_value.reranker_input_cap = 25
+            mock_settings.return_value.voyage_api_key = "test-voyage-key"
+            mock_settings.return_value.slm_tunnel_base_url = "https://slm.example.com"
+            await rerank("q", ["a"], top_k=5, trace_id="tr-1", session_id="se-1")
+
+        mock_record.assert_not_awaited()
+        applied = [
+            c for c in mock_log.info.call_args_list if c.args and c.args[0] == "reranker_applied"
+        ]
+        assert applied[0].kwargs["provider"] == "slm_local"
+        assert applied[0].kwargs["cost_usd"] is None
 
     @pytest.mark.asyncio
     async def test_voyage_failure_falls_back_and_succeeds(self) -> None:
@@ -686,10 +846,16 @@ class TestFallbackToMacTunnel:
             mock_settings.return_value.slm_tunnel_base_url = "https://slm.example.com"
             await rerank("q", ["a"], top_k=5)
 
-        # Exactly 3 reads: rerank()'s start, the reranker_failed duration, and the
-        # fallback's final duration computed FROM that same start — not 4, which
-        # would mean _rerank_fallback started its own independent clock.
-        assert mock_monotonic.call_count == 3
+        # Exactly 6 reads: rerank()'s start, the reranker_failed duration, the
+        # fallback's final duration computed FROM that same start (the original
+        # 3 -- not 4, which would mean _rerank_fallback started its own
+        # independent clock), plus 3 from _attempt_rerank's own per-call cost-
+        # latency timer (FRE-974): 1 for the failed Voyage attempt (its
+        # call_start read before the ConnectError aborts the call before the
+        # matching end-read) and 2 for the successful fallback attempt
+        # (call_start + the end read, since the fallback is never billed but
+        # the latency timer runs unconditionally).
+        assert mock_monotonic.call_count == 6
 
 
 class TestPassthrough:

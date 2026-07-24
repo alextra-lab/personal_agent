@@ -93,7 +93,7 @@ async def test_paraphrase_generation_raising_degrades_to_dense_only(memory_servi
 
     monkeypatch.setattr(svc, "generate_query_paraphrases", _boom)
 
-    async def _embed_seeded(text: str, mode: str = "query") -> list[float]:
+    async def _embed_seeded(text: str, mode: str = "query", **_kwargs: object) -> list[float]:
         return _unit_embedding(dims, 0)
 
     monkeypatch.setattr(svc, "generate_embedding", _embed_seeded)
@@ -120,7 +120,7 @@ async def test_empty_paraphrase_set_degrades_to_dense_only(memory_service, monke
 
     monkeypatch.setattr(svc, "generate_query_paraphrases", _empty)
 
-    async def _embed_seeded(text: str, mode: str = "query") -> list[float]:
+    async def _embed_seeded(text: str, mode: str = "query", **_kwargs: object) -> list[float]:
         return _unit_embedding(dims, 0)
 
     monkeypatch.setattr(svc, "generate_embedding", _embed_seeded)
@@ -147,7 +147,7 @@ async def test_depth_bound_respected(memory_service, monkeypatch):
 
     monkeypatch.setattr(svc, "generate_query_paraphrases", _empty)
 
-    async def _embed_first_axis(text: str, mode: str = "query") -> list[float]:
+    async def _embed_first_axis(text: str, mode: str = "query", **_kwargs: object) -> list[float]:
         return [1.0] + [0.0] * (dims - 1)
 
     monkeypatch.setattr(svc, "generate_embedding", _embed_first_axis)
@@ -176,7 +176,7 @@ async def test_paraphrase_surfaces_item_filed_under_different_vocabulary(
     async def _paraphrase(query_text, count, **kwargs):
         return ["perception"] if query_text == f"{prefix}-vision" else []
 
-    async def _embed(text: str, mode: str = "query") -> list[float]:
+    async def _embed(text: str, mode: str = "query", **_kwargs: object) -> list[float]:
         # Only the "perception" variant embeds to the seeded entity's vector;
         # the original "vision" query embeds to an orthogonal, empty-match vector.
         if text == "perception":
@@ -221,7 +221,7 @@ async def test_one_variant_failure_does_not_zero_the_whole_arm(memory_service, m
 
     monkeypatch.setattr(svc, "generate_query_paraphrases", _paraphrase)
 
-    async def _embed_seeded(text: str, mode: str = "query") -> list[float]:
+    async def _embed_seeded(text: str, mode: str = "query", **_kwargs: object) -> list[float]:
         return _unit_embedding(dims, 0)
 
     monkeypatch.setattr(svc, "generate_embedding", _embed_seeded)

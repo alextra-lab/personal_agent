@@ -17,12 +17,14 @@ See: ADR-0035 (seshat-backend-decision), Enhancement 1
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 import structlog
 
 from personal_agent.config import get_settings
+from personal_agent.llm_client.cost_tracker import record_vendor_cost
 from personal_agent.service.cf_service_token import cf_access_service_token_headers
 
 if TYPE_CHECKING:
@@ -118,7 +120,34 @@ def _resolve_embedder_kind(settings: AppConfig) -> str:
     return resolve_substrate(settings.substrate_profile).backends["embedder"].kind
 
 
-async def _generate_vectors(texts: list[str], settings: AppConfig) -> list[list[float]]:
+def _get_embedding_pricing_eur() -> float | None:
+    """Resolve the "embedding" role's EUR-per-token rate (FRE-974, ADR-0120 T0).
+
+    Read from the catalog's declared pricing (config-owned, ADR-0121), not from
+    the settings fields the managed runtime path uses for endpoint/auth — those
+    are a `managed_embedder` substrate-profile runtime concern, separate from
+    the role's static declared cost.
+
+    Returns:
+        EUR cost per input token, or ``None`` if unset (skips cost recording
+        rather than emitting a wrong number).
+    """
+    from personal_agent.config.model_loader import (  # noqa: PLC0415
+        load_model_config,
+        resolve_role_definition,
+    )
+
+    model_def = resolve_role_definition("embedding", config=load_model_config())
+    return model_def.input_cost_per_token_eur if model_def else None
+
+
+async def _generate_vectors(
+    texts: list[str],
+    settings: AppConfig,
+    *,
+    trace_id: str | None = None,
+    session_id: str | None = None,
+) -> list[list[float]]:
     """Embed already mode-prefixed *texts* through the profile-resolved embedder.
 
     Under a ``local`` substrate profile (``private``/``dev``/``test``, the
@@ -129,6 +158,10 @@ async def _generate_vectors(texts: list[str], settings: AppConfig) -> list[list[
     via the fallback (ADR-0112 D4's "seamless local fallback"). Any final
     failure propagates to the caller — the existing zero-vector fail-open path
     in :func:`generate_embedding` / :func:`generate_embeddings_batch`.
+
+    ``trace_id``/``session_id`` are forwarded only to the managed (OVH,
+    billed) path for cost attribution (FRE-974) — the local paths here are
+    not billed, so there is no cost to attribute.
     """
     if _resolve_embedder_kind(settings) != "managed":
         model_id, endpoint, api_key = _get_embedding_config()
@@ -145,6 +178,8 @@ async def _generate_vectors(texts: list[str], settings: AppConfig) -> list[list[
             settings.managed_embedding_token or "",
             settings.managed_embedding_model,
             dimensions=dimensions,
+            trace_id=trace_id,
+            session_id=session_id,
         )
     except Exception as exc:
         if not settings.local_fallback_embedding_endpoint:
@@ -173,6 +208,8 @@ async def generate_embedding(
     text: str | None,
     *,
     mode: Literal["document", "query"] = "document",
+    trace_id: str | None = None,
+    session_id: str | None = None,
 ) -> list[float]:
     """Generate an embedding vector for a single text.
 
@@ -180,6 +217,13 @@ async def generate_embedding(
         text: Text to embed. Returns zero vector for empty/None.
         mode: "document" embeds text as-is; "query" prepends the
             Qwen3-Embedding instruction prefix for asymmetric search.
+        trace_id: Request/consolidation trace id, forwarded to the managed
+            (OVH) path for cost attribution (FRE-974). ``None`` skips cost
+            recording for this call, it does not affect the embedding itself.
+        session_id: Session id, forwarded alongside ``trace_id``. Pass
+            :data:`personal_agent.llm_client.cost_tracker.SYSTEM_SESSION_ID`
+            for session-less background work so real vendor spend is still
+            attributed rather than silently dropped.
 
     Returns:
         List of floats with length == settings.embedding_dimensions.
@@ -193,7 +237,9 @@ async def generate_embedding(
     embed_text = f"{_QUERY_PREFIX}{text}" if mode == "query" else text
 
     try:
-        vectors = await _generate_vectors([embed_text], settings)
+        vectors = await _generate_vectors(
+            [embed_text], settings, trace_id=trace_id, session_id=session_id
+        )
         return [float(x) for x in vectors[0]]
 
     except Exception as exc:
@@ -209,12 +255,21 @@ async def generate_embeddings_batch(
     texts: list[str],
     *,
     mode: Literal["document", "query"] = "document",
+    trace_id: str | None = None,
+    session_id: str | None = None,
 ) -> list[list[float]]:
     """Generate embeddings for a batch of texts.
 
     Args:
         texts: List of texts to embed.
         mode: "document" embeds texts as-is; "query" prepends instruction prefix.
+        trace_id: Request/consolidation trace id, forwarded to the managed
+            (OVH) path for cost attribution (FRE-974). ``None`` skips cost
+            recording for this call, it does not affect the embeddings themselves.
+        session_id: Session id, forwarded alongside ``trace_id``. Pass
+            :data:`personal_agent.llm_client.cost_tracker.SYSTEM_SESSION_ID`
+            for session-less background work so real vendor spend is still
+            attributed rather than silently dropped.
 
     Returns:
         List of embedding vectors, one per input text.
@@ -226,7 +281,9 @@ async def generate_embeddings_batch(
     embed_texts = [f"{_QUERY_PREFIX}{t}" for t in texts] if mode == "query" else texts
 
     try:
-        return await _generate_vectors(embed_texts, settings)
+        return await _generate_vectors(
+            embed_texts, settings, trace_id=trace_id, session_id=session_id
+        )
 
     except Exception as exc:
         logger.warning(
@@ -283,6 +340,9 @@ async def _embed_managed_batch(
     model: str,
     dimensions: int,
     client: httpx.AsyncClient,
+    *,
+    trace_id: str | None = None,
+    session_id: str | None = None,
 ) -> list[list[float]]:
     """One managed-embedder request for a batch within the endpoint's size limit.
 
@@ -297,13 +357,22 @@ async def _embed_managed_batch(
     didn't honor the request, which is a server-side anomaly worth failing
     loud on rather than silently re-truncating. Server-side MRL truncation
     doesn't renormalize, so the result is L2-renormalized before returning.
+
+    On success, records this call's real vendor cost (FRE-974) — one
+    ``api_costs`` row per HTTP request (this function makes exactly one), not
+    aggregated across the caller's chunk loop. A response with no ``usage``
+    field skips cost recording for this call only (logged at debug) rather
+    than guessing; the returned vectors are unaffected either way.
     """
     payload = {"model": model, "input": texts, "dimensions": dimensions}
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     url = f"{base_url.rstrip('/')}/embeddings"
+    start = time.monotonic()
     response = await client.post(url, json=payload, headers=headers)
+    latency_ms = int((time.monotonic() - start) * 1000)
     response.raise_for_status()
-    rows = response.json()["data"]
+    body = response.json()
+    rows = body["data"]
     if len(rows) != len(texts):
         raise EmbeddingResponseError(
             f"managed embeddings response returned {len(rows)} rows for {len(texts)} "
@@ -318,6 +387,41 @@ async def _embed_managed_batch(
                 f"{dimensions} (settings.embedding_dimensions) -- the endpoint did not "
                 "honor the requested width"
             )
+
+    total_tokens = body.get("usage", {}).get("total_tokens")
+    # bool is an int subclass; excluded explicitly since a boolean token count
+    # is never sane. A malformed/adversarial vendor response (non-numeric,
+    # negative) must degrade to "skip cost recording", never raise into this
+    # already-successful embedding call (security review, FRE-974).
+    if isinstance(total_tokens, int) and not isinstance(total_tokens, bool) and total_tokens >= 0:
+        pricing_eur = _get_embedding_pricing_eur()
+        if pricing_eur is not None:
+            cost_usd = total_tokens * pricing_eur * get_settings().eur_usd_rate
+            logger.info(
+                "embedding_generated",
+                provider="ovh",
+                model=model,
+                tokens=total_tokens,
+                cost_usd=cost_usd,
+                latency_ms=latency_ms,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            await record_vendor_cost(
+                provider="ovh",
+                model=model,
+                tokens=total_tokens,
+                cost_usd=cost_usd,
+                trace_id=trace_id,
+                session_id=session_id,
+                purpose="embedding",
+                latency_ms=latency_ms,
+            )
+    else:
+        logger.debug(
+            "embedding_cost_usage_missing", provider="ovh", model=model, total_tokens=total_tokens
+        )
+
     return [_renormalize(vec) for vec in vectors]
 
 
@@ -329,6 +433,8 @@ async def _embed_managed(
     *,
     client: httpx.AsyncClient | None = None,
     dimensions: int | None = None,
+    trace_id: str | None = None,
+    session_id: str | None = None,
 ) -> list[list[float]]:
     """Embed via the managed embedder endpoint (OVH AI Endpoints Qwen3-Embedding-8B).
 
@@ -346,6 +452,10 @@ async def _embed_managed(
             MRL truncation, FRE-826). Defaults to ``settings.embedding_dimensions``
             when omitted (live callers, e.g. the FRE-821 failover probe, don't
             need to plumb it through explicitly).
+        trace_id: Request/consolidation trace id, forwarded to each chunk's cost
+            recording (FRE-974). ``None`` skips cost recording only, never the
+            embedding itself.
+        session_id: Session id, forwarded alongside ``trace_id``.
 
     Returns:
         Unit-length embedding vectors, each exactly ``dimensions`` components,
@@ -364,13 +474,31 @@ async def _embed_managed(
     ]
     if client is not None:
         results = [
-            await _embed_managed_batch(chunk, base_url, token, model, dimensions, client)
+            await _embed_managed_batch(
+                chunk,
+                base_url,
+                token,
+                model,
+                dimensions,
+                client,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
             for chunk in chunks
         ]
     else:
         async with httpx.AsyncClient(timeout=120.0) as owned_client:
             results = [
-                await _embed_managed_batch(chunk, base_url, token, model, dimensions, owned_client)
+                await _embed_managed_batch(
+                    chunk,
+                    base_url,
+                    token,
+                    model,
+                    dimensions,
+                    owned_client,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                )
                 for chunk in chunks
             ]
     return [vec for batch in results for vec in batch]

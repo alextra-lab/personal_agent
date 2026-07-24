@@ -19,17 +19,25 @@ from __future__ import annotations
 
 import structlog
 
-from personal_agent.llm_client.models import ModelConfig
+from personal_agent.llm_client.models import ModelConfig, ModelKind
 
 log = structlog.get_logger(__name__)
 
 
 def register_model_pricing(config: ModelConfig) -> int:
-    """Register every priced model definition into ``litellm.model_cost``.
+    """Register every priced LLM chat model into ``litellm.model_cost``.
 
     Idempotent: re-registering the same config overwrites with identical values.
-    A definition with no ``input_cost_per_token`` is skipped (local/free models and
-    any cloud model deferring to litellm's shipped registry).
+    A definition with no ``input_cost_per_token``, or a non-LLM ``kind``
+    (``embedding``/``reranker``), is skipped: ``mode: "chat"`` below is a
+    litellm chat-completion registration, and `litellm.completion_cost()` is
+    never called for embedding/reranker calls (FRE-974 — they compute cost
+    directly from vendor-response token usage, not through litellm). Reusing
+    ``input_cost_per_token`` for the reranker's real USD price was almost a
+    silent registry pollution bug — reranker's ``kind`` filters it back out
+    here rather than needing a separate never-registered field the way
+    embedding's EUR price does (``input_cost_per_token_eur``, never read by
+    this function at all).
 
     Args:
         config: Loaded model configuration whose definitions may carry pricing.
@@ -41,7 +49,7 @@ def register_model_pricing(config: ModelConfig) -> int:
 
     entries: dict[str, dict[str, object]] = {}
     for definition in config.models.values():
-        if definition.input_cost_per_token is None:
+        if definition.input_cost_per_token is None or definition.kind is not ModelKind.LLM:
             continue
         # litellm dispatch key mirrors LiteLLMClient._litellm_model (provider/id).
         provider = definition.provider or "openai"

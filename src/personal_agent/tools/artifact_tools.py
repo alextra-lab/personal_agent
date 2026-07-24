@@ -389,7 +389,12 @@ async def artifact_write_executor(
     # Build embedding text from metadata fields — skip if all empty.
     emb_text = "\n".join(filter(None, [title, summary, " ".join(tags or []), slug]))
     if emb_text.strip():
-        embedding = await generate_embedding(emb_text, mode="document")
+        embedding = await generate_embedding(
+            emb_text,
+            mode="document",
+            trace_id=trace_id,
+            session_id=str(session_id) if session_id else None,
+        )
         emb_literal: str | None = _pgvector_literal(embedding)
     else:
         emb_literal = None

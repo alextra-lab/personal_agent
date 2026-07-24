@@ -107,7 +107,7 @@ async def _all_claims(service: MemoryService, user_id: UUID = _OWNER_UID) -> lis
 async def test_ac1_wrong_first_fact_is_correctable(owner_service: MemoryService) -> None:
     with patch(
         "personal_agent.memory.service.generate_embedding",
-        new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
+        new=AsyncMock(side_effect=lambda t, **_kw: _fake_embed(t)),
     ):
         await owner_service.assert_claim(
             Claim(content="The lease ends in Jaunary.", confidence=0.5, observed_at=_T0),
@@ -134,7 +134,7 @@ async def test_ac1_wrong_first_fact_is_correctable(owner_service: MemoryService)
 async def test_ac2_evolution_is_bitemporal_not_destructive(owner_service: MemoryService) -> None:
     with patch(
         "personal_agent.memory.service.generate_embedding",
-        new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
+        new=AsyncMock(side_effect=lambda t, **_kw: _fake_embed(t)),
     ):
         await owner_service.assert_claim(
             Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T0),
@@ -165,7 +165,7 @@ async def test_reject_weaker_contradiction_does_not_clobber(
 ) -> None:
     with patch(
         "personal_agent.memory.service.generate_embedding",
-        new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
+        new=AsyncMock(side_effect=lambda t, **_kw: _fake_embed(t)),
     ):
         await owner_service.assert_claim(
             Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T0),
@@ -249,7 +249,7 @@ def _vec(cos: float) -> list[float]:
 def _embed_map(mapping: dict[str, list[float]]):
     """Deterministic embedder: content → vector (default orthogonal to [1, 0])."""
 
-    async def _embed(text: str) -> list[float]:
+    async def _embed(text: str, **_kwargs: object) -> list[float]:
         return mapping.get(text, [0.0, 1.0])
 
     return _embed
@@ -418,7 +418,7 @@ async def test_adr0107_ac1_claim_attaches_to_acting_user_not_owner(
 
     with patch(
         "personal_agent.memory.service.generate_embedding",
-        new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
+        new=AsyncMock(side_effect=lambda t, **_kw: _fake_embed(t)),
     ):
         claim_id = await owner_service.assert_claim(
             Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T0),
@@ -444,7 +444,7 @@ async def test_two_users_same_fact_slot_are_independent(owner_service: MemorySer
 
     with patch(
         "personal_agent.memory.service.generate_embedding",
-        new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
+        new=AsyncMock(side_effect=lambda t, **_kw: _fake_embed(t)),
     ):
         await owner_service.assert_claim(
             Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T0),
@@ -477,7 +477,7 @@ async def test_within_user_supersession_still_works_when_scoped(
 
     with patch(
         "personal_agent.memory.service.generate_embedding",
-        new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
+        new=AsyncMock(side_effect=lambda t, **_kw: _fake_embed(t)),
     ):
         await owner_service.assert_claim(
             Claim(content="The lease ends in March.", confidence=0.5, observed_at=_T0),
@@ -502,7 +502,7 @@ async def test_assert_claim_skips_when_target_user_person_absent(
     unknown_user = UUID("00000000-0000-0000-0000-0000000000ff")
     with patch(
         "personal_agent.memory.service.generate_embedding",
-        new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
+        new=AsyncMock(side_effect=lambda t, **_kw: _fake_embed(t)),
     ):
         claim_id = await owner_service.assert_claim(
             Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T0),

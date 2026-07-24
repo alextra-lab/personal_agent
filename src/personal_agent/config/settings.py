@@ -1326,6 +1326,16 @@ class AppConfig(BaseSettings):
         ),
         json_schema_extra={"secret": True},
     )
+    eur_usd_rate: float = Field(
+        default=1.14,
+        gt=0,
+        description=(
+            "Static EUR->USD conversion rate for OVH's EUR-denominated embedding "
+            "cost (FRE-974, ADR-0120 T0). Approximate (XE mid-market, 2026-07-24) — "
+            "not a live FX feed. Override in .env as the rate drifts; a single-user "
+            "cost-visibility ledger doesn't need to-the-cent accuracy."
+        ),
+    )
 
     # Linear (native tool — FRE-224)
     linear_api_key: str | None = Field(

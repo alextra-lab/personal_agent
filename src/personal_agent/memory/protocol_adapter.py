@@ -258,7 +258,12 @@ class MemoryServiceAdapter:
         )
         try:
             t0 = time.perf_counter()
-            embedding = await generate_embedding(user_message, mode="query")
+            embedding = await generate_embedding(
+                user_message,
+                mode="query",
+                trace_id=trace_id,
+                session_id=current_session_id or None,
+            )
             emb_ms = (time.perf_counter() - t0) * 1000.0
             if not any(x != 0.0 for x in embedding):
                 log.info(

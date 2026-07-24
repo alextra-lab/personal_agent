@@ -199,6 +199,7 @@ _BEHAVIOUR_FIELDS: tuple[str, ...] = (
     "parallel_tool_calls",
     "input_cost_per_token",
     "output_cost_per_token",
+    "input_cost_per_token_eur",
 )
 
 

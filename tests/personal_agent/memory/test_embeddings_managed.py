@@ -9,6 +9,8 @@ pre-FRE-821 behavior (regression guard).
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -171,6 +173,178 @@ class TestEmbedManaged:
                 )
 
 
+class TestEmbedManagedCost:
+    """FRE-974: cost recording for the OVH-managed embedding call path."""
+
+    @pytest.mark.asyncio
+    async def test_records_cost_from_usage(self) -> None:
+        """A chunk response carrying usage.total_tokens -> one record_vendor_cost call."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "data": [{"index": 0, "embedding": [1.0, 2.0]}],
+                    "usage": {"prompt_tokens": 40, "total_tokens": 40},
+                },
+            )
+
+        trace_id = str(uuid4())
+        session_id = str(uuid4())
+        mock_record = AsyncMock()
+        with (
+            patch(
+                "personal_agent.memory.embeddings._get_embedding_pricing_eur",
+                return_value=1e-7,
+            ),
+            patch("personal_agent.memory.embeddings.get_settings") as mock_settings,
+            patch("personal_agent.memory.embeddings.record_vendor_cost", mock_record),
+        ):
+            mock_settings.return_value.eur_usd_rate = 1.14
+            mock_settings.return_value.embedding_dimensions = 2
+            async with _client(httpx.MockTransport(handler)) as client:
+                await _embed_managed(
+                    ["hello"],
+                    "https://example.test",
+                    "tok",
+                    "m",
+                    client=client,
+                    dimensions=2,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                )
+
+        mock_record.assert_awaited_once()
+        kwargs = mock_record.await_args.kwargs
+        assert kwargs["provider"] == "ovh"
+        assert kwargs["model"] == "m"
+        assert kwargs["tokens"] == 40
+        assert kwargs["cost_usd"] == pytest.approx(40 * 1e-7 * 1.14)
+        assert kwargs["trace_id"] == trace_id
+        assert kwargs["session_id"] == session_id
+
+    @pytest.mark.asyncio
+    async def test_skips_cost_when_usage_missing(self) -> None:
+        """No usage field in the response -> no cost recorded, vectors unaffected."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0, 2.0]}]})
+
+        mock_record = AsyncMock()
+        with patch("personal_agent.memory.embeddings.record_vendor_cost", mock_record):
+            async with _client(httpx.MockTransport(handler)) as client:
+                vectors = await _embed_managed(
+                    ["hello"], "https://example.test", "tok", "m", client=client, dimensions=2
+                )
+
+        mock_record.assert_not_awaited()
+        assert len(vectors) == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_cost_on_malformed_usage(self) -> None:
+        """A non-numeric/negative usage.total_tokens must never raise -- vectors still return."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "data": [{"index": 0, "embedding": [1.0, 2.0]}],
+                    "usage": {"total_tokens": "not-a-number"},
+                },
+            )
+
+        mock_record = AsyncMock()
+        with patch("personal_agent.memory.embeddings.record_vendor_cost", mock_record):
+            async with _client(httpx.MockTransport(handler)) as client:
+                vectors = await _embed_managed(
+                    ["hello"], "https://example.test", "tok", "m", client=client, dimensions=2
+                )
+
+        mock_record.assert_not_awaited()
+        assert len(vectors) == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_cost_on_negative_usage(self) -> None:
+        """A negative usage.total_tokens (malformed/adversarial) must never raise."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "data": [{"index": 0, "embedding": [1.0, 2.0]}],
+                    "usage": {"total_tokens": -5},
+                },
+            )
+
+        mock_record = AsyncMock()
+        with patch("personal_agent.memory.embeddings.record_vendor_cost", mock_record):
+            async with _client(httpx.MockTransport(handler)) as client:
+                vectors = await _embed_managed(
+                    ["hello"], "https://example.test", "tok", "m", client=client, dimensions=2
+                )
+
+        mock_record.assert_not_awaited()
+        assert len(vectors) == 1
+
+    @pytest.mark.asyncio
+    async def test_records_cost_per_chunk(self) -> None:
+        """A 30-text call chunks into 25+5 -> two independent cost recordings."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            n = len(body["input"])
+            return httpx.Response(
+                200,
+                json={
+                    "data": [{"index": i, "embedding": [1.0]} for i in range(n)],
+                    "usage": {"total_tokens": n * 10},
+                },
+            )
+
+        mock_record = AsyncMock()
+        with (
+            patch(
+                "personal_agent.memory.embeddings._get_embedding_pricing_eur",
+                return_value=1e-7,
+            ),
+            patch("personal_agent.memory.embeddings.record_vendor_cost", mock_record),
+        ):
+            async with _client(httpx.MockTransport(handler)) as client:
+                await _embed_managed(
+                    [f"t{i}" for i in range(30)],
+                    "https://example.test",
+                    "tok",
+                    "m",
+                    client=client,
+                    dimensions=1,
+                    trace_id=str(uuid4()),
+                    session_id=str(uuid4()),
+                )
+
+        assert mock_record.await_count == 2
+        tokens_seen = sorted(c.kwargs["tokens"] for c in mock_record.await_args_list)
+        assert tokens_seen == [50, 250]  # 5*10, 25*10
+
+    @pytest.mark.asyncio
+    async def test_no_identity_no_pricing_no_call_never_raises(self) -> None:
+        """Missing trace_id/session_id/pricing must never break the embedding call itself."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "data": [{"index": 0, "embedding": [1.0, 2.0]}],
+                    "usage": {"total_tokens": 10},
+                },
+            )
+
+        async with _client(httpx.MockTransport(handler)) as client:
+            vectors = await _embed_managed(
+                ["hello"], "https://example.test", "tok", "m", client=client, dimensions=2
+            )
+        assert len(vectors) == 1
+
+
 class TestManagedProfileIntegration:
     """`generate_embedding`/`generate_embeddings_batch` under the managed_embedder profile."""
 
@@ -230,8 +404,6 @@ class TestManagedProfileIntegration:
         async def _boom(*args: object, **kwargs: object) -> list[list[float]]:
             raise httpx.ConnectError("unreachable", request=httpx.Request("POST", "https://x"))
 
-        from unittest.mock import AsyncMock, patch
-
         # Native-4096 local response -- the local llama.cpp server is not known
         # to honor the OpenAI `dimensions` request param, so the fallback path
         # must client-side truncate+renormalize to the configured 1024 (FRE-826).
@@ -260,8 +432,6 @@ class TestManagedProfileIntegration:
         async def _boom(*args: object, **kwargs: object) -> list[list[float]]:
             raise httpx.ConnectError("unreachable", request=httpx.Request("POST", "https://x"))
 
-        from unittest.mock import patch
-
         with (
             patch("personal_agent.memory.embeddings.get_settings", return_value=settings),
             patch("personal_agent.memory.embeddings._embed_managed", side_effect=_boom),
@@ -278,8 +448,6 @@ class TestManagedProfileIntegration:
 
         async def _boom(*args: object, **kwargs: object) -> list[list[float]]:
             raise httpx.ConnectError("unreachable", request=httpx.Request("POST", "https://x"))
-
-        from unittest.mock import AsyncMock, patch
 
         with (
             patch("personal_agent.memory.embeddings.get_settings", return_value=settings),
@@ -305,7 +473,6 @@ def _fake_openai_response(vectors: list[list[float]]) -> object:
 
 
 def _patched_get_settings(settings: AppConfig):
-    from unittest.mock import patch
 
     return patch("personal_agent.memory.embeddings.get_settings", return_value=settings)
 
@@ -314,7 +481,6 @@ _RealAsyncClient = httpx.AsyncClient
 
 
 def _patched_httpx_client(handler):
-    from unittest.mock import patch
 
     return patch(
         "httpx.AsyncClient",
@@ -327,7 +493,6 @@ class TestPrivateProfileUnaffected:
 
     @pytest.mark.asyncio
     async def test_private_profile_never_calls_embed_managed(self) -> None:
-        from unittest.mock import AsyncMock, patch
 
         mock_resp = _fake_openai_response([[0.1] * 1024])
         with (
@@ -348,7 +513,6 @@ class TestPrivateProfileUnaffected:
 
     @pytest.mark.asyncio
     async def test_batch_private_profile_never_calls_embed_managed(self) -> None:
-        from unittest.mock import AsyncMock, patch
 
         mock_resp = _fake_openai_response([[0.1] * 1024, [0.2] * 1024])
         with (

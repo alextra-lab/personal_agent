@@ -164,6 +164,35 @@
           "tool_results": []
         }
       ]
+    },
+    {
+      "case_id": "user_typed_tool_name",
+      "captures": [
+        {
+          "trace_id": "ac8-usertool-t1",
+          "session_id": "ac8-usertool",
+          "timestamp": "2026-07-20T10:05:00+00:00",
+          "user_message": "can you run query_elasticsearch again for me?",
+          "assistant_response": "Sure, I will run it again.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        },
+        {
+          "trace_id": "ac8-usertool-t2",
+          "session_id": "ac8-usertool",
+          "timestamp": "2026-07-20T10:10:00+00:00",
+          "user_message": "thanks",
+          "assistant_response": "Done \u2014 it came back healthy this time.",
+          "steps": [],
+          "tools_used": [],
+          "outcome": "completed",
+          "user_id": "00000000-0000-0000-0000-000000000001",
+          "tool_results": []
+        }
+      ]
     }
   ]
 }

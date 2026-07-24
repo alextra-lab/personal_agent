@@ -1,4 +1,6 @@
-"""Run the pre-registered session-digest fixture sets (ADR-0124, FRE-953 / Amendment A).
+"""Run the pre-registered session-digest fixture sets.
+
+ADR-0124, FRE-953 / Amendment A, FRE-956 / Amendment B.
 
 Runs the **real** producer — the same ``generate_session_digest`` the sweep calls, on
 the ``session_summary`` role's live deployment — against the frozen fixture sets in
@@ -9,13 +11,22 @@ The fixture sets and their labels are fixed in ``REGISTRY.md`` and were committe
 before this script was first run. Do not edit a set to improve a result: a criterion
 evaluated on a post-hoc sample has not been met.
 
-**Amendment A scope.** The amended arm proves **AC-8** (metadata present, payloads and
-arguments absent), **AC-12** (self-correction recall + Tier-C precision) and **AC-13**
-(missing evidence). **AC-9 is withdrawn** and removed. **AC-10** is deferred to an
-owner-led redesign (its fixture is invalidated by the amendment), so it is not run by
-default and is reachable only via ``--set ac10``.
+**Amendment B scope.** The producer's input is now conversation-only — zero tool
+metadata (name/status/error), not only payloads. The default arm proves **AC-8**
+(rewritten: asserts *zero* tool metadata reaches the prompt, plus a positive control for
+user-typed conversation content), **AC-10** (un-deferred: nothing tool-sourced remains
+to label, so the fixture is rebuilt over the three conversation bases and runs again by
+default), **AC-12** (self-correction recall + Tier-C precision; all 8 positives now cite
+the assistant's own text) and **AC-13** (missing evidence, fixture reduced to a pair).
+**AC-9 is withdrawn** and removed.
 
-    uv run python scripts/eval/session_digest_eval.py            # ac8, ac12, ac13
+**Cost note.** Un-deferring AC-10 adds ~9 paid generation calls to the default run (one
+per fixture session), on top of AC-12's 20 cases and AC-13's 2 — roughly a 40% increase
+over the Amendment-A-era default. Use ``--set`` to run a single criterion, or
+``--dry-run`` for the free, offline AC-8 check only, if that cost is unwanted for a
+given invocation.
+
+    uv run python scripts/eval/session_digest_eval.py            # ac8, ac10, ac12, ac13
     uv run python scripts/eval/session_digest_eval.py --set ac12 # one set
     uv run python scripts/eval/session_digest_eval.py --dry-run  # no model calls (AC-8)
 
@@ -54,9 +65,10 @@ _SETS = {
     "ac13": "ac13_missing_evidence",
 }
 
-#: Not run by default: AC-10's fixture is invalidated by Amendment A and its redesign is
-#: owner-led (FRE-953 open question). Reachable via ``--set ac10`` for the future rework.
-_DEFERRED = {"ac10"}
+#: Amendment B un-defers AC-10: with `tool_evidence` retired, nothing tool-sourced
+#: remains to label, so the fixture is rebuilt over the three conversation bases and is
+#: a Phase-0 gate criterion again. Nothing is deferred.
+_DEFERRED: set[str] = set()
 
 
 def _load(name: str) -> dict[str, Any]:
@@ -112,12 +124,14 @@ def _leak_probes(value: object) -> list[str]:
 
 
 def score_ac8(payload: dict[str, Any]) -> dict[str, Any]:
-    """AC-8 (Amendment A): metadata present, payloads and arguments absent.
+    """AC-8 (Amendment B): the prompt is user/assistant text and nothing else.
 
-    The absence direction is the one that catches a regression back to payload-feeding,
-    so it is scored explicitly — structurally (the ``output:``/``arguments:`` block
-    labels must be gone) and by value (no distinctive payload/argument token appears,
-    unless it legitimately also occurs in the visible name/status/error/conversation).
+    Amendment A withheld tool payloads and arguments while keeping name/status/error
+    as metadata; Amendment B withholds the metadata too. So this is now purely an
+    absence proof — structurally (no ``output:``/``arguments:`` block, no
+    ``Tool invocations`` header) and by value (no tool name/error/payload/argument
+    token appears, unless it legitimately also occurs in the visible conversation —
+    the ``user_typed_tool_name`` case's positive control).
     """
     failures: list[str] = []
     for case in payload["cases"]:
@@ -125,16 +139,11 @@ def score_ac8(payload: dict[str, Any]) -> dict[str, Any]:
         prompt = build_prompt(captures)
 
         # Content that is legitimately visible — a probe that also occurs here is not a
-        # leak (a file path echoed in a tool error, say).
+        # leak (a tool name the user themselves typed, say).
         visible = " ".join(
             [
                 *(c.user_message or "" for c in captures),
                 *(c.assistant_response or "" for c in captures),
-                *(
-                    f"{r.get('tool_name', '')} {r.get('error') or ''}"
-                    for c in captures
-                    for r in c.tool_results
-                ),
             ]
         )
 
@@ -146,23 +155,25 @@ def score_ac8(payload: dict[str, Any]) -> dict[str, Any]:
             if capture.assistant_response and capture.assistant_response not in prompt:
                 failures.append(f"{case['case_id']}: assistant text truncated")
             for result in capture.tool_results:
-                # Presence: name, status, error.
-                if result["tool_name"] not in prompt:
-                    failures.append(f"{case['case_id']}: tool {result['tool_name']} missing")
-                if result.get("error") and result["error"] not in prompt:
-                    failures.append(f"{case['case_id']}: tool error missing")
-                # Absence: no distinctive payload/argument token leaks.
-                for probe in _leak_probes(result.get("output")) + _leak_probes(
-                    result.get("arguments")
-                ):
-                    if probe not in visible and probe in prompt:
-                        failures.append(f"{case['case_id']}: leaked payload/argument {probe!r}")
+                # Absence: no tool name, error, payload or argument token leaks —
+                # unless it's already legitimately part of the conversation text.
+                probes = [result["tool_name"], *_leak_probes(result.get("error"))]
+                if result.get("error"):
+                    probes.append(result["error"])
+                probes += _leak_probes(result.get("output")) + _leak_probes(result.get("arguments"))
+                for probe in probes:
+                    if probe and probe not in visible and probe in prompt:
+                        failures.append(f"{case['case_id']}: leaked tool metadata {probe!r}")
 
-        # Absence: the block labels a payload/argument render would emit are gone.
+        # Absence: the block labels a tool-metadata render would emit are gone.
+        if "Tool invocations" in prompt:
+            failures.append(f"{case['case_id']}: a Tool invocations block was rendered")
         if "\n      output:" in prompt:
             failures.append(f"{case['case_id']}: an output: block was rendered")
         if "\n      arguments:" in prompt:
             failures.append(f"{case['case_id']}: an arguments: block was rendered")
+        if "status=" in prompt:
+            failures.append(f"{case['case_id']}: a status= marker was rendered")
 
     return {
         "criterion": "AC-8",
@@ -173,8 +184,8 @@ def score_ac8(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 # ==========================================================================
-# AC-10 — basis tagging discriminates (DEFERRED — Amendment A invalidated the
-# fixture; the harness is retained for the owner-led redesign, run only via --set)
+# AC-10 — basis tagging discriminates (un-deferred by Amendment B: with
+# `tool_evidence` retired, nothing tool-sourced remains to label)
 # ==========================================================================
 
 

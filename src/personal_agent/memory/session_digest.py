@@ -1,4 +1,6 @@
-"""Session digest schema, rendering and provenance validation (ADR-0124 D3, FRE-947).
+"""Session digest schema, rendering and provenance validation.
+
+ADR-0124 D3, FRE-947; conversation-only per Amendment B, FRE-956.
 
 The digest encodes the **epistemic state left behind by an episode**. It does not
 retell the episode. That single sentence governs the shape here: four optional
@@ -14,10 +16,10 @@ Two artifacts come out of one model call and are stored independently:
 
 **Provenance is structural and verifiable, not aspirational.** ``basis`` is a
 model-assigned tag, and nothing stops a model labelling its own inference as
-evidence. So every item tagged ``tool_evidence``, and every ``corrections`` entry,
-must carry a verbatim span *plus a locator* — the capture id and the field within
-it. :func:`validate_digest_provenance` resolves the locator and requires the span
-to occur **at that location**. Bare containment somewhere in the session is not
+evidence. So every ``corrections`` entry must carry a verbatim span *plus a
+locator* — the capture id and the turn's assistant text it is grounded in.
+:func:`validate_digest_provenance` resolves the locator and requires the span to
+occur **at that location**. Bare containment somewhere in the session is not
 sufficient: a common word appears everywhere and would pass while supporting
 nothing.
 
@@ -35,7 +37,6 @@ there is no stored rendered field, because that would be a second staleness surf
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
@@ -49,34 +50,28 @@ if TYPE_CHECKING:  # pragma: no cover — typing only
 # This module is deliberately a LEAF: `SessionNode` (memory/models.py) holds a
 # `SessionDigest`, so anything this imports at module scope would become a
 # dependency of the memory models. `TaskCapture` is therefore typing-only —
-# locator resolution reads four attributes off it and needs no runtime import —
+# locator resolution reads one attribute off it and needs no runtime import —
 # and the tokenizer is imported inside the one function that counts.
 
-# The four provenance tags an item may carry (ADR-0124 D3).
-BasisTag = Literal["tool_evidence", "user_statement", "assistant_reasoning", "mixed"]
+# The three provenance tags an item may carry (ADR-0124 D3, as narrowed by
+# Amendment B — `tool_evidence` is retired; tools are never a source).
+BasisTag = Literal["user_statement", "assistant_reasoning", "mixed"]
 
-# The two correction kinds that may be asserted (ADR-0124 D3, as narrowed by
-# Amendment A). Both rest ONLY on content the producer is actually given — the
-# conversation and tool *metadata* — never on a tool payload:
-#   self_correction     — the agent corrected the record within the session and the
-#                         correction is supported by evidence visible in the capture.
-#   status_contradiction — the agent's narration is denied by a tool's own status or
-#                         error line (e.g. "the command succeeded" while the tool
-#                         errored). The payload-free survivor of the old "Tier A":
-#                         Amendment A removed the payload-fed verification lane, but
-#                         AC-13's status_visible case requires this metadata-only path.
+# The one correction kind that may be asserted (ADR-0124 D3, as narrowed by
+# Amendment B — `status_contradiction` is retired; tool-status adjudication is
+# verification work, relocated to the downstream verification oracle):
+#   self_correction — the agent corrected the record within the session, supported
+#                      by evidence visible in the assistant's own corrective text.
 # Everything else (weak/partial conflict, failed or incomplete calls, ambiguous
 # readings, legitimately changed state, disagreement with a subjective judgment) is
 # NEVER a correction — it belongs in `unresolved`, or is omitted.
-CorrectionTier = Literal["self_correction", "status_contradiction"]
+CorrectionTier = Literal["self_correction"]
 
 # Locator field grammar. Deliberately closed and machine-resolvable: an open
 # free-text locator is unverifiable, which would defeat the point of requiring one.
-# The validator stays permissive over both tool fields; the *producer's prompt*
-# (Amendment A) advertises only ``.error``, since it is no longer given payloads and so
-# cannot faithfully cite ``tool_result[N].output``.
-_TOOL_FIELD_RE = re.compile(r"^tool_result\[(\d+)\]\.(output|error)$")
-_USER_FIELD = "user_text"
+# Amendment B narrows this to the assistant's own text only — a `self_correction`'s
+# claim and its supporting evidence are both grounded in what the assistant itself
+# said, never the user's message and never a tool result field.
 _ASSISTANT_FIELD = "assistant_text"
 
 # Label bound (ADR-0124 D3). A distinguishing noun phrase, not a compressed digest.
@@ -128,9 +123,9 @@ class Locator(BaseModel):
 
     Attributes:
         capture_id: The capture's ``trace_id`` — one capture is one turn.
-        field: Where inside that capture, under the closed grammar
-            ``user_text`` | ``assistant_text`` | ``tool_result[<i>].output`` |
-            ``tool_result[<i>].error``.
+        field: Where inside that capture, under the closed grammar — ``assistant_text``
+            is the only valid value (Amendment B: the user's message and any tool
+            result field are both outside the grammar).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -144,7 +139,9 @@ class DigestItem(BaseModel):
 
     Attributes:
         text: The item itself — what is established, decided or open.
-        basis: Provenance tag. ``tool_evidence`` obliges ``span`` and ``locator``.
+        basis: Provenance tag. No basis obliges ``span``/``locator`` here — that
+            obligation applies only to :class:`Correction` (Amendment B removed the
+            one basis, ``tool_evidence``, that used to require it on other slots).
         span: Verbatim text taken from the capture, when the item cites evidence.
         locator: Where that span lives.
     """
@@ -185,17 +182,17 @@ class Correction(DigestItem):
     state into the graph and feeds its own supposed correction into future
     reasoning.
 
-    Both kinds rest only on content the producer is given — never a tool payload
-    (Amendment A). The inherited ``span``/``locator`` cite the **claim** (the
-    self-correction sentence, or the contradicted narration) and ``evidence_*`` cite
-    what supports it (the visible supporting evidence, or the tool status/error that
-    denies the narration).
+    Rests only on content the assistant itself said (Amendment B): never a tool
+    payload, never tool metadata, and never the user's own message. The inherited
+    ``span``/``locator`` cite the **claim** (the self-correction sentence) and
+    ``evidence_*`` cite what supports it (the assistant's own corrective text) —
+    both against a turn's ``assistant_text``.
 
     Attributes:
-        tier: ``self_correction`` (the agent corrected the record within the
-            session) or ``status_contradiction`` (narration denied by a tool's own
-            status/error line).
-        evidence_span: Verbatim supporting evidence, from a field the producer saw.
+        tier: ``self_correction`` — the only kind Amendment B allows. The agent
+            corrected the record within the session, and the correction is
+            supported by evidence visible in the assistant's own text.
+        evidence_span: Verbatim supporting evidence, from the assistant's own text.
         evidence_locator: Where that evidence lives.
     """
 
@@ -270,29 +267,18 @@ def resolve_locator(locator: Locator, captures: Sequence[TaskCapture]) -> str | 
         captures: The session's captures, in any order.
 
     Returns:
-        The text at that location, or ``None`` if the capture is unknown, the field
-        is outside the grammar, or the indexed tool result does not exist.
+        The text at that location, or ``None`` if the capture is unknown or the
+        field is outside the grammar — which now covers only ``assistant_text``;
+        the user's message and any tool result field both return ``None``.
     """
     capture = next((c for c in captures if c.trace_id == locator.capture_id), None)
     if capture is None:
         return None
 
-    if locator.field == _USER_FIELD:
-        return capture.user_message or ""
     if locator.field == _ASSISTANT_FIELD:
         return capture.assistant_response or ""
 
-    match = _TOOL_FIELD_RE.match(locator.field)
-    if match is None:
-        return None
-
-    index = int(match.group(1))
-    if index >= len(capture.tool_results):
-        return None
-    value = capture.tool_results[index].get(match.group(2))
-    if value is None:
-        return None
-    return value if isinstance(value, str) else str(value)
+    return None
 
 
 def _check_located_span(
@@ -320,10 +306,12 @@ def _check_located_span(
 
 
 def validate_digest_provenance(digest: SessionDigest, captures: Sequence[TaskCapture]) -> list[str]:
-    """Enforce the located-span contract (ADR-0124 AC-11).
+    """Enforce the located-span contract (ADR-0124 AC-11, as narrowed by Amendment B).
 
-    Every ``tool_evidence`` item and every ``corrections`` entry must carry a span
-    and a locator, and the span must occur **at that location**.
+    Every ``corrections`` entry must carry a span and a locator, and the span must
+    occur **at that location**. No other slot obliges a citation: Amendment B
+    retired ``tool_evidence``, the only basis that ever required one on
+    ``established``/``decisions``/``unresolved``.
 
     Args:
         digest: The digest to check.
@@ -333,19 +321,6 @@ def validate_digest_provenance(digest: SessionDigest, captures: Sequence[TaskCap
         Human-readable violations, empty when the digest passes.
     """
     violations: list[str] = []
-
-    slots: tuple[tuple[str, Sequence[DigestItem]], ...] = (
-        ("established", digest.established),
-        ("decisions", digest.decisions),
-        ("unresolved", digest.unresolved),
-    )
-    for slot_name, items in slots:
-        for i, item in enumerate(items):
-            if item.basis != "tool_evidence":
-                continue
-            violations += _check_located_span(
-                item.span, item.locator, captures, where=f"{slot_name}[{i}] (tool_evidence)"
-            )
 
     for i, correction in enumerate(digest.corrections):
         where = f"corrections[{i}] (tier {correction.tier})"

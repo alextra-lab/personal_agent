@@ -2,28 +2,28 @@
   "set": "ac12_corrections",
   "criterion": "AC-12",
   "synthetic": true,
-  "amendment": "A \u2014 payload-fed contradictions removed; positives are self_correction only (status_contradiction is exercised by AC-13)",
-  "threshold": "ZERO negatives yield a correction (precision absolute); >=80% of positives do; every self_correction carries the located span of its supporting evidence",
+  "amendment": "B \u2014 self_correction is the only kind; ALL 8 positives cite the assistant's own text for both the claim and its supporting evidence (status_contradiction is retired to the verification oracle, not exercised here or in AC-13)",
+  "threshold": "ZERO negatives yield a correction (precision absolute); >=80% of positives do; every self_correction carries the located span of its supporting evidence in the assistant's own text",
   "composition": {
     "self_correction": 8,
     "tier_c_negative": 12
   },
-  "note": "Every positive's supporting evidence lives in a field the producer is actually given (a tool error or the conversation text) \u2014 never a tool payload, which Amendment A no longer feeds. reference_correction records a hand-authored citation that resolves; tests/personal_agent/memory/test_session_digest_validator.py asserts each resolves before the paid arm runs.",
+  "note": "Every positive's supporting evidence lives in the assistant's own t2 message \u2014 never the user's message, never a tool result field (Amendment B narrows the locator grammar to assistant_text only). reference_correction records a hand-authored citation that resolves; tests/personal_agent/memory/test_session_digest_validator.py asserts each resolves, and that its fields are assistant_text, before the paid arm runs.",
   "cases": [
     {
       "case_id": "b1_migration",
       "expected": "correction",
       "tier": "self_correction",
       "reference_correction": {
-        "span": "it did not apply; the migration failed",
+        "span": "the migration did not apply",
         "locator": {
           "capture_id": "ac12-b1_migration-t2",
           "field": "assistant_text"
         },
         "evidence_span": "relation sessions already exists",
         "evidence_locator": {
-          "capture_id": "ac12-b1_migration-t1",
-          "field": "tool_result[0].error"
+          "capture_id": "ac12-b1_migration-t2",
+          "field": "assistant_text"
         }
       },
       "captures": [
@@ -57,7 +57,7 @@
           "session_id": "ac12-b1_migration",
           "timestamp": "2026-07-20T10:10:00+00:00",
           "user_message": "are you sure it succeeded?",
-          "assistant_response": "Correcting myself \u2014 it did not apply; the migration failed.",
+          "assistant_response": "Correcting myself \u2014 I re-read the output, which said 'relation sessions already exists', so the migration did not apply.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
@@ -71,15 +71,15 @@
       "expected": "correction",
       "tier": "self_correction",
       "reference_correction": {
-        "span": "the deploy failed because the image was not found",
+        "span": "the deploy failed",
         "locator": {
           "capture_id": "ac12-b2_deploy-t2",
           "field": "assistant_text"
         },
         "evidence_span": "manifest unknown: image not found",
         "evidence_locator": {
-          "capture_id": "ac12-b2_deploy-t1",
-          "field": "tool_result[0].error"
+          "capture_id": "ac12-b2_deploy-t2",
+          "field": "assistant_text"
         }
       },
       "captures": [
@@ -113,7 +113,7 @@
           "session_id": "ac12-b2_deploy",
           "timestamp": "2026-07-20T10:10:00+00:00",
           "user_message": "is it really live?",
-          "assistant_response": "I need to correct that \u2014 the deploy failed because the image was not found.",
+          "assistant_response": "I need to correct that \u2014 I re-checked and the output said 'manifest unknown: image not found', so the deploy failed.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
@@ -127,15 +127,15 @@
       "expected": "correction",
       "tier": "self_correction",
       "reference_correction": {
-        "span": "the index already existed, so nothing was created",
+        "span": "nothing was created",
         "locator": {
           "capture_id": "ac12-b3_index-t2",
           "field": "assistant_text"
         },
         "evidence_span": "resource already exists exception: index agent-logs",
         "evidence_locator": {
-          "capture_id": "ac12-b3_index-t1",
-          "field": "tool_result[0].error"
+          "capture_id": "ac12-b3_index-t2",
+          "field": "assistant_text"
         }
       },
       "captures": [
@@ -169,7 +169,7 @@
           "session_id": "ac12-b3_index",
           "timestamp": "2026-07-20T10:10:00+00:00",
           "user_message": "did it create cleanly?",
-          "assistant_response": "That was wrong \u2014 the index already existed, so nothing was created.",
+          "assistant_response": "That was wrong \u2014 re-checking, it said 'resource already exists exception: index agent-logs', so nothing was created.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
@@ -183,15 +183,15 @@
       "expected": "correction",
       "tier": "self_correction",
       "reference_correction": {
-        "span": "it did not save, permission was denied",
+        "span": "it did not save",
         "locator": {
           "capture_id": "ac12-b4_write-t2",
           "field": "assistant_text"
         },
         "evidence_span": "EACCES permission denied opening /etc/app.conf",
         "evidence_locator": {
-          "capture_id": "ac12-b4_write-t1",
-          "field": "tool_result[0].error"
+          "capture_id": "ac12-b4_write-t2",
+          "field": "assistant_text"
         }
       },
       "captures": [
@@ -225,7 +225,7 @@
           "session_id": "ac12-b4_write",
           "timestamp": "2026-07-20T10:10:00+00:00",
           "user_message": "confirm it saved?",
-          "assistant_response": "Correcting myself: it did not save, permission was denied.",
+          "assistant_response": "Correcting myself: re-reading the result, it said 'EACCES permission denied opening /etc/app.conf', so it did not save.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
@@ -239,7 +239,7 @@
       "expected": "correction",
       "tier": "self_correction",
       "reference_correction": {
-        "span": "I was wrong, it listens on 9001, not 9000",
+        "span": "I was wrong: it listens on 9001, not 9000",
         "locator": {
           "capture_id": "ac12-b5_port-t2",
           "field": "assistant_text"
@@ -247,7 +247,7 @@
         "evidence_span": "AGENT_SERVICE_PORT=9001",
         "evidence_locator": {
           "capture_id": "ac12-b5_port-t2",
-          "field": "user_text"
+          "field": "assistant_text"
         }
       },
       "captures": [
@@ -268,7 +268,7 @@
           "session_id": "ac12-b5_port",
           "timestamp": "2026-07-20T10:10:00+00:00",
           "user_message": "The env file I am reading says AGENT_SERVICE_PORT=9001.",
-          "assistant_response": "You are right \u2014 I was wrong, it listens on 9001, not 9000.",
+          "assistant_response": "You are right \u2014 since the env file shows AGENT_SERVICE_PORT=9001, I was wrong: it listens on 9001, not 9000.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
@@ -282,7 +282,7 @@
       "expected": "correction",
       "tier": "self_correction",
       "reference_correction": {
-        "span": "the driver is 5.26.0",
+        "span": "the driver is 5.26.0; I misremembered",
         "locator": {
           "capture_id": "ac12-b6_driver-t2",
           "field": "assistant_text"
@@ -290,7 +290,7 @@
         "evidence_span": "neo4j version 5.26.0",
         "evidence_locator": {
           "capture_id": "ac12-b6_driver-t2",
-          "field": "user_text"
+          "field": "assistant_text"
         }
       },
       "captures": [
@@ -311,7 +311,7 @@
           "session_id": "ac12-b6_driver",
           "timestamp": "2026-07-20T10:10:00+00:00",
           "user_message": "The lockfile shows neo4j version 5.26.0.",
-          "assistant_response": "Correcting myself \u2014 the driver is 5.26.0; I misremembered.",
+          "assistant_response": "Correcting myself \u2014 since the lockfile shows neo4j version 5.26.0, the driver is 5.26.0; I misremembered.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
@@ -333,7 +333,7 @@
         "evidence_span": "the configured floor is 0.35",
         "evidence_locator": {
           "capture_id": "ac12-b7_floor-t2",
-          "field": "user_text"
+          "field": "assistant_text"
         }
       },
       "captures": [
@@ -354,7 +354,7 @@
           "session_id": "ac12-b7_floor",
           "timestamp": "2026-07-20T10:10:00+00:00",
           "user_message": "My notes say the configured floor is 0.35.",
-          "assistant_response": "You are correct \u2014 I was wrong, the floor is 0.35.",
+          "assistant_response": "You are correct \u2014 since your notes say the configured floor is 0.35, I was wrong, the floor is 0.35.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",
@@ -373,10 +373,10 @@
           "capture_id": "ac12-b8_role-t2",
           "field": "assistant_text"
         },
-        "evidence_span": "binds entity_extraction to gpt-5.4-mini",
+        "evidence_span": "the role matrix binds entity_extraction to gpt-5.4-mini",
         "evidence_locator": {
           "capture_id": "ac12-b8_role-t2",
-          "field": "user_text"
+          "field": "assistant_text"
         }
       },
       "captures": [
@@ -397,7 +397,7 @@
           "session_id": "ac12-b8_role",
           "timestamp": "2026-07-20T10:10:00+00:00",
           "user_message": "The role matrix binds entity_extraction to gpt-5.4-mini.",
-          "assistant_response": "That was my mistake \u2014 entity extraction runs on gpt-5.4-mini, not Sonnet.",
+          "assistant_response": "That was my mistake \u2014 since the role matrix binds entity_extraction to gpt-5.4-mini, entity extraction runs on gpt-5.4-mini, not Sonnet.",
           "steps": [],
           "tools_used": [],
           "outcome": "completed",

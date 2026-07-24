@@ -11,15 +11,18 @@ model*, so the trigger is the debounced idle sweep in
 ``brainstem/scheduler.py`` — this module is a pure function of the captures it is
 handed and owns no scheduling.
 
-**What it reads (Amendment A).** The whole conversation — full user and full assistant
-text, every turn — plus tool activity as *metadata only*: name, status and error. No
-tool payloads and no tool arguments. The old 200-character excerpts and 20-turn cap are
-gone: measured user messages sit at p50 58 chars — already below the cut — while
-assistant responses sit at p50 1,847, so the clip barely touched user text while
-discarding roughly 89% of the assistant text where a session's outcome lives. The digest
-is the user's memory of the *conversation*; tool output reached the user through the
-assistant's narration, and that narration is what belongs in memory. (Payloads continue
-to be captured and stored — only their delivery here stops.)
+**What it reads (Amendment B — conversation-only).** The whole conversation — full
+user and full assistant text, every turn — and **nothing else**. The old 200-character
+excerpts and 20-turn cap are gone: measured user messages sit at p50 58 chars — already
+below the cut — while assistant responses sit at p50 1,847, so the clip barely touched
+user text while discarding roughly 89% of the assistant text where a session's outcome
+lives. Amendment A first removed tool *payloads*, keeping tool name/status/error as
+metadata; Amendment B removes that metadata too — no tool name, status, error, argument
+or payload reaches the prompt. The digest is the user's memory of the *conversation*;
+tool output reached the user through the assistant's narration, and that narration is
+what belongs in memory. (Tool results continue to be captured and stored — only their
+delivery here stops; invocation and success/failure counts remain available as computed
+structured properties derived from the captures, never fed to the generator.)
 
 **What it emits.** Four optional slots with per-item provenance, validated. Never
 silently truncated input: oversized sessions are rejected **before** any model call,
@@ -119,20 +122,22 @@ Emit JSON only, matching this shape exactly:
 
 item = {
   "text":  "<the item>",
-  "basis": "tool_evidence" | "user_statement" | "assistant_reasoning" | "mixed",
-  "span":    "<verbatim text copied from the session>",   // REQUIRED if basis is tool_evidence
-  "locator": {"capture_id": "<capture id>", "field": "<field>"}  // REQUIRED with span
+  "basis": "user_statement" | "assistant_reasoning" | "mixed"
 }
 
-correction = item + {
-  "tier": "self_correction" | "status_contradiction",
-  "evidence_span":    "<verbatim supporting evidence>",
-  "evidence_locator": {"capture_id": "...", "field": "..."}
+correction = {
+  "text":    "<the self-correction>",
+  "basis":   "user_statement" | "assistant_reasoning" | "mixed",
+  "tier":    "self_correction",
+  "span":    "<verbatim text copied from the assistant's own message>",
+  "locator": {"capture_id": "<capture id>", "field": "assistant_text"},
+  "evidence_span":    "<verbatim supporting text, also from the assistant's own message>",
+  "evidence_locator": {"capture_id": "<capture id>", "field": "assistant_text"}
 }
 
-`field` must be exactly one of: user_text | assistant_text | tool_result[N].error, \
-using the capture id and tool index shown in the transcript. You are not given tool \
-payloads, so never cite one.
+`field` must be exactly assistant_text, using the capture id shown in the transcript. \
+You are given only the conversation — never cite a field that isn't a turn's assistant \
+response.
 
 SLOTS — all optional, omit any that has nothing to say. Empty is a valid digest.
 - established: facts and observations that survived the interaction. Filter this \
@@ -143,44 +148,40 @@ rejected alternatives and the reasons they were rejected.
 - unresolved: unfinished state a future reader could wrongly treat as settled.
 - corrections: see below. Usually empty, and that scarcity is correct.
 
-SPANS — a span must be copied VERBATIM from the exact field its locator names. Do \
-not paraphrase it, and do not cite a span that lives somewhere else in the session. \
-An item you cannot cite this way must be tagged with a non-evidence basis or omitted.
+SPANS — a correction's span and evidence_span must each be copied VERBATIM from the \
+assistant's own message at the field its locator names. Do not paraphrase, and do not \
+cite text that lives somewhere else in the session.
 
 CORRECTIONS — precision above all. A missed error is recoverable from the raw \
-evidence; a false error writes self-confirming state into memory. You are given the \
-conversation and tool METADATA (name, status, error) — never tool payloads. Assert \
-only these two, and cite only fields you were actually given:
-- status_contradiction: the assistant asserted an outcome that a tool's OWN status \
-or error line denies — e.g. it said a command succeeded while that tool's status is \
-failed or its error is populated. Cite the contradicted assistant claim in \
-span/locator AND the denying tool status/error in evidence_span/evidence_locator \
-(evidence_locator must be a tool_result[N].error).
-- self_correction: the assistant corrected the record within the session, supported \
-by evidence visible in the conversation. Cite the self-correction in span/locator \
-and its supporting evidence in evidence_span/evidence_locator.
+evidence; a false error writes self-confirming state into memory. You are given only \
+the conversation — no tool status, errors, or payloads. The only kind you may assert:
+- self_correction: the assistant corrected the record within the session. Cite the \
+self-correction in span/locator and, in evidence_span/evidence_locator, the \
+assistant's own supporting text — both must come from a turn's assistant response, \
+never the user's message. If the correcting fact came from the user, the assistant \
+must have restated it in its own reply for it to be citable here.
 
-NEVER assert a correction for: weak or partial conflict, a failed or incomplete \
-tool call the assistant reported honestly, text with several defensible readings, \
-state that legitimately changed over time, or disagreement with a subjective \
-judgment or recommendation. Those belong in unresolved, or are omitted. NEVER infer \
-an error from absent evidence, and NEVER assert a contradiction that would need a \
-tool payload you were not given.
+NEVER assert a correction for: weak or partial conflict, text with several \
+defensible readings, state that legitimately changed over time, or disagreement \
+with a subjective judgment or recommendation. Those belong in unresolved, or are \
+omitted. NEVER infer an error from absent evidence, and NEVER assert a correction \
+whose span or evidence would need to be cited from the user's own message — only \
+the assistant's text is citable.
 
 Before asserting a correction, apply the SAME-PROPOSITION test explicitly. A \
-correction requires the conversation to contradict the very thing the assistant \
-asserted, not a neighbouring one. In particular:
+correction requires the assistant's own later text to contradict the very thing it \
+asserted earlier, not a neighbouring claim. In particular:
 - A JUDGMENT is not a factual claim. "I would treat this as low priority", "I \
 recommend X", "that seems fine", a severity or priority assessment, a suggested \
-course of action — none of these are contradicted by a tool carrying a different \
-label or status. The assistant asserted what it would DO; the tool reports what \
-something IS. Those are different propositions, so this is not a correction.
+course of action — none of these are contradicted by stating a different fact \
+later. The assistant asserted what it would DO or thought was true; a later fact is \
+a different proposition, so this is not a correction.
 - An APPROXIMATION is not a wrong number. "about two thousand" against 2,276, or \
 "around 300ms" against 310ms, agree.
 - A SCOPED claim is not a universal one. "the ones I checked are healthy" is not \
-contradicted by an unchecked index being unhealthy.
-If you cannot name the single proposition that the assistant asserted and the \
-conversation denies, in those words, there is no correction to make.
+contradicted by a later claim about something unchecked.
+If you cannot name the single proposition the assistant asserted and its own later \
+text denies, in those words, there is no correction to make.
 
 LENGTH — include an item only if its future value exceeds the cost of displacing \
 retrieved evidence. Aim for about __TARGET_TOKENS__ tokens across the whole digest \
@@ -197,38 +198,17 @@ Full transcript follows. Nothing has been truncated.
 """
 
 
-def _tool_block(index: int, result: dict[str, Any]) -> str:
-    """Render one tool invocation as metadata only — name, status, error (Amendment A).
-
-    Tool payloads and arguments are deliberately not rendered: the digest is the
-    user's memory of the conversation, and tool output reached the user through the
-    assistant's narration, not directly. What survives is the activity the episode
-    contained — which tool ran, whether it succeeded, and any error — bounded by
-    construction and carrying real signal (the corpus's ``nonexistent_tool``
-    invocations live entirely in names and statuses).
-
-    Args:
-        index: Position of this result within its turn, used by locators.
-        result: The captured tool result.
-
-    Returns:
-        The rendered block.
-    """
-    name = result.get("tool_name", "unknown_tool")
-    status = "ok" if result.get("success") else "failed"
-    error = result.get("error") or "(none)"
-    return f"  [{index}] {name}  status={status}\n      error: {_neutralise_delimiters(error)}"
-
-
 def _neutralise_delimiters(text: str) -> str:
     """Defuse forged transcript structure in attacker-influenceable content.
 
-    Turn headers and the missing-evidence banner are plain text. Amendment A removed
-    tool payloads from the prompt, which was the widest such surface, but a tool
-    *error* line can still echo attacker-influenced content (an upstream HTTP body, a
-    file path). Without this, crafted error text could forge a turn boundary or fake
-    the evidence-unavailable declaration and thereby restructure the transcript the
-    summariser reasons over.
+    Turn headers and the missing-evidence banner are plain text. A user message or
+    an assistant response can itself echo attacker-influenced content — pasted web
+    content, a forwarded document, a file path the assistant read back. Without
+    this, crafted conversation text could forge a turn boundary or fake the
+    evidence-unavailable declaration and thereby restructure the transcript the
+    summariser reasons over. (Amendment B removed tool metadata from the prompt
+    entirely, which closes that surface for this concern too — the remaining risk
+    is conversation text, which this function still covers.)
 
     This does not make the prompt injection-proof — nothing at this layer does. It
     removes the cheap structural forgery, which is worth doing now because digests
@@ -240,7 +220,13 @@ def _neutralise_delimiters(text: str) -> str:
 
 
 def _format_turn(index: int, capture: TaskCapture) -> tuple[str, list[str]]:
-    """Render one turn in full, and report any evidence it is missing."""
+    """Render one turn in full, and report any evidence it is missing.
+
+    Conversation-only (Amendment B): no tool metadata of any kind — name, status,
+    error, argument or payload — is rendered here, even when the capture carries a
+    full tool result. Tool activity remains captured and stored; it simply never
+    reaches this prompt.
+    """
     notes: list[str] = []
     parts = [
         f"--- Turn {index} (capture_id: {capture.trace_id}) ---",
@@ -253,31 +239,18 @@ def _format_turn(index: int, capture: TaskCapture) -> tuple[str, list[str]]:
     if capture.assistant_response is None:
         notes.append(f"turn {index} has no recorded assistant response")
 
-    if capture.tool_results:
-        parts.append("")
-        parts.append("Tool invocations:")
-        for i, result in enumerate(capture.tool_results):
-            parts.append(_tool_block(i, result))
-    elif capture.tools_used:
-        # The turn used tools but their results are absent from the capture.
-        parts.append("")
-        parts.append(
-            f"Tool invocations: <not recorded; tools used: {', '.join(capture.tools_used)}>"
-        )
-        notes.append(f"turn {index} used tools whose results were not recorded")
-
     return "\n".join(parts), notes
 
 
 def build_prompt(captures: Sequence[TaskCapture]) -> str:
-    """Assemble the conversation-scoped transcript prompt (ADR-0124 D2, Amendment A).
+    """Assemble the conversation-only transcript prompt (ADR-0124 D2, Amendment B).
 
-    Every turn, the complete user and assistant text of each, and every tool
-    invocation as metadata only — name, status, error. No tool payloads and no tool
-    arguments. Anything genuinely missing from what the producer *does* read (an
-    absent assistant response, tools whose results were never recorded) is *declared*
-    at the top instead of silently skipped, so the summariser never reads a gap in its
-    own input as the assistant having invented something.
+    Every turn, the complete user and assistant text of each, and **nothing else** —
+    no tool name, status, error, argument or payload reaches this prompt. Anything
+    genuinely missing from what the producer *does* read (an absent assistant
+    response) is *declared* at the top instead of silently skipped, so the
+    summariser never reads a gap in its own input as the assistant having invented
+    something.
 
     Args:
         captures: The session's captures, ordered oldest first.
@@ -301,8 +274,8 @@ def build_prompt(captures: Sequence[TaskCapture]) -> str:
             "\nSOME EVIDENCE IS UNAVAILABLE for this session:\n"
             + "\n".join(f"  - {n}" for n in unique)
             + "\nDo not infer a contradiction, an error, or an omission from the absence of\n"
-            "this evidence. Corrections that rest on tool status, tool errors, or the\n"
-            "session's own text remain legitimate.\n"
+            "this evidence. Corrections that rest on the session's own conversation text\n"
+            "remain legitimate.\n"
         )
     else:
         evidence_notes = ""
@@ -360,7 +333,7 @@ def _parse_item(raw: object) -> DigestItem:
     basis = raw.get("basis")
     if not isinstance(text, str) or not text.strip():
         raise ValueError("item has no text")
-    if basis not in ("tool_evidence", "user_statement", "assistant_reasoning", "mixed"):
+    if basis not in ("user_statement", "assistant_reasoning", "mixed"):
         raise ValueError(f"item has invalid basis: {basis!r}")
     span = raw.get("span")
     return DigestItem(
@@ -376,7 +349,7 @@ def _parse_correction(raw: object) -> Correction:
     item = _parse_item(raw)
     assert isinstance(raw, dict)  # _parse_item already rejected non-dicts
     tier = raw.get("tier")
-    if tier not in ("self_correction", "status_contradiction"):
+    if tier not in ("self_correction",):
         raise ValueError(f"correction has invalid tier: {tier!r}")
     evidence_span = raw.get("evidence_span")
     evidence_locator = _parse_locator(raw.get("evidence_locator"))

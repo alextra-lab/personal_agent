@@ -23,6 +23,7 @@ from personal_agent.events import (
     get_event_bus,
 )
 from personal_agent.llm_client import InferencePriority, LocalLLMClient, ModelRole
+from personal_agent.llm_client.cost_tracker import SYSTEM_SESSION_ID
 from personal_agent.llm_client.token_counter import estimate_tokens
 from personal_agent.memory.embeddings import generate_embedding, generate_embeddings_batch
 from personal_agent.memory.fact import PromotionCandidate
@@ -1755,7 +1756,11 @@ class MemoryService:
             embedding = entity.embedding
             if embedding is None and entity.description:
                 embed_text = f"{entity.name}: {entity.description}"
-                embedding = await generate_embedding(embed_text)
+                embedding = await generate_embedding(
+                    embed_text,
+                    trace_id=originating_trace_id,
+                    session_id=originating_session_id,
+                )
 
             # Single session for dedup check + MERGE write (atomicity)
             effective_name = entity.name
@@ -2011,7 +2016,9 @@ class MemoryService:
                     return 0
 
                 texts = [f"{c['name']}: {c['description']}" for c in candidates]
-                embeddings = await generate_embeddings_batch(texts)
+                embeddings = await generate_embeddings_batch(
+                    texts, trace_id=trace_id, session_id=SYSTEM_SESSION_ID
+                )
                 updates = [
                     {"name": c["name"], "embedding": emb}
                     for c, emb in zip(candidates, embeddings, strict=True)
@@ -2094,7 +2101,9 @@ class MemoryService:
                     return 0
 
                 texts = [c["content"] for c in candidates]
-                embeddings = await generate_embeddings_batch(texts)
+                embeddings = await generate_embeddings_batch(
+                    texts, trace_id=trace_id, session_id=SYSTEM_SESSION_ID
+                )
                 updates = [
                     {"claim_id": c["claim_id"], "embedding": emb}
                     for c, emb in zip(candidates, embeddings, strict=True)
@@ -2268,7 +2277,9 @@ class MemoryService:
             log.warning("assert_claim_skipped_not_connected", trace_id=trace_id)
             return ""
 
-        embedding = await generate_embedding(claim.content)
+        embedding = await generate_embedding(
+            claim.content, trace_id=trace_id, session_id=SYSTEM_SESSION_ID
+        )
         now = datetime.now(timezone.utc)
         claim_id = str(uuid4())
         user_id_str = str(user_id)
@@ -3175,7 +3186,9 @@ class MemoryService:
                 vector_results: list[Any] = []
                 if query_text:
                     try:
-                        query_embedding = await generate_embedding(query_text, mode="query")
+                        query_embedding = await generate_embedding(
+                            query_text, mode="query", trace_id=trace_id, session_id=session_id
+                        )
                         if any(x != 0.0 for x in query_embedding):
                             vec_top_k = (
                                 current_settings.proactive_memory_vector_top_k
@@ -3940,7 +3953,9 @@ class MemoryService:
         current_settings = get_settings()
         top_k = limit if limit is not None else current_settings.multipath_arm_top_k
         try:
-            embedding = await generate_embedding(query_text, mode="query")
+            embedding = await generate_embedding(
+                query_text, mode="query", trace_id=trace_id, session_id=session_id
+            )
         except Exception as exc:
             log.warning(
                 "dense_recall_arm_embed_failed",
@@ -4601,7 +4616,9 @@ class MemoryService:
                     # failure must not zero out the other variants' results,
                     # matching query_memory's existing per-call isolation.
                     try:
-                        embedding = await generate_embedding(variant, mode="query")
+                        embedding = await generate_embedding(
+                            variant, mode="query", trace_id=trace_id, session_id=session_id
+                        )
                         ranked = await self._dense_vector_search_ranked(
                             session, embedding, top_k, vis_frag, vis_params
                         )
@@ -4727,7 +4744,9 @@ class MemoryService:
                     entity_scores: dict[str, float] = {}
                     if relevance_bounded and query_text:
                         try:
-                            query_embedding = await generate_embedding(query_text, mode="query")
+                            query_embedding = await generate_embedding(
+                                query_text, mode="query", trace_id=trace_id, session_id=session_id
+                            )
                             if any(x != 0.0 for x in query_embedding):
                                 rows = await self._query_entity_vector_candidates(
                                     db_session,

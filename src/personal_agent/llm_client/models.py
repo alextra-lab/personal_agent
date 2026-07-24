@@ -371,6 +371,19 @@ class ModelDefinition(BaseModel):
             "USD cost per output token (ADR-0101 §8b / FRE-691). See input_cost_per_token."
         ),
     )
+    input_cost_per_token_eur: float | None = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "EUR cost per input token (FRE-974, ADR-0120 T0) — for vendors that bill "
+            "in EUR (OVH AI Endpoints). Deliberately separate from input_cost_per_token "
+            "(USD): reusing that field for a EUR rate would silently corrupt every "
+            "USD-denominated consumer (register_model_pricing() -> litellm.model_cost, "
+            "which assumes USD). Converted to USD at the call site via "
+            "settings.eur_usd_rate; never registered into litellm's pricing registry, "
+            "since embedding calls never go through litellm.completion_cost()."
+        ),
+    )
     tool_calling_strategy: ToolCallingStrategy | None = Field(
         default=None,
         description=(

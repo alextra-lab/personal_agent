@@ -14,6 +14,15 @@ from personal_agent.telemetry import get_logger
 log = get_logger(__name__)
 settings = get_settings()
 
+#: Sentinel session id for genuinely session-less background work (FRE-974) —
+#: e.g. a Neo4j entity/claim embedding backfill or claim-assertion during
+#: consolidation, which has a trace_id but never a live user session. Mirrors
+#: the identical nil-UUID pattern already used for identity-less system work
+#: on the ``user_id`` column (``captains_log/capture.py``, ``.../backfill.py``).
+#: Callers pass this explicitly rather than ``None`` so real vendor spend is
+#: attributed to "system", not silently dropped by the identity gate below.
+SYSTEM_SESSION_ID = "00000000-0000-0000-0000-000000000000"
+
 
 async def _publish_model_call_completed(
     *,
@@ -397,6 +406,93 @@ class CostTrackerService:
             Dict mapping model to cost in USD
         """
         return await self._get_cost_breakdown_by("model", days, provider)
+
+
+async def record_vendor_cost(
+    *,
+    provider: str,
+    model: str,
+    tokens: int,
+    cost_usd: float,
+    trace_id: str | None,
+    session_id: str | None,
+    purpose: str,
+    latency_ms: int | None = None,
+) -> None:
+    """Best-effort record a non-chat vendor call's cost (FRE-974).
+
+    For the OVH-embedding / Voyage-reranker cost paths, which have more varied
+    identity availability than the LLM path (:meth:`CostTrackerService.record_api_call`
+    raises :class:`MissingIdentityError` on a missing ``trace_id``/``session_id``).
+    Genuinely session-less background work should pass :data:`SYSTEM_SESSION_ID`
+    explicitly rather than rely on this function to paper over a dropped identity —
+    the gate here is a fail-safe for unexpected/malformed input, not the normal path
+    for known session-less work.
+
+    Never raises: a cost-recording failure must never break the embedding or
+    rerank call it is attached to.
+
+    Args:
+        provider: ADR-0121 catalog provider key (``"ovh"``, ``"voyage"``).
+        model: Vendor model id (e.g. ``"Qwen3-Embedding-8B"``, ``"rerank-2.5"``).
+        tokens: Tokens billed for this call, per the vendor's own accounting.
+        cost_usd: Cost of this call in USD.
+        trace_id: Request/consolidation trace id. Skips recording if ``None``
+            or not a valid UUID.
+        session_id: Session id, or :data:`SYSTEM_SESSION_ID` for background
+            work. Skips recording if ``None`` or not a valid UUID.
+        purpose: Role/purpose tag (``"embedding"``, ``"reranker"``).
+        latency_ms: Wall-clock latency of the vendor call in milliseconds.
+    """
+    if not trace_id or not session_id:
+        log.debug(
+            "vendor_cost_unattributed",
+            provider=provider,
+            model=model,
+            reason="missing_identity",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return
+
+    try:
+        trace_uuid = UUID(trace_id)
+        session_uuid = UUID(session_id)
+    except ValueError:
+        log.debug(
+            "vendor_cost_unattributed",
+            provider=provider,
+            model=model,
+            reason="invalid_identity",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return
+
+    tracker = CostTrackerService()
+    try:
+        await tracker.connect()
+        await tracker.record_api_call(
+            provider=provider,
+            model=model,
+            input_tokens=tokens,
+            output_tokens=0,
+            cost_usd=cost_usd,
+            trace_id=trace_uuid,
+            session_id=session_uuid,
+            purpose=purpose,
+            latency_ms=latency_ms,
+        )
+    except Exception as exc:
+        log.warning(
+            "vendor_cost_recording_failed",
+            provider=provider,
+            error=str(exc),
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+    finally:
+        await tracker.disconnect()
 
 
 def _normalize_asyncpg_dsn(database_url: str) -> str:

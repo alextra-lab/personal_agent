@@ -74,9 +74,10 @@
 #     lexical/multi-query arm imports + module-level helpers, FRE-725 description
 #     update-kind constants + create_entity signal param/docstring inserted above,
 #     FRE-864 ADR-0115 D2 class SET-clause block inserted above, FRE-866 the
-#     structural arm's class predicate params/block inserted above, then FRE-969
-#     one import line inserted above). ---
+#     structural arm's class predicate params/block inserted above, FRE-969 one
+#     import line inserted above, then FRE-974 the SYSTEM_SESSION_ID import line
+#     + generate_embedding trace_id/session_id kwargs inserted above). ---
 - path: src/personal_agent/memory/service.py
-  line: 1894  # FRE-969: +1 from parse_stored_digest import line above (was 1893)
+  line: 1899  # FRE-974: +5 from SYSTEM_SESSION_ID import + generate_embedding kwargs above (was 1894)
   pattern: cypher_merge
   reason: "dynamic on_create_clauses set origination; static analyzer can't see joined props (FP)"

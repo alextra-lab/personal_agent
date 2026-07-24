@@ -26,6 +26,7 @@ import structlog
 
 from personal_agent.config import get_settings
 from personal_agent.config.settings import AppConfig
+from personal_agent.llm_client.cost_tracker import record_vendor_cost
 from personal_agent.service.cf_service_token import cf_access_service_token_headers
 
 log = structlog.get_logger(__name__)
@@ -115,6 +116,26 @@ def _get_reranker_fallback_config() -> tuple[str, str]:
     return _resolve_reranker_role_config("reranker_fallback", f"{slm_base.rstrip('/')}/v1")
 
 
+def _get_reranker_pricing() -> float | None:
+    """Resolve the "reranker" role's USD-per-token rate (FRE-974).
+
+    Only the Voyage primary is billed; the Mac-tunnel fallback is free local
+    infra, so this is only ever consulted from the Voyage branch of
+    :func:`_attempt_rerank`.
+
+    Returns:
+        USD cost per token, or ``None`` if unset (skips cost recording rather
+        than emitting a wrong number).
+    """
+    from personal_agent.config.model_loader import (  # noqa: PLC0415
+        load_model_config,
+        resolve_role_definition,
+    )
+
+    model_def = resolve_role_definition("reranker", config=load_model_config())
+    return model_def.input_cost_per_token if model_def else None
+
+
 async def _attempt_rerank(
     model_id: str,
     endpoint: str,
@@ -128,7 +149,7 @@ async def _attempt_rerank(
     task_id: str | None,
     span_id: str,
     settings: AppConfig,
-) -> list[RerankResult]:
+) -> tuple[list[RerankResult], str, float | None]:
     """Call one reranker endpoint's /rerank and return sorted results (FRE-851).
 
     Handles the Voyage vs. legacy contract difference by hostname: Voyage
@@ -144,6 +165,17 @@ async def _attempt_rerank(
     (ADR-0074), which does not apply to a third-party vendor, and there is no
     reason to leak internal correlation ids off our infra.
 
+    On a successful **Voyage** call whose response carries ``usage.total_tokens``,
+    records this call's real vendor cost (FRE-974) — the Mac-tunnel/local
+    fallback is never billed, so cost recording never fires for it even if its
+    response happens to carry a ``usage`` field.
+
+    Returns:
+        A tuple of ``(results, provider, cost_usd)`` — ``provider`` is
+        ``"voyage"`` or ``"slm_local"`` (hostname-derived, same signal already
+        used for auth/request-shape above); ``cost_usd`` is ``None`` for any
+        non-Voyage target or a Voyage response with no ``usage``.
+
     Raises:
         RuntimeError: If the target is Voyage and no API key is configured —
             raised immediately, before any network call, so the caller falls
@@ -153,6 +185,7 @@ async def _attempt_rerank(
             fall back to another target or degrade to passthrough.
     """
     is_voyage = _VOYAGE_HOSTNAME in endpoint
+    provider = "voyage" if is_voyage else "slm_local"
 
     if is_voyage:
         if not settings.voyage_api_key:
@@ -176,6 +209,7 @@ async def _attempt_rerank(
     request_key = "top_k" if is_voyage else "top_n"
     response_key = "data" if is_voyage else "results"
 
+    call_start = time.monotonic()
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             f"{endpoint}/rerank",
@@ -189,6 +223,7 @@ async def _attempt_rerank(
         )
         resp.raise_for_status()
         data = resp.json()
+    call_latency_ms = int((time.monotonic() - call_start) * 1000)
 
     results = []
     for item in data.get(response_key, []):
@@ -203,7 +238,44 @@ async def _attempt_rerank(
 
     # Sort by score descending
     results.sort(key=lambda r: r.score, reverse=True)
-    return results
+
+    cost_usd: float | None = None
+    if is_voyage:
+        total_tokens = data.get("usage", {}).get("total_tokens")
+        # bool is an int subclass; excluded explicitly since a boolean token
+        # count is never sane. A malformed/adversarial Voyage response
+        # (non-numeric, negative) must degrade to "skip cost recording",
+        # never raise into this already-successful rerank (security review,
+        # FRE-974).
+        if (
+            isinstance(total_tokens, int)
+            and not isinstance(total_tokens, bool)
+            and total_tokens >= 0
+        ):
+            pricing = _get_reranker_pricing()
+            if pricing is not None:
+                cost_usd = total_tokens * pricing
+                await record_vendor_cost(
+                    provider=provider,
+                    model=model_id,
+                    tokens=total_tokens,
+                    cost_usd=cost_usd,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    purpose="reranker",
+                    latency_ms=call_latency_ms,
+                )
+        else:
+            log.debug(
+                "reranker_cost_usage_missing",
+                provider=provider,
+                model_id=model_id,
+                trace_id=trace_id,
+                session_id=session_id,
+                total_tokens=total_tokens,
+            )
+
+    return results, provider, cost_usd
 
 
 async def rerank(
@@ -272,7 +344,7 @@ async def rerank(
 
     start = time.monotonic()
     try:
-        results = await _attempt_rerank(
+        results, provider, cost_usd = await _attempt_rerank(
             model_id,
             endpoint,
             query,
@@ -325,6 +397,8 @@ async def rerank(
         results=results,
         duration_ms=duration_ms,
         fallback=False,
+        provider=provider,
+        cost_usd=cost_usd,
     )
     return results
 
@@ -368,7 +442,7 @@ async def _rerank_fallback(
         return _passthrough(documents)
 
     try:
-        results = await _attempt_rerank(
+        results, provider, cost_usd = await _attempt_rerank(
             model_id,
             endpoint,
             query,
@@ -410,6 +484,8 @@ async def _rerank_fallback(
         results=results,
         duration_ms=duration_ms,
         fallback=True,
+        provider=provider,
+        cost_usd=cost_usd,
     )
     return results
 
@@ -427,8 +503,15 @@ def _log_reranker_applied(
     results: list[RerankResult],
     duration_ms: float,
     fallback: bool,
+    provider: str,
+    cost_usd: float | None,
 ) -> None:
-    """Emit the shared "reranker_applied" telemetry event (FRE-851 primary + fallback paths)."""
+    """Emit the shared "reranker_applied" telemetry event (FRE-851 primary + fallback paths).
+
+    ``provider``/``cost_usd`` (FRE-974): ``provider`` is ``"voyage"`` or
+    ``"slm_local"``; ``cost_usd`` is ``None`` for the free local fallback and
+    for a Voyage response with no reported ``usage``.
+    """
     log.info(
         "reranker_applied",
         trace_id=trace_id,
@@ -443,6 +526,8 @@ def _log_reranker_applied(
         top_score=results[0].score if results else None,
         duration_ms=round(duration_ms, 1),
         fallback=fallback,
+        provider=provider,
+        cost_usd=cost_usd,
     )
 
 

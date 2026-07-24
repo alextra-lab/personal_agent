@@ -311,7 +311,12 @@ async def notes_write_executor(
             f"note exceeds {_MAX_NOTE_BYTES} bytes (have {size_bytes}); split it."
         )
 
-    embedding = await generate_embedding(final_body, mode="document")
+    embedding = await generate_embedding(
+        final_body,
+        mode="document",
+        trace_id=trace_id,
+        session_id=str(session_id) if session_id else None,
+    )
 
     log.info(
         "notes_write_uploading",
@@ -408,10 +413,16 @@ async def notes_search_executor(
 
     user_id = _resolve_user_id(ctx)
     trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
+    session_id = _resolve_session_id(ctx)
 
     effective_k = min(max(int(k) if k is not None else 5, 1), _MAX_SEARCH_K)
 
-    query_emb = await generate_embedding(query, mode="query")
+    query_emb = await generate_embedding(
+        query,
+        mode="query",
+        trace_id=trace_id,
+        session_id=str(session_id) if session_id else None,
+    )
     tag_filter = list(tags) if tags else None
 
     log.info(

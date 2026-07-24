@@ -172,6 +172,8 @@ roles:
   vision:             { open: false, default: … }
 ```
 
+> **`sub_agent`'s binding is amended by [Addendum A](#addendum-a--per-primary-sub_agent-default-mapping-fre-964) (FRE-964):** its flat `default:` shown here becomes a per-primary `defaults_by_primary` map, owner-configured in the Config UI. The other rows are unchanged.
+
 **Decoding parameters and effort live on the binding, not on the model**, because they are per-use.
 This is what dissolves the `primary`/`sub_agent` duplication: they stop being two "models" and
 become two bindings of one model at different effort — which is what they always were.
@@ -462,6 +464,7 @@ value at a fraction of the risk.
   profile, which is the dimension ADR-0120 needs.
 - **The plumbing for orchestrator-chosen sub-agents lands without the pipeline change**, so
   the future sub-agent ADR is a scoped request-pipeline debate rather than a config-and-pipeline debate at once.
+  *(Amended by [Addendum A](#addendum-a--per-primary-sub_agent-default-mapping-fre-964): the sub's **model** is no longer an orchestrator-per-dispatch choice — it is an owner-configured per-primary default. Any remaining pipeline debate is orthogonal to model selection.)*
 
 ### Negative Consequences
 
@@ -485,6 +488,7 @@ value at a fraction of the risk.
   experience.
 - `sub_agent` is temporarily *less* configurable than ADR-0119 proposed (no user picker), by
   design, until the future sub-agent ADR gives it the right mechanism.
+  *(Resolved by [Addendum A](#addendum-a--per-primary-sub_agent-default-mapping-fre-964): `sub_agent` is now owner-configurable as a per-primary default in the Config UI — standing configuration, not a per-session picker.)*
 
 ### Risks and Mitigations
 
@@ -496,7 +500,7 @@ value at a fraction of the risk.
 | Existing sessions change model on deploy | Medium | Migration maps each session's `execution_profile` to the equivalent `primary` selection; AC-7 |
 | A selected model's provider is down and turns fail | Medium | Availability filtering at read time via provider health; unavailable deployments are absent from the picker; AC-5 |
 | Telemetry continuity breaks — dashboards keyed on `profile` go blank | Medium | `TraceContext.profile` → provider + model migrated in the same wave with dashboards updated; AC-8 |
-| Scope sprawl into the sub-agent pipeline change | Medium | Explicitly out of scope (§5), deferred to the future sub-agent ADR; `sub_agent` keeps a deployment default here |
+| Scope sprawl into the sub-agent pipeline change | Medium | Explicitly out of scope (§5); the sub's model is settled by [Addendum A](#addendum-a--per-primary-sub_agent-default-mapping-fre-964) (per-primary configured default), so any pipeline change is orthogonal to model selection |
 | A second resolution door: `factory.py:125-167`'s key-bypass path skips the guardrail the role path enforces | **High** | Sequencing step 2 unifies both paths on resolve-to-key-then-enter-by-key with an explicit `budget_role`; AC-4(c) drives an invalid key through the resolved-key path specifically |
 | A step ships that deploys broken (catalog deleted while compose still pins it) | **High** | Step 1 moves `docker-compose.cloud.yml`, `docker-compose.eval.yml`, `config/deployment.yaml`, and `settings.model_config_path` in the same PR; deployability is the step's own gate |
 | Catalog metadata rots into stale prose | Low | Declared-vs-observed line (§2): no failure-mode prose fields; observations live in telemetry |
@@ -829,6 +833,11 @@ sub depends on which primary the user picked.** The missing structure is the *pa
   §2's rule that the catalog carries declared model facts while per-use policy lives on the binding.
   The guard enumerates the same set either way, so the structural benefit is available without the
   layering violation.
+- **Guard placement compatibility (reject or coerce a cloud/local mismatch).** Rejected by owner
+  direction: this is selection *by name, not by location*. A cloud primary paired with a local sub
+  (or the reverse) is a legal, deliberate choice whose added latency the owner accepts; a guard that
+  rejected or silently rewrote the pairing to match placement would re-introduce the location-first
+  framing ADR-0121 removed with Path. The pairing carries no egress semantics of its own.
 
 ### Verification / Acceptance Criteria
 
@@ -838,15 +847,21 @@ sub depends on which primary the user picked.** The missing structure is the *pa
   primaries (unit), and live `MODEL_CALL_COMPLETED.model` on a sub-agent call for each. *Fails if*
   both sessions resolve the sub to one fixed deployment regardless of primary — the pre-amendment
   behaviour a broken implementation would still exhibit.
-- **AC-A2 — the guard fails closed on a missing pairing.** A `kind: llm` deployment present in the
-  catalog with **no** `defaults_by_primary` entry makes config load raise, naming the deployment and
-  the missing key. *Check:* a `config_guard` test feeding a catalog with one unpaired primary;
-  assert a Finding at error severity. *Fails if* the config loads clean — the exact "remembered, not
-  enforced" gap.
-- **AC-A3 — the guard fails closed on a dangling sub.** A `defaults_by_primary` value naming a
-  non-existent or non-`kind: llm` deployment makes the guard raise, naming both sides. *Check:*
-  `config_guard` test; assert a Finding. *Fails if* the dangling value passes and the role would
-  resolve to nothing at runtime.
+- **AC-A2 — the guard fails closed on a missing pairing, through the gate that actually blocks
+  shipping.** A `kind: llm` deployment present in the catalog with **no** `defaults_by_primary` entry
+  makes the **aggregate guard the pre-commit/CI hook runs** (`run_all_checks`, `config_guard.py:834`
+  — the same aggregate that already fails a dangling reference) emit an **error-severity** Finding,
+  so that entrypoint exits nonzero and the commit/deploy is blocked. *Check:* run the guard
+  entrypoint that gates CI against a catalog with one unpaired primary and assert it fails — **not**
+  a unit call to the new check function in isolation. *Fails if* the aggregate run stays green (e.g.
+  the new check exists but is never registered in `run_all_checks`, or emits a non-error severity):
+  the check would "exist" while the gate still lets the unpaired primary ship — the exact
+  "remembered, not enforced" gap this criterion must catch.
+- **AC-A3 — the guard fails closed on a dangling sub, through the same gate.** A `defaults_by_primary`
+  value naming a non-existent or non-`kind: llm` deployment makes `run_all_checks` emit an
+  error-severity Finding naming both sides, and the CI/pre-commit entrypoint exits nonzero. *Check:*
+  run the gating entrypoint (not the isolated function) against such a catalog; assert it fails.
+  *Fails if* the aggregate run passes and the role would resolve to nothing at runtime.
 - **AC-A4 — the Config UI edit is what resolution reads, and it is standing.** After the owner
   changes a primary's sub in the Config UI, a **new** session on that primary resolves the sub to
   the newly-configured deployment, and the change survives a backend restart. *Check:* set the
@@ -868,6 +883,9 @@ gate.
 
 1. **The `defaults_by_primary` map + loader/schema**, seeded for the current `kind: llm`
    deployments — the durable form of the FRE-963 stopgap. *(no AC alone; substrate for the rest.)*
+   **Migration window:** step 1 adds the map **alongside** the existing flat `sub_agent` binding,
+   which stays operative; the flat default is removed only when step 3's resolver cuts over, so no
+   intermediate step leaves `sub_agent` unresolvable.
 2. **The fail-closed guard** in `config_guard.py` — must-define-on-add + dangling value. *(AC-A2,
    AC-A3.)* Lands before the resolver trusts the map is total.
 3. **The resolver** — `sub_agent` resolves as a function of the session's selected primary,

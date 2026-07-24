@@ -29,11 +29,13 @@ class TestResolve:
     def test_resolve_entity_extraction_returns_gpt_5_4_mini(self) -> None:
         assert resolve("entity_extraction") == "gpt-5.4-mini"
 
-    def test_resolve_sub_agent_returns_claude_sonnet(self) -> None:
-        """FRE-926 AC-1 — sub_agent left the legacy matrix at FRE-920 (its value
-        there had drifted); it must still resolve via its Layer-3 binding.
+    def test_resolve_sub_agent_returns_qwen_instruct(self) -> None:
+        """FRE-926 AC-1 — sub_agent left the legacy matrix at FRE-920; it must still resolve via its Layer-3 binding.
+
+        FRE-963: the binding's deployment was restored from claude_sonnet to
+        qwen3.6-35b-instruct, the primary's local companion.
         """
-        assert resolve("sub_agent") == "claude_sonnet"
+        assert resolve("sub_agent") == "qwen3.6-35b-instruct"
 
     def test_resolve_artifact_builder_returns_claude_sonnet(self) -> None:
         """FRE-926 AC-1 — artifact_builder was never declared in the legacy matrix."""

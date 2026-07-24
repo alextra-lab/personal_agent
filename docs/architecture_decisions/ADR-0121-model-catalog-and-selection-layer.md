@@ -850,18 +850,18 @@ sub depends on which primary the user picked.** The missing structure is the *pa
 - **AC-A2 — the guard fails closed on a missing pairing, through the gate that actually blocks
   shipping.** A `kind: llm` deployment present in the catalog with **no** `defaults_by_primary` entry
   makes the **aggregate guard the pre-commit/CI hook runs** (`run_all_checks`, `config_guard.py:834`
-  — the same aggregate that already fails a dangling reference) emit an **error-severity** Finding,
-  so that entrypoint exits nonzero and the commit/deploy is blocked. *Check:* run the guard
-  entrypoint that gates CI against a catalog with one unpaired primary and assert it fails — **not**
-  a unit call to the new check function in isolation. *Fails if* the aggregate run stays green (e.g.
-  the new check exists but is never registered in `run_all_checks`, or emits a non-error severity):
-  the check would "exist" while the gate still lets the unpaired primary ship — the exact
-  "remembered, not enforced" gap this criterion must catch.
+  — the same aggregate that already fails a dangling reference) return a Finding, so its gating
+  entrypoint (`scripts/check_config.py`, which exits nonzero on any non-empty Findings list) blocks
+  the commit/deploy. *Check:* run that gating entrypoint against a catalog with one unpaired primary
+  and assert it exits nonzero — **not** a unit call to the new check function in isolation. *Fails
+  if* the gate stays green (e.g. the new check exists but is never registered in `run_all_checks`, so
+  the entrypoint never sees its Finding): the check would "exist" while the gate still lets the
+  unpaired primary ship — the exact "remembered, not enforced" gap this criterion must catch.
 - **AC-A3 — the guard fails closed on a dangling sub, through the same gate.** A `defaults_by_primary`
-  value naming a non-existent or non-`kind: llm` deployment makes `run_all_checks` emit an
-  error-severity Finding naming both sides, and the CI/pre-commit entrypoint exits nonzero. *Check:*
-  run the gating entrypoint (not the isolated function) against such a catalog; assert it fails.
-  *Fails if* the aggregate run passes and the role would resolve to nothing at runtime.
+  value naming a non-existent or non-`kind: llm` deployment makes `run_all_checks` return a Finding
+  naming both sides, so `scripts/check_config.py` exits nonzero. *Check:* run the gating entrypoint
+  (not the isolated function) against such a catalog; assert it exits nonzero. *Fails if* the gate
+  passes and the role would resolve to nothing at runtime.
 - **AC-A4 — the Config UI edit is what resolution reads, and it is standing.** After the owner
   changes a primary's sub in the Config UI, a **new** session on that primary resolves the sub to
   the newly-configured deployment, and the change survives a backend restart. *Check:* set the

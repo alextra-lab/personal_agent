@@ -25,7 +25,12 @@ import orjson
 import pytest
 
 from personal_agent.memory.service import MemoryService
-from personal_agent.memory.session_digest import DigestItem, SessionDigest, render_digest
+from personal_agent.memory.session_digest import (
+    DigestItem,
+    SessionDigest,
+    parse_stored_digest,
+    render_digest,
+)
 
 _VALID_DIGEST = SessionDigest(
     established=[
@@ -247,6 +252,88 @@ async def test_get_session_digest_views_malformed_session_id_row_is_skipped() ->
     result = await service.get_session_digest_views(["sess-good"])
 
     assert list(result.keys()) == ["sess-good"]
+
+
+# --------------------------------------------------------------------------
+# Legacy `tool_evidence` basis (FRE-969) — retired by Amendment B, still on disk
+# --------------------------------------------------------------------------
+
+
+def test_parse_stored_digest_coerces_retired_tool_evidence_basis_to_mixed() -> None:
+    """A pre-Amendment-B digest carrying `tool_evidence` parses, coerced to `mixed`.
+
+    The pydantic BasisTag literal narrowed to user_statement/assistant_reasoning/mixed
+    (Amendment B) and would otherwise reject the whole stored digest, exactly as
+    session_digest_view_parse_failed reported live on FRE-969.
+    """
+    raw = {
+        "established": [{"text": "Uses Neo4j for the knowledge graph.", "basis": "tool_evidence"}],
+    }
+
+    digest = parse_stored_digest(raw)
+
+    assert digest.established[0].basis == "mixed"
+    assert digest.established[0].text == "Uses Neo4j for the knowledge graph."
+
+
+def test_parse_stored_digest_coerces_tool_evidence_in_every_slot() -> None:
+    raw = {
+        "established": [{"text": "e", "basis": "tool_evidence"}],
+        "decisions": [{"text": "d", "basis": "tool_evidence"}],
+        "unresolved": [{"text": "u", "basis": "tool_evidence", "as_of": "2026-07-01T00:00:00Z"}],
+        "corrections": [
+            {
+                "text": "c",
+                "basis": "tool_evidence",
+                "tier": "self_correction",
+                "evidence_span": "ev",
+                "evidence_locator": {"capture_id": "cap-1", "field": "assistant_text"},
+            }
+        ],
+    }
+
+    digest = parse_stored_digest(raw)
+
+    assert digest.established[0].basis == "mixed"
+    assert digest.decisions[0].basis == "mixed"
+    assert digest.unresolved[0].basis == "mixed"
+    assert digest.corrections[0].basis == "mixed"
+
+
+def test_parse_stored_digest_leaves_valid_basis_untouched() -> None:
+    raw = {"established": [{"text": "e", "basis": "assistant_reasoning"}]}
+
+    digest = parse_stored_digest(raw)
+
+    assert digest.established[0].basis == "assistant_reasoning"
+
+
+@pytest.mark.asyncio
+async def test_get_session_digest_views_legacy_tool_evidence_basis_renders_instead_of_parse_failing() -> (
+    None
+):
+    """The end-to-end read path: a stored digest with the retired basis still renders.
+
+    Reproduces the two live sessions from FRE-969 — before the fix this row's digest
+    would hit the ``except`` branch and log ``session_digest_view_parse_failed``.
+    """
+    legacy_digest_json = orjson.dumps(
+        {"established": [{"text": "Legacy fact.", "basis": "tool_evidence"}]}
+    ).decode()
+    service, _ = _make_service_with_mock(
+        data_return=[
+            {
+                "session_id": "sess-legacy",
+                "session_label": "Old session",
+                "session_digest": legacy_digest_json,
+            }
+        ]
+    )
+
+    result = await service.get_session_digest_views(["sess-legacy"])
+
+    assert result["sess-legacy"].digest_text is not None
+    assert "Legacy fact." in result["sess-legacy"].digest_text
 
 
 # --------------------------------------------------------------------------

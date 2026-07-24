@@ -51,6 +51,7 @@ from personal_agent.memory.session_digest import (
     TERMINAL_ELIGIBLE_REASONS,
     SessionDigest,
     SessionDigestView,
+    parse_stored_digest,
     render_digest,
 )
 from personal_agent.memory.supersession import (
@@ -1364,7 +1365,7 @@ class MemoryService:
             raw_digest = row.get("session_digest")
             if raw_digest is not None:
                 try:
-                    digest = SessionDigest.model_validate(orjson.loads(raw_digest))
+                    digest = parse_stored_digest(orjson.loads(raw_digest))
                     digest_text = render_digest(digest) or None
                 except Exception as e:  # noqa: BLE001 — one malformed row must not drop the page
                     log.warning(

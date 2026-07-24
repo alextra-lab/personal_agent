@@ -1,6 +1,6 @@
 # ADR-0123: Turn progress surface — make the wait legible, so the user stays attached
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-21
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** pwa, transport, observability, human-in-the-loop, reliability
@@ -567,6 +567,46 @@ closes only when AC-7 is proven on the deployed stack. Master asserts AC-7 at th
 ---
 
 ## Status Updates
+
+### 2026-07-24 - Accepted
+**Changed By:** cc-adrs (Opus)
+**Reason:** Owner accepted the decision in session on 2026-07-24. A second live incident the same
+day made the harm concrete again: the owner fired a real turn against qwen35 asking for a seven-day
+budget-spending analysis. The turn ran correctly for over ten minutes — it queried Elasticsearch
+telemetry, wrote an analysis script, recovered from several tool errors, and found fifty-three turns
+across seven days — but the UI showed **zero activity the entire time**, because every long wait was
+an inference step and the transport does not model inference. The owner put it plainly: if the backend
+is processing, the activity must be bubbled up to the UI. This is exactly the silence this ADR exists
+to end.
+
+The implementation chain filed at proposal time stands as the plan of record — **FRE-934** (T1 —
+inference phases on the transport, AC-1/2/6/8), **FRE-935** (T2 — unknown-is-unknown, AC-4),
+**FRE-936** (T3 — the live phase surface, AC-3/5/9), **FRE-937** (T4 — collapsed summary, the seam,
+AC-7), under umbrella **FRE-933** — with three reconciliations at acceptance:
+
+- **The client seed §5 targets is already fixed, so FRE-935 is re-pointed.** FRE-928 (merged
+  2026-07-22, PR #613) removed the `tool_iteration_max: 6` seed: `StreamingChat.tsx` now defaults the
+  ceiling to `null` (unknown), citing "FRE-928 AC-4 / FRE-935". The §5 and Implementation-Notes
+  references to that seed are therefore **historical** — accurate at proposal time, superseded by
+  FRE-928 — and the §5 body is left intact as the historical decision rather than rewritten. FRE-935
+  is re-pointed to the client work not yet proven done: verifying AC-4 holds in the shipped status-bar
+  code (a real `0` renders distinct from absent; the distinction is type-level) and hardening it
+  against reintroduction.
+- **A server-side facet of §5, which qualifies this ADR's "pure client-side defect" claim, is now a
+  new ticket (FRE-961).** §5 states the fabricated-ceiling problem is purely a client seed because
+  "`turn_status` already sends the real ceiling." That holds *during a turn with resolved values*, but
+  is incomplete: the projector defaults `tool_iteration_max` and `context_max` to `0`
+  (`observability/topology/projector.py:178,182`) and includes them unconditionally in the emission
+  (`:429,431`), so **at turn start — before the resolving event lands — it emits `0` for these
+  ceilings**, which a client cannot distinguish from a real value. That is a genuine *server-side*
+  absent-versus-zero defect the proposal-time analysis missed. FRE-961 makes "absent" representable on
+  the wire rather than coerced to `0`; it and the re-pointed FRE-935 together close absent-versus-zero
+  end to end.
+- **The sessionless inference-status endpoint the PWA polls returns a 404 against the cloud gateway**,
+  blinding the liveness indicator — a separate liveness poll from the phase surface, now **FRE-962**.
+
+**FRE-928 remains the tail-of-the-chain complement** to this ADR's head-of-the-chain intervention, as
+the Context section states; it shipped independently on 2026-07-22.
 
 ### 2026-07-21 - Proposed
 **Changed By:** cc-adrs (Opus)

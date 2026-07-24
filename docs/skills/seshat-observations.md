@@ -28,7 +28,7 @@ Key fields in `agent-logs-*`:
 | `@timestamp` | date | Event time |
 | `level` | keyword | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `trace_id` | keyword | Per-request trace |
-| `event_type` | keyword | e.g. `tool_call_started`, `litellm_request_complete` |
+| `event_type` | keyword | e.g. `tool_call_started`, `model_call_completed` |
 | `tool_name` | keyword | Tool invoked |
 | `cost_usd` | float | LLM call cost (**not** `cost_dollars`) |
 | `prompt_tokens`, `completion_tokens` | long | Token counts |

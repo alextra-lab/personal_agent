@@ -1,6 +1,6 @@
 # ADR-0121: Model Catalog and Selection Layer — providers, deployments, bindings; the user selects the model
 
-**Status:** Implemented — 2026-07-22. Accepted 2026-07-19 (owner). Full chain FRE-887 (T1–T5, seam AC-9 on FRE-920) shipped and deployed; **AC-9 proven live on the deployed stack 2026-07-22** (owner session 0a68ec3b — the model picker replaced the Path/profile pill, the conversation loop ran the selected model and changed qwen→haiku on switch, and the selection survived multiple PWA reopens and conversation switches). Path removed end to end.
+**Status:** Implemented — 2026-07-22. Accepted 2026-07-19 (owner). Full chain FRE-887 (T1–T5, seam AC-9 on FRE-920) shipped and deployed; **AC-9 proven live on the deployed stack 2026-07-22** (owner session 0a68ec3b — the model picker replaced the Path/profile pill, the conversation loop ran the selected model and changed qwen→haiku on switch, and the selection survived multiple PWA reopens and conversation switches). Path removed end to end. **Addendum A (FRE-964, 2026-07-24):** replaces `sub_agent`'s single flat default with a per-primary default map, owner-configured in the Config UI — Proposed; supersedes §5's "orchestrator-per-dispatch" direction for the sub's model. See [Addendum A](#addendum-a--per-primary-sub_agent-default-mapping-fre-964) below.
 **Date:** 2026-07-19
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** config, model-routing, provider-abstraction, pwa, human-in-the-loop, observability
@@ -257,7 +257,7 @@ The organizing principle is **selection authority**:
 |---|---|---|---|
 | `primary` | **User** | Standing (per session) | One picker — replaces Path |
 | `artifact_builder` | **User**, over a configured default | **Per build** | DecisionCard (ADR-0122) |
-| `sub_agent` | Deployment default now; **orchestrator per dispatch** later (the future sub-agent ADR) | — | None yet |
+| `sub_agent` | ~~Deployment default now; **orchestrator per dispatch** later~~ → **Owner (per-primary configured default)** (Addendum A) | Standing | Config UI |
 | `vision` | Deployment | Never | None — pinned |
 | Writers — `entity_extraction`, `captains_log`, `insights`, `embedding`, `reranker`, `reranker_fallback` | Deployment | Never | None — pinned |
 
@@ -289,6 +289,8 @@ telemetry identity, budget policy, and a binding on both profiles
 (`config/profiles/{local,cloud}.yaml`). This ADR does not create it; it **moves its binding** off the
 deleted profile onto a Layer 3 role binding, replacing the local profile's `sub_agent` *slot-alias*
 reference with a real model key. Its per-build selection surface is ADR-0122.
+
+> **Superseded for model selection by [Addendum A](#addendum-a--per-primary-sub_agent-default-mapping-fre-964) (FRE-964).** `sub_agent`'s model is now an owner-configured per-primary default, not an orchestrator-per-dispatch choice. The paragraph below is retained as the historical rationale; the Stage-5 *pipeline* framing it describes is now orthogonal to (and no longer decides) the sub's model.
 
 **`sub_agent` is not user-selectable.** Its model choice belongs to the orchestrator at dispatch
 time, alongside effort and thinking/instruct mode — the pattern this project's own master/dispatcher
@@ -724,6 +726,158 @@ closes only when AC-9 is proven on the deployed stack. Master asserts AC-9 at th
 
 ---
 
+## Addendum A — Per-primary `sub_agent` default mapping (FRE-964)
+
+**Status:** Proposed — 2026-07-24.
+**Deciders:** Owner (architect), cc-adrs (Opus).
+
+### What this changes and why
+
+ADR-0121 §5 left `sub_agent` with a **single flat binding default** and deferred its model
+*choice* to "the orchestrator at dispatch time … the future sub-agent ADR." T5 (FRE-920, §8
+decision 1) then set that single default to `claude_sonnet` because, with Path gone, one binding
+could not simultaneously match what the retired `local` and `cloud` profiles each used to provide.
+
+The net effect is the defect this addendum corrects: a session whose **primary** is the local
+`qwen3.6-35b-thinking` fans its `sub_agent` calls out to cloud `claude_sonnet` — an unintended
+local→cloud egress the owner did not choose. It is the same root as FRE-960's "silently fails open"
+symptom (multi-query paraphrase inherits whatever `sub_agent` resolves to) and sits behind the
+routing gap FRE-958 fixed. A stopgap (FRE-963) re-binds the current default immediately; **this
+addendum makes that durable and general.**
+
+The root cause is structural: **a single `sub_agent` default cannot be correct, because the right
+sub depends on which primary the user picked.** The missing structure is the *pairing*.
+
+### The decision
+
+1. **`sub_agent`'s default becomes a per-primary map** — a `defaults_by_primary` block on the
+   `sub_agent` Layer-3 binding (`config/model_roles.yaml`), one deliberate line per primary:
+
+   ```yaml
+   sub_agent:
+     defaults_by_primary:
+       qwen3.6-35b-thinking: qwen3.6-35b-instruct   # local thinking primary → local instruct companion
+       claude_sonnet:        claude_sonnet           # frontier primary → itself (no cheaper same-family sub)
+       # … one entry per primary-eligible deployment (see the guard, point 5)
+   ```
+
+   The map lives on the **binding**, not on the deployment in `config/models.yaml`, because a
+   pairing is **per-use policy, not a declared model fact** — the same separation §2 draws for
+   effort and decoding parameters. "`qwen3.6-35b-thinking`'s companion is the instruct sibling" is
+   a policy about how the role is used, not a property of the qwen model.
+
+2. **Resolution becomes a function of the session's selected primary.** `sub_agent` no longer
+   resolves through the flat `resolve_role_target("sub_agent")` at `expansion.py:109`; it resolves
+   as `sub_agent_for(primary) = configured_override(primary) ?? defaults_by_primary[primary]`, where
+   `primary` is the session's selection state that §4 already makes server-authoritative. The
+   resolver reads the primary the user picked and yields its paired sub.
+
+3. **The choice is standing configuration, set in the Config UI — not per-session, not per-build.**
+   The Config UI (the ADR-0121 capstone) reads and edits the per-primary map; the backend holds it.
+   This is **not** `artifact_builder`'s per-build DecisionCard and **not** `primary`'s per-session
+   picker: there is no "for just this chat, use a different sub." To run a different sub next
+   session, you change the configuration before that session starts. It is ordinary configuration
+   with a standing effect.
+
+4. **Selection is by model name, not by location.** The map pairs deployments *by name*; a
+   cloud-primary/local-sub pairing (or the reverse) is legal and its added latency is explicitly
+   accepted. There is **no placement or egress guard** on the pairing. This retires the *egress
+   framing* on FRE-960 as a category error: query-paraphrase — and every other `sub_agent`
+   consumer — **inherits the configured sub**, it does not make an egress decision of its own.
+
+5. **A fail-closed guard makes "intentionally set" enforced, not remembered.** A new
+   `config_guard` check: **every primary-eligible deployment** — the same `kind: llm` set the
+   `primary` picker offers (§3) — must have a `defaults_by_primary` entry, **and** that entry must
+   resolve to a valid `kind: llm` deployment. A missing key **or** a dangling value is a config-load
+   error naming the offender, the same class and code path as the retained dangling-reference check
+   (`check_dangling_model_references`, `config_guard.py:395`). Adding a selectable primary without
+   defining its sub cannot ship.
+
+### What this supersedes in ADR-0121
+
+- **§5's "`sub_agent` is not user-selectable; its model choice belongs to the orchestrator at
+  dispatch time (the future sub-agent ADR)" is superseded for *model selection*.** The sub's model
+  is now owner-configured per-primary. The "orchestrator chooses the sub's model per dispatch"
+  direction is **retired** — not deferred.
+- The §5 **role-tier table** row for `sub_agent` now reads: **Authority = Owner (configured
+  default, per primary) · When = Standing · Surface = Config UI**.
+- The Stage-5 *pipeline* question (when and how sub-agents are invoked — the `SINGLE/HYBRID/
+  DECOMPOSE/DELEGATE` flip §5 describes) is now **orthogonal to model selection** and remains out of
+  scope. If it is ever pursued it no longer decides the sub's model; the configured pairing does.
+  The plumbing §5 landed (`sub_agent` resolving through the catalog, per-call effort override,
+  `sub_agent_types.py:48`'s `model_role` field) is unaffected and still useful.
+
+### Alternatives considered
+
+- **Keep the single flat binding (status quo + the FRE-963 stopgap only).** Rejected: one value
+  cannot serve both a local-qwen primary and a cloud-sonnet primary — whichever it names, the other
+  primary silently mismatches. This *is* the FRE-920 regression; a stopgap re-points it but leaves
+  the same trap for the next primary added.
+- **Derive the sub from the primary by rule** (e.g. "same family, instruct sibling," or "sub =
+  primary"). Rejected: derivation is exactly the defect ADR-0121 set out to remove — a rule that
+  freezes a pairing and hides it. Not every primary has an instruct sibling; "sub = primary" throws
+  away the cheaper-companion optimization the qwen case exists for. An explicit per-primary line is
+  visible, guardable, and each pairing is a deliberate decision — the same discipline the catalog
+  applies to every other concern.
+- **Per-session `sub_agent` selection via the ADR-0079 selection store.** Considered and rejected
+  by owner direction: the sub is standing configuration, not per-turn state. Reusing the session
+  selection store would add a per-session surface nobody asked for and conflate the sub with the
+  primary picker; changing the sub for the next session is done by editing configuration before that
+  session starts.
+- **A `default_sub_agent` field on each deployment in `config/models.yaml`.** Rejected: it makes
+  "must-define-on-add" structural but re-pollutes the catalog with a *pairing policy*, violating
+  §2's rule that the catalog carries declared model facts while per-use policy lives on the binding.
+  The guard enumerates the same set either way, so the structural benefit is available without the
+  layering violation.
+
+### Verification / Acceptance Criteria
+
+- **AC-A1 — the sub tracks the primary.** A `sub_agent` dispatch in a session whose selected
+  primary is `qwen3.6-35b-thinking` resolves to `qwen3.6-35b-instruct`; in a session whose primary
+  is `claude_sonnet` the same dispatch resolves to `claude_sonnet`. *Check:* the resolver under two
+  primaries (unit), and live `MODEL_CALL_COMPLETED.model` on a sub-agent call for each. *Fails if*
+  both sessions resolve the sub to one fixed deployment regardless of primary — the pre-amendment
+  behaviour a broken implementation would still exhibit.
+- **AC-A2 — the guard fails closed on a missing pairing.** A `kind: llm` deployment present in the
+  catalog with **no** `defaults_by_primary` entry makes config load raise, naming the deployment and
+  the missing key. *Check:* a `config_guard` test feeding a catalog with one unpaired primary;
+  assert a Finding at error severity. *Fails if* the config loads clean — the exact "remembered, not
+  enforced" gap.
+- **AC-A3 — the guard fails closed on a dangling sub.** A `defaults_by_primary` value naming a
+  non-existent or non-`kind: llm` deployment makes the guard raise, naming both sides. *Check:*
+  `config_guard` test; assert a Finding. *Fails if* the dangling value passes and the role would
+  resolve to nothing at runtime.
+- **AC-A4 — the Config UI edit is what resolution reads, and it is standing.** After the owner
+  changes a primary's sub in the Config UI, a **new** session on that primary resolves the sub to
+  the newly-configured deployment, and the change survives a backend restart. *Check:* set the
+  override, open a fresh session, assert the resolved sub; restart the backend, assert it still
+  holds. *Fails if* the change is lost on restart or a new session still resolves the old default —
+  proving it was ephemeral rather than configuration.
+- **AC-A5 — no placement coercion (by name, not location).** A configured pairing of a `local`
+  primary with a `cloud` sub resolves and dispatches exactly as configured: the sub is not silently
+  rewritten to the primary's placement and nothing rejects the mismatch. *Check:* configure
+  `qwen3.6-35b-thinking` (local) → `claude_haiku` (cloud); assert the sub dispatches on the
+  `anthropic` provider. *Fails if* a placement/egress guard rewrites or blocks the pairing.
+
+**Assembled-ADR seam:** AC-A4 is owned by the **Config-UI override child** — the last ticket in the
+chain below. This addendum does **not** close when the map, resolver, and guard land; it closes only
+when the Config UI edits the map live and a new session reads the edit. Master asserts AC-A4 at the
+gate.
+
+### Implementation chain (sequenced; tickets filed under FRE-964)
+
+1. **The `defaults_by_primary` map + loader/schema**, seeded for the current `kind: llm`
+   deployments — the durable form of the FRE-963 stopgap. *(no AC alone; substrate for the rest.)*
+2. **The fail-closed guard** in `config_guard.py` — must-define-on-add + dangling value. *(AC-A2,
+   AC-A3.)* Lands before the resolver trusts the map is total.
+3. **The resolver** — `sub_agent` resolves as a function of the session's selected primary,
+   replacing the flat binding at `expansion.py:109` and every other `sub_agent` consumer; a runtime
+   fail-closed fallback backs up the config-time guard. *(AC-A1, AC-A5.)*
+4. **Config UI override integration** — read and edit the map as standing configuration; gated on
+   the Config UI (the ADR-0121 capstone / the ADR-0119 observe-view successor). *(AC-A4 — the seam.)*
+
+---
+
 ## References
 
 - ADR-0029 — provider-type concurrency control (the capacity concern re-homed onto providers)
@@ -750,6 +904,10 @@ closes only when AC-9 is proven on the deployed stack. Master asserts AC-9 at th
 - FRE-879 — the local→cloud artifact-builder regression that triggered this refactor
 - FRE-880 — the candidate-registry ticket whose defects prompted the substrate review
 - FRE-886 — attachment default (retired: `vision` is pinned)
+- FRE-958 — sub-agent delegation routing fix (any role reaches its provider) — the routing half Addendum A's pairing rides on
+- FRE-960 — multi-query paraphrase "fails open" — its egress framing retired by Addendum A (paraphrase inherits the configured sub)
+- FRE-963 — immediate stopgap re-bind of the current `sub_agent` default; Addendum A makes it durable and per-primary
+- FRE-964 — Addendum A: per-primary `sub_agent` default mapping
 - `config/models.yaml` · `config/models.cloud.yaml` — the 11-of-12 identical catalogs
 - `src/personal_agent/llm_client/concurrency.py:48` — `infer_provider_type`, the string-parsed provider
 - `src/personal_agent/llm_client/models.py:173-187` — the existing `supports_*` capability convention
@@ -933,3 +1091,22 @@ incomplete `config/profile.py` consumer list):**
 surviving Path control; a model switch taking effect on the next turn with `MODEL_CALL_COMPLETED.model`
 matching; survival across reload and WS reconnect; an in-flight turn unaffected by a mid-turn switch).
 That is master's gate, not this entry.
+
+### 2026-07-24 - Addendum A proposed (FRE-964)
+**Changed By:** cc-adrs (Opus)
+**Reason:** Owner-directed, following the T5/FRE-920 regression where `sub_agent`'s single flat
+binding default became `claude_sonnet`, silently routing a local-qwen primary's sub-agent calls to
+cloud Sonnet (the same root as FRE-960's fail-open and the routing gap FRE-958 fixed). The fix is
+structural: a single default cannot be correct because the right sub depends on which primary the
+user picked. Addendum A replaces the flat default with a hand-maintained **per-primary map**
+(`defaults_by_primary` on the `sub_agent` binding), resolves the sub as a function of the session's
+selected primary, guards it fail-closed (a selectable primary cannot ship without its default sub
+defined, dangling values rejected — same class as the retained dangling-reference check), and makes
+the pairing owner-configurable as **standing configuration in the Config UI** (not per-session, not
+per-build). Pairing is **by model name, not by location** — cloud/local mismatches are legal, latency
+accepted — which retires FRE-960's egress framing (paraphrase inherits the configured sub). Design
+settled over discussion with the owner; supersedes §5's "orchestrator-per-dispatch" direction for the
+sub's *model* (the Stage-5 pipeline framing is now orthogonal and stays out of scope). The main ADR
+Status stays **Implemented**; this addendum is **Proposed** pending its own implementation chain
+(FRE-964 children). A stopgap re-bind (FRE-963) ships separately and immediately; Addendum A makes it
+durable and general.

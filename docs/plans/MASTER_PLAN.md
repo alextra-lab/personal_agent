@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-23 (ADR-0124 Phase 0 deployed + Done — FRE-947 + FRE-953)
+> **Last updated**: 2026-07-24 (ADR-0124 Amendment B merged — summariser conversation-only; FRE-956 in build)
 
 ## 0. ADR-0123 turn progress surface — merged, tickets pending
 
@@ -28,14 +28,20 @@ reset action fire after real per-turn data accumulates** — unfiled by intent. 
 evals) — real only if sessions grow. **FRE-954** (Needs Approval, Sonnet) — a `build_frozen_reset`
 sanitiser fixed-point defect, parked behind the never-firing reset action.
 
-## 0b. Session-summary workstream — Phase 1 gated on AC-10 (owner-led)
+## 0b. Session-summary workstream — Amendment B landed; Phase-0 producer change in build
 
-Phase 0 is live (conversation-scoped producer; ADR-0124 + Amendment A). **The one open item is the
-AC-10 measurement redesign, which gates Phase 1 (FRE-948).** Its old fixtures were payload-derived (now
-invalid) and its harness scored by token overlap assuming ~one emitted item per label, against a
-~250-token digest. **Redesign is owner-led and unfiled by intent** — do not file a ticket for a
-criterion whose subject may still move. Chain behind it: FRE-948 → FRE-949 (Phase 2a replay) → FRE-950
-(Phase 2 hydration) → FRE-951 (Phase 3); Phase 4 unfiled, gated on AC-24.
+ADR-0124 Amendment B is merged (PR #647): the summariser is **conversation-only** — the `tool_evidence`
+basis and `status_contradiction` correction are removed, and tool metadata is removed from the
+producer's input **entirely** (tool counts kept only as computed structured properties, never fed to the
+generator). AC-10 is redefined over the three conversation bases (`user_statement`,
+`assistant_reasoning`, `mixed`); the old payload-derived fixtures retire with it. Tool-derived
+verification is relocated to the future **verification oracle** (research Lane 5 → Workstream 4), not the
+summariser.
+
+**Live head: FRE-956** (build1) — implements the conversation-only producer + rebuilds the AC-8 /
+AC-10–13 fixtures; **gateway-rebuild deploy, ask-first**, when it lands. It **blocks FRE-948** (Phase 1),
+which is held parked (unlabelled) until FRE-956 merges. Chain: FRE-956 → FRE-948 → FRE-949 (Phase 2a
+replay) → FRE-950 (Phase 2 hydration) → FRE-951 (Phase 3); Phase 4 unfiled, gated on AC-24.
 
 **AC-22 is the seam** master owns — the paired evaluation holds only once Phases 0, 1 and 2 have all
 landed, so the ADR does not close when its last child merges. Standing condition at every gate: *do not
@@ -44,9 +50,9 @@ stopping is correct.
 
 ## 1. Reduce the backlog
 
-~80 Approved; most carry no stream label (parked). Live queue: **both build streams idle** — build1's
-ADR-0124 chain is parked on the owner-led AC-10 redesign (§0b); build2 empty (FRE-954 parked, Needs
-Approval). Awaiting approval and unlabelled: FRE-927, FRE-932. Method:
+~80 Approved; most carry no stream label (parked). Live queue: **build1 building FRE-956** (ADR-0124
+Amendment B producer, §0b); build2 idle (FRE-954 parked, Needs Approval). Awaiting approval and
+unlabelled: FRE-927, FRE-932. Method:
 verify per cluster, cancel the provable with a one-line reason, bring judgment calls to the owner.
 Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729–732, FRE-810/811/814) ·
 `[Thread]` placeholders that can never be Done (FRE-401/418/397) · work gated on events that never

@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-24 (ADR-0124 Amendment B merged — summariser conversation-only; FRE-956 in build)
+> **Last updated**: 2026-07-24 (ADR-0124 Phases 0–1 live — conversation-only producer + digest surface deployed; paused before Phase 2)
 
 ## 0. ADR-0123 turn progress surface — merged, tickets pending
 
@@ -28,31 +28,31 @@ reset action fire after real per-turn data accumulates** — unfiled by intent. 
 evals) — real only if sessions grow. **FRE-954** (Needs Approval, Sonnet) — a `build_frozen_reset`
 sanitiser fixed-point defect, parked behind the never-firing reset action.
 
-## 0b. Session-summary workstream — Amendment B landed; Phase-0 producer change in build
+## 0b. Session-summary workstream — Phases 0–1 live; paused before Phase 2 on real digests
 
-ADR-0124 Amendment B is merged (PR #647): the summariser is **conversation-only** — the `tool_evidence`
-basis and `status_contradiction` correction are removed, and tool metadata is removed from the
-producer's input **entirely** (tool counts kept only as computed structured properties, never fed to the
-generator). AC-10 is redefined over the three conversation bases (`user_statement`,
-`assistant_reasoning`, `mixed`); the old payload-derived fixtures retire with it. Tool-derived
-verification is relocated to the future **verification oracle** (research Lane 5 → Workstream 4), not the
-summariser.
+ADR-0124 through **Phase 1 is live** (both deployed 2026-07-24): Amendment B shipped the
+**conversation-only producer** (FRE-956 — `tool_evidence`/`status_contradiction` retired, tool metadata
+gone from the input entirely; AC-10 redefined over the three conversation bases) and the
+**session-browser digest surface** (FRE-948 — generated label replaces the title hack, digest rendered,
+cross-substrate read bounded + graceful-degrading). Tool-derived verification is relocated to the future
+**verification oracle** (research Lane 5 → Workstream 4).
 
-**Live head: FRE-956** (build1) — implements the conversation-only producer + rebuilds the AC-8 /
-AC-10–13 fixtures; **gateway-rebuild deploy, ask-first**, when it lands. It **blocks FRE-948** (Phase 1),
-which is held parked (unlabelled) until FRE-956 merges. Chain: FRE-956 → FRE-948 → FRE-949 (Phase 2a
-replay) → FRE-950 (Phase 2 hydration) → FRE-951 (Phase 3); Phase 4 unfiled, gated on AC-24.
+The chain now **pauses by design before Phase 2**: FRE-949 (Phase 2a offline analysis) → FRE-950
+(Phase 2 hydration) → FRE-951 (Phase 3) are held **parked** on two conditions — a real conversation-only
+**digest population must accumulate** (prod digests are budget-denied, so none exists yet), and the
+**Phase-1 forcing-function read** (is the digest worth consuming?) must land first. Per the ADR, *if
+Phase 1 shows the digest conveys nothing useful, stopping is correct* — do not invent a consumer to
+justify the artifact.
 
-**AC-22 is the seam** master owns — the paired evaluation holds only once Phases 0, 1 and 2 have all
-landed, so the ADR does not close when its last child merges. Standing condition at every gate: *do not
-invent a consumer to justify an artifact* — if Phase 1 shows the digest conveys nothing useful,
-stopping is correct.
+**Standing post-deploy check master owns:** the Amendment B retired-value population scan (FRE-956) —
+run once real digests exist, refusing an empty population. **AC-22 seam** (assembled Phases 0–2
+evaluation) remains master's; it closes only once Phase 2 lands, not when a child merges.
 
 ## 1. Reduce the backlog
 
-~80 Approved; most carry no stream label (parked). Live queue: **build1 building FRE-956** (ADR-0124
-Amendment B producer, §0b); build2 idle (FRE-954 parked, Needs Approval). Awaiting approval and
-unlabelled: FRE-927, FRE-932. Method:
+~80 Approved; most carry no stream label (parked). Live queue: **both build streams idle** — build1 free
+after Phases 0–1 shipped (§0b, chain paused before Phase 2); build2 empty (FRE-954 parked, Needs
+Approval). Awaiting approval and unlabelled: FRE-927, FRE-932. Method:
 verify per cluster, cancel the provable with a one-line reason, bring judgment calls to the owner.
 Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729–732, FRE-810/811/814) ·
 `[Thread]` placeholders that can never be Done (FRE-401/418/397) · work gated on events that never

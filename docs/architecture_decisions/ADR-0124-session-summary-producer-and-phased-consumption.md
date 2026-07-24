@@ -1,6 +1,6 @@
 # ADR-0124: Session-summary producer correction and phased consumption
 
-**Status:** Accepted — 2026-07-23 (owner), **amended 2026-07-23 (Amendment A — conversation-scoped input; tool payloads removed from D2; D3 corrections narrowed to the two payload-free kinds `self_correction` + `status_contradiction`, the payload-fed adjudication removed — see the D3 reconciliation note).** Implementation chain FRE-947 → FRE-948 → FRE-949 → FRE-950 → FRE-951; Phase 4 unfiled, gated on AC-24.
+**Status:** Accepted — 2026-07-23 (owner), **amended 2026-07-23 (Amendment A — conversation-scoped input; tool payloads removed from D2; D3 corrections narrowed to payload-free kinds), further amended 2026-07-24 (Amendment B — the summariser is conversation-*only*: tool metadata removed from D2's input entirely; the `tool_evidence` basis and the `status_contradiction` correction removed to the verification oracle; `corrections` reduced to `self_correction`).** Implementation chain FRE-947 → FRE-948 → FRE-949 → FRE-950 → FRE-951; Phase 4 unfiled, gated on AC-24.
 **Date:** 2026-07-23
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** memory, second-brain, knowledge-graph, retrieval, telemetry, privacy
@@ -136,12 +136,17 @@ session-end is not observable. The question is "when is the projection stale."
   `session_summary`, or the next turn after a sweep will NULL the fresh digest. This also fixes the
   live clobber bug.
 
-### D2 — What it reads: the whole conversation *(narrowed by Amendment A)*
+### D2 — What it reads: the whole conversation *(narrowed by Amendment A; conversation-only by Amendment B)*
 
 - Full user text and full assistant text, all turns. The 200-char clip and the 20-turn cap are
   removed outright.
-- **Tool activity as metadata** — name, status, error. **No payloads** (Amendment A). Bounded by
-  construction, so no per-result cap and no summariser-specific input ceiling are needed.
+- **Tool activity as metadata** — name, status, error. **No payloads** (Amendment A). *(Amendment B:
+  tool metadata is removed from the producer's input **entirely** — see the Amendment B section. The
+  producer reads user and assistant text only; no tool name, status or error reaches the prompt.
+  Tool invocation and success/failure counts remain available as **computed** structured properties
+  per D3's "compute state, generate meaning" — derived from the captures, never fed to the generator.)*
+  The input is user and assistant text only; its size is governed by the oversized-input rejection
+  below, not by any tool-result cap.
 - **Egress is governed by the role binding, not by a per-session branch.** *(Amendment A: with tool
   payloads removed, the producer's input is conversation text the primary model already processed, so
   there is no new egress path at all. The role decision below stands on its own merits — an
@@ -188,15 +193,14 @@ session-end is not observable. The question is "when is the projection stale."
   not be judged on the current producer's output in any case. Creating the role is precisely what
   turns that future question into a config flip rather than a code change.
 
-- **If evidence is ever unavailable, the contract must say so.** No routine path withholds payloads
-  any more, but captures can be incomplete — a truncated record, a tool whose result was never
-  stored, a capture written during a failure. Whenever the producer's input is missing evidence it
-  would normally have, the prompt must state it — *"tool payloads were unavailable for this session;
-  do not infer contradiction from their absence"* — or the summariser commits the fabrication error
-  described in D3 against its own missing evidence. The rule survives the removal of the per-session
-  branch because its cause was never the branch: it is that absence of evidence is not evidence of
-  absence, and a summariser comparing narration against evidence will read one as the other unless
-  told otherwise.
+- **If evidence is ever unavailable, the contract must say so.** Captures can be incomplete — a
+  truncated record, a turn whose assistant text was never stored, a capture written during a failure.
+  Whenever the producer's input is missing conversation it would normally have, the prompt must state
+  it — *"part of this session's transcript was unavailable; do not infer content from its absence"* —
+  or the summariser fabricates to fill the gap. *(Amendment B: with tool metadata and
+  `status_contradiction` both removed, there is no tool evidence whose absence could be misread into a
+  false contradiction; the rule reduces to the general stance that absence of evidence is not evidence
+  of absence, which AC-13 checks over the conversation-only input.)*
 - **Oversized input fails visibly.** Estimate tokens before dispatch; if the model's real limit
   would be exceeded, raise and record the reason. Never silently truncate. The check is
   pre-dispatch, so a doomed session costs an estimate and a log line, not a model call. Log on
@@ -207,7 +211,7 @@ session-end is not observable. The question is "when is the projection stale."
   two turns, genuine session-level relation appears that neither turn expresses alone ("A was
   rejected after X was discovered; B was chosen"). This removes 51% of generations.
 
-### D3 — What it emits: two artifacts, four optional slots, verifiable provenance *(corrections narrowed by Amendment A)*
+### D3 — What it emits: two artifacts, four optional slots, verifiable provenance *(corrections narrowed by Amendment A; conversation-only by Amendment B)*
 
 The producer emits **two artifacts in one call, stored independently**:
 
@@ -229,41 +233,45 @@ conversational and topic-drifting. A 17-turn session that ran diet principles �
 ratatouille → coaching a couscous has no single intent, and is normal rather than pathological.
 
 **Provenance is structural and verifiable.** Each item carries a `basis` tag
-(`tool_evidence | user_statement | assistant_reasoning | mixed`). Because `basis` is a
-model-assigned label and nothing stops a model tagging its own inference as evidence, it is backed
-by an enforcement step: **every item tagged `tool_evidence`, and every `corrections` entry, must
-carry a verbatim span plus a locator** — the capture id and the field within it (which tool result,
-or which turn's assistant text). The validator resolves the locator and requires the span to occur
-*at that location*, not merely somewhere in the session. Bare containment is not sufficient: a
-common word appears everywhere and would pass while supporting nothing. This turns the
+(`user_statement | assistant_reasoning | mixed`) *(Amendment B removed `tool_evidence`)*. Because
+`basis` is a model-assigned label and nothing stops a model tagging its own inference as evidence, it
+is backed by an enforcement step: **every `corrections` entry must carry a verbatim span plus a
+locator** — the capture id and the turn's assistant text the correction is grounded in *(Amendment B:
+the locator names a turn's assistant text only; the tool-result field it once allowed is gone with
+`tool_evidence` and `status_contradiction`)*. The validator resolves the locator and requires the
+span to occur *at that location*, not merely somewhere in the session. Bare containment is not
+sufficient: a common word appears everywhere and would pass while supporting nothing. This turns the
 evidence-versus-interpretation invariant from a prompt instruction into a machine-checkable one.
 
 **Error-flagging is precision-first, deliberately asymmetric.** A missed error is recoverable from
 raw evidence; a false error writes self-confirming state into the graph and feeds its own
-supposed correction into future reasoning. Two **payload-free** kinds may be asserted, and nothing
-else (the tier names are self-describing values, not `A`/`B` — see Amendment A and its reconciliation
-note below):
+supposed correction into future reasoning. **After Amendment B a single kind may be asserted, and
+nothing else:**
 
-- **`self_correction` — explicit evidenced self-correction** (was "Tier B"). The agent itself
-  corrected the record within the session, and the correction is supported by evidence *in the
-  conversation*. Carries the located span of the self-correction.
-- **`status_contradiction` — narration denied by a tool's own status or error** (the payload-free
-  survivor of the old "Tier A"). The assistant asserted an outcome that the tool's recorded status or
-  error contradicts *on the status alone* — e.g. "the command succeeded" against a recorded failure.
-  This needs no payload, so it is not verification and does not leave with the payload-fed half; it is
-  the kind **AC-13 requires** to still fire. Carries the located span of the contradicting status/error.
+- **`self_correction` — explicit evidenced self-correction.** The agent itself corrected the record
+  within the session, and the correction is supported by evidence *in the conversation* — the
+  assistant's own corrective text, which the user saw. Carries the located span of the **supporting
+  evidence** in the conversation — the corrective text that grounds the correction (AC-11 / AC-12) —
+  not merely a pointer to the fact that a correction occurred.
+- **`status_contradiction` — REMOVED by Amendment B.** Adjudicating narration against a tool's own
+  status or error is *verification*, and verification belongs to the downstream verification oracle
+  (Lane 5 → Workstream 4), not the summariser. The raw status/error remains durably captured in the
+  turn records, so the oracle reads it directly later; the summariser carrying it preserved nothing
+  and added a false-positive surface to a ~250-token digest. *(This reverses the Amendment A
+  reconciliation note below, which had retained `status_contradiction` as the payload-free survivor
+  of the old "Tier A"; Amendment B relocates that survivor to the oracle with the rest of
+  verification.)*
 
 **Tier C — not errors, never asserted as corrections.** Weak or partial conflict, failed or
 incomplete tool calls, multiple defensible readings, state that legitimately changed over time, and
 disagreement with a subjective judgment or recommendation. These belong in `unresolved`, or are
 omitted. **Never infer error from absent evidence.**
 
-Both surviving kinds need only the session's own text and tool *metadata* (status/error), so they
-survive the removal of payloads intact. This matters wherever a capture is incomplete: a correction
-available from the conversation or from a tool's status remains legitimate to record, and a producer
-must not suppress it merely because some payload is missing. What it must never do is assert a
-correction that depends on payload content it was not given — which is precisely the payload-fed
-adjudication Amendment A removed to the verification workstream.
+`self_correction` needs only the session's own conversation text, so it survives on the
+conversation-only input intact. This matters wherever a capture is incomplete: a self-correction the
+user saw remains legitimate to record, and a producer must not suppress it merely because some other
+evidence is missing. What it must never do is assert a correction that depends on content it was not
+given.
 
 **Compute state, generate meaning.** Turn count, duration, tool invocation and success/failure
 counts, and `dominant_entities` are queryable and remain structured properties. They are never
@@ -312,9 +320,10 @@ Additional live mechanisms, each with its mitigation:
 - **Provenance collapse** — the model cannot distinguish a retrieved atomic fact from an LLM-authored
   retrospective synthesis. Mitigation: the rendered annotation is explicitly labelled as derived
   synthesis, not presented as equivalent evidence.
-- **Indirect instruction contamination** — a new path created by D2. Attacker-influenceable web or
-  file content → tool result → digest → *a future session's context*, arriving with the authority of
-  the system's own memory. Low likelihood in a single-user system; recorded because the path is new.
+- **~~Indirect instruction contamination~~** *(no longer applicable — Amendment A removed tool
+  payloads and Amendment B removed tool metadata from the input entirely, so the
+  attacker-influenceable content → tool result → digest → future-session path this bullet described no
+  longer exists. Matches the struck instruction-contamination row in the Risks table.)*
 
 **Structural invariant, enforced rather than monitored:**
 
@@ -353,6 +362,12 @@ workstream and belongs there. The verification-oracle lane moves to the fact-ver
 **Status of this amendment:** Accepted, same day as the ADR, before the Phase-0 behaviour reached
 steady state. It **narrows D2 and D3**; D1 and D4 are untouched. Raised by the owner during
 deployment of FRE-947.
+
+> **Superseded in part by Amendment B (2026-07-24).** Amendment B further narrows this amendment: it
+> removes tool metadata from the producer's input entirely and relocates `status_contradiction` to
+> the verification oracle, so `corrections` reduces to `self_correction`. Where this section describes
+> tool metadata or `status_contradiction` as *retained*, read it as Amendment A's state at the time,
+> since superseded. See the **Amendment B** section below.
 
 ### What was wrong
 
@@ -398,6 +413,11 @@ payloads leaves for the fact-verifier workstream. Tier C is unchanged: still nev
 > (`self_correction`, `status_contradiction`) so nothing is mislabelled, and the shipped producer
 > (FRE-953) carries exactly these two. The withdrawal of the payload-fed verification lane is
 > unchanged.
+>
+> **Reversed by Amendment B (2026-07-24).** This note retained `status_contradiction` because AC-13
+> required the `status_visible` case. Amendment B removes that requirement — status-based
+> contradiction is verification and moves to the oracle — so `corrections` reduces to `self_correction`
+> alone and AC-13's fixture drops the `status_visible` case. See the Amendment B section.
 
 The absent-evidence rule survives untouched and now covers a wider case: captures can be incomplete,
 and a summariser comparing narration against evidence will read absence as contradiction unless told
@@ -474,6 +494,140 @@ are not needed."
 
 Withdrawn criteria are struck rather than renumbered, so AC references in the implementation chain
 (FRE-947 → FRE-951) remain stable.
+
+---
+
+## Amendment B — 2026-07-24: the summariser is conversation-only
+
+**Status of this amendment:** Accepted — owner-agreed in session on 2026-07-23, formalised here. It
+**further narrows D2 and D3**; D1 and D4 are untouched. It closes the loose end Amendment A left:
+Amendment A removed tool *payloads* from the producer's input but kept two tool reaches — the
+`tool_evidence` basis and the `status_contradiction` correction — and **AC-10 was deferred** as a
+result. Design agreed with the owner and recorded in
+`docs/superpowers/specs/2026-07-23-adr-0124-amendment-b-summarizer-conversation-only-design.md`.
+
+### Principle (owner)
+
+The summary is built on **what the user actually received** — the assistant's responses plus the
+user's own text. The assistant already consumed the tools and folded them into its reply, so that
+reply *is* the record of what happened. Re-injecting tools lets the summariser re-derive facts
+differently than the assistant actually presented — a summary of something the user never received.
+The summariser must therefore neither **source content from** tools nor **adjudicate against** them.
+
+### Decision
+
+1. **Remove `tool_evidence` as a basis value.** Tools-as-source violates fidelity. `basis` collapses
+   to the conversation-grounded values `user_statement`, `assistant_reasoning`, `mixed`.
+2. **Remove the `status_contradiction` correction.** Tools-as-adjudication is *verification* work,
+   which belongs to the downstream **verification oracle** (Lane 5 → Workstream 4), not the
+   summariser. `corrections` reduces to `self_correction` alone. This reverses the Amendment A
+   reconciliation note, which had retained `status_contradiction` as the payload-free survivor of the
+   old "Tier A"; Amendment B relocates that survivor to the oracle with the rest of verification.
+3. **Remove tool metadata from the producer's input entirely.** This is the change that makes the
+   principle *structural* rather than a prompt convention. "Keep tool metadata in the input but treat
+   it as inert to the output" does not hold for a language model: anything in the prompt is in the
+   model's attention, so a tool status or error left in-context can still surface as a digest item — a
+   tool-sourced item, exactly what removing `tool_evidence` is meant to prevent. With
+   `status_contradiction` gone there is **no remaining output slot that reads tool metadata**, so the
+   metadata has no consumer and is dropped from the prompt. The input is user text + assistant text,
+   all turns, and nothing tool-derived.
+4. **`self_correction` is conversation-only.** FRE-953 had allowed a self-correction's evidence to be
+   "a tool error or the conversation." Amendment B restricts it to the **conversation** — the
+   assistant correcting itself in its own text, which the user saw. This is what lets AC-11's locator
+   grammar drop every `tool_result[...]` target.
+5. **Do not add a tool-error flag.** Considered and rejected: most tool errors are *recovered from*,
+   so a judgment-free "produced amid tool errors" flag is mostly false positives and would pollute a
+   ~250-token digest; separating harmful from benign errors *is* the judgment that belongs to the
+   oracle; and the raw tool status/error is **already durably captured in the turn records**, so the
+   oracle reads it directly later. The summariser carrying it preserves nothing and only adds noise.
+
+### What the computed properties still carry
+
+Removing tool metadata from the *prompt* does not remove it from the graph. Tool invocation and
+success/failure counts remain **computed** structured properties on the session node (D3, "compute
+state, generate meaning") — derived deterministically from the captures, never generated from the
+prompt. Amendment B stops feeding tool data to the *generator*; it does not stop *counting* it.
+
+### What is genuinely lost
+
+1. **Status-based contradiction detection** — narration denied by a tool's own status or error (e.g.
+   "the command succeeded" against a recorded failure). This was the payload-free survivor Amendment A
+   kept; it is verification and now leaves wholly to the oracle, which reads the same status/error
+   from the durable turn records. **The interim is acknowledged and accepted, not gated:** until the
+   oracle ships, a status-contradicted false narration is simply unflagged by the digest. This is
+   deliberate — the summariser is not a verification surface (that is the point of Amendment B), and
+   the raw status/error stays durably captured for the oracle. Crucially this specific loss is
+   **subtractive**: removing `status_contradiction` can only *omit* a correction a digest might have
+   carried, never *add* a wrong one, so its interim failure mode is a digest that is *smaller* (a
+   missed status-contradiction flag), not one that is *false*. No Phase-0/1 consumer reads
+   `corrections` at all; and when **Phase 2** later attaches digests to retrieved facts, it only *adds*
+   annotation and **cannot alter which facts win** (AC-17) — and removing a correction kind introduces
+   no new content for it to surface. (Digest annotation carrying *other* misinformation — e.g. a
+   fabricated `established` item — is a separate, pre-existing risk this ADR governs through provenance
+   tagging, the precision-first corrections bar and the relative annotation bound; Amendment B neither
+   creates nor worsens it.) The digest was never a verification *guarantee* even with
+   `status_contradiction` (corrections are precision-first and recall-floored by design). If the owner
+   later wants that signal in
+   annotations, it is the oracle's to supply and Phase 2 can consume the oracle's output. Gating the
+   human-visible Phase 1 browser — or fact-first Phase 2 ranking — on a verification oracle would
+   reintroduce the very scope-crossing this amendment removes.
+2. **The un-narrated tool signal** Amendment A valued — e.g. the 27 `nonexistent_tool` invocations
+   that "live in names and statuses." By Amendment B's stricter principle this is not memory: an
+   agent-internal tool failure the user never saw is not part of what they retained. Where it *was*
+   narrated, it survives in the assistant text, which is kept.
+
+Both align with Amendment A's forward note: verification evidence lives in the durably-stored turn
+records (the future VO-dump), read by the oracle on demand — not carried in the memory digest.
+
+### Consequences
+
+- **AC-10 unblocks.** With nothing tool-sourced left to label, the payload/tool-derived fixture
+  problem dissolves; AC-10's discrimination check is redefined over the three conversation bases and
+  is a Phase-0 gate criterion again.
+- **Phase 1 (FRE-948) proceeds** on the simplest possible producer.
+
+### Consequential changes elsewhere in this ADR
+
+| Section | Change |
+|---|---|
+| D2 | Tool metadata (name/status/error) removed from the input entirely; input is user + assistant text only |
+| D3 — `basis` | `tool_evidence` removed; three conversation bases remain |
+| D3 — enforcement | span+locator required for `corrections` only; locator names a turn's assistant text |
+| D3 — corrections | `status_contradiction` removed to the oracle; `self_correction` is the only kind |
+| D3 reconciliation note (under Amendment A) | reversed — its retention of `status_contradiction` no longer holds |
+| Risks — fabricated corrections | standard is `self_correction` only (conversation-grounded) |
+| AC-8 | asserts absence of all tool metadata (name/status/error), not only payloads |
+| AC-10 | redefined over three bases; un-deferred; a stored `tool_evidence` value now fails it |
+| AC-11 | `tool_evidence` dropped; locator grammar is conversation-only (`tool_result[...]` removed) |
+| AC-12 | positives are `self_correction` only; the `status_contradiction`/AC-13 cross-reference removed |
+| AC-13 | the `status_visible` fixture case removed; fixture reduces to a pair |
+
+### Verification / acceptance of this amendment
+
+Amendment B's own acceptance is discriminating and outcome-level, not a restatement of the edits:
+
+- **No retired value survives where a digest is produced or stored — over a non-empty, complete
+  population.** Let the post-amendment population be every digest with `summary_generated_at` later
+  than the Amendment-B deploy timestamp. **AC-7 supplies completeness** (every eligible multi-turn
+  session quiet past the threshold carries a digest); **non-emptiness is required here** — the
+  population must contain at least the eligible multi-turn sessions summarised in the measurement
+  window, and if the live corpus supplies none, a pre-registered synthetic supplement per the
+  **Corpus-feasibility** gate above, labelled as such. Over that population, **zero** items carry
+  `basis = tool_evidence` and **zero** `corrections` entries carry `status_contradiction`. ·
+  **Check:** a Cypher scan of `session_digest` records filtered by
+  `summary_generated_at > <deploy timestamp>`. · *Fails if* any such item exists — a build that edited
+  the prose but left the schema enum or the producer prompt intact would produce one — **or if the
+  population is empty**, which would let the scan pass vacuously while the producer is dead.
+- **The prompt is conversation-only.** AC-8 (as amended) asserts the assembled prompt contains no tool
+  name, status, error, argument or payload. · *Fails if* any tool-derived token appears — the
+  regression back to feeding tool data to the generator.
+- **The deferred discrimination check runs.** AC-10 (as amended) is constructed and passes over the
+  three conversation bases. · *Fails if* it cannot be built because a tool-sourced basis is still
+  emitted.
+
+Each criterion can fail against a half-finished implementation, and the reconciliation is not complete
+until all three hold. **That seam is owned by the Amendment B implementation ticket**, not by any
+single edit to this document — the ADR change alone does not deliver Amendment B.
 
 ---
 
@@ -697,7 +851,7 @@ consequence-of-being-wrong axis Phase 2 is the safer thing to ship first.
 |------|----------|------------|
 | **Cross-session supersession of `unresolved`** — a thread left open in session A is settled in session C; nothing revisits A's digest, because regeneration is triggered only by A's own new turns and a concluded session never gets more. Open threads accumulate as permanent false-open state, and the anti-re-litigation consumer eventually asserts "we never settled X" about something settled weeks ago — the exact inverse of its purpose. | **High** (occurs whenever a thread outlives its session, which the corpus shows is common; not strictly guaranteed) | Phase 0 stamps every `unresolved` item with its session's timestamp so consumers phrase the nudge as *"as of that session, X was open"* rather than asserting present tense. Phase 3's entity-overlap machinery then checks whether a later session's `decisions` settle an earlier session's `unresolved`. The timestamp must ship in Phase 0 or the Phase 3 fix has nothing to stand on. |
 | **Proportional dominance** — annotation outweighing the facts it annotates in a small context (five digests ≈ 74% of a p50 context) | High | Relative bound: annotation may never exceed the tokens of the facts it annotates. Measured in the Phase 2a replay before anything ships. |
-| **Fabricated corrections** poisoning the graph self-confirmingly | High | Precision-first correction standard (`self_correction` + `status_contradiction`, both payload-free); verbatim-span validation; never infer error from absent evidence; `corrections` rate monitored as a drift signal. |
+| **Fabricated corrections** poisoning the graph self-confirmingly | High | Precision-first correction standard (`self_correction` only after Amendment B — conversation-grounded); verbatim-span validation; never infer error from absent evidence; `corrections` rate monitored as a drift signal. |
 | ~~**Instruction contamination**~~ *(no longer applicable — Amendment A)* via tool output surviving into a digest and then into a future session's context | High blast radius; likelihood **not** reduced by single-user operation — the corpus already includes web search and file reads, whose content is not authored by the user | Gated, not accepted. **AC-21 blocks Phase 2** — the point at which a contaminated digest first reaches a model automatically — on an adversarial fixture set proving directives in tool output neither survive into the digest nor alter it. Phase 0 and Phase 1 are unaffected because a digest read only by a human is not an injection path. |
 | ~~**Egress**~~ *(no longer applicable — Amendment A; the producer's input carries no bytes the primary turn did not already send)* — full tool payloads (file contents, command output, query results) reach whichever provider serves the summariser's role | Medium; unchanged in kind from the primary turn, which already sent those bytes to its own model | Governed at the **role binding** per ADR-0121, not by a per-session branch — the deliberate consequence being that egress is a configuration decision the owner makes once. Sharpened by the deferred role split: the only available binding is `captains_log`, shared with reflection, so the knob is currently coarser than the decision deserves. |
 | **Provenance collapse** — the model treating derived synthesis as retrieved fact | Medium | Rendered annotation explicitly labelled as derived; `basis` tags retained in the structured record. |
@@ -829,29 +983,41 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   carries `turn_count` today but not duration or tool success/failure counts, and D3's
   compute-don't-generate rule does not by itself justify adding aggregate columns or backfilling
   history — if those properties are added later, this criterion extends to them then.
-- **AC-8** — Input completeness. For a predefined fixture set spanning multi-result turns, failed
-  calls and long assistant responses, the assembled prompt contains: every turn in the session; the
-  **full, untruncated** user and assistant text of each; for every tool invocation its name,
-  status and error. **Amendment A:** payloads and tool arguments are *not* included, so the criterion
-  additionally asserts their **absence**. · **Check:** assert over the assembled prompt against the
-  capture record. · *Fails if* any turn, or any tool's name, status or error is missing or altered,
-  **or if any tool payload appears in the prompt** — the second direction is the one that catches a
-  regression back to payload-feeding.
+- **AC-8** — Input completeness and provenance. For a predefined fixture set spanning multi-result
+  turns, failed calls and long assistant responses, the assembled prompt contains every turn in the
+  session and the **full, untruncated** user and assistant text of each, **and is composed of nothing
+  else**. **Amendment B:** the prompt is assembled **solely from the user and assistant text fields**
+  of each turn (plus fixed scaffolding) — no tool-metadata field (name, status, error), argument or
+  payload is serialised into it. · **Check:** two-directional. *Completeness* — every turn's full user
+  and assistant text is present and byte-identical to the capture. *Provenance* — the assembled prompt
+  is byte-reconstructible from the concatenation of those text fields and the fixed scaffolding alone,
+  and the prompt-builder reads no tool-metadata field. · *Fails if* any turn or any turn's full text is
+  missing or altered, **or if the prompt contains any span that did not originate in a user/assistant
+  text field or the fixed scaffolding** — a tool name the *user themselves typed* is legitimate content
+  and does not fail this; a tool-metadata field serialised by the builder does. This is what catches a
+  regression back to feeding tool data to the generator without false-failing on conversation that
+  merely mentions a tool.
 - **AC-9** — **WITHDRAWN by Amendment A.** It required a fact present only in tool output to reach
   the digest, which the amendment deliberately prevents: an unnarrated fact is not part of the
   conversation and therefore not the user's memory. Retained as a numbered entry so AC references in
   the implementation chain stay stable.
 
-- **AC-10** — Every digest item carries a `basis` tag, and tagging discriminates. · **Check:** schema
-  validation for tag presence across all stored digests; plus, on a predefined labelled set of ≥40
-  items spanning all four basis values, agreement between emitted tag and labelled truth ≥85% with
-  **no single tag value exceeding 60% of emissions** unless the labelled truth is equally skewed. ·
-  *Fails if* any item is untagged, or if tagging collapses onto one value — the evasion that
-  tag-presence alone cannot catch.
-- **AC-11** — Every `tool_evidence` item and every `corrections` entry carries a span **and a
-  locator**, and the span occurs at that location. · **Check:** validator resolves each locator to
-  the named capture and field, then requires the span there. · *Fails if* any locator is absent or
-  unresolvable, or the span is not found at the cited location — bare containment anywhere in the
+- **AC-10** — Every digest item carries a `basis` tag, and tagging discriminates. **Amendment B
+  redefines this over the three conversation bases** (`user_statement | assistant_reasoning | mixed`);
+  with `tool_evidence` removed there is no tool-sourced label to fixture, which is what unblocks this
+  criterion (it was deferred under Amendment A). · **Check:** schema validation for tag presence
+  across all stored digests; plus, on a predefined labelled set of ≥40 items spanning **all three**
+  basis values (each value represented by ≥8 items), agreement between emitted tag and labelled truth
+  ≥85% with **no single tag value exceeding 60% of emissions** unless the labelled truth is equally
+  skewed. · *Fails if* any item is untagged, **if any stored item carries the retired `tool_evidence`
+  value**, or if tagging collapses onto one value — the evasion that tag-presence alone cannot catch.
+- **AC-11** — Every `corrections` entry carries a span **and a locator**, and the span occurs at that
+  location. **Amendment B:** `tool_evidence` items no longer exist, and the locator grammar names a
+  **turn's assistant text only** — the `tool_result[N].error` / `tool_result[N]` targets are removed
+  with `status_contradiction`, since `self_correction` is grounded in the conversation. · **Check:**
+  validator resolves each locator to the named capture and the cited turn's assistant text, then
+  requires the span there. · *Fails if* any locator is absent, unresolvable, or names a tool-result
+  field, or the span is not found at the cited location — bare containment anywhere in the
   session does not pass. **Stated limitation:** this proves the citation resolves, not that the span
   *supports* the proposition. A fabricated item citing a real but irrelevant span at a valid locator
   passes this check. Mechanical entailment is not available to us, so semantic support is carried by
@@ -859,28 +1025,32 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   cheap failure mode — invented citations — impossible, and is claimed as nothing more.
 - **AC-12** — **Corrections fire when they should and stay silent when they should not.** On a
   predefined labelled set: positives comprising ≥8 `self_correction` positives (evidenced
-  self-corrections; **Amendment A:** the payload-fed contradiction cases are removed with the payload
-  lane — `status_contradiction` is exercised by AC-13, not here); negatives comprising ≥12
+  self-corrections; **Amendment B:** `self_correction` is the *only* correction kind — the
+  `status_contradiction` cases are removed to the verification oracle, not exercised here or in
+  AC-13); negatives comprising ≥12
   Tier-C cases drawn from the full range D3 names —
   weak/partial conflict, failed or incomplete calls, ambiguous readings, legitimately changed state,
-  and disagreement with a subjective judgment. The producer emits a correction for **every** positive
-  and none of the negatives. Each emitted `self_correction` additionally carries the located span of
-  the **supporting evidence**, not merely of the self-correction sentence. · **Check:** hand-labelled
+  and disagreement with a subjective judgment. The producer emits a correction for the positives — at
+  or above the recall floor stated below — and for **none** of the negatives (precision is absolute;
+  recall is floored, not perfect — see the fail rule). Each emitted `self_correction` additionally carries the located span of
+  the **supporting evidence** in the conversation — the assistant's own corrective text that grounds
+  it, the same span D3 requires — not a bare assertion that a correction occurred. ·
+  **Check:** hand-labelled
   fixtures, fixed before tuning. · *Fails if* **any** negative yields a correction (precision is
   absolute here), or if fewer than **80%** of positives yield one, or if any `self_correction` lacks
   its evidence span. The recall floor is 80% rather than 100% deliberately: D3 accepts that a missed
   error is recoverable, so demanding perfect recall would contradict the precision-first stance and
   penalise a justifiably conservative producer. It is not 0% because that is the degenerate
   never-emit implementation this criterion exists to catch.
-- **AC-13** — Missing evidence produces silence, not invention, and does not suppress corrections
-  that survive it. · **Check:** a fixture triple built on captures with deliberately incomplete
-  records — one whose only possible contradiction lives in a payload absent from the capture (must
-  yield **no** correction), one whose contradiction is visible in tool **status or error** (must
-  yield one), one containing an explicit evidenced **self-correction** in the session's own text
-  (must yield one). · *Fails if* absent evidence produces an asserted error, **or** if either
-  non-payload correction path is suppressed. Both directions matter: a producer that invents
-  contradictions from gaps fails the first case, and one that goes mute whenever any evidence is
-  missing fails the other two.
+- **AC-13** — Missing evidence produces silence, not invention, and does not suppress the correction
+  that survives it. **Amendment B** removes the `status_contradiction` (`status_visible`) case, so the
+  fixture is a **pair**. · **Check:** two fixtures built on captures with deliberately incomplete
+  records — one whose only possible contradiction would need evidence absent from the conversation
+  (must yield **no** correction), and one containing an explicit evidenced **self-correction** in the
+  session's own text (must yield one). · *Fails if* absent evidence produces an asserted correction,
+  **or** if the surviving `self_correction` path is suppressed. Both directions matter: a producer
+  that invents corrections from gaps fails the first case, and one that goes mute whenever any evidence
+  is missing fails the second.
 
 - **AC-14** — The summariser resolves through its **own** role, and introducing that role changed no
   behaviour. · **Check:** `session_summary.py` resolves `session_summary`, not `captains_log`;
@@ -987,8 +1157,10 @@ ADR does not close because its last child merged.
 - [ADR-0087: Memory Recall Quality Measurement Program](ADR-0087-memory-recall-quality-measurement-program.md) — measurement-first posture this ADR's evaluation criteria inherit (Accepted 2026-06-27)
 - [ADR-0098: Memory Substrate and Lifecycle Architecture](ADR-0098-memory-substrate-and-lifecycle-architecture.md) — substrate and retention model this artifact lives in (Accepted 2026-06-27; §D1 superseded by ADR-0115, §D2/§D4/§D7 remain Accepted)
 - [ADR-0100: Relevance-Bounded Recall](ADR-0100-relevance-bounded-recall.md) — the ranking path Phase 2 must leave unchanged (Accepted)
-- `docs/research/2026-07-22-session-summary-kg-opportunity.md` — backing research; §B is the design space, §E the decision-ready addendum this ADR argues rather than transcribes
+- `docs/research/2026-07-22-session-summary-kg-opportunity.md` — backing research; §B is the design space, §E the decision-ready addendum this ADR argues rather than transcribes; Lane 5 → Workstream 4 is the verification oracle Amendment B relocates verification to
+- `docs/superpowers/specs/2026-07-23-adr-0124-amendment-b-summarizer-conversation-only-design.md` — Amendment B design, owner-agreed in session and formalised here
 - FRE-946 — ADR ticket
+- FRE-955 — Amendment B ticket
 - FRE-347 / FRE-346 — the original producer implementation
 - Producer: `src/personal_agent/second_brain/session_summary.py`, `second_brain/consolidator.py:386-440`
 - Write path and clobber bug: `src/personal_agent/memory/service.py:1133-1148`
@@ -1000,6 +1172,18 @@ ADR does not close because its last child merged.
 ---
 
 ## Status Updates
+
+### 2026-07-24 - Amendment B (Accepted)
+**Changed By:** Owner (architect), via cc-adrs (Opus)
+**Reason:** The summariser is conversation-only. Amendment A removed tool payloads but kept two tool
+reaches — the `tool_evidence` basis and the `status_contradiction` correction — and deferred AC-10.
+Amendment B removes both, removes tool metadata from the producer's input **entirely** (keeping the
+principle structural rather than a prompt convention a model can violate on any generation), restricts
+`self_correction` evidence to the conversation, and rejects a tool-error flag. All tool-derived
+verification relocates to the future verification oracle (Lane 5 → Workstream 4), which reads the
+durably-stored status/error directly. `corrections` reduces to `self_correction`; `basis` to the
+three conversation values. AC-10 is un-deferred and redefined over the three bases, unblocking Phase 1
+(FRE-948). D1 and D4 untouched.
 
 ### 2026-07-23 - Amendment A (Accepted)
 **Changed By:** Owner (architect), via cc-adrs (Opus)

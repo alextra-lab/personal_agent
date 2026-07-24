@@ -570,6 +570,10 @@ export interface SessionSummary {
   /** Number of user turns (user-role messages only) in this session (FRE-521). */
   turn_count?: number;
   title: string | null;
+  /** Model-generated label, replacing the first-60-chars title hack when present (ADR-0124 Phase 1). */
+  session_label?: string | null;
+  /** Rendered digest prose ("Established: …\n\nDecisions: …"), or null with no digest yet. */
+  session_digest?: string | null;
   /** Current context size + window for status-bar hydration (FRE-426). */
   context_tokens?: number;
   context_max?: number;

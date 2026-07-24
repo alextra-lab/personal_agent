@@ -247,6 +247,22 @@ class SessionSummaryOutcome(BaseModel):
     failure_reason: SummaryFailureReason | None = None
 
 
+class SessionDigestView(BaseModel):
+    """Display-ready projection of one session's label + rendered digest (ADR-0124 Phase 1).
+
+    Read-time only — never stored. ``digest_text`` is already run through
+    :func:`render_digest`; a consumer needs no further parsing. ``label`` and
+    ``digest_text`` are independent: a malformed stored digest must not suppress
+    a perfectly valid label — they are written independently by
+    ``write_session_digest`` and must be read back independently too.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str | None = None
+    digest_text: str | None = None
+
+
 def _normalise(text: str) -> str:
     """Collapse whitespace runs and strip, for span comparison.
 

@@ -50,6 +50,8 @@ from personal_agent.memory.models import (
 from personal_agent.memory.session_digest import (
     TERMINAL_ELIGIBLE_REASONS,
     SessionDigest,
+    SessionDigestView,
+    render_digest,
 )
 from personal_agent.memory.supersession import (
     ClaimRecord,
@@ -1287,6 +1289,96 @@ class MemoryService:
             )
         return accepted
 
+    async def get_session_digest_views(
+        self, session_ids: Sequence[str], *, trace_id: str | None = None
+    ) -> dict[str, SessionDigestView]:
+        """Batch-read display-ready label + rendered digest for a page of sessions.
+
+        One query for the whole page (ADR-0124 Phase 1) rather than a round trip
+        per session. A session absent from the graph, never digested, or whose
+        stored digest fails to parse is simply missing from the returned mapping —
+        the caller treats an absent id exactly like "no digest yet." A malformed
+        stored digest never suppresses a valid label: they were written
+        independently (write_session_digest sets both in one statement, but as two
+        separate properties) and are parsed independently here. Never raises.
+
+        Args:
+            session_ids: Postgres session ids for the current page.
+            trace_id: Trace identifier for log correlation (ADR-0074 §I3).
+
+        Returns:
+            ``{session_id: SessionDigestView}`` for sessions with a usable label
+            and/or a well-formed digest. Empty when Neo4j is unavailable, no id
+            matches, the query fails, or ``session_ids`` is empty.
+        """
+        unique_ids = list(dict.fromkeys(session_ids))
+        if not unique_ids:
+            return {}
+
+        if not self.connected or not self.driver:
+            log.warning(
+                "session_digest_view_read_unavailable",
+                trace_id=trace_id,
+                reason="neo4j_not_connected",
+            )
+            return {}
+
+        try:
+            async with self.driver.session() as db_session:
+                result = await db_session.run(
+                    """
+                    MATCH (s:Session)
+                    WHERE s.session_id IN $session_ids
+                    RETURN s.session_id AS session_id,
+                           s.session_label AS session_label,
+                           s.session_digest AS session_digest
+                    """,
+                    session_ids=unique_ids,
+                )
+                rows = await result.data()
+        except Exception as e:
+            log.error(
+                "session_digest_view_read_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+            )
+            return {}
+
+        views: dict[str, SessionDigestView] = {}
+        for row in rows:
+            session_id = row.get("session_id")
+            if not isinstance(session_id, str) or not session_id:
+                log.warning(
+                    "session_digest_view_row_skipped",
+                    trace_id=trace_id,
+                    reason="malformed_session_id",
+                    raw_session_id=repr(row.get("session_id")),
+                )
+                continue
+
+            raw_label = row.get("session_label")
+            label = raw_label.strip() if isinstance(raw_label, str) and raw_label.strip() else None
+
+            digest_text: str | None = None
+            raw_digest = row.get("session_digest")
+            if raw_digest is not None:
+                try:
+                    digest = SessionDigest.model_validate(orjson.loads(raw_digest))
+                    digest_text = render_digest(digest) or None
+                except Exception as e:  # noqa: BLE001 — one malformed row must not drop the page
+                    log.warning(
+                        "session_digest_view_parse_failed",
+                        session_id=session_id,
+                        error=str(e),
+                        trace_id=trace_id,
+                    )
+
+            if label is not None or digest_text is not None:
+                views[session_id] = SessionDigestView(label=label, digest_text=digest_text)
+
+        return views
+
     async def mark_session_projection_clean(
         self,
         session_id: str,
@@ -2417,6 +2509,31 @@ class MemoryService:
             return True
         except Exception as e:
             log.error("entity_class_index_creation_failed", error=str(e), exc_info=True)
+            return False
+
+    async def ensure_session_id_index(self) -> bool:
+        """Create the Session.session_id index (ADR-0124 Phase 1 read path).
+
+        Idempotent (IF NOT EXISTS). Mirrors ensure_entity_class_index()'s pattern.
+        Every session_id-keyed Cypher query (write_session_digest, create_session,
+        and this phase's batched digest read) already relies on this lookup; it is
+        made user-facing and unconditional by the session-browser read, which is
+        why it is added now rather than left as a background label scan.
+
+        Returns:
+            True if the index exists or was created successfully.
+        """
+        if not self.connected or not self.driver:
+            return False
+        try:
+            async with self.driver.session() as session:
+                await session.run(
+                    "CREATE INDEX session_id_index IF NOT EXISTS FOR (s:Session) ON (s.session_id)"
+                )
+            log.info("session_id_index_ensured", index_name="session_id_index")
+            return True
+        except Exception as e:
+            log.error("session_id_index_creation_failed", error=str(e), exc_info=True)
             return False
 
     async def bootstrap_owner_identity(

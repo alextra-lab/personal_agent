@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v35-session-continuity-fallback';
+const CACHE_NAME = 'seshat-v36-session-digest-surface';
 
 const PRECACHE_URLS = [
   '/',

@@ -91,7 +91,7 @@ export function SessionList({ currentSessionId, onSelect }: SessionListProps) {
               ].join(' ')}
             >
               <p className={['text-sm font-medium truncate', isActive ? 'text-slate-100' : 'text-slate-300'].join(' ')}>
-                {s.title ?? '(empty session)'}
+                {s.session_label ?? s.title ?? '(empty session)'}
                 {s.channel === 'EVAL' && (
                   <span className="ml-1.5 text-[10px] font-mono text-sky-400/70 border border-sky-400/30 rounded px-1">
                     EVAL
@@ -101,6 +101,11 @@ export function SessionList({ currentSessionId, onSelect }: SessionListProps) {
               <p className="text-xs text-slate-500 mt-0.5">
                 {formatRelativeTime(s.last_active_at)} · {s.turn_count ?? 0} {(s.turn_count ?? 0) === 1 ? 'turn' : 'turns'}
               </p>
+              {s.session_digest && (
+                <p className="text-xs text-slate-500 mt-1 whitespace-pre-line line-clamp-3">
+                  {s.session_digest}
+                </p>
+              )}
             </button>
           </li>
         );

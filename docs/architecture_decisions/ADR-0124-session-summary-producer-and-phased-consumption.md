@@ -556,13 +556,18 @@ prompt. Amendment B stops feeding tool data to the *generator*; it does not stop
    from the durable turn records. **The interim is acknowledged and accepted, not gated:** until the
    oracle ships, a status-contradicted false narration is simply unflagged by the digest. This is
    deliberate — the summariser is not a verification surface (that is the point of Amendment B), and
-   the raw status/error stays durably captured for the oracle. Crucially the loss is
-   **under-annotation, never misinformation**: a missing correction makes a digest *smaller*, not
-   *false*. No Phase-0/1 consumer reads `corrections` at all; and when **Phase 2** later attaches
-   digests to retrieved facts, it only *adds* annotation and **cannot alter which facts win** (AC-17),
-   so an absent status-contradiction note leaves the model with less commentary, not a wrong fact —
-   and the digest was never a verification *guarantee* even with `status_contradiction` (corrections
-   are precision-first and recall-floored by design). If the owner later wants that signal in
+   the raw status/error stays durably captured for the oracle. Crucially this specific loss is
+   **subtractive**: removing `status_contradiction` can only *omit* a correction a digest might have
+   carried, never *add* a wrong one, so its interim failure mode is a digest that is *smaller* (a
+   missed status-contradiction flag), not one that is *false*. No Phase-0/1 consumer reads
+   `corrections` at all; and when **Phase 2** later attaches digests to retrieved facts, it only *adds*
+   annotation and **cannot alter which facts win** (AC-17) — and removing a correction kind introduces
+   no new content for it to surface. (Digest annotation carrying *other* misinformation — e.g. a
+   fabricated `established` item — is a separate, pre-existing risk this ADR governs through provenance
+   tagging, the precision-first corrections bar and the relative annotation bound; Amendment B neither
+   creates nor worsens it.) The digest was never a verification *guarantee* even with
+   `status_contradiction` (corrections are precision-first and recall-floored by design). If the owner
+   later wants that signal in
    annotations, it is the oracle's to supply and Phase 2 can consume the oracle's output. Gating the
    human-visible Phase 1 browser — or fact-first Phase 2 ranking — on a verification oracle would
    reintroduce the very scope-crossing this amendment removes.

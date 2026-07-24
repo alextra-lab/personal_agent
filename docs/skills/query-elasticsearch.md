@@ -66,6 +66,12 @@ known_bad_patterns:
       fields: [command]
     reason: "Index 'agent-telemetry-*' does not exist."
     suggestion: "Use 'agent-logs-*' for all structured telemetry."
+  - pattern: "litellm_request_complete"
+    applies_to:
+      tool: bash
+      fields: [command]
+    reason: "Event 'litellm_request_complete' was removed in FRE-376 Phase 3 — 0 docs in agent-logs-*. Cost/tokens for cloud AND local model calls are unified on 'model_call_completed'."
+    suggestion: "Use event_type == \"model_call_completed\" (has cost_usd, role, provider) or \"api_cost_recorded\" (parallel ledger, no role)."
 ---
 
 # query-elasticsearch — Query ES indices, inspect schema, read self-telemetry
@@ -102,14 +108,15 @@ Most important fields for queries:
 | `message` | text | Log message (full-text search; not for term equality) |
 | `trace_id` | keyword | Request trace ID |
 | `session_id` | keyword | Session identifier |
-| `event_type` | keyword | What happened (e.g. `tool_call_started`, `litellm_request_complete`) |
+| `event_type` | keyword | What happened (e.g. `tool_call_started`, `model_call_completed`) |
 | `action` | keyword | Sub-event action |
 | `task_type` | keyword | Gateway intent classification |
 | `mode` | keyword | Agent mode: `NORMAL`, `ALERT`, etc. |
 | `tool_name` | keyword | Name of tool called |
-| `prompt_tokens` | long | Input tokens to LLM |
-| `completion_tokens` | long | Output tokens from LLM |
-| `cache_read_input_tokens` | long | Cache-hit tokens (prompt caching) |
+| `input_tokens` | long | Prompt tokens to LLM (on `model_call_completed`) |
+| `output_tokens` | long | Completion tokens from LLM (on `model_call_completed`) |
+| `cache_read_tokens` | long | Cache-hit tokens (on `model_call_completed`) |
+| `cache_read_input_tokens` | long | Cache-hit tokens (on `api_cost_recorded` — different field name, same meaning) |
 | `cache_creation_input_tokens` | long | Cache-miss tokens (new cache entry) |
 | `cost_usd` | float | Cost of LLM call |
 | `elapsed_s` | float | Elapsed wall time in seconds |
@@ -194,13 +201,96 @@ curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
       "by_task": {
         "terms": {"field": "task_type", "size": 10},
         "aggs": {
-          "input": {"sum": {"field": "prompt_tokens"}},
-          "output": {"sum": {"field": "completion_tokens"}},
+          "input": {"sum": {"field": "input_tokens"}},
+          "output": {"sum": {"field": "output_tokens"}},
           "cost": {"sum": {"field": "cost_usd"}}
         }
       }
     }
   }' | jq '.aggregations.by_task.buckets'
+
+# Daily spend trend, last 7 days
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "model_call_completed"}},
+      {"range": {"@timestamp": {"gte": "now-7d"}}},
+      {"exists": {"field": "cost_usd"}}
+    ]}},
+    "aggs": {
+      "by_day": {
+        "date_histogram": {"field": "@timestamp", "calendar_interval": "day"},
+        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
+      }
+    }
+  }' | jq '.aggregations.by_day.buckets'
+
+# Spend by role, last 24h (model_call_completed — role is the factory role,
+# e.g. primary / sub_agent / artifact_builder; see Pattern 3b below to group by budget cap)
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "model_call_completed"}},
+      {"range": {"@timestamp": {"gte": "now-24h"}}},
+      {"exists": {"field": "cost_usd"}}
+    ]}},
+    "aggs": {
+      "by_role": {
+        "terms": {"field": "role", "size": 10},
+        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
+      }
+    }
+  }' | jq '.aggregations.by_role.buckets'
+
+# Spend by model, last 24h
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "model_call_completed"}},
+      {"range": {"@timestamp": {"gte": "now-24h"}}},
+      {"exists": {"field": "cost_usd"}}
+    ]}},
+    "aggs": {
+      "by_model": {
+        "terms": {"field": "model", "size": 10},
+        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
+      }
+    }
+  }' | jq '.aggregations.by_model.buckets'
+
+# Spend by budget cap — budget_counter_snapshot already groups roles sharing a
+# cap (cost_gate.budget_role_for(), config/governance/budget.yaml) into running_total,
+# so no client-side join is needed. Take the latest snapshot per (role, time_window).
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "budget_counter_snapshot"}},
+      {"range": {"@timestamp": {"gte": "now-5m"}}}
+    ]}},
+    "aggs": {
+      "by_cap": {
+        "terms": {"field": "time_window", "size": 5},
+        "aggs": {
+          "by_role": {
+            "terms": {"field": "role", "size": 20},
+            "aggs": {
+              "running_total": {"max": {"field": "running_total"}},
+              "cap_usd": {"max": {"field": "cap_usd"}},
+              "utilization_ratio": {"max": {"field": "utilization_ratio"}}
+            }
+          }
+        }
+      }
+    }
+  }' | jq '.aggregations.by_cap.buckets'
 
 # Loop-gate fires (consecutive or identity blocks) in last 7 days
 curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
@@ -311,7 +401,8 @@ curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
 | `term` query on `error` text field | Use `error.keyword`. All other named fields (`level`, `event_type`, `tool_name`, `trace_id`, etc.) are pure keyword post-2026-05-10 reindex — `term` works directly. |
 | Wrong time boundary for "today" | "Today" is ambiguous. Use `@timestamp >= now-24h` (rolling window) instead of a midnight boundary — events from earlier in the day may be in yesterday's UTC index. |
 | Empty `_source` filter | Omit `_source` to get the full doc (it's small). Or list explicit fields to keep results small. |
-| Guessing `event_type` values | Run a `terms` agg on `event_type` to see what's actually emitted. Known values: `tool_call_started`, `tool_call_completed`, `litellm_request_complete`, `tool_loop_gate`, `session_created`, `gateway_request`, `state_transition`, `model_call_started`, `model_call_completed`, `history_sanitised`. |
+| Guessing `event_type` values | Run a `terms` agg on `event_type` to see what's actually emitted. Known values: `tool_call_started`, `tool_call_completed`, `tool_loop_gate`, `session_created`, `gateway_request`, `state_transition`, `model_call_started`, `model_call_completed`, `api_cost_recorded`, `budget_counter_snapshot`, `history_sanitised`. |
+| Assuming a separate cloud-only cost event exists | See `known_bad_patterns` above — the legacy per-provider event name was removed (FRE-376 Phase 3). Cost/tokens for **both** cloud and local model calls are unified on `model_call_completed` (has `role`); `api_cost_recorded` is a parallel ledger (no `role`). |
 
 ## Governance
 

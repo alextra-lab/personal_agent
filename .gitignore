@@ -203,3 +203,6 @@ telemetry/gating_watcher_state.json
 
 # ADR-0114 study substrate snapshot manifests (FRE-838) — local artifacts
 scripts/study/snapshots/
+
+# `remember` plugin session-continuity scratch — must never land on tracked main
+.remember/

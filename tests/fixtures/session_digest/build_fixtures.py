@@ -1,4 +1,6 @@
-"""Author the pre-registered session-digest fixture sets (ADR-0124, FRE-947).
+"""Author the pre-registered session-digest fixture sets.
+
+ADR-0124, FRE-947; conversation-only per Amendment B, FRE-956.
 
 The ground truth for every case is hand-written **here** and emitted to JSON
 alongside. Kept as a script rather than as raw JSON so the labelling stays
@@ -78,16 +80,20 @@ def _write(name: str, payload: dict[str, Any]) -> None:
 
 
 # ==========================================================================
-# AC-8 — input completeness
+# AC-8 — input completeness (Amendment B: zero tool metadata reaches the prompt)
 # ==========================================================================
 
 
 def ac8() -> dict[str, Any]:
-    """Three sessions covering the input dimensions AC-8 names.
+    """Four sessions covering the input dimensions AC-8 (Amendment B) names.
 
-    Deliberately includes a gate-blocked and a malformed-argument invocation: those
-    reach a capture only after this ticket's capture-completeness fix, so their
-    presence in the prompt is itself the proof that fix works end to end.
+    Three carry realistic tool activity (a gate-blocked and a malformed-argument
+    invocation included) whose name/status/error/output/arguments must reach
+    *storage* but never the *prompt* — none of those values coincide with any word
+    in the conversation text, so their absence from the assembled prompt is a
+    genuine absence-of-metadata proof, not a coincidence. The fourth is the
+    criterion's stated positive control: a tool name the user themselves typed in
+    plain prose is legitimate conversation content and must survive.
     """
     long_answer = (
         "The reindex completed. Every shard reallocated cleanly and the cluster "
@@ -168,6 +174,24 @@ def ac8() -> dict[str, Any]:
         _capture("ac8-long", 2, user="how long did it take?", assistant="About four minutes."),
     ]
 
+    # Positive control (AC-8: "a tool name the user themselves typed is legitimate
+    # content and does not fail this"). No tool activity at all — the point is
+    # purely that the user's own prose survives verbatim.
+    user_typed_tool_name = [
+        _capture(
+            "ac8-usertool",
+            1,
+            user="can you run query_elasticsearch again for me?",
+            assistant="Sure, I will run it again.",
+        ),
+        _capture(
+            "ac8-usertool",
+            2,
+            user="thanks",
+            assistant="Done — it came back healthy this time.",
+        ),
+    ]
+
     return {
         "set": "ac8_input_completeness",
         "criterion": "AC-8",
@@ -176,102 +200,87 @@ def ac8() -> dict[str, Any]:
             {"case_id": "multi_result_turn", "captures": multi_result},
             {"case_id": "failed_and_undispatched_calls", "captures": failed_calls},
             {"case_id": "long_assistant_response", "captures": long_response},
+            {"case_id": "user_typed_tool_name", "captures": user_typed_tool_name},
         ],
     }
 
 
 # ==========================================================================
-# AC-10 — basis tagging discriminates
+# AC-10 — basis tagging discriminates (Amendment B: three conversation bases)
 # ==========================================================================
 
 
 def ac10() -> dict[str, Any]:
-    """40 labelled items across 8 sessions, balanced 10 per basis value.
+    """42 labelled items across 9 sessions, balanced 14 per basis value.
 
-    The balance is what makes the anti-collapse threshold meaningful: with a flat
-    ground truth, a producer that tags everything `mixed` cannot claim it was merely
-    matching a skewed truth.
+    Amendment B retires `tool_evidence`, so the fixture drops that spec row
+    entirely and redefines `mixed` as a conversation-only combination — the
+    assistant blends what the user said with its own reasoning, no tool output
+    involved anywhere in the input. The balance is what makes the anti-collapse
+    threshold meaningful: with a flat ground truth, a producer that tags everything
+    `mixed` cannot claim it was merely matching a skewed truth.
     """
-    cases = []
     specs = [
-        # (basis, user text, assistant text, tool output or None, the item's content)
-        (
-            "tool_evidence",
-            "check {thing}",
-            "I looked it up and reported below.",
-            '{{"{key}": "{value}"}}',
-            "{key} is {value}",
-        ),
+        # (basis, user text template, assistant text template, the item's content)
         (
             "user_statement",
             "note that {thing}",
             "Understood, I will keep that in mind.",
-            None,
             "the user stated {thing}",
         ),
         (
             "assistant_reasoning",
             "what do you think about {thing}?",
             "Reasoning from the structure alone, {thing} implies a trade-off.",
-            None,
             "the assistant inferred a trade-off in {thing}",
         ),
         (
             "mixed",
             "given {thing}, what should we do?",
-            "Combining what you said with the lookup, the answer follows.",
-            '{{"{key}": "{value}"}}',
-            "{thing} combined with the measurement",
+            "Since you raised {thing}, and reasoning from that alone, the answer follows.",
+            "{thing} combined with the assistant's own reasoning",
         ),
     ]
     topics = [
-        ("shard allocation", "unassigned_shards", "4"),
-        ("retention policy", "min_age", "7d"),
-        ("driver version", "version", "5.26.0"),
-        ("memory headroom", "mem_available_gib", "1.2"),
-        ("index size", "docs_count", "2276"),
-        ("reranker latency", "p95_ms", "310"),
-        ("embedding width", "dimensions", "1024"),
-        ("budget cap", "daily_cap_usd", "2.50"),
-        ("cache hit rate", "hit_ratio", "0.62"),
-        ("consolidation lag", "lag_seconds", "45"),
+        "shard allocation",
+        "retention policy",
+        "driver version",
+        "memory headroom",
+        "index size",
+        "reranker latency",
+        "embedding width",
+        "budget cap",
+        "cache hit rate",
+        "consolidation lag",
+        "similarity floor",
+        "compaction threshold",
+        "token budget",
+        "session timeout",
     ]
 
     items = []
-    for i, (topic, key, value) in enumerate(topics):
-        for basis, u, a, out, content in specs:
+    for topic in topics:
+        for basis, user_tpl, assistant_tpl, content_tpl in specs:
             items.append(
                 {
                     "basis": basis,
-                    "user": u.format(thing=topic),
-                    "assistant": a.format(thing=topic),
-                    "output": out.format(key=key, value=value) if out else None,
-                    "content": content.format(thing=topic, key=key, value=value),
+                    "user": user_tpl.format(thing=topic),
+                    "assistant": assistant_tpl.format(thing=topic),
+                    "content": content_tpl.format(thing=topic),
                 }
             )
 
-    # 8 sessions x 5 items, so every session mixes basis values and no session can be
-    # answered by tagging uniformly.
-    for s in range(8):
-        chunk = items[s * 5 : (s + 1) * 5]
-        session_id = f"ac10-s{s}"
+    # Chunked so every session mixes basis values and no session can be answered by
+    # tagging uniformly.
+    chunk_size = 5
+    cases = []
+    for start in range(0, len(items), chunk_size):
+        chunk = items[start : start + chunk_size]
+        session_id = f"ac10-s{start // chunk_size}"
         captures = []
         labelled = []
         for j, item in enumerate(chunk, start=1):
-            tools = (
-                [_tool("query_elasticsearch", output=item["output"], arguments={"q": item["user"]})]
-                if item["output"]
-                else []
-            )
-            captures.append(
-                _capture(
-                    session_id,
-                    j,
-                    user=item["user"],
-                    assistant=item["assistant"],
-                    tools=tools,
-                )
-            )
+            captures.append(_capture(session_id, j, user=item["user"], assistant=item["assistant"]))
             labelled.append({"content": item["content"], "true_basis": item["basis"]})
         cases.append({"case_id": session_id, "captures": captures, "labelled_items": labelled})
 
@@ -280,7 +289,7 @@ def ac10() -> dict[str, Any]:
         "criterion": "AC-10",
         "synthetic": True,
         "threshold": "agreement >= 85%; no single emitted tag > 60% of emissions",
-        "label_distribution": {b: 10 for b, *_ in specs},
+        "label_distribution": {basis: len(topics) for basis, *_ in specs},
         "cases": cases,
     }
 
@@ -299,18 +308,23 @@ def _self_correction(
     t2_assistant: str,
     span: str,
     evidence_span: str,
-    evidence_field: tuple[str, str],
     tool: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """An evidenced self-correction (Amendment A).
+    """An evidenced self-correction, conversation-only (Amendment B).
 
-    The agent fixed the record within the conversation, and the supporting evidence
-    lives in a field the producer is GIVEN — a tool error or the conversation text —
-    never a tool payload.
+    The agent fixed the record within the conversation, and BOTH the correction
+    claim and its supporting evidence are grounded in the assistant's own t2
+    message — never the user's message, never a tool result (Amendment B narrows
+    the locator grammar to `assistant_text` only, per AC-11 and the D3
+    consequential-changes table). Where the correcting fact originated with the
+    user or a tool, the assistant's own t2 text explicitly restates it, which is
+    what makes it citable at all.
 
     ``reference_correction`` records a hand-authored citation that resolves; it is
-    pre-validated offline (test_session_digest_validator.py) so an un-citable positive
-    cannot silently become an ``errored`` case in the paid arm.
+    pre-validated offline (test_session_digest_validator.py) so an un-citable
+    positive cannot silently become an ``errored`` case in the paid arm. ``tool``,
+    when given, is still captured/stored (Amendment A) purely for realism — it is
+    never cited, since the producer's prompt never reaches it.
     """
     sid = f"ac12-{case_id}"
     return {
@@ -321,7 +335,7 @@ def _self_correction(
             "span": span,
             "locator": {"capture_id": f"{sid}-t2", "field": "assistant_text"},
             "evidence_span": evidence_span,
-            "evidence_locator": {"capture_id": evidence_field[0], "field": evidence_field[1]},
+            "evidence_locator": {"capture_id": f"{sid}-t2", "field": "assistant_text"},
         },
         "captures": [
             _capture(sid, 1, user=t1_user, assistant=t1_assistant, tools=[tool] if tool else None),
@@ -343,19 +357,23 @@ def _tier_c(case_id: str, kind: str, captures: list[dict[str, Any]]) -> dict[str
 def ac12() -> dict[str, Any]:
     cases: list[dict[str, Any]] = []
 
-    # --- 8 self-corrections (Amendment A) ----------------------------------
-    # 4 backed by a visible tool error; the assistant asserted success, the tool's own
-    # error line denies it, and the assistant self-corrects on the next turn.
+    # --- 8 self-corrections, ALL conversation-only (assistant-text-only) --------
+    # 4 where the assistant itself re-narrates a tool's observed error in its own
+    # words as part of the self-correction — the citable evidence is the
+    # assistant's OWN restatement, never the tool_result field it happened to
+    # originate from.
     cases += [
         _self_correction(
             "b1_migration",
             t1_user="did the migration apply?",
             t1_assistant="Yes, the migration applied cleanly and the sessions table is ready.",
             t2_user="are you sure it succeeded?",
-            t2_assistant="Correcting myself — it did not apply; the migration failed.",
-            span="it did not apply; the migration failed",
+            t2_assistant=(
+                "Correcting myself — I re-read the output, which said 'relation sessions "
+                "already exists', so the migration did not apply."
+            ),
+            span="the migration did not apply",
             evidence_span="relation sessions already exists",
-            evidence_field=("ac12-b1_migration-t1", "tool_result[0].error"),
             tool=_tool(
                 "run_migration",
                 success=False,
@@ -368,10 +386,12 @@ def ac12() -> dict[str, Any]:
             t1_user="did the deploy go out?",
             t1_assistant="The deploy went through and the new image is live.",
             t2_user="is it really live?",
-            t2_assistant="I need to correct that — the deploy failed because the image was not found.",
-            span="the deploy failed because the image was not found",
+            t2_assistant=(
+                "I need to correct that — I re-checked and the output said 'manifest unknown: "
+                "image not found', so the deploy failed."
+            ),
+            span="the deploy failed",
             evidence_span="manifest unknown: image not found",
-            evidence_field=("ac12-b2_deploy-t1", "tool_result[0].error"),
             tool=_tool(
                 "deploy_service",
                 success=False,
@@ -384,10 +404,12 @@ def ac12() -> dict[str, Any]:
             t1_user="create the index",
             t1_assistant="I created the index and it is ready to receive writes.",
             t2_user="did it create cleanly?",
-            t2_assistant="That was wrong — the index already existed, so nothing was created.",
-            span="the index already existed, so nothing was created",
+            t2_assistant=(
+                "That was wrong — re-checking, it said 'resource already exists exception: "
+                "index agent-logs', so nothing was created."
+            ),
+            span="nothing was created",
             evidence_span="resource already exists exception: index agent-logs",
-            evidence_field=("ac12-b3_index-t1", "tool_result[0].error"),
             tool=_tool(
                 "create_index",
                 success=False,
@@ -400,10 +422,12 @@ def ac12() -> dict[str, Any]:
             t1_user="save the config",
             t1_assistant="The config file was written successfully.",
             t2_user="confirm it saved?",
-            t2_assistant="Correcting myself: it did not save, permission was denied.",
-            span="it did not save, permission was denied",
+            t2_assistant=(
+                "Correcting myself: re-reading the result, it said 'EACCES permission denied "
+                "opening /etc/app.conf', so it did not save."
+            ),
+            span="it did not save",
             evidence_span="EACCES permission denied opening /etc/app.conf",
-            evidence_field=("ac12-b4_write-t1", "tool_result[0].error"),
             tool=_tool(
                 "write_file",
                 success=False,
@@ -413,53 +437,68 @@ def ac12() -> dict[str, Any]:
         ),
     ]
 
-    # 4 backed by the conversation text; the user supplies the correcting fact and the
-    # assistant self-corrects, evidence cited from user_text.
+    # 4 where the correcting fact originated with the USER, but the assistant
+    # restates it in its own corrective reply — that restatement is what is cited,
+    # never the user's own message.
     cases += [
         _self_correction(
             "b5_port",
             t1_user="what port does the gateway use?",
             t1_assistant="The gateway listens on port 9000.",
             t2_user="The env file I am reading says AGENT_SERVICE_PORT=9001.",
-            t2_assistant="You are right — I was wrong, it listens on 9001, not 9000.",
-            span="I was wrong, it listens on 9001, not 9000",
+            t2_assistant=(
+                "You are right — since the env file shows AGENT_SERVICE_PORT=9001, I was "
+                "wrong: it listens on 9001, not 9000."
+            ),
+            span="I was wrong: it listens on 9001, not 9000",
             evidence_span="AGENT_SERVICE_PORT=9001",
-            evidence_field=("ac12-b5_port-t2", "user_text"),
         ),
         _self_correction(
             "b6_driver",
             t1_user="what version is the neo4j driver?",
             t1_assistant="The Neo4j driver is pinned at 5.28.",
             t2_user="The lockfile shows neo4j version 5.26.0.",
-            t2_assistant="Correcting myself — the driver is 5.26.0; I misremembered.",
-            span="the driver is 5.26.0",
+            t2_assistant=(
+                "Correcting myself — since the lockfile shows neo4j version 5.26.0, the "
+                "driver is 5.26.0; I misremembered."
+            ),
+            span="the driver is 5.26.0; I misremembered",
             evidence_span="neo4j version 5.26.0",
-            evidence_field=("ac12-b6_driver-t2", "user_text"),
         ),
         _self_correction(
             "b7_floor",
             t1_user="what is the similarity floor?",
             t1_assistant="The similarity floor is 0.5.",
             t2_user="My notes say the configured floor is 0.35.",
-            t2_assistant="You are correct — I was wrong, the floor is 0.35.",
+            t2_assistant=(
+                "You are correct — since your notes say the configured floor is 0.35, I was "
+                "wrong, the floor is 0.35."
+            ),
             span="I was wrong, the floor is 0.35",
             evidence_span="the configured floor is 0.35",
-            evidence_field=("ac12-b7_floor-t2", "user_text"),
         ),
         _self_correction(
             "b8_role",
             t1_user="what model does entity extraction use?",
             t1_assistant="Entity extraction runs on Sonnet.",
             t2_user="The role matrix binds entity_extraction to gpt-5.4-mini.",
-            t2_assistant="That was my mistake — entity extraction runs on gpt-5.4-mini, not Sonnet.",
+            t2_assistant=(
+                "That was my mistake — since the role matrix binds entity_extraction to "
+                "gpt-5.4-mini, entity extraction runs on gpt-5.4-mini, not Sonnet."
+            ),
             span="entity extraction runs on gpt-5.4-mini, not Sonnet",
-            evidence_span="binds entity_extraction to gpt-5.4-mini",
-            evidence_field=("ac12-b8_role-t2", "user_text"),
+            evidence_span="the role matrix binds entity_extraction to gpt-5.4-mini",
         ),
     ]
 
-    # --- 12 Tier-C negatives -----------------------------------------------
-    # Each is something a careless producer would plausibly flag as an error.
+    # --- 12 Tier-C negatives (unchanged by Amendment B) ---------------------
+    # Each is something a careless producer would plausibly flag as an error. Tool
+    # results remain attached for realism (storage is unaffected by Amendment B),
+    # but since the producer no longer reads them at all, the categories that
+    # depended on tool-vs-narration conflict (weak/partial conflict, failed/
+    # incomplete calls) now additionally prove the producer invents nothing from a
+    # bare, single-sided conversational claim — the same "never flag this"
+    # obligation, on a narrower input.
 
     # 3 x weak / partial conflict
     cases.append(
@@ -725,18 +764,24 @@ def ac12() -> dict[str, Any]:
         "set": "ac12_corrections",
         "criterion": "AC-12",
         "synthetic": True,
-        "amendment": "A — payload-fed contradictions removed; positives are self_correction only (status_contradiction is exercised by AC-13)",
+        "amendment": (
+            "B — self_correction is the only kind; ALL 8 positives cite the assistant's own "
+            "text for both the claim and its supporting evidence (status_contradiction is "
+            "retired to the verification oracle, not exercised here or in AC-13)"
+        ),
         "threshold": (
             "ZERO negatives yield a correction (precision absolute); >=80% of positives do; "
-            "every self_correction carries the located span of its supporting evidence"
+            "every self_correction carries the located span of its supporting evidence in the "
+            "assistant's own text"
         ),
         "composition": {"self_correction": 8, "tier_c_negative": 12},
         "note": (
-            "Every positive's supporting evidence lives in a field the producer is actually given "
-            "(a tool error or the conversation text) — never a tool payload, which Amendment A no "
-            "longer feeds. reference_correction records a hand-authored citation that resolves; "
-            "tests/personal_agent/memory/test_session_digest_validator.py asserts each resolves "
-            "before the paid arm runs."
+            "Every positive's supporting evidence lives in the assistant's own t2 message — "
+            "never the user's message, never a tool result field (Amendment B narrows the "
+            "locator grammar to assistant_text only). reference_correction records a "
+            "hand-authored citation that resolves; "
+            "tests/personal_agent/memory/test_session_digest_validator.py asserts each "
+            "resolves, and that its fields are assistant_text, before the paid arm runs."
         ),
         "cases": cases,
     }
@@ -748,25 +793,25 @@ def ac12() -> dict[str, Any]:
 
 
 def ac13() -> dict[str, Any]:
-    """The fixture triple. Both directions matter.
+    """The fixture pair (Amendment B — the `status_visible` case is removed).
 
-    A producer that invents contradictions from gaps fails case 1; one that goes mute
-    whenever any evidence is missing fails cases 2 and 3.
+    Both directions matter. A producer that invents contradictions from gaps fails
+    case 1; one that goes mute whenever any evidence is missing fails case 2.
     """
     return {
         "set": "ac13_missing_evidence",
         "criterion": "AC-13",
         "synthetic": True,
-        "threshold": (
-            "payload_absent yields NO correction; status_visible and self_correction each yield ONE"
-        ),
+        "amendment": "B — the status_visible case is removed; fixture is a pair, not a triple",
+        "threshold": "payload_absent yields NO correction; self_correction yields ONE",
         "cases": [
             {
                 "case_id": "payload_absent",
                 "expected": "no_correction",
                 "why": (
                     "the only possible contradiction lives in a payload the capture does "
-                    "not hold; absence of evidence is not evidence of absence"
+                    "not hold, and is tool-derived in any case — absence of evidence is not "
+                    "evidence of absence, and nothing tool-derived is citable post-Amendment-B"
                 ),
                 "captures": [
                     _capture(
@@ -793,36 +838,12 @@ def ac13() -> dict[str, Any]:
                 ],
             },
             {
-                "case_id": "status_visible",
-                "expected": "correction",
-                "why": (
-                    "a contradiction between 'the command succeeded' and a recorded error "
-                    "status is a status_contradiction on status alone, and must not be suppressed "
-                    "merely because a payload is missing"
-                ),
-                "captures": [
-                    _capture(
-                        "ac13-status",
-                        1,
-                        user="run the migration",
-                        assistant="The migration ran successfully with no errors.",
-                        tools=[
-                            _tool(
-                                "read_file",
-                                success=False,
-                                output=None,
-                                error="exit code 1: relation already exists",
-                                arguments={"path": "migrations/003.sql"},
-                            )
-                        ],
-                    ),
-                    _capture("ac13-status", 2, user="so we are done?", assistant="We should be."),
-                ],
-            },
-            {
                 "case_id": "self_correction",
                 "expected": "correction",
-                "why": "a self_correction needs only the session's own text plus supporting evidence",
+                "why": (
+                    "a self_correction needs only the assistant's own conversation text — its "
+                    "claim and its supporting evidence are both present in the same reply"
+                ),
                 "captures": [
                     _capture(
                         "ac13-self",
@@ -834,7 +855,10 @@ def ac13() -> dict[str, Any]:
                         "ac13-self",
                         2,
                         user="are you certain?",
-                        assistant="I was wrong — the deployment config sets it to 9001.",
+                        assistant=(
+                            "I was wrong — since the deployment config sets "
+                            "AGENT_SERVICE_PORT=9001, it listens on 9001, not 9000."
+                        ),
                         tools=[
                             _tool(
                                 "read_file",

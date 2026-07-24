@@ -1,4 +1,5 @@
-# Session-digest fixture registry (ADR-0124 Phase 0, FRE-947 → FRE-953 / Amendment A)
+# Session-digest fixture registry (ADR-0124 Phase 0, FRE-947 → FRE-953 / Amendment A →
+FRE-956 / Amendment B)
 
 **Pre-registered.** This file and every fixture it lists were written and committed
 **before** the producer was tuned and **before** any evaluation arm was run. ADR-0124's
@@ -16,6 +17,18 @@ exercised by AC-13); **AC-13 is unchanged**; **AC-10 is deferred**
 to an owner-led redesign (its fixture is payload-derived and invalidated — kept for that
 rework, not run by the amended arm). The eight new AC-12 positives were written down here
 and committed before the amended arm was run.
+
+**Amendment B (FRE-956) update.** Tool metadata (name/status/error), not only payloads,
+is removed from the producer's input entirely; `tool_evidence` and `status_contradiction`
+are retired from the schema. Consequently: **AC-8** additionally asserts *zero* tool
+metadata (not only payloads/arguments) reaches the prompt, plus a positive control — a
+tool name the user themselves typed survives; **AC-10 is un-deferred** (nothing
+tool-sourced remains to label, so the fixture is rebuilt over the three conversation
+bases and runs by default again); **AC-12's positives are rebuilt so ALL EIGHT** cite the
+assistant's own text for both the claim and its supporting evidence — the locator grammar
+is `assistant_text` only, so the four cases that used to cite `user_text` are restructured
+around the assistant restating the correcting fact in its own reply; **AC-13 drops the
+`status_visible` case**, reducing the fixture from a triple to a pair.
 
 ---
 
@@ -83,18 +96,22 @@ exact production path — `build_prompt`, the parser, and
 
 ## 3. The sets
 
-### `ac8_input_completeness.json` — AC-8 *(amended)*
-Three sessions exercising the input dimensions AC-8 names: a multi-result turn, a
-failed call, and a long assistant response. Includes one gate-blocked and one
-malformed-argument invocation.
+### `ac8_input_completeness.json` — AC-8 *(amended by Amendment B)*
+Four sessions exercising the input dimensions AC-8 names: a multi-result turn, a
+failed call, a long assistant response, and (new in Amendment B) a positive control.
+Includes one gate-blocked and one malformed-argument invocation.
 
-*Ground truth (Amendment A):* the assembled prompt must contain every turn, the full
-untruncated user and assistant text of each, and for every invocation its name, status
-and error — **and must NOT contain any tool payload or tool argument**. The absence
-direction is the one that catches a regression back to payload-feeding, so the scorer
-asserts it both structurally (no `output:`/`arguments:` block is rendered) and by value
-(no distinctive payload/argument token leaks). The fixture captures still carry payloads
-and arguments (storage is unchanged); the criterion is about what reaches the prompt.
+*Ground truth (Amendment B):* the assembled prompt must contain every turn, the full
+untruncated user and assistant text of each, and **must NOT contain any tool name,
+status, error, payload or argument** — Amendment A only withheld payloads/arguments;
+Amendment B withholds the metadata too. The absence direction is the one that catches a
+regression back to feeding tool data to the generator, so the scorer asserts it both
+structurally (no `output:`/`arguments:` block, no `Tool invocations` header) and by
+value (no tool name/error/payload/argument token leaks). The fourth case,
+`user_typed_tool_name`, is the criterion's stated positive control: a tool name the user
+themselves typed in prose is legitimate conversation content and must survive. The
+fixture captures still carry tool results in full (storage is unaffected); the
+criterion is entirely about what reaches the prompt.
 
 ### `ac9_tool_only_facts.json` — AC-9 *(WITHDRAWN — fixture deleted)*
 Withdrawn by Amendment A: it required a fact present only in tool output to reach the
@@ -102,29 +119,33 @@ digest, which the amendment deliberately prevents (an unnarrated fact is not par
 the conversation and so is not the user's memory). The fixture is removed and the
 criterion must not be evidenced.
 
-### `ac10_basis_labelling.json` — AC-10 *(DEFERRED — invalidated, owner-led redesign)*
-**40 items** across 8 sessions, labelled with their true `basis`. **Invalidated by
-Amendment A:** the balance was built around payload-derived `tool_evidence` labels the
-producer can no longer emit, and the harness scores agreement by token overlap on the
-assumption of ~one emitted item per label, which a ~250-token digest violates by design
-(FRE-953 open question). The fixture is retained for the owner-led redesign and is **not
-run by the amended arm** (reachable only via `--set ac10`).
+### `ac10_basis_labelling.json` — AC-10 *(un-deferred by Amendment B)*
+**42 items** across 9 sessions, labelled with their true `basis`, balanced 14 per value
+across the three conversation bases (`user_statement`, `assistant_reasoning`, `mixed`).
+**Rebuilt for Amendment B:** the retired `tool_evidence` spec row is dropped entirely —
+with nothing tool-sourced left to label, the payload/tool-derived fixture problem that
+deferred this criterion under Amendment A dissolves, and `mixed` is redefined as a
+conversation-only combination (the assistant blends what the user said with its own
+reasoning, no tool output anywhere in the input). The fixture runs by default again.
 
-### `ac12_corrections.json` — AC-12 *(amended)*
+### `ac12_corrections.json` — AC-12 *(amended by Amendment B)*
 **20 cases**, ground truth fixed per case.
 
 *Positives (8 `self_correction`)* — the assistant corrected the record within the
-conversation, and the supporting evidence lives in a field the producer is actually
-given, never a tool payload:
-- **4** backed by a visible **tool error** (the assistant asserted success/a value, the
-  tool's own error line denies it, and the assistant self-corrects on the next turn);
-- **4** backed by the **conversation text** (the user supplies the correcting fact and
-  the assistant self-corrects, evidence cited from `user_text`).
+conversation, and **both** the claim and its supporting evidence are cited from the
+assistant's own t2 message (Amendment B narrows the locator grammar to `assistant_text`
+only — the user's own message is no longer a valid locator target):
+- **4** where the assistant's own corrective message re-narrates, in its own words, a
+  tool error it previously observed (the tool call is still captured/stored for realism
+  but is never cited — the citable text is the assistant's restatement);
+- **4** where the correcting fact originated with the user, but the assistant's
+  corrective reply explicitly restates it in its own words, and that restatement — not
+  the user's original message — is what is cited.
 
 Each positive carries a `reference_correction` — a hand-authored span/locator +
-evidence-span/locator that resolves — pre-validated offline by
-`tests/personal_agent/memory/test_session_digest_validator.py` before any paid run, so
-an un-citable positive cannot silently turn into an `errored` case.
+evidence-span/locator that resolves, both fields `assistant_text` — pre-validated
+offline by `tests/personal_agent/memory/test_session_digest_validator.py` before any
+paid run, so an un-citable positive cannot silently turn into an `errored` case.
 
 *Negatives (12 Tier-C)*, unchanged, spanning the full range D3 names — each a case a
 careless producer would plausibly flag:
@@ -138,17 +159,17 @@ careless producer would plausibly flag:
 of positives do, and every emitted `self_correction` carries the located span of its
 **supporting evidence**, not merely of the self-correction sentence.
 
-### `ac13_missing_evidence.json` — AC-13
-The fixture **triple**, on captures with deliberately incomplete records:
+### `ac13_missing_evidence.json` — AC-13 *(reduced to a pair by Amendment B)*
+The fixture **pair** — Amendment B removes the `status_visible` case, since
+`status_contradiction` is retired to the verification oracle — on captures with
+deliberately incomplete records:
 1. `payload_absent` — the only possible contradiction lives in a payload missing from
-   the capture. Must yield **no** correction.
-2. `status_visible` — the contradiction is visible in tool **status/error**. Must
-   yield **one**.
-3. `self_correction` — an explicit evidenced self-correction in the session's own
-   text. Must yield **one**.
+   the capture (and is tool-derived in any case). Must yield **no** correction.
+2. `self_correction` — an explicit evidenced self-correction, entirely in the
+   assistant's own text. Must yield **one**.
 
-Both directions matter: a producer that invents contradictions from gaps fails (1),
-and one that goes mute whenever any evidence is missing fails (2) and (3).
+Both directions matter: a producer that invents contradictions from gaps fails (1), and
+one that goes mute whenever any evidence is missing fails (2).
 
 ---
 

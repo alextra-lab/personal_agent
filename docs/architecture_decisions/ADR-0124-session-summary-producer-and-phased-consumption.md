@@ -145,7 +145,8 @@ session-end is not observable. The question is "when is the projection stale."
   producer reads user and assistant text only; no tool name, status or error reaches the prompt.
   Tool invocation and success/failure counts remain available as **computed** structured properties
   per D3's "compute state, generate meaning" — derived from the captures, never fed to the generator.)*
-  Bounded by construction, so no per-result cap and no summariser-specific input ceiling are needed.
+  The input is user and assistant text only; its size is governed by the oversized-input rejection
+  below, not by any tool-result cap.
 - **Egress is governed by the role binding, not by a per-session branch.** *(Amendment A: with tool
   payloads removed, the producer's input is conversation text the primary model already processed, so
   there is no new egress path at all. The role decision below stands on its own merits — an
@@ -249,8 +250,9 @@ nothing else:**
 
 - **`self_correction` — explicit evidenced self-correction.** The agent itself corrected the record
   within the session, and the correction is supported by evidence *in the conversation* — the
-  assistant's own corrective text, which the user saw. Carries the located span of the
-  self-correction.
+  assistant's own corrective text, which the user saw. Carries the located span of the **supporting
+  evidence** in the conversation — the corrective text that grounds the correction (AC-11 / AC-12) —
+  not merely a pointer to the fact that a correction occurred.
 - **`status_contradiction` — REMOVED by Amendment B.** Adjudicating narration against a tool's own
   status or error is *verification*, and verification belongs to the downstream verification oracle
   (Lane 5 → Workstream 4), not the summariser. The raw status/error remains durably captured in the
@@ -318,9 +320,10 @@ Additional live mechanisms, each with its mitigation:
 - **Provenance collapse** — the model cannot distinguish a retrieved atomic fact from an LLM-authored
   retrospective synthesis. Mitigation: the rendered annotation is explicitly labelled as derived
   synthesis, not presented as equivalent evidence.
-- **Indirect instruction contamination** — a new path created by D2. Attacker-influenceable web or
-  file content → tool result → digest → *a future session's context*, arriving with the authority of
-  the system's own memory. Low likelihood in a single-user system; recorded because the path is new.
+- **~~Indirect instruction contamination~~** *(no longer applicable — Amendment A removed tool
+  payloads and Amendment B removed tool metadata from the input entirely, so the
+  attacker-influenceable content → tool result → digest → future-session path this bullet described no
+  longer exists. Matches the struck instruction-contamination row in the Risks table.)*
 
 **Structural invariant, enforced rather than monitored:**
 
@@ -550,7 +553,13 @@ prompt. Amendment B stops feeding tool data to the *generator*; it does not stop
 1. **Status-based contradiction detection** — narration denied by a tool's own status or error (e.g.
    "the command succeeded" against a recorded failure). This was the payload-free survivor Amendment A
    kept; it is verification and now leaves wholly to the oracle, which reads the same status/error
-   from the durable turn records.
+   from the durable turn records. **The interim is acknowledged and accepted, not gated:** until the
+   oracle ships, a status-contradicted false narration is simply unflagged by the digest. This is
+   deliberate — the summariser is not a verification surface (that is the point of Amendment B), the
+   raw status/error stays durably captured for the oracle, and no Phase-0 or Phase-1 consumer acts on
+   a `corrections` entry (anti-re-litigation is Phase 3, gated separately on its own precision bar).
+   Gating the human-visible Phase 1 browser on a verification oracle would reintroduce the very
+   scope-crossing this amendment removes; the loss is a smaller digest, not a live exposure.
 2. **The un-narrated tool signal** Amendment A valued — e.g. the 27 `nonexistent_tool` invocations
    that "live in names and statuses." By Amendment B's stricter principle this is not memory: an
    agent-internal tool failure the user never saw is not part of what they retained. Where it *was*
@@ -586,11 +595,17 @@ records (the future VO-dump), read by the oracle on demand — not carried in th
 
 Amendment B's own acceptance is discriminating and outcome-level, not a restatement of the edits:
 
-- **No retired value survives where a digest is produced or stored.** Over all digests generated after
-  Amendment B ships, **zero** items carry `basis = tool_evidence` and **zero** `corrections` entries
-  carry `status_contradiction`. · **Check:** a Cypher scan of `session_digest` records keyed on
-  `summary_generated_at` after the ship SHA. · *Fails if* any such item exists — which a build that
-  edited the prose but left the schema enum or the producer prompt intact would produce.
+- **No retired value survives where a digest is produced or stored — over a non-empty, complete
+  population.** Let the post-amendment population be every digest with `summary_generated_at` later
+  than the Amendment-B deploy timestamp. AC-2 and AC-7 already require that population to be
+  **non-empty and complete** (every eligible multi-turn session quiet past the threshold carries a
+  digest). Over it, **zero** items carry `basis = tool_evidence` and **zero** `corrections` entries
+  carry `status_contradiction`. · **Check:** a Cypher scan of `session_digest` records filtered by
+  `summary_generated_at > <deploy timestamp>`, run only after AC-2/AC-7 confirm the population is
+  populated. · *Fails if* any such item exists — a build that edited the prose but left the schema
+  enum or the producer prompt intact would produce one — **or if the population is empty**, which
+  would let the scan pass vacuously while the producer is dead; this criterion inherits AC-2/AC-7's
+  non-emptiness rather than passing around it.
 - **The prompt is conversation-only.** AC-8 (as amended) asserts the assembled prompt contains no tool
   name, status, error, argument or payload. · *Fails if* any tool-derived token appears — the
   regression back to feeding tool data to the generator.
@@ -956,15 +971,20 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   carries `turn_count` today but not duration or tool success/failure counts, and D3's
   compute-don't-generate rule does not by itself justify adding aggregate columns or backfilling
   history — if those properties are added later, this criterion extends to them then.
-- **AC-8** — Input completeness. For a predefined fixture set spanning multi-result turns, failed
-  calls and long assistant responses, the assembled prompt contains every turn in the session and the
-  **full, untruncated** user and assistant text of each. **Amendment B:** the prompt carries **no tool
-  metadata at all** — not payloads or arguments (already excluded by Amendment A), and not tool name,
-  status or error — so the criterion asserts the **absence** of every tool-derived token. · **Check:**
-  assert over the assembled prompt against the capture record. · *Fails if* any turn, or any turn's
-  full user or assistant text, is missing or altered, **or if any tool name, status, error, argument
-  or payload appears in the prompt** — the second direction is what catches a regression back to
-  feeding tool data to the generator.
+- **AC-8** — Input completeness and provenance. For a predefined fixture set spanning multi-result
+  turns, failed calls and long assistant responses, the assembled prompt contains every turn in the
+  session and the **full, untruncated** user and assistant text of each, **and is composed of nothing
+  else**. **Amendment B:** the prompt is assembled **solely from the user and assistant text fields**
+  of each turn (plus fixed scaffolding) — no tool-metadata field (name, status, error), argument or
+  payload is serialised into it. · **Check:** two-directional. *Completeness* — every turn's full user
+  and assistant text is present and byte-identical to the capture. *Provenance* — the assembled prompt
+  is byte-reconstructible from the concatenation of those text fields and the fixed scaffolding alone,
+  and the prompt-builder reads no tool-metadata field. · *Fails if* any turn or any turn's full text is
+  missing or altered, **or if the prompt contains any span that did not originate in a user/assistant
+  text field or the fixed scaffolding** — a tool name the *user themselves typed* is legitimate content
+  and does not fail this; a tool-metadata field serialised by the builder does. This is what catches a
+  regression back to feeding tool data to the generator without false-failing on conversation that
+  merely mentions a tool.
 - **AC-9** — **WITHDRAWN by Amendment A.** It required a fact present only in tool output to reach
   the digest, which the amendment deliberately prevents: an unnarrated fact is not part of the
   conversation and therefore not the user's memory. Retained as a numbered entry so AC references in
@@ -998,8 +1018,9 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
   AC-13); negatives comprising ≥12
   Tier-C cases drawn from the full range D3 names —
   weak/partial conflict, failed or incomplete calls, ambiguous readings, legitimately changed state,
-  and disagreement with a subjective judgment. The producer emits a correction for **every** positive
-  and none of the negatives. Each emitted `self_correction` additionally carries the located span of
+  and disagreement with a subjective judgment. The producer emits a correction for the positives — at
+  or above the recall floor stated below — and for **none** of the negatives (precision is absolute;
+  recall is floored, not perfect — see the fail rule). Each emitted `self_correction` additionally carries the located span of
   the **supporting evidence** in the conversation, not merely of the self-correction sentence. ·
   **Check:** hand-labelled
   fixtures, fixed before tuning. · *Fails if* **any** negative yields a correction (precision is

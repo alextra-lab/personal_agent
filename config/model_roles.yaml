@@ -109,7 +109,23 @@ bindings:
   # the incoherence FRE-958 also touched). `open: true` makes it user-selectable
   # rather than pinned; the per-primary default mapping and must-define-on-add
   # guard are the ADR-0121 amendment, not this stopgap.
-  sub_agent:          { deployment: qwen3.6-35b-instruct, open: true }
+  #
+  # ADR-0121 Addendum A (FRE-964) step 1 (FRE-965): `defaults_by_primary` below
+  # is the durable, per-primary form of the FRE-963 re-bind above — one
+  # deliberate line per primary-eligible (kind: llm) deployment, no derivation.
+  # Migration window: this is substrate only. `deployment`/`open` above stay
+  # operative and unchanged; nothing resolves through this map until step 3
+  # (FRE-967) cuts the resolver over, and it is not yet enforced total/valid
+  # until step 2's (FRE-966) fail-closed guard lands.
+  sub_agent:
+    deployment: qwen3.6-35b-instruct
+    open: true
+    defaults_by_primary:
+      qwen3.6-35b-thinking: qwen3.6-35b-instruct  # local thinking primary -> local instruct companion
+      qwen3.6-35b-instruct: qwen3.6-35b-instruct  # self-pair — no cheaper local companion
+      claude_sonnet:        claude_sonnet          # frontier primary -> itself (no cheaper same-family sub)
+      claude_haiku:         claude_haiku           # self-pair — already the cheap Anthropic tier
+      gpt-5.4-mini:         gpt-5.4-mini           # self-pair — no cheaper GPT tier in the catalog
   entity_extraction:  { deployment: gpt-5.4-mini }
   captains_log:       { deployment: claude_sonnet }
   # ADR-0124 D2 (FRE-947): pinned — no `open: true`. The summariser reads full

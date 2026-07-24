@@ -3135,7 +3135,14 @@ async def step_init(
                     ExpansionController,
                 )
 
-                llm_client = get_llm_client(role_name=ModelRole.PRIMARY.value)
+                # FRE-958: this client serves ONLY the planner and dispatch calls
+                # inside ExpansionController.execute(), both of which request
+                # role=SUB_AGENT internally — it must be built for that role (ADR-0033
+                # client isolation, mirrored in expansion.py's autonomous-mode path),
+                # never PRIMARY. sub_agent may be bound to a different placement
+                # (e.g. a cloud provider) than primary; building for the wrong role
+                # dials the wrong client/endpoint for every sub-agent call.
+                llm_client = get_llm_client(role_name=ModelRole.SUB_AGENT.value)
                 controller = ExpansionController()
                 # ADR-0088 D4: report progress at dispatch start so tool/context fields are
                 # live during the (potentially multi-minute) expansion window. Cost itself

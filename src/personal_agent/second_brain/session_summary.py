@@ -21,8 +21,9 @@ metadata; Amendment B removes that metadata too — no tool name, status, error,
 or payload reaches the prompt. The digest is the user's memory of the *conversation*;
 tool output reached the user through the assistant's narration, and that narration is
 what belongs in memory. (Tool results continue to be captured and stored — only their
-delivery here stops; invocation and success/failure counts remain available as computed
-structured properties derived from the captures, never fed to the generator.)
+delivery here stops. Invocation and success/failure counts are computable from those
+stored captures if a future consumer needs them; no such computed property exists yet,
+and none is fed to the generator.)
 
 **What it emits.** Four optional slots with per-item provenance, validated. Never
 silently truncated input: oversized sessions are rejected **before** any model call,

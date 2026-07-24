@@ -28,10 +28,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 import orjson
 
@@ -42,6 +42,46 @@ WHERE s.summary_generated_at IS NOT NULL
   AND s.session_digest IS NOT NULL
 RETURN s.session_digest AS digest
 """
+
+
+class _DigestRecord(Protocol):
+    """One returned row — only ``record["digest"]`` is ever read."""
+
+    def __getitem__(self, key: str) -> str: ...
+
+
+class _DigestResult(Protocol):
+    """What a session's ``run()`` returns — an async iterable of records."""
+
+    def __aiter__(self) -> AsyncIterator[_DigestRecord]: ...
+
+
+class Neo4jSessionLike(Protocol):
+    """The slice of the neo4j ``AsyncSession`` contract this module needs."""
+
+    async def run(self, query: str, **params: Any) -> _DigestResult:
+        """Run a Cypher query and return its result."""
+        ...
+
+    async def __aenter__(self) -> "Neo4jSessionLike":
+        """Enter the session's async context."""
+        ...
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        """Exit the session's async context."""
+        ...
+
+
+class Neo4jDriverLike(Protocol):
+    """The slice of the neo4j ``AsyncDriver`` contract this module needs.
+
+    A real ``AsyncDriver`` satisfies this structurally; tests inject a small
+    fake that does the same, with no live Neo4j required.
+    """
+
+    def session(self) -> Neo4jSessionLike:
+        """Open a new session."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -98,7 +138,7 @@ def scan_digests(raw_digest_json: Sequence[str]) -> RetiredValueScan:
 
 
 async def run_scan(
-    driver: Any, deploy_ts: datetime, *, allow_empty: bool = False
+    driver: Neo4jDriverLike, deploy_ts: datetime, *, allow_empty: bool = False
 ) -> RetiredValueScan:
     """Fetch the post-deploy digest population and scan it.
 
@@ -175,7 +215,7 @@ async def _main() -> int:
     from personal_agent.memory.service import MemoryService  # noqa: PLC0415
 
     service = MemoryService()
-    if not await service.connect():
+    if not await service.connect() or service.driver is None:
         print("could not connect to Neo4j", file=sys.stderr)
         return 1
 

@@ -77,6 +77,13 @@ _ASSISTANT_FIELD = "assistant_text"
 # Label bound (ADR-0124 D3). A distinguishing noun phrase, not a compressed digest.
 MAX_LABEL_CHARS = 90
 
+# A basis Amendment B retired from BasisTag (FRE-969). Digests stored before the
+# retirement still carry it on disk; the closest surviving tag it is coerced to
+# on read is "mixed" — never rejected outright, since that would blank an entire
+# historical session's digest for one stale tag.
+_RETIRED_BASIS_TOOL_EVIDENCE = "tool_evidence"
+_RETIRED_BASIS_FALLBACK: BasisTag = "mixed"
+
 
 class SummaryFailureReason(StrEnum):
     """Why a generation attempt failed.
@@ -351,6 +358,36 @@ def validate_digest_provenance(digest: SessionDigest, captures: Sequence[TaskCap
         )
 
     return violations
+
+
+def parse_stored_digest(raw: dict[str, object]) -> SessionDigest:
+    """Validate a stored digest payload, tolerating bases retired by Amendment B.
+
+    Digests written before Amendment B may carry ``basis: "tool_evidence"`` on an
+    ``established``/``decisions``/``unresolved``/``corrections`` item — the tag was
+    retired (tools are never a source of an established fact), but nothing rewrote
+    sessions already on disk. The tightened :data:`BasisTag` literal would reject
+    the whole digest for one stale tag; this coerces it to ``"mixed"`` instead, so
+    historical sessions keep rendering.
+
+    Args:
+        raw: The digest payload as read from storage (parsed JSON).
+
+    Returns:
+        The validated digest.
+
+    Raises:
+        pydantic.ValidationError: For any malformation other than the retired
+            ``tool_evidence`` basis.
+    """
+    for slot in ("established", "decisions", "unresolved", "corrections"):
+        items = raw.get(slot)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict) and item.get("basis") == _RETIRED_BASIS_TOOL_EVIDENCE:
+                item["basis"] = _RETIRED_BASIS_FALLBACK
+    return SessionDigest.model_validate(raw)
 
 
 def render_digest(digest: SessionDigest) -> str:

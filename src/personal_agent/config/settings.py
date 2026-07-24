@@ -184,7 +184,18 @@ class AppConfig(BaseSettings):
     orchestrator_max_concurrent_tasks: int = Field(
         default=5, ge=0, description="Maximum concurrent tasks"
     )
-    orchestrator_task_timeout_seconds: int = Field(default=300, ge=1, description="Task timeout")
+    orchestrator_task_timeout_seconds: int = Field(
+        default=900,
+        ge=1,
+        description=(
+            "Total-turn wall-clock deadline (FRE-973). Enforced in step_llm_call: a "
+            "model call is bounded to the turn's remaining budget via asyncio.wait_for, "
+            "and once the budget is exhausted no further LLM call is attempted — the "
+            "turn stops with whatever tool_results were gathered rather than running "
+            "to a provider timeout. Raised from the scaffolding-era 300 (which would "
+            "clip legitimate long turns, e.g. multi-minute artifact builds) to 900."
+        ),
+    )
     orchestrator_max_tool_iterations: int = Field(
         default=25,
         ge=0,

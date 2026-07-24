@@ -869,7 +869,7 @@ def test_get_session_config_no_selection_row_falls_back_to_binding_default() -> 
     roles = resp.json()["roles"]
     assert roles["primary"]["resolved"] == "qwen3.6-35b-thinking"
     assert roles["artifact_builder"]["resolved"] == "claude_sonnet"
-    assert roles["sub_agent"]["resolved"] == "claude_sonnet"
+    assert roles["sub_agent"]["resolved"] == "qwen3.6-35b-instruct"
 
 
 def test_get_session_config_selection_store_failure_logs_trace_id() -> None:
@@ -1139,7 +1139,9 @@ def test_list_sessions_digest_hydration_failure_logs_trace_id_and_degrades() -> 
     assert resp.status_code == 200
     data = resp.json()
     assert data[0]["session_label"] is None
-    failure_log = next(e for e in captured if e.get("event") == "session_digest_view_hydration_failed")
+    failure_log = next(
+        e for e in captured if e.get("event") == "session_digest_view_hydration_failed"
+    )
     assert failure_log.get("trace_id")
 
 

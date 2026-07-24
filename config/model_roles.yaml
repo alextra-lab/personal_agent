@@ -103,7 +103,13 @@ bindings:
   # applies to either role). artifact_builder's real per-build choice lands
   # with ADR-0122.
   artifact_builder:   { deployment: claude_sonnet, open: true }
-  sub_agent:          { deployment: claude_sonnet }
+  # FRE-963 (owner-directed 2026-07-24): restored to its companion default —
+  # qwen3.6-35b-instruct, alongside the qwen3.6-35b-thinking primary — after
+  # drifting to claude_sonnet (a silent local-primary-to-cloud-sub_agent fan-out,
+  # the incoherence FRE-958 also touched). `open: true` makes it user-selectable
+  # rather than pinned; the per-primary default mapping and must-define-on-add
+  # guard are the ADR-0121 amendment, not this stopgap.
+  sub_agent:          { deployment: qwen3.6-35b-instruct, open: true }
   entity_extraction:  { deployment: gpt-5.4-mini }
   captains_log:       { deployment: claude_sonnet }
   # ADR-0124 D2 (FRE-947): pinned — no `open: true`. The summariser reads full

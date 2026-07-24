@@ -301,32 +301,32 @@
     },
     "binding|sub_agent": {
       "definition": {
-        "context_length": 200000,
-        "default_timeout": 180,
-        "disable_thinking": false,
-        "endpoint": null,
-        "id": "claude-sonnet-5",
-        "input_cost_per_token": 3e-06,
-        "max_concurrency": 10,
-        "max_tokens": 128000,
+        "context_length": 65536,
+        "default_timeout": 90,
+        "disable_thinking": true,
+        "endpoint": "https://slm.example.com/v1",
+        "id": "unsloth/qwen3.6-35-A3B-subagent",
+        "input_cost_per_token": null,
+        "max_concurrency": 3,
+        "max_tokens": 2048,
         "min_concurrency": 1,
-        "min_p": null,
-        "output_cost_per_token": 1.5e-05,
+        "min_p": 0.0,
+        "output_cost_per_token": null,
         "parallel_tool_calls": true,
-        "placement": "cloud",
-        "presence_penalty": null,
-        "provider": "anthropic",
-        "quantization": null,
+        "placement": "local",
+        "presence_penalty": 1.5,
+        "provider": "slm_local",
+        "quantization": "8bit",
         "reasoning_effort": null,
-        "repetition_penalty": null,
+        "repetition_penalty": 1.0,
         "supports_function_calling": true,
-        "supports_pdf_document": true,
+        "supports_pdf_document": false,
         "supports_vision": true,
-        "temperature": null,
+        "temperature": 0.7,
         "thinking_budget_tokens": null,
         "tool_calling_strategy": "native",
-        "top_k": null,
-        "top_p": null
+        "top_k": 20,
+        "top_p": 0.8
       },
       "key": "sub_agent"
     },
@@ -425,7 +425,7 @@
       "artifact_builder": 180,
       "compressor": 60,
       "primary": 600,
-      "sub_agent": 180
+      "sub_agent": 90
     }
   }
 }

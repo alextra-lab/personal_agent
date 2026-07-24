@@ -139,6 +139,14 @@ class RoleBinding(BaseModel):
         disable_thinking: Per-use hard disable of thinking for Qwen3.5+ models.
         reasoning_effort: Per-use reasoning-effort hint for reasoning models.
         default_timeout: Per-use request timeout, overriding the deployment default.
+        defaults_by_primary: ADR-0121 Addendum A (FRE-964) — a per-primary default
+            map, currently meaningful only on the ``sub_agent`` binding: primary
+            deployment key -> the sub deployment key it pairs with, one
+            deliberate line per primary-eligible deployment (no derivation).
+            Substrate only as of step 1 (FRE-965) — nothing resolves through it
+            yet; the flat ``deployment`` above stays the operative default until
+            step 3's resolver cutover. ``None`` when unset (every binding other
+            than ``sub_agent`` today).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -152,6 +160,15 @@ class RoleBinding(BaseModel):
         None, description="Per-use reasoning-effort hint"
     )
     default_timeout: int | None = Field(None, ge=1, description="Per-use timeout override")
+    defaults_by_primary: dict[str, str] | None = Field(
+        None,
+        description=(
+            "ADR-0121 Addendum A: per-primary default sub map (primary deployment "
+            "key -> paired sub deployment key). Substrate only until step 3's "
+            "resolver reads it; the flat `deployment` field above is what actually "
+            "resolves until then."
+        ),
+    )
 
 
 class ModelDefinition(BaseModel):

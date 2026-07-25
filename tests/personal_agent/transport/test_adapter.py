@@ -138,7 +138,18 @@ class TestPhaseEvents:
         assert result["type"] == "PHASE_END"
         assert result["session_id"] == "s"
         assert result["seq"] == 9
-        assert result["data"] == {"phase": "expansion", "phase_id": "p0", "parent_id": None}
+        assert result["data"] == {
+            "phase": "expansion",
+            "phase_id": "p0",
+            "parent_id": None,
+            "ok": True,
+        }
+
+    def test_phase_end_ok_false(self) -> None:
+        """FRE-936 / AC-9(b): a failed phase's PHASE_END carries ok=False."""
+        event = PhaseEndEvent(phase=Phase.PLANNING, phase_id="p1", session_id="s", ok=False)
+        result = to_agui_event(event)
+        assert result["data"]["ok"] is False
 
     def test_phase_events_json_serializable(self) -> None:
         """The persisted payload must be JSON-safe (enum → value)."""

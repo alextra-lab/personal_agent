@@ -20,6 +20,7 @@ import { ChatMessage } from './ChatMessage';
 import { ClassifiedErrorCard } from './ClassifiedErrorCard';
 import { DecisionCard } from './DecisionCard';
 import { LocationConsent } from './LocationConsent';
+import { PhaseIndicator } from './PhaseIndicator';
 import { SessionList } from './SessionList';
 import { ToolIndicator } from './ToolIndicator';
 import { TurnStatusBar } from './TurnStatusBar';
@@ -99,6 +100,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     isStreaming,
     isReconnecting,
     activeTools,
+    phases,
     turnStatus,
     serverSelection,
     pendingConstraint,
@@ -222,7 +224,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, activeTools, pendingConstraint, classifiedError]);
+  }, [messages, activeTools, phases, pendingConstraint, classifiedError]);
 
   const handleSend = (text: string, attachments: UploadedAttachment[]) => {
     if (!sessionId) return;
@@ -473,6 +475,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             Stays visible after streaming ends (shows the last turn's metrics);
             self-hides only until the first turn produces a turn_status. */}
         <TurnStatusBar status={turnStatus} />
+        <PhaseIndicator phases={phases} />
         <ToolIndicator tools={activeTools} />
         <ChatInput
           onSend={handleSend}

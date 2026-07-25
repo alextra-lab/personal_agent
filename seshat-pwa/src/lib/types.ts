@@ -15,6 +15,8 @@ export type AGUIEventType =
   | 'TEXT_DELTA'
   | 'TOOL_CALL_START'
   | 'TOOL_CALL_END'
+  | 'PHASE_START'
+  | 'PHASE_END'
   | 'STATE_DELTA'
   | 'INTERRUPT'
   | 'tool_approval_request'
@@ -94,6 +96,47 @@ export interface ToolCallEndData {
 }
 
 /**
+ * The closed set of inference / human-wait phases the transport announces
+ * (ADR-0123 §1-§2). Mirrors `personal_agent.transport.events.Phase`.
+ */
+export type PhaseName =
+  | 'planning'
+  | 'synthesis'
+  | 'artifact_build'
+  | 'expansion'
+  | 'sub_agent'
+  | 'waiting_for_choice';
+
+/** PHASE_START payload — an inference / human-wait phase began (ADR-0123 §2). */
+export interface PhaseStartData {
+  phase: PhaseName;
+  phase_id: string;
+  /**
+   * ISO-8601 UTC server timestamp of the phase start. Held verbatim by the
+   * client — never reparsed/reserialized — so a reconnect can assert
+   * byte-equality against the persisted event (ADR-0123 AC-3(b)).
+   */
+  started_at: string;
+  detail: string | null;
+  /** The parent's phase_id when this is a concurrent child (AC-8). */
+  parent_id: string | null;
+}
+
+/** PHASE_END payload — an inference / human-wait phase ended (ADR-0123 §2). */
+export interface PhaseEndData {
+  phase: PhaseName;
+  phase_id: string;
+  parent_id: string | null;
+  /**
+   * `false` when the phase ended because the wrapped work raised (FRE-936 /
+   * AC-9(b)) — `phase_span`'s pairing guarantee means PHASE_END fires on
+   * every exit, success or exception, so this is what distinguishes them.
+   * Absent on events persisted before this field shipped; treated as `true`.
+   */
+  ok?: boolean;
+}
+
+/**
  * STATE_DELTA payload — agent state change.
  *
  * The key ``context_window`` carries a float in [0, 1] representing
@@ -139,6 +182,34 @@ export interface ToolCall {
   status: 'running' | 'completed';
   /** Human-readable result summary (populated on completion). */
   result?: string;
+}
+
+/**
+ * A phase instance in the live turn-progress surface (ADR-0123 T3, FRE-936).
+ *
+ * `running` resolves to `completed`/`error` on its own PHASE_END (keyed by
+ * `ok`). As a backstop — when no matching PHASE_END arrives, e.g. a dropped
+ * best-effort emission — a terminal transport event sweeps any still-running
+ * phase directly: CANCELLED → `cancelled`, RUN_ERROR → `error`, DONE →
+ * `completed` (a normal turn end must never leave a phase spinning).
+ */
+export interface PhaseNode {
+  phaseId: string;
+  phase: PhaseName;
+  detail: string | null;
+  /** Raw server ISO-8601 timestamp, held verbatim (ADR-0123 AC-3(b)). */
+  startedAt: string;
+  state: 'running' | 'completed' | 'cancelled' | 'error';
+  /** The parent's phaseId when this is a concurrent child (AC-8); null for a top-level phase. */
+  parentId: string | null;
+  /**
+   * Client-observed `Date.now()` at the moment this phase left `running`.
+   * PHASE_END carries no server end timestamp, so this freezes the
+   * displayed duration on resolution — without it a completed phase's
+   * elapsed time would keep growing from `startedAt` forever, contradicting
+   * its own checkmark. `null` while still running.
+   */
+  endedAt: number | null;
 }
 
 export interface ChatMessage {

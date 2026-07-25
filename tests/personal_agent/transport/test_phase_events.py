@@ -58,6 +58,11 @@ class TestEmitHelpers:
         assert len(recorder) == 1
         assert isinstance(recorder[0], PhaseEndEvent)
         assert recorder[0].phase is Phase.SYNTHESIS
+        assert recorder[0].ok is True
+
+    async def test_emit_phase_end_explicit_ok_false(self, recorder: list[Any]) -> None:
+        await emit_phase_end(session_id="s1", phase=Phase.PLANNING, phase_id="p1", ok=False)
+        assert recorder[0].ok is False
 
     async def test_no_session_is_noop(self, recorder: list[Any]) -> None:
         await emit_phase_start(
@@ -101,12 +106,29 @@ class TestPhaseSpan:
         assert [type(e) for e in recorder] == [PhaseStartEvent, PhaseEndEvent]
         assert recorder[0].phase_id == recorder[1].phase_id == pid
         assert recorder[0].started_at  # server timestamp present
+        # ADR-0123 AC-9(b) / FRE-936: a clean exit reports ok=True, so the client
+        # can tell this phase actually succeeded rather than merely "ended".
+        assert recorder[1].ok is True
 
     async def test_end_fires_on_exception(self, recorder: list[Any]) -> None:
         with pytest.raises(ValueError):
             async with phase_span(session_id="s1", phase=Phase.PLANNING):
                 raise ValueError("boom")
         assert [type(e) for e in recorder] == [PhaseStartEvent, PhaseEndEvent]
+        # FRE-936: without this, a phase that raised still emits a "clean" PHASE_END
+        # indistinguishable from success — the client would render a green check for
+        # a phase that just failed. ok=False is what lets AC-9(b) resolve correctly.
+        assert recorder[1].ok is False
+
+    async def test_end_fires_ok_false_on_cancellation(self, recorder: list[Any]) -> None:
+        """CancelledError must still propagate — ok=False is reported, not swallowed."""
+        import asyncio
+
+        with pytest.raises(asyncio.CancelledError):
+            async with phase_span(session_id="s1", phase=Phase.SUB_AGENT):
+                raise asyncio.CancelledError()
+        assert [type(e) for e in recorder] == [PhaseStartEvent, PhaseEndEvent]
+        assert recorder[1].ok is False
 
     async def test_noop_without_session(self, recorder: list[Any]) -> None:
         async with phase_span(session_id=None, phase=Phase.PLANNING) as pid:

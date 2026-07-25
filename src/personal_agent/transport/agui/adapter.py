@@ -86,7 +86,9 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
                     "parent_id": parent_id,
                 },
             }
-        case PhaseEndEvent(phase=phase, phase_id=phase_id, session_id=sid, parent_id=parent_id):
+        case PhaseEndEvent(
+            phase=phase, phase_id=phase_id, session_id=sid, parent_id=parent_id, ok=ok
+        ):
             envelope = {
                 "type": "PHASE_END",
                 "session_id": sid,
@@ -94,6 +96,7 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
                     "phase": phase.value,
                     "phase_id": phase_id,
                     "parent_id": parent_id,
+                    "ok": ok,
                 },
             }
         case StateUpdateEvent(key=key, value=value, session_id=sid):

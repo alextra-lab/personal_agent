@@ -317,6 +317,7 @@ async def emit_phase_end(
     phase: Phase,
     phase_id: str,
     parent_id: str | None = None,
+    ok: bool = True,
 ) -> None:
     """Persist + enqueue a ``PHASE_END`` event (ADR-0123 §2).
 
@@ -327,6 +328,8 @@ async def emit_phase_end(
         phase: Which phase ended.
         phase_id: Id of the phase instance that ended (pairs with its start).
         parent_id: Parent phase id when this ended a concurrent child.
+        ok: ``False`` when the phase ended because the wrapped work raised
+            (FRE-936 / AC-9(b)); see :class:`~personal_agent.transport.events.PhaseEndEvent`.
     """
     if not session_id:
         return
@@ -337,6 +340,7 @@ async def emit_phase_end(
                 phase_id=phase_id,
                 session_id=session_id,
                 parent_id=parent_id,
+                ok=ok,
             ),
             session_id,
         )
@@ -360,12 +364,16 @@ async def phase_span(
     """Emit a ``PHASE_START`` on enter and a paired ``PHASE_END`` on exit.
 
     Guarantees pairing across every exit path — normal return, early return, or
-    exception — because the end fires in a ``finally``. A no-op when
-    ``session_id`` is falsy (yields ``None``). The generated ``phase_id`` is
-    yielded so a concurrent child can reference it as its ``parent_id`` (AC-8):
-    the enclosing ``finally`` only runs after the ``async with`` body completes,
-    so a parent span wrapping ``asyncio.gather`` ends strictly after its last
-    child (ADR §1).
+    exception. A no-op when ``session_id`` is falsy (yields ``None``). The
+    generated ``phase_id`` is yielded so a concurrent child can reference it as
+    its ``parent_id`` (AC-8): the end only fires after the ``async with`` body
+    completes, so a parent span wrapping ``asyncio.gather`` ends strictly after
+    its last child (ADR §1).
+
+    FRE-936 / AC-9(b): the paired end reports ``ok=False`` when the body raised
+    (any ``BaseException``, including ``asyncio.CancelledError``) so the client
+    can tell a failed phase from a successful one — the exception always
+    re-raises afterward, so cancellation still propagates.
 
     Args:
         session_id: Target session identifier, or ``None`` to skip emission.
@@ -391,12 +399,22 @@ async def phase_span(
     )
     try:
         yield phase_id
-    finally:
+    except BaseException:
         await emit_phase_end(
             session_id=session_id,
             phase=phase,
             phase_id=phase_id,
             parent_id=parent_id,
+            ok=False,
+        )
+        raise
+    else:
+        await emit_phase_end(
+            session_id=session_id,
+            phase=phase,
+            phase_id=phase_id,
+            parent_id=parent_id,
+            ok=True,
         )
 
 

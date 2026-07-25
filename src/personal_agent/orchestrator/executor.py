@@ -184,12 +184,15 @@ async def _emit_classified_error(ctx: "ExecutionContext", classified: "Classifie
 
 
 def _resolve_context_max() -> int:
-    """Return the active primary model's context window for the status meter.
+    """Return the active primary model's context window.
 
     Resolves the profile-active primary model's ``context_length`` (e.g. 200K
-    for cloud Sonnet, 131K for local Qwen) so the PWA meter reflects the real
-    window instead of the static local budget (FRE-414). Falls back to the
-    configured budget when the model config can't be resolved.
+    for cloud Sonnet, 131K for local Qwen) so both the PWA status meter
+    (FRE-414) and the in-turn compaction/consent gate (FRE-972) measure
+    pressure against the real window instead of the static local budget.
+    Falls back to the configured budget when the model config can't be
+    resolved — logged at warning, since a silent fallback here now also
+    mis-sizes the compaction gate, not just a display meter.
 
     Returns:
         The active model's context length, or ``settings.context_window_max_tokens``.
@@ -198,11 +201,14 @@ def _resolve_context_max() -> int:
         from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
         from personal_agent.config.selection import get_current_selection  # noqa: PLC0415
 
-        _, model_def = resolve_role_target("primary", model_key=get_current_selection("primary"))
+        deployment_key, model_def = resolve_role_target(
+            "primary", model_key=get_current_selection("primary")
+        )
         if model_def is not None:
             return model_def.context_length
-    except Exception:
-        log.debug("context_max_resolve_failed")
+        log.warning("context_max_resolve_no_definition", deployment_key=deployment_key)
+    except Exception as exc:
+        log.warning("context_max_resolve_failed", error=str(exc), error_type=type(exc).__name__)
     return settings.context_window_max_tokens
 
 
@@ -3314,7 +3320,10 @@ async def step_init(
         # cache_frozen_layout_enabled flag — FRE-941.)
         ctx.messages = apply_context_window(
             ctx.messages,
-            max_tokens=settings.context_window_max_tokens,
+            # FRE-972: the session's selected-model window, not the static
+            # local-Qwen budget — a larger-window cloud primary must not be
+            # truncated as if it only had settings.context_window_max_tokens.
+            max_tokens=_resolve_context_max(),
             strategy=settings.conversation_context_strategy,
             trace_id=ctx.trace_id,
             session_id=ctx.session_id,
@@ -3562,11 +3571,16 @@ async def step_llm_call(
         needs_hard_compression,
     )
 
-    if ctx.session_id and needs_hard_compression(ctx.messages, settings.context_window_max_tokens):
+    # FRE-972: measure against the session's selected-model window (the same
+    # resolver the turn-status meter uses), not the static local-Qwen budget —
+    # else a larger-window cloud primary hits this gate and its consent popup
+    # far below its real window.
+    _effective_max_tokens = _resolve_context_max()
+    if ctx.session_id and needs_hard_compression(ctx.messages, _effective_max_tokens):
         # ADR-0076: ask before silently summarising history. "Stop here"
         # produces a final answer from current context; "Compress and continue"
         # (the default) runs the existing within-session compression.
-        _max_tokens = settings.context_window_max_tokens
+        _max_tokens = _effective_max_tokens
         _tokens = estimate_messages_tokens(ctx.messages)
         _pct = (100.0 * _tokens / _max_tokens) if _max_tokens else 0.0
         _compress_action = await _maybe_pause_for_constraint(
@@ -3599,7 +3613,7 @@ async def step_llm_call(
                 trace_id=ctx.trace_id,
                 session_id=ctx.session_id,
                 messages=len(ctx.messages),
-                max_tokens=settings.context_window_max_tokens,
+                max_tokens=_effective_max_tokens,
             )
             try:
                 ctx.messages, _ = await compress_in_place(

@@ -112,10 +112,12 @@ def sanitise_messages(
     """Strip orphaned tool_result / tool_call entries from a message history.
 
     This is a defence-in-depth guard that runs on every dispatch, regardless
-    of provider. When both sides are clean (the common case) the function
-    returns the original list object unchanged. It also guarantees the
-    returned history never ends on a lone ``role: "assistant"`` message
-    (FRE-971) — see :func:`_ensure_trailing_role`.
+    of provider. When the history has no orphaned tool_calls/tool_results and
+    does not end on a lone ``role: "assistant"`` message, the function returns
+    the original list object unchanged. It also guarantees the returned
+    history never ends on that lone ``role: "assistant"`` message (FRE-971)
+    — see :func:`_ensure_trailing_role` — appending a synthetic user
+    continuation (and so returning a new list) when it would otherwise.
 
     Algorithm (two-pass):
     1. Collect every ``id`` issued via ``tool_calls`` in assistant messages
@@ -138,7 +140,9 @@ def sanitise_messages(
 
     Returns:
         Tuple of (sanitised_messages, SanitiseReport). When the history was
-        already clean, sanitised_messages is the same object as the input.
+        already clean AND does not end on a lone ``role: "assistant"``
+        message, sanitised_messages is the same object as the input;
+        otherwise a new list (see :func:`_ensure_trailing_role`).
     """
     # Pass 0: strip <tool_code> blocks from assistant messages so the model
     # doesn't learn the pseudo-code pattern from its own poisoned output.

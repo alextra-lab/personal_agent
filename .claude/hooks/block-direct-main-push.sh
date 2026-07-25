@@ -65,7 +65,7 @@ case "$root" in
     */.claude/worktrees/build|*/.claude/worktrees/build2|*/.claude/worktrees/adrs)
         case "$verdict" in
             TARGETS_MAIN|BARE)
-                printf 'BLOCKED: direct push to main is forbidden from the build/worktree session (role boundary). Open a PR; master merges. (FRE-680 guard)\n'
+                printf 'BLOCKED: direct push to main is forbidden from the build/worktree session (role boundary). Open a PR; master merges. (FRE-680 guard)\n' >&2
                 exit 2
                 ;;
         esac

@@ -24,8 +24,8 @@ fi
 root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
 case "$root" in
-    */.claude/worktrees/build|*/.claude/worktrees/adrs)
-        printf 'BLOCKED: deploy commands are forbidden in the build/adr session (role boundary). master deploys.\n'
+    */.claude/worktrees/build|*/.claude/worktrees/build2|*/.claude/worktrees/adrs)
+        printf 'BLOCKED: deploy commands are forbidden in the build/adr session (role boundary). master deploys.\n' >&2
         exit 2
         ;;
 esac

@@ -39,6 +39,75 @@ async def test_preference_applied_bypasses_pause(monkeypatch: pytest.MonkeyPatch
     assert pushed["called"] is False
 
 
+def _capture_waiting_phases(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Capture PhaseStart/PhaseEnd events pushed during a constraint pause."""
+    import personal_agent.transport.agui.transport as transport_mod
+    from personal_agent.transport.events import PhaseEndEvent, PhaseStartEvent
+
+    captured: list[object] = []
+
+    async def _capture(event: object, session_id: str) -> None:
+        if isinstance(event, (PhaseStartEvent, PhaseEndEvent)):
+            captured.append(event)
+
+    monkeypatch.setattr(transport_mod, "_push_event", _capture)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_pause_emits_waiting_for_choice_phase(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-0123 §1 (FRE-934): a real pause is bracketed by a WAITING_FOR_CHOICE phase."""
+    from personal_agent.transport.events import Phase, PhaseEndEvent, PhaseStartEvent
+
+    async def fake_load(user_id: object, constraint: str, **_kw: object) -> None:
+        return None
+
+    async def fake_push(**kwargs: object) -> dict[str, str]:
+        return {"decision": "continue_10", "resolution": "user_choice"}
+
+    async def fake_emit(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(ex, "_load_constraint_preference", fake_load)
+    monkeypatch.setattr(f"{_TRANSPORT}.register_and_push_constraint", fake_push)
+    monkeypatch.setattr(f"{_TRANSPORT}.emit_constraint_resolved", fake_emit)
+    events = _capture_waiting_phases(monkeypatch)
+
+    await ex._maybe_pause_for_constraint(
+        session_id="s1",
+        trace_id="t1",
+        user_id=uuid4(),
+        constraint="artifact_builder",
+        context="ctx",
+    )
+
+    waiting = [e for e in events if e.phase is Phase.WAITING_FOR_CHOICE]
+    assert [type(e) for e in waiting] == [PhaseStartEvent, PhaseEndEvent]
+    assert waiting[0].detail == "artifact_builder"
+    assert waiting[0].phase_id == waiting[1].phase_id
+
+
+@pytest.mark.asyncio
+async def test_preference_bypass_emits_no_waiting_phase(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No pause happened → no WAITING_FOR_CHOICE phase (the wrap is scoped to the wait)."""
+
+    async def fake_load(user_id: object, constraint: str, **_kw: object) -> str:
+        return "continue_10"
+
+    monkeypatch.setattr(ex, "_load_constraint_preference", fake_load)
+    events = _capture_waiting_phases(monkeypatch)
+
+    await ex._maybe_pause_for_constraint(
+        session_id="s1",
+        trace_id="t1",
+        user_id=uuid4(),
+        constraint="tool_iteration_limit",
+        context="ctx",
+    )
+
+    assert events == []
+
+
 @pytest.mark.asyncio
 async def test_no_ws_default_no_resolution_emitted(monkeypatch: pytest.MonkeyPatch) -> None:
     """connection_lost applies the default silently — no CONSTRAINT_RESOLVED (AC-13)."""

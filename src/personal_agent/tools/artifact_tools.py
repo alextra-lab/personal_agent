@@ -1588,18 +1588,25 @@ async def artifact_draft_executor(
         timeout_s=draft_timeout,
     )
 
+    # ADR-0123 §2 (FRE-934): the multi-minute artifact-draft build is the longest
+    # silence a turn produces — bracket it as an ARTIFACT_BUILD phase so the client
+    # can name it. Best-effort; the span ends when respond() returns or raises.
+    from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
+    from personal_agent.transport.events import Phase  # noqa: PLC0415
+
     start_ms = int(time.monotonic() * 1000)
     try:
-        response = await asyncio.wait_for(
-            builder_client.respond(
-                role=ModelRole.ARTIFACT_BUILDER,
-                messages=messages,
-                max_tokens=draft_max_tokens,
-                trace_ctx=child_ctx,
-                timeout_s=draft_timeout,
-            ),
-            timeout=draft_timeout,
-        )
+        async with phase_span(session_id=session_id, phase=Phase.ARTIFACT_BUILD, detail=title):
+            response = await asyncio.wait_for(
+                builder_client.respond(
+                    role=ModelRole.ARTIFACT_BUILDER,
+                    messages=messages,
+                    max_tokens=draft_max_tokens,
+                    trace_ctx=child_ctx,
+                    timeout_s=draft_timeout,
+                ),
+                timeout=draft_timeout,
+            )
     except asyncio.TimeoutError as exc:
         sub_agent_duration_ms = int(time.monotonic() * 1000) - start_ms
         log.warning(

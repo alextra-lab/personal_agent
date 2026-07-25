@@ -25,6 +25,8 @@ from personal_agent.transport.events import (
     ConstraintResolvedEvent,
     InternalEvent,
     InterruptEvent,
+    PhaseEndEvent,
+    PhaseStartEvent,
     StateUpdateEvent,
     TextDeltaEvent,
     ToolApprovalRequestEvent,
@@ -64,6 +66,35 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
                 "type": "TOOL_CALL_END",
                 "data": {"tool_name": name, "result": summary},
                 "session_id": sid,
+            }
+        case PhaseStartEvent(
+            phase=phase,
+            phase_id=phase_id,
+            session_id=sid,
+            started_at=started_at,
+            detail=detail,
+            parent_id=parent_id,
+        ):
+            envelope = {
+                "type": "PHASE_START",
+                "session_id": sid,
+                "data": {
+                    "phase": phase.value,
+                    "phase_id": phase_id,
+                    "started_at": started_at,
+                    "detail": detail,
+                    "parent_id": parent_id,
+                },
+            }
+        case PhaseEndEvent(phase=phase, phase_id=phase_id, session_id=sid, parent_id=parent_id):
+            envelope = {
+                "type": "PHASE_END",
+                "session_id": sid,
+                "data": {
+                    "phase": phase.value,
+                    "phase_id": phase_id,
+                    "parent_id": parent_id,
+                },
             }
         case StateUpdateEvent(key=key, value=value, session_id=sid):
             envelope = {

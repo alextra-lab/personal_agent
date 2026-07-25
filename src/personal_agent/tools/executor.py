@@ -234,18 +234,27 @@ async def _check_permissions(
         elif settings.approval_ui_enabled and transport is not None:
             # Perform interactive approval round-trip via the PWA.
             # Import here to avoid circular imports at module load time.
-            from personal_agent.transport.agui.ws_endpoint import ApprovalDecision  # noqa: PLC0415, I001
-
-            decision: ApprovalDecision = await transport.request_tool_approval(
-                request_id=str(uuid4()),
-                trace_id=trace_ctx.trace_id,
-                session_id=session_id or "",
-                tool=tool_name,
-                args=arguments,
-                risk_level="high",  # primitives will pass the real level later
-                reason=f"Tool '{tool_name}' requires approval in {mode_str} mode",
-                timeout_seconds=settings.approval_timeout_seconds,
+            from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
+            from personal_agent.transport.agui.ws_endpoint import (
+                ApprovalDecision,  # noqa: PLC0415, I001
             )
+            from personal_agent.transport.events import Phase  # noqa: PLC0415
+
+            # ADR-0123 §1 (FRE-934): the turn is blocked on the user's approval —
+            # an explicit WAITING_FOR_CHOICE phase (excluded from the AC-2 clock).
+            async with phase_span(
+                session_id=session_id, phase=Phase.WAITING_FOR_CHOICE, detail=tool_name
+            ):
+                decision: ApprovalDecision = await transport.request_tool_approval(
+                    request_id=str(uuid4()),
+                    trace_id=trace_ctx.trace_id,
+                    session_id=session_id or "",
+                    tool=tool_name,
+                    args=arguments,
+                    risk_level="high",  # primitives will pass the real level later
+                    reason=f"Tool '{tool_name}' requires approval in {mode_str} mode",
+                    timeout_seconds=settings.approval_timeout_seconds,
+                )
             if decision.decision != "approve":
                 return PermissionResult(
                     allowed=False,

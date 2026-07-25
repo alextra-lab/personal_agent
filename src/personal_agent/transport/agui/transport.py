@@ -17,10 +17,11 @@ See: docs/architecture_decisions/ADR-0075-websocket-transport.md
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 if TYPE_CHECKING:
     from personal_agent.error_classification import ClassifiedError
@@ -43,6 +44,9 @@ from personal_agent.transport.events import (
     ConstraintResolvedEvent,
     InternalEvent,
     InterruptEvent,
+    Phase,
+    PhaseEndEvent,
+    PhaseStartEvent,
     StateUpdateEvent,
     TextDeltaEvent,
     ToolApprovalRequestEvent,
@@ -257,6 +261,143 @@ async def emit_turn_status(*, session_id: str, value: Mapping[str, Any]) -> None
         StateUpdateEvent(key="turn_status", value=dict(value), session_id=session_id),
         session_id,
     )
+
+
+async def emit_phase_start(
+    *,
+    session_id: str | None,
+    phase: Phase,
+    phase_id: str,
+    started_at: str,
+    detail: str | None = None,
+    parent_id: str | None = None,
+) -> None:
+    """Persist + enqueue a ``PHASE_START`` event (ADR-0123 §2).
+
+    Best-effort by construction: a falsy ``session_id`` (headless / CLI / eval —
+    no transport client) is a no-op, and any ``Exception`` from the emit path is
+    logged and swallowed so a cosmetic progress failure can never fail a turn
+    (AC-6). ``BaseException`` / :class:`asyncio.CancelledError` are deliberately
+    **not** caught — a cancelled turn must stay cancelled.
+
+    Args:
+        session_id: Target session identifier, or ``None`` to skip emission.
+        phase: Which phase began.
+        phase_id: Unique id for this phase instance (pairs with the end).
+        started_at: ISO-8601 UTC server timestamp of the phase start.
+        detail: Optional human-readable qualifier.
+        parent_id: Parent phase id when this is a concurrent child.
+    """
+    if not session_id:
+        return
+    try:
+        await _push_event(
+            PhaseStartEvent(
+                phase=phase,
+                phase_id=phase_id,
+                session_id=session_id,
+                started_at=started_at,
+                detail=detail,
+                parent_id=parent_id,
+            ),
+            session_id,
+        )
+    except Exception:
+        log.exception(
+            "transport.phase_start_emit_failed",
+            session_id=session_id,
+            phase=phase.value,
+            phase_id=phase_id,
+        )
+
+
+async def emit_phase_end(
+    *,
+    session_id: str | None,
+    phase: Phase,
+    phase_id: str,
+    parent_id: str | None = None,
+) -> None:
+    """Persist + enqueue a ``PHASE_END`` event (ADR-0123 §2).
+
+    Same best-effort posture as :func:`emit_phase_start` (AC-6).
+
+    Args:
+        session_id: Target session identifier, or ``None`` to skip emission.
+        phase: Which phase ended.
+        phase_id: Id of the phase instance that ended (pairs with its start).
+        parent_id: Parent phase id when this ended a concurrent child.
+    """
+    if not session_id:
+        return
+    try:
+        await _push_event(
+            PhaseEndEvent(
+                phase=phase,
+                phase_id=phase_id,
+                session_id=session_id,
+                parent_id=parent_id,
+            ),
+            session_id,
+        )
+    except Exception:
+        log.exception(
+            "transport.phase_end_emit_failed",
+            session_id=session_id,
+            phase=phase.value,
+            phase_id=phase_id,
+        )
+
+
+@asynccontextmanager
+async def phase_span(
+    *,
+    session_id: str | None,
+    phase: Phase,
+    detail: str | None = None,
+    parent_id: str | None = None,
+) -> AsyncIterator[str | None]:
+    """Emit a ``PHASE_START`` on enter and a paired ``PHASE_END`` on exit.
+
+    Guarantees pairing across every exit path — normal return, early return, or
+    exception — because the end fires in a ``finally``. A no-op when
+    ``session_id`` is falsy (yields ``None``). The generated ``phase_id`` is
+    yielded so a concurrent child can reference it as its ``parent_id`` (AC-8):
+    the enclosing ``finally`` only runs after the ``async with`` body completes,
+    so a parent span wrapping ``asyncio.gather`` ends strictly after its last
+    child (ADR §1).
+
+    Args:
+        session_id: Target session identifier, or ``None`` to skip emission.
+        phase: Which phase this span represents.
+        detail: Optional human-readable qualifier.
+        parent_id: Parent phase id when this span is a concurrent child.
+
+    Yields:
+        The generated ``phase_id`` for children to reference, or ``None`` when
+        emission is skipped.
+    """
+    if not session_id:
+        yield None
+        return
+    phase_id = uuid4().hex
+    await emit_phase_start(
+        session_id=session_id,
+        phase=phase,
+        phase_id=phase_id,
+        started_at=datetime.now(UTC).isoformat(),
+        detail=detail,
+        parent_id=parent_id,
+    )
+    try:
+        yield phase_id
+    finally:
+        await emit_phase_end(
+            session_id=session_id,
+            phase=phase,
+            phase_id=phase_id,
+            parent_id=parent_id,
+        )
 
 
 async def emit_session_selection(*, session_id: str, role: str, deployment_key: str) -> None:

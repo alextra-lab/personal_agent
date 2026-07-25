@@ -267,7 +267,14 @@ export interface ResolvedConstraint {
 export interface TurnStatus {
   // Engagement lane — per-harness-run, resets on next user input
   context_tokens: number;
-  context_max: number;
+  /**
+   * Server-resolved context-window ceiling; `null` until it resolves (FRE-961 /
+   * ADR-0123 §5). Same absent-vs-zero contract as `tool_iteration_max` below: the
+   * server sends `null` (not a fabricated 0) before the turn's real ceiling lands, so
+   * the client renders "—" rather than a misleading 0% bar. Typed nullable so a 0-seed
+   * cannot be reintroduced without changing the type.
+   */
+  context_max: number | null;
   /**
    * Live tool iteration and its server-resolved ceiling.
    *

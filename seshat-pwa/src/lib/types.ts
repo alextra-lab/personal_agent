@@ -188,9 +188,10 @@ export interface ToolCall {
  * A phase instance in the live turn-progress surface (ADR-0123 T3, FRE-936).
  *
  * `running` resolves to `completed`/`error` on its own PHASE_END (keyed by
- * `ok`), or is swept to `cancelled`/`error` as a backstop when a terminal
- * transport event (CANCELLED/RUN_ERROR/DONE) arrives with no matching
- * PHASE_END — e.g. a dropped best-effort emission.
+ * `ok`). As a backstop — when no matching PHASE_END arrives, e.g. a dropped
+ * best-effort emission — a terminal transport event sweeps any still-running
+ * phase directly: CANCELLED → `cancelled`, RUN_ERROR → `error`, DONE →
+ * `completed` (a normal turn end must never leave a phase spinning).
  */
 export interface PhaseNode {
   phaseId: string;

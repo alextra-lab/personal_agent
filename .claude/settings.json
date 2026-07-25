@@ -92,11 +92,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/deploy-approval-gate.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/_dispatch.sh deploy-approval-gate.sh closed"
           },
           {
             "type": "command",
-            "command": ".claude/hooks/block-direct-main-push.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/_dispatch.sh block-direct-main-push.sh closed"
           }
         ]
       },
@@ -105,7 +105,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/check-forbidden-patterns.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/_dispatch.sh check-forbidden-patterns.sh closed"
           }
         ]
       }
@@ -116,7 +116,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/format-python.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/_dispatch.sh format-python.sh open"
           }
         ]
       }
@@ -126,7 +126,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/nudge-discussion-mode.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/_dispatch.sh nudge-discussion-mode.sh open"
           }
         ]
       }

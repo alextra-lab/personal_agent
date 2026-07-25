@@ -7,6 +7,7 @@ set -uo pipefail
 HOOK="$(cd "$(dirname "$0")" && pwd)/deploy-approval-gate.sh"
 PRIMARY="/opt/seshat"
 BUILD_WT="/opt/seshat/.claude/worktrees/build"
+BUILD2_WT="/opt/seshat/.claude/worktrees/build2"
 ADR_WT="/opt/seshat/.claude/worktrees/adrs"
 SENTINEL="$PRIMARY/.claude/.deploy-approved"
 fails=0
@@ -19,6 +20,8 @@ assert_exit() { # desc, expected_code, actual_code
 
 # 1. Deploy command in build worktree → DENY (2)
 ( cd "$BUILD_WT" && payload "ENV=cloud make rebuild SERVICE=seshat-gateway" | bash "$HOOK" ); assert_exit "build worktree denies deploy" 2 $?
+# 1b. Deploy command in build2 worktree → DENY (2) — FRE-984: pattern previously omitted build2
+( cd "$BUILD2_WT" && payload "ENV=cloud make rebuild SERVICE=seshat-gateway" | bash "$HOOK" ); assert_exit "build2 worktree denies deploy" 2 $?
 # 2. Deploy command in adr worktree → DENY (2)
 ( cd "$ADR_WT" && payload "make deploy" | bash "$HOOK" ); assert_exit "adr worktree denies deploy" 2 $?
 # 3. Non-deploy command in build worktree → ALLOW (0)

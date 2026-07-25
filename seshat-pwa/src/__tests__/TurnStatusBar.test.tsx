@@ -264,3 +264,42 @@ describe('TurnStatusBar — absent is a distinct state from zero (FRE-928 AC-4 /
     expect(toolSpan.className).not.toContain('text-amber-400');
   });
 });
+
+describe('TurnStatusBar — context ceiling absent is distinct from zero (FRE-961 / ADR-0123 §5)', () => {
+  // Client half of the server absent-vs-zero fix: the server now sends `null` for
+  // context_max until the turn's real ceiling resolves. The bar must render "—", not a
+  // fabricated 0% ceiling. (c) — a legitimate counter 0 with a resolved ceiling — is the
+  // discriminator: an implementation that hides everything falsy fails it.
+
+  it('(a) unresolved context_max renders "—", never a fabricated 0% ceiling', () => {
+    render(
+      <TurnStatusBar
+        status={makeStatus({ session_context_tokens: 10000, context_max: null })}
+      />,
+    );
+    const ctxSpan = screen.getByText(/10K\//);
+    expect(ctxSpan.textContent).toContain('10K/—');
+    expect(ctxSpan.textContent).not.toMatch(/%/);
+    // The old defect coerced null→0 and showed "10K/0 0%".
+    expect(screen.queryByText(/10K\/0/)).toBeNull();
+  });
+
+  it('(b) a resolved context_max renders the real ceiling and percentage', () => {
+    render(
+      <TurnStatusBar
+        status={makeStatus({ session_context_tokens: 25000, context_max: 100000 })}
+      />,
+    );
+    expect(screen.getByText(/25K\/100K 25%/)).toBeDefined();
+  });
+
+  it('(c) a legitimate zero occupancy with a resolved ceiling still shows 0%', () => {
+    render(
+      <TurnStatusBar
+        status={makeStatus({ session_context_tokens: 0, context_max: 100000 })}
+      />,
+    );
+    expect(screen.getByText(/0\/100K 0%/)).toBeDefined();
+    expect(screen.queryByText(/0\/—/)).toBeNull();
+  });
+});

@@ -201,6 +201,77 @@ async def test_non_decomposed_unaffected(monkeypatch: pytest.MonkeyPatch) -> Non
     assert emitted[-1]["tool_iteration_max"] == 25
 
 
+# ── FRE-961: absent-vs-zero for unresolved ceilings (ADR-0123 §5) ────────────
+
+
+async def test_unresolved_ceilings_emit_absent_not_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-a: before a resolving TurnProgressEvent, ceilings emit absent, never 0-as-live.
+
+    An emission triggered by a non-progress event (here TopologyEntered) fires before the
+    executor's resolving ``turn.progress`` lands. The ceiling fields must be ABSENT (None),
+    not a fabricated 0 the client cannot distinguish from a resolved ceiling.
+    """
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+
+    assert emitted[-1]["context_max"] is None
+    assert emitted[-1]["tool_iteration_max"] is None
+    # Explicitly NOT the old fabricated zero.
+    assert emitted[-1]["context_max"] != 0
+    assert emitted[-1]["tool_iteration_max"] != 0
+
+
+async def test_resolved_ceilings_both_emit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-b: a resolved turn emits BOTH ceilings as their real values (neither absent).
+
+    Both fields of the two-field defect are covered positively: an implementation that
+    permanently nulls one ceiling still fails here.
+    """
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        TurnProgressEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            tool_iteration=4,
+            tool_iteration_max=25,
+            context_tokens=1000,
+            context_max=131072,
+            topology="primary",
+        )
+    )
+
+    assert emitted[-1]["tool_iteration_max"] == 25
+    assert emitted[-1]["context_max"] == 131072
+
+
+async def test_counter_zero_distinct_from_absent_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-c: the discriminator — a legitimate counter 0 stays 0 while ceilings stay absent.
+
+    In the pre-resolution emission the counters (``tool_iteration``, ``context_tokens``) are
+    real zeros and must emit 0; the ceilings are unresolved and must emit None. An
+    implementation that nulls all zeros would pass AC-a/AC-b and fail here.
+    """
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+
+    # Counters: real zero, present as 0.
+    assert emitted[-1]["tool_iteration"] == 0
+    assert emitted[-1]["context_tokens"] == 0
+    # Ceilings: unresolved, absent — distinct from the counter zeros in the SAME emission.
+    assert emitted[-1]["tool_iteration_max"] is None
+    assert emitted[-1]["context_max"] is None
+
+
 async def test_degraded_raises_visible_state(monkeypatch: pytest.MonkeyPatch) -> None:
     emitted = _capture(monkeypatch)
     proj = TurnObservationProjector()

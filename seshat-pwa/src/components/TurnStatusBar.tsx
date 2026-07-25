@@ -45,12 +45,16 @@ export function TurnStatusBar({ status }: TurnStatusBarProps) {
   // --- Session lane ---
   const sessionCost = safeNum(status.session_cost_usd);
   const sessionCtxTokens = safeNum(status.session_context_tokens);
-  const ctxMax = safeNum(status.context_max);
+  // Absent ≠ zero (FRE-961 / ADR-0123 §5): the server sends `null` for context_max until
+  // the turn's real ceiling resolves. `presentNum` keeps absent absent so an unresolved
+  // ceiling renders "—", never a fabricated 0% bar — mirrors the tool_iteration_max lane.
+  const ctxMax = presentNum(status.context_max);
   const compactionCount = safeNum(status.compaction_count);
   const cacheResetCount = safeNum(status.cache_reset_count);
   const qualityAlert = status.quality_alert ?? null;
 
-  const ctxPct = ctxMax > 0 ? Math.round((sessionCtxTokens / ctxMax) * 100) : 0;
+  const ctxPct =
+    ctxMax !== null && ctxMax > 0 ? Math.round((sessionCtxTokens / ctxMax) * 100) : 0;
   const ctxBar =
     ctxPct >= 85 ? 'bg-red-500' : ctxPct >= 70 ? 'bg-amber-500' : 'bg-emerald-500';
   const ctxLabel =
@@ -81,7 +85,9 @@ export function TurnStatusBar({ status }: TurnStatusBarProps) {
             />
           </div>
           <span className={`font-mono flex-shrink-0 ${ctxLabel}`}>
-            {formatTokens(sessionCtxTokens)}/{formatTokens(ctxMax)} {ctxPct}%
+            {ctxMax !== null
+              ? `${formatTokens(sessionCtxTokens)}/${formatTokens(ctxMax)} ${ctxPct}%`
+              : `${formatTokens(sessionCtxTokens)}/${UNKNOWN}`}
           </span>
         </div>
         <span className="font-mono flex-shrink-0 text-slate-400">

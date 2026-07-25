@@ -150,13 +150,19 @@ class TurnObservation:
         topology: Active execution-topology label.
         phase: Coarse lifecycle phase (``running`` / ``completed``).
         tool_iteration: Latest primary tool-execution iteration reported.
-        tool_iteration_max: Resolved per-turn primary tool-iteration cap.
+        tool_iteration_max: Resolved per-turn primary tool-iteration cap, or ``None`` while
+            unresolved. ``None`` (not 0) is the absent state: a resolving ``turn.progress``
+            has not landed yet, so no real ceiling exists to surface (ADR-0123 §5 / FRE-961).
+            Emitting a fabricated 0 the client cannot distinguish from a resolved ceiling is
+            exactly the harm the absent-vs-zero rule outlaws.
         sub_agent_iterations: Per-``task_id`` latest sub-agent iteration (FRE-553); summed
             into the surfaced meter so concurrent sub-agents never clobber one counter.
         sub_agent_iteration_max: Per-``task_id`` sub-agent cap (FRE-553); summed into the
             surfaced max.
         context_tokens: Latest estimated context-window occupancy.
-        context_max: Resolved context-window token budget.
+        context_max: Resolved context-window token budget, or ``None`` while unresolved —
+            the absent state, same absent-vs-zero contract as ``tool_iteration_max`` above
+            (ADR-0123 §5 / FRE-961).
         live_cost_usd: Accumulated live cost from model-call events.
         input_tokens: Accumulated prompt tokens from model-call events.
         output_tokens: Accumulated completion tokens from model-call events.
@@ -175,11 +181,11 @@ class TurnObservation:
     topology: str = "primary"
     phase: str = "running"
     tool_iteration: int = 0
-    tool_iteration_max: int = 0
+    tool_iteration_max: int | None = None
     sub_agent_iterations: dict[str, int] = field(default_factory=dict)
     sub_agent_iteration_max: dict[str, int] = field(default_factory=dict)
     context_tokens: int = 0
-    context_max: int = 0
+    context_max: int | None = None
     live_cost_usd: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -410,7 +416,15 @@ class TurnObservationProjector:
         # through a decomposed turn's expansion window. Raw fields are kept separate and
         # summed only here. With no sub-agent ticks the dicts are empty → primary values.
         tool_iteration = obs.tool_iteration + sum(obs.sub_agent_iterations.values())
-        tool_iteration_max = obs.tool_iteration_max + sum(obs.sub_agent_iteration_max.values())
+        # FRE-961 (ADR-0123 §5): absent-preserving max. While the primary ceiling is
+        # unresolved (None) the surfaced max stays absent — a sub-agent-only sum would be a
+        # known underestimate masquerading as the real ceiling. Once primary resolves, add
+        # the sub-agent maxima. The numerator above is a real aggregate and always emits.
+        tool_iteration_max: int | None = (
+            None
+            if obs.tool_iteration_max is None
+            else obs.tool_iteration_max + sum(obs.sub_agent_iteration_max.values())
+        )
         # ADR-0092 §D2/§D3: session-lane fields (zero when no aggregate yet — shouldn't
         # occur in practice since _ensure_session always precedes _emit).
         sess = self._by_session.get(obs.session_id)

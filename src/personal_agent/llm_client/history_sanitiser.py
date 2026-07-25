@@ -52,6 +52,10 @@ class SanitiseReport:
             orphaned_calls_stripped when one message had multiple orphans).
         truncated: True if the history was truncated to the last clean user
             turn because sanitisation alone could not produce a valid history.
+        trailing_assistant_fixed: True if a synthetic user continuation was
+            appended because the history ended on a lone ``role: "assistant"``
+            message (FRE-971 — Anthropic rejects assistant-message prefill:
+            "The conversation must end with a user message.").
         was_dirty: True if any change was made (convenience flag).
     """
 
@@ -59,6 +63,7 @@ class SanitiseReport:
     orphaned_calls_stripped: int
     assistant_messages_modified: int
     truncated: bool
+    trailing_assistant_fixed: bool = False
 
     @property
     def was_dirty(self) -> bool:
@@ -68,7 +73,36 @@ class SanitiseReport:
             or self.orphaned_calls_stripped
             or self.assistant_messages_modified
             or self.truncated
+            or self.trailing_assistant_fixed
         )
+
+
+def _ensure_trailing_role(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Append a synthetic user turn if the history ends on ``role: "assistant"``.
+
+    Anthropic (and other strict providers, via litellm) reject a request whose
+    final message is ``role: "assistant"``: "This model does not support
+    assistant message prefill. The conversation must end with a user
+    message." A within-session compression recap with an empty tail can leave
+    the trailing message as a lone assistant turn (FRE-971). Any unresolved
+    ``tool_calls`` on that trailing message are always orphaned (no result can
+    follow the last message) and are already stripped by the caller before
+    this runs, so the appended turn only ever needs to close out plain
+    assistant content.
+
+    Args:
+        messages: Message list to check. Not mutated.
+
+    Returns:
+        Tuple of (messages, fixed). When the last message is not
+        ``assistant``, the input list is returned unchanged.
+    """
+    if not messages or messages[-1].get("role") != "assistant":
+        return messages, False
+    continuation = {"role": "user", "content": "Continue with the user's request."}
+    return [*messages, continuation], True
 
 
 def sanitise_messages(
@@ -78,8 +112,12 @@ def sanitise_messages(
     """Strip orphaned tool_result / tool_call entries from a message history.
 
     This is a defence-in-depth guard that runs on every dispatch, regardless
-    of provider. When both sides are clean (the common case) the function
-    returns the original list object unchanged.
+    of provider. When the history has no orphaned tool_calls/tool_results and
+    does not end on a lone ``role: "assistant"`` message, the function returns
+    the original list object unchanged. It also guarantees the returned
+    history never ends on that lone ``role: "assistant"`` message (FRE-971)
+    — see :func:`_ensure_trailing_role` — appending a synthetic user
+    continuation (and so returning a new list) when it would otherwise.
 
     Algorithm (two-pass):
     1. Collect every ``id`` issued via ``tool_calls`` in assistant messages
@@ -102,7 +140,9 @@ def sanitise_messages(
 
     Returns:
         Tuple of (sanitised_messages, SanitiseReport). When the history was
-        already clean, sanitised_messages is the same object as the input.
+        already clean AND does not end on a lone ``role: "assistant"``
+        message, sanitised_messages is the same object as the input;
+        otherwise a new list (see :func:`_ensure_trailing_role`).
     """
     # Pass 0: strip <tool_code> blocks from assistant messages so the model
     # doesn't learn the pseudo-code pattern from its own poisoned output.
@@ -138,11 +178,13 @@ def sanitise_messages(
     if not orphaned_results and not orphaned_calls:
         # Reflect any tool_code modifications in the report so was_dirty is correct.
         modified = tool_code_assistants_dropped + (1 if tool_code_stripped else 0)
+        messages, trailing_fixed = _ensure_trailing_role(messages)
         report = SanitiseReport(
             orphaned_results_stripped=0,
             orphaned_calls_stripped=0,
             assistant_messages_modified=modified,
             truncated=False,
+            trailing_assistant_fixed=trailing_fixed,
         )
         log.debug(
             HISTORY_SANITISED,
@@ -151,6 +193,7 @@ def sanitise_messages(
             assistant_messages_modified=modified,
             tool_code_blocks_stripped=tool_code_stripped,
             truncated=False,
+            trailing_assistant_fixed=trailing_fixed,
             message_count=len(messages),
             trace_id=trace_id,
         )
@@ -204,11 +247,16 @@ def sanitise_messages(
     # In that case fall back to truncating at the last clean user turn.
     sanitised, was_truncated = _truncate_if_still_broken(sanitised, trace_id)
 
+    # Run last, after truncation, so a truncated history can't reintroduce a
+    # trailing-assistant tail without the guard seeing the final shape.
+    sanitised, trailing_fixed = _ensure_trailing_role(sanitised)
+
     report = SanitiseReport(
         orphaned_results_stripped=results_stripped,
         orphaned_calls_stripped=calls_stripped,
         assistant_messages_modified=assistants_modified,
         truncated=was_truncated,
+        trailing_assistant_fixed=trailing_fixed,
     )
 
     log.info(
@@ -217,6 +265,7 @@ def sanitise_messages(
         orphaned_calls_stripped=calls_stripped,
         assistant_messages_modified=assistants_modified,
         truncated=was_truncated,
+        trailing_assistant_fixed=trailing_fixed,
         original_message_count=len(messages),
         sanitised_message_count=len(sanitised),
         trace_id=trace_id,

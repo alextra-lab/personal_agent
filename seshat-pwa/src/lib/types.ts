@@ -122,6 +122,28 @@ export interface PhaseStartData {
   parent_id: string | null;
 }
 
+/**
+ * One entry in a `phase_state` full-state snapshot — a currently-active phase
+ * (ADR-0123 §6, FRE-986). Same fields as PHASE_START's data minus the routing
+ * `session_id`; `started_at` is held verbatim (AC-3(b)).
+ */
+export interface PhaseSnapshotEntry {
+  phase: PhaseName;
+  phase_id: string;
+  started_at: string;
+  detail: string | null;
+  parent_id: string | null;
+}
+
+/**
+ * `phase_state` STATE_DELTA payload — the complete set of currently-active phases
+ * for the session, a full-state replacement (ADR-0123 §6). The newest one wins, so
+ * a reconnecting client converges from it alone and self-corrects a dropped PHASE_END.
+ */
+export interface PhaseStateData {
+  active: PhaseSnapshotEntry[];
+}
+
 /** PHASE_END payload — an inference / human-wait phase ended (ADR-0123 §2). */
 export interface PhaseEndData {
   phase: PhaseName;
@@ -210,6 +232,15 @@ export interface PhaseNode {
    * its own checkmark. `null` while still running.
    */
   endedAt: number | null;
+  /**
+   * `true` when this node was resolved to `completed` by the `phase_state`
+   * snapshot safety net (its own PHASE_END was dropped), rather than by an
+   * authoritative PHASE_END (ADR-0123 §6, FRE-986). Such a provisional
+   * completion remains *upgradable* — a later RUN_ERROR / CANCELLED still
+   * refines it to `error` / `cancelled`; a genuinely PHASE_END-completed node
+   * (unmarked) is never touched by those sweeps.
+   */
+  snapshotResolved?: boolean;
 }
 
 export interface ChatMessage {

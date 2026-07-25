@@ -17,10 +17,11 @@ See: docs/architecture_decisions/ADR-0075-websocket-transport.md
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 from uuid import UUID, uuid4
 
 if TYPE_CHECKING:
@@ -74,28 +75,46 @@ _MAX_EMIT_LOCKS = 4096
 
 
 def _get_emit_lock(session_id: str) -> asyncio.Lock:
-    """Return (creating if needed) the per-session emit-serialization lock."""
+    """Return (creating if needed) the per-session emit-serialization lock.
+
+    Eviction skips any **held** lock (FRE-986): evicting a lock mid-emit would let a
+    later emit for that session obtain a *second* lock, breaking the one-stable-lock
+    invariant this cache exists to uphold (FRE-518) — and with it the race-freedom of
+    the ``phase_state`` snapshot, whose build must be serialized against its session's
+    other emits. The oldest *unheld* entry is evicted; if every entry is held (never
+    the case below any realistic concurrent-session working set) the cache grows
+    transiently rather than corrupt the invariant.
+    """
     lock = _session_emit_locks.get(session_id)
     if lock is None:
         if len(_session_emit_locks) >= _MAX_EMIT_LOCKS:
-            # Evict the oldest insertion-order entry to stay bounded.
-            oldest = next(iter(_session_emit_locks))
-            del _session_emit_locks[oldest]
+            for candidate, candidate_lock in _session_emit_locks.items():
+                if not candidate_lock.locked():
+                    del _session_emit_locks[candidate]
+                    break
         lock = asyncio.Lock()
         _session_emit_locks[session_id] = lock
     return lock
 
 
-async def _push_event(event: InternalEvent, session_id: str) -> None:
+async def _persist_and_enqueue(session_id: str, make_event: Callable[[], InternalEvent]) -> None:
     """Persist an event, then enqueue the sequenced envelope for live WS delivery.
 
-    The persist + enqueue run under the per-session emit lock so seq order equals
-    enqueue order across concurrent emitters (FRE-518).
-    """
-    envelope = to_agui_event(event)
-    event_type = envelope["type"]
+    ``make_event`` is called **inside** the per-session emit lock, so the seq order equals
+    enqueue order across concurrent emitters (FRE-518) *and* an event whose content is derived
+    from mutable in-process state (the ``phase_state`` snapshot, read from ``_phase_registry``)
+    is built at seq-assignment time. That is what makes the highest-seq snapshot always reflect
+    the latest registry state: were the snapshot built *before* acquiring the lock, a preempted
+    ``phase_end`` could enqueue a stale empty snapshot above a concurrent ``phase_start``'s
+    snapshot and defeat newest-wins convergence (FRE-986, ADR-0123 §6).
 
+    Args:
+        session_id: Target session identifier.
+        make_event: Zero-arg factory producing the event to emit, invoked under the lock.
+    """
     async with _get_emit_lock(session_id):
+        envelope = to_agui_event(make_event())
+        event_type = envelope["type"]
         try:
             async with AsyncSessionLocal() as db:
                 buf = SessionEventBuffer(db)
@@ -120,6 +139,144 @@ async def _push_event(event: InternalEvent, session_id: str) -> None:
                 session_id=session_id,
                 event_type=event_type,
             )
+
+
+async def _push_event(event: InternalEvent, session_id: str) -> None:
+    """Persist a pre-built event, then enqueue it for live WS delivery (FRE-518)."""
+    await _persist_and_enqueue(session_id, lambda: event)
+
+
+# ── Session-keyed current-phase projection (FRE-986, ADR-0123 §6) ────────────
+#
+# The phase surface must be a *projection of current phase state*, not an accumulation of the
+# event log. ``PhaseStart`` / ``PhaseEnd`` remain on the wire as deltas (they carry the AC-2 gap
+# semantics and feed the AC-7 summary), but every transition additionally emits a full-state
+# ``phase_state`` snapshot — the complete set of currently-active phases, keyed by session — so a
+# reconnecting client converges from the newest message alone and self-corrects when a delta is
+# dropped, exactly as ``turn_status`` does (``projector.py`` docstring). Single-instance topology:
+# this in-process registry is authoritative (owner-approved 2026-07-25; no Redis bus).
+
+
+class _PhaseActive(TypedDict):
+    """One active-phase entry in a ``phase_state`` snapshot (the client-facing wire shape)."""
+
+    phase: str
+    phase_id: str
+    started_at: str
+    detail: str | None
+    parent_id: str | None
+
+
+class _PhaseSnapshot(TypedDict):
+    """The ``phase_state`` full-state payload — every currently-active phase for a session."""
+
+    active: list[_PhaseActive]
+
+
+@dataclass(frozen=True)
+class _PhaseRecord:
+    """One currently-active phase instance held in the in-process registry."""
+
+    phase: Phase
+    phase_id: str
+    started_at: str  # ISO-8601 UTC, held verbatim (AC-3(b) byte-equality)
+    detail: str | None
+    parent_id: str | None
+
+    def as_active(self) -> _PhaseActive:
+        """The snapshot ``active`` entry — the fields a client needs to render this phase."""
+        return {
+            "phase": self.phase.value,
+            "phase_id": self.phase_id,
+            "started_at": self.started_at,
+            "detail": self.detail,
+            "parent_id": self.parent_id,
+        }
+
+
+#: session_id → phase_id → record. A session appears iff it has ≥1 active phase; it self-cleans
+#: on the last phase end (``phase_span`` guarantees start/end pairing), so this stays small under
+#: normal operation and the cap below is a pure backstop.
+_phase_registry: dict[str, dict[str, _PhaseRecord]] = {}
+#: Backstop bound on tracked sessions. Reached only on a leak (phases started without a paired
+#: end while the process lives); a process crash clears the dict outright. We never evict an
+#: *active* session — that would let its next transition emit a false authoritative empty
+#: snapshot — so the cap instead rejects a brand-new session, degrading it to delta-only.
+_MAX_PHASE_SESSIONS = 8192
+
+
+def _phase_registry_add(
+    session_id: str,
+    *,
+    phase: Phase,
+    phase_id: str,
+    started_at: str,
+    detail: str | None,
+    parent_id: str | None,
+) -> bool:
+    """Record a started phase, returning whether the session is tracked.
+
+    Session-sticky: an already-tracked session always accepts the phase; a brand-new session is
+    rejected at the cap (returns ``False``) so it degrades to delta-only rather than an active
+    session ever being evicted (FRE-986).
+
+    Returns:
+        ``True`` if the session is tracked (a snapshot should be emitted), ``False`` if rejected.
+    """
+    phases = _phase_registry.get(session_id)
+    if phases is None:
+        if len(_phase_registry) >= _MAX_PHASE_SESSIONS:
+            log.warning("transport.phase_registry_full", session_id=session_id)
+            return False
+        phases = _phase_registry[session_id] = {}
+    phases[phase_id] = _PhaseRecord(
+        phase=phase, phase_id=phase_id, started_at=started_at, detail=detail, parent_id=parent_id
+    )
+    return True
+
+
+def _phase_registry_remove(session_id: str, phase_id: str) -> None:
+    """Drop an ended phase; drop the session key when it empties (self-clean)."""
+    phases = _phase_registry.get(session_id)
+    if phases is None:
+        return
+    phases.pop(phase_id, None)
+    if not phases:
+        del _phase_registry[session_id]
+
+
+def _phase_snapshot_value(session_id: str) -> _PhaseSnapshot:
+    """The full-state ``phase_state`` payload — all currently-active phases for the session."""
+    phases = _phase_registry.get(session_id, {})
+    return {"active": [rec.as_active() for rec in phases.values()]}
+
+
+async def _emit_phase_snapshot(session_id: str) -> None:
+    """Emit the current-phase full-state replacement (a ``phase_state`` STATE_DELTA).
+
+    The value is read from ``_phase_registry`` inside the emit lock (via ``_persist_and_enqueue``),
+    so the highest-seq snapshot always reflects the latest registry state (race-freedom, FRE-986).
+    """
+    await _persist_and_enqueue(
+        session_id,
+        lambda: StateUpdateEvent(
+            key="phase_state", value=_phase_snapshot_value(session_id), session_id=session_id
+        ),
+    )
+
+
+async def _emit_phase_snapshot_best_effort(session_id: str, phase_id: str) -> None:
+    """Emit the ``phase_state`` snapshot, swallowing any failure (AC-6).
+
+    Independent of the paired delta emit: the snapshot fires whether or not the delta
+    succeeded, and a snapshot failure is a cosmetic loss that must never fail a turn.
+    """
+    try:
+        await _emit_phase_snapshot(session_id)
+    except Exception:
+        log.exception(
+            "transport.phase_snapshot_emit_failed", session_id=session_id, phase_id=phase_id
+        )
 
 
 async def emit_done(session_id: str) -> None:
@@ -290,6 +447,16 @@ async def emit_phase_start(
     """
     if not session_id:
         return
+    # Register first (synchronous, authoritative) so the snapshot reflects this start even if
+    # the delta emit below fails; a session rejected at the cap degrades to delta-only (FRE-986).
+    tracked = _phase_registry_add(
+        session_id,
+        phase=phase,
+        phase_id=phase_id,
+        started_at=started_at,
+        detail=detail,
+        parent_id=parent_id,
+    )
     try:
         await _push_event(
             PhaseStartEvent(
@@ -309,6 +476,8 @@ async def emit_phase_start(
             phase=phase.value,
             phase_id=phase_id,
         )
+    if tracked:
+        await _emit_phase_snapshot_best_effort(session_id, phase_id)
 
 
 async def emit_phase_end(
@@ -333,6 +502,10 @@ async def emit_phase_end(
     """
     if not session_id:
         return
+    # Capture tracked-ness before removal: an untracked (rejected) session must not emit a
+    # snapshot at all, else it would assert a false authoritative empty state (FRE-986).
+    was_tracked = session_id in _phase_registry
+    _phase_registry_remove(session_id, phase_id)  # authoritative even if the delta emit fails
     try:
         await _push_event(
             PhaseEndEvent(
@@ -351,6 +524,8 @@ async def emit_phase_end(
             phase=phase.value,
             phase_id=phase_id,
         )
+    if was_tracked:
+        await _emit_phase_snapshot_best_effort(session_id, phase_id)
 
 
 @asynccontextmanager

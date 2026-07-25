@@ -224,47 +224,145 @@ def test_decide_skip_when_next_has_no_tier() -> None:
 
 
 def test_decide_await_while_in_progress() -> None:
-    issues = [_issue("FRE-786", "In Progress", _OPUS)]
     rec = _launched_record(now=0.0)
-    d = decide("build1", issues, rec, now=10.0, stall_timeout_s=60, tracked_pr_open=False)
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=10.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state="In Progress",
+    )
     assert d.kind == "await"
 
 
 def test_decide_run_complete_on_in_review_plus_pr() -> None:
-    issues = [_issue("FRE-786", "In Review", _OPUS)]
     rec = _launched_record(now=0.0)
-    d = decide("build1", issues, rec, now=10.0, stall_timeout_s=60, tracked_pr_open=True)
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=10.0,
+        stall_timeout_s=60,
+        tracked_pr_open=True,
+        tracked_state="In Review",
+    )
     assert d.kind == "run_complete"
 
 
 def test_decide_clear_on_terminal_merge() -> None:
-    issues = [_issue("FRE-786", "Awaiting Deploy", _OPUS)]
     rec = _launched_record(now=0.0, run_confirmed=True)
-    d = decide("build1", issues, rec, now=10.0, stall_timeout_s=60, tracked_pr_open=False)
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=10.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state="Awaiting Deploy",
+    )
     assert d.kind == "clear"
 
 
 def test_decide_bounce_safety_in_review_never_clears() -> None:
     # A master bounce keeps the PR/ticket at In Review; the stream must stay occupied.
-    issues = [_issue("FRE-786", "In Review", _OPUS)]
     rec = _launched_record(now=0.0, run_confirmed=True)
-    d = decide("build1", issues, rec, now=10.0, stall_timeout_s=60, tracked_pr_open=True)
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=10.0,
+        stall_timeout_s=60,
+        tracked_pr_open=True,
+        tracked_state="In Review",
+    )
     assert d.kind == "await"
     assert d.kind not in {"clear", "launch"}
 
 
 def test_decide_stall_on_silence_past_timeout() -> None:
-    issues = [_issue("FRE-786", "Approved", _OPUS)]  # never started
-    rec = _launched_record(now=0.0)
-    d = decide("build1", issues, rec, now=1000.0, stall_timeout_s=60, tracked_pr_open=False)
+    rec = _launched_record(now=0.0)  # never started — still Approved
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=1000.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state="Approved",
+    )
     assert d.kind == "stall"
 
 
 def test_decide_never_completes_on_silence() -> None:
-    issues = [_issue("FRE-786", "Approved", _OPUS)]
     rec = _launched_record(now=0.0)
-    d = decide("build1", issues, rec, now=1000.0, stall_timeout_s=60, tracked_pr_open=False)
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=1000.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state="Approved",
+    )
     assert d.kind not in {"run_complete", "clear"}
+
+
+# --- decide: launched record, FRE-976 reconciliation boundary --------------
+
+
+@pytest.mark.parametrize("terminal", ["Done", "Awaiting Deploy", "Canceled", "Duplicate"])
+def test_decide_release_on_reconciled_terminal_even_if_absent_from_board(terminal: str) -> None:
+    # The FRE-965 wedge shape: the launched ticket merged straight to a terminal
+    # state and had its stream label removed, so it is ABSENT from the
+    # label-filtered board (issues=[]). The direct reconciliation lookup returns
+    # the true terminal state → RELEASE, instead of stall-looping forever.
+    rec = _launched_record(ticket="FRE-965", now=0.0)
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=10.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state=terminal,
+    )
+    assert d.kind == "clear"
+    assert d.reason == "reconciled-terminal"
+
+
+def test_decide_does_not_release_on_board_absence_when_reconcile_inconclusive() -> None:
+    # Board omits the ticket AND the direct lookup is inconclusive (None:
+    # not-found or a lookup failure). Absence must NOT be read as done — the slot
+    # is held, never released (releasing risks double-dispatch onto a busy seat).
+    rec = _launched_record(ticket="FRE-965", now=0.0)
+    within = decide(
+        "build1", [], rec, now=10.0, stall_timeout_s=60, tracked_pr_open=False, tracked_state=None
+    )
+    assert within.kind == "await"
+    past = decide(
+        "build1", [], rec, now=1000.0, stall_timeout_s=60, tracked_pr_open=False, tracked_state=None
+    )
+    assert past.kind == "stall"  # surfaced via the stall timer, never released
+    assert past.kind not in {"clear", "launch"}
+
+
+def test_decide_holds_in_progress_even_when_far_past_timeout() -> None:
+    # A genuinely in-flight ticket (In Progress, no PR) is never released or
+    # stalled-out no matter how old — the boundary must not release too eagerly.
+    rec = _launched_record(now=0.0)
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=10_000.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state="In Progress",
+    )
+    assert d.kind == "await"
+    assert d.kind not in {"clear", "stall"}
 
 
 # --- decide: surfaced record -----------------------------------------------
@@ -298,7 +396,14 @@ def _run(
     stall=60,
     rc_alive=None,
     kill_switch_engaged=None,
+    reconcile=None,
 ):
+    # Default reconcile reads the tracked ticket's state from the board — a
+    # stand-in for "the direct Linear lookup agrees with the board". Tests that
+    # exercise the FRE-976 gap (board omits the ticket, direct lookup differs)
+    # pass an explicit reconcile.
+    if reconcile is None:
+        reconcile = lambda t: next((i.state for i in board if i.identifier == t), None)  # noqa: E731
     persisted: list[dict[str, DispatchRecord]] = []
     result = run_once(
         ["build1"],
@@ -306,6 +411,7 @@ def _run(
         now=now,
         stall_timeout_s=stall,
         board_fetcher=lambda s: board,
+        reconcile=reconcile,
         runner=runner,
         notifier=notifier or _Notifier(),
         persist=lambda st: persisted.append(dict(st)),
@@ -369,6 +475,66 @@ def test_run_once_clear_on_terminal_drops_record() -> None:
     board = [_issue("FRE-786", "Awaiting Deploy", _OPUS)]
     state, _ = _run({"build1": _launched_record(run_confirmed=True)}, runner, board, now=5.0)
     assert "build1" not in state
+
+
+def test_run_once_releases_reconciled_terminal_ticket_absent_from_board() -> None:
+    # FRE-965 wedge, end-to-end: the launched ticket is ABSENT from the
+    # label-filtered board (label removed) but the direct reconcile lookup
+    # returns a terminal state → the slot is released within one tick, instead
+    # of stall-looping forever.
+    runner = _RecordingRunner({"pr": _FakeRunResult(stdout="[]")})
+    board: list[IssueSnapshot] = []  # ticket dropped from the label-filtered board
+    state, _ = _run(
+        {"build1": _launched_record(ticket="FRE-965")},
+        runner,
+        board,
+        now=10.0,
+        reconcile=lambda t: "Done",
+    )
+    assert "build1" not in state  # released
+
+
+def test_run_once_released_slot_then_launches_next() -> None:
+    # After the release, the freed stream launches its NEXT eligible ticket on
+    # the following tick — the slot genuinely advanced, not just cleared.
+    runner = _SeatRunner()
+    next_board = [_issue("FRE-971", "Approved", _OPUS, priority=1)]  # Urgent NEXT
+    state, _ = _run({}, runner, next_board, now=20.0)
+    assert state["build1"].ticket == "FRE-971"
+    assert state["build1"].phase in {"launched", "delivering"}
+
+
+def test_run_once_holds_when_reconcile_inconclusive_and_board_absent() -> None:
+    # Board omits the ticket AND reconcile is inconclusive (None) → the slot is
+    # HELD (record retained), never released on absence alone.
+    runner = _RecordingRunner({"pr": _FakeRunResult(stdout="[]")})
+    state, _ = _run(
+        {"build1": _launched_record(ticket="FRE-965")},
+        runner,
+        [],
+        now=10.0,
+        stall=60,
+        reconcile=lambda t: None,
+    )
+    assert "build1" in state  # held, not released
+
+
+def test_run_once_reconcile_failure_is_inconclusive_not_a_release() -> None:
+    # A transport failure during reconciliation must be treated as inconclusive
+    # (slot held), never as terminal (which would falsely release the slot).
+    def _boom(_ticket: str) -> str | None:
+        raise RuntimeError("Linear API request failed: HTTP 500")
+
+    runner = _RecordingRunner({"pr": _FakeRunResult(stdout="[]")})
+    state, _ = _run(
+        {"build1": _launched_record(ticket="FRE-965")},
+        runner,
+        [],
+        now=10.0,
+        stall=60,
+        reconcile=_boom,
+    )
+    assert "build1" in state  # held despite the lookup failure
 
 
 def test_run_once_run_complete_keeps_record_sets_confirmed() -> None:
@@ -459,6 +625,7 @@ def _run_wedge(runner: _RecordingRunner, ticks: int, wedge_ticks: int = 2):  # t
             now=0.0,
             stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
             board_fetcher=lambda s: board,
+            reconcile=lambda _t: None,
             runner=runner,
             notifier=notifier,
             persist=lambda st: None,
@@ -523,6 +690,7 @@ def test_wedge_ping_is_once_per_episode_and_re_fires_on_a_new_episode() -> None:
             now=0.0,
             stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
             board_fetcher=lambda s: [_issue("FRE-1", "Approved", _OPUS)],
+            reconcile=lambda _t: None,
             runner=runner,
             notifier=notifier,
             persist=lambda st: None,
@@ -580,6 +748,7 @@ def test_stale_wedge_count_is_reset_on_a_non_wedge_decision() -> None:
         now=5.0,
         stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
         board_fetcher=lambda s: board,
+        reconcile=lambda _t: None,
         runner=runner,
         notifier=_Notifier(),
         persist=lambda st: None,
@@ -606,6 +775,7 @@ def test_blocked_launch_tick_resets_a_stale_wedge_count() -> None:
         now=0.0,
         stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
         board_fetcher=lambda s: board,
+        reconcile=lambda _t: None,
         runner=runner,
         notifier=_Notifier(),
         persist=lambda st: None,
@@ -631,6 +801,7 @@ def test_duplicate_streams_do_not_double_increment_the_wedge_counter() -> None:
         now=0.0,
         stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
         board_fetcher=lambda s: board,
+        reconcile=lambda _t: None,
         runner=runner,
         notifier=_Notifier(),
         persist=lambda st: None,
@@ -682,6 +853,7 @@ def _run_held(  # type: ignore[no-untyped-def]
             now=now,
             stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
             board_fetcher=lambda s: board,
+            reconcile=lambda _t: None,
             runner=runner,
             notifier=notifier,
             persist=lambda st: None,
@@ -755,6 +927,7 @@ def _held_ticker(state, held_escalated, notifier, board):  # type: ignore[no-unt
             now=now,
             stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
             board_fetcher=lambda s: board,
+            reconcile=lambda _t: None,
             runner=_RecordingRunner(),
             notifier=notifier,
             persist=lambda st: None,
@@ -837,6 +1010,7 @@ def test_held_escalation_is_gated_on_execute() -> None:
         now=5000.0,  # well past threshold
         stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
         board_fetcher=lambda s: [_issue("FRE-786", "Approved", _OPUS | {"context:keep"})],
+        reconcile=lambda _t: None,
         runner=_RecordingRunner(),
         notifier=notifier,
         persist=lambda st: None,
@@ -863,6 +1037,7 @@ def test_duplicate_streams_do_not_double_escalate_held() -> None:
         now=5000.0,
         stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
         board_fetcher=lambda s: board,
+        reconcile=lambda _t: None,
         runner=_RecordingRunner(),
         notifier=notifier,
         persist=lambda st: None,

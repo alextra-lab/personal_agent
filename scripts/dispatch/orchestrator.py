@@ -67,6 +67,7 @@ from scripts.dispatch.launcher import (
 from scripts.dispatch.next_resolver import (
     IssueSnapshot,
     fetch_board,
+    fetch_issue_state,
     resolve_next,
 )
 from scripts.reconcile_board import load_linear_key
@@ -384,18 +385,23 @@ def decide(
     now: float,
     stall_timeout_s: float,
     tracked_pr_open: bool,
+    tracked_state: str | None = None,
 ) -> StreamDecision:
     """Decide one stream's action for this tick (pure).
 
     Args:
         stream: Dispatch stream key.
-        issues: The stream's board snapshot (all states, from the resolver).
+        issues: The stream's board snapshot (non-terminal, from the resolver).
         record: The orchestrator's current tracking for this stream, if any.
         now: Wall-clock epoch seconds.
         stall_timeout_s: Seconds after which a launched run with no PR stalls.
         tracked_pr_open: Whether an open PR exists for a launched record's
             ticket (resolved by the caller; irrelevant without a launched
             record).
+        tracked_state: The launched ticket's TRUE current state from a direct
+            by-identifier Linear lookup (FRE-976), or ``None`` when the lookup
+            was inconclusive (no such issue / failure). Only meaningful for a
+            ``launched`` record; ignored otherwise.
 
     Returns:
         The decided ``StreamDecision``.
@@ -408,11 +414,11 @@ def decide(
         return _decide_surfaced(stream, issues, record)
     return _decide_launched(
         stream,
-        issues,
         record,
         now=now,
         stall_timeout_s=stall_timeout_s,
         tracked_pr_open=tracked_pr_open,
+        tracked_state=tracked_state,
     )
 
 
@@ -436,19 +442,35 @@ def _decide_no_record(stream: str, issues: Sequence[IssueSnapshot]) -> StreamDec
 
 def _decide_launched(
     stream: str,
-    issues: Sequence[IssueSnapshot],
     record: DispatchRecord,
     *,
     now: float,
     stall_timeout_s: float,
     tracked_pr_open: bool,
+    tracked_state: str | None,
 ) -> StreamDecision:
-    """Decide for an owned in-flight (``launched``) record."""
-    state = _state_of(issues, record.ticket)
-    normalized = state.strip().lower() if state else None
+    """Decide for an owned in-flight (``launched``) record.
+
+    ``tracked_state`` is the ticket's TRUE current state from a direct
+    by-identifier Linear lookup (``fetch_issue_state``), reconciled every tick
+    (FRE-976) — deliberately NOT read from the label-filtered board, which can
+    omit the ticket (its stream label removed at merge, or it was paginated out)
+    and so must never be mistaken for "done". The boundary:
+
+    - A confirmed terminal state RELEASES the slot (``clear``). This is the only
+      release path — it fires whether or not the ticket still carries the stream
+      label, which is exactly the FRE-965 wedge (merged straight to Done, label
+      removed, no PR) that the old board-derived state could not see.
+    - A non-terminal state HOLDS the slot (``await``/``run_complete``).
+    - ``None`` (Linear reports no such issue, or the lookup failed) is
+      inconclusive — the slot is HELD, never released; a genuinely stuck launch
+      is surfaced by the stall timer, not by a premature release (which would
+      risk double-dispatch onto a still-busy seat).
+    """
+    normalized = tracked_state.strip().lower() if tracked_state else None
 
     if normalized in _TERMINAL_STATES:
-        return StreamDecision(stream, "clear", ticket=record.ticket, reason="merged")
+        return StreamDecision(stream, "clear", ticket=record.ticket, reason="reconciled-terminal")
 
     if normalized == "in review" and tracked_pr_open and not record.run_confirmed:
         return StreamDecision(
@@ -459,7 +481,8 @@ def _decide_launched(
     if normalized in {"in review", "in progress"}:
         return StreamDecision(stream, "await", ticket=record.ticket, reason="in-flight")
 
-    # Not progressing (still Approved / unknown): stall only past the timeout.
+    # Not progressing (still Approved / not-found / inconclusive): the slot is
+    # HELD, never released on this basis. Stall-notify only past the timeout.
     if not record.run_confirmed and now - record.launched_at > stall_timeout_s:
         return StreamDecision(stream, "stall", ticket=record.ticket, reason="no-pr-past-timeout")
     return StreamDecision(stream, "await", ticket=record.ticket, reason="starting")
@@ -612,6 +635,7 @@ def run_once(
     now: float,
     stall_timeout_s: float,
     board_fetcher: Callable[[str], Sequence[IssueSnapshot]],
+    reconcile: Callable[[str], str | None],
     runner: CommandRunner,
     notifier: Notifier,
     persist: Callable[[dict[str, DispatchRecord]], None],
@@ -637,6 +661,12 @@ def run_once(
         now: Wall-clock epoch seconds.
         stall_timeout_s: Stall grace seconds.
         board_fetcher: Returns a stream's board snapshot.
+        reconcile: Returns a ticket's TRUE current Linear state by direct
+            by-identifier lookup, or ``None`` when Linear reports no such issue
+            (FRE-976). Called once per tick per launched record. May raise
+            ``RuntimeError`` on a transport failure — ``run_once`` catches it and
+            treats the reconciliation as inconclusive (holds the slot, never
+            releases).
         runner: Command runner seam for the launcher, warm-session, and PR probe.
         notifier: Liveness-notification sink.
         persist: Persists the state dict after a mutation.
@@ -676,11 +706,26 @@ def run_once(
         trace_id = str(uuid.uuid4())
         issues = board_fetcher(stream)
         record = state.get(stream)
-        tracked_pr_open = (
-            _open_pr_exists(record.ticket, runner)
-            if record is not None and record.phase == "launched"
-            else False
-        )
+        # FRE-976: for a launched record, reconcile its ticket's TRUE state
+        # against Linear by direct lookup — the board can omit it (label removed
+        # / paginated out), so its absence there is not a completion signal. A
+        # lookup failure is inconclusive, NOT terminal: fall back to ``None`` so
+        # the slot is held rather than falsely released.
+        tracked_pr_open = False
+        tracked_state: str | None = None
+        if record is not None and record.phase == "launched":
+            tracked_pr_open = _open_pr_exists(record.ticket, runner)
+            try:
+                tracked_state = reconcile(record.ticket)
+            except RuntimeError as exc:
+                logger.warning(
+                    "dispatch_reconcile_failed",
+                    trace_id=trace_id,
+                    stream=stream,
+                    ticket=record.ticket,
+                    error=str(exc),
+                )
+                tracked_state = None
         decision = decide(
             stream,
             issues,
@@ -688,6 +733,7 @@ def run_once(
             now=now,
             stall_timeout_s=stall_timeout_s,
             tracked_pr_open=tracked_pr_open,
+            tracked_state=tracked_state,
         )
         logger.info(
             "dispatch_decision",
@@ -1264,6 +1310,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             now=time.time(),
             stall_timeout_s=args.stall_timeout,
             board_fetcher=lambda stream: fetch_board(stream, api_key),
+            reconcile=lambda ticket: fetch_issue_state(ticket, api_key),
             runner=subprocess_runner,
             notifier=notifier,
             persist=lambda st: save_state(state_path, st),

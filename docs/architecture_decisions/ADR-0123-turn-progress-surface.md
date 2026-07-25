@@ -568,6 +568,39 @@ closes only when AC-7 is proven on the deployed stack. Master asserts AC-7 at th
 
 ## Status Updates
 
+### 2026-07-25 - Corrections (two), recorded at the T1 master gate
+**Changed By:** cc-master (Opus)
+**Reason:** Two statements in this ADR were found to be wrong or unsatisfiable as literally written
+while gating T1 (FRE-934). Per this ADR's own convention the affected bodies are left intact as the
+historical record; the operative readings are recorded here.
+
+- **The liveness / inference-status observation in the 2026-07-24 note is STALE and was withdrawn.**
+  That note reads "the sessionless inference-status endpoint the PWA polls returns a 404 against the
+  cloud gateway, blinding the liveness indicator." A 404 was genuinely observed, but the premise
+  behind it was wrong: the endpoint **and its only production caller were both deliberately deleted**
+  by FRE-920 (commit `643e8503`, merged 2026-07-20) — four days *before* this ADR was accepted. There
+  is no poller and no liveness indicator in PWA production code today; a grep of `seshat-pwa/src` for
+  that path returns nothing. FRE-920 shipped the replacement in the same commit: a sessionless
+  `/api/v1/config` whose provider table carries live-checked availability, and unlike the deleted
+  route it **is** mounted on the standalone cloud gateway (it answers `401`, not `404` — present and
+  merely credentialed). **FRE-962 was therefore canceled as superseded-by-FRE-920, not built** —
+  implementing it as written would have remounted a route nothing calls. Treat this bullet of the
+  2026-07-24 note as withdrawn; the rest of that note stands.
+
+- **AC-2's gap clock excludes intervals where a phase is actively running.** Read literally, AC-2
+  ("no gap between consecutive semantic progress events exceeds 10 seconds") is **unsatisfiable** for
+  exactly the case this ADR exists to fix: §3 rules that elapsed time — not streamed internal output —
+  is the honest signal for a long silent step, and §4 plus AC-2's own filler clause forbid closing the
+  gap with heartbeats or timer ticks. So a legitimate 43-second planning phase emits a start and an
+  end and nothing in between, and its raw inter-event gap *is* its duration. The operative reading,
+  confirmed with the owner and applied in T1: **the gap clock measures dead air only** — it excludes
+  `Waiting for your choice` intervals (as AC-2 already states) **and** any interval in which a phase is
+  actively running, the phase's server start-timestamp being the non-silence signal the client renders
+  as a live counter. What AC-2 still forbids is unchanged and is the point: an unannounced stretch with
+  no phase open, and closing a gap with non-semantic filler. AC-2's live measurement remains **not**
+  closeable from T1 alone — it belongs to the assembled seam AC-7 (T4, FRE-937), since it requires the
+  client surface to exist.
+
 ### 2026-07-24 - Accepted
 **Changed By:** cc-adrs (Opus)
 **Reason:** Owner accepted the decision in session on 2026-07-24. A second live incident the same

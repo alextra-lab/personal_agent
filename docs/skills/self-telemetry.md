@@ -86,8 +86,10 @@ known_bad_patterns:
 
 | `event_type` | Path | Key fields |
 |---|---|---|
-| `model_call_completed` | **Unified** LLM call event — cloud (`LiteLLMClient`) AND local (`LocalLLMClient`) both emit this since FRE-376 Phase 3 (see `known_bad_patterns` above for the retired per-provider name) | `model`, `provider`, `role`, `endpoint`, `latency_ms`, `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, `cost_usd` (present on cloud/priced calls) |
-| `api_cost_recorded` | Parallel cost ledger (Postgres `api_costs` mirror) — always carries `cost_usd`, no `role` | `provider`, `model`, `cost_usd`, `latency_ms`, `record_id`, `trace_id`, `session_id`, `cache_read_input_tokens`, `cache_creation_input_tokens` |
+| `api_cost_recorded` | **Total-spend source (FRE-979).** Unified per-call cost ledger (Postgres `api_costs` mirror) — every priced call lands here regardless of provider: `anthropic`/`openai` (LLM), `ovh` (managed embedding), `voyage` (reranker). Always carries `cost_usd`, no `role`. | `provider`, `model`, `cost_usd`, `latency_ms`, `record_id`, `trace_id`, `session_id`, `cache_read_input_tokens`, `cache_creation_input_tokens` |
+| `model_call_completed` | **LLM-completions only.** Cloud (`LiteLLMClient`) AND local (`LocalLLMClient`) both emit this since FRE-376 Phase 3 (see `known_bad_patterns` above for the retired per-provider name). Has the `role` dimension, so keep it for by-role/by-model LLM breakdowns — but it **excludes embedding and rerank cost**; do not use it alone for total spend. | `model`, `provider`, `role`, `endpoint`, `latency_ms`, `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, `cost_usd` (present on cloud/priced calls) |
+| `embedding_generated` | Managed-embedding call (FRE-974) — provider `ovh` only today | `provider` (`ovh`), `model`, `tokens`, `cost_usd`, `latency_ms`, `trace_id`, `session_id` |
+| `reranker_applied` | Reranker call, primary + fallback paths (FRE-851/974) — `cost_usd` is `None` for the free local fallback (`slm_local`) or a Voyage response with no reported usage | `provider` (`voyage` or `slm_local`), `model_id`, `cost_usd`, `duration_ms`, `fallback` |
 | `budget_counter_snapshot` | Cap-utilization gauge, one doc per configured budget-role cap every 60s (FRE-547) | `role` (the **budget-role** key, e.g. `main_inference`, `entity_extraction`, `artifact_builder` — already groups factory roles like `primary`/`sub_agent`/`compressor` via `cost_gate.budget_role_for()`), `time_window` (`daily`/`weekly`), `window_start`, `running_total`, `cap_usd`, `utilization_ratio` |
 | `llm_step_completed` | Orchestrator step wrapper | `model_role`, `duration_ms`, `tokens` (total) |
 
@@ -125,6 +127,9 @@ Hit rate ≈ `total_cached / (total_input + total_cached)`. A ratio near zero me
 
 ## Pattern 3 — Cost breakdown by role and by model (last 24 h)
 
+**LLM-only** (`model_call_completed`) — excludes OVH embedding and Voyage rerank cost; see
+Pattern 3c for total spend across all providers.
+
 `role` is the factory role (`primary`, `sub_agent`, `compressor`, `artifact_builder`, ...) —
 not yet grouped into a budget cap. See Pattern 3b to group by budget cap instead.
 
@@ -146,10 +151,14 @@ curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
 
 ## Pattern 3a — Daily spend trend (last 7 days)
 
+Total spend across **all** providers (LLM + OVH embedding + Voyage rerank) — uses
+`api_cost_recorded`, the unified per-call ledger. `model_call_completed` alone would
+understate this (misses embedding/rerank cost).
+
 ```bash
 curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
   -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-7days AND cost_usd IS NOT NULL | EVAL day = DATE_TRUNC(1 day, @timestamp) | STATS daily_cost=SUM(cost_usd), calls=COUNT(*) BY day | SORT day ASC"}' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"api_cost_recorded\" AND @timestamp > NOW()-7days | EVAL day = DATE_TRUNC(1 day, @timestamp) | STATS daily_cost=SUM(cost_usd), calls=COUNT(*) BY day | SORT day ASC"}' \
   | jq '.values'
 ```
 
@@ -173,6 +182,42 @@ curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
 The cap definitions themselves live in `config/governance/budget.yaml`; the `role` value on
 this event is the budget-role key from that file, not the factory `role` seen on
 `model_call_completed`.
+
+---
+
+## Pattern 3c — Total spend by provider (last 24h)
+
+The **total-spend source of truth**. `api_cost_recorded` carries every priced call
+(`anthropic`, `openai`, `ovh`, `voyage`) — `model_call_completed` alone understates spend
+because it excludes `embedding_generated` (OVH) and `reranker_applied` (Voyage) cost (FRE-979).
+
+```bash
+curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"api_cost_recorded\" AND @timestamp > NOW()-24hours | STATS total_cost=SUM(cost_usd), calls=COUNT(*) BY provider | SORT total_cost DESC"}' \
+  | jq '.values'
+```
+
+---
+
+## Pattern 3d — Managed-inference cost: embedding + reranker (last 7 days)
+
+Breaks out the two non-LLM cost paths `api_cost_recorded`'s total rolls up but doesn't
+distinguish by purpose.
+
+```bash
+# OVH embedding cost, daily
+curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"embedding_generated\" AND @timestamp > NOW()-7days | EVAL day = DATE_TRUNC(1 day, @timestamp) | STATS daily_cost=SUM(cost_usd), calls=COUNT(*) BY day | SORT day ASC"}' \
+  | jq '.values'
+
+# Voyage reranker cost, total (excludes the free slm_local fallback — filter cost_usd IS NOT NULL)
+curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"reranker_applied\" AND provider == \"voyage\" AND cost_usd IS NOT NULL AND @timestamp > NOW()-7days | STATS total_cost=SUM(cost_usd), calls=COUNT(*)"}' \
+  | jq '.values'
+```
 
 ---
 
@@ -244,6 +289,8 @@ curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
 - Always pipe large responses through `| head -c 50000` or use `LIMIT N` in ES|QL.
 - `trace_id` requires `.keyword` suffix for exact-match `_search` queries but not for ES|QL `==`.
 - Cloud and local paths emit the **same** `event_type` (`model_call_completed`) — filter by `provider` if you need to split them, not by a different event name.
+- For **total spend**, use `api_cost_recorded` — `model_call_completed` alone excludes OVH
+  embedding (`embedding_generated`) and Voyage rerank (`reranker_applied`) cost (FRE-979).
 - Reflections and captures use the Captain's Log indices (`agent-captains-*`), not `agent-logs-*`.
 
 See also: [query-elasticsearch](query-elasticsearch.md) · [seshat-observations](seshat-observations.md)

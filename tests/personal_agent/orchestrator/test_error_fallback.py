@@ -263,6 +263,153 @@ class TestExecuteTaskSafePartialWorkPreserved:
 
 
 # ---------------------------------------------------------------------------
+# _salvage_partial_reply (FRE-973) — shared helper extracted from step_llm_call
+# ---------------------------------------------------------------------------
+
+
+class TestSalvagePartialReplyHelper:
+    def _classified(self, **overrides: object) -> ClassifiedError:
+        defaults: dict[str, object] = {
+            "category": "model_server",
+            "reason": "The model server returned an error.",
+            "next_step": "Retry or shorten the request.",
+            "actions": ("retry", "stop"),
+            "partial": False,
+        }
+        defaults.update(overrides)
+        return ClassifiedError(**defaults)  # type: ignore[arg-type]
+
+    def test_builds_reply_and_marks_partial_when_tool_results_present(self) -> None:
+        ctx = _make_ctx()
+        ctx.tool_results.append({"tool_name": "query_es", "success": True})  # type: ignore[attr-defined]
+        classified = self._classified()
+
+        result = ex._salvage_partial_reply(ctx, classified, lead="Here's what I gathered:")
+
+        assert ctx.final_reply is not None
+        assert "query_es" in ctx.final_reply
+        assert "Here's what I gathered" in ctx.final_reply
+        assert result.partial is True
+
+    def test_no_op_when_tool_results_empty(self) -> None:
+        """No results to salvage — classified stays partial=False, no reply set."""
+        ctx = _make_ctx()
+        classified = self._classified()
+
+        result = ex._salvage_partial_reply(ctx, classified, lead="Here's what I gathered:")
+
+        assert ctx.final_reply is None
+        assert result.partial is False
+
+    def test_idempotent_second_call_does_not_overwrite(self) -> None:
+        ctx = _make_ctx()
+        ctx.tool_results.append({"tool_name": "query_es", "success": True})  # type: ignore[attr-defined]
+        classified = self._classified()
+
+        first = ex._salvage_partial_reply(ctx, classified, lead="First lead:")
+        first_reply = ctx.final_reply
+        second = ex._salvage_partial_reply(
+            ctx, self._classified(), lead="Second lead — should not appear:"
+        )
+
+        assert ctx.final_reply == first_reply
+        assert "Second lead" not in (ctx.final_reply or "")
+        assert first.partial is True
+        assert second.partial is False  # unchanged input classified — never touched
+
+
+# ---------------------------------------------------------------------------
+# execute_task's outer except now salvages too (FRE-973) — previously only
+# step_llm_call's own local except did, so an exception raised anywhere else
+# in the state-machine loop silently dropped ctx.tool_results.
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteTaskOuterExceptSalvage:
+    @pytest.mark.asyncio
+    async def test_error_outside_step_llm_call_still_salvages(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import contextlib
+
+        ctx = _make_ctx()
+        ctx.tool_results.append({"tool_name": "query_es", "success": True})  # type: ignore[attr-defined]
+        ctx.state = TaskState.TOOL_EXECUTION
+
+        @contextlib.asynccontextmanager
+        async def fake_observe_topology(_ctx: ExecutionContext):
+            yield
+
+        async def raising_step_tool_execution(
+            ctx_in: ExecutionContext, _sm: object, _trace_ctx: object
+        ) -> TaskState:
+            raise LLMServerError("524 origin timeout")
+
+        monkeypatch.setattr(ex, "observe_topology", fake_observe_topology)
+        monkeypatch.setattr(ex, "step_tool_execution", raising_step_tool_execution)
+
+        result_ctx = await ex.execute_task(ctx, session_manager=None)  # type: ignore[arg-type]
+
+        assert result_ctx.final_reply is not None
+        assert "query_es" in result_ctx.final_reply
+        assert result_ctx.classified_error is not None
+        assert result_ctx.classified_error.partial is True
+        assert result_ctx.classified_error.category == "model_server"
+        assert result_ctx.state == TaskState.FAILED
+
+
+# ---------------------------------------------------------------------------
+# execute_task_safe's outer except — last-resort salvage net (FRE-973)
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteTaskSafeLastResortSalvage:
+    @pytest.mark.asyncio
+    async def test_returned_reply_uses_salvaged_text_not_hardcoded_message(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """execute_task itself raising must not discard prior steps or a
+        reply salvaged before the raise (previously this except hardcoded its
+        return, ignoring ctx.final_reply and replacing ctx.steps outright).
+        """
+        ctx = _make_ctx()
+        prior_step = {"type": "tool_call", "description": "query_es", "metadata": {}}
+        ctx.steps.append(prior_step)  # type: ignore[attr-defined]
+        salvaged_reply = "Here is what I found before things went wrong."
+
+        async def fake_execute_task(ctx_in: ExecutionContext, _sm: object) -> ExecutionContext:
+            ctx_in.final_reply = salvaged_reply
+            raise LLMServerError("524 origin timeout")
+
+        monkeypatch.setattr(ex, "execute_task", fake_execute_task)
+        monkeypatch.setattr(ex, "_emit_classified_error", _noop_emit)
+
+        result = await ex.execute_task_safe(ctx, session_manager=None)  # type: ignore[arg-type]
+
+        assert result["reply"] == salvaged_reply
+        assert prior_step in result["steps"]
+        error_steps = [s for s in result["steps"] if s.get("type") == "error"]
+        assert error_steps, "Expected the new error step to be appended, not replace prior steps"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_classified_message_when_nothing_salvaged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ctx = _make_ctx()
+
+        async def fake_execute_task(ctx_in: ExecutionContext, _sm: object) -> ExecutionContext:
+            raise LLMServerError("524 origin timeout")
+
+        monkeypatch.setattr(ex, "execute_task", fake_execute_task)
+        monkeypatch.setattr(ex, "_emit_classified_error", _noop_emit)
+
+        result = await ex.execute_task_safe(ctx, session_manager=None)  # type: ignore[arg-type]
+
+        assert result["reply"] != ""
+        assert "retry" in result["reply"].lower() or "error" in result["reply"].lower()
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

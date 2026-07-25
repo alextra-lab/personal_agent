@@ -11,6 +11,7 @@ This module defines the data structures used throughout the orchestrator:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -309,6 +310,11 @@ class ExecutionContext:
     # Tool loop governance (per-request)
     tool_iteration_count: int = 0
     loop_gate: ToolLoopGate = field(default_factory=ToolLoopGate)
+    # FRE-973: monotonic timestamp marking turn start, for the wall-clock deadline
+    # enforced in step_llm_call (a runaway turn is bounded by elapsed time, not just
+    # tool-call count). Stamped at construction — in production this happens
+    # immediately before execute_task_safe is invoked (orchestrator.py).
+    turn_started_monotonic: float = field(default_factory=time.monotonic)
     # Set True when the iteration limit fires so step_llm_call performs a no-tool synthesis pass
     force_synthesis_from_limit: bool = False
     # ADR-0076: extra iterations granted when the user picks "Continue" at a

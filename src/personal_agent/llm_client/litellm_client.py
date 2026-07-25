@@ -12,6 +12,7 @@ and telemetry (structlog). LiteLLM handles provider format conversion and retrie
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import time
 from typing import TYPE_CHECKING, Any
@@ -514,6 +515,25 @@ class LiteLLMClient:
         )
         try:
             response = await litellm.acompletion(**litellm_kwargs)
+        except asyncio.CancelledError:
+            # FRE-973: a turn-level wall-clock deadline (asyncio.wait_for in the
+            # executor's step_llm_call) cancels this call directly. CancelledError
+            # is a BaseException, not an Exception, so it would otherwise skip the
+            # except Exception below entirely and leak this reservation until the
+            # cost-gate reaper sweeps it at TTL. Resolve it the same as any other
+            # failed exit, then propagate the cancellation — never swallow it.
+            try:
+                await gate.refund(reservation_id, trace_id=trace_id)
+            except Exception as refund_exc:  # noqa: BLE001
+                log.error(
+                    "litellm_refund_after_cancel_failed",
+                    trace_id=trace_id,
+                    session_id=trace_ctx.session_id,
+                    reservation_id=str(reservation_id),
+                    error=str(refund_exc),
+                )
+            await cost_tracker.disconnect()
+            raise
         except Exception as e:
             # Refund the reservation so the counter doesn't leak headroom.
             try:

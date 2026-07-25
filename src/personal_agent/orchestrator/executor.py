@@ -122,6 +122,19 @@ def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
     return base + ctx.tool_iteration_bonus
 
 
+def _turn_deadline_remaining(ctx: "ExecutionContext") -> float:
+    """Seconds left in this turn's wall-clock budget (FRE-973).
+
+    May be negative once the budget is exhausted. Checked at the LLM-call seam
+    in step_llm_call (bounds an in-flight call to whatever remains) and in
+    step_tool_execution's iteration-limit gate (skips the interactive
+    "continue?" pause once there is no time left to spend asking).
+    """
+    return (
+        ctx.turn_started_monotonic + settings.orchestrator_task_timeout_seconds
+    ) - time.monotonic()
+
+
 # ── Constraint governance (ADR-0076 / FRE-389) ─────────────────────────────
 
 
@@ -1543,6 +1556,68 @@ def _fallback_reply_from_tool_results(ctx: ExecutionContext, *, lead: str | None
     return "\n".join(lines)
 
 
+def _salvage_partial_reply(
+    ctx: ExecutionContext, classified: "ClassifiedError", *, lead: str
+) -> "ClassifiedError":
+    """Populate ``ctx.final_reply`` from gathered ``tool_results``, if any (FRE-398/FRE-973).
+
+    No-op if ``ctx.tool_results`` is empty (nothing to salvage) or if
+    ``ctx.final_reply`` is already set (never overwrite an existing reply —
+    idempotent to call more than once for the same failure).
+
+    Args:
+        ctx: Execution context whose ``tool_results`` / ``final_reply`` are inspected.
+        classified: The error classification for this failure.
+        lead: Opening line for the salvaged summary (context-appropriate framing).
+
+    Returns:
+        ``classified``, marked ``partial=True`` when a reply was actually salvaged.
+    """
+    if ctx.tool_results and not ctx.final_reply:
+        from personal_agent.error_classification import with_partial
+
+        ctx.final_reply = (
+            _fallback_reply_from_tool_results(ctx, lead=lead)
+            + f"\n\n---\n_{classified.reason} {classified.next_step}_"
+        )
+        classified = with_partial(classified)
+    return classified
+
+
+def _stop_turn_for_deadline(ctx: ExecutionContext) -> None:
+    """Populate ``ctx.final_reply`` for a graceful turn-deadline stop (FRE-973).
+
+    Called from step_llm_call when the turn's wall-clock budget
+    (``settings.orchestrator_task_timeout_seconds``) is exhausted, either
+    before a call is attempted or mid-call via ``asyncio.wait_for``. This is a
+    deliberate, successful early stop — not an error — so unlike
+    :func:`_salvage_partial_reply` it always sets a reply (even with no
+    ``tool_results`` gathered yet) and appends a ``warning`` step rather than
+    an ``error`` one.
+    """
+    budget = settings.orchestrator_task_timeout_seconds
+    if ctx.tool_results:
+        ctx.final_reply = _fallback_reply_from_tool_results(
+            ctx,
+            lead=(
+                f"This turn was stopped early — it exceeded its {budget}s time "
+                "budget. Here's what was gathered so far:"
+            ),
+        )
+    else:
+        ctx.final_reply = (
+            f"This turn was stopped early — it exceeded its {budget}s time budget "
+            "before gathering any results."
+        )
+    ctx.steps.append(
+        {
+            "type": "warning",
+            "description": "Turn wall-clock budget exceeded; stopping early",
+            "metadata": {"budget_seconds": budget},
+        }
+    )
+
+
 def _select_no_tool_final_reply(
     ctx: ExecutionContext, response_content: str, reasoning_trace: str | None
 ) -> str:
@@ -2408,6 +2483,21 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
             )
             ctx.error = e
             ctx.state = TaskState.FAILED
+
+            # FRE-973: an exception raised outside step_llm_call's own try (e.g. in
+            # step_tool_execution, or the state-dispatch loop itself) used to reach
+            # this handler and silently discard ctx.tool_results — this is the
+            # confirmed gap: only step_llm_call's local except previously salvaged
+            # gathered work. Close it here too so no exit path drops it.
+            from personal_agent.error_classification import classify_error
+
+            classified = ctx.classified_error or classify_error(e)
+            classified = _salvage_partial_reply(
+                ctx,
+                classified,
+                lead="The turn failed before I could finish, but here's what I gathered:",
+            )
+            ctx.classified_error = classified
 
             # Stop monitoring even on fatal error
             if monitor is not None and ctx.metrics_summary is None:
@@ -4116,18 +4206,82 @@ async def step_llm_call(
             component_ids=tuple(_component_ids),
         )
 
-        response = await llm_client.respond(
-            role=model_role,
-            messages=request_messages,
-            system_prompt=system_prompt,
-            tools=tools if tools else None,
-            tool_choice=tool_choice,
-            trace_ctx=span_ctx,
-            previous_response_id=ctx.last_response_id,
-            max_retries=max_retries_override,
-            priority=InferencePriority.USER_FACING,
-            prompt_identity=_prompt_identity,
-        )
+        # FRE-973: bound this call to the turn's remaining wall-clock budget so a
+        # slow primary generation cannot run past the SLM/tunnel read-timeout with
+        # no partial output salvaged (incident: a 1013s turn hard-failed on a
+        # Cloudflare 524 on a single 251s call, with an iteration-count-only gate
+        # that never tripped). If the budget is already gone, don't even attempt
+        # the call — stop and salvage what's gathered so far.
+        _deadline_remaining = _turn_deadline_remaining(ctx)
+        if _deadline_remaining <= 0:
+            log.warning(
+                "turn_wall_clock_budget_exhausted",
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                span_id=span_id,
+                budget_seconds=settings.orchestrator_task_timeout_seconds,
+            )
+            if timer and llm_span_name:
+                timer.end_span(llm_span_name, reason="deadline_exceeded_before_call")
+            _stop_turn_for_deadline(ctx)
+            # ADR-0074 §I3: pair the STEP_PLANNING_STARTED emitted above this try
+            # with a completion, matching the success/error exits below.
+            log.info(
+                STEP_PLANNING_COMPLETED,
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                span_id=span_id,
+                parent_span_id=trace_ctx.parent_span_id,
+                model_role=model_role.value,
+                channel=ctx.channel.value,
+                duration_ms=int((time.time() - step_start_time) * 1000),
+                status="deadline_exceeded",
+                next_state="synthesis",
+            )
+            return TaskState.SYNTHESIS
+
+        try:
+            response = await asyncio.wait_for(
+                llm_client.respond(
+                    role=model_role,
+                    messages=request_messages,
+                    system_prompt=system_prompt,
+                    tools=tools if tools else None,
+                    tool_choice=tool_choice,
+                    trace_ctx=span_ctx,
+                    previous_response_id=ctx.last_response_id,
+                    max_retries=max_retries_override,
+                    priority=InferencePriority.USER_FACING,
+                    prompt_identity=_prompt_identity,
+                ),
+                timeout=_deadline_remaining,
+            )
+        except TimeoutError:
+            log.warning(
+                "turn_wall_clock_budget_exceeded_mid_call",
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                span_id=span_id,
+                budget_seconds=settings.orchestrator_task_timeout_seconds,
+            )
+            if timer and llm_span_name:
+                timer.end_span(llm_span_name, reason="deadline_exceeded_mid_call")
+            _stop_turn_for_deadline(ctx)
+            # ADR-0074 §I3: pair the STEP_PLANNING_STARTED emitted above this try
+            # with a completion, matching the success/error exits below.
+            log.info(
+                STEP_PLANNING_COMPLETED,
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                span_id=span_id,
+                parent_span_id=trace_ctx.parent_span_id,
+                model_role=model_role.value,
+                channel=ctx.channel.value,
+                duration_ms=int((time.time() - step_start_time) * 1000),
+                status="deadline_exceeded",
+                next_state="synthesis",
+            )
+            return TaskState.SYNTHESIS
 
         # Extract response content and tool calls
         response_content = response["content"] or ""
@@ -4350,7 +4504,7 @@ async def step_llm_call(
         ctx.error = e
 
         # FRE-398: classify the error and salvage any gathered tool results.
-        from personal_agent.error_classification import classify_error, with_partial
+        from personal_agent.error_classification import classify_error
 
         classified = classify_error(e)
 
@@ -4391,15 +4545,11 @@ async def step_llm_call(
         except Exception:  # noqa: BLE001
             pass  # health hint is best-effort — never impair the error path
 
-        if ctx.tool_results:
-            ctx.final_reply = (
-                _fallback_reply_from_tool_results(
-                    ctx,
-                    lead="The model call failed before I could finish, but here's what I gathered:",
-                )
-                + f"\n\n---\n_{classified.reason} {classified.next_step}_"
-            )
-            classified = with_partial(classified)
+        classified = _salvage_partial_reply(
+            ctx,
+            classified,
+            lead="The model call failed before I could finish, but here's what I gathered:",
+        )
         ctx.classified_error = classified
 
         error_step: OrchestratorStep = {
@@ -4481,13 +4631,25 @@ async def step_tool_execution(
         # ADR-0076: ask the user whether to continue past the limit or finish
         # now, instead of silently forcing synthesis. Stored preferences and
         # the no-WS fallback are handled inside the helper.
-        action_id = await _maybe_pause_for_constraint(
-            session_id=ctx.session_id,
-            trace_id=ctx.trace_id,
-            user_id=ctx.user_id,
-            constraint="tool_iteration_limit",
-            context=f"Reached {ctx.tool_iteration_count} tool calls on this turn.",
-        )
+        # FRE-973: unless the turn's wall-clock budget is already exhausted —
+        # there's no time left to spend asking, so treat it as an automatic
+        # decline rather than pausing for a decision the turn can't act on.
+        if _turn_deadline_remaining(ctx) <= 0:
+            log.info(
+                "tool_iteration_limit_pause_skipped_deadline_exceeded",
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                iteration=ctx.tool_iteration_count,
+            )
+            action_id = None
+        else:
+            action_id = await _maybe_pause_for_constraint(
+                session_id=ctx.session_id,
+                trace_id=ctx.trace_id,
+                user_id=ctx.user_id,
+                constraint="tool_iteration_limit",
+                context=f"Reached {ctx.tool_iteration_count} tool calls on this turn.",
+            )
         if action_id == "continue_10":
             ctx.tool_iteration_bonus += 10
             log.info(
@@ -5055,10 +5217,21 @@ async def execute_task_safe(
             error_type=type(e).__name__,
             exc_info=True,
         )
-        # FRE-398: classify and surface a structured, actionable reply.
+        # FRE-398: classify and surface a structured, actionable reply. Prefer
+        # ctx.classified_error when execute_task already classified this failure
+        # (it may also have salvaged a partial reply — never reclassify over that).
         from personal_agent.error_classification import classify_error
 
-        classified = classify_error(e)
+        classified = ctx.classified_error or classify_error(e)
+        # FRE-973: this is a last-resort net — execute_task's own except normally
+        # salvages first, so this is idempotent (no-op) when ctx.final_reply is
+        # already set. It only does real work if execute_task itself raised
+        # before reaching its own handler.
+        classified = _salvage_partial_reply(
+            ctx,
+            classified,
+            lead="The turn failed before I could finish, but here's what I gathered:",
+        )
         log.error(
             TASK_FAILED,
             trace_id=ctx.trace_id,
@@ -5071,13 +5244,19 @@ async def execute_task_safe(
             REPLY_READY,
             trace_id=ctx.trace_id,
             session_id=ctx.session_id,
-            reply_length=0,
+            reply_length=len(ctx.final_reply or ""),
             fatal_error=True,
         )
         await _emit_classified_error(ctx, classified)
         return {
-            "reply": f"{classified.reason} {classified.next_step}",
+            # FRE-973: surface any salvaged partial reply instead of always the
+            # bare classified message (this previously ignored ctx.final_reply
+            # unconditionally).
+            "reply": ctx.final_reply or f"{classified.reason} {classified.next_step}",
+            # FRE-973: preserve steps recorded before the fatal exception instead
+            # of discarding them (this previously replaced ctx.steps outright).
             "steps": [
+                *ctx.steps,
                 {
                     "type": "error",
                     "description": classified.reason,
@@ -5085,7 +5264,7 @@ async def execute_task_safe(
                         "error_type": type(e).__name__,
                         "error_category": classified.category,
                     },
-                }
+                },
             ],
             "trace_id": ctx.trace_id,
         }

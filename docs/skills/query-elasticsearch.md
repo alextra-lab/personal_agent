@@ -209,15 +209,16 @@ curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
     }
   }' | jq '.aggregations.by_task.buckets'
 
-# Daily spend trend, last 7 days
+# Daily spend trend, last 7 days — TOTAL across all providers (LLM + OVH embedding +
+# Voyage rerank). Uses api_cost_recorded, the unified per-call ledger (FRE-979).
+# model_call_completed alone would understate this — it excludes embedding/rerank cost.
 curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
   -H 'Content-Type: application/json' \
   -d '{
     "size": 0,
     "query": {"bool": {"must": [
-      {"term": {"event_type": "model_call_completed"}},
-      {"range": {"@timestamp": {"gte": "now-7d"}}},
-      {"exists": {"field": "cost_usd"}}
+      {"term": {"event_type": "api_cost_recorded"}},
+      {"range": {"@timestamp": {"gte": "now-7d"}}}
     ]}},
     "aggs": {
       "by_day": {
@@ -227,8 +228,60 @@ curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
     }
   }' | jq '.aggregations.by_day.buckets'
 
-# Spend by role, last 24h (model_call_completed — role is the factory role,
-# e.g. primary / sub_agent / artifact_builder; see Pattern 3b below to group by budget cap)
+# Total spend by provider, last 24h — the total-spend source of truth. api_cost_recorded
+# carries every priced call (anthropic, openai, ovh, voyage); model_call_completed alone
+# misses embedding_generated (OVH) and reranker_applied (Voyage) cost (FRE-979).
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "api_cost_recorded"}},
+      {"range": {"@timestamp": {"gte": "now-24h"}}}
+    ]}},
+    "aggs": {
+      "by_provider": {
+        "terms": {"field": "provider", "size": 10},
+        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
+      }
+    }
+  }' | jq '.aggregations.by_provider.buckets'
+
+# Managed-inference cost, last 7 days — embedding (OVH) and reranker (Voyage) breakdowns
+# that api_cost_recorded's total rolls up but doesn't distinguish by purpose.
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "embedding_generated"}},
+      {"range": {"@timestamp": {"gte": "now-7d"}}}
+    ]}},
+    "aggs": {
+      "by_day": {
+        "date_histogram": {"field": "@timestamp", "calendar_interval": "day"},
+        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
+      }
+    }
+  }' | jq '.aggregations.by_day.buckets'
+
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "reranker_applied"}},
+      {"term": {"provider": "voyage"}},
+      {"exists": {"field": "cost_usd"}},
+      {"range": {"@timestamp": {"gte": "now-7d"}}}
+    ]}},
+    "aggs": {"total_cost": {"sum": {"field": "cost_usd"}}}
+  }' | jq '.aggregations.total_cost'
+
+# Spend by role, last 24h — LLM-only (model_call_completed — role is the factory role,
+# e.g. primary / sub_agent / artifact_builder; see Pattern 3b below to group by budget cap).
+# Excludes OVH embedding and Voyage rerank cost; use the total-spend-by-provider recipe
+# above for a figure that includes them.
 curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
   -H 'Content-Type: application/json' \
   -d '{
@@ -246,7 +299,7 @@ curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
     }
   }' | jq '.aggregations.by_role.buckets'
 
-# Spend by model, last 24h
+# Spend by model, last 24h — LLM-only (model_call_completed); same exclusion as above.
 curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
   -H 'Content-Type: application/json' \
   -d '{
@@ -401,8 +454,9 @@ curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
 | `term` query on `error` text field | Use `error.keyword`. All other named fields (`level`, `event_type`, `tool_name`, `trace_id`, etc.) are pure keyword post-2026-05-10 reindex — `term` works directly. |
 | Wrong time boundary for "today" | "Today" is ambiguous. Use `@timestamp >= now-24h` (rolling window) instead of a midnight boundary — events from earlier in the day may be in yesterday's UTC index. |
 | Empty `_source` filter | Omit `_source` to get the full doc (it's small). Or list explicit fields to keep results small. |
-| Guessing `event_type` values | Run a `terms` agg on `event_type` to see what's actually emitted. Known values: `tool_call_started`, `tool_call_completed`, `tool_loop_gate`, `session_created`, `gateway_request`, `state_transition`, `model_call_started`, `model_call_completed`, `api_cost_recorded`, `budget_counter_snapshot`, `history_sanitised`. |
-| Assuming a separate cloud-only cost event exists | See `known_bad_patterns` above — the legacy per-provider event name was removed (FRE-376 Phase 3). Cost/tokens for **both** cloud and local model calls are unified on `model_call_completed` (has `role`); `api_cost_recorded` is a parallel ledger (no `role`). |
+| Guessing `event_type` values | Run a `terms` agg on `event_type` to see what's actually emitted. Known values: `tool_call_started`, `tool_call_completed`, `tool_loop_gate`, `session_created`, `gateway_request`, `state_transition`, `model_call_started`, `model_call_completed`, `api_cost_recorded`, `embedding_generated`, `reranker_applied`, `budget_counter_snapshot`, `history_sanitised`. |
+| Assuming a separate cloud-only cost event exists | See `known_bad_patterns` above — the legacy per-provider event name was removed (FRE-376 Phase 3). Cost/tokens for **both** cloud and local model calls are unified on `model_call_completed` (has `role`). |
+| Using `model_call_completed` alone for TOTAL spend | It's LLM-completions only — it excludes `embedding_generated` (OVH) and `reranker_applied` (Voyage) cost, which route through the unified ledger instead. Use `api_cost_recorded` for total spend across every provider (FRE-974/979); keep `model_call_completed` for by-role/by-model LLM-only breakdowns. |
 
 ## Governance
 

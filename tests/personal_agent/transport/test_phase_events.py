@@ -31,7 +31,14 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     async def _capture(event: Any, session_id: str) -> None:
         captured.append(event)
 
+    async def _noop_snapshot(session_id: str, phase_id: str) -> None:
+        # The full-state phase_state snapshot (FRE-986) has its own suite
+        # (test_phase_state.py); stub it here so these delta-focused tests stay
+        # hermetic and never touch the real persist path.
+        return None
+
     monkeypatch.setattr(transport_mod, "_push_event", _capture)
+    monkeypatch.setattr(transport_mod, "_emit_phase_snapshot_best_effort", _noop_snapshot)
     return captured
 
 

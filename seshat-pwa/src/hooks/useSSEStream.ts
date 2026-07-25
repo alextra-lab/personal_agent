@@ -22,12 +22,14 @@ import type {
   PendingInterrupt,
   PhaseEndData,
   PhaseNode,
+  PhaseSnapshotEntry,
   PhaseStartData,
   ResolvedConstraint,
   ToolApprovalRequestData,
   ToolCall,
   TurnStatus,
 } from '@/lib/types';
+import { reconcilePhaseSnapshot } from '@/lib/phase-state';
 
 /** Server-authoritative model-selection change, from a `session_selection` STATE_DELTA. */
 export interface ServerSelection {
@@ -322,6 +324,15 @@ export function useSSEStream(): UseSSEStreamReturn {
             setServerSelection({ role, deploymentKey: deployment_key });
           }
         }
+        // ADR-0123 §6 / FRE-986: full-state phase snapshot → converge the active phase
+        // set from this single message (self-correcting; newest wins). Shape-guarded —
+        // a malformed payload is ignored, never thrown on.
+        if (key === 'phase_state' && value !== null && typeof value === 'object') {
+          const active = (value as { active?: unknown }).active;
+          if (Array.isArray(active)) {
+            setPhases((prev) => reconcilePhaseSnapshot(prev, active as PhaseSnapshotEntry[]));
+          }
+        }
         break;
       }
 
@@ -374,10 +385,15 @@ export function useSSEStream(): UseSSEStreamReturn {
         setIsStreaming(false);
         // AC-9(a) backstop: resolve any phase still 'running' (its own
         // PHASE_END never arrived — e.g. a dropped best-effort emission).
-        // Phases already resolved by their own PHASE_END are left alone.
+        // Also upgrade a node the phase_state snapshot provisionally completed
+        // (FRE-986 `snapshotResolved`) — a dropped PHASE_END(ok:false) must not
+        // leave a cancelled turn showing a green check. A genuinely
+        // PHASE_END-completed node (unmarked) is left alone.
         setPhases((prev) =>
           prev.map((p) =>
-            p.state === 'running' ? { ...p, state: 'cancelled', endedAt: Date.now() } : p,
+            p.state === 'running' || p.snapshotResolved
+              ? { ...p, state: 'cancelled', snapshotResolved: false, endedAt: p.endedAt ?? Date.now() }
+              : p,
           ),
         );
         break;
@@ -396,11 +412,15 @@ export function useSSEStream(): UseSSEStreamReturn {
         setIsStreaming(false);
         setActiveTools([]);
         // AC-9(b) backstop — see the PHASE_END ok:false handling above for
-        // the primary mechanism; this only catches a phase that never got
-        // its own PHASE_END at all.
+        // the primary mechanism; this catches a phase that never got its own
+        // PHASE_END at all, plus one the phase_state snapshot provisionally
+        // completed after a dropped PHASE_END(ok:false) (FRE-986). A genuinely
+        // PHASE_END-completed node (unmarked) is not mislabelled as error.
         setPhases((prev) =>
           prev.map((p) =>
-            p.state === 'running' ? { ...p, state: 'error', endedAt: Date.now() } : p,
+            p.state === 'running' || p.snapshotResolved
+              ? { ...p, state: 'error', snapshotResolved: false, endedAt: p.endedAt ?? Date.now() }
+              : p,
           ),
         );
         break;

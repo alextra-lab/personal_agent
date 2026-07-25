@@ -168,6 +168,104 @@ describe('useSSEStream — phases lifecycle', () => {
   });
 });
 
+// ── phase_state full-state snapshot (ADR-0123 §6, FRE-986) ──────────────────
+
+function phaseState(seq: number, active: object[]): object {
+  return {
+    type: 'STATE_DELTA',
+    seq,
+    session_id: 'session-1',
+    data: { key: 'phase_state', value: { active } },
+  };
+}
+
+describe('useSSEStream — phase_state snapshot (FRE-986, AC-3)', () => {
+  it('converges the active phase from a snapshot alone (no prior deltas)', async () => {
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+    pushEvent(
+      phaseState(5, [
+        {
+          phase: 'planning',
+          phase_id: 'p1',
+          started_at: '2026-07-25T10:00:03.000Z',
+          detail: null,
+          parent_id: null,
+        },
+      ]),
+    );
+    expect(hook.result.current.phases).toHaveLength(1);
+    expect(hook.result.current.phases[0]).toMatchObject({ phaseId: 'p1', state: 'running' });
+    expect(hook.result.current.phases[0].startedAt).toBe('2026-07-25T10:00:03.000Z');
+  });
+
+  it('self-corrects a stuck-running phase whose PHASE_END was dropped', async () => {
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+    pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
+    // PHASE_END for p1 is dropped; a later snapshot (for a new phase p2) omits p1.
+    pushEvent(
+      phaseState(3, [
+        {
+          phase: 'synthesis',
+          phase_id: 'p2',
+          started_at: '2026-07-25T10:01:00.000Z',
+          detail: null,
+          parent_id: null,
+        },
+      ]),
+    );
+    const byId = Object.fromEntries(hook.result.current.phases.map((p) => [p.phaseId, p]));
+    expect(byId.p1.state).toBe('completed');
+    expect(byId.p2.state).toBe('running');
+  });
+
+  it('lets a later RUN_ERROR upgrade a snapshot-resolved node to error', async () => {
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+    pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
+    pushEvent(phaseState(3, [])); // p1 dropped its PHASE_END(ok:false) → snapshot-completes it
+    expect(hook.result.current.phases[0].state).toBe('completed');
+    pushEvent({ type: 'RUN_ERROR', session_id: 'session-1', data: { category: 'x', reason: 'y' } });
+    expect(hook.result.current.phases[0].state).toBe('error');
+  });
+
+  it('lets a later CANCELLED upgrade a snapshot-resolved node to cancelled', async () => {
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+    pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
+    pushEvent(phaseState(3, []));
+    pushEvent({ type: 'CANCELLED', session_id: 'session-1' });
+    expect(hook.result.current.phases[0].state).toBe('cancelled');
+  });
+
+  it('does NOT let RUN_ERROR mislabel a genuinely completed earlier phase', async () => {
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+    pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
+    pushEvent(phaseEnd(2, { phase_id: 'p1' })); // genuine ok:true completion
+    pushEvent(phaseStart(3, { phase_id: 'p2', started_at: '2026-07-25T10:01:00.000Z' }));
+    pushEvent({ type: 'RUN_ERROR', session_id: 'session-1', data: { category: 'x', reason: 'y' } });
+    const byId = Object.fromEntries(hook.result.current.phases.map((p) => [p.phaseId, p]));
+    expect(byId.p1.state).toBe('completed'); // untouched
+    expect(byId.p2.state).toBe('error'); // the running one is swept
+  });
+
+  it('ignores a malformed phase_state payload without throwing', async () => {
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+    pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
+    // null value, non-array active — must be ignored, leaving p1 running.
+    pushEvent({ type: 'STATE_DELTA', session_id: 'session-1', data: { key: 'phase_state', value: null } });
+    pushEvent({
+      type: 'STATE_DELTA',
+      session_id: 'session-1',
+      data: { key: 'phase_state', value: { active: 'nope' } },
+    });
+    expect(hook.result.current.phases[0].state).toBe('running');
+  });
+});
+
 // ── AC-3: reconnect resumes rather than restarts or re-narrates ────────────
 
 describe('useSSEStream — AC-3 reconnect', () => {

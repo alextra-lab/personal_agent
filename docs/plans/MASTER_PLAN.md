@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-24 pm (a live turn surfaced a bug wave — sub-agent routing + config-design; ADR-0123 accepted)
+> **Last updated**: 2026-07-25 (the 2026-07-24 bug wave SHIPPED — 7 fixes deployed; pipeline-hardening family filed)
 
 ## 0. ADR-0123 turn progress surface — accepted; adrs seat filing the impl chain (FRE-957)
 
@@ -39,27 +39,34 @@ don't invent a consumer.
 **Standing checks master owns:** the Amendment B retired-value population scan (FRE-956) once digests
 exist; the **AC-22 seam** (assembled Phases 0–2) closes only when Phase 2 lands, not when a child merges.
 
-## 0c. Model selection — sub-agent routing + the primary/sub pairing design
+## 0c. The 2026-07-24 bug wave — SHIPPED; two follow-on threads
 
-A live turn exposed that **sub-agent delegation was silently broken**: since ADR-0121 T5 (FRE-920)
-rebound `sub_agent` to cloud `claude_sonnet`, the enforced-expansion path dialed a dead local endpoint,
-so every sub-agent died and the primary ground the whole task solo. **FRE-958** fixes the routing
-(merged; **deploy HELD** to bundle with FRE-963). The deeper design, owner-settled: **`sub_agent` has a
-per-primary *default* (companion — qwen-thinking→qwen-instruct, sonnet→sonnet), open-ended override by
-model *name* via the Config UI; selection is by name, not location** (owner accepts mismatch latency).
-- **FRE-963** (build1, Urgent) — stopgap re-bind `sub_agent` → `qwen3.6-35b-instruct` + open. **Deploys
-  with FRE-958 in one gateway rebuild** (ask-first) once its PR lands.
-- **FRE-964** (adrs, queued behind FRE-957) — ADR-0121 amendment: the per-primary default *map* + a
-  must-define-on-add guard + the Config UI override surface.
-- **FRE-959** (SIGPIPE reported to the model as a tool failure) · **FRE-960** (query-paraphrasing has the
-  same routing bug, fails-open → recall degraded to single-query since FRE-920; re-scoped as a routing
-  bug, not egress) — both Needs Approval.
+The wave (sub-agent routing, Anthropic-primary prefill, compaction window, 524 salvage, OVH/Voyage cost
++ migration 0022, legacy digest, budget right-size) is **deployed** (2026-07-25, main `cc019fde`) — see
+git log + `LAST_SESSION.md`. Forward from here:
+- **Finish wave verification** — FRE-970/971/972/969 are deployed + TDD-proven but their *behavioural*
+  ACs are not yet live-confirmed (qwen turns 524 on the tunnel before completing). Fire a **sonnet**
+  budget turn to seal them, then close Done. FRE-974/973 already Done.
+- **Config chain FRE-966→967→968** (ADR-0121 Addendum A — per-primary sub_agent map · guard · resolver ·
+  Config-UI seam) — **parked** (labels off, relations wired); resumes on owner's word.
+- **Follow-ups (Needs Approval):** FRE-978 (Stage-7 static-window trim, sibling of 972) · FRE-979 (ES
+  skill → `api_cost_recorded` for total spend, sibling of 970/974) · FRE-980 (raise CF tunnel timeout —
+  **Mac-side terraform**, not build-pipeline). Also still open from the wave: FRE-959 (SIGPIPE) · FRE-960
+  (paraphrase routing).
+
+## 0d. Pipeline-hardening family — filed, held for the explore study
+
+Surfaced by this session's own dispatch failures. **FRE-976** (Linear-reconciled dispatch — the daemon
+stall-loops on a Done-directly ticket; Tier-1) · **FRE-975** (gate master on a review-complete signal,
+not PR-open+CI-green) · **FRE-977** (explore first-class dispatch — master owns explore hand-offs). All
+Needs Approval. **Hold until the explore pipeline-architecture study lands** (owner-started) — it may
+fold them into a unified design. Open owner decision: dispatch 975+977 to build2 now (hold 976)?
 
 ## 1. Reduce the backlog
 
-~80 Approved; most carry no stream label (parked). Live queue: **build1 building FRE-963** (§0c),
-**adrs building FRE-957** (§0, then FRE-964 queued); build2 empty (FRE-954 parked). Awaiting approval and
-unlabelled: FRE-927, FRE-932. Method:
+~80 Approved; most carry no stream label (parked). Live queue: **build1 + build2 idle** (wave done); the
+pipeline-hardening family (§0d) is the next candidate for build2, held for the explore study. Awaiting
+approval and unlabelled: FRE-927, FRE-932. Method:
 verify per cluster, cancel the provable with a one-line reason, bring judgment calls to the owner.
 Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729–732, FRE-810/811/814) ·
 `[Thread]` placeholders that can never be Done (FRE-401/418/397) · work gated on events that never
@@ -92,8 +99,9 @@ Inference. Re-sequence after §0.
 
 ## Awaiting an owner decision
 
-- **ADR-0120 cost governance** — Proposed. Impl chain (FRE-898/904/905; T0 = instrument OVH/Voyage/
-  Perplexity into `api_costs`) unlocks on Proposed→Accepted. All cost work ask-first.
+- **ADR-0120 cost governance** — Proposed. Note: FRE-974 already delivered the **OVH/Voyage half of T0**
+  (both now in `api_costs`); Perplexity + the caps/consent layer remain, unlock on Proposed→Accepted.
+  All cost work ask-first.
 - **Backlog cull scope + gate** (see §1).
 - **FRE-885** · **FRE-805** · **FRE-621** — Needs Approval.
 
@@ -106,8 +114,9 @@ Inference. Re-sequence after §0.
 
 ## Deploy queue
 
-**FRE-958 + FRE-963 (ask-first — gateway rebuild, BUNDLED — TOP PICKUP)** — FRE-958 (sub-agent routing)
-merged + Awaiting-Deploy-held; deploy together with FRE-963 (the re-bind) in ONE rebuild once FRE-963's
-PR lands + is gated (§0c). Re-stop embeddings + verify after. · **FRE-938** (gateway + PWA, owner-gated)
-— merged #617, PWA cache v35. · FRE-739 (needs FRE-740 + a live non-owner request) · FRE-717 (needs
-organic outcome input).
+The 2026-07-24 wave is **deployed** (2026-07-25 bundled rebuild + migration 0022; embeddings re-stopped).
+Remaining:
+- **FRE-970 · 971 · 972 · 969** — deployed; **behavioural verification pending** (fire a sonnet budget
+  turn — see §0c / `LAST_SESSION.md`). Close Done once confirmed.
+- **FRE-943 · 739 · 717** — rode the wave rebuild → now live; verify ACs + close.
+- **FRE-938** (gateway + PWA, owner-gated) — merged #617, PWA cache v35.

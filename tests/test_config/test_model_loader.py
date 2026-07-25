@@ -8,7 +8,11 @@ import structlog
 
 from personal_agent.config import ModelConfigError, load_model_config, settings
 from personal_agent.config import model_loader as model_loader_module
-from personal_agent.config.model_loader import check_vision_capabilities
+from personal_agent.config.model_loader import (
+    check_vision_capabilities,
+    resolve_active_context_length,
+)
+from personal_agent.config.selection import reset_current_selection, set_current_selection
 from personal_agent.config.settings import AppConfig
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition
 
@@ -655,3 +659,70 @@ class TestCheckVisionCapabilities:
 
         assert (capable, missing) == ([], [])
         assert "vision_capabilities_check_failed" in [e["event"] for e in logs]
+
+
+class TestResolveActiveContextLength:
+    """FRE-978 — the shared model-aware context-length resolver.
+
+    Extracted from ``orchestrator.executor._resolve_context_max`` (FRE-972) so
+    both the in-turn compaction gate and the pre-LLM gateway's Stage 7 budget
+    trim measure pressure against the session's real selected-model window
+    instead of a static, Qwen-calibrated constant, without ``request_gateway``
+    (upstream of the orchestrator) reaching into ``orchestrator`` internals.
+    """
+
+    _CLOUD_KEY = "claude_sonnet"  # context_length 200000 (config/models.yaml)
+    _LOCAL_KEY = "qwen3.6-35b-thinking"  # context_length 131072 (config/models.yaml)
+
+    def test_resolves_active_primary_selection(self) -> None:
+        """Returns the selected model's real context_length, not the fallback."""
+        token = set_current_selection({"primary": self._CLOUD_KEY})
+        try:
+            expected = load_model_config().models[self._CLOUD_KEY].context_length
+            assert resolve_active_context_length("primary", fallback=1) == expected
+        finally:
+            reset_current_selection(token)
+
+    def test_differs_cloud_vs_local(self) -> None:
+        """Selection-aware: cloud (Sonnet 200K) differs from local (Qwen 131K)."""
+        cloud_token = set_current_selection({"primary": self._CLOUD_KEY})
+        try:
+            cloud_max = resolve_active_context_length("primary", fallback=1)
+        finally:
+            reset_current_selection(cloud_token)
+
+        local_token = set_current_selection({"primary": self._LOCAL_KEY})
+        try:
+            local_max = resolve_active_context_length("primary", fallback=1)
+        finally:
+            reset_current_selection(local_token)
+
+        assert cloud_max == 200000
+        assert cloud_max != local_max
+
+    def test_falls_back_when_no_definition_resolves(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No model definition for the resolved key -> returns the caller's fallback."""
+        monkeypatch.setattr(
+            model_loader_module,
+            "resolve_role_target",
+            lambda role, *, model_key=None, config=None: ("missing-key", None),
+        )
+        assert resolve_active_context_length("primary", fallback=42) == 42
+
+    def test_falls_back_on_resolution_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A resolution failure (e.g. bad config) is swallowed -> returns the fallback."""
+
+        def _boom(role: str, *, model_key: str | None = None, config: object = None) -> object:
+            raise RuntimeError("simulated resolution failure")
+
+        monkeypatch.setattr(model_loader_module, "resolve_role_target", _boom)
+        assert resolve_active_context_length("primary", fallback=99) == 99
+
+    def test_fallback_not_used_when_selection_resolves(self) -> None:
+        """A resolvable selection wins over the fallback (fallback is a trap value)."""
+        token = set_current_selection({"primary": self._LOCAL_KEY})
+        try:
+            result = resolve_active_context_length("primary", fallback=-1)
+        finally:
+            reset_current_selection(token)
+        assert result == 131072

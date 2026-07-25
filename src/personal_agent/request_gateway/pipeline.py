@@ -78,7 +78,15 @@ async def run_gateway_pipeline(
         expansion_budget = settings.expansion_budget_max
 
     if max_context_tokens is None:
-        max_context_tokens = settings.context_budget_max_tokens
+        # FRE-978: the session's selected-model window, not the static
+        # Qwen-calibrated budget — sibling of FRE-972's in-turn gate fix.
+        from personal_agent.config.model_loader import (  # noqa: PLC0415
+            resolve_active_context_length,
+        )
+
+        max_context_tokens = resolve_active_context_length(
+            "primary", fallback=settings.context_budget_max_tokens
+        )
 
     degraded_stages: list[str] = []
 

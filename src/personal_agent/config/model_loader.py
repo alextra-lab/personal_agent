@@ -381,6 +381,39 @@ def resolve_role_definition(
     return resolve_role_target(role, model_key=model_key, config=config)[1]
 
 
+def resolve_active_context_length(role: str = "primary", *, fallback: int) -> int:
+    """Return the active per-turn selection's model context window, or ``fallback``.
+
+    Resolves through the per-turn selection contextvar (``config.selection``) and
+    the role's binding default, so callers measure pressure against the real
+    model window (e.g. 200K for cloud Sonnet, 131K for local Qwen) instead of a
+    static, Qwen-calibrated constant. Shared by the in-turn compaction/consent
+    gate (``orchestrator.executor._resolve_context_max``, FRE-972) and the
+    pre-LLM gateway's Stage 7 budget trim (``request_gateway.pipeline``,
+    FRE-978) — extracted here because ``request_gateway`` sits upstream of
+    ``orchestrator`` and must not import from it.
+
+    Args:
+        role: Role name to resolve (``"primary"`` for the session's main model).
+        fallback: Value to return when no model definition resolves, or
+            resolution raises. Each caller carries its own historical
+            constant here — the two current callers use different ones.
+
+    Returns:
+        The resolved model's ``context_length``, or ``fallback``.
+    """
+    try:
+        from personal_agent.config.selection import get_current_selection  # noqa: PLC0415
+
+        deployment_key, model_def = resolve_role_target(role, model_key=get_current_selection(role))
+        if model_def is not None:
+            return model_def.context_length
+        log.warning("context_max_resolve_no_definition", deployment_key=deployment_key)
+    except Exception as exc:
+        log.warning("context_max_resolve_failed", error=str(exc), error_type=type(exc).__name__)
+    return fallback
+
+
 def is_selectable_binding(role: str, key: str, config: ModelConfig) -> bool:
     """Whether ``key`` is a legal user selection for ``role`` (ADR-0121 §6).
 

@@ -191,25 +191,15 @@ def _resolve_context_max() -> int:
     (FRE-414) and the in-turn compaction/consent gate (FRE-972) measure
     pressure against the real window instead of the static local budget.
     Falls back to the configured budget when the model config can't be
-    resolved — logged at warning, since a silent fallback here now also
-    mis-sizes the compaction gate, not just a display meter.
+    resolved. Delegates to the shared resolver (FRE-978) also used by the
+    pre-LLM gateway's Stage 7 budget trim.
 
     Returns:
         The active model's context length, or ``settings.context_window_max_tokens``.
     """
-    try:
-        from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
-        from personal_agent.config.selection import get_current_selection  # noqa: PLC0415
+    from personal_agent.config.model_loader import resolve_active_context_length  # noqa: PLC0415
 
-        deployment_key, model_def = resolve_role_target(
-            "primary", model_key=get_current_selection("primary")
-        )
-        if model_def is not None:
-            return model_def.context_length
-        log.warning("context_max_resolve_no_definition", deployment_key=deployment_key)
-    except Exception as exc:
-        log.warning("context_max_resolve_failed", error=str(exc), error_type=type(exc).__name__)
-    return settings.context_window_max_tokens
+    return resolve_active_context_length("primary", fallback=settings.context_window_max_tokens)
 
 
 async def _report_turn_progress(ctx: "ExecutionContext") -> None:

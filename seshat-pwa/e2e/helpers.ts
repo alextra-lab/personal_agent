@@ -19,7 +19,6 @@ const BACKEND = 'http://localhost:9000';
  *
  * - sessions/{id}/messages → empty history (new session)
  * - sessions/{id}          → 404 (no server-side profile to hydrate)
- * - inference/status       → "up" so Send is enabled
  * - chat/stream            → 200 OK (fire-and-forget; WS carries events)
  */
 export async function stubRest(page: Page, sessionId = TEST_SESSION): Promise<void> {
@@ -28,9 +27,6 @@ export async function stubRest(page: Page, sessionId = TEST_SESSION): Promise<vo
   );
   await page.route(`${BACKEND}/api/v1/sessions/${sessionId}`, (route) =>
     route.fulfill({ status: 404, body: 'not found' }),
-  );
-  await page.route(`${BACKEND}/api/inference/status*`, (route) =>
-    route.fulfill({ json: { status: 'up', latency_ms: 10 } }),
   );
   await page.route(`${BACKEND}/chat/stream`, (route) =>
     route.fulfill({ status: 200, body: '' }),

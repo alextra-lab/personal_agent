@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse hook: gate deploy commands by session role.
-#   - build / adr worktrees: hard-deny any deploy command (those sessions never deploy).
+#   - build / build2 / adr worktrees: hard-deny any deploy command (those sessions never deploy).
 #   - master (primary tree): allow. Master is the deploy authority; deploys are gated
 #     by the owner's explicit approval + master's judgment, not a sentinel file.
 # Role is determined by the worktree root of the hook's CWD.

@@ -50,7 +50,7 @@ roles:
 
 caps:
   - {time_window: daily,  role: entity_extraction, cap_usd: 5.00}   # reset 2026-07-04: FRE-771 powered A/B complete (was TEMP BUMP to $25.00)
-  - {time_window: daily,  role: captains_log,      cap_usd: 5.00}   # raised 2026-07-24 (was $2.50, breaching — observed daily peak $2.76); ~2x peak, owner-approved
+  - {time_window: daily,  role: captains_log,      cap_usd: 10.00}  # TEMPORARY testing bump 2026-07-25 (was $5.00, breaching at 100.3%: $5.02 spent + $5.26 denied = ~$10.3 true daily demand after ADR-0124 digests shipped 07-24). Owner-approved "while we test" — REVIEW and right-size once the digest population stabilises; do not let this go stale like the FRE-334 bumps did.
   - {time_window: daily,  role: main_inference,    cap_usd: 10.00}  # right-sized 2026-07-24 (was $15 stale FRE-334 bump); ~2x observed daily peak $4.94, owner-approved
   - {time_window: daily,  role: skill_routing,     cap_usd: 0.10}   # user-confirmed 2026-05-07
   - {time_window: daily,  role: study,              cap_usd: 5.00}   # FRE-839: ADR-0114 study categorizer, isolated from entity_extraction's cap so a one-time corpus run can never contend with live prod extraction — owner-confirmed 2026-07-10

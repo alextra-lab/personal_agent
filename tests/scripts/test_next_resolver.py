@@ -20,11 +20,13 @@ import urllib.error
 import pytest
 from scripts.dispatch.launcher import known_streams
 from scripts.dispatch.next_resolver import (
+    _EXCLUDED_STATE_TYPES,
     Blocker,
     IssueSnapshot,
     _build_parser,
     eligible_candidates,
     fetch_board,
+    fetch_issue_state,
     main,
     resolve_next,
     stream_label,
@@ -493,6 +495,102 @@ def test_fetch_board_surfaces_graphql_errors_on_200(monkeypatch: pytest.MonkeyPa
         fetch_board("build1", "fake-key")
 
 
+# --- fetch_board pagination + terminal filter (FRE-976) ---------------------
+
+
+def _page_node(identifier: str, state: str = "Approved") -> dict[str, object]:
+    return {
+        "identifier": identifier,
+        "state": {"name": state},
+        "priority": 2,
+        "createdAt": "2026-07-01T00:00:00Z",
+        "labels": {"nodes": [{"name": "stream:build1"}]},
+        "inverseRelations": {"nodes": []},
+    }
+
+
+def _page_body(nodes: list[dict[str, object]], *, has_next: bool, cursor: str | None) -> bytes:
+    return json.dumps(
+        {
+            "data": {
+                "issues": {
+                    "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+                    "nodes": nodes,
+                }
+            }
+        }
+    ).encode()
+
+
+def test_fetch_board_paginates_across_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A stream whose labelled set spans two pages must return ALL of it — a
+    # silent truncation at the page cap is exactly the FRE-976 wedge cause.
+    pages = [
+        _page_body([_page_node("FRE-1"), _page_node("FRE-2")], has_next=True, cursor="CUR"),
+        _page_body([_page_node("FRE-3")], has_next=False, cursor=None),
+    ]
+    seen_cursors: list[object] = []
+
+    def _fake_urlopen(request: object, *a: object, **k: object) -> _FakeResponse:
+        body = json.loads(request.data.decode())  # type: ignore[attr-defined]
+        seen_cursors.append(body["variables"]["after"])
+        return _FakeResponse(pages[len(seen_cursors) - 1])
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    snapshots = fetch_board("build1", "fake-key")
+    assert [s.identifier for s in snapshots] == ["FRE-1", "FRE-2", "FRE-3"]
+    # The second request carried the first page's endCursor (cursor was threaded).
+    assert seen_cursors == [None, "CUR"]
+
+
+def test_fetch_board_query_excludes_terminal_state_types(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The server-side terminal-type exclusion must be sent — dropping it lets
+    # Done tickets accumulate and truncate the board again (FRE-976).
+    captured: dict[str, object] = {}
+
+    def _fake_urlopen(request: object, *a: object, **k: object) -> _FakeResponse:
+        captured.update(json.loads(request.data.decode()))  # type: ignore[attr-defined]
+        return _FakeResponse(_page_body([], has_next=False, cursor=None))
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    fetch_board("build1", "fake-key")
+    assert captured["variables"]["excluded"] == list(_EXCLUDED_STATE_TYPES)  # type: ignore[index]
+    assert "state: { type: { nin: $excluded } }" in captured["query"]  # type: ignore[operator]
+
+
+# --- fetch_issue_state: direct by-identifier reconciliation (FRE-976) --------
+
+
+def _issue_body(state: str | None) -> bytes:
+    issue = None if state is None else {"identifier": "FRE-965", "state": {"name": state}}
+    return json.dumps({"data": {"issue": issue}}).encode()
+
+
+def test_fetch_issue_state_returns_true_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda *a, **k: _FakeResponse(_issue_body("Done"))
+    )
+    assert fetch_issue_state("FRE-965", "fake-key") == "Done"
+
+
+def test_fetch_issue_state_none_when_issue_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Linear returns 200 with `data.issue: null` for an unknown id — this must be
+    # a conclusive None (inconclusive-for-release), never raise.
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResponse(_issue_body(None)))
+    assert fetch_issue_state("FRE-99999", "fake-key") is None
+
+
+def test_fetch_issue_state_raises_on_transport_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A transport failure must raise (the caller holds the slot), never look like
+    # a not-found that could be mistaken for terminal.
+    def _raise(*a: object, **k: object) -> None:
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", _raise)
+    with pytest.raises(RuntimeError):
+        fetch_issue_state("FRE-965", "fake-key")
+
+
 @pytest.mark.integration
 def test_fetch_board_live_query_is_valid() -> None:
     """Prove the board-fetch query validates against Linear's live schema.
@@ -512,8 +610,23 @@ def test_fetch_board_live_query_is_valid() -> None:
         assert snap.identifier
         assert snap.state
         assert stream_label("build1") in snap.labels
+        # FRE-976: Awaiting Deploy (Linear type `started`) is kept, but the
+        # completed/canceled/duplicate accumulators must be filtered out.
+        assert snap.state.strip().lower() not in {"done", "canceled", "cancelled", "duplicate"}
         for blocker in snap.blocked_by:
             assert blocker.identifier
+
+
+@pytest.mark.integration
+def test_fetch_issue_state_live_query_is_valid() -> None:
+    """Prove the by-identifier reconciliation query validates against Linear (FRE-976)."""
+    api_key = load_linear_key()
+    if not api_key:
+        pytest.skip("no AGENT_LINEAR_API_KEY configured")
+    # A known-terminal ticket resolves even though its stream label was removed.
+    assert fetch_issue_state("FRE-965", api_key) == "Done"
+    # An unknown id is a conclusive None, not an error.
+    assert fetch_issue_state("FRE-99999999", api_key) is None
 
 
 # --- FRE-914 follow-up: an unknown stream must fail, never resolve to "none" ---

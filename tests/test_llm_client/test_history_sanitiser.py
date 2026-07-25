@@ -6,7 +6,6 @@ import pytest
 
 from personal_agent.llm_client.history_sanitiser import SanitiseReport, sanitise_messages
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -49,6 +48,7 @@ class TestCleanHistory:
             _assistant(call_ids=["call_1"]),
             _tool_result("call_1"),
             _assistant(content="It is sunny."),
+            _user("thanks"),
         ]
         sanitised, report = sanitise_messages(messages)
         assert sanitised is messages
@@ -74,6 +74,7 @@ class TestCleanHistory:
             _tool_result("c1"),
             _tool_result("c2"),
             _assistant(content="done"),
+            _user("great, thanks"),
         ]
         sanitised, report = sanitise_messages(messages)
         assert sanitised is messages
@@ -102,7 +103,7 @@ class TestOrphanedToolResult:
         messages = [
             _user("search something"),
             _assistant(call_ids=["call_qwen"]),
-            _tool_result("call_qwen"),       # valid Qwen turn
+            _tool_result("call_qwen"),  # valid Qwen turn
             _user("now summarise"),
             # Anthropic turn: sees the call_qwen result still in history → orphan
             _tool_result("call_qwen", "stale result"),
@@ -214,6 +215,7 @@ class TestMixedProviderIds:
             _assistant(call_ids=["qwen_1"]),
             _tool_result("qwen_1"),
             _assistant(content="found it"),
+            _user("great"),
         ]
         sanitised, report = sanitise_messages(messages)
         assert not report.was_dirty
@@ -292,6 +294,90 @@ class TestSanitiseReport:
         r = SanitiseReport(0, 0, 0, True)
         assert r.was_dirty
 
+    def test_was_dirty_true_when_trailing_assistant_fixed(self) -> None:
+        r = SanitiseReport(0, 0, 0, False, trailing_assistant_fixed=True)
+        assert r.was_dirty
+
+    def test_trailing_assistant_fixed_defaults_false(self) -> None:
+        r = SanitiseReport(0, 0, 0, False)
+        assert r.trailing_assistant_fixed is False
+
+
+# ---------------------------------------------------------------------------
+# FRE-971: Anthropic rejects a request whose final message is role
+# "assistant" ("assistant message prefill" not supported). A within-session
+# compression recap with an empty tail can leave the trailing message as a
+# lone assistant turn. sanitise_messages must close the request out on
+# user/tool before it reaches litellm.
+# ---------------------------------------------------------------------------
+
+
+class TestTrailingAssistantGuard:
+    def test_trailing_assistant_message_gets_user_continuation_appended(self) -> None:
+        messages = [_user("do the task"), _assistant(content="working on it")]
+        sanitised, report = sanitise_messages(messages)
+        assert sanitised[-1]["role"] == "user"
+        assert sanitised is not messages
+        assert report.trailing_assistant_fixed is True
+        assert report.was_dirty is True
+
+    def test_trailing_user_message_untouched(self) -> None:
+        messages = [_user("do the task"), _assistant(content="ok"), _user("thanks")]
+        sanitised, report = sanitise_messages(messages)
+        assert sanitised is messages
+        assert report.trailing_assistant_fixed is False
+
+    def test_trailing_tool_message_untouched(self) -> None:
+        messages = [_user(), _assistant(call_ids=["c1"]), _tool_result("c1")]
+        sanitised, report = sanitise_messages(messages)
+        assert sanitised is messages
+        assert report.trailing_assistant_fixed is False
+
+    def test_trailing_assistant_with_orphaned_tool_calls_stripped_then_continuation_appended(
+        self,
+    ) -> None:
+        """Strip the orphan, then close the request out.
+
+        A trailing assistant tool_call can never have a result (nothing follows it),
+        so it is always an orphan — the existing strip pass clears it first, then the
+        trailing-role guard closes the request out.
+        """
+        messages = [
+            _user(),
+            {
+                "role": "assistant",
+                "content": "let me check that",
+                "tool_calls": [_tool_call("dangling")],
+            },
+        ]
+        sanitised, report = sanitise_messages(messages)
+        assert report.orphaned_calls_stripped == 1
+        assert sanitised[-2]["role"] == "assistant"
+        assert "tool_calls" not in sanitised[-2]
+        assert sanitised[-1]["role"] == "user"
+        assert report.trailing_assistant_fixed is True
+
+    def test_empty_messages_list_is_noop(self) -> None:
+        sanitised, report = sanitise_messages([])
+        assert sanitised == []
+        assert report.trailing_assistant_fixed is False
+
+    def test_compression_empty_tail_recap_reproduction(self) -> None:
+        """Reproduce the exact FRE-971 shape.
+
+        The shape emitted by within_session_compression._assemble_compressed /
+        build_frozen_reset when the tool loop has no user turn after the head and
+        _extract_tail returns [].
+        """
+        messages = [
+            {"role": "system", "content": "you are a helpful assistant"},
+            _user("original task"),
+            {"role": "assistant", "content": "CUMULATIVE NARRATIVE recap of the tool loop"},
+        ]
+        sanitised, report = sanitise_messages(messages)
+        assert sanitised[-1]["role"] in ("user", "tool")
+        assert report.trailing_assistant_fixed is True
+
 
 # ---------------------------------------------------------------------------
 # tool_code mimicry — strip poisoned assistant content so the model stops copying
@@ -306,8 +392,7 @@ class TestToolCodeStripping:
             {
                 "role": "assistant",
                 "content": (
-                    "<tool_code>\nprint(infra_health())\n</tool_code>\n"
-                    "I'll check the services."
+                    "<tool_code>\nprint(infra_health())\n</tool_code>\nI'll check the services."
                 ),
             },
             _user("and logs"),

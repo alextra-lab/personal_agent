@@ -173,14 +173,20 @@ class TestSanitiserFixedPoint:
     async def test_reverse_orphan_in_the_middle_is_summarised_away(
         self, _stub_summary: None
     ) -> None:
-        """Under the production tail shape the defect does not manifest.
+        """Under the production tail shape the reverse-orphan defect does not manifest.
 
         With the default ``min_tail_turns`` the walk stops before the user turn that
         opens the reverse-orphan pair, so the whole pair falls to the middle band and
-        is compacted into the recap — it never reaches the verbatim tail, and the
-        persisted output is a clean sanitiser fixed point. This is why the gap is
-        latent, not live (and the frozen-reset action itself does not fire in
-        production — ADR-0092 open item #7).
+        is compacted into the recap — it never reaches the verbatim tail, so no
+        orphaned tool_calls survive into the persisted output. This is why the
+        reverse-orphan gap is latent, not live (and the frozen-reset action itself
+        does not fire in production — ADR-0092 open item #7).
+
+        With no verbatim tail, ``result.messages`` ends on the lone assistant recap —
+        the FRE-971 shape. ``sanitise_messages`` closes that out with a synthetic user
+        continuation on the wire request; it does not touch ``result.messages`` itself
+        (the appended turn is never persisted — see ``_ensure_trailing_role``), so this
+        is a real fix, not a violation of the fixed-point invariant this class checks.
         """
         from personal_agent.llm_client.history_sanitiser import sanitise_messages
 
@@ -196,9 +202,14 @@ class TestSanitiserFixedPoint:
             m.get("role") == "assistant" and len(m.get("tool_calls") or []) == 2
             for m in result.messages
         )
+        assert result.messages[-1]["role"] == "assistant"
         sanitised, report = sanitise_messages(list(result.messages))
-        assert not report.was_dirty
-        assert sanitised == result.messages
+        assert report.orphaned_results_stripped == 0
+        assert report.orphaned_calls_stripped == 0
+        assert report.truncated is False
+        assert report.trailing_assistant_fixed is True
+        assert sanitised[:-1] == result.messages
+        assert sanitised[-1] == {"role": "user", "content": "Continue with the user's request."}
 
     @pytest.mark.xfail(
         strict=True,

@@ -1897,6 +1897,63 @@ async def _chat_impl(
             },
         )
 
+    # Resolve the primary model selection for this turn (ADR-0121 §4).
+    # An explicit `model` is a direct instruction (not the PWA's stale-reload
+    # risk ADR-0079 guards against) — validated, used for this turn, AND
+    # persisted so it becomes the session's stored default. Omitted → the
+    # session's existing selection (or the binding default) governs, via the
+    # same resolver /chat/stream uses.
+    #
+    # Resolved and set BEFORE the gateway pipeline runs (FRE-978): Stage 7's
+    # budget trim reads this same selection contextvar to size against the
+    # real model window, so it must already be populated by the time
+    # run_gateway_pipeline executes — unlike /chat/stream, this path is not a
+    # separate asyncio.Task, so the ordering here is the only thing that
+    # decides what Stage 7 sees.
+    from personal_agent.config.selection import (  # noqa: PLC0415
+        set_current_selection,
+        set_skill_routing_mode,
+    )
+
+    explicit_selection: str | None = None
+    if model is not None:
+        from personal_agent.config.model_loader import (  # noqa: PLC0415
+            is_selectable_binding,
+            load_model_config,
+        )
+
+        if is_selectable_binding("primary", model, load_model_config()):
+            explicit_selection = model
+        else:
+            log.warning("chat.invalid_model", model=model, trace_id=trace_id)
+
+    if explicit_selection is not None:
+        resolved_selection = explicit_selection
+    else:
+        resolved_selection, _ = await _resolve_session_selection(
+            str(session.session_id), None, request_user.user_id, trace_id=trace_id
+        )
+
+    # Persist whenever it was an explicit instruction, or this turn just
+    # created the session row (mirrors /chat/stream's new-session upsert —
+    # without this a legacy-created session has no selection row until its
+    # first PATCH, the exact gap the retired profile bridge papered over).
+    if explicit_selection is not None or not session_id:
+        from personal_agent.service.repositories.session_model_selection_repository import (  # noqa: E501, PLC0415
+            SessionModelSelectionRepository,
+        )
+
+        await SessionModelSelectionRepository(db).upsert(
+            session_id=cast(UUID, session.session_id),
+            role="primary",
+            deployment_key=resolved_selection,
+        )
+
+    set_current_selection({"primary": resolved_selection})
+
+    if skill_routing_mode:
+        set_skill_routing_mode(skill_routing_mode)
+
     # --- Phase: gateway_pipeline ---
     # Compute expansion budget from brainstem sensors before pipeline.
     # Graceful degradation: budget defaults to 0 on any sensor failure.
@@ -1942,56 +1999,6 @@ async def _chat_impl(
             exc_info=True,
         )
         gateway_output = None
-
-    # Resolve the primary model selection for this turn (ADR-0121 §4).
-    # An explicit `model` is a direct instruction (not the PWA's stale-reload
-    # risk ADR-0079 guards against) — validated, used for this turn, AND
-    # persisted so it becomes the session's stored default. Omitted → the
-    # session's existing selection (or the binding default) governs, via the
-    # same resolver /chat/stream uses.
-    from personal_agent.config.selection import (  # noqa: PLC0415
-        set_current_selection,
-        set_skill_routing_mode,
-    )
-
-    explicit_selection: str | None = None
-    if model is not None:
-        from personal_agent.config.model_loader import (  # noqa: PLC0415
-            is_selectable_binding,
-            load_model_config,
-        )
-
-        if is_selectable_binding("primary", model, load_model_config()):
-            explicit_selection = model
-        else:
-            log.warning("chat.invalid_model", model=model, trace_id=trace_id)
-
-    if explicit_selection is not None:
-        resolved_selection = explicit_selection
-    else:
-        resolved_selection, _ = await _resolve_session_selection(
-            str(session.session_id), None, request_user.user_id, trace_id=trace_id
-        )
-
-    # Persist whenever it was an explicit instruction, or this turn just
-    # created the session row (mirrors /chat/stream's new-session upsert —
-    # without this a legacy-created session has no selection row until its
-    # first PATCH, the exact gap the retired profile bridge papered over).
-    if explicit_selection is not None or not session_id:
-        from personal_agent.service.repositories.session_model_selection_repository import (  # noqa: E501, PLC0415
-            SessionModelSelectionRepository,
-        )
-
-        await SessionModelSelectionRepository(db).upsert(
-            session_id=cast(UUID, session.session_id),
-            role="primary",
-            deployment_key=resolved_selection,
-        )
-
-    set_current_selection({"primary": resolved_selection})
-
-    if skill_routing_mode:
-        set_skill_routing_mode(skill_routing_mode)
 
     # --- Phase: orchestrator ---
     result: Any = {}

@@ -5,7 +5,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import tiktoken
 
+from personal_agent.config.selection import reset_current_selection, set_current_selection
 from personal_agent.governance.models import Mode
 from personal_agent.request_gateway.pipeline import run_gateway_pipeline
 from personal_agent.request_gateway.types import (
@@ -13,6 +15,25 @@ from personal_agent.request_gateway.types import (
     GatewayOutput,
     TaskType,
 )
+
+_ENCODING = tiktoken.get_encoding("cl100k_base")
+_UNIT = "the quick brown fox jumps over the lazy dog. "
+_UNIT_TOKENS = len(_ENCODING.encode(_UNIT))
+
+
+def _sized_text(target_tokens: int) -> str:
+    """Plain text whose cl100k_base token count is ~target_tokens."""
+    reps = max(1, int(target_tokens / _UNIT_TOKENS))
+    return _UNIT * reps
+
+
+def _history_sized(total_tokens: int, turns: int = 6) -> list[dict[str, str]]:
+    per_turn = total_tokens // turns
+    history = []
+    for i in range(turns):
+        history.append({"role": "user", "content": f"turn {i} " + _sized_text(per_turn)})
+        history.append({"role": "assistant", "content": f"reply {i}"})
+    return history
 
 
 class TestRunGatewayPipeline:
@@ -140,9 +161,7 @@ class TestRunGatewayPipeline:
                 memory_adapter=None,
             )
         # Check intent_classified event for analysis classification
-        intent_events = [
-            e for e in cap_logs if e.get("event") == "intent_classified"
-        ]
+        intent_events = [e for e in cap_logs if e.get("event") == "intent_classified"]
         assert len(intent_events) == 1
         ie = intent_events[0]
         assert ie["task_type"] == "analysis"
@@ -150,9 +169,7 @@ class TestRunGatewayPipeline:
         assert ie["trace_id"] == "t"
 
         # Check gateway_output summary event also present
-        output_events = [
-            e for e in cap_logs if e.get("event") == "gateway_output"
-        ]
+        output_events = [e for e in cap_logs if e.get("event") == "gateway_output"]
         assert len(output_events) == 1
 
     @pytest.mark.asyncio
@@ -286,6 +303,88 @@ class TestRunGatewayPipeline:
         assert "budget_trimmed" in evt
         assert "overflow_action" in evt
         assert "expansion_budget" in evt
+
+
+class TestStage7BudgetResolvesActiveSelection:
+    """FRE-978 — Stage 7's budget trim must measure the session's real window.
+
+    Before the fix, an unset ``max_context_tokens`` always fell back to the
+    static ``settings.context_budget_max_tokens`` (120K, Qwen-calibrated)
+    regardless of the session's selected primary model — the sibling bug to
+    FRE-972 (the in-turn compaction/consent gate), in Stage 7 of the pre-LLM
+    gateway instead of the executor's state machine.
+
+    ``qwen3.6-35b-instruct`` (context_length 65536) is smaller than the
+    static fallback (120000); ``claude_sonnet`` (200000) is larger. A history
+    sized between the two proves the trim now tracks the *selected* model,
+    not a constant every session sizes identically against.
+    """
+
+    _SMALL_KEY = "qwen3.6-35b-instruct"  # context_length 65536 (config/models.yaml)
+    _LARGE_KEY = "claude_sonnet"  # context_length 200000 (config/models.yaml)
+    _HISTORY_TOKENS = 90000  # > 65536, < 120000 (static fallback), < 200000
+
+    @pytest.mark.asyncio
+    async def test_trims_for_a_selection_smaller_than_the_static_fallback(self) -> None:
+        """A selection with a smaller window than the static fallback still trims."""
+        history = _history_sized(self._HISTORY_TOKENS)
+        token = set_current_selection({"primary": self._SMALL_KEY})
+        try:
+            result = await run_gateway_pipeline(
+                user_message="current question",
+                session_id="s",
+                session_messages=history,
+                trace_id="t",
+                mode=Mode.NORMAL,
+                memory_adapter=None,
+            )
+        finally:
+            reset_current_selection(token)
+
+        assert result.context.trimmed is True
+
+    @pytest.mark.asyncio
+    async def test_does_not_trim_for_a_selection_larger_than_the_history(self) -> None:
+        """The identical history is untouched under a larger-window selection.
+
+        Proves the trim is selection-aware, not just more aggressive across
+        the board: the static fallback (120000) would NOT have trimmed this
+        history either, but the old code ignored the selection entirely, so
+        this alone doesn't prove the fix — paired with the smaller-selection
+        test above (which the static fallback would also NOT have trimmed,
+        since 90000 < 120000) it shows the ceiling actually moves with the
+        selection in both directions.
+        """
+        history = _history_sized(self._HISTORY_TOKENS)
+        token = set_current_selection({"primary": self._LARGE_KEY})
+        try:
+            result = await run_gateway_pipeline(
+                user_message="current question",
+                session_id="s",
+                session_messages=history,
+                trace_id="t",
+                mode=Mode.NORMAL,
+                memory_adapter=None,
+            )
+        finally:
+            reset_current_selection(token)
+
+        assert result.context.trimmed is False
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_static_budget_when_no_selection_is_set(self) -> None:
+        """No active selection -> resolves via settings.context_budget_max_tokens (unchanged)."""
+        history = _history_sized(self._HISTORY_TOKENS)
+        result = await run_gateway_pipeline(
+            user_message="current question",
+            session_id="s",
+            session_messages=history,
+            trace_id="t",
+            mode=Mode.NORMAL,
+            memory_adapter=None,
+        )
+        # 90000 tokens of history stays under the 120000 static fallback.
+        assert result.context.trimmed is False
 
 
 class TestPivot1Regression:

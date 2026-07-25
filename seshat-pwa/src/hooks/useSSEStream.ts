@@ -20,6 +20,9 @@ import type {
   ConstraintResolvedData,
   PendingConstraint,
   PendingInterrupt,
+  PhaseEndData,
+  PhaseNode,
+  PhaseStartData,
   ResolvedConstraint,
   ToolApprovalRequestData,
   ToolCall,
@@ -50,6 +53,14 @@ export interface UseSSEStreamReturn {
   messages: ChatMessage[];
   isStreaming: boolean;
   activeTools: ToolCall[];
+  /**
+   * Live turn-progress phases (ADR-0123 T3, FRE-936) — the current turn's
+   * inference/human-wait phases with their concurrent children. Resets to
+   * `[]` on each new sendMessage; survives a mid-turn WS reconnect
+   * untouched (same as activeTools — elapsed is recomputed from the held
+   * server timestamp, never from reconnect time).
+   */
+  phases: PhaseNode[];
   /** Live per-turn metrics (ADR-0076); null until first turn_status STATE_DELTA. */
   turnStatus: TurnStatus | null;
   /**
@@ -124,6 +135,7 @@ export function useSSEStream(): UseSSEStreamReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeTools, setActiveTools] = useState<ToolCall[]>([]);
+  const [phases, setPhases] = useState<PhaseNode[]>([]);
   const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
   const [serverSelection, setServerSelection] = useState<ServerSelection | null>(null);
   // FRE-928: a QUEUE, not a single slot. Nothing stops two turns running
@@ -258,6 +270,39 @@ export function useSSEStream(): UseSSEStreamReturn {
         break;
       }
 
+      case 'PHASE_START': {
+        const data = event.data as unknown as PhaseStartData;
+        setPhases((prev) => [
+          ...prev,
+          {
+            phaseId: data.phase_id,
+            phase: data.phase,
+            detail: data.detail,
+            startedAt: data.started_at,
+            state: 'running',
+            parentId: data.parent_id,
+            endedAt: null,
+          },
+        ]);
+        break;
+      }
+
+      case 'PHASE_END': {
+        // ok:false means the wrapped work raised — resolve straight to
+        // 'error' rather than waiting on a later RUN_ERROR sweep, which may
+        // never touch this phase (phase_span's `finally` always emits
+        // PHASE_END before an outer error handler runs).
+        const { phase_id, ok } = event.data as unknown as PhaseEndData;
+        setPhases((prev) =>
+          prev.map((p) =>
+            p.phaseId === phase_id && p.state === 'running'
+              ? { ...p, state: ok === false ? 'error' : 'completed', endedAt: Date.now() }
+              : p,
+          ),
+        );
+        break;
+      }
+
       case 'STATE_DELTA': {
         const { key, value } = event.data as { key: string; value: unknown };
         if (key === 'turn_status' && value !== null && typeof value === 'object') {
@@ -327,6 +372,14 @@ export function useSSEStream(): UseSSEStreamReturn {
         setPendingConstraints([]);
         isStreamingRef.current = false; // FRE-236: keep ref in sync
         setIsStreaming(false);
+        // AC-9(a) backstop: resolve any phase still 'running' (its own
+        // PHASE_END never arrived — e.g. a dropped best-effort emission).
+        // Phases already resolved by their own PHASE_END are left alone.
+        setPhases((prev) =>
+          prev.map((p) =>
+            p.state === 'running' ? { ...p, state: 'cancelled', endedAt: Date.now() } : p,
+          ),
+        );
         break;
       }
 
@@ -342,6 +395,14 @@ export function useSSEStream(): UseSSEStreamReturn {
         isStreamingRef.current = false; // FRE-236: keep ref in sync
         setIsStreaming(false);
         setActiveTools([]);
+        // AC-9(b) backstop — see the PHASE_END ok:false handling above for
+        // the primary mechanism; this only catches a phase that never got
+        // its own PHASE_END at all.
+        setPhases((prev) =>
+          prev.map((p) =>
+            p.state === 'running' ? { ...p, state: 'error', endedAt: Date.now() } : p,
+          ),
+        );
         break;
       }
 
@@ -414,6 +475,12 @@ export function useSSEStream(): UseSSEStreamReturn {
           localStorage.removeItem(DRAFT_KEY(currentSessionRef.current));
         }
         setActiveTools([]);
+        // Safety net: a normal turn end must never leave a phase spinning.
+        setPhases((prev) =>
+          prev.map((p) =>
+            p.state === 'running' ? { ...p, state: 'completed', endedAt: Date.now() } : p,
+          ),
+        );
         // FRE-407: the turn is complete — mark the assistant message complete
         // (unconditionally) and stamp its trace_id so TurnRating can render.
         // trace_id arrives on the turn_status STATE_DELTA (stashed in the ref);
@@ -508,6 +575,7 @@ export function useSSEStream(): UseSSEStreamReturn {
       setBudgetDenied(null);
       setClassifiedError(null);
       setActiveTools([]);
+      setPhases([]);
       // FRE-928: pending constraints are deliberately NOT cleared here. A card maps to
       // a live server-side waiter that now survives a disconnect and rides its own
       // timeout, and nothing blocks the user from sending while one is open. Clearing
@@ -673,6 +741,7 @@ export function useSSEStream(): UseSSEStreamReturn {
     isStreaming,
     isReconnecting,
     activeTools,
+    phases,
     turnStatus,
     serverSelection,
     pendingConstraint,

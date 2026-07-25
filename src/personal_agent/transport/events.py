@@ -139,12 +139,19 @@ class PhaseEndEvent:
         session_id: Target session identifier (routes the event).
         parent_id: The parent's ``phase_id`` when this ended a child, so the
             client can resolve the child against its parent without a lookup.
+        ok: ``False`` when the phase ended because the wrapped work raised
+            (FRE-936 / AC-9(b)). ``phase_span``'s pairing guarantee means a
+            ``PhaseEndEvent`` fires on *every* exit, success or exception —
+            without this flag a failed phase is wire-identical to a
+            successful one, and the client would render a green check for
+            work that just failed.
     """
 
     phase: Phase
     phase_id: str
     session_id: str
     parent_id: str | None = None
+    ok: bool = True
 
 
 @dataclass(frozen=True)

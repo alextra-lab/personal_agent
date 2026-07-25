@@ -353,6 +353,120 @@ class TestGracefulDegradation:
         assert "Hazelcast scales" in result.synthesis_context
 
 
+class TestExpansionPhaseEvents:
+    """ADR-0123 AC-8 (FRE-934): a fan-out is one EXPANSION parent + N SUB_AGENT children.
+
+    Drives ``_run_dispatch`` with a hand-built 3-task plan (bypassing the planner /
+    fallback) so the assertion is purely about dispatch concurrency + phase pairing.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @staticmethod
+    def _capture_phase_events(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+        import personal_agent.transport.agui.transport as transport_mod
+        from personal_agent.transport.events import PhaseEndEvent, PhaseStartEvent
+
+        captured: list[Any] = []
+
+        async def _capture(event: Any, session_id: str) -> None:
+            if isinstance(event, (PhaseStartEvent, PhaseEndEvent)):
+                captured.append(event)
+
+        monkeypatch.setattr(transport_mod, "_push_event", _capture)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_three_children_one_parent_parent_ends_last(
+        self,
+        controller: ExpansionController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        from personal_agent.transport.events import Phase, PhaseEndEvent, PhaseStartEvent
+
+        events = self._capture_phase_events(monkeypatch)
+        plan = _validate_plan_json(_make_plan_json(3))
+
+        # Staggered completion so children finish in a different order than they
+        # start — proving independent child lifecycles, not lockstep.
+        delays = {"Goal for task 0": 0.03, "Goal for task 1": 0.01, "Goal for task 2": 0.02}
+
+        async def _delayed(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            await asyncio.sleep(delays.get(spec.task, 0.01))
+            return _make_sub_agent_result(spec.task)
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=_delayed,
+        ):
+            await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-ac8",
+                messages=[],
+                result=ExpansionResult(),
+                session_id=str(uuid4()),
+            )
+
+        starts = [e for e in events if isinstance(e, PhaseStartEvent)]
+        ends = [e for e in events if isinstance(e, PhaseEndEvent)]
+
+        parent_starts = [e for e in starts if e.phase is Phase.EXPANSION]
+        child_starts = [e for e in starts if e.phase is Phase.SUB_AGENT]
+        parent_ends = [e for e in ends if e.phase is Phase.EXPANSION]
+        child_ends = [e for e in ends if e.phase is Phase.SUB_AGENT]
+
+        # One parent, three children.
+        assert len(parent_starts) == 1
+        assert len(child_starts) == 3
+        assert len(parent_ends) == 1
+        assert len(child_ends) == 3
+
+        parent_id = parent_starts[0].phase_id
+        # Every child is parented to the one EXPANSION phase.
+        assert {c.parent_id for c in child_starts} == {parent_id}
+        # Children have distinct identities.
+        assert len({c.phase_id for c in child_starts}) == 3
+        # Each child start pairs with an end of the same phase_id.
+        assert {c.phase_id for c in child_starts} == {c.phase_id for c in child_ends}
+
+        # The parent ends only after the last child ends (AC-8).
+        parent_end_pos = events.index(parent_ends[0])
+        child_end_positions = [events.index(e) for e in child_ends]
+        assert parent_end_pos > max(child_end_positions)
+
+    @pytest.mark.asyncio
+    async def test_no_session_emits_no_phase_events(
+        self,
+        controller: ExpansionController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        events = self._capture_phase_events(monkeypatch)
+        plan = _validate_plan_json(_make_plan_json(3))
+        mock_results = [_make_sub_agent_result(f"task_{i}") for i in range(3)]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-no-session",
+                messages=[],
+                result=ExpansionResult(),
+                session_id=None,
+            )
+
+        assert events == []
+
+
 class TestExpansionResultCost:
     """FRE-501 — ExpansionResult exposes planner + sub-agent cost for the meter."""
 

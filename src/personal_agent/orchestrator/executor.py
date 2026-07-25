@@ -610,10 +610,11 @@ async def _maybe_pause_for_constraint(
     )
     from personal_agent.transport.agui.transport import (
         emit_constraint_resolved,
+        phase_span,
         register_and_push_constraint,
     )
     from personal_agent.transport.agui.ws_endpoint import WaiterMetadata
-    from personal_agent.transport.events import ConstraintPauseEvent
+    from personal_agent.transport.events import ConstraintPauseEvent, Phase
 
     if timeout_seconds is None:
         timeout_seconds = settings.constraint_pause_timeout_seconds
@@ -653,27 +654,32 @@ async def _maybe_pause_for_constraint(
         session_id=session_id,
     )
 
-    payload = await register_and_push_constraint(
-        session_id=session_id,
-        request_id=request_id,
-        event=ConstraintPauseEvent(
-            request_id=request_id,
+    # ADR-0123 §1 (FRE-934): the turn is blocked on the user here, not working —
+    # surface an explicit WAITING_FOR_CHOICE phase so the wait is honest and its
+    # interval is excludable from the AC-2 silence clock. Only the actual pause is
+    # wrapped; a stored-preference bypass returns above and never reaches this.
+    async with phase_span(session_id=session_id, phase=Phase.WAITING_FOR_CHOICE, detail=constraint):
+        payload = await register_and_push_constraint(
             session_id=session_id,
-            trace_id=trace_id,
-            constraint=constraint,
-            context=context,
-            options=opts,
-            default_option=default_id,
-            expires_at=expires_at,
-        ),
-        metadata=WaiterMetadata(
-            constraint=constraint,
-            options=opts,
-            default_option=default_id,
-            created_at=time.monotonic(),
-        ),
-        timeout_seconds=timeout_seconds,
-    )
+            request_id=request_id,
+            event=ConstraintPauseEvent(
+                request_id=request_id,
+                session_id=session_id,
+                trace_id=trace_id,
+                constraint=constraint,
+                context=context,
+                options=opts,
+                default_option=default_id,
+                expires_at=expires_at,
+            ),
+            metadata=WaiterMetadata(
+                constraint=constraint,
+                options=opts,
+                default_option=default_id,
+                created_at=time.monotonic(),
+            ),
+            timeout_seconds=timeout_seconds,
+        )
 
     action_id = str(payload.get("decision", default_id))
     resolution = str(payload.get("resolution", "user_choice"))
@@ -4244,22 +4250,33 @@ async def step_llm_call(
             )
             return TaskState.SYNTHESIS
 
+        # ADR-0123 §2 (FRE-934): bracket the primary inference as a transport
+        # phase so the client can name the wait instead of showing silence. The
+        # first round (no tool has run yet) is the PLANNING inference; a post-tool
+        # round is the "final synthesis" inference. Tight scope — the span closes
+        # when respond() returns/raises, before tool processing or the expansion
+        # hook — so it never overlaps the EXPANSION parent phase.
+        from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
+        from personal_agent.transport.events import Phase  # noqa: PLC0415
+
+        _inference_phase = Phase.PLANNING if ctx.tool_iteration_count == 0 else Phase.SYNTHESIS
         try:
-            response = await asyncio.wait_for(
-                llm_client.respond(
-                    role=model_role,
-                    messages=request_messages,
-                    system_prompt=system_prompt,
-                    tools=tools if tools else None,
-                    tool_choice=tool_choice,
-                    trace_ctx=span_ctx,
-                    previous_response_id=ctx.last_response_id,
-                    max_retries=max_retries_override,
-                    priority=InferencePriority.USER_FACING,
-                    prompt_identity=_prompt_identity,
-                ),
-                timeout=_deadline_remaining,
-            )
+            async with phase_span(session_id=ctx.session_id, phase=_inference_phase):
+                response = await asyncio.wait_for(
+                    llm_client.respond(
+                        role=model_role,
+                        messages=request_messages,
+                        system_prompt=system_prompt,
+                        tools=tools if tools else None,
+                        tool_choice=tool_choice,
+                        trace_ctx=span_ctx,
+                        previous_response_id=ctx.last_response_id,
+                        max_retries=max_retries_override,
+                        priority=InferencePriority.USER_FACING,
+                        prompt_identity=_prompt_identity,
+                    ),
+                    timeout=_deadline_remaining,
+                )
         except TimeoutError:
             log.warning(
                 "turn_wall_clock_budget_exceeded_mid_call",

@@ -401,23 +401,42 @@ class ExpansionController:
             for task in plan.tasks
         ]
 
+        # ADR-0123 §1/AC-8 (FRE-934): a sub-agent fan-out is one parent EXPANSION
+        # phase with N concurrent SUB_AGENT children, each with its own lifecycle.
+        # Each child span wraps one run_sub_agent so its end fires as that agent
+        # finishes (or raises, under return_exceptions); the parent span's end
+        # fires only after gather() resolves — i.e. strictly after the last child.
+        from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
+        from personal_agent.transport.events import Phase  # noqa: PLC0415
+
+        async def _dispatch_one(spec: SubAgentSpec, parent_id: str | None) -> SubAgentResult:
+            async with phase_span(
+                session_id=session_id,
+                phase=Phase.SUB_AGENT,
+                detail=spec.task[:80],
+                parent_id=parent_id,
+            ):
+                return await run_sub_agent(
+                    spec=spec,
+                    llm_client=llm_client,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    eval_mode=eval_mode,
+                )
+
         try:
-            raw_results = await asyncio.wait_for(
-                asyncio.gather(
-                    *[
-                        run_sub_agent(
-                            spec=spec,
-                            llm_client=llm_client,
-                            trace_id=trace_id,
-                            session_id=session_id,
-                            eval_mode=eval_mode,
-                        )
-                        for spec in specs
-                    ],
-                    return_exceptions=True,
-                ),
-                timeout=settings.worker_global_timeout_seconds,
-            )
+            async with phase_span(
+                session_id=session_id,
+                phase=Phase.EXPANSION,
+                detail=f"{len(specs)} sub-agents",
+            ) as _parent_id:
+                raw_results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *[_dispatch_one(spec, _parent_id) for spec in specs],
+                        return_exceptions=True,
+                    ),
+                    timeout=settings.worker_global_timeout_seconds,
+                )
             # Filter out exceptions — keep only successful SubAgentResult objects
             sub_results: list[SubAgentResult] = [
                 r for r in raw_results if isinstance(r, SubAgentResult)

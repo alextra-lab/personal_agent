@@ -9,7 +9,39 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Literal
+
+
+class Phase(str, Enum):
+    """Closed set of inference phases the transport announces (ADR-0123 §1-§2).
+
+    Tool phases are **not** here — they continue to derive from
+    :class:`ToolStartEvent` / :class:`ToolEndEvent` and must not be duplicated.
+    These name the inference and human-wait boundaries that were previously
+    invisible to the client (telemetry-only).
+
+    Members:
+        PLANNING: The first primary-inference round of a turn — the model
+            deciding what to do (``step_planning_started``, ADR §2).
+        SYNTHESIS: A post-tool primary-inference round — the model writing the
+            response from gathered results (ADR §2 "final synthesis inference").
+        ARTIFACT_BUILD: The artifact-draft sub-agent HTML build (the multi-minute
+            silence of the measured turn two).
+        EXPANSION: The parent phase spanning a concurrent sub-agent fan-out.
+        SUB_AGENT: One child activity within an ``EXPANSION`` parent.
+        WAITING_FOR_CHOICE: A human pause (builder card, tool approval, cost
+            gate). Blocked on the user, not working — excluded from the AC-2 gap
+            clock (ADR §1).
+    """
+
+    PLANNING = "planning"
+    SYNTHESIS = "synthesis"
+    ARTIFACT_BUILD = "artifact_build"
+    EXPANSION = "expansion"
+    SUB_AGENT = "sub_agent"
+    WAITING_FOR_CHOICE = "waiting_for_choice"
+
 
 #: The governed constraints a ``ConstraintPauseEvent`` may carry (ADR-0076 +
 #: ADR-0122 §3). Widened by FRE-881 from the original closed pair to (a) admit
@@ -66,6 +98,53 @@ class ToolEndEvent:
     tool_name: str
     result_summary: str
     session_id: str
+
+
+@dataclass(frozen=True)
+class PhaseStartEvent:
+    """An inference / human-wait phase began (ADR-0123 §2).
+
+    Emitted alongside — never duplicating — the tool events, on the best-effort
+    ``_push_event`` path. The ``started_at`` server timestamp is what the client
+    computes advancing elapsed from, so a reconnect mid-phase does not reset the
+    counter (ADR §3/§6).
+
+    Attributes:
+        phase: Which phase began (see :class:`Phase`).
+        phase_id: Unique id for this phase instance. Pairs with the matching
+            :class:`PhaseEndEvent` and distinguishes concurrent children that
+            share a ``phase`` value.
+        session_id: Target session identifier (routes the event).
+        started_at: ISO-8601 UTC server timestamp of the phase start.
+        detail: Optional human-readable qualifier (e.g. a sub-agent task name).
+        parent_id: When set, the ``phase_id`` of the parent phase this is a child
+            of — the concurrent-children model (ADR §1, AC-8).
+    """
+
+    phase: Phase
+    phase_id: str
+    session_id: str
+    started_at: str  # ISO-8601 UTC
+    detail: str | None = None
+    parent_id: str | None = None
+
+
+@dataclass(frozen=True)
+class PhaseEndEvent:
+    """An inference / human-wait phase ended (ADR-0123 §2).
+
+    Attributes:
+        phase: Which phase ended (see :class:`Phase`).
+        phase_id: Id of the phase instance that ended (pairs with its start).
+        session_id: Target session identifier (routes the event).
+        parent_id: The parent's ``phase_id`` when this ended a child, so the
+            client can resolve the child against its parent without a lookup.
+    """
+
+    phase: Phase
+    phase_id: str
+    session_id: str
+    parent_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -241,6 +320,8 @@ InternalEvent = (
     TextDeltaEvent
     | ToolStartEvent
     | ToolEndEvent
+    | PhaseStartEvent
+    | PhaseEndEvent
     | StateUpdateEvent
     | InterruptEvent
     | ToolApprovalRequestEvent

@@ -917,6 +917,75 @@ async def test_artifact_draft_returns_expected_keys(
     assert out["task_id"].startswith("draft-")
 
 
+def _capture_phase_events(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Capture PhaseStart/PhaseEnd events on the transport push path (ADR-0123)."""
+    import personal_agent.transport.agui.transport as transport_mod
+    from personal_agent.transport.events import PhaseEndEvent, PhaseStartEvent
+
+    captured: list[Any] = []
+
+    async def _capture(event: Any, session_id: str) -> None:
+        if isinstance(event, (PhaseStartEvent, PhaseEndEvent)):
+            captured.append(event)
+
+    monkeypatch.setattr(transport_mod, "_push_event", _capture)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_emits_artifact_build_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-0123 AC-1 (FRE-934): the sub-agent build emits an ARTIFACT_BUILD pair."""
+    from personal_agent.transport.events import Phase, PhaseEndEvent, PhaseStartEvent
+
+    _install_draft_fakes(monkeypatch)
+    events = _capture_phase_events(monkeypatch)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="report",
+        title="My Report",
+        summary="A test",
+        plan="Section 1.",
+        ctx=_ctx(session_id=uuid4()),
+    )
+
+    build = [e for e in events if e.phase is Phase.ARTIFACT_BUILD]
+    assert [type(e) for e in build] == [PhaseStartEvent, PhaseEndEvent]
+    assert build[0].phase_id == build[1].phase_id
+    assert build[0].started_at  # server timestamp
+    assert build[0].detail == "My Report"
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_phase_end_fires_on_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ARTIFACT_BUILD phase is paired even when the sub-agent build raises."""
+    from personal_agent.transport.events import Phase, PhaseEndEvent, PhaseStartEvent
+
+    _store, client = _install_draft_fakes(monkeypatch)
+    events = _capture_phase_events(monkeypatch)
+
+    async def _boom(**kwargs: Any) -> dict[str, Any]:
+        raise ValueError("generation exploded")
+
+    monkeypatch.setattr(client, "respond", _boom)
+
+    with pytest.raises(artifact_tools.ToolExecutionError):
+        await artifact_tools.artifact_draft_executor(
+            slug="report",
+            title="My Report",
+            summary="A test",
+            plan="Section 1.",
+            ctx=_ctx(session_id=uuid4()),
+        )
+
+    build = [e for e in events if e.phase is Phase.ARTIFACT_BUILD]
+    # Start AND end both present despite the raise (phase never left spinning).
+    assert [type(e) for e in build] == [PhaseStartEvent, PhaseEndEvent]
+
+
 @pytest.mark.asyncio
 async def test_artifact_draft_uses_artifact_builder_role(
     monkeypatch: pytest.MonkeyPatch,

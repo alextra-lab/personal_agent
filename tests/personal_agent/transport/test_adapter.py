@@ -8,6 +8,9 @@ from personal_agent.transport.agui.adapter import serialize_event, to_agui_event
 from personal_agent.transport.events import (
     ClassifiedErrorEvent,
     InterruptEvent,
+    Phase,
+    PhaseEndEvent,
+    PhaseStartEvent,
     StateUpdateEvent,
     TextDeltaEvent,
     ToolEndEvent,
@@ -91,6 +94,66 @@ class TestToAguiEvent:
         result = to_agui_event(event)
         assert result["data"]["args"] == {"x": 1}
         assert isinstance(result["data"]["args"], dict)
+
+
+class TestPhaseEvents:
+    """ADR-0123 §2: PhaseStart/PhaseEnd → PHASE_START / PHASE_END wire format."""
+
+    def test_phase_start_full(self) -> None:
+        event = PhaseStartEvent(
+            phase=Phase.SUB_AGENT,
+            phase_id="c1",
+            session_id="s",
+            started_at="2026-07-25T10:00:00+00:00",
+            detail="pricing history",
+            parent_id="p0",
+        )
+        result = to_agui_event(event, seq=7)
+        assert result["type"] == "PHASE_START"
+        assert result["session_id"] == "s"
+        assert result["seq"] == 7
+        assert result["data"] == {
+            "phase": "sub_agent",
+            "phase_id": "c1",
+            "started_at": "2026-07-25T10:00:00+00:00",
+            "detail": "pricing history",
+            "parent_id": "p0",
+        }
+
+    def test_phase_start_defaults(self) -> None:
+        event = PhaseStartEvent(
+            phase=Phase.PLANNING,
+            phase_id="p1",
+            session_id="s",
+            started_at="2026-07-25T10:00:00+00:00",
+        )
+        result = to_agui_event(event)
+        assert result["data"]["detail"] is None
+        assert result["data"]["parent_id"] is None
+        assert result["data"]["phase"] == "planning"
+
+    def test_phase_end(self) -> None:
+        event = PhaseEndEvent(phase=Phase.EXPANSION, phase_id="p0", session_id="s", parent_id=None)
+        result = to_agui_event(event, seq=9)
+        assert result["type"] == "PHASE_END"
+        assert result["session_id"] == "s"
+        assert result["seq"] == 9
+        assert result["data"] == {"phase": "expansion", "phase_id": "p0", "parent_id": None}
+
+    def test_phase_events_json_serializable(self) -> None:
+        """The persisted payload must be JSON-safe (enum → value)."""
+        start = PhaseStartEvent(
+            phase=Phase.ARTIFACT_BUILD,
+            phase_id="a1",
+            session_id="s",
+            started_at="2026-07-25T10:00:00+00:00",
+            detail="My Report",
+        )
+        parsed = json.loads(serialize_event(start, seq=1))
+        assert parsed["type"] == "PHASE_START"
+        assert parsed["data"]["phase"] == "artifact_build"
+        end = PhaseEndEvent(phase=Phase.ARTIFACT_BUILD, phase_id="a1", session_id="s")
+        assert json.loads(serialize_event(end))["type"] == "PHASE_END"
 
 
 class TestSerializeEvent:

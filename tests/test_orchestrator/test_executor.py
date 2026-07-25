@@ -815,6 +815,92 @@ async def test_execute_task_uses_selection_resolved_model_config(mock_client_cla
     )
 
 
+class TestInferencePhaseEvents:
+    """ADR-0123 AC-1 / AC-2 (FRE-934): inference phases reach the transport.
+
+    A planning→tool→synthesis turn must emit a PLANNING pair (first round) and a
+    SYNTHESIS pair (post-tool round), ordered, with the tool events between them —
+    the contiguous semantic sequence AC-2's gap clock is computed over.
+    """
+
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    @pytest.mark.asyncio
+    async def test_planning_then_synthesis_pairs_emitted(self, mock_client_class):
+        import personal_agent.transport.agui.transport as transport_mod
+        from personal_agent.transport.events import (
+            Phase,
+            PhaseEndEvent,
+            PhaseStartEvent,
+        )
+
+        mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
+        mock_client_class.return_value = mock_client
+        mock_client.respond.side_effect = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "read_file",
+                        "arguments": json.dumps({"path": "/tmp/x"}),
+                    }
+                ],
+                "reasoning_trace": None,
+                "usage": {"total_tokens": 100},
+                "raw": {},
+            },
+            {
+                "role": "assistant",
+                "content": "Done.",
+                "tool_calls": [],
+                "reasoning_trace": None,
+                "usage": {"total_tokens": 150},
+                "raw": {},
+            },
+        ]
+
+        events: list = []
+
+        async def _capture(event, session_id: str) -> None:
+            events.append(event)
+
+        with patch.object(transport_mod, "_push_event", _capture):
+            await Orchestrator().handle_user_request(
+                session_id="test-session",
+                user_message="Read /tmp/x",
+                mode=Mode.NORMAL,
+                channel=Channel.CHAT,
+            )
+
+        phases = [e for e in events if isinstance(e, (PhaseStartEvent, PhaseEndEvent))]
+        planning_starts = [
+            e for e in phases if isinstance(e, PhaseStartEvent) and e.phase is Phase.PLANNING
+        ]
+        planning_ends = [
+            e for e in phases if isinstance(e, PhaseEndEvent) and e.phase is Phase.PLANNING
+        ]
+        synth_starts = [
+            e for e in phases if isinstance(e, PhaseStartEvent) and e.phase is Phase.SYNTHESIS
+        ]
+        synth_ends = [
+            e for e in phases if isinstance(e, PhaseEndEvent) and e.phase is Phase.SYNTHESIS
+        ]
+
+        # AC-1: both inference phases are announced, each as a start/end pair with
+        # a server timestamp.
+        assert planning_starts and planning_ends
+        assert synth_starts and synth_ends
+        assert planning_starts[0].started_at  # server timestamp present
+        assert planning_starts[0].phase_id == planning_ends[0].phase_id
+        assert synth_starts[0].phase_id == synth_ends[0].phase_id
+
+        # AC-2 (sequence): planning precedes synthesis — the phase sequence matches
+        # the work (plan, then synthesize after the tool ran).
+        assert phases.index(planning_ends[0]) < phases.index(synth_starts[0])
+
+
 # ── tool_call ID collision regression tests (Bug 2) ─────────────────────────
 
 

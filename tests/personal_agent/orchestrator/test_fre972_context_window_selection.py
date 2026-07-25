@@ -36,7 +36,7 @@ _UNIT_TOKENS = len(_ENCODING.encode(_UNIT))
 
 
 @pytest.fixture(autouse=True)
-def _restore_executor_tool_globals() -> Any:
+def _restore_executor_tool_globals() -> object:
     """Restore executor's lazily-cached registry globals after each test.
 
     step_llm_call seeds the module-level ``_tool_registry`` /

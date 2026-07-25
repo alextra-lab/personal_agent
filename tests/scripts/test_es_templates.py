@@ -20,6 +20,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ES_DIR = REPO_ROOT / "docker" / "elasticsearch"
 SETUP_SCRIPT = REPO_ROOT / "scripts" / "setup-elasticsearch.sh"
+KIBANA_SETUP = REPO_ROOT / "config" / "kibana" / "setup_dashboards.py"
 
 
 def _load(name: str) -> dict:
@@ -222,15 +223,42 @@ def _settings(template: dict) -> dict:
 
 
 def test_logs_has_total_fields_cap_that_does_not_drop_docs() -> None:
-    """agent-logs caps mapped fields and skips (not drops) beyond the cap (FRE-544)."""
+    """agent-logs caps mapped fields and skips (not drops) beyond the cap (FRE-544).
+
+    FRE-983: cap raised 300 -> 1000. The live cluster's agent-logs sat at ~292 of
+    300 leaf fields and was actively dropping ~3% of docs' unmappable fields
+    (parent_span_id, task_id, to_state, ...) via ignore_dynamic_beyond_limit. The
+    raise was applied live but must live in the repo template too, or a
+    setup-elasticsearch.sh re-run would silently regress it back to 300.
+    """
     s = _settings(_load("index-template.json"))
-    assert s.get("index.mapping.total_fields.limit") == 300, (
-        "agent-logs must cap dynamic field growth at 300"
+    assert s.get("index.mapping.total_fields.limit") == 1000, (
+        "agent-logs must cap dynamic field growth at 1000 (FRE-983 durable raise)"
     )
     # ignore_dynamic_beyond_limit=true → over-cap docs index (fields skipped to _source),
     # never rejected. Required: dropping telemetry docs is unacceptable for a catch-all.
     assert s.get("index.mapping.total_fields.ignore_dynamic_beyond_limit") is True, (
         "must skip over-cap dynamic fields, not reject the document"
+    )
+
+
+def test_no_competing_agent_logs_template_writer() -> None:
+    """Only the canonical setup path may define agent-logs-template (FRE-983).
+
+    config/kibana/setup_dashboards.py used to PUT its own agent-logs-template with a
+    stripped mapping (no total_fields.limit, no dynamic_templates, no shard/replica
+    settings, no priority). Whichever writer ran last won, so running the dashboard
+    setup after setup-elasticsearch.sh silently clobbered the governed template and
+    reopened the field-drop cliff. The canonical template
+    (docker/elasticsearch/index-template.json, applied by scripts/setup-elasticsearch.sh)
+    is the sole source of truth and is a strict superset of the fields the dashboard
+    writer ensured, so the duplicate was removed. Guard against its return.
+    """
+    source = KIBANA_SETUP.read_text()
+    assert "_index_template/agent-logs-template" not in source, (
+        "config/kibana/setup_dashboards.py must not PUT agent-logs-template — the "
+        "canonical writer is scripts/setup-elasticsearch.sh via "
+        "docker/elasticsearch/index-template.json (FRE-983 clobber guard)"
     )
 
 

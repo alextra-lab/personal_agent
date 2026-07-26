@@ -4,7 +4,26 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-25 (the 2026-07-24 bug wave SHIPPED — 7 fixes deployed; pipeline-hardening family filed)
+> **Last updated**: 2026-07-26 (ALL DEV HALTED — cost incident; harness stopped; audit project opened)
+
+## ⛔ 0. STOP — the environment is deliberately down, and this is the only active thread
+
+**`cloud-sim-seshat-gateway` is STOPPED and `telemetry/dispatch.disabled` is ENGAGED (owner-directed,
+2026-07-26). Do not restart either, and do not raise any budget cap, without explicit owner
+instruction.** Everything below this section is superseded until the audit is scoped.
+
+A background loop (ADR-0124 session-summary sweep) spent more over 14 days than all user inference
+while delivering 6 digests and 2 merged proposals; the investigation showed cost attribution is not
+trustworthy. Full detail: `docs/plans/LAST_SESSION.md` and
+`docs/research/2026-07-25-captains-log-summarization-insights-cost-incident.md` (PR #678, open).
+
+**The only forward plan right now** is the Linear project **"Cost, Process and Monitoring Audit"** —
+process · reporting · monitoring · cost management. It holds FRE-987 (the loop), FRE-989 (attribution
+audit), FRE-988 (connection pooling), all **Needs Approval**.
+
+**Next action is study, not build.** Captain's Log reflection, Summarization (session digest) and
+Insights each get an objective-first study in its own clean master session. Do not patch, and do not
+resume the sections below until the owner re-opens them.
 
 ## 0. ADR-0123 turn progress surface — accepted; adrs seat filing the impl chain (FRE-957)
 

@@ -1,70 +1,107 @@
-# Last session — 2026-07-25 (the bug wave: built, deployed, mid-verification)
+# Last session — 2026-07-25/26 (shipped a wave, then found a cost incident and stopped everything)
+
+## READ THIS FIRST — the environment is deliberately STOPPED
+
+**The harness (`cloud-sim-seshat-gateway`) is STOPPED. The dispatch kill switch is ENGAGED. This is
+intentional, owner-directed. Do not restart either without explicit instruction.**
+
+- `docker stop cloud-sim-seshat-gateway` — run 2026-07-26 ~04:20Z. `/health` returns nothing by design.
+- `telemetry/dispatch.disabled` present → dispatch daemon *and* the PR-gating watcher are both gated.
+- Both build seats idle, both worktrees clean, 0 commits ahead. Nothing lost, nothing in flight.
+- All datastores (postgres, ES, neo4j, redis, searxng, reranker, kibana, caddy, cloudflared) and the
+  PWA shell are still up — they cost nothing and hold the evidence.
+
+**Why:** a background process was spending real money on a loop that produced nothing, and cost
+control turned out not to be trustworthy enough to leave running unattended. See §"The incident".
 
 ## Doing / discussing (≤5 sentences)
 
-The forcing-function budget turn (re-fired at session start) drove an entire **bug wave to completion**:
-gated + merged **7 fixes** and shipped them in **one bundled gateway deploy** at ~06:35 UTC 2026-07-25
-(migration 0022 → `ENV=cloud make rebuild SERVICE=seshat-gateway`, main `cc019fde`), verified healthy.
-**Live verification is INCOMPLETE and is the top pickup:** FRE-974 (OVH cost) and FRE-973 (salvage) are
-**confirmed live + closed Done**; FRE-970/971/972/969 are deployed + TDD-proven but their behavioural
-ACs are **not yet live-confirmed** because every qwen budget turn 524s on the Cloudflare tunnel (~250s
-cap) before completing — a **sonnet-primary** turn is needed to seal them. Also filed a whole
-**pipeline-hardening family** (FRE-975/976/977) + three follow-ups (FRE-978/979/980) this session.
+The first two-thirds of the session was ordinary delivery: gated and merged **PRs #667–#676** (seven
+tickets), ran two bundled gateway+PWA deploys, and closed FRE-934/935/961/976/978/979/984 Done with
+live evidence — the ADR-0123 turn-progress chain is now live end-to-end except its seam. The last
+third was an incident: the owner asked why 321 budget denials existed when they had made ~67 turns,
+and the answer overturned my analysis twice before landing on a **non-convergent retry loop** in the
+ADR-0124 session-summary sweep. Investigating it exposed that **cost attribution is broadly
+untrustworthy** — capped roles can bill to the wrong budget, three roles are uncapped and unmeasurable,
+and a 100× cost jump ran three days unnoticed. The owner halted all development, then had me stop the
+harness itself. **A new Linear project — "Cost, Process and Monitoring Audit" — now holds this work,
+and each background stream will be studied objective-first in dedicated clean sessions.**
 
 ## Commits — the story behind the last ~10
 
-- **PRs #657–#664** = the 7-ticket wave, gated + merged in order: FRE-965 (defaults_by_primary substrate,
-  the parked config-chain step 1) · FRE-970 (ES skills cost-event fix) · FRE-969 (legacy digest tolerant
-  read) · FRE-974 (OVH/Voyage cost metering **+ Postgres migration 0022** widening `api_costs.cost_usd`
-  to DECIMAL(18,12)) · FRE-973 (524 wall-clock guard + salvage) · FRE-971 (Anthropic-primary prefill 400)
-  · FRE-972 (compaction/consent gate resolves the session's model window — the "89% of 96K" popup).
-- **`#660`** (chore, not a FRE ticket) = **budget cap right-size** — the three stale FRE-334 temp-bumps
-  (main_inference daily $15→$10, weekly $40→$25, `_total` $50→$30) + captains_log $2.50→$5 (it was
-  *breaching*), based on `budget_counter_snapshot` observed peaks. `.env` `AGENT_CLOUD_WEEKLY_BUDGET_USD`
-  → $30 (live, gitignored). Owner-approved.
-- **Two outside factors the messages don't carry:** (1) the **dispatch daemon wedged for hours** on
-  build1/FRE-965 — it stall-looped because FRE-965 went Done-directly + label-removed (parked-chain edge)
-  during a **GitHub PR-service major outage** (~16 min, blocked all PR creation/merge); I cleared
-  `dispatch_state.json` manually and it recovered. (2) **FRE-975 fired three times live** — the watcher
-  gates master on PR-open+CI-green *before* the build finishes its own Step-8 review.
+- **PRs #667–#676** = seven merged tickets. FRE-978 (Stage-7 model-aware trim) · FRE-979 (ES cost
+  skills → `api_cost_recorded`) · FRE-935 (absent-vs-zero client, verify-not-implement) · FRE-934
+  (inference phases on the transport) · FRE-984 (safety hooks anchored to `$CLAUDE_PROJECT_DIR`) ·
+  FRE-983 Phase-2 (durable field-limit + killed a clobbering template writer) · FRE-961 (server-side
+  absent-not-zero) · FRE-936 (the live phase surface) · FRE-986 (phase-state projection).
+- **#671** = ADR-0123 corrections: withdrew a stale liveness observation and recorded AC-2's operative
+  gap-clock reading (the literal text is unsatisfiable given §3/§4 forbid filler events).
+- **#678 = the incident report** — `docs/research/2026-07-25-captains-log-summarization-insights-cost-incident.md`.
+  **STILL OPEN, no auto-merge, deliberately left for the owner.**
+- **#677 = a cap raise I opened and then CLOSED myself.** It would have doubled `captains_log` to $10.
+  Withdrawn once the denials proved to be one loop, not demand. Do not resurrect it.
+- **Two outside factors the messages don't carry:** (1) codex was down (OpenAI circuit-open) during
+  FRE-978, so that PR shipped without plan-review and I supplied the adversarial pass myself; (2) the
+  dispatch daemon wedged mid-session on a ticket I canceled underneath it — which turned out to be the
+  exact bug FRE-976 fixes, and restarting the daemon deployed the fix that then proved itself live.
 
 ## Worktrees — anything special
 
-- **build1 / build2** — idle (wave complete; nothing Approved+labelled remains on either).
-- **explore** — **the owner manually started a pipeline-architecture study** (do NOT re-dispatch or
-  `/clear` it — the study is running). Master tried to send-keys it and failed (needs owner `/clear` +
-  `/prime-explore`; that's FRE-977). Its output may reshape FRE-975/976/977 into a unified design.
+- **build (build1)** — idle, clean, on `fre-983-es-telemetry-lifecycle`. Was mid-FRE-983 when halted.
+- **build2** — idle, clean, on `fre-986-phase-state-projection`.
+- **Hooks are per-worktree:** the FRE-984 fix (hooks anchored to `$CLAUDE_PROJECT_DIR` instead of cwd)
+  is live in the primary tree and build2 only. **build1, adrs and explore still run the old
+  cwd-relative registrations** until each rebases on main. Not urgent while everything is stopped.
 
 ## Plan position + drift
 
-The **bug wave (MASTER_PLAN §0c) is COMPLETE and deployed** — §0c's FRE-958/963/964 all shipped; the
-primary/sub pairing design is settled and the ADR-0121 Addendum merged. The **config chain FRE-966→967→
-968 is parked** (labels off, relations wired, resumes on owner's word). One notable convergence:
-**FRE-974 delivered ADR-0120's T0** (OVH/Voyage cost into `api_costs`) ahead of that ADR being accepted.
-No unexpected drift — the wave was the plan.
+MASTER_PLAN is **stale** — it still describes the 07-24 bug wave as the live thread and has no entry
+for the audit. The ADR-0123 chain progressed far beyond what it records. **Deliberate drift, not
+oversight:** the plan should not be rewritten around the audit until the owner has scoped it, and the
+studies will reshape it. Treat MASTER_PLAN §0/§0b as historically-true-but-superseded until then.
+
+## The incident (the thread to pick up)
+
+**What happened.** The ADR-0124 session-summary idle sweep runs every 300s, regenerates each digest
+**wholesale** (`f(all captures)`), and on failure leaves the session dirty and eligible **forever**.
+The exclusion predicate requires *both* a terminal failure reason *and* the attempt ceiling, and
+`budget_denied` is classified transient — so the ceiling is unreachable. Observed: attempt counter
+**311** against a configured max of **2**; 358 attempts / 0 successes in 24h across 5 sessions.
+
+**Cost.** 30-day total $25.51, **60% of it in the last three days**. `captains_log` = $10.52/14d,
+more than all user inference. Delivered output over 14 days: **6 digests written, 2 merged proposals**.
+
+**The correction that matters most:** the cap was never containment. It is a **daily allowance the
+loop burns through** — it reset at midnight and had spent **$3.67 of $5.00 in four hours** with the
+owner asleep and all dev halted. That is why the harness itself had to stop: the kill switch stops
+dispatch and build seats, **not** the gateway's background schedulers.
+
+**I was wrong twice, publicly, before getting there** — first blaming a backfill loop (disproved by
+clock mismatch), then sizing a cap raise from denial volume treated as demand. Both were caught by the
+owner asking a ratio question I should have asked myself. Worth remembering: *67 turns/week cannot
+produce a 12-per-hour overnight pattern.*
 
 ## Answers for the fresh start
 
-- **TOP PICKUP — finish wave verification + close 4 tickets.** Deploy is live/healthy (health green,
-  migration applied, joinability green, embeddings re-stopped). Still **Awaiting Deploy pending
-  behavioural confirmation:** FRE-970 (agent hits `model_call_completed` on a *completing* budget turn),
-  FRE-971 (a **sonnet-primary** tool turn completes, no prefill-400), FRE-972 (sonnet near ~150–200K, no
-  premature popup), FRE-969 (the two legacy sessions `ca8d0fa3` / `e9674e4d` render). Fire a **sonnet**
-  budget turn to seal 970/971/972 at once, spot-check 969, then close them Done with evidence.
-- **Qwen turns still 524 on heavy work** — the CF tunnel caps a single generation at ~250s; FRE-973
-  salvages it gracefully but it can't complete. Root cause is **32K `thinking_budget_tokens` + 72K
-  assembled context** on local qwen-35B. Two levers filed/discussed: **FRE-980** (raise the CF tunnel
-  timeout to ≥900s — **a MAC-SIDE change in `infrastructure/terraform-cloudflare-mac`, applied via
-  `terraform apply` on the Mac; NOT a VPS/build-pipeline task** — see FRE-980's pinned comment) and a
-  **thinking-budget A/B eval** (not filed — owner deciding vs. just routing heavy work to sonnet).
-- **Pipeline-hardening family (all Needs Approval, parked):** FRE-975 (review-complete gate signal),
-  FRE-976 (Linear-reconciled dispatch — the daemon-wedge fix, Tier-1), FRE-977 (explore first-class
-  dispatch). **Hold them unapproved until explore's study lands** — it may unify them. **Open owner
-  decision:** dispatch 975+977 to build2 now (hold 976 for explore)? — unresolved at reset.
-- **Follow-ups filed this session (Needs Approval):** FRE-978 (Stage-7's *separate* static-window trim —
-  the actually-live truncation, sibling of 972), FRE-979 (ES skill must use `api_cost_recorded` for total
-  spend so OVH/Voyage aren't dropped — sibling of 970/974), FRE-980 (CF tunnel timeout).
-- **Stale Awaiting-Deploy trio** (FRE-943 config-endpoint window · 739 · 717) **rode the wave rebuild →
-  now deployed**; verify their ACs + close next session.
-- **Standing correction saved to memory:** master **owns** explore dispatch (don't hand it back to the
-  owner); it needs the full `/clear`+`/prime`+inject sequence, never a task pushed onto a live context.
+- **Do NOT restart the harness or clear the kill switch** without the owner saying so.
+- **Do NOT raise any budget cap** as a remedy. A higher ceiling funds the loop. This is written into
+  the audit project's posture on purpose.
+- **The audit project is "Cost, Process and Monitoring Audit"** (Urgent, Needs Approval) covering
+  process · reporting · monitoring · cost management. It holds **FRE-987** (the loop, root cause
+  established), **FRE-989** (attribution audit, 5 findings), **FRE-988** (connection pooling).
+  All three are **Needs Approval** — the owner has not approved them yet.
+- **Next work is study, not build.** The owner's words: each stream gets a deep objective+implementation
+  study in **new clean master sessions** — Captain's Log reflection, Summarization (session digest),
+  and Insights, separately. Objective first. Do not patch.
+- **Awaiting Deploy queue — 9 tickets, and the distinction matters.** **8 of 9 are already DEPLOYED**
+  and are simply awaiting verification and an evidence-close: FRE-936 (deployed in the 19:51Z gateway +
+  20:06Z PWA rebuild, UI behaviour never observed), and FRE-970/972/943/971/969/739/717 (deployed in
+  earlier waves — the 06:35Z and 12:50Z rebuilds and older — never closed out).
+  **FRE-986 is the ONLY one genuinely undeployed:** it merged at 20:29Z, *38 minutes after* the last
+  gateway rebuild, so its code has never run anywhere. **It needs a deploy, not just verification**,
+  whenever the harness comes back.
+  Nothing here is verifiable while the harness is stopped — do not close any of them on inference.
+- **PR #678** (incident report) is open with auto-merge deliberately OFF — the owner may want to read
+  it before it lands.
+- **A refinement to a standing fact:** a `fre-XXX` token in a docs PR **body** also triggers the Linear
+  integration (it moved FRE-987 to In Progress). The known rule only covered branch and title.

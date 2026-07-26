@@ -1122,6 +1122,12 @@ class MemoryService:
         Owns only the properties derived from the turn stream itself: timestamps,
         ``turn_count`` and ``dominant_entities``.
 
+        It also clears ``summary_evidence_failure_count`` (FRE-992). New turns mean new
+        captures, so a session previously written off as unreadable has materially
+        changed and earns a fresh retry budget. Without this the exclusion is
+        self-reinforcing: an excluded session is never selected again, and only a
+        successful read — the very thing the exclusion prevents — could reset it.
+
         It deliberately does **not** write ``session_summary``, ``session_label``,
         ``session_digest`` or ``summary_generated_at`` (ADR-0124 D1). Those belong to
         the idle sweep, which publishes them through
@@ -1156,7 +1162,8 @@ class MemoryService:
                     SET s.started_at = $started_at,
                         s.ended_at = $ended_at,
                         s.turn_count = $turn_count,
-                        s.dominant_entities = $dominant_entities
+                        s.dominant_entities = $dominant_entities,
+                        s.summary_evidence_failure_count = 0
                     """,
                     session_id=session_node.session_id,
                     started_at=session_node.started_at.isoformat(),
@@ -1248,7 +1255,8 @@ class MemoryService:
                         s.summary_generated_at = $generated_at,
                         s.turn_count = $turn_count,
                         s.summary_failure_reason = null,
-                        s.summary_attempt_count = 0
+                        s.summary_attempt_count = 0,
+                        s.summary_evidence_failure_count = 0
                     RETURN s.session_id AS session_id
                     """,
                     session_id=session_id,
@@ -1441,7 +1449,8 @@ class MemoryService:
                     WHERE s.ended_at = $expected_ended_at
                     SET s.summary_generated_at = $generated_at,
                         s.summary_failure_reason = null,
-                        s.summary_attempt_count = 0
+                        s.summary_attempt_count = 0,
+                        s.summary_evidence_failure_count = 0
                     RETURN s.session_id AS session_id
                     """,
                     session_id=session_id,
@@ -1472,6 +1481,7 @@ class MemoryService:
         *,
         expected_ended_at: datetime,
         failure_reason: str,
+        evidence_failure: bool = False,
         trace_id: str | None = None,
     ) -> bool:
         """Record a failed generation attempt — inert and loud (ADR-0124 AC-4).
@@ -1489,6 +1499,13 @@ class MemoryService:
             session_id: Session whose attempt failed.
             expected_ended_at: ``ended_at`` as captured when the sweep read it.
             failure_reason: A :class:`SummaryFailureReason` value.
+            evidence_failure: Whether the attempt failed because the session's evidence
+                could not be read whole (FRE-992). Bumps a **second, reason-specific**
+                counter as well as the shared one. ``summary_attempt_count`` is shared
+                across every reason while terminality tests only the *current* reason,
+                so a shared bound cannot express "give up after N failed evidence
+                reads" — two unrelated model errors would spend the budget and retire
+                the session on its first genuine evidence failure.
             trace_id: Trace identifier for log correlation (ADR-0074 §I3).
 
         Returns:
@@ -1505,12 +1522,17 @@ class MemoryService:
                     MATCH (s:Session {session_id: $session_id})
                     WHERE s.ended_at = $expected_ended_at
                     SET s.summary_failure_reason = $failure_reason,
-                        s.summary_attempt_count = coalesce(s.summary_attempt_count, 0) + 1
-                    RETURN s.summary_attempt_count AS attempts
+                        s.summary_attempt_count = coalesce(s.summary_attempt_count, 0) + 1,
+                        s.summary_evidence_failure_count =
+                            coalesce(s.summary_evidence_failure_count, 0)
+                            + (CASE WHEN $evidence_failure THEN 1 ELSE 0 END)
+                    RETURN s.summary_attempt_count AS attempts,
+                           s.summary_evidence_failure_count AS evidence_attempts
                     """,
                     session_id=session_id,
                     expected_ended_at=expected_ended_at.isoformat(),
                     failure_reason=failure_reason,
+                    evidence_failure=evidence_failure,
                 )
                 row = await result.single()
         except Exception as e:
@@ -1532,6 +1554,7 @@ class MemoryService:
             trace_id=trace_id,
             failure_reason=failure_reason,
             attempt_count=row["attempts"],
+            evidence_attempt_count=row["evidence_attempts"],
         )
         return True
 
@@ -1555,14 +1578,33 @@ class MemoryService:
         Transient reasons (a budget denial above all) are never terminal, so those
         sessions keep coming back until they succeed.
 
+        Sessions whose **evidence** could not be read are excluded on their own counter
+        (FRE-992), not on the shared one: ``summary_attempt_count`` is spent by every
+        reason while terminality tests only the current reason, so a session that hit
+        two model errors before its first unreadable sweep would otherwise be retired
+        after a single evidence failure.
+
+        Each row carries ``graph_turn_count`` — a count of the session's ``Turn`` nodes.
+        This is the only independent signal of how many turns a session actually had,
+        and it is deliberately not ``s.turn_count``: that property is overwritten by
+        :meth:`create_session` with the count from **one** consolidation batch, so a
+        session consolidated across two windows carries the second window's number.
+        ``Turn`` nodes are ``MERGE``-d one per capture and accumulate, making the count
+        a *lower bound on turns that genuinely existed* — it can undercount a turn
+        consolidation never saw, but it can never overcount, because a ``Turn`` node is
+        proof its capture existed. That asymmetry is what lets a caller use it to
+        prove evidence is missing without ever falsely accusing a complete read.
+
         Args:
             idle_threshold_seconds: How long a session must be quiet to be eligible.
-            max_attempts: Attempt count at which a deterministic failure goes terminal.
+            max_attempts: Attempt count at which a deterministic failure goes terminal,
+                and the bound on consecutive unreadable-evidence sweeps.
             limit: Maximum sessions to return in one sweep.
             trace_id: Trace identifier for log correlation (ADR-0074 §I3).
 
         Returns:
-            Rows of ``session_id``, ``started_at``, ``ended_at`` — fewest-attempts
+            Rows of ``session_id``, ``started_at``, ``ended_at``, ``graph_turn_count``
+            — fewest-attempts
             first, then oldest-stale, so a backlog drains in the order it accumulated
             **without** letting repeatedly-failing sessions monopolise the window.
             Ordering by ``ended_at`` alone lets a session that fails for a
@@ -1588,11 +1630,17 @@ class MemoryService:
                            OR s.summary_generated_at < s.ended_at)
                       AND NOT (s.summary_failure_reason IN $terminal_reasons
                                AND coalesce(s.summary_attempt_count, 0) >= $max_attempts)
-                    RETURN s.session_id AS session_id,
-                           s.started_at  AS started_at,
-                           s.ended_at    AS ended_at
+                      AND coalesce(s.summary_evidence_failure_count, 0) < $max_attempts
+                    WITH s
                     ORDER BY coalesce(s.summary_attempt_count, 0) ASC, s.ended_at ASC
                     LIMIT $limit
+                    OPTIONAL MATCH (t:Turn {session_id: s.session_id})
+                    WITH s, count(t) AS graph_turn_count
+                    RETURN s.session_id AS session_id,
+                           s.started_at  AS started_at,
+                           s.ended_at    AS ended_at,
+                           graph_turn_count
+                    ORDER BY coalesce(s.summary_attempt_count, 0) ASC, s.ended_at ASC
                     """,
                     cutoff=cutoff,
                     terminal_reasons=sorted(TERMINAL_ELIGIBLE_REASONS),
@@ -2546,6 +2594,32 @@ class MemoryService:
             return True
         except Exception as e:
             log.error("session_id_index_creation_failed", error=str(e), exc_info=True)
+            return False
+
+    async def ensure_turn_session_id_index(self) -> bool:
+        """Create the Turn.session_id index (FRE-992).
+
+        Idempotent (IF NOT EXISTS). The digest sweep counts a session's ``Turn`` nodes
+        to decide whether its captures were read whole, and several existing queries
+        (``link_session_turns``, the dominant-entity refresh) already match ``Turn`` by
+        ``session_id``. Without this index each of those is a label scan over every
+        turn in the graph.
+
+        Returns:
+            True if the index exists or was created successfully.
+        """
+        if not self.connected or not self.driver:
+            return False
+        try:
+            async with self.driver.session() as session:
+                await session.run(
+                    "CREATE INDEX turn_session_id_index IF NOT EXISTS "
+                    "FOR (t:Turn) ON (t.session_id)"
+                )
+            log.info("turn_session_id_index_ensured", index_name="turn_session_id_index")
+            return True
+        except Exception as e:
+            log.error("turn_session_id_index_creation_failed", error=str(e), exc_info=True)
             return False
 
     async def bootstrap_owner_identity(

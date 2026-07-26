@@ -105,6 +105,16 @@ class SummaryFailureReason(StrEnum):
     MODEL_ERROR = "model_error"
     TIMEOUT = "timeout"
     EMPTY_OUTPUT = "empty_output"
+    # Bounded by its OWN counter, deliberately outside the split above (FRE-992).
+    # The producer could not read the session's evidence — the durable store was
+    # unreachable, a capture would not parse, or the graph knows of more turns than
+    # either store holds. Not terminal-eligible: `summary_attempt_count` is shared
+    # across every reason while terminality tests only the *current* one, so listing
+    # this reason there would let two unrelated model errors terminalise a session on
+    # its first evidence failure — permanently retiring it over a transient outage,
+    # which is the exact defect FRE-992 exists to remove. It is bounded instead by
+    # `summary_evidence_failure_count`, which only this reason increments.
+    EVIDENCE_UNAVAILABLE = "evidence_unavailable"
 
 
 TERMINAL_ELIGIBLE_REASONS: frozenset[str] = frozenset(

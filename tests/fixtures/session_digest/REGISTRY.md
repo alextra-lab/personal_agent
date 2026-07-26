@@ -71,12 +71,20 @@ different, mostly single-turn set (553 sessions, 13 multi-turn, 2 with tool resu
    is a pre-registered synthetic supplement, labelled as such in the result."* Every
    set below is therefore **synthetic and labelled as such**, and no criterion has
    been shrunk to fit.
-3. **On deploy, the first sweep will digest nothing.** It will find 121 dirty
-   sessions, read zero captures for each, and mark them clean with no digest. That is
-   correct — a session whose evidence is gone cannot be digested, and its legacy
-   `session_summary` is preserved (D-d) — but it means digests appear only for
-   sessions created *after* deploy. The sweep counts `no_captures` separately from
-   `skipped` so this is visible rather than reading as a successful floor application.
+3. ~~**On deploy, the first sweep will digest nothing.**~~ **Falsified by FRE-992
+   (2026-07-26).** This note recorded that the first sweep would read zero captures
+   for every dirty session and mark them clean, and treated that as correct on the
+   premise that their evidence was gone. The premise was wrong: the captures were in
+   Elasticsearch the whole time, and the producer was reading a non-durable local
+   directory. Forty-six sessions carrying 2-17 turns were retired by that reasoning.
+
+   The producer now reads both stores, and a session it cannot read **whole** is
+   recorded as a failure (`evidence_unavailable`) rather than marked clean — so the
+   counter that made this visible has changed meaning, and `no_captures` no longer
+   exists. `skipped` is now only ever a *positively-established* single-turn session.
+   Sessions retired under the old behaviour stay retired until their
+   `summary_generated_at` is cleared; that is a deliberate operator decision, not a
+   side effect of this fix.
 
 ---
 

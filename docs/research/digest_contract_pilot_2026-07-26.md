@@ -40,6 +40,37 @@ clean.
 
 Arm A's failure rate is **5/30 = 16.7%**; arms B and C are 0/30.
 
+### 2.1 The number that actually matters — and it does not favour the contract
+
+Parse rate is not the deliverable. The deliverable is **a usable digest actually stored**: one that
+parses, fits the 250-token budget, and is not empty. On that measure:
+
+| | Parsed | Over the 250-token budget | Empty digest | **Would be stored** |
+|---|---:|---:|---:|---:|
+| A (today) | 25/30 | 6 | 1 | **18/30 (60%)** |
+| B (contract) | 30/30 | 10 | 5 | **15/30 (50%)** |
+| C (bounded) | 30/30 | 9 | 3 | **18/30 (60%)** |
+
+**The contract did not improve end-to-end delivery.** It made parsing perfect and moved the failures
+downstream into over-budget and empty. The formatting failure was removed; a sizing failure that had
+been hiding behind it was exposed.
+
+The empty case is the more serious half. An empty digest returns `GENERATED`, so it **marks the
+session clean and is never retried** — five sessions permanently recorded as summarised while holding
+no memory at all. A silent non-delivery is worse than a loud failure, and it is the outcome most
+directly hostile to the consumer this artifact exists to serve.
+
+Stated against my own finding: 15 against 18 is three sessions at N=30, temperature could not be
+pinned (§8.1), and production retries an over-budget digest once, which this harness did not
+simulate. It is **not** a significant regression. But it is decisively not an improvement, and the
+burden of proof was on the change.
+
+**What this means for the ticket's own framing.** FRE-996 said "a run that produces valid output that
+is still too long is a success for this ticket," and by that standard it succeeded. But read at the
+altitude of *the summariser working*, the honest verdict is that this work moved the **diagnosis**,
+not the **outcome**: the binding constraint is a 250-token bound ADR-0124 admits was never
+calibrated, and that is FRE-994's job, not this one's.
+
 > **A correction to this pilot's own first pass.** The harness initially scored one of those
 > five as `empty` rather than `truncated`, because it tested for an empty payload *before*
 > testing whether the ceiling had been hit. That reply had `finish_reason=length` at exactly
@@ -222,14 +253,22 @@ Two forward-looking notes:
 
 ## 10. Recommendation
 
-1. **Ship the contract for the digest.** The wrapping class is eliminated by mechanism, the failure
-   rate on this sample went 16.7% → 0%, and it costs less per call than the status quo.
-2. **Do not read this as the digest being fixed.** A third of contract-produced digests still exceed
-   the token budget. FRE-993/FRE-994 are the fix for that, and this result makes them more clearly
-   load-bearing, not less.
-3. **Do not generalise the contract on this evidence alone.** FRE-995 §8.3 sequences the other
+1. **Ship the contract, but for the reasons that survived measurement — not the headline one.** It
+   removes a fence heuristic that is load-bearing on 37% of replies, it makes truncation separable
+   from format drift for the first time, and it **cuts output tokens by 53%** (33,214 → 15,765 per
+   30 calls; ~30% cheaper per call). On a role that was the single largest line in the cost ledger,
+   that saving is the most immediately valuable thing here. What it does *not* do is deliver more
+   usable digests (§2.1).
+2. **Do not re-enable the sweep on this alone.** End-to-end delivery is 15/30 against today's 18/30.
+   Re-enabling now would produce a system that stores *fewer* usable digests while looking healthier
+   in the logs — perfect parse rates, silent empties. Calibrate the bound first (FRE-994), then
+   re-enable.
+3. **Gate on the empty-digest rate, not the parse rate.** An empty digest marks its session clean and
+   is never retried, so it is a silent non-delivery. It is the metric that tracks what this artifact
+   is actually for.
+4. **Do not generalise the contract on this evidence alone.** FRE-995 §8.3 sequences the other
    sites; skill routing (A4) is the natural second subject and the cheapest confirmation, because its
    16.3% failure rate is pure format drift with zero truncation — the one place the contract's
    remaining claim can be tested cleanly.
-4. **Drop item-count bounds as a length lever** (§5), and tell FRE-994 to measure against the prompt
+5. **Drop item-count bounds as a length lever** (§5), and tell FRE-994 to measure against the prompt
    target and the ceiling instead.

@@ -497,6 +497,198 @@ class TestOutputKindAxis:
         assert result["entities"][0]["class"] == "World"
 
 
+@pytest.mark.asyncio
+class TestFailOpenDefaultSignal:
+    """FRE-997: each fail-open coercion emits a signal.
+
+    Carries what the model actually returned and the identity tuple, without
+    changing the fail-open default itself (ADR-0115 D4). Driven through the full
+    extractor path (the same `_run_extractor` harness every other test in this
+    file uses) so what's exercised is identity threading through the real
+    `_finalize_extraction` call sites, not a bare helper in isolation.
+
+    Assertions match this test file's own precedent (test_session_summary.py's
+    `test_oversize_emits_a_failure_event_naming_the_reason`): substring-match on
+    `r.getMessage()` rather than access structlog kwargs as record attributes,
+    since this project's structlog config renders the event dict into the
+    message text rather than exposing it via stdlib LogRecord attributes.
+    """
+
+    @staticmethod
+    def _fail_open_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [
+            r.getMessage()
+            for r in caplog.records
+            if "entity_extraction_fail_open_default" in r.getMessage()
+        ]
+
+    @staticmethod
+    def _full_entity(**overrides: Any) -> dict[str, Any]:
+        """Build an entity valid on all three fail-open axes.
+
+        A test overrides exactly one field and knows any signal that fires
+        belongs to that field alone.
+        """
+        entity: dict[str, Any] = {
+            "name": "Neo4j",
+            "type": "Technology",
+            "class": "World",
+            "output_kind": "knowledge",
+            "description": "d",
+            "description_update_kind": "new",
+        }
+        entity.update(overrides)
+        return entity
+
+    async def test_off_vocabulary_class_emits_signal_with_identity(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        model_json = _entity_model_json(self._full_entity(name="Postgres", **{"class": "System"}))
+        with caplog.at_level("WARNING"):
+            await _run_extractor(model_json, user_message="msg")
+
+        messages = self._fail_open_messages(caplog)
+        assert len(messages) == 1
+        msg = messages[0]
+        assert "class" in msg
+        assert "System" in msg
+        assert "World" in msg
+        assert _TRACE_ID in msg
+        assert _SESSION_ID in msg
+
+    async def test_valid_class_emits_no_signal(self, caplog: pytest.LogCaptureFixture) -> None:
+        model_json = _entity_model_json(self._full_entity())
+        with caplog.at_level("WARNING"):
+            await _run_extractor(model_json, user_message="msg")
+
+        assert not self._fail_open_messages(caplog)
+
+    async def test_off_vocabulary_output_kind_emits_signal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        model_json = _entity_model_json(self._full_entity(output_kind="background_noise"))
+        with caplog.at_level("WARNING"):
+            await _run_extractor(model_json, user_message="msg")
+
+        messages = self._fail_open_messages(caplog)
+        assert len(messages) == 1
+        assert "output_kind" in messages[0]
+        assert "background_noise" in messages[0]
+        assert "knowledge" in messages[0]
+
+    async def test_valid_output_kind_emits_no_signal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        model_json = _entity_model_json(self._full_entity(output_kind="finding"))
+        with caplog.at_level("WARNING"):
+            await _run_extractor(model_json, user_message="msg")
+
+        assert not self._fail_open_messages(caplog)
+
+    async def test_off_vocabulary_description_update_kind_emits_signal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        model_json = _entity_model_json(self._full_entity(description_update_kind="updated"))
+        with caplog.at_level("WARNING"):
+            await _run_extractor(model_json, user_message="msg")
+
+        messages = self._fail_open_messages(caplog)
+        assert len(messages) == 1
+        assert "description_update_kind" in messages[0]
+        assert "updated" in messages[0]
+
+    async def test_valid_description_update_kind_emits_no_signal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        model_json = _entity_model_json(self._full_entity(description_update_kind="enrichment"))
+        with caplog.at_level("WARNING"):
+            await _run_extractor(model_json, user_message="msg")
+
+        assert not self._fail_open_messages(caplog)
+
+    async def test_off_vocabulary_claim_update_kind_emits_signal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        model_json: dict[str, Any] = {
+            "summary": "s",
+            "entities": [],
+            "relationships": [],
+            "stances": [],
+            "claims": [
+                {
+                    "subject": "owner",
+                    "content": "x",
+                    "facet": "employer",
+                    "update_kind": "corrected",
+                }
+            ],
+        }
+        with caplog.at_level("WARNING"):
+            await _run_extractor(model_json, user_message="msg")
+
+        messages = self._fail_open_messages(caplog)
+        assert len(messages) == 1
+        assert "update_kind" in messages[0]
+        assert "corrected" in messages[0]
+
+    async def test_valid_claim_update_kind_emits_no_signal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        model_json: dict[str, Any] = {
+            "summary": "s",
+            "entities": [],
+            "relationships": [],
+            "stances": [],
+            "claims": [
+                {
+                    "subject": "owner",
+                    "content": "x",
+                    "facet": "employer",
+                    "update_kind": "evolution",
+                }
+            ],
+        }
+        with caplog.at_level("WARNING"):
+            await _run_extractor(model_json, user_message="msg")
+
+        assert not self._fail_open_messages(caplog)
+
+    async def test_rejected_value_is_truncated(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A pathologically long off-vocabulary value must be bounded.
+
+        It must not ship past this file's own existing bound for diagnostic
+        model-output logging (content_preview[:200]).
+        """
+        model_json = _entity_model_json(self._full_entity(output_kind="x" * 500))
+        with caplog.at_level("WARNING"):
+            await _run_extractor(model_json, user_message="msg")
+
+        messages = self._fail_open_messages(caplog)
+        assert len(messages) == 1
+        assert "x" * 200 in messages[0]
+        assert "x" * 201 not in messages[0]
+
+    async def test_multiple_off_vocabulary_fields_each_emit_exactly_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Two independently-coerced fields must each emit their own signal.
+
+        Not one shared/deduplicated event.
+        """
+        model_json = _entity_model_json(
+            self._full_entity(
+                name="Postgres", **{"class": "System"}, output_kind="background_noise"
+            )
+        )
+        with caplog.at_level("WARNING"):
+            await _run_extractor(model_json, user_message="msg")
+
+        messages = self._fail_open_messages(caplog)
+        assert len(messages) == 2
+        assert any("class" in m and "System" in m for m in messages)
+        assert any("output_kind" in m and "background_noise" in m for m in messages)
+
+
 class TestTwoAxisPromptContract:
     """ADR-0115 D1: the prompt instructs the model to emit output_kind + class as two axes."""
 

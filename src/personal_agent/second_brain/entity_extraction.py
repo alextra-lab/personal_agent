@@ -422,6 +422,53 @@ def _supplement_person_entities_from_user_message(
     return out
 
 
+#: Bound on logged fail-open detail (FRE-997), matching this file's own existing
+#: precedent for diagnostic model output (``content_preview=content[:200]`` below).
+#: The coerced fields are enum-typed and normally a single short token, but the
+#: fail-open path exists precisely because the model can emit something
+#: unexpected — this caps how much of that ever reaches the log index.
+_MAX_REJECTED_VALUE_CHARS = 200
+
+
+def _log_fail_open_default(
+    *,
+    field_name: str,
+    rejected_value: str,
+    default_value: str,
+    trace_id: UUID | str | None,
+    session_id: str | None,
+) -> None:
+    """Emit once, whenever a fail-open helper substitutes its default (FRE-997).
+
+    Entity extraction has no receiving-side schema; four helpers silently default
+    off-vocabulary model output (ADR-0115 D4) and, until this, nothing recorded
+    that a substitution happened — a correct classification and a silently
+    corrected wrong one were indistinguishable after the fact. This does not
+    change the fail-open behaviour; it only makes it measurable.
+
+    ``rejected_value`` is always the caller's own already-stringified candidate
+    (each ``_normalize_*`` helper computes it via ``str(...)`` before comparing
+    against its vocabulary), never a raw object re-stringified here — so this
+    call introduces no new serialization risk.
+
+    Args:
+        field_name: Which field defaulted (``class``/``output_kind``/
+            ``update_kind``/``description_update_kind``).
+        rejected_value: The model's off-vocabulary value, truncated.
+        default_value: The value substituted in its place.
+        trace_id: Originating capture's trace_id (ADR-0074 §I3).
+        session_id: Originating capture's session_id.
+    """
+    log.warning(
+        "entity_extraction_fail_open_default",
+        field_name=field_name,
+        rejected_value=rejected_value[:_MAX_REJECTED_VALUE_CHARS],
+        default_value=default_value,
+        trace_id=str(trace_id) if trace_id else None,
+        session_id=session_id,
+    )
+
+
 _VALID_ENTITY_CLASSES = frozenset({"World", "Personal"})
 
 # ADR-0115 D1: the routing axis, orthogonal to class; off-vocabulary → "knowledge" (fail-open).
@@ -452,20 +499,41 @@ def _normalize_facet(value: Any) -> str:
     return _FACET_NON_ALNUM_RE.sub("_", text).strip("_")
 
 
-def _normalize_update_kind(value: Any) -> str:
+def _normalize_update_kind(
+    value: Any,
+    *,
+    trace_id: UUID | str | None = None,
+    session_id: str | None = None,
+) -> str:
     """Return a valid update_kind, defaulting off-vocabulary values to "new" (FRE-712).
 
     Args:
         value: The raw ``update_kind`` field from the model.
+        trace_id: Originating capture's trace_id, for the fail-open signal (FRE-997).
+        session_id: Originating capture's session_id, for the fail-open signal.
 
     Returns:
         One of "new"/"correction"/"evolution".
     """
     candidate = str(value or "").strip().lower()
-    return candidate if candidate in _VALID_UPDATE_KINDS else "new"
+    if candidate in _VALID_UPDATE_KINDS:
+        return candidate
+    _log_fail_open_default(
+        field_name="update_kind",
+        rejected_value=candidate,
+        default_value="new",
+        trace_id=trace_id,
+        session_id=session_id,
+    )
+    return "new"
 
 
-def _normalize_description_update_kind(value: Any) -> str:
+def _normalize_description_update_kind(
+    value: Any,
+    *,
+    trace_id: UUID | str | None = None,
+    session_id: str | None = None,
+) -> str:
     """Return a valid per-entity description signal, defaulting off-vocabulary to "new" (FRE-725).
 
     Mirrors :func:`_normalize_update_kind` for the World-fact description enrichment/correction
@@ -474,12 +542,23 @@ def _normalize_description_update_kind(value: Any) -> str:
 
     Args:
         value: The raw ``description_update_kind`` field from the model.
+        trace_id: Originating capture's trace_id, for the fail-open signal (FRE-997).
+        session_id: Originating capture's session_id, for the fail-open signal.
 
     Returns:
         One of "new"/"enrichment"/"correction".
     """
     candidate = str(value or "").strip().lower()
-    return candidate if candidate in _VALID_DESCRIPTION_UPDATE_KINDS else "new"
+    if candidate in _VALID_DESCRIPTION_UPDATE_KINDS:
+        return candidate
+    _log_fail_open_default(
+        field_name="description_update_kind",
+        rejected_value=candidate,
+        default_value="new",
+        trace_id=trace_id,
+        session_id=session_id,
+    )
+    return "new"
 
 
 def _build_provenance(
@@ -536,7 +615,12 @@ def _coerce_mastery(value: Any) -> float | None:
     return max(0.0, min(1.0, mastery))
 
 
-def _normalize_entity_class(entity: dict[str, Any]) -> str:
+def _normalize_entity_class(
+    entity: dict[str, Any],
+    *,
+    trace_id: UUID | str | None = None,
+    session_id: str | None = None,
+) -> str:
     """Return a valid entity class, defaulting to World (fail-open, ADR-0115 D4).
 
     A missing or invalid class fails **open** to ``World`` (visible to the tutor).
@@ -546,6 +630,8 @@ def _normalize_entity_class(entity: dict[str, Any]) -> str:
 
     Args:
         entity: An extracted entity dict.
+        trace_id: Originating capture's trace_id, for the fail-open signal (FRE-997).
+        session_id: Originating capture's session_id, for the fail-open signal.
 
     Returns:
         One of ``World`` / ``Personal``.
@@ -553,18 +639,35 @@ def _normalize_entity_class(entity: dict[str, Any]) -> str:
     candidate = str(entity.get("class", "")).strip().capitalize()
     if candidate in _VALID_ENTITY_CLASSES:
         return candidate
+    _log_fail_open_default(
+        field_name="class",
+        rejected_value=candidate,
+        default_value="World",
+        trace_id=trace_id,
+        session_id=session_id,
+    )
     return "World"
 
 
-def _normalize_output_kind(entity: dict[str, Any]) -> str:
+def _normalize_output_kind(
+    entity: dict[str, Any],
+    *,
+    trace_id: UUID | str | None = None,
+    session_id: str | None = None,
+) -> str:
     """Return a valid output_kind, defaulting to knowledge (fail-open, ADR-0115 D4).
 
     A missing or invalid ``output_kind`` fails **open** to ``knowledge`` — an
     uncertain item is kept visible to the tutor rather than silently routed to
-    ``ephemeral``/``finding`` on a hedging or malformed model response.
+    ``ephemeral``/``finding`` on a hedging or malformed model response. This is
+    ADR-0115's routing axis (FRE-997) — a wrong guess here routes the item as
+    ``knowledge`` regardless, so this is the fail-open signal the audit called
+    the consequential one.
 
     Args:
         entity: An extracted entity dict.
+        trace_id: Originating capture's trace_id, for the fail-open signal (FRE-997).
+        session_id: Originating capture's session_id, for the fail-open signal.
 
     Returns:
         One of ``knowledge`` / ``ephemeral`` / ``finding``.
@@ -572,6 +675,13 @@ def _normalize_output_kind(entity: dict[str, Any]) -> str:
     candidate = str(entity.get("output_kind", "")).strip().lower()
     if candidate in _VALID_OUTPUT_KINDS:
         return candidate
+    _log_fail_open_default(
+        field_name="output_kind",
+        rejected_value=candidate,
+        default_value="knowledge",
+        trace_id=trace_id,
+        session_id=session_id,
+    )
     return "knowledge"
 
 
@@ -608,12 +718,14 @@ def _finalize_extraction(
     )
 
     for entity in result.get("entities", []):
-        entity["class"] = _normalize_entity_class(entity)
-        entity["output_kind"] = _normalize_output_kind(entity)
+        entity["class"] = _normalize_entity_class(entity, trace_id=trace_id, session_id=session_id)
+        entity["output_kind"] = _normalize_output_kind(
+            entity, trace_id=trace_id, session_id=session_id
+        )
         # FRE-725: validated per-entity description enrichment/correction signal (Python owns
         # defaulting, like class) so the correction gate keys on a stable, in-vocabulary value.
         entity["description_update_kind"] = _normalize_description_update_kind(
-            entity.get("description_update_kind")
+            entity.get("description_update_kind"), trace_id=trace_id, session_id=session_id
         )
 
     stances = list(result.get("stances", []))
@@ -637,7 +749,9 @@ def _finalize_extraction(
         # defaulting, like class) so supersession keys on a stable facet and labels
         # correction-vs-evolution from an explicit signal rather than a heuristic.
         claim["facet"] = _normalize_facet(claim.get("facet"))
-        claim["update_kind"] = _normalize_update_kind(claim.get("update_kind"))
+        claim["update_kind"] = _normalize_update_kind(
+            claim.get("update_kind"), trace_id=trace_id, session_id=session_id
+        )
         claim["provenance"] = dict(provenance)
     result["claims"] = claims
 

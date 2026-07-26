@@ -2266,6 +2266,19 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    session_digest_structured_output: bool = Field(
+        default=True,
+        alias="AGENT_SESSION_DIGEST_STRUCTURED_OUTPUT",
+        description=(
+            "Hold the digest model to the wire schema as a forced tool call rather than "
+            "asking for JSON in prose (FRE-996). Eliminates fence-wrapped and "
+            "trailing-prose replies structurally; it does NOT prevent truncation, which "
+            "is a sizing question owned by FRE-993/FRE-994. Cloud path only — the local "
+            "path's tool handling is outside this pilot's evidence. "
+            "Env var: AGENT_SESSION_DIGEST_STRUCTURED_OUTPUT"
+        ),
+    )
+
     session_digest_target_tokens: int = Field(
         default=180,
         ge=1,

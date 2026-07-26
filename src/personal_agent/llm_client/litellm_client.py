@@ -748,5 +748,9 @@ class LiteLLMClient:
             usage=usage,
             response_id=response_id,
             cost_usd=_cost_usd or 0.0,
+            # Surfaced so a caller can tell a reply cut off at the ceiling from a
+            # complete one (FRE-996). Reachable via `raw` before this, which meant in
+            # practice nobody read it and truncation arrived disguised as a parse error.
+            finish_reason=choice.finish_reason,
             raw=response.model_dump() if hasattr(response, "model_dump") else {},
         )

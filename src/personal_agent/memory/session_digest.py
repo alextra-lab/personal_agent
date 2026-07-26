@@ -100,6 +100,12 @@ class SummaryFailureReason(StrEnum):
     SCHEMA_INVALID = "schema_invalid"
     SPAN_VALIDATION_FAILED = "span_validation_failed"
     DIGEST_OVER_BUDGET = "digest_over_budget"
+    # The reply was cut off at the output ceiling (FRE-996). Split out of
+    # SCHEMA_INVALID, where it was previously indistinguishable from format drift: a
+    # truncated JSON fragment fails parsing with "unexpected end of data", so a sizing
+    # fault was being counted, and remediated, as a formatting fault. Deterministic for
+    # a fixed input and ceiling, so it keeps the terminal eligibility it already had.
+    OUTPUT_TRUNCATED = "output_truncated"
     # Transient — always retryable, never terminal.
     BUDGET_DENIED = "budget_denied"
     MODEL_ERROR = "model_error"
@@ -123,6 +129,10 @@ TERMINAL_ELIGIBLE_REASONS: frozenset[str] = frozenset(
         SummaryFailureReason.SCHEMA_INVALID,
         SummaryFailureReason.SPAN_VALIDATION_FAILED,
         SummaryFailureReason.DIGEST_OVER_BUDGET,
+        # Membership preserves behaviour rather than changing it: truncation used to
+        # arrive as SCHEMA_INVALID, which is terminal-eligible. Omitting it here would
+        # leave a deterministically-truncating session eligible for every future sweep.
+        SummaryFailureReason.OUTPUT_TRUNCATED,
     }
 )
 

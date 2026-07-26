@@ -706,6 +706,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 log.info("neo4j_session_id_index_ensured")
             except Exception as sid_idx_e:
                 log.warning("neo4j_session_id_index_setup_failed", error=str(sid_idx_e))
+            # Ensure Turn.session_id index (FRE-992). Idempotent; the digest sweep
+            # counts a session's Turn nodes on every pass to decide whether its
+            # captures were read whole, and link_session_turns already matches Turn by
+            # session_id — both are label scans without it.
+            try:
+                await memory_service.ensure_turn_session_id_index()
+                log.info("neo4j_turn_session_id_index_ensured")
+            except Exception as turn_idx_e:
+                log.warning("neo4j_turn_session_id_index_setup_failed", error=str(turn_idx_e))
             # Bootstrap owner identity (FRE-213 / ADR-0052) — idempotent, no-op when empty
             if settings.owner_name and settings.agent_owner_email:
                 try:

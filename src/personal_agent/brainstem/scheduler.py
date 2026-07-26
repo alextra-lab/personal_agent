@@ -140,6 +140,11 @@ class BrainstemScheduler:
         self._summary_sweep_in_progress = False
         self.metrics_daemon = metrics_daemon
 
+        # Retained (not merely forwarded) because the session-digest sweep reads the
+        # durable captures index through it — the local capture directory is not
+        # durable in the gateway container (FRE-992).
+        self._lifecycle_es_client = lifecycle_es_client
+
         # Data lifecycle (Phase 2.3)
         self.lifecycler = DataLifecycleManager(es_client=lifecycle_es_client)
         self._last_disk_check: datetime | None = None
@@ -462,24 +467,25 @@ class BrainstemScheduler:
                 generation, the write, and every structured log below.
 
         Returns:
-            Counts of ``considered``, ``generated``, ``skipped``, ``no_captures``,
-            ``failed`` and ``refused``. Returned rather than logged alone so tests
-            and the post-deploy population check read the same numbers.
+            Counts of ``considered``, ``generated``, ``skipped``,
+            ``evidence_unavailable``, ``failed`` and ``refused``. Returned rather than
+            logged alone so tests and the post-deploy population check read the same
+            numbers.
 
-            ``no_captures`` is broken out from ``skipped`` deliberately. Both mark a
-            session clean, but they mean opposite things: a floor skip is "this
-            session does not warrant a digest", whereas ``no_captures`` is "its
-            evidence is no longer on disk". Retention purges captures while
-            ``Session`` nodes persist indefinitely, so a legacy session is normally
-            unregenerable — and folding the two together would let a sweep that
-            digested *nothing* report the same shape as one that correctly applied
-            the floor.
+            ``evidence_unavailable`` is broken out from ``skipped`` deliberately, and
+            the two now have **opposite** effects on the graph (FRE-992). A floor skip
+            is "this session does not warrant a digest" and marks it clean; evidence
+            unavailable is "the producer could not read what this session was made of"
+            and records a *failure*. They used to write identical graph state, which is
+            how 46 sessions carrying 2-17 turns were retired without a digest and
+            without a trace: the sweep counted them separately while the graph could
+            not tell them apart.
         """
         result = {
             "considered": 0,
             "generated": 0,
             "skipped": 0,
-            "no_captures": 0,
+            "evidence_unavailable": 0,
             "failed": 0,
             "refused": 0,
         }
@@ -519,9 +525,13 @@ class BrainstemScheduler:
         self, row: dict[str, Any], *, result: dict[str, int], trace_id: str
     ) -> None:
         """Regenerate and publish one session's digest, updating ``result`` in place."""
-        from personal_agent.captains_log.capture import read_session_captures  # noqa: PLC0415
-        from personal_agent.memory.session_digest import SessionSummaryStatus  # noqa: PLC0415
+        from personal_agent.captains_log.capture import load_session_captures  # noqa: PLC0415
+        from personal_agent.memory.session_digest import (  # noqa: PLC0415
+            SessionSummaryStatus,
+            SummaryFailureReason,
+        )
         from personal_agent.second_brain.session_summary import (  # noqa: PLC0415
+            MIN_TURNS_FOR_DIGEST,
             generate_session_digest,
         )
 
@@ -541,16 +551,69 @@ class BrainstemScheduler:
             )
             return
 
-        captures = read_session_captures(
-            session_id, started_at=started_at, ended_at=expected_ended_at
+        read = await load_session_captures(
+            session_id,
+            started_at=started_at,
+            ended_at=expected_ended_at,
+            es_client=self._lifecycle_es_client,
+            trace_id=trace_id,
         )
-        if not captures:
-            log.info(
-                "session_summary_no_captures_on_disk",
+        captures = list(read.captures)
+
+        # Fail closed on any read that cannot be shown whole (FRE-992, ADR-0124 AC-8).
+        # Three distinct conditions, one verdict:
+        #   * the read itself is unproven — a store was unreachable, a capture would
+        #     not parse, or the query hit its size bound;
+        #   * the graph knows of more turns than both stores together hold;
+        #   * nothing was found at all, which asserts a conclusion about content the
+        #     producer never saw. This is the case that retired 46 sessions.
+        # None of them may advance freshness. Marking a session clean here writes
+        # "the projection ran" over a projection that could not run, and nothing
+        # re-examines a session once that stamp is set.
+        graph_turn_count = int(row.get("graph_turn_count") or 0)
+        if not read.complete or not captures or len(captures) < graph_turn_count:
+            log.warning(
+                "session_summary_evidence_unavailable",
                 session_id=session_id,
                 trace_id=trace_id,
-                reason="captures purged by retention; session cannot be regenerated",
+                capture_count=len(captures),
+                graph_turn_count=graph_turn_count,
+                source=read.source.value,
+                unreadable=read.unreadable,
+                stores_unavailable=read.stores_unavailable,
+                read_complete=read.complete,
             )
+            # Only a *deterministic* shortfall spends the retry budget. A store that
+            # could not be reached is transient by nature — the same read may succeed
+            # on the next sweep — so it records the failure loudly but leaves the
+            # session retryable forever, exactly as a budget denial does. Charging an
+            # outage to the bound would let a ten-minute Elasticsearch restart retire
+            # every session swept during it, which is this ticket's own defect wearing
+            # a different mask.
+            recorded = await self.memory_service.record_session_summary_failure(
+                session_id,
+                expected_ended_at=expected_ended_at,
+                failure_reason=SummaryFailureReason.EVIDENCE_UNAVAILABLE.value,
+                evidence_failure=not read.stores_unavailable,
+                trace_id=trace_id,
+            )
+            # Counted on the write, not on the verdict, so the counters still partition
+            # `considered` — a session that took a turn mid-read was not written off,
+            # it was refused, and the next sweep sees it afresh.
+            result["evidence_unavailable" if recorded else "refused"] += 1
+            return
+
+        # Below the floor on a read that IS whole — a positively-established
+        # single-turn session, which ADR-0124 D2 deliberately gives no digest.
+        if len(captures) < MIN_TURNS_FOR_DIGEST:
+            accepted = await self.memory_service.mark_session_projection_clean(
+                session_id,
+                expected_ended_at=expected_ended_at,
+                generated_at=datetime.now(timezone.utc),
+                trace_id=trace_id,
+            )
+            result["skipped" if accepted else "refused"] += 1
+            return
 
         outcome = await generate_session_digest(
             captures, session_id=session_id, ended_at=expected_ended_at, trace_id=trace_id
@@ -569,12 +632,12 @@ class BrainstemScheduler:
             return
 
         if outcome.status is SessionSummaryStatus.SKIPPED_BELOW_FLOOR:
-            # No digest to publish. Advance freshness ONLY — never write
-            # label/digest=None over a session that already carries a good digest,
-            # and never write a deflated recount over a correct turn_count. Captures
-            # age out under retention while Session nodes live forever, so "fewer
-            # captures than turns" is the normal state of an older session, not a
-            # sign that it had none.
+            # Reachable only when the producer declines for its own reasons (the
+            # settings guard it re-checks for non-scheduled callers); the turn floor
+            # itself is applied above, against a read already proven whole. Advance
+            # freshness ONLY — never write label/digest=None over a session that
+            # already carries a good digest, and never write a deflated recount over a
+            # correct turn_count.
             accepted = await self.memory_service.mark_session_projection_clean(
                 session_id,
                 expected_ended_at=expected_ended_at,
@@ -582,7 +645,7 @@ class BrainstemScheduler:
                 trace_id=trace_id,
             )
             if accepted:
-                result["no_captures" if not captures else "skipped"] += 1
+                result["skipped"] += 1
         else:
             accepted = await self.memory_service.write_session_digest(
                 session_id,

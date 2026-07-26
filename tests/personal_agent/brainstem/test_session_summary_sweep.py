@@ -25,8 +25,9 @@ import pytest
 
 from personal_agent.brainstem import scheduler as sched
 from personal_agent.brainstem.scheduler import BrainstemScheduler, _parse_graph_timestamp
-from personal_agent.captains_log.capture import TaskCapture
+from personal_agent.captains_log.capture import CaptureSource, SessionCaptureRead, TaskCapture
 from personal_agent.memory.session_digest import (
+    TERMINAL_ELIGIBLE_REASONS,
     DigestItem,
     SessionDigest,
     SessionSummaryOutcome,
@@ -88,13 +89,26 @@ class _FakeMemory:
             if fresh is not None and fresh >= s["ended_at"]:
                 continue  # not dirty
             reason = s.get("summary_failure_reason")
+            # Imported, never re-listed: a hard-coded copy silently omitted
+            # digest_over_budget, and would omit every reason added after it.
             if (
-                reason in {"oversized_input", "schema_invalid", "span_validation_failed"}
+                reason in TERMINAL_ELIGIBLE_REASONS
                 and s.get("summary_attempt_count", 0) >= max_attempts
             ):
                 continue  # recorded terminal failure
+            # Unreadable evidence is bounded on its OWN counter (FRE-992), so an
+            # unrelated model error cannot spend the budget that retires it.
+            if s.get("summary_evidence_failure_count", 0) >= max_attempts:
+                continue
             rows.append(
-                {"session_id": sid, "started_at": s["started_at"], "ended_at": s["ended_at"]}
+                {
+                    "session_id": sid,
+                    "started_at": s["started_at"],
+                    "ended_at": s["ended_at"],
+                    # Counted from Turn nodes in production — a lower bound on the
+                    # turns that genuinely existed, NOT the s.turn_count property.
+                    "graph_turn_count": s.get("graph_turns", 0),
+                }
             )
         return sorted(rows, key=lambda r: r["ended_at"])[:limit]
 
@@ -118,6 +132,7 @@ class _FakeMemory:
         session["turn_count"] = turn_count
         session["summary_failure_reason"] = None
         session["summary_attempt_count"] = 0
+        session["summary_evidence_failure_count"] = 0
         self.writes.append({"session_id": session_id, "label": label, "digest": digest})
         return True
 
@@ -135,27 +150,46 @@ class _FakeMemory:
         session["summary_generated_at"] = generated_at
         session["summary_failure_reason"] = None
         session["summary_attempt_count"] = 0
+        session["summary_evidence_failure_count"] = 0
         # Deliberately touches neither session_label/session_digest nor turn_count.
         return True
 
     async def record_session_summary_failure(
-        self, session_id: str, *, expected_ended_at: datetime, failure_reason: str, trace_id=None
+        self,
+        session_id: str,
+        *,
+        expected_ended_at: datetime,
+        failure_reason: str,
+        evidence_failure: bool = False,
+        trace_id=None,
     ) -> bool:
         session = self.sessions[session_id]
         if session["ended_at"] != expected_ended_at:
             return False
         session["summary_failure_reason"] = failure_reason
         session["summary_attempt_count"] = session.get("summary_attempt_count", 0) + 1
+        if evidence_failure:
+            session["summary_evidence_failure_count"] = (
+                session.get("summary_evidence_failure_count", 0) + 1
+            )
         self.failures.append({"session_id": session_id, "reason": failure_reason})
         return True
 
 
-def _session(*, ended_minutes_ago: float, turns: int = 3) -> dict[str, Any]:
+def _session(*, ended_minutes_ago: float, turns: int = 3, graph_turns: int = 0) -> dict[str, Any]:
+    """One graph session row.
+
+    ``turns`` is the ``turn_count`` *property* — batch-local and unreliable, which is
+    why the sweep never reads it. ``graph_turns`` is the count of ``Turn`` nodes, the
+    completeness oracle; it defaults to 0 because a legacy session may genuinely have
+    none, and a zero oracle must never by itself condemn a read.
+    """
     ended = _now() - timedelta(minutes=ended_minutes_ago)
     return {
         "started_at": ended - timedelta(minutes=10),
         "ended_at": ended,
         "turn_count": turns,
+        "graph_turns": graph_turns,
         "summary_generated_at": None,
     }
 
@@ -173,24 +207,54 @@ def _patch_producer(
     outcome: SessionSummaryOutcome | None = None,
     *,
     captures_by_session: dict[str, list[TaskCapture]] | None = None,
+    complete: bool = True,
 ) -> list[dict[str, Any]]:
-    """Patch the producer and the capture reader; return the recorded generation calls."""
+    """Patch the producer and the capture reader; return the recorded generation calls.
+
+    ``complete`` models a read the stores could not vouch for — an unreachable
+    Elasticsearch, an unparseable capture, or a query that hit its size bound.
+    """
     calls: list[dict[str, Any]] = []
 
     async def fake_generate(captures, *, session_id, ended_at, trace_id="x"):
         calls.append({"session_id": session_id, "captures": list(captures), "ended_at": ended_at})
         return outcome or _generated()
 
-    def fake_read(session_id, *, started_at, ended_at, limit=1000):
+    async def fake_load(session_id, *, started_at, ended_at, es_client, limit=1000, trace_id=None):
         if captures_by_session is not None:
-            return captures_by_session.get(session_id, [])
-        return [_capture(session_id, started_at), _capture(session_id, ended_at)]
+            found = captures_by_session.get(session_id, [])
+        else:
+            found = [_capture(session_id, started_at), _capture(session_id, ended_at)]
+        return SessionCaptureRead(
+            captures=tuple(found),
+            source=CaptureSource.ELASTICSEARCH if found else CaptureSource.NONE,
+            unreadable=0 if complete else 1,
+            unattributable=0,
+            stores_unavailable=False,
+            complete=complete,
+        )
 
     monkeypatch.setattr(
         "personal_agent.second_brain.session_summary.generate_session_digest", fake_generate
     )
-    monkeypatch.setattr("personal_agent.captains_log.capture.read_session_captures", fake_read)
+    monkeypatch.setattr("personal_agent.captains_log.capture.load_session_captures", fake_load)
     return calls
+
+
+def _patch_load(monkeypatch: pytest.MonkeyPatch, captures: list[TaskCapture]) -> None:
+    """Patch only the capture reader, leaving the producer alone."""
+
+    async def fake_load(session_id, *, started_at, ended_at, es_client, limit=1000, trace_id=None):
+        return SessionCaptureRead(
+            captures=tuple(captures),
+            source=CaptureSource.ELASTICSEARCH,
+            unreadable=0,
+            unattributable=0,
+            stores_unavailable=False,
+            complete=True,
+        )
+
+    monkeypatch.setattr("personal_agent.captains_log.capture.load_session_captures", fake_load)
 
 
 # --------------------------------------------------------------------------
@@ -302,10 +366,13 @@ async def test_below_floor_session_does_not_stay_dirty_forever(
     pass — while AC-7 forbids giving it a digest. The reconciliation is that
     `summary_generated_at` means "the projection ran", not "a digest exists".
     """
-    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30, turns=1)})
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30, turns=1, graph_turns=1)})
     scheduler.memory_service = memory  # type: ignore[assignment]
+    # One turn, and the graph agrees there was only ever one — a positively-established
+    # single-turn session, not a session whose evidence went missing.
     _patch_producer(
-        monkeypatch, SessionSummaryOutcome(status=SessionSummaryStatus.SKIPPED_BELOW_FLOOR)
+        monkeypatch,
+        captures_by_session={"sess-1": [_capture("sess-1", _now() - timedelta(minutes=30))]},
     )
 
     await scheduler.run_session_summary_sweep(trace_id="t-1")
@@ -422,9 +489,12 @@ async def test_write_refused_when_a_turn_lands_mid_generation(
         "personal_agent.second_brain.session_summary.generate_session_digest",
         generate_then_a_turn_lands,
     )
-    monkeypatch.setattr(
-        "personal_agent.captains_log.capture.read_session_captures",
-        lambda sid, *, started_at, ended_at, limit=1000: [_capture(sid, started_at)],
+    _patch_load(
+        monkeypatch,
+        [
+            _capture("sess-1", _now() - timedelta(minutes=40)),
+            _capture("sess-1", _now() - timedelta(minutes=35)),
+        ],
     )
 
     result = await scheduler.run_session_summary_sweep(trace_id="t-1")
@@ -492,36 +562,238 @@ async def test_sweep_without_a_memory_service_is_a_no_op(
         "considered": 0,
         "generated": 0,
         "skipped": 0,
-        "no_captures": 0,
+        "evidence_unavailable": 0,
         "failed": 0,
         "refused": 0,
     }
 
 
 @pytest.mark.asyncio
-async def test_unregenerable_session_is_counted_separately_from_a_floor_skip(
+async def test_a_session_read_as_empty_is_never_marked_clean(
     scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Retention purges captures while Session nodes persist — measured on the live
-    graph at 59/59 multi-turn sessions unregenerable (FRE-947).
+    """FRE-992 — this REVERSES the FRE-947 decision that stood here.
 
-    Both outcomes mark the session clean, but conflating them would let a sweep that
-    digested nothing report the same shape as one that correctly applied the floor.
+    That decision marked a no-captures session clean so it would not be re-read
+    forever, on the reading that its evidence had been purged by retention. The live
+    audit falsified the premise: the captures had not been purged at all, they were in
+    Elasticsearch, and the producer was reading a non-durable directory. Forty-six
+    sessions carrying 2-17 turns were permanently retired by that stamp.
+
+    A clean stamp asserts "the projection ran". A read that found nothing cannot
+    support that claim about content it never saw. The original concern — do not
+    re-read forever — is now met by a bounded counter rather than by a false stamp.
     """
     memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30)})
     scheduler.memory_service = memory  # type: ignore[assignment]
-    _patch_producer(
+    _patch_producer(monkeypatch, captures_by_session={"sess-1": []})
+
+    result = await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert result["evidence_unavailable"] == 1
+    assert result["skipped"] == 0
+    session = memory.sessions["sess-1"]
+    assert session["summary_generated_at"] is None, (
+        "an unread session must not wear a clean stamp — this is the FRE-992 defect"
+    )
+    assert session["summary_failure_reason"] == "evidence_unavailable"
+    assert session["summary_evidence_failure_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_evidence_failures_are_bounded_and_then_excluded(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bounded, or FRE-992's fix becomes FRE-987's unbounded retry loop.
+
+    Convergence is the whole reason the reversed decision above is safe: the session is
+    retried while its evidence might return (a transient Elasticsearch outage), then
+    stops — carrying a stated reason an operator can act on, rather than a clean stamp
+    that hides it.
+    """
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+    _patch_producer(monkeypatch, captures_by_session={"sess-1": []})
+
+    for _ in range(4):  # max_attempts is 2
+        await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert memory.sessions["sess-1"]["summary_evidence_failure_count"] == 2
+    assert await memory.find_dirty_idle_sessions(idle_threshold_seconds=_IDLE, max_attempts=2) == []
+
+
+@pytest.mark.asyncio
+async def test_a_store_outage_never_spends_the_retry_budget(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bound is for evidence that is genuinely gone, not for a store being down.
+
+    With a 300s sweep and a bound of 2, a ten-minute Elasticsearch restart covers two
+    sweeps. If an outage spent the budget, every session swept during it would be
+    retired permanently — this ticket's own defect, relocated from a clean stamp to a
+    silent exclusion from the candidate set. An outage is transient, so it records the
+    failure loudly and stays retryable, exactly as a budget denial does.
+    """
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+
+    async def unreachable(
+        session_id, *, started_at, ended_at, es_client, limit=1000, trace_id=None
+    ):
+        return SessionCaptureRead(
+            captures=(),
+            source=CaptureSource.NONE,
+            unreadable=0,
+            unattributable=0,
+            stores_unavailable=True,
+            complete=False,
+        )
+
+    monkeypatch.setattr("personal_agent.captains_log.capture.load_session_captures", unreachable)
+
+    for _ in range(5):
+        await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    session = memory.sessions["sess-1"]
+    assert session["summary_failure_reason"] == "evidence_unavailable", "loud, every time"
+    assert session.get("summary_evidence_failure_count", 0) == 0, "an outage is not a write-off"
+    still_dirty = await memory.find_dirty_idle_sessions(
+        idle_threshold_seconds=_IDLE, max_attempts=2
+    )
+    assert [r["session_id"] for r in still_dirty] == ["sess-1"], (
+        "the session must recover on its own once the store comes back"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unrelated_model_error_does_not_shorten_the_evidence_bound(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reason `EVIDENCE_UNAVAILABLE` is not in TERMINAL_ELIGIBLE_REASONS.
+
+    `summary_attempt_count` is spent by every reason while terminality tests only the
+    *current* one. Had this reason been listed there, two prior model errors would
+    terminalise the session on its FIRST unreadable sweep — retiring it permanently
+    over a transient outage, which is precisely the defect being fixed.
+    """
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30)})
+    memory.sessions["sess-1"]["summary_attempt_count"] = 2  # two prior model errors
+    memory.sessions["sess-1"]["summary_failure_reason"] = "model_error"
+    scheduler.memory_service = memory  # type: ignore[assignment]
+    _patch_producer(monkeypatch, captures_by_session={"sess-1": []})
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert memory.sessions["sess-1"]["summary_evidence_failure_count"] == 1
+    still_dirty = await memory.find_dirty_idle_sessions(
+        idle_threshold_seconds=_IDLE, max_attempts=2
+    )
+    assert [r["session_id"] for r in still_dirty] == ["sess-1"], (
+        "one evidence failure must not exhaust a budget spent by other reasons"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_read_the_stores_cannot_vouch_for_does_not_generate(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail closed: an unproven read never reaches the model (ADR-0124 AC-8).
+
+    Captures were found, and enough of them to clear the floor — but a store was
+    unreachable or a capture would not parse, so the transcript cannot be asserted
+    whole. Generating here would publish a digest, marked clean, built from evidence
+    the producer knew was partial.
+    """
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+    calls = _patch_producer(monkeypatch, complete=False)
+
+    result = await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert calls == [], "no model call on an unproven read"
+    assert result["evidence_unavailable"] == 1
+    assert memory.sessions["sess-1"]["summary_generated_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_read_short_of_the_graphs_own_turn_count_does_not_generate(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stores answered cleanly, but the graph knows of turns they do not hold.
+
+    A ``Turn`` node is proof its capture existed, so this is a positive demonstration
+    of missing evidence rather than an inference from silence.
+    """
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30, graph_turns=5)})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+    calls = _patch_producer(
         monkeypatch,
-        SessionSummaryOutcome(status=SessionSummaryStatus.SKIPPED_BELOW_FLOOR),
-        captures_by_session={"sess-1": []},
+        captures_by_session={
+            "sess-1": [_capture("sess-1", _now() - timedelta(minutes=40 - i)) for i in range(3)]
+        },
     )
 
     result = await scheduler.run_session_summary_sweep(trace_id="t-1")
 
-    assert result["no_captures"] == 1
-    assert result["skipped"] == 0
-    # Still marked clean: a session whose evidence is gone must not be re-read forever.
-    assert memory.sessions["sess-1"]["summary_generated_at"] is not None
+    assert calls == [], "3 of 5 turns is not a transcript"
+    assert result["evidence_unavailable"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_captures_are_only_in_elasticsearch_is_digested(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 46-session case end to end (AC-8, the completeness criterion).
+
+    Seventeen turns, nothing on the local disk, all seventeen in the durable store. The
+    old reader saw zero and retired the session; the prompt must now carry all 17.
+    """
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30, graph_turns=17)})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+    turns = [
+        _capture("sess-1", _now() - timedelta(minutes=90 - i), text=f"turn {i}") for i in range(17)
+    ]
+    calls = _patch_producer(monkeypatch, captures_by_session={"sess-1": turns})
+
+    result = await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert result["generated"] == 1
+    assert len(calls[0]["captures"]) == 17, "every turn of the session must reach the prompt"
+    assert memory.sessions["sess-1"]["turn_count"] == 17
+
+
+@pytest.mark.asyncio
+async def test_a_refused_evidence_failure_record_counts_as_refused(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mirrors the success path's refusal accounting: the session advanced mid-read."""
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+
+    async def load_then_a_turn_lands(
+        session_id, *, started_at, ended_at, es_client, limit=1000, trace_id=None
+    ):
+        memory.sessions[session_id]["ended_at"] = _now() - timedelta(minutes=1)
+        return SessionCaptureRead(
+            captures=(),
+            source=CaptureSource.NONE,
+            unreadable=0,
+            unattributable=0,
+            stores_unavailable=False,
+            complete=True,
+        )
+
+    monkeypatch.setattr(
+        "personal_agent.captains_log.capture.load_session_captures", load_then_a_turn_lands
+    )
+
+    result = await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert result["refused"] == 1
+    assert result["evidence_unavailable"] == 0, (
+        "a refused write is not a write-off; the counters must partition `considered`"
+    )
+    assert "summary_failure_reason" not in memory.sessions["sess-1"], "nothing was recorded"
 
 
 @pytest.mark.asyncio
@@ -530,16 +802,19 @@ async def test_resumed_session_with_purged_captures_keeps_its_digest(
 ) -> None:
     """The regression the pre-PR review caught, end to end.
 
-    A 6-turn session was digested weeks ago. Retention has since purged its captures.
-    The user resumes it with one new turn, so ended_at advances and it is dirty
-    again — but only the new turn's capture survives on disk, putting the read below
-    the floor. The sweep must advance freshness WITHOUT erasing the good digest or
-    shrinking turn_count from 6.
+    A 6-turn session was digested weeks ago. Its captures are no longer retrievable.
+    The user resumes it with one new turn, so ended_at advances and it is dirty again —
+    but only that one turn comes back from the stores, while the graph still holds six
+    ``Turn`` nodes. The sweep must not erase the good digest or shrink turn_count.
 
-    Before the fix this wrote label=None, digest=None, turn_count=1 — the clobber bug
-    ADR-0124 exists to remove, reintroduced in the fields that replaced it.
+    Before the FRE-947 fix this wrote label=None, digest=None, turn_count=1 — the
+    clobber bug ADR-0124 exists to remove, reintroduced in the fields that replaced it.
+    FRE-992 changes only the *freshness* half of the outcome: five turns the graph can
+    prove existed did not come back, so this is recorded as unreadable evidence rather
+    than stamped clean. The stored digest surviving untouched is the invariant, and it
+    holds on both paths.
     """
-    session = _session(ended_minutes_ago=30, turns=6)
+    session = _session(ended_minutes_ago=30, turns=6, graph_turns=6)
     session["summary_generated_at"] = _now() - timedelta(days=14)
     session["session_label"] = "Elasticsearch shard triage"
     session["session_digest"] = SessionDigest(
@@ -550,44 +825,40 @@ async def test_resumed_session_with_purged_captures_keeps_its_digest(
 
     _patch_producer(
         monkeypatch,
-        SessionSummaryOutcome(status=SessionSummaryStatus.SKIPPED_BELOW_FLOOR),
         captures_by_session={"sess-1": [_capture("sess-1", _now() - timedelta(minutes=30))]},
     )
 
-    await scheduler.run_session_summary_sweep(trace_id="t-1")
+    result = await scheduler.run_session_summary_sweep(trace_id="t-1")
 
     survived = memory.sessions["sess-1"]
     assert survived["session_label"] == "Elasticsearch shard triage", "digest label erased"
     assert survived["session_digest"] is not None, "a good digest was clobbered"
-    assert survived["turn_count"] == 6, "turn_count shrank to the purged-capture recount"
-    # ...and it is still marked clean, so it is not re-swept forever.
-    assert survived["summary_generated_at"] > _now() - timedelta(minutes=1)
+    assert survived["turn_count"] == 6, "turn_count shrank to the partial recount"
+    assert result["evidence_unavailable"] == 1
+    # Freshness does NOT advance — a failure record is inert (AC-4).
+    assert survived["summary_generated_at"] < _now() - timedelta(days=13)
 
 
 @pytest.mark.asyncio
 async def test_first_sweep_does_not_zero_turn_count_across_the_legacy_corpus(
     scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Measured live: all 59 multi-turn graph sessions have zero captures on disk.
+    """Measured live: the legacy corpus reads as empty from the local directory.
 
-    On first deploy every one of them is dirty and unregenerable. Writing a recount
-    of 0 would destroy the correct turn_count for the whole corpus — and AC-7 could
-    not detect it, since AC-7 compares turn_count against a recount and both sides
-    would have been corrupted by the same write.
+    On first deploy every such session is dirty. Writing a recount of 0 would destroy
+    the correct turn_count for the whole corpus — and AC-7 could not detect it, since
+    AC-7 compares turn_count against a recount and both sides would have been corrupted
+    by the same write. Recording a failure touches neither.
     """
     memory = _FakeMemory(
         {f"sess-{i}": _session(ended_minutes_ago=60 + i, turns=3 + i) for i in range(5)}
     )
     scheduler.memory_service = memory  # type: ignore[assignment]
-    _patch_producer(
-        monkeypatch,
-        SessionSummaryOutcome(status=SessionSummaryStatus.SKIPPED_BELOW_FLOOR),
-        captures_by_session={},  # nothing on disk for any of them
-    )
+    _patch_producer(monkeypatch, captures_by_session={})  # nothing in either store
 
     result = await scheduler.run_session_summary_sweep(trace_id="t-1")
 
-    assert result["no_captures"] == 5
+    assert result["evidence_unavailable"] == 5
     for i in range(5):
         assert memory.sessions[f"sess-{i}"]["turn_count"] == 3 + i
 

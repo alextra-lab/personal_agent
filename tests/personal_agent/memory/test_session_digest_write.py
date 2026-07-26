@@ -334,7 +334,9 @@ async def test_failure_is_inert_and_loud() -> None:
     Stored digest and label unchanged; freshness does not advance; a failure event
     is emitted; the session stays eligible for retry.
     """
-    service, captured = _make_service_with_mock(single_returns={"attempts": 1})
+    service, captured = _make_service_with_mock(
+        single_returns={"attempts": 1, "evidence_attempts": 0}
+    )
 
     recorded = await service.record_session_summary_failure(
         "sess-1",
@@ -356,7 +358,9 @@ async def test_failure_is_inert_and_loud() -> None:
 @pytest.mark.asyncio
 async def test_failure_record_is_also_predicated_on_ended_at() -> None:
     """A failure record must not clobber a concurrent successful write."""
-    service, captured = _make_service_with_mock(single_returns={"attempts": 1})
+    service, captured = _make_service_with_mock(
+        single_returns={"attempts": 1, "evidence_attempts": 0}
+    )
 
     await service.record_session_summary_failure(
         "sess-1",
@@ -451,3 +455,123 @@ async def test_dirty_scan_excludes_only_terminal_failures() -> None:
         "a budget denial is transient by nature and must never be terminal"
     )
     assert "oversized_input" in params["terminal_reasons"]
+
+
+# --------------------------------------------------------------------------
+# FRE-992 — unreadable evidence is bounded on its own counter
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_evidence_unavailable_is_not_a_shared_counter_terminal_reason() -> None:
+    """It must be excluded on its OWN counter, not the shared attempt count.
+
+    ``summary_attempt_count`` is spent by every failure reason while terminality tests
+    only the *current* one. Listing this reason among the terminal-eligible ones would
+    let two unrelated model errors retire a session on its first unreadable sweep —
+    permanently writing it off over a transient outage, which is the FRE-992 defect.
+    """
+    service, captured = _make_service_with_mock()
+    service.driver.session.return_value.__aenter__.return_value.run.return_value.data = AsyncMock(
+        return_value=[]
+    )
+
+    await service.find_dirty_idle_sessions(idle_threshold_seconds=900.0, max_attempts=2)
+
+    cypher, params = captured[0]
+    assert SummaryFailureReason.EVIDENCE_UNAVAILABLE.value not in params["terminal_reasons"]
+    assert "coalesce(s.summary_evidence_failure_count, 0) < $max_attempts" in cypher
+
+
+@pytest.mark.asyncio
+async def test_dirty_scan_reports_a_turn_node_count_not_the_turn_count_property() -> None:
+    """``s.turn_count`` is overwritten with one consolidation batch's count.
+
+    ``Turn`` nodes are MERGE-d one per capture and accumulate, so counting them yields
+    a lower bound on the turns that genuinely existed — the only signal that can prove
+    evidence is missing without ever falsely accusing a complete read.
+    """
+    service, captured = _make_service_with_mock()
+    service.driver.session.return_value.__aenter__.return_value.run.return_value.data = AsyncMock(
+        return_value=[]
+    )
+
+    await service.find_dirty_idle_sessions(idle_threshold_seconds=900.0, max_attempts=2)
+
+    cypher = captured[0][0]
+    assert "OPTIONAL MATCH (t:Turn {session_id: s.session_id})" in cypher
+    assert "count(t) AS graph_turn_count" in cypher
+    assert "s.turn_count AS" not in cypher, "the batch-local property is not the oracle"
+    # The page is cut BEFORE the per-session Turn count, or the count runs once per
+    # candidate rather than once per returned row — O(dirty backlog x total turns)
+    # every sweep interval.
+    assert cypher.index("LIMIT $limit") < cypher.index("OPTIONAL MATCH"), (
+        "LIMIT must precede the aggregation, not follow it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_only_an_evidence_failure_bumps_the_evidence_counter() -> None:
+    service, captured = _make_service_with_mock(
+        single_returns={"attempts": 1, "evidence_attempts": 1}
+    )
+
+    await service.record_session_summary_failure(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        failure_reason=SummaryFailureReason.EVIDENCE_UNAVAILABLE.value,
+        evidence_failure=True,
+    )
+    await service.record_session_summary_failure(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        failure_reason=SummaryFailureReason.MODEL_ERROR.value,
+    )
+
+    assert captured[0][1]["evidence_failure"] is True
+    assert captured[1][1]["evidence_failure"] is False
+    # One statement, branching on the flag — so the shared counter always advances
+    # while the evidence counter advances only for its own reason.
+    assert "CASE WHEN $evidence_failure THEN 1 ELSE 0 END" in captured[0][0]
+
+
+@pytest.mark.asyncio
+async def test_both_success_paths_clear_the_evidence_counter() -> None:
+    """A session that becomes readable again must be fully rehabilitated."""
+    service, captured = _make_service_with_mock(single_returns={"session_id": "sess-1"})
+
+    await service.write_session_digest(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        generated_at=_ENDED_AT,
+        turn_count=3,
+        label="A label",
+        digest=_digest(),
+    )
+    await service.mark_session_projection_clean(
+        "sess-1", expected_ended_at=_ENDED_AT, generated_at=_ENDED_AT
+    )
+
+    for cypher, _ in captured:
+        assert "s.summary_evidence_failure_count = 0" in cypher
+
+
+@pytest.mark.asyncio
+async def test_new_turns_restore_a_written_off_sessions_retry_budget() -> None:
+    """Otherwise the exclusion is self-reinforcing and permanent.
+
+    An excluded session is never selected again, and the only other reset points are a
+    successful read or clean-mark — the very things the exclusion prevents. New turns
+    mean new captures, so the evidence situation has materially changed and the session
+    earns a fresh bound. Without this, a brief store outage retires a session that goes
+    on to receive many more real turns.
+    """
+    service, captured = _make_service_with_mock()
+
+    await service.create_session(_session_node(), trace_id="t-1")
+
+    cypher = captured[0][0]
+    assert "s.summary_evidence_failure_count = 0" in cypher
+    # Still no encroachment on the sweep's own fields (ADR-0124 D1).
+    assert "summary_generated_at" not in cypher
+    assert "summary_failure_reason" not in cypher

@@ -36,7 +36,7 @@ false accusation into the graph that nothing downstream can distinguish from a r
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -60,6 +60,11 @@ from personal_agent.memory.session_digest import (
     UnresolvedItem,
     digest_token_count,
     validate_digest_provenance,
+)
+from personal_agent.memory.session_digest_wire import (
+    DIGEST_TOOL_NAME,
+    digest_tool,
+    digest_tool_choice,
 )
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.trace import SystemTraceContext
@@ -431,6 +436,58 @@ def _input_token_limit(context_length: int | None) -> int:
     return (context_length or _FALLBACK_CONTEXT_LENGTH) - _OUTPUT_RESERVE_TOKENS
 
 
+class OutputTruncated(Exception):
+    """The provider stopped at the output ceiling, so the reply is a fragment.
+
+    Raised instead of letting the fragment reach the parser, because a truncated JSON
+    fragment fails parsing with ``unexpected end of data`` — indistinguishable, after the
+    fact, from a model that got the format wrong. FRE-995 measured exactly that
+    conflation: every sampled ``schema_invalid`` detail was a truncation. Distinguishing
+    them at the point the stop reason is still visible is the only place it can be done.
+    """
+
+
+#: Stop reasons that mean "the ceiling cut this off", across provider vocabularies.
+_TRUNCATION_FINISH_REASONS = frozenset({"length", "max_tokens"})
+
+
+def _reply_payload(response: Mapping[str, Any]) -> str:
+    """Read the digest JSON from a reply, whether it came back as a tool call or text.
+
+    Under the contract the payload arrives in the tool call's arguments — a structured
+    field, which is precisely why fence wrapping and trailing prose have nowhere to
+    occur. The text fallback covers the contract being switched off, and a model that
+    answers in prose anyway; treating that as an empty reply would turn a recoverable
+    answer into a failure.
+    """
+    for call in response.get("tool_calls") or []:
+        if call.get("name") == DIGEST_TOOL_NAME and call.get("arguments"):
+            return str(call["arguments"])
+    return response.get("content", "") or ""
+
+
+def _reject_if_truncated(response: Mapping[str, Any]) -> None:
+    """Raise :class:`OutputTruncated` when the reply was cut off at the ceiling.
+
+    Two independent signals, deliberately. ``finish_reason`` is the direct one, but it is
+    not always trustworthy: litellm's ``response_format`` path overwrites the provider's
+    stop reason with ``"stop"`` before the caller ever sees it. This producer avoids that
+    path, and the token check means a future library change that reintroduces it degrades
+    into a false *positive* — reporting truncation we could still see in the token count —
+    rather than silently scoring a truncated digest as clean.
+    """
+    finish_reason = response.get("finish_reason")
+    if finish_reason in _TRUNCATION_FINISH_REASONS:
+        raise OutputTruncated(f"provider stopped with finish_reason={finish_reason!r}")
+
+    completion_tokens = (response.get("usage") or {}).get("completion_tokens")
+    if isinstance(completion_tokens, int) and completion_tokens >= _MAX_OUTPUT_TOKENS:
+        raise OutputTruncated(
+            f"output reached the {_MAX_OUTPUT_TOKENS}-token ceiling "
+            f"(finish_reason={finish_reason!r})"
+        )
+
+
 async def _call_model(
     prompt: str,
     *,
@@ -438,9 +495,18 @@ async def _call_model(
     provider: str | None,
     session_id: str,
 ) -> str:
-    """Dispatch one generation call. Raises on any client-level failure."""
+    """Dispatch one generation call. Raises on any client-level failure.
+
+    Raises:
+        OutputTruncated: If the reply was cut off at the output ceiling.
+    """
     if provider is not None:
         from personal_agent.llm_client.factory import get_llm_client_for_key  # noqa: PLC0415
+
+        # The contract is applied on the cloud path only. The local path forwards tools
+        # to llama-server, but that behaviour is outside FRE-996's evidence and the
+        # deployed session_summary role is cloud — so no unverified claim ships here.
+        use_contract = get_settings().session_digest_structured_output
 
         # budget_role stays captains_log: ADR-0124 D2 defers splitting cost
         # attribution as a separate, smaller decision.
@@ -449,6 +515,12 @@ async def _call_model(
             role=ModelRole.PRIMARY,
             messages=[{"role": "user", "content": prompt}],
             system_prompt=_system_prompt(),
+            # Held to the schema as a forced tool rather than a `response_format`:
+            # for the deployed claude-sonnet-5, litellm turns `response_format` into a
+            # synthetic forced tool AND overwrites the provider's stop_reason with
+            # "stop", which would hide truncation entirely. See session_digest_wire.
+            tools=[digest_tool()] if use_contract else None,
+            tool_choice=digest_tool_choice() if use_contract else None,
             # Without this the client falls back to the deployment's max_tokens
             # (128k) for an artifact bounded at ~250 tokens, and the cost gate
             # reserves against that ceiling on every call — exhausting a shared
@@ -456,7 +528,8 @@ async def _call_model(
             max_tokens=_MAX_OUTPUT_TOKENS,
             trace_ctx=SystemTraceContext.new("session_summary", session_id=session_id),
         )
-        return response.get("content", "") or ""
+        _reject_if_truncated(response)
+        return _reply_payload(response)
 
     from personal_agent.llm_client.concurrency import InferencePriority  # noqa: PLC0415
 
@@ -476,6 +549,7 @@ async def _call_model(
         priority_timeout=120.0,
         trace_ctx=SystemTraceContext.new("session_summary", session_id=session_id),
     )
+    _reject_if_truncated(llm_response)
     return llm_response.get("content", "") or ""
 
 
@@ -595,6 +669,13 @@ async def generate_session_digest(
                 trace_id=trace_id,
                 detail=f"{e.denial_reason} role={e.role} cap={e.cap} spend={e.current_spend}",
             )
+        except OutputTruncated as e:
+            # A validation-class failure, not a client failure: it retries once, exactly
+            # as it did when it arrived disguised as SCHEMA_INVALID. Retrying a
+            # deterministic truncation is unlikely to pay, but changing that bound is a
+            # sizing decision and belongs to FRE-993, not to re-labelling the reason.
+            last_validation_failure = (SummaryFailureReason.OUTPUT_TRUNCATED, str(e))
+            continue
         except (LLMTimeout, InferenceSlotTimeout) as e:
             return _failed(
                 SummaryFailureReason.TIMEOUT,

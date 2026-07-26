@@ -44,7 +44,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 
 <!-- AUTOGEN:AppConfig START — regenerate via scripts/audit/config_inventory.py generate -->
 
-**314 typed scalar/path parameters** live in `src/personal_agent/config/settings.py` (`AppConfig`, a pydantic `BaseSettings` with `env_prefix="AGENT_"`). Every field is read through the process-wide `from personal_agent.config import settings` singleton (`settings.<field>`), so the **reader** is uniformly that accessor; **validation** is pydantic type coercion at load (`AppConfig()` raises `ValidationError` on a bad value). The **Env var** column shows `AGENT_<FIELD>` (the prefix+name form, **always valid**); where a field also declares an `alias=`, that alias is shown after `·` as an **additional** accepted spelling — empirically both bind (e.g. `debug` accepts `AGENT_DEBUG` *and* `APP_DEBUG`). A field's default is overridable by either; the *profile-divergence* for scalars is the set of `docker-compose*.yml` `environment:` blocks that override it (see §8).
+**315 typed scalar/path parameters** live in `src/personal_agent/config/settings.py` (`AppConfig`, a pydantic `BaseSettings` with `env_prefix="AGENT_"`). Every field is read through the process-wide `from personal_agent.config import settings` singleton (`settings.<field>`), so the **reader** is uniformly that accessor; **validation** is pydantic type coercion at load (`AppConfig()` raises `ValidationError` on a bad value). The **Env var** column shows `AGENT_<FIELD>` (the prefix+name form, **always valid**); where a field also declares an `alias=`, that alias is shown after `·` as an **additional** accepted spelling — empirically both bind (e.g. `debug` accepts `AGENT_DEBUG` *and* `APP_DEBUG`). A field's default is overridable by either; the *profile-divergence* for scalars is the set of `docker-compose*.yml` `environment:` blocks that override it (see §8).
 
 | # | Field (`settings.X`) | Env var | Type | Default | Secret | In `.env.example` |
 |---|---|---|---|---|---|---|
@@ -287,81 +287,82 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 237 | `service_port` | `AGENT_SERVICE_PORT` | `int` | `9000` |  | ✅ |
 | 238 | `service_url` | `AGENT_SERVICE_URL` · `SERVICE_URL` | `str` | `'http://localhost:9000'` |  | ✅ |
 | 239 | `session_digest_max_tokens` | `AGENT_SESSION_DIGEST_MAX_TOKENS` | `int` | `250` |  | ✅ |
-| 240 | `session_digest_target_tokens` | `AGENT_SESSION_DIGEST_TARGET_TOKENS` | `int` | `180` |  | ✅ |
-| 241 | `session_retention_days` | `AGENT_SESSION_RETENTION_DAYS` | `int` | `180` |  | ✅ |
-| 242 | `session_retention_sweep_interval_seconds` | `AGENT_SESSION_RETENTION_SWEEP_INTERVAL_SECONDS` | `int` | `86400` |  | ✅ |
-| 243 | `session_summary_enabled` | `AGENT_SESSION_SUMMARY_ENABLED` | `bool` | `True` |  | ✅ |
-| 244 | `session_summary_idle_threshold_seconds` | `AGENT_SESSION_SUMMARY_IDLE_THRESHOLD_SECONDS` | `float` | `900.0` |  | ✅ |
-| 245 | `session_summary_max_attempts` | `AGENT_SESSION_SUMMARY_MAX_ATTEMPTS` | `int` | `2` |  | ✅ |
-| 246 | `session_summary_sweep_interval_seconds` | `AGENT_SESSION_SUMMARY_SWEEP_INTERVAL_SECONDS` | `float` | `300.0` |  | ✅ |
-| 247 | `session_write_wait_timeout_seconds` | `AGENT_SESSION_WRITE_WAIT_TIMEOUT_SECONDS` | `float` | `10.0` |  | — |
-| 248 | `signal_priority_clamp` | `AGENT_SIGNAL_PRIORITY_CLAMP` | `float` | `0.5` |  | ✅ |
-| 249 | `signal_smoothing_prior` | `AGENT_SIGNAL_SMOOTHING_PRIOR` | `float` | `2.0` |  | ✅ |
-| 250 | `signal_suppression_cooldown_days` | `AGENT_SIGNAL_SUPPRESSION_COOLDOWN_DAYS` | `int` | `30` |  | ✅ |
-| 251 | `signal_suppression_min_n` | `AGENT_SIGNAL_SUPPRESSION_MIN_N` | `int` | `5` |  | ✅ |
-| 252 | `signal_suppression_threshold` | `AGENT_SIGNAL_SUPPRESSION_THRESHOLD` | `float` | `-0.4` |  | ✅ |
-| 253 | `signal_window_days` | `AGENT_SIGNAL_WINDOW_DAYS` | `int` | `90` |  | ✅ |
-| 254 | `skill_index_max_tokens` | `AGENT_SKILL_INDEX_MAX_TOKENS` | `int` | `2048` |  | ✅ |
-| 255 | `skill_index_p95_token_threshold` | `AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD` | `int` | `6000` |  | ✅ |
-| 256 | `skill_nudge_enabled` | `AGENT_SKILL_NUDGE_ENABLED` | `bool` | `True` |  | ✅ |
-| 257 | `skill_routing_mode` | `AGENT_SKILL_ROUTING_MODE` | `str` | `'hybrid'` |  | ✅ |
-| 258 | `skill_routing_model_key` | `AGENT_SKILL_ROUTING_MODEL_KEY` | `str` | `'claude_haiku'` |  | ✅ |
-| 259 | `skill_routing_threshold_monitor_enabled` | `AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_ENABLED` | `bool` | `True` |  | ✅ |
-| 260 | `skill_routing_threshold_monitor_hour_utc` | `AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_HOUR_UTC` | `int` | `5` |  | ✅ |
-| 261 | `slm_gpu_util_degraded_pct` | `AGENT_SLM_GPU_UTIL_DEGRADED_PCT` | `float` | `95.0` |  | — |
-| 262 | `slm_health_cache_ttl_seconds` | `AGENT_SLM_HEALTH_CACHE_TTL_SECONDS` | `float` | `45.0` |  | — |
-| 263 | `slm_health_index_prefix` | `AGENT_SLM_HEALTH_INDEX_PREFIX` | `str` | `'agent-monitors-slm-health'` |  | — |
-| 264 | `slm_health_probe_enabled` | `AGENT_SLM_HEALTH_PROBE_ENABLED` | `bool` | `True` |  | — |
-| 265 | `slm_health_probe_interval_seconds` | `AGENT_SLM_HEALTH_PROBE_INTERVAL_SECONDS` | `float` | `300.0` |  | — |
-| 266 | `slm_health_url` | `AGENT_SLM_HEALTH_URL` | `str` | `'https://<deployment-host>/health'` |  | ✅ |
-| 267 | `slm_queue_depth_degraded` | `AGENT_SLM_QUEUE_DEPTH_DEGRADED` | `int` | `4` |  | — |
-| 268 | `slm_tunnel_base_url` | `AGENT_SLM_TUNNEL_BASE_URL` | `str \| None` | `None` |  | ✅ |
-| 269 | `structural_arm_enabled` | `AGENT_STRUCTURAL_ARM_ENABLED` | `bool` | `False` |  | — |
-| 270 | `structural_arm_top_k` | `AGENT_STRUCTURAL_ARM_TOP_K` | `int` | `50` |  | — |
-| 271 | `structural_class_predicate_enabled` | `AGENT_STRUCTURAL_CLASS_PREDICATE_ENABLED` | `bool` | `False` |  | — |
-| 272 | `structural_type_predicate_enabled` | `AGENT_STRUCTURAL_TYPE_PREDICATE_ENABLED` | `bool` | `False` |  | — |
-| 273 | `sub_agent_max_tokens` | `AGENT_SUB_AGENT_MAX_TOKENS` | `int` | `4096` |  | — |
-| 274 | `sub_agent_timeout_seconds` | `AGENT_SUB_AGENT_TIMEOUT_SECONDS` | `float` | `120.0` |  | — |
-| 275 | `substrate_profile` | `AGENT_SUBSTRATE_PROFILE` | `str` | `'private'` |  | ✅ |
-| 276 | `synthesis_timeout_seconds` | `AGENT_SYNTHESIS_TIMEOUT_SECONDS` | `float` | `25.0` |  | — |
-| 277 | `sysgraph_database_url` | `AGENT_SYSGRAPH_DATABASE_URL` | `str` | `'postgresql+asyncpg://<redacted>@localhost:5432/personal_agent'` |  | ✅ |
-| 278 | `sysgraph_maintenance_enabled` | `AGENT_SYSGRAPH_MAINTENANCE_ENABLED` | `bool` | `True` |  | — |
-| 279 | `sysgraph_maintenance_hour_utc` | `AGENT_SYSGRAPH_MAINTENANCE_HOUR_UTC` | `int` | `9` |  | — |
-| 280 | `tool_result_compression_enabled` | `AGENT_TOOL_RESULT_COMPRESSION_ENABLED` | `bool` | `False` |  | — |
-| 281 | `tool_result_digest_exclude_tools` | `AGENT_TOOL_RESULT_DIGEST_EXCLUDE_TOOLS` | `list` | `[]` |  | — |
-| 282 | `tool_result_digest_head_lines` | `AGENT_TOOL_RESULT_DIGEST_HEAD_LINES` | `int` | `40` |  | — |
-| 283 | `tool_result_digest_keep` | `AGENT_TOOL_RESULT_DIGEST_KEEP` | `int` | `3` |  | — |
-| 284 | `tool_result_digest_max_expand_tokens` | `AGENT_TOOL_RESULT_DIGEST_MAX_EXPAND_TOKENS` | `int` | `8000` |  | — |
-| 285 | `tool_result_digest_min_savings_tokens` | `AGENT_TOOL_RESULT_DIGEST_MIN_SAVINGS_TOKENS` | `int` | `500` |  | — |
-| 286 | `tool_result_digest_pin_ttl_turns` | `AGENT_TOOL_RESULT_DIGEST_PIN_TTL_TURNS` | `int` | `4` |  | — |
-| 287 | `tool_result_digest_put_timeout_ms` | `AGENT_TOOL_RESULT_DIGEST_PUT_TIMEOUT_MS` | `int` | `2000` |  | — |
-| 288 | `tool_result_digest_tail_lines` | `AGENT_TOOL_RESULT_DIGEST_TAIL_LINES` | `int` | `20` |  | — |
-| 289 | `tool_result_digest_threshold_tokens` | `AGENT_TOOL_RESULT_DIGEST_THRESHOLD_TOKENS` | `int` | `1500` |  | — |
-| 290 | `turn_observed_stream_maxlen` | `AGENT_TURN_OBSERVED_STREAM_MAXLEN` | `int` | `10000` |  | — |
-| 291 | `turn_projector_enabled` | `AGENT_TURN_PROJECTOR_ENABLED` | `bool` | `True` |  | — |
-| 292 | `upload_max_size_bytes` | `AGENT_UPLOAD_MAX_SIZE_BYTES` | `int` | `52428800` |  | — |
-| 293 | `url_guard_allowlist` | `AGENT_URL_GUARD_ALLOWLIST` | `list` | `[]` |  | — |
-| 294 | `url_guard_cache_ttl_seconds` | `AGENT_URL_GUARD_CACHE_TTL_SECONDS` | `int` | `3600` |  | — |
-| 295 | `url_guard_enabled` | `AGENT_URL_GUARD_ENABLED` | `bool` | `True` |  | — |
-| 296 | `url_guard_mode` | `AGENT_URL_GUARD_MODE` | `str` | `'blocklist'` |  | — |
-| 297 | `use_service_mode` | `AGENT_USE_SERVICE_MODE` | `bool` | `True` |  | — |
-| 298 | `user_display_names_json` | `AGENT_USER_DISPLAY_NAMES_JSON` | `str` | `'{}'` |  | ✅ |
-| 299 | `version` | `AGENT_VERSION` | `str` | `'0.1.0'` |  | ✅ |
-| 300 | `voyage_api_key` | `AGENT_VOYAGE_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 301 | `within_session_compression_enabled` | `AGENT_WITHIN_SESSION_COMPRESSION_ENABLED` | `bool` | `True` |  | — |
-| 302 | `within_session_compression_refire_after_messages` | `AGENT_WITHIN_SESSION_COMPRESSION_REFIRE_AFTER_MESSAGES` | `int` | `4` |  | — |
-| 303 | `within_session_hard_threshold_ratio` | `AGENT_WITHIN_SESSION_HARD_THRESHOLD_RATIO` | `float` | `0.85` |  | — |
-| 304 | `within_session_max_tail_ratio` | `AGENT_WITHIN_SESSION_MAX_TAIL_RATIO` | `float` | `0.35` |  | — |
-| 305 | `within_session_min_tail_ratio` | `AGENT_WITHIN_SESSION_MIN_TAIL_RATIO` | `float` | `0.25` |  | — |
-| 306 | `within_session_pre_pass_threshold_tokens` | `AGENT_WITHIN_SESSION_PRE_PASS_THRESHOLD_TOKENS` | `int` | `800` |  | — |
-| 307 | `worker_global_timeout_seconds` | `AGENT_WORKER_GLOBAL_TIMEOUT_SECONDS` | `float` | `180.0` |  | — |
-| 308 | `worker_timeout_seconds` | `AGENT_WORKER_TIMEOUT_SECONDS` | `float` | `60.0` |  | — |
-| 309 | `ws_event_queue_size` | `AGENT_WS_EVENT_QUEUE_SIZE` | `int` | `500` |  | — |
-| 310 | `ws_event_ttl_hours` | `AGENT_WS_EVENT_TTL_HOURS` | `int` | `24` |  | — |
-| 311 | `ws_max_message_size` | `AGENT_WS_MAX_MESSAGE_SIZE` | `int` | `8192` |  | — |
-| 312 | `ws_ping_timeout_seconds` | `AGENT_WS_PING_TIMEOUT_SECONDS` | `int` | `60` |  | — |
-| 313 | `ws_rate_limit_per_second` | `AGENT_WS_RATE_LIMIT_PER_SECOND` | `int` | `20` |  | — |
-| 314 | `ws_ticket_ttl_seconds` | `AGENT_WS_TICKET_TTL_SECONDS` | `int` | `30` |  | — |
+| 240 | `session_digest_structured_output` | `AGENT_SESSION_DIGEST_STRUCTURED_OUTPUT` | `bool` | `True` |  | ✅ |
+| 241 | `session_digest_target_tokens` | `AGENT_SESSION_DIGEST_TARGET_TOKENS` | `int` | `180` |  | ✅ |
+| 242 | `session_retention_days` | `AGENT_SESSION_RETENTION_DAYS` | `int` | `180` |  | ✅ |
+| 243 | `session_retention_sweep_interval_seconds` | `AGENT_SESSION_RETENTION_SWEEP_INTERVAL_SECONDS` | `int` | `86400` |  | ✅ |
+| 244 | `session_summary_enabled` | `AGENT_SESSION_SUMMARY_ENABLED` | `bool` | `True` |  | ✅ |
+| 245 | `session_summary_idle_threshold_seconds` | `AGENT_SESSION_SUMMARY_IDLE_THRESHOLD_SECONDS` | `float` | `900.0` |  | ✅ |
+| 246 | `session_summary_max_attempts` | `AGENT_SESSION_SUMMARY_MAX_ATTEMPTS` | `int` | `2` |  | ✅ |
+| 247 | `session_summary_sweep_interval_seconds` | `AGENT_SESSION_SUMMARY_SWEEP_INTERVAL_SECONDS` | `float` | `300.0` |  | ✅ |
+| 248 | `session_write_wait_timeout_seconds` | `AGENT_SESSION_WRITE_WAIT_TIMEOUT_SECONDS` | `float` | `10.0` |  | — |
+| 249 | `signal_priority_clamp` | `AGENT_SIGNAL_PRIORITY_CLAMP` | `float` | `0.5` |  | ✅ |
+| 250 | `signal_smoothing_prior` | `AGENT_SIGNAL_SMOOTHING_PRIOR` | `float` | `2.0` |  | ✅ |
+| 251 | `signal_suppression_cooldown_days` | `AGENT_SIGNAL_SUPPRESSION_COOLDOWN_DAYS` | `int` | `30` |  | ✅ |
+| 252 | `signal_suppression_min_n` | `AGENT_SIGNAL_SUPPRESSION_MIN_N` | `int` | `5` |  | ✅ |
+| 253 | `signal_suppression_threshold` | `AGENT_SIGNAL_SUPPRESSION_THRESHOLD` | `float` | `-0.4` |  | ✅ |
+| 254 | `signal_window_days` | `AGENT_SIGNAL_WINDOW_DAYS` | `int` | `90` |  | ✅ |
+| 255 | `skill_index_max_tokens` | `AGENT_SKILL_INDEX_MAX_TOKENS` | `int` | `2048` |  | ✅ |
+| 256 | `skill_index_p95_token_threshold` | `AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD` | `int` | `6000` |  | ✅ |
+| 257 | `skill_nudge_enabled` | `AGENT_SKILL_NUDGE_ENABLED` | `bool` | `True` |  | ✅ |
+| 258 | `skill_routing_mode` | `AGENT_SKILL_ROUTING_MODE` | `str` | `'hybrid'` |  | ✅ |
+| 259 | `skill_routing_model_key` | `AGENT_SKILL_ROUTING_MODEL_KEY` | `str` | `'claude_haiku'` |  | ✅ |
+| 260 | `skill_routing_threshold_monitor_enabled` | `AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_ENABLED` | `bool` | `True` |  | ✅ |
+| 261 | `skill_routing_threshold_monitor_hour_utc` | `AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_HOUR_UTC` | `int` | `5` |  | ✅ |
+| 262 | `slm_gpu_util_degraded_pct` | `AGENT_SLM_GPU_UTIL_DEGRADED_PCT` | `float` | `95.0` |  | — |
+| 263 | `slm_health_cache_ttl_seconds` | `AGENT_SLM_HEALTH_CACHE_TTL_SECONDS` | `float` | `45.0` |  | — |
+| 264 | `slm_health_index_prefix` | `AGENT_SLM_HEALTH_INDEX_PREFIX` | `str` | `'agent-monitors-slm-health'` |  | — |
+| 265 | `slm_health_probe_enabled` | `AGENT_SLM_HEALTH_PROBE_ENABLED` | `bool` | `True` |  | — |
+| 266 | `slm_health_probe_interval_seconds` | `AGENT_SLM_HEALTH_PROBE_INTERVAL_SECONDS` | `float` | `300.0` |  | — |
+| 267 | `slm_health_url` | `AGENT_SLM_HEALTH_URL` | `str` | `'https://<deployment-host>/health'` |  | ✅ |
+| 268 | `slm_queue_depth_degraded` | `AGENT_SLM_QUEUE_DEPTH_DEGRADED` | `int` | `4` |  | — |
+| 269 | `slm_tunnel_base_url` | `AGENT_SLM_TUNNEL_BASE_URL` | `str \| None` | `None` |  | ✅ |
+| 270 | `structural_arm_enabled` | `AGENT_STRUCTURAL_ARM_ENABLED` | `bool` | `False` |  | — |
+| 271 | `structural_arm_top_k` | `AGENT_STRUCTURAL_ARM_TOP_K` | `int` | `50` |  | — |
+| 272 | `structural_class_predicate_enabled` | `AGENT_STRUCTURAL_CLASS_PREDICATE_ENABLED` | `bool` | `False` |  | — |
+| 273 | `structural_type_predicate_enabled` | `AGENT_STRUCTURAL_TYPE_PREDICATE_ENABLED` | `bool` | `False` |  | — |
+| 274 | `sub_agent_max_tokens` | `AGENT_SUB_AGENT_MAX_TOKENS` | `int` | `4096` |  | — |
+| 275 | `sub_agent_timeout_seconds` | `AGENT_SUB_AGENT_TIMEOUT_SECONDS` | `float` | `120.0` |  | — |
+| 276 | `substrate_profile` | `AGENT_SUBSTRATE_PROFILE` | `str` | `'private'` |  | ✅ |
+| 277 | `synthesis_timeout_seconds` | `AGENT_SYNTHESIS_TIMEOUT_SECONDS` | `float` | `25.0` |  | — |
+| 278 | `sysgraph_database_url` | `AGENT_SYSGRAPH_DATABASE_URL` | `str` | `'postgresql+asyncpg://<redacted>@localhost:5432/personal_agent'` |  | ✅ |
+| 279 | `sysgraph_maintenance_enabled` | `AGENT_SYSGRAPH_MAINTENANCE_ENABLED` | `bool` | `True` |  | — |
+| 280 | `sysgraph_maintenance_hour_utc` | `AGENT_SYSGRAPH_MAINTENANCE_HOUR_UTC` | `int` | `9` |  | — |
+| 281 | `tool_result_compression_enabled` | `AGENT_TOOL_RESULT_COMPRESSION_ENABLED` | `bool` | `False` |  | — |
+| 282 | `tool_result_digest_exclude_tools` | `AGENT_TOOL_RESULT_DIGEST_EXCLUDE_TOOLS` | `list` | `[]` |  | — |
+| 283 | `tool_result_digest_head_lines` | `AGENT_TOOL_RESULT_DIGEST_HEAD_LINES` | `int` | `40` |  | — |
+| 284 | `tool_result_digest_keep` | `AGENT_TOOL_RESULT_DIGEST_KEEP` | `int` | `3` |  | — |
+| 285 | `tool_result_digest_max_expand_tokens` | `AGENT_TOOL_RESULT_DIGEST_MAX_EXPAND_TOKENS` | `int` | `8000` |  | — |
+| 286 | `tool_result_digest_min_savings_tokens` | `AGENT_TOOL_RESULT_DIGEST_MIN_SAVINGS_TOKENS` | `int` | `500` |  | — |
+| 287 | `tool_result_digest_pin_ttl_turns` | `AGENT_TOOL_RESULT_DIGEST_PIN_TTL_TURNS` | `int` | `4` |  | — |
+| 288 | `tool_result_digest_put_timeout_ms` | `AGENT_TOOL_RESULT_DIGEST_PUT_TIMEOUT_MS` | `int` | `2000` |  | — |
+| 289 | `tool_result_digest_tail_lines` | `AGENT_TOOL_RESULT_DIGEST_TAIL_LINES` | `int` | `20` |  | — |
+| 290 | `tool_result_digest_threshold_tokens` | `AGENT_TOOL_RESULT_DIGEST_THRESHOLD_TOKENS` | `int` | `1500` |  | — |
+| 291 | `turn_observed_stream_maxlen` | `AGENT_TURN_OBSERVED_STREAM_MAXLEN` | `int` | `10000` |  | — |
+| 292 | `turn_projector_enabled` | `AGENT_TURN_PROJECTOR_ENABLED` | `bool` | `True` |  | — |
+| 293 | `upload_max_size_bytes` | `AGENT_UPLOAD_MAX_SIZE_BYTES` | `int` | `52428800` |  | — |
+| 294 | `url_guard_allowlist` | `AGENT_URL_GUARD_ALLOWLIST` | `list` | `[]` |  | — |
+| 295 | `url_guard_cache_ttl_seconds` | `AGENT_URL_GUARD_CACHE_TTL_SECONDS` | `int` | `3600` |  | — |
+| 296 | `url_guard_enabled` | `AGENT_URL_GUARD_ENABLED` | `bool` | `True` |  | — |
+| 297 | `url_guard_mode` | `AGENT_URL_GUARD_MODE` | `str` | `'blocklist'` |  | — |
+| 298 | `use_service_mode` | `AGENT_USE_SERVICE_MODE` | `bool` | `True` |  | — |
+| 299 | `user_display_names_json` | `AGENT_USER_DISPLAY_NAMES_JSON` | `str` | `'{}'` |  | ✅ |
+| 300 | `version` | `AGENT_VERSION` | `str` | `'0.1.0'` |  | ✅ |
+| 301 | `voyage_api_key` | `AGENT_VOYAGE_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 302 | `within_session_compression_enabled` | `AGENT_WITHIN_SESSION_COMPRESSION_ENABLED` | `bool` | `True` |  | — |
+| 303 | `within_session_compression_refire_after_messages` | `AGENT_WITHIN_SESSION_COMPRESSION_REFIRE_AFTER_MESSAGES` | `int` | `4` |  | — |
+| 304 | `within_session_hard_threshold_ratio` | `AGENT_WITHIN_SESSION_HARD_THRESHOLD_RATIO` | `float` | `0.85` |  | — |
+| 305 | `within_session_max_tail_ratio` | `AGENT_WITHIN_SESSION_MAX_TAIL_RATIO` | `float` | `0.35` |  | — |
+| 306 | `within_session_min_tail_ratio` | `AGENT_WITHIN_SESSION_MIN_TAIL_RATIO` | `float` | `0.25` |  | — |
+| 307 | `within_session_pre_pass_threshold_tokens` | `AGENT_WITHIN_SESSION_PRE_PASS_THRESHOLD_TOKENS` | `int` | `800` |  | — |
+| 308 | `worker_global_timeout_seconds` | `AGENT_WORKER_GLOBAL_TIMEOUT_SECONDS` | `float` | `180.0` |  | — |
+| 309 | `worker_timeout_seconds` | `AGENT_WORKER_TIMEOUT_SECONDS` | `float` | `60.0` |  | — |
+| 310 | `ws_event_queue_size` | `AGENT_WS_EVENT_QUEUE_SIZE` | `int` | `500` |  | — |
+| 311 | `ws_event_ttl_hours` | `AGENT_WS_EVENT_TTL_HOURS` | `int` | `24` |  | — |
+| 312 | `ws_max_message_size` | `AGENT_WS_MAX_MESSAGE_SIZE` | `int` | `8192` |  | — |
+| 313 | `ws_ping_timeout_seconds` | `AGENT_WS_PING_TIMEOUT_SECONDS` | `int` | `60` |  | — |
+| 314 | `ws_rate_limit_per_second` | `AGENT_WS_RATE_LIMIT_PER_SECOND` | `int` | `20` |  | — |
+| 315 | `ws_ticket_ttl_seconds` | `AGENT_WS_TICKET_TTL_SECONDS` | `int` | `30` |  | — |
 
 ### Orphan `AGENT_*` keys in `.env.example` (1)
 

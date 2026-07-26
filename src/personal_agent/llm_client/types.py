@@ -76,6 +76,11 @@ class LLMResponse(TypedDict):
         cost_usd: Per-call cost in USD. Populated on paid (cloud) calls so the
             executor can accumulate ``turn_cost_usd`` for the live status bar;
             omitted on self-hosted (free) local calls (read as 0.0 by callers).
+        finish_reason: Why generation stopped, in OpenAI's vocabulary (``stop``,
+            ``length``, ``tool_calls``, …). Populated on cloud calls; **absent**
+            elsewhere rather than defaulted, because ``"stop"`` and "we did not look"
+            must stay distinguishable — a caller that cannot tell a truncated reply
+            from a complete one reads a sizing fault as a format fault (FRE-996).
     """
 
     role: str  # "assistant"
@@ -86,6 +91,7 @@ class LLMResponse(TypedDict):
     response_id: str | None
     raw: dict[str, Any]
     cost_usd: NotRequired[float]
+    finish_reason: NotRequired[str | None]
 
 
 class LLMStreamEvent(TypedDict):

@@ -40,36 +40,73 @@ clean.
 
 Arm A's failure rate is **5/30 = 16.7%**; arms B and C are 0/30.
 
-### 2.1 The number that actually matters — and it does not favour the contract
+### 2.1 Delivery, and why it cannot be scored against 250
 
 Parse rate is not the deliverable. The deliverable is **a usable digest actually stored**: one that
-parses, fits the 250-token budget, and is not empty. On that measure:
+parses, carries content, and fits the token bound. An earlier revision of this section scored that
+against the 250-token bound and reported a delivery regression. **That was circular and is
+withdrawn.** 250 is the placeholder ADR-0124 D3 itself flags as provisional pending a compression
+curve that has never been run — the curve that *is* FRE-994. Scoring this pilot against the number
+the next ticket exists to determine measures the threshold, not the contract. The same document
+elsewhere calls that bound uncalibrated (§4, §10) and then leaned on it anyway; the inconsistency
+was mine.
 
-| | Parsed | Over the 250-token budget | Empty digest | **Would be stored** |
-|---|---:|---:|---:|---:|
-| A (today) | 25/30 | 6 | 1 | **18/30 (60%)** |
-| B (contract) | 30/30 | 10 | 5 | **15/30 (50%)** |
-| C (bounded) | 30/30 | 9 | 3 | **18/30 (60%)** |
+**The bound is the whole result.** Delivery per arm — content-bearing *and* within bound — across
+plausible thresholds:
 
-**The contract did not improve end-to-end delivery.** It made parsing perfect and moved the failures
-downstream into over-budget and empty. The formatting failure was removed; a sizing failure that had
-been hiding behind it was exposed.
+| Bound | A | B | C | Leader |
+|---:|---:|---:|---:|---|
+| 150 | 8 | 5 | 4 | A |
+| 180 | 12 | 9 | 9 | A |
+| 250 | 18 | 15 | 18 | A / C |
+| 275 | 21 | 21 | 19 | A / B |
+| 300 | 22 | 21 | 21 | A |
+| 312 | 24 | 21 | 22 | A |
+| 350 | 24 | 23 | 24 | A / C |
+| 400 | 24 | 23 | 26 | C |
+| 419 | 24 | 25 | 27 | C |
 
-The empty case is the more serious half. An empty digest returns `GENERATED`, so it **marks the
-session clean and is never retried** — five sessions permanently recorded as summarised while holding
-no memory at all. A silent non-delivery is worse than a loud failure, and it is the outcome most
-directly hostile to the consumer this artifact exists to serve.
+Nothing about the arms changes down that table. Only the constant they are measured against does,
+and the leader changes three times. **Any delivery verdict from this pilot is a statement about the
+threshold, not about the contract.**
 
-Stated against my own finding: 15 against 18 is three sessions at N=30, temperature could not be
-pinned (§8.1), and production retries an over-budget digest once, which this harness did not
-simulate. It is **not** a significant regression. But it is decisively not an improvement, and the
-burden of proof was on the change.
+### 2.2 Where the bound would have to sit — FRE-994's other half
 
-**What this means for the ticket's own framing.** FRE-996 said "a run that produces valid output that
-is still too long is a success for this ticket," and by that standard it succeeded. But read at the
-altitude of *the summariser working*, the honest verdict is that this work moved the **diagnosis**,
-not the **outcome**: the binding constraint is a 250-token bound ADR-0124 admits was never
-calibrated, and that is FRE-994's job, not this one's.
+The threshold at which every content-bearing digest in each arm passes, with the tail alongside it,
+because a bound set at the maximum is a bound set by one outlier:
+
+| Arm | n | p50 | p90 | p95 | max (all pass at) |
+|---|---:|---:|---:|---:|---:|
+| A (today) | 24 | 185 | 273 | 299 | **312** |
+| B (contract) | 25 | 235 | 331 | 393 | **413** |
+| C (bounded) | 27 | 226 | 352 | 390 | **419** |
+
+FRE-994's stated question is how *small* a digest can get before it drops consequential conclusions.
+This is the other half: **where the bound has to sit for the generator to be able to hit it at all,
+and that this differs by arm.** A bound of 250 rejects roughly a quarter of arm C's usable output.
+The two halves have to be answered together, or the curve optimises against a ceiling the generator
+cannot reach.
+
+### 2.3 Non-delivery, split by whether it is loud or silent
+
+The measure that survives without a bound: did a session end up with memory, by any route?
+
+| Arm | Loud non-delivery (truncated) | Silent (parsed, no content) | **Total** |
+|---|---:|---:|---:|
+| A (today) | 5 | 1 | **6/30** |
+| B (contract) | 0 | 5 | **5/30** |
+| C (bounded) | 0 | 3 | **3/30** |
+
+**On total non-delivery the contract is better, and the bounded variant is best** — 6 → 5 → 3. But
+the *character* of the failure inverts: arm A's are truncations, which are loud and leave the session
+dirty and retryable; arms B and C fail by returning an empty digest, which returns `GENERATED` and
+so **marks the session clean and is never retried**. Fewer sessions lose their memory under the
+contract, but the ones that do, lose it silently. That trade is worth making and worth monitoring;
+it is not worth hiding.
+
+*Correction to an earlier revision:* arm A's total non-delivery is 6, not 1. The composition is 5
+truncations plus 1 digest that parsed with no content — not, as suggested at the gate, one empty
+reply plus five clean-but-contentless parses. Content-bearing counts are A 24, B 25, C 27.
 
 > **A correction to this pilot's own first pass.** The harness initially scored one of those
 > five as `empty` rather than `truncated`, because it tested for an empty payload *before*
@@ -147,6 +184,27 @@ through countable structure alone should be expected to fail the same way. The s
 express a character bound (`maxLength` is unsupported, FRE-995 §8.2), so this avenue is closed:
 **length has to be controlled by the prompt's token target and the ceiling, not by the schema.**
 
+### 5.1 But they appear to affect *completion* — a signal pointing the other way
+
+Tested for length, item ceilings fail. On a property this pilot did not set out to test, they look
+like the best arm:
+
+| | A (today) | B (contract) | C (bounded) |
+|---|---:|---:|---:|
+| Content-bearing digests | 24/30 | 25/30 | **27/30** |
+| Total non-delivery | 6/30 | 5/30 | **3/30** |
+| Delivery at a bound of 400+ | 24 | 23–25 | **26–27** |
+
+Arm C produced content more often than either other arm and had the fewest sessions end with no
+memory. A plausible reading is that naming a small ceiling gives the model a shape it can complete,
+where an open-ended list invites either sprawl or abandonment — but that is a hypothesis this run
+cannot test, and 27 against 25 and 24 is two or three sessions at N=30.
+
+**Recorded as a signal, not claimed as a finding.** It points the opposite way from this section's
+own conclusion, which is exactly why it should not be buried in it: item ceilings are the wrong lever
+for *length* and may be a useful lever for *completion*, and FRE-994 should treat those as separate
+questions rather than inheriting a flat "drop them".
+
 ---
 
 ## 6. What FRE-994 inherits
@@ -160,24 +218,33 @@ said FRE-994 needed and could not previously get:
 | Rendered digest tokens (max) | 312 | 413 | 419 |
 | Over the 250-token hard budget | 6/25 | 10/30 | 9/30 |
 
-**A third of contract-produced digests would fail `DIGEST_OVER_BUDGET` in production.** That is a
-success for this ticket by its own stated terms — "a run that produces valid output that is still
-too long is a success" — and it is precisely the number FRE-994 exists to act on. Note arm A's
-figures are computed only over its 25 parsed replies, so its apparent advantage is survivorship: the
-long ones are missing because they truncated.
+A third of contract-produced digests exceed the *current placeholder* of 250 — but read that as a
+statement about the placeholder, not about the arms (§2.1). Arm A's figures are also computed only
+over its 25 parsed replies, so its apparent advantage is survivorship: its long digests are missing
+because they truncated, which is precisely the distortion that made this corpus unusable to FRE-994
+before now.
+
+The actionable pair is in §2.2: the per-arm ceiling at which every content-bearing digest passes
+(312 / 413 / 419) with the p90s beside it (273 / 331 / 352). That is the half of the curve that says
+where the bound *can* sit; FRE-994 owns the half that says where it *should*.
 
 ---
 
 ## 7. A signal worth watching, not yet a conclusion
 
-Arm B returned **5/30 entirely empty digests** — a reply that parsed cleanly but filled no slot,
-rendering to 0 tokens — against arm A's 1/25 and arm C's 3/30. (This is distinct from the truncated
-reply in §2: these parsed fine and simply had nothing in them.) An empty digest is legal by design — ADR-0124 says "Empty is a valid digest" and the scarcity
-of corrections is a feature. But a contract that makes it *easier* to emit nothing would be a quality
-regression hiding inside a conformance win, and 5 vs 1 at N=30 is too small to call either way.
+Arm B returned **5/30 digests that parsed cleanly but filled no slot** (0 rendered tokens), against
+arm A's 1 and arm C's 3. An empty digest is legal by design — ADR-0124 says "Empty is a valid
+digest", and the scarcity of corrections is a feature, not an under-performing slot.
 
-Flagged rather than resolved. If the contract ships to production, empty-digest rate is the thing to
-watch, and it is cheaply observable — `session_summary_generated` already logs per-slot counts.
+Two things keep this from being a simple regression, and they pull in opposite directions. Against:
+the contract raises the *silent* failure count (1 → 5), and a silent failure marks its session clean
+forever (§2.3). For: the contract *lowers* total non-delivery (6 → 5 → 3), because arm A's losses are
+truncations, which are more numerous and merely louder. So the contract does not appear to make
+sessions lose their memory more often — it changes how the remaining losses announce themselves.
+
+Too small to call either way at N=30, and left as a signal. If the contract ships, this is the thing
+to watch, and it is cheaply observable: `session_summary_generated` already logs per-slot counts, so
+an empty digest is countable today without new instrumentation.
 
 ---
 
@@ -253,22 +320,40 @@ Two forward-looking notes:
 
 ## 10. Recommendation
 
-1. **Ship the contract, but for the reasons that survived measurement — not the headline one.** It
-   removes a fence heuristic that is load-bearing on 37% of replies, it makes truncation separable
-   from format drift for the first time, and it **cuts output tokens by 53%** (33,214 → 15,765 per
-   30 calls; ~30% cheaper per call). On a role that was the single largest line in the cost ledger,
-   that saving is the most immediately valuable thing here. What it does *not* do is deliver more
-   usable digests (§2.1).
-2. **Do not re-enable the sweep on this alone.** End-to-end delivery is 15/30 against today's 18/30.
-   Re-enabling now would produce a system that stores *fewer* usable digests while looking healthier
-   in the logs — perfect parse rates, silent empties. Calibrate the bound first (FRE-994), then
-   re-enable.
-3. **Gate on the empty-digest rate, not the parse rate.** An empty digest marks its session clean and
-   is never retried, so it is a silent non-delivery. It is the metric that tracks what this artifact
-   is actually for.
-4. **Do not generalise the contract on this evidence alone.** FRE-995 §8.3 sequences the other
+Stated bound-independently, because §2.1 shows any conclusion that depends on the 250-token
+placeholder is a statement about the placeholder.
+
+**Three results survive every threshold:**
+
+- **Truncation 5/30 → 0/30.**
+- **Format drift 11/30 → 0/30**, and by mechanism rather than by sample (§3).
+- **Output tokens down 53%** (33,214 → 15,765 per 30 calls; ~30% cheaper per call). On what was the
+  single largest line in the cost ledger, this is the most immediately bankable result here.
+
+**One result is indeterminate:** the delivery effect. It cannot be scored until the bound is
+calibrated, and it should be reported as indeterminate rather than as a regression — which an
+earlier revision of this document got wrong.
+
+**One result is directional, on total non-delivery** (§2.3): 6 → 5 → 3 across A, B, C, so fewer
+sessions end with no memory under the contract, and fewest under the bounded variant. The failures
+that remain, though, are silent rather than loud.
+
+Therefore:
+
+1. **Ship the contract**, for the three bound-independent results above.
+2. **Do not re-enable the sweep until the bound is calibrated** (FRE-994). Not because delivery
+   regresses — that is unknown — but because re-enabling against an uncalibrated 250 would reject
+   roughly a quarter of usable output while the logs showed a perfect parse rate.
+3. **Gate on non-delivery, split loud versus silent** — not on parse rate. An empty digest marks its
+   session clean and is never retried, so it is the failure that hides. It is also the metric that
+   tracks what this artifact is actually for.
+4. **Give FRE-994 both halves of the question** (§2.2): how small a digest can be before it drops
+   conclusions, *and* where the bound must sit for the generator to reach it at all — 312 / 413 / 419
+   by arm, with p90s of 273 / 331 / 352. Optimising the first without the second sets a target the
+   generator cannot hit.
+5. **Do not generalise the contract on this evidence alone.** FRE-995 §8.3 sequences the other
    sites; skill routing (A4) is the natural second subject and the cheapest confirmation, because its
    16.3% failure rate is pure format drift with zero truncation — the one place the contract's
    remaining claim can be tested cleanly.
-5. **Drop item-count bounds as a length lever** (§5), and tell FRE-994 to measure against the prompt
-   target and the ceiling instead.
+6. **Item-count bounds: wrong lever for length, possible lever for completion** (§5, §5.1). Do not
+   simply drop them; treat length and completion as separate questions.

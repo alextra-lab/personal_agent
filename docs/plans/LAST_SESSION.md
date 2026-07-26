@@ -93,9 +93,14 @@ produce a 12-per-hour overnight pattern.*
 - **Next work is study, not build.** The owner's words: each stream gets a deep objective+implementation
   study in **new clean master sessions** — Captain's Log reflection, Summarization (session digest),
   and Insights, separately. Objective first. Do not patch.
-- **Awaiting Deploy queue is NOT verifiable right now** — the harness is down. FRE-936 and FRE-986 are
-  merged and deployed but their UI/reconnect behaviour was never observed; FRE-970/972/943/971/969/739/717
-  are older residue. Do not close any of them on inference.
+- **Awaiting Deploy queue — 9 tickets, and the distinction matters.** **8 of 9 are already DEPLOYED**
+  and are simply awaiting verification and an evidence-close: FRE-936 (deployed in the 19:51Z gateway +
+  20:06Z PWA rebuild, UI behaviour never observed), and FRE-970/972/943/971/969/739/717 (deployed in
+  earlier waves — the 06:35Z and 12:50Z rebuilds and older — never closed out).
+  **FRE-986 is the ONLY one genuinely undeployed:** it merged at 20:29Z, *38 minutes after* the last
+  gateway rebuild, so its code has never run anywhere. **It needs a deploy, not just verification**,
+  whenever the harness comes back.
+  Nothing here is verifiable while the harness is stopped — do not close any of them on inference.
 - **PR #678** (incident report) is open with auto-merge deliberately OFF — the owner may want to read
   it before it lands.
 - **A refinement to a standing fact:** a `fre-XXX` token in a docs PR **body** also triggers the Linear

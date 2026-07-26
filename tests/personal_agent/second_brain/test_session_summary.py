@@ -836,19 +836,21 @@ def test_system_prompt_can_drop_the_length_rule_entirely() -> None:
     assert '"label"' in prompt
 
 
-def test_system_prompt_states_structural_limits_when_given() -> None:
-    """ADR-0124 D3's bound is a global token count; the KG destination constrains
-    shape instead (items per slot, length per item). Structural arms state both.
+def test_system_prompt_takes_no_argument_the_curve_does_not_use() -> None:
+    """The length policy is the only thing the curve varies, so it is the only thing
+    this function exposes.
+
+    An earlier revision also accepted structural per-slot limits, on the theory that
+    the digest's JSON destination constrains shape rather than size. FRE-996 then
+    measured item ceilings moving the rendered median by three tokens, so that lever
+    does not control length and the parameters had no caller. Production surface
+    added for an eval that then does not use it is production surface nobody
+    maintains.
     """
-    prompt = ss.system_prompt(max_items_per_slot=3, max_tokens_per_item=35)
+    import inspect
 
-    assert "3" in prompt
-    assert "35" in prompt
-    assert "LIMITS" in prompt
-
-
-def test_system_prompt_omits_the_limits_clause_when_not_given() -> None:
-    """Absent structural arguments the prompt must be exactly today's prompt — the
-    clause is additive, never a default the live producer silently inherits.
-    """
-    assert "LIMITS" not in ss.system_prompt()
+    assert set(inspect.signature(ss.system_prompt).parameters) == {
+        "target_tokens",
+        "max_tokens",
+        "include_length_rule",
+    }

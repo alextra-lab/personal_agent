@@ -302,19 +302,11 @@ def build_prompt(captures: Sequence[TaskCapture]) -> str:
 #: prompt.
 _LENGTH_RULE_MARKER = "LENGTH — include an item only"
 
-_LIMITS_RULE = """\
-LIMITS — this digest is stored as a structured record, so its bounds are \
-structural: at most {max_items} items in any one slot, and at most {max_item_tokens} \
-tokens per item. Fewer is always acceptable; the caps are ceilings, not quotas.
-"""
-
 
 def system_prompt(
     *,
     target_tokens: int | None = None,
     max_tokens: int | None = None,
-    max_items_per_slot: int | None = None,
-    max_tokens_per_item: int | None = None,
     include_length_rule: bool = True,
 ) -> str:
     """Render the system prompt, optionally overriding its length policy.
@@ -331,8 +323,6 @@ def system_prompt(
     Args:
         target_tokens: Overrides ``session_digest_target_tokens``.
         max_tokens: Overrides ``session_digest_max_tokens``.
-        max_items_per_slot: When given, adds a structural ceiling on items per slot.
-        max_tokens_per_item: When given, adds a structural ceiling on item length.
         include_length_rule: When False, the LENGTH paragraph is removed rather than
             given a large number — a large number is still an instruction, and the
             unbounded arm measures what the generator writes when nothing constrains
@@ -355,13 +345,6 @@ def system_prompt(
         if start != -1:
             end = prompt.find("\n\n", start)
             prompt = prompt[:start] + (prompt[end + 2 :] if end != -1 else "")
-
-    if max_items_per_slot is not None and max_tokens_per_item is not None:
-        prompt = (
-            prompt.rstrip("\n")
-            + "\n\n"
-            + _LIMITS_RULE.format(max_items=max_items_per_slot, max_item_tokens=max_tokens_per_item)
-        )
 
     return prompt
 

@@ -1,15 +1,27 @@
-"""Arms, response schema, token decomposition and cost projection (FRE-994 §4, §5.1).
+"""Arms, token decomposition and cost projection (FRE-994 §4, §5.1).
 
-**Arms are structural, not a global token budget.** The digest's destination is a
-JSON-string property on the ``Session`` node (``memory/service.py`` —
-``SET s.session_digest = orjson.dumps(...)``), read back whole and rendered; nothing
-queries inside it. So the graph imposes no token bound at all — it imposes a *shape*.
-A global "250 rendered tokens" is a read-time context-window constraint levied on
-behalf of a Phase-2 consumer that does not exist yet, and it is not expressible in a
-response schema. Items-per-slot and tokens-per-item are, and they are what both the
-schema and the stored record actually constrain. Rendered tokens are still measured
-on every arm — a future consumer pays them, and AC-3's call ceiling derives from
-them — they simply stop being the knob.
+**The knob is the prompt's stated token policy, because it is the only lever that
+works.** Rev 2 of this plan parameterised the arms structurally — items per slot by
+tokens per item — on the reasoning that the digest's destination is a JSON blob on the
+``Session`` node and so constrains *shape* rather than size. FRE-996 then measured that
+directly and the reasoning does not survive it: per-slot item ceilings moved the rendered
+median by three tokens (221 → 224), because item *text* is unbounded and a model
+satisfies "at most five items" by writing five longer ones. The schema dialect has no
+``maxLength`` (FRE-995 §8.2), so structure cannot express length at all.
+
+What is left is the prompt's own LENGTH rule, and FRE-996's numbers suggest it is doing
+real work: told 180 target / 250 maximum, the generator lands at a rendered median of
+208–224. The tail is where it fails — p90 341–389, all-pass 413–419. So the curve's
+question is whether moving that stated number moves the distribution, and at what point
+moving it down starts costing consequential conclusions.
+
+Item ceilings survive as a **separate arm answering a separate question**: FRE-996 §5.1
+found the bounded variant produced content on 27 of 30 sessions against 25 and 24, and
+flagged length and completion as questions that should not be conflated. That arm uses the
+production :func:`digest_tool` with ``bounded=True``, not a re-implementation.
+
+Every constant below that prices the run is **measured from FRE-996's committed records**
+(``telemetry/evaluation/fre996-pilot-final.json``, 90 calls), not assumed.
 """
 
 from __future__ import annotations
@@ -18,11 +30,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import orjson
-from pydantic import BaseModel, Field
 
 from personal_agent.config import load_model_config, resolve_role_model_key
 from personal_agent.llm_client.token_counter import estimate_tokens
-from personal_agent.memory.session_digest import Correction, DigestItem
+from personal_agent.memory.session_digest_wire import digest_tool, digest_tool_choice
 from personal_agent.second_brain.session_summary import system_prompt
 
 #: Catalog key of the scoring model. Deliberately a different family from the
@@ -30,11 +41,16 @@ from personal_agent.second_brain.session_summary import system_prompt
 #: share its blind spots between the ground truth and its own scorer.
 SCORING_MODEL_KEY = "gpt-5.4-mini"
 
-#: Output ceiling for every generation call. Set high enough that it is never the
-#: binding constraint at the bounds under test — the production producer's 2,048 is
-#: the wall 57% of live calls hit, and a curve run against that wall would measure
-#: the wall rather than the bound.
+#: Output ceiling for every generation call. Above production's 2,048 so the ceiling is
+#: never the binding constraint — a curve measured against a wall measures the wall. The
+#: highest contract output FRE-996 recorded was 1,050, so this binds nothing but the
+#: unbounded arm, which is exactly the arm whose natural length is the question.
 CALL_OUTPUT_CEILING = 4_096
+
+#: ADR-0124 D3's own ratio between the target it states and the maximum it enforces
+#: (180 / 250). Each arm moves both together at this ratio, so an arm is a **policy
+#: pair**, not an isolated hard maximum — named as a confound, not averaged over.
+TARGET_TO_MAX_RATIO = 0.72
 
 
 @dataclass(frozen=True)
@@ -43,39 +59,40 @@ class Arm:
 
     Attributes:
         name: Stable identifier, used as the JSONL key and the table row.
-        max_items_per_slot: Structural ceiling on items in any one slot.
-        max_tokens_per_item: Structural ceiling on the length of one item.
-        implied_rendered_ceiling: Roughly what the pair permits once rendered.
-            Reported for comparability with ADR-0124 D3's existing figure; never
-            enforced, because enforcing it would reintroduce the instrument this
-            study is testing.
-        unbounded: When True the length rule leaves the prompt entirely rather than
-            being widened — a large number is still an instruction, and this arm
-            measures what the generator writes when nothing constrains it.
-        structured: False reruns the arm in today's free-text-JSON mode, so the
-            amendment can tell FRE-993 whether structured output alone removes the
-            truncation class that produces its schema-invalid failures.
+        max_tokens: The maximum the prompt states. Zero on the unbounded arm.
+        bounded_schema: Send the contract with per-slot item ceilings
+            (:func:`digest_tool` ``bounded=True``). Answers FRE-996 §5.1's completion
+            question, which is orthogonal to length.
+        unbounded: When True the LENGTH paragraph leaves the prompt entirely rather
+            than being widened — a large number is still an instruction, and this arm
+            measures what the generator writes when nothing constrains it. It is the
+            reference the loss endpoint is measured *against*, so it is not optional.
     """
 
     name: str
-    max_items_per_slot: int = 0
-    max_tokens_per_item: int = 0
-    implied_rendered_ceiling: int = 0
+    max_tokens: int = 0
+    bounded_schema: bool = False
     unbounded: bool = False
-    structured: bool = True
+
+    @property
+    def target_tokens(self) -> int:
+        """The target the prompt states, derived at ADR-0124 D3's own ratio."""
+        return int(self.max_tokens * TARGET_TO_MAX_RATIO)
 
 
+#: The curve. ``t250`` is the policy deployed today, so it anchors the curve to the
+#: incumbent rather than floating free of it; ``t400`` sits in the region FRE-996 §2.2
+#: measured as where every content-bearing contract digest passes (413–419).
 ARMS: tuple[Arm, ...] = (
-    Arm("s1x25", 1, 25, 100),
-    Arm("s2x30", 2, 30, 240),  # ≈ ADR-0124 D3's 250 as deployed today
-    Arm("s3x35", 3, 35, 420),
-    Arm("s4x45", 4, 45, 720),
-    Arm("s6x55", 6, 55, 1_320),
+    Arm("t120", 120),
+    Arm("t180", 180),
+    Arm("t250", 250),  # deployed today: 180 target / 250 maximum
+    Arm("t400", 400),
     Arm("unbounded", unbounded=True),
+    Arm("t250_bounded", 250, bounded_schema=True),
 )
 
-#: The mode contrast (§4.0): one arm rerun exactly as production emits today.
-FREE_TEXT_CONTRAST_ARM = Arm("s2x30_freetext", 2, 30, 240, structured=False)
+ARMS_BY_NAME = {a.name: a for a in ARMS}
 
 
 def system_prompt_for(arm: Arm) -> str:
@@ -92,86 +109,29 @@ def system_prompt_for(arm: Arm) -> str:
     """
     if arm.unbounded:
         return system_prompt(include_length_rule=False)
-    return system_prompt(
-        target_tokens=int(arm.implied_rendered_ceiling * 0.72),
-        max_tokens=arm.implied_rendered_ceiling,
-        max_items_per_slot=arm.max_items_per_slot,
-        max_tokens_per_item=arm.max_tokens_per_item,
-    )
+    return system_prompt(target_tokens=arm.target_tokens, max_tokens=arm.max_tokens)
 
 
-# ── Response schema, derived from the stored record ─────────────────────────
+def tools_for(arm: Arm) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The contract this arm sends, and the choice that forces it.
 
+    Always the production contract from ``session_digest_wire`` — FRE-996 shipped it and
+    the producer sends it on every call, so a harness-local schema would calibrate a
+    contract that is not deployed.
 
-class ResponseDigest(BaseModel):
-    """The four slots exactly as the graph stores them.
-
-    ``unresolved`` items are :class:`DigestItem`, not ``UnresolvedItem``: ``as_of``
-    is stamped by the producer from the session's own ``ended_at`` (ADR-0124 D3 —
-    compute state, generate meaning), so asking the model for it would invite the
-    hallucinated timestamp the design excludes.
-    """
-
-    established: list[DigestItem] = Field(default_factory=list)
-    decisions: list[DigestItem] = Field(default_factory=list)
-    unresolved: list[DigestItem] = Field(default_factory=list)
-    corrections: list[Correction] = Field(default_factory=list)
-
-
-class DigestResponse(BaseModel):
-    """What one generation call must return."""
-
-    label: str
-    digest: ResponseDigest
-
-
-def _strip_annotations(node: object) -> object:
-    """Remove ``title`` and ``description`` from a generated schema.
-
-    Pydantic lifts each model's docstring into ``description``. Left in, every
-    generation call would ship this module's internal rationale to the provider as
-    part of the prompt — paid for on every call, and an instruction the design never
-    intended the model to read.
-    """
-    if isinstance(node, dict):
-        return {
-            k: _strip_annotations(v) for k, v in node.items() if k not in ("title", "description")
-        }
-    if isinstance(node, list):
-        return [_strip_annotations(v) for v in node]
-    return node
-
-
-def digest_response_schema() -> dict[str, Any]:
-    """The JSON schema enforced on generation calls.
-
-    Derived from the models the graph stores rather than hand-written, so it cannot
-    drift from the record it is meant to produce.
+    Args:
+        arm: The arm being run.
 
     Returns:
-        A JSON schema for :class:`DigestResponse`, stripped of generated prose.
+        The ``tools`` list and the ``tool_choice`` payload.
     """
-    stripped = _strip_annotations(DigestResponse.model_json_schema())
-    assert isinstance(stripped, dict)
-    return stripped
-
-
-def response_format() -> dict[str, Any]:
-    """The ``response_format`` payload for a structured generation call."""
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "session_digest",
-            "schema": digest_response_schema(),
-            "strict": False,
-        },
-    }
+    return [digest_tool(bounded=arm.bounded_schema)], digest_tool_choice()
 
 
 # ── Token decomposition (§4.4) ──────────────────────────────────────────────
 
 #: JSON keys whose values are model-authored prose. Everything else in the payload
-#: is scaffolding the schema requires.
+#: is scaffolding the contract requires.
 _CONTENT_KEYS = frozenset({"text", "span", "evidence_span", "label"})
 
 
@@ -217,9 +177,10 @@ def decompose_tokens(raw: str, *, output_tokens: int) -> TokenParts:
     """Split one call's billed output into content and structural tokens.
 
     The content count uses the same cl100k estimator the budget path uses, which
-    systematically undercounts Anthropic tokenisation; the structural residual
-    therefore skews slightly high. The comparison the study draws — content against
-    the *bound*, both on the same estimator — is unaffected.
+    undercounts Anthropic tokenisation by about half again (:data:`PROVIDER_TOKEN_RATIO`);
+    the structural residual therefore skews high and is read as an upper bound on the
+    envelope, not a point estimate. The comparison the study draws — content against the
+    *bound*, both on the same estimator — is unaffected.
 
     Args:
         raw: The model's raw output.
@@ -243,52 +204,67 @@ def decompose_tokens(raw: str, *, output_tokens: int) -> TokenParts:
     )
 
 
-#: Live prior for the unbounded arm: FRE-993 measured mean output of 1,338 tokens
-#: across 446 production calls. The unbounded arm has no caps to construct a payload
-#: from, so this stands in — flagged as an observation, not a projection.
-OBSERVED_UNBOUNDED_OUTPUT_TOKENS = 1_338
+# ── Cost projection (AC-6) ──────────────────────────────────────────────────
+#
+# Every constant here is measured from FRE-996's 90 committed call records rather than
+# assumed, because rev 2 of this plan priced the run on the cl100k estimator alone and
+# understated billed input by roughly a third — the same class of error, a number that
+# looks measured because it came out of code, that this ticket exists to correct.
+
+#: Anthropic's billed ``prompt_tokens`` divided by this repo's cl100k estimate of the
+#: same prompt. Measured over FRE-996's 30 sessions: p50 1.535, mean 1.544, range
+#: 1.49–1.70. The estimator the cost gate reserves against is systematically low, so a
+#: projection that skips this correction under-prices the run by a third.
+PROVIDER_TOKEN_RATIO = 1.535
+
+#: Billed input tokens the contract's tool definition adds to every call. Measured
+#: exactly — FRE-996's arm B minus arm A prompt tokens was 1,663 on all 30 sessions,
+#: with zero variance, because the definition is identical every time.
+TOOL_DEFINITION_TOKENS = 1_663
+
+#: Billed output tokens per rendered digest token, over FRE-996's 60 contract calls
+#: (p50 2.4, mean 2.7). Most of a digest call's output is envelope — braces, keys and
+#: basis tags — which is why a rendered-token bound and a call ceiling are different
+#: numbers and must be stated separately (AC-3).
+OUTPUT_ENVELOPE_PER_RENDERED_TOKEN = 2.7
+
+#: Rendered tokens produced as a multiple of the maximum the prompt states, at the p90
+#: of FRE-996's contract arms (341/250 = 1.36 and 389/250 = 1.56). Taken at the p90 and
+#: not the median deliberately: this projection is the upper bound the owner authorises
+#: spend against, and a median-priced run is one that overspends half the time.
+RENDERED_OVERSHOOT_P90 = 1.5
+
+#: Upper bound for the unbounded arm's output. No contract-mode measurement of an
+#: unconstrained digest exists — FRE-996's free-text arm A ran to production's 2,048
+#: ceiling on 5 of 30 calls — so the ceiling itself is the only honest bound to price.
+UNBOUNDED_OUTPUT_UPPER_BOUND = 2_048
 
 
-def estimate_max_output_tokens(arm: Arm) -> int:
-    """Billed output of a maximally-compliant response, measured offline.
-
-    A projection resting on a guessed envelope factor is a guess dressed as a
-    number. A payload that fills every slot to the arm's own caps is constructible
-    here, serialised exactly as the schema requires, and counted — so the structural
-    overhead in the estimate is measured rather than assumed. It is an **upper**
-    bound: a compliant response cannot bill more, and most will bill much less.
+def projected_input_tokens(estimated_prompt_tokens: int) -> int:
+    """Billed input for one generation call, corrected to what the provider bills.
 
     Args:
-        arm: The arm to estimate.
+        estimated_prompt_tokens: cl100k estimate of transcript plus system prompt.
 
     Returns:
-        Estimated billed output tokens, never above :data:`CALL_OUTPUT_CEILING`.
+        Projected billed ``prompt_tokens``, including the tool definition.
+    """
+    return round(estimated_prompt_tokens * PROVIDER_TOKEN_RATIO) + TOOL_DEFINITION_TOKENS
+
+
+def projected_output_tokens(arm: Arm) -> int:
+    """Upper-bound billed output for one call on this arm.
+
+    Args:
+        arm: The arm being priced.
+
+    Returns:
+        Projected billed ``completion_tokens``, never above the call ceiling.
     """
     if arm.unbounded:
-        return min(OBSERVED_UNBOUNDED_OUTPUT_TOKENS, CALL_OUTPUT_CEILING)
-
-    # ~4 characters per token under cl100k, the estimator the budget path uses.
-    filler = "x" * (arm.max_tokens_per_item * 4)
-    item = {"text": filler, "basis": "assistant_reasoning", "span": None, "locator": None}
-    correction = {
-        **item,
-        "tier": "self_correction",
-        "evidence_span": filler,
-        "evidence_locator": {"capture_id": "0" * 36, "field": "assistant_text"},
-    }
-    payload = {
-        "label": "x" * 90,
-        "digest": {
-            "established": [item] * arm.max_items_per_slot,
-            "decisions": [item] * arm.max_items_per_slot,
-            "unresolved": [item] * arm.max_items_per_slot,
-            "corrections": [correction] * arm.max_items_per_slot,
-        },
-    }
-    return min(estimate_tokens(orjson.dumps(payload).decode()), CALL_OUTPUT_CEILING)
-
-
-# ── Cost projection (AC-6) ──────────────────────────────────────────────────
+        return min(UNBOUNDED_OUTPUT_UPPER_BOUND, CALL_OUTPUT_CEILING)
+    rendered = arm.max_tokens * RENDERED_OVERSHOOT_P90
+    return min(round(rendered * OUTPUT_ENVELOPE_PER_RENDERED_TOKEN), CALL_OUTPUT_CEILING)
 
 
 @dataclass(frozen=True)
@@ -330,8 +306,8 @@ def project_cost(
     """Price a planned run.
 
     Args:
-        generation_input_tokens: Total input tokens across generation calls.
-        generation_output_tokens: Total output tokens across generation calls.
+        generation_input_tokens: Total billed input tokens across generation calls.
+        generation_output_tokens: Total billed output tokens across generation calls.
         scoring_input_tokens: Total input tokens across extraction and judging.
         scoring_output_tokens: Total output tokens across extraction and judging.
 

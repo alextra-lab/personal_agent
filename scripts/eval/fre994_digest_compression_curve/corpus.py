@@ -59,10 +59,18 @@ class SessionRef:
 
 @dataclass(frozen=True)
 class Sample:
-    """The two disjoint draws, made once and recorded in the manifest."""
+    """The draw, made once and recorded in the manifest.
 
-    fit: tuple[SessionRef, ...]
-    holdout: tuple[SessionRef, ...]
+    There is deliberately no held-out second draw. Rev 2 carried one, and at the sample
+    size the ``study`` lane actually affords it would cost roughly a third of the run's
+    generations to confirm a rule against a subsample whose own confidence interval is
+    wider than the effect being confirmed. The selection bias a holdout guards against —
+    the decision rule picks the smallest arm that clears a threshold, so it takes the
+    maximum over arms and is optimistic — is instead corrected for by bootstrap, which
+    uses every generation and costs nothing.
+    """
+
+    sessions: tuple[SessionRef, ...]
     seed: int
 
 
@@ -78,12 +86,13 @@ def frame_query() -> dict[str, Any]:
     """
     return {
         "size": 0,
-        # `user_id` is required by TaskCapture, and 1,169 of 2,787 documents — every
-        # one of them in an April 2026 `-v2` index — do not carry it. Those documents
-        # cannot be parsed, so a session drawn from that era arrives with part of its
-        # transcript missing while still looking like a complete read. Excluding them
-        # at the frame is what stops the curve attributing the reader's loss to the
-        # bound: a digest cannot omit a conclusion its input never contained.
+        # `user_id` is required by TaskCapture, so a document without it cannot be
+        # parsed and arrives as a silently shorter transcript — which would charge the
+        # bound for material the generator never saw. When this frame was first drawn,
+        # 1,169 of 2,787 documents were in that state; master's 2026-07-26 cleanup
+        # backfilled the real ones and purged the synthetic, and the filter now excludes
+        # nothing. It stays as a standing guard, because the failure it prevents is
+        # silent: the read reports itself complete either way.
         "query": {"bool": {"filter": [{"exists": {"field": "user_id"}}]}},
         "aggs": {
             "by_session": {
@@ -161,29 +170,27 @@ def eligible_sessions(buckets: list[dict[str, Any]]) -> list[SessionRef]:
     ]
 
 
-def draw_sample(eligible: list[SessionRef], *, fit_n: int, holdout_n: int, seed: int) -> Sample:
-    """Draw disjoint fit and held-out samples, stratified by size quartile.
+def draw_sample(eligible: list[SessionRef], *, n: int, seed: int) -> Sample:
+    """Draw the sample, stratified by conversation-size quartile.
 
     Stratification is what makes the absolute-versus-relative question answerable:
     a sample bunched at the median cannot separate a constant bound from one that
-    scales with the material. The held-out draw is disjoint because a rule confirmed
-    on the data it was fitted to has not been confirmed at all.
+    scales with the material.
 
     Args:
         eligible: Output of :func:`eligible_sessions`.
-        fit_n: Sessions in the fit sample.
-        holdout_n: Sessions in the held-out sample.
+        n: Sessions to draw.
         seed: Recorded in the manifest; the run must be reproducible from it.
 
     Returns:
-        The two draws.
+        The draw.
 
     Raises:
-        ValueError: If the frame cannot supply the requested sizes. Refused rather
+        ValueError: If the frame cannot supply the requested size. Refused rather
             than quietly shrunk — a run that silently returns fewer sessions reports
             a sample size it never measured.
     """
-    total = fit_n + holdout_n
+    total = n
     if total > len(eligible):
         raise ValueError(
             f"requested {total} sessions but only {len(eligible)} eligible in the frame"
@@ -213,7 +220,7 @@ def draw_sample(eligible: list[SessionRef], *, fit_n: int, holdout_n: int, seed:
         if not progressed:  # pragma: no cover — guarded by the size check above
             break
 
-    return Sample(fit=tuple(drawn[:fit_n]), holdout=tuple(drawn[fit_n:total]), seed=seed)
+    return Sample(sessions=tuple(drawn), seed=seed)
 
 
 async def read_captures(ref: SessionRef, *, es_client: Any, trace_id: str) -> SessionCaptureRead:

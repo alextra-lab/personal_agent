@@ -1,9 +1,9 @@
 """FRE-994 digest compression curve harness.
 
-Covers the parts that must be right *before* any spend: the sampling frame, the
-structural arm table, the response schema derived from the stored record, the
-token decomposition that separates envelope overhead from instruction-following
-failure, and the cost projection the owner authorises the run against.
+Covers the parts that must be right *before* any spend: the sampling frame, the arm
+table, the production contract the arms send, the token decomposition that separates
+envelope overhead from instruction-following failure, and the cost projection the owner
+authorises the run against.
 
 The paid stages (generation, extraction, judging) are exercised here only through
 their pure helpers — the calls themselves are Phase B/C and are not made by any
@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import pytest
 from scripts.eval.fre994_digest_compression_curve import arms, corpus
+
+from personal_agent.memory.session_digest_wire import DIGEST_TOOL_NAME
 
 # ── Sampling frame ──────────────────────────────────────────────────────────
 
@@ -57,97 +59,119 @@ def test_frame_rejects_synthetic_ids_and_single_turn_sessions() -> None:
 
 def test_sample_is_deterministic_for_a_seed() -> None:
     """The manifest records a seed; a run that cannot be reproduced from it is not evidence."""
-    first = corpus.draw_sample(corpus.eligible_sessions(_frame()), fit_n=12, holdout_n=4, seed=7)
-    again = corpus.draw_sample(corpus.eligible_sessions(_frame()), fit_n=12, holdout_n=4, seed=7)
+    first = corpus.draw_sample(corpus.eligible_sessions(_frame()), n=16, seed=7)
+    again = corpus.draw_sample(corpus.eligible_sessions(_frame()), n=16, seed=7)
 
-    assert [s.session_id for s in first.fit] == [s.session_id for s in again.fit]
-    assert [s.session_id for s in first.holdout] == [s.session_id for s in again.holdout]
+    assert [s.session_id for s in first.sessions] == [s.session_id for s in again.sessions]
 
 
-def test_fit_and_holdout_are_disjoint() -> None:
-    """The held-out confirmation is worthless if the rule was fitted on it."""
-    sample = corpus.draw_sample(corpus.eligible_sessions(_frame()), fit_n=12, holdout_n=4, seed=7)
+def test_a_larger_draw_extends_a_smaller_one_rather_than_replacing_it() -> None:
+    """The budget affords a precommitted N with an extension if measured spend leaves room.
 
-    assert not {s.session_id for s in sample.fit} & {s.session_id for s in sample.holdout}
-    assert len(sample.fit) == 12
-    assert len(sample.holdout) == 4
+    That extension is only honest if the larger draw is the smaller draw plus more —
+    otherwise "we extended the sample" is really "we redrew it after seeing results".
+    """
+    small = corpus.draw_sample(corpus.eligible_sessions(_frame()), n=12, seed=7)
+    large = corpus.draw_sample(corpus.eligible_sessions(_frame()), n=24, seed=7)
+
+    assert [s.session_id for s in large.sessions][:12] == [s.session_id for s in small.sessions]
 
 
 def test_sample_spans_every_size_quartile() -> None:
     """Stratification is what makes the absolute-vs-relative question answerable; a sample bunched at the median cannot distinguish the two shapes at all."""
-    sample = corpus.draw_sample(corpus.eligible_sessions(_frame()), fit_n=12, holdout_n=4, seed=7)
+    sample = corpus.draw_sample(corpus.eligible_sessions(_frame()), n=16, seed=7)
 
-    assert {s.quartile for s in sample.fit} == {1, 2, 3, 4}
+    assert {s.quartile for s in sample.sessions} == {1, 2, 3, 4}
 
 
 def test_oversized_request_is_refused_not_silently_truncated() -> None:
     """Asking for more sessions than the frame holds must fail loudly: a run that silently returns fewer reports a sample size it did not measure."""
     with pytest.raises(ValueError, match="only 40 eligible"):
-        corpus.draw_sample(corpus.eligible_sessions(_frame()), fit_n=60, holdout_n=12, seed=7)
+        corpus.draw_sample(corpus.eligible_sessions(_frame()), n=72, seed=7)
+
+
+def test_frame_excludes_documents_the_capture_model_cannot_parse() -> None:
+    """`TaskCapture` requires `user_id`, so a document without it silently shortens the transcript while the read still reports itself complete.
+
+    Master's 2026-07-26 cleanup emptied that class, but the filter stays: the
+    failure it prevents is invisible, so its absence would not be noticed.
+    """
+    query = corpus.frame_query()["query"]
+
+    assert {"exists": {"field": "user_id"}} in query["bool"]["filter"]
 
 
 # ── Arms ────────────────────────────────────────────────────────────────────
 
 
-def test_arms_are_structural_not_a_global_token_budget() -> None:
-    """ADR-0124 D3 bounds a rendered token count; the KG destination stores a JSON record and constrains shape instead.
+def test_the_curve_varies_the_prompts_stated_token_policy() -> None:
+    """FRE-996 §5 measured that per-slot item ceilings move rendered length by three tokens, because item text is unbounded and the schema dialect has no `maxLength`.
 
-    Arms carry the structural pair.
+    The prompt's LENGTH rule is the only lever left, so it is the one the curve moves.
     """
-    bounded = [a for a in arms.ARMS if not a.unbounded]
+    curve = [a for a in arms.ARMS if not a.unbounded and not a.bounded_schema]
 
-    assert bounded, "expected bounded arms"
-    for arm in bounded:
-        assert arm.max_items_per_slot > 0
-        assert arm.max_tokens_per_item > 0
+    assert len(curve) >= 3, "a curve needs at least three points"
+    for arm in curve:
+        prompt = arms.system_prompt_for(arm)
+        assert str(arm.max_tokens) in prompt
+        assert str(arm.target_tokens) in prompt
+
+
+def test_the_deployed_policy_is_one_of_the_arms() -> None:
+    """A curve that does not contain today's setting cannot say whether today's setting is wrong — it can only describe alternatives to something it never measured."""
+    incumbent = arms.ARMS_BY_NAME["t250"]
+
+    assert incumbent.max_tokens == 250
+    assert incumbent.target_tokens == 180
 
 
 def test_unbounded_arm_removes_the_instruction_rather_than_widening_it() -> None:
     """A very large number is still an instruction.
 
-    The unbounded arm measures what
-    the generator writes when nothing constrains it, so the rule has to leave.
+    The unbounded arm measures what the generator writes when nothing constrains
+    it — it is the reference the loss endpoint is differenced against — so the
+    rule has to leave the prompt entirely.
     """
     unbounded = [a for a in arms.ARMS if a.unbounded]
 
     assert len(unbounded) == 1
-    prompt = arms.system_prompt_for(unbounded[0])
-    assert "LENGTH" not in prompt
-    assert "LIMITS" not in prompt
+    assert "LENGTH" not in arms.system_prompt_for(unbounded[0])
 
 
-def test_bounded_arm_prompt_states_its_own_limits() -> None:
-    arm = next(a for a in arms.ARMS if not a.unbounded)
-    prompt = arms.system_prompt_for(arm)
+def test_arms_send_the_production_contract_not_a_local_copy() -> None:
+    """FRE-996 shipped the wire contract and the producer sends it on every call.
 
-    assert "LIMITS" in prompt
-    assert str(arm.max_items_per_slot) in prompt
-    assert str(arm.max_tokens_per_item) in prompt
-
-
-# ── Response schema ─────────────────────────────────────────────────────────
-
-
-def test_schema_is_derived_from_the_stored_record() -> None:
-    """Hand-writing the schema would let it drift from the model the graph stores.
-
-    It carries all four slots and the label.
+    A schema declared in the harness would calibrate a contract that is not
+    deployed, and would drift from it on the next edit.
     """
-    schema = arms.digest_response_schema()
-    props = schema["properties"]
+    arm = arms.ARMS_BY_NAME["t250"]
+    tools, choice = arms.tools_for(arm)
 
-    assert set(props) == {"label", "digest"}
-    slots = schema["$defs"]["ResponseDigest"]["properties"]
-    assert set(slots) == {"established", "decisions", "unresolved", "corrections"}
+    assert tools[0]["function"]["name"] == DIGEST_TOOL_NAME
+    assert choice["function"]["name"] == DIGEST_TOOL_NAME
 
 
-def test_schema_never_asks_the_model_for_computed_state() -> None:
+def test_only_the_completion_arm_carries_per_slot_ceilings() -> None:
+    """Item ceilings are the wrong lever for length and a candidate lever for completion (FRE-996 §5.1), so they belong to one arm answering that question — not to the curve, where they would confound it."""
+    bounded = [a for a in arms.ARMS if a.bounded_schema]
+
+    assert [a.name for a in bounded] == ["t250_bounded"]
+    # Same stated length policy as the incumbent, so the contrast isolates the schema.
+    assert bounded[0].max_tokens == arms.ARMS_BY_NAME["t250"].max_tokens
+    assert "maxItems" in str(arms.tools_for(bounded[0])[0])
+    assert "maxItems" not in str(arms.tools_for(arms.ARMS_BY_NAME["t250"])[0])
+
+
+def test_the_prompt_never_asks_the_model_for_computed_state() -> None:
     """`as_of` is stamped by the producer from the session's own ended_at (ADR-0124 D3, compute state / generate meaning).
 
-    A schema that asked for it would invite
-    exactly the hallucinated timestamp the design excludes.
+    A contract that asked for it would invite exactly the hallucinated timestamp
+    the design excludes.
     """
-    assert "as_of" not in str(arms.digest_response_schema())
+    tools, _ = arms.tools_for(arms.ARMS_BY_NAME["t250"])
+
+    assert "as_of" not in str(tools)
 
 
 # ── Token decomposition (§4.4) ──────────────────────────────────────────────
@@ -167,17 +191,16 @@ def test_decomposition_separates_content_from_structure() -> None:
 
     parts = arms.decompose_tokens(raw, output_tokens=200)
 
+    assert parts.content_tokens is not None
     assert parts.content_tokens > 0
     assert parts.structural_tokens == 200 - parts.content_tokens
-    assert parts.structural_tokens > 0
 
 
 def test_unparsable_output_is_reported_not_dropped() -> None:
     """Truncated rows are the majority failure in production.
 
-    Excluding them biases
-    every ratio toward successes — which is precisely how the live defect stayed
-    invisible for fourteen days.
+    Excluding them biases every ratio toward successes — which is precisely how
+    the live defect stayed invisible for fourteen days.
     """
     parts = arms.decompose_tokens('{"label": "cut off mid-str', output_tokens=2048)
 
@@ -186,15 +209,11 @@ def test_unparsable_output_is_reported_not_dropped() -> None:
     assert parts.structural_tokens is None
 
 
-# ── Cost projection (§AC-6) ─────────────────────────────────────────────────
+# ── Cost projection (AC-6) ──────────────────────────────────────────────────
 
 
 def test_projection_prices_each_stage_at_its_own_model() -> None:
-    """Generation runs on Sonnet and scoring on gpt-5.
-
-    4-mini; pricing both at one
-    rate would misstate the number the owner authorises.
-    """
+    """Generation runs on Sonnet and scoring on a cross-family mini; pricing both at one rate would misstate the number the owner authorises."""
     projection = arms.project_cost(
         generation_input_tokens=1_000_000,
         generation_output_tokens=0,
@@ -219,55 +238,56 @@ def test_projection_counts_output_at_the_output_rate() -> None:
     assert projection.scoring_usd == pytest.approx(4.50)
 
 
+def test_input_projection_corrects_the_estimator_and_adds_the_tool_definition() -> None:
+    """Rev 2 of this plan priced the run on the cl100k estimate alone and under-stated billed input by roughly a third.
+
+    The estimator is systematically low against Anthropic's tokeniser (measured
+    1.535× over FRE-996's 30 sessions) and the contract's tool definition adds a
+    further 1,663 tokens to every single call — neither is optional to count.
+    """
+    billed = arms.projected_input_tokens(10_000)
+
+    assert billed == round(10_000 * arms.PROVIDER_TOKEN_RATIO) + arms.TOOL_DEFINITION_TOKENS
+    assert billed > 10_000 * 1.5
+
+
+def test_output_projection_rises_with_the_stated_bound() -> None:
+    """The projection has to respond to the knob the arms move, or it is pricing something other than the run."""
+    assert arms.projected_output_tokens(arms.ARMS_BY_NAME["t120"]) < arms.projected_output_tokens(
+        arms.ARMS_BY_NAME["t400"]
+    )
+
+
+def test_output_projection_is_an_upper_bound_not_a_median() -> None:
+    """A median-priced run overspends half the time.
+
+    FRE-996 measured a rendered p90 of 341–389 against a stated 250, so the
+    projection prices the overshoot rather than the typical case.
+    """
+    t250 = arms.ARMS_BY_NAME["t250"]
+
+    # FRE-996's largest observed contract output at this policy was 1,050 tokens.
+    assert arms.projected_output_tokens(t250) >= 1_000
+
+
+def test_output_projection_is_capped_by_the_call_ceiling() -> None:
+    """No arm can bill more than the ceiling the call sets — a projection that exceeded it would be projecting spend the provider cannot produce."""
+    for arm in arms.ARMS:
+        assert arms.projected_output_tokens(arm) <= arms.CALL_OUTPUT_CEILING
+
+
 # ── AC-5: the producer stays disabled ───────────────────────────────────────
 
 
 def test_harness_never_calls_the_live_producer() -> None:
     """The curve is generated out of band.
 
-    Importing `generate_session_digest` would
-    route through the settings gate and the sweep's cost lane; calling it would
-    re-enable the feature this study runs alongside, not on.
+    Importing `generate_session_digest` would route through the settings gate and
+    the sweep's cost lane; calling it would re-enable the feature this study runs
+    alongside, not on.
     """
     import inspect
 
     for module in (arms, corpus):
         source = inspect.getsource(module)
         assert "generate_session_digest" not in source
-
-
-# ── Offline output estimate (§AC-6) ─────────────────────────────────────────
-
-
-def test_output_estimate_is_measured_not_guessed() -> None:
-    """The projection the owner authorises must not rest on a guessed envelope factor.
-
-    A fully-populated payload at an arm's own caps is constructible offline,
-    so the structural overhead is measured rather than assumed.
-    """
-    small = next(a for a in arms.ARMS if a.name == "s1x25")
-    large = next(a for a in arms.ARMS if a.name == "s6x55")
-
-    assert arms.estimate_max_output_tokens(small) < arms.estimate_max_output_tokens(large)
-    # Scaffolding is never free: a compliant payload always bills more than its prose.
-    assert arms.estimate_max_output_tokens(small) > small.max_items_per_slot * (
-        small.max_tokens_per_item * 4
-    )
-
-
-def test_output_estimate_is_capped_by_the_call_ceiling() -> None:
-    """No arm can bill more than the ceiling the call sets — a projection that exceeded it would be projecting spend the provider cannot produce."""
-    for arm in arms.ARMS:
-        assert arms.estimate_max_output_tokens(arm) <= arms.CALL_OUTPUT_CEILING
-
-
-def test_frame_excludes_documents_the_capture_model_cannot_parse() -> None:
-    """1,169 of 2,787 live capture documents carry no `user_id`, which TaskCapture requires.
-
-    A session drawn from that era arrives with part of its transcript
-    missing while the read still looks healthy — and the curve would then charge the
-    bound for conclusions the generator was never shown.
-    """
-    query = corpus.frame_query()["query"]
-
-    assert {"exists": {"field": "user_id"}} in query["bool"]["filter"]

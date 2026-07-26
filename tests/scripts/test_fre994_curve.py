@@ -65,18 +65,6 @@ def test_sample_is_deterministic_for_a_seed() -> None:
     assert [s.session_id for s in first.sessions] == [s.session_id for s in again.sessions]
 
 
-def test_a_larger_draw_extends_a_smaller_one_rather_than_replacing_it() -> None:
-    """The budget affords a precommitted N with an extension if measured spend leaves room.
-
-    That extension is only honest if the larger draw is the smaller draw plus more —
-    otherwise "we extended the sample" is really "we redrew it after seeing results".
-    """
-    small = corpus.draw_sample(corpus.eligible_sessions(_frame()), n=12, seed=7)
-    large = corpus.draw_sample(corpus.eligible_sessions(_frame()), n=24, seed=7)
-
-    assert [s.session_id for s in large.sessions][:12] == [s.session_id for s in small.sessions]
-
-
 def test_sample_spans_every_size_quartile() -> None:
     """Stratification is what makes the absolute-vs-relative question answerable; a sample bunched at the median cannot distinguish the two shapes at all."""
     sample = corpus.draw_sample(corpus.eligible_sessions(_frame()), n=16, seed=7)
@@ -242,38 +230,94 @@ def test_input_projection_corrects_the_estimator_and_adds_the_tool_definition() 
     """Rev 2 of this plan priced the run on the cl100k estimate alone and under-stated billed input by roughly a third.
 
     The estimator is systematically low against Anthropic's tokeniser (measured
-    1.535× over FRE-996's 30 sessions) and the contract's tool definition adds a
-    further 1,663 tokens to every single call — neither is optional to count.
+    1.535× at the median over FRE-996's 30 sessions) and the contract's tool
+    definition adds a further ~1,663 tokens to every single call — neither is
+    optional to count.
     """
-    billed = arms.projected_input_tokens(10_000)
+    arm = arms.ARMS_BY_NAME["t250"]
+    billed = arms.projected_input_tokens(10_000, arm=arm, basis="expected")
 
-    assert billed == round(10_000 * arms.PROVIDER_TOKEN_RATIO) + arms.TOOL_DEFINITION_TOKENS
+    assert billed == round(10_000 * arms.PROVIDER_TOKEN_RATIO_P50) + arms.TOOL_DEFINITION_TOKENS
     assert billed > 10_000 * 1.5
+
+
+def test_input_projection_prices_the_bounded_contract_higher() -> None:
+    """The bounded definition carries extra `maxItems` keys, so applying the plain definition's measured increment to it would under-price that arm."""
+    plain = arms.projected_input_tokens(10_000, arm=arms.ARMS_BY_NAME["t250"], basis="expected")
+    bounded = arms.projected_input_tokens(
+        10_000, arm=arms.ARMS_BY_NAME["t250_bounded"], basis="expected"
+    )
+
+    assert bounded > plain
+
+
+def test_the_ceiling_basis_is_the_only_true_upper_bound() -> None:
+    """Rev 3 multiplied a median input ratio by a mean envelope by a p90 overshoot and called the product an upper bound.
+
+    A product of marginals bounds nothing. The `ceiling` basis prices every call
+    at the maximum its own parameters physically permit, which is the only figure
+    that can honestly be compared against a budget cap.
+    """
+    for arm in arms.ARMS:
+        expected = arms.projected_output_tokens(arm, basis="expected")
+        planning = arms.projected_output_tokens(arm, basis="planning")
+        ceiling = arms.projected_output_tokens(arm, basis="ceiling")
+
+        assert expected <= planning <= ceiling
+        assert ceiling == arm.call_ceiling
+
+
+def test_the_unbounded_arm_is_priced_at_its_ceiling_on_every_basis() -> None:
+    """No contract-mode measurement of an unconstrained digest exists — FRE-996's unconstrained arm was free-text — so an expected value for it would be invention rather than projection."""
+    unbounded = arms.ARMS_BY_NAME["unbounded"]
+
+    for basis in arms.COST_BASES:
+        assert arms.projected_output_tokens(unbounded, basis=basis) == unbounded.call_ceiling
 
 
 def test_output_projection_rises_with_the_stated_bound() -> None:
     """The projection has to respond to the knob the arms move, or it is pricing something other than the run."""
-    assert arms.projected_output_tokens(arms.ARMS_BY_NAME["t120"]) < arms.projected_output_tokens(
-        arms.ARMS_BY_NAME["t400"]
-    )
+    assert arms.projected_output_tokens(
+        arms.ARMS_BY_NAME["t120"], basis="expected"
+    ) < arms.projected_output_tokens(arms.ARMS_BY_NAME["t250"], basis="expected")
 
 
-def test_output_projection_is_an_upper_bound_not_a_median() -> None:
-    """A median-priced run overspends half the time.
+def test_an_unknown_cost_basis_is_refused() -> None:
+    """A silently-defaulted basis would let a caller compare an expected figure against a cap while believing it was a bound."""
+    arm = arms.ARMS_BY_NAME["t250"]
 
-    FRE-996 measured a rendered p90 of 341–389 against a stated 250, so the
-    projection prices the overshoot rather than the typical case.
+    with pytest.raises(ValueError, match="unknown cost basis"):
+        arms.projected_output_tokens(arm, basis="worst")
+    with pytest.raises(ValueError, match="unknown cost basis"):
+        arms.projected_input_tokens(1_000, arm=arm, basis="worst")
+
+
+def test_bounded_arms_keep_productions_call_ceiling() -> None:
+    """A ceiling below the arm's natural output would make truncation an artefact of the harness — FRE-993's own bug, arriving through the eval.
+
+    Production's 2,048 is roughly twice FRE-996's largest observed contract
+    output, so it binds nothing at any policy under test.
     """
-    t250 = arms.ARMS_BY_NAME["t250"]
+    assert arms.ARMS_BY_NAME["t250"].call_ceiling == arms.BOUNDED_CALL_CEILING
+    assert arms.ARMS_BY_NAME["unbounded"].call_ceiling == arms.UNBOUNDED_CALL_CEILING
+    assert arms.UNBOUNDED_CALL_CEILING > arms.BOUNDED_CALL_CEILING
 
-    # FRE-996's largest observed contract output at this policy was 1,050 tokens.
-    assert arms.projected_output_tokens(t250) >= 1_000
 
+def test_the_registry_is_the_precommitment() -> None:
+    """The plan's cost, multiplicity and selection claims are computed for exactly this arm set.
 
-def test_output_projection_is_capped_by_the_call_ceiling() -> None:
-    """No arm can bill more than the ceiling the call sets — a projection that exceeded it would be projecting spend the provider cannot produce."""
-    for arm in arms.ARMS:
-        assert arms.projected_output_tokens(arm) <= arms.CALL_OUTPUT_CEILING
+    An arm left in the registry but absent from the plan is an arm the driver's
+    default would run — pricing one experiment and executing another, which is
+    what rev 3 did with `t400`.
+    """
+    assert [a.name for a in arms.ARMS] == [
+        "t120",
+        "t180",
+        "t250",
+        "unbounded",
+        "t250_bounded",
+    ]
+    assert set(arms.JUDGED_ARM_NAMES) <= {a.name for a in arms.ARMS}
 
 
 # ── AC-5: the producer stays disabled ───────────────────────────────────────

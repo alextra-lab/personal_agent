@@ -37,8 +37,15 @@ from personal_agent.config.settings import get_settings  # noqa: E402
 from personal_agent.llm_client.token_counter import estimate_tokens  # noqa: E402
 from personal_agent.second_brain.session_summary import build_prompt  # noqa: E402
 
-#: Sessions whose reference sets are hand-authored before any digest is seen. The
-#: only genuinely independent ground truth in the study (§4.3).
+#: The precommitted sample size. Fixed before the run and not revised after seeing any
+#: result: an "extend if there is budget left" rule reads as prudence but is optional
+#: stopping, because spend is driven by output length and output length *is* one of the
+#: two decision endpoints.
+PRECOMMITTED_N = 20
+
+#: Sessions whose reference sets are hand-authored before any digest is seen — the first
+#: eight of the stratified draw, so the subset is fixed by the seed rather than chosen.
+#: The only genuinely independent ground truth in the study (§4.3).
 CALIBRATION_N = 8
 
 #: Rough output of one extraction or judging call. Scoring is a small fraction of the
@@ -56,7 +63,7 @@ def _es_client() -> Any:
 
 
 async def _dry_run(*, n: int, seed: int, arm_names: list[str], judge_arms: list[str]) -> Any:
-    """Draw the sample, count every prompt, and price the run per arm."""
+    """Draw the sample, count every prompt, and price the run on all three bases."""
     selected = [arms.ARMS_BY_NAME[name] for name in arm_names]
     es = _es_client()
     try:
@@ -66,7 +73,10 @@ async def _dry_run(*, n: int, seed: int, arm_names: list[str], judge_arms: list[
         sample = corpus.draw_sample(eligible, n=n, seed=seed)
 
         sessions: list[dict[str, Any]] = []
-        per_arm_tokens = {a.name: {"input": 0, "output": 0, "calls": 0} for a in selected}
+        per_arm_tokens: dict[str, dict[str, int]] = {
+            a.name: {"calls": 0, **{f"{b}_{d}": 0 for b in arms.COST_BASES for d in ("in", "out")}}
+            for a in selected
+        }
         score_in = score_out = 0
 
         for ref in sample.sessions:
@@ -92,11 +102,14 @@ async def _dry_run(*, n: int, seed: int, arm_names: list[str], judge_arms: list[
             per_arm: dict[str, dict[str, int]] = {}
             for arm in selected:
                 estimated = transcript_tokens + estimate_tokens(arms.system_prompt_for(arm))
-                billed_in = arms.projected_input_tokens(estimated)
-                billed_out = arms.projected_output_tokens(arm)
-                per_arm[arm.name] = {"input_tokens": billed_in, "output_tokens": billed_out}
-                per_arm_tokens[arm.name]["input"] += billed_in
-                per_arm_tokens[arm.name]["output"] += billed_out
+                per_arm[arm.name] = {"estimated_prompt_tokens": estimated}
+                for basis in arms.COST_BASES:
+                    billed_in = arms.projected_input_tokens(estimated, arm=arm, basis=basis)
+                    billed_out = arms.projected_output_tokens(arm, basis=basis)
+                    per_arm[arm.name][f"{basis}_in"] = billed_in
+                    per_arm[arm.name][f"{basis}_out"] = billed_out
+                    per_arm_tokens[arm.name][f"{basis}_in"] += billed_in
+                    per_arm_tokens[arm.name][f"{basis}_out"] += billed_out
                 per_arm_tokens[arm.name]["calls"] += 1
 
             # Extraction: one call per session over the transcript, on the scoring model.
@@ -119,26 +132,33 @@ async def _dry_run(*, n: int, seed: int, arm_names: list[str], judge_arms: list[
                 }
             )
 
-        gen_in = sum(t["input"] for t in per_arm_tokens.values())
-        gen_out = sum(t["output"] for t in per_arm_tokens.values())
-        projection = arms.project_cost(
-            generation_input_tokens=gen_in,
-            generation_output_tokens=gen_out,
-            scoring_input_tokens=score_in,
-            scoring_output_tokens=score_out,
-        )
-        arm_costs = {
-            name: round(
-                arms.project_cost(
-                    generation_input_tokens=t["input"],
-                    generation_output_tokens=t["output"],
-                    scoring_input_tokens=0,
-                    scoring_output_tokens=0,
-                ).generation_usd,
-                2,
+        projections: dict[str, Any] = {}
+        for basis in arms.COST_BASES:
+            gen_in = sum(t[f"{basis}_in"] for t in per_arm_tokens.values())
+            gen_out = sum(t[f"{basis}_out"] for t in per_arm_tokens.values())
+            projected = arms.project_cost(
+                generation_input_tokens=gen_in,
+                generation_output_tokens=gen_out,
+                scoring_input_tokens=score_in,
+                scoring_output_tokens=score_out,
             )
-            for name, t in per_arm_tokens.items()
-        }
+            projections[basis] = {
+                "generation_usd": round(projected.generation_usd, 2),
+                "scoring_usd": round(projected.scoring_usd, 2),
+                "total_usd": round(projected.total_usd, 2),
+                "per_arm_generation_usd": {
+                    name: round(
+                        arms.project_cost(
+                            generation_input_tokens=t[f"{basis}_in"],
+                            generation_output_tokens=t[f"{basis}_out"],
+                            scoring_input_tokens=0,
+                            scoring_output_tokens=0,
+                        ).generation_usd,
+                        2,
+                    )
+                    for name, t in per_arm_tokens.items()
+                },
+            }
 
         return {
             "frame": {
@@ -146,7 +166,19 @@ async def _dry_run(*, n: int, seed: int, arm_names: list[str], judge_arms: list[
                 "eligible_sessions": len(eligible),
                 "index": corpus.CAPTURES_INDEX,
             },
-            "sample": {"seed": seed, "n": len(sample.sessions), "calibration_n": CALIBRATION_N},
+            "sample": {
+                "seed": seed,
+                "n": len(sample.sessions),
+                "calibration_n": CALIBRATION_N,
+                # The seed alone does not reproduce the draw. Stratification assigns
+                # quartiles over the *live* frame, which grows as sessions are captured
+                # — the eligible count moved 314 → 315 between two runs half an hour
+                # apart — so the same seed against a later frame draws a different
+                # sample. The id list is the reproducible artifact; the seed only makes
+                # it arbitrary.
+                "session_ids": [s.session_id for s in sample.sessions],
+                "calibration_session_ids": [s.session_id for s in sample.sessions[:CALIBRATION_N]],
+            },
             "arms": arm_names,
             "judged_arms": judge_arms,
             # Surfaced, never silent: a session the reader could not deliver is a
@@ -155,18 +187,10 @@ async def _dry_run(*, n: int, seed: int, arm_names: list[str], judge_arms: list[
             "unreadable_sessions": [s["session_id"] for s in sessions if "skipped" in s],
             "measurable_sessions": sum(1 for s in sessions if "skipped" not in s),
             "generation_calls": sum(t["calls"] for t in per_arm_tokens.values()),
-            "tokens": {
-                "generation_input_billed": gen_in,
-                "generation_output_upper_bound": gen_out,
-                "scoring_input": score_in,
-                "scoring_output": score_out,
-            },
-            "projection_usd": {
-                "generation": round(projection.generation_usd, 2),
-                "scoring": round(projection.scoring_usd, 2),
-                "total_upper_bound": round(projection.total_usd, 2),
-                "per_arm_generation": arm_costs,
-            },
+            "scoring_tokens": {"input": score_in, "output": score_out},
+            # Three bases, never one number. `ceiling` is the only true upper bound and
+            # the only one to compare against a cap; `expected` is the likely spend.
+            "projection_usd": projections,
             "sessions": sessions,
         }
     finally:
@@ -181,16 +205,20 @@ def main() -> int:
         action="store_true",
         help="Phase A: sample, count and price. Makes no model calls.",
     )
-    parser.add_argument("--n", type=int, default=36, help="sessions in the sample")
+    # Defaults ARE the precommitted design, not a starting point to be overridden: the
+    # plan's cost, multiplicity and selection claims are all computed for exactly this
+    # sample size and arm set, so a default that ran anything else would price one
+    # experiment and execute another.
+    parser.add_argument("--n", type=int, default=PRECOMMITTED_N, help="sessions in the sample")
     parser.add_argument("--seed", type=int, default=994)
     parser.add_argument(
         "--arms",
         default=",".join(a.name for a in arms.ARMS),
-        help="comma-separated arm names to generate",
+        help="comma-separated arm names to generate (default: the precommitted set)",
     )
     parser.add_argument(
         "--judge-arms",
-        default="t120,t180,t250,unbounded",
+        default=",".join(arms.JUDGED_ARM_NAMES),
         help=(
             "arms whose digests are scored for consequential-conclusion loss. Length, "
             "delivery and completion are read off every generated arm for free; only "

@@ -820,9 +820,10 @@ def test_system_prompt_overrides_both_token_bounds() -> None:
 
 
 def test_system_prompt_can_drop_the_length_rule_entirely() -> None:
-    """The unbounded arm measures what the generator writes when nothing constrains
-    it, so the LENGTH paragraph has to leave the prompt — not merely get a large
-    number, which is still an instruction.
+    """The LENGTH paragraph has to leave the prompt, not merely get a large number.
+
+    The unbounded arm measures what the generator writes when nothing constrains it,
+    and a very large number is still an instruction.
     """
     prompt = ss.system_prompt(include_length_rule=False)
 
@@ -837,8 +838,7 @@ def test_system_prompt_can_drop_the_length_rule_entirely() -> None:
 
 
 def test_system_prompt_takes_no_argument_the_curve_does_not_use() -> None:
-    """The length policy is the only thing the curve varies, so it is the only thing
-    this function exposes.
+    """The length policy is the only thing the curve varies, so it is all this exposes.
 
     An earlier revision also accepted structural per-slot limits, on the theory that
     the digest's JSON destination constrains shape rather than size. FRE-996 then

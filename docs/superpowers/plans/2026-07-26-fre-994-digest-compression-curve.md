@@ -3,7 +3,9 @@
 **Ticket:** FRE-994 (Approved, `stream:build2`, `Tier-1:Opus`) · **Backing ADR:** ADR-0124 D3/D4
 **Blocks:** FRE-993 (producer fix consumes this result)
 **Depends on:** FRE-992 (merged `fc4553c9` — union capture reader) · FRE-996 (merged `5b0675a5` — output contract)
-**Date:** 2026-07-26 · **Rev 3** — rewritten after FRE-996 merged; §9 records what changed and why
+**Date:** 2026-07-26 · **Rev 4** — rev 3 rewritten after FRE-996 merged; rev 4 after codex plan-review
+returned 7 findings (2 critical, 4 major). §9 records what changed and why; §10 records each finding
+against its resolution.
 
 ---
 
@@ -45,8 +47,8 @@ Frame: `agent-captains-captures-*` excluding `…-subagents-*` on `cloud-sim-ela
 | | Count |
 |---|---:|
 | Sessions in the index | 893 |
-| Eligible: UUID-keyed, ≥ `MIN_TURNS_FOR_DIGEST` (2) | **314** |
-| Sampled sessions readable in full | 36 / 36 in the N=36 draw |
+| Eligible: UUID-keyed, ≥ `MIN_TURNS_FOR_DIGEST` (2) | **315** |
+| Sampled sessions readable in full | 20 / 20 |
 
 Master's same-day cleanup removed 927 test captures, restored 242 real April captures with correct
 attribution, and backfilled `user_id`. The consequence for this study is direct and worth stating:
@@ -54,9 +56,14 @@ the previous draw lost 14 of 72 sessions to unparsable captures that still repor
 read, and the current draw loses none. The `user_id` filter stays in the frame as a standing guard
 because that failure is silent.
 
-Sample: stratified by conversation-size quartile, equal draw, round-robin, deterministic seed
-recorded in the manifest. A larger draw is a strict prefix extension of a smaller one (asserted by a
-test) — which is what makes §7's extension rule an extension rather than a redraw.
+Sample: stratified by conversation-size quartile, equal draw, round-robin, deterministic seed.
+
+**The seed does not by itself reproduce the draw, and the manifest records the ids because of it.**
+Quartiles are assigned over the *live* frame, which grows as sessions are captured — the eligible
+count moved 314 → 315 between two dry runs half an hour apart — so the same seed against a later
+frame draws a different sample. The manifest records the drawn session ids and the calibration
+subset's ids; those, not the seed, are the reproducible artifact. The seed only makes the choice
+arbitrary rather than chosen.
 
 ## 4. Measurement
 
@@ -71,9 +78,19 @@ still matters to the amendment. Its conclusion about the instrument does not sur
 > so the model satisfies "at most five items" by writing five longer ones, and the schema dialect has
 > no `maxLength` (FRE-995 §8.2). **Structure cannot express length.**
 
-What is left is the prompt's own LENGTH rule, and it appears to be doing real work: told 180 target /
-250 maximum, the generator lands at a rendered median of 208–224. The failure is in the tail. So the
-curve moves the stated policy, and the first thing it measures is whether the distribution follows.
+What is left is the prompt's own LENGTH rule — and whether *that* lever works is **unknown, not
+established**. FRE-996 held the prompt constant across all three of its arms, so a generator told
+"180 target / 250 maximum" landing at a rendered median of 208–224 shows a coincidence of numbers,
+not that the paragraph caused them; the model and the schema may produce that distribution with the
+paragraph deleted. The one controlled contrast FRE-996 ran was on `maxItems`, and it supports exactly
+one claim: *those* item ceilings did not shorten output.
+
+So the curve moves the stated policy, and **the first thing it measures is whether the distribution
+follows at all.** Prompt inertness is a live hypothesis and a reportable outcome: `t120`, `t180` and
+`t250` vary the numbers while `unbounded` deletes the paragraph, so if the four length distributions
+are indistinguishable the delivery endpoint says so — and the amendment's conclusion becomes that no
+prompt-side bound is an instrument at all, which would be the most useful single thing this ticket
+could hand FRE-993.
 
 Three consequences:
 
@@ -112,10 +129,20 @@ question is the excess over the unbounded arm:
 > **ΔL(T) = L(T) − L(unbounded)**
 
 **Paired, not unpaired.** Every arm runs on the same sessions, so ΔL is a within-session paired
-difference and its interval comes from a paired bootstrap over sessions (and, equivalently, from the
-discordant pairs). This matters for what N buys: rev 2's power table priced ΔL as a difference of two
-independent proportions, which is the wrong estimator for this design and needs roughly twice the N
-it actually does.
+difference and its interval comes from a paired bootstrap over sessions — equivalently, from the
+discordant pairs. Pairing is the *correct* estimator here; how much precision it buys is **not
+claimed**, because that depends entirely on the discordance rate, which is unknown until the run and
+which no pilot has measured. An earlier revision asserted the paired design needed "roughly half" the
+N of an unpaired one. That figure was not computed from anything and is withdrawn. Uncontrollable
+temperature (§4.6) further weakens the pairing, since two arms on one session are not deterministic
+counterfactuals.
+
+**What N=20 actually resolves.** ΔL moves in steps of 1/20 = 0.05, so the 0.10 decision threshold
+sits two discordant sessions away from zero and the 0.20 interval bound four. A handful of judge
+verdicts can move the selected arm. The loss endpoint at this budget is therefore **exploratory and
+is labelled as such in the write-up** — it can rule an arm out loudly, it can return inconclusive,
+and it is not on its own sufficient to move a production constant. The delivery endpoint is the
+decision-grade half.
 
 `partial` coverage scores **0 in the primary endpoint** (an item half-carried is an item a future
 reader cannot rely on) and **0.5 in a reported sensitivity analysis**. Both precommitted; if they
@@ -128,22 +155,44 @@ The metric is only as good as the reference. Making it two `gpt-5.4-mini` calls 
 to judge — shares one model's blind spots between the ground truth and its scorer, and nothing in the
 design would notice.
 
-- **Calibration subset (8 sessions): I build the reference set by hand**, reading the transcripts,
-  before seeing any digest. This is the only genuinely independent ground truth in the study, and it
-  costs labour rather than money.
+- **Calibration subset: the first 8 sessions of the stratified draw**, fixed by the seed rather than
+  chosen, and named in the manifest before any reference is written. **I build their reference sets by
+  hand**, reading the transcripts, before seeing any digest.
 - **LLM extractor** (`gpt-5.4-mini`, independent prompt, cross-family from the generator) runs on
   every sampled session, including the calibration subset.
 - **Precommitted validity gate:** on the calibration subset the extractor must recall **≥80% of the
-  hand-authored reference items** and introduce **≤20% items I judge not consequential**. Below either
-  threshold the LLM reference is not fit for purpose → the loss endpoint runs on the hand-referenced
-  subset only (a smaller, honest N), or is discarded. It is not rescued by relaxing the gate.
+  hand-authored reference items** and introduce **≤20% items I judge not consequential**.
 - **Judge agreement:** on the calibration subset, judge verdicts are compared to mine on the same
-  items. Precommitted: **item-level agreement ≥80% and Cohen's κ ≥ 0.6**. Below that, the judge is not
+  items. Precommitted: **item-level agreement ≥80% and Cohen's κ ≥ 0.6**. Below that the judge is not
   measuring what it claims and the loss endpoint is discarded (memory: a bad eval is discarded, not
   reframed). The delivery endpoint is unaffected — it involves no judge.
-- **Anchors are stop conditions, with numbers.** An empty digest must score **retention ≤ 0.05**; the
-  reference scored against itself must score **≥ 0.95**. Either anchor failing **invalidates the loss
-  endpoint** — stated here so it cannot be downgraded to a caveat later.
+- **On gate failure the loss endpoint becomes descriptive and cannot select the bound.** An earlier
+  revision allowed falling back to "the hand-referenced subset only". That subset is 8 sessions, which
+  is far below what §6's rule needs, and running the same rule on it would launder a number nobody
+  should trust into a production constant. Precommitted: a failed extractor gate means loss is
+  reported for the calibration subset **as illustration only**, and the amendment's bound comes from
+  the delivery endpoint or from nowhere.
+
+**What these gates do and do not establish, stated plainly.** I write the reference items, I decide
+which extractor additions are not consequential, and I supply the verdicts the judge is compared
+against. Every gate above can therefore pass because two models successfully reproduced *one person's
+reading* — including if that reading systematically overlooks the kind of conclusion compression
+destroys. Writing the references before seeing any digest prevents arm-by-arm tailoring; it does not
+make the ground truth independent of the person who also designed the arms and knows the thresholds.
+Three things bound that, none of which removes it:
+
+- The hand-authored reference sets and the transcript ids are **committed to the repo**, so the
+  owner or a later reader can audit the judgement rather than take it on trust.
+- Reference items are written against **ADR-0124 D3's own definition** of a consequential conclusion,
+  quoted at the top of the reference file, rather than against an ad-hoc sense of importance.
+- The write-up states the limitation in these words, in its Limitations section, rather than in a
+  footnote.
+
+**The two anchors are plumbing checks, not validity evidence.** An empty digest must score retention
+**≤ 0.05** and the reference scored against itself **≥ 0.95**; either failing means the scorer is
+broken and the loss endpoint is discarded. But a scorer can pass both while still misjudging
+compressed paraphrases — which are exactly the cases that select the arm — so passing them is
+necessary and nowhere near sufficient. Rev 3 implied otherwise.
 
 ### 4.4 Separating instruction-failure from envelope overhead
 
@@ -202,7 +251,12 @@ shape** and names the sample size that would. It does not pick the more interest
 | `unbounded` | LENGTH rule removed | plain | the reference ΔL is differenced against |
 | `t250_bounded` | 180 / 250 | `bounded=True` | completion contrast (FRE-996 §5.1) |
 
-Five arms. `t400` was priced and cut: the `unbounded` arm already supplies the upper anchor for the
+Five arms, and the registry in `arms.py` contains **exactly these five** — rev 3's plan said five
+while its code still carried a sixth (`t400`) that the driver's default would have run, pricing one
+experiment and executing another. The registry is the precommitment now, and the driver's defaults
+reproduce the design this section prices.
+
+`t400` was cut deliberately: the `unbounded` arm already supplies the upper anchor for the
 controllability question, and the decision the ticket exists to make is about how far the bound can
 come *down*. If the answer turns out to be "higher than 250", the evidence for it is the unbounded
 arm's own achieved distribution, which the run measures directly.
@@ -212,9 +266,15 @@ delivery and completion but not judged — it shares `t250`'s length policy, so 
 second estimate of the same point on the curve.
 
 Generation uses the **production model and production prompt** (`session_summary` → `claude-sonnet-5`;
-`build_prompt` and `system_prompt` imported, never copied). Call ceiling **4,096** on every arm so it
-is never binding — FRE-996's largest contract output was 1,050 — with `finish_reason` recorded so
+`build_prompt` and `system_prompt` imported, never copied), with `finish_reason` recorded so
 truncation stays distinguishable from a valid stop.
+
+Call ceilings differ by arm, and the difference is a measurement choice rather than a budget one.
+Bounded arms use production's **2,048** — roughly twice FRE-996's largest observed contract output
+(1,050), so it binds nothing at any policy under test. The `unbounded` arm uses **4,096**, because it
+is the one arm whose natural length is the open question and a curve measured against a wall measures
+the wall. Its truncation rate is reported: if it truncates at 4,096, that is itself the finding that
+an unconstrained contract digest exceeds twice the production ceiling.
 
 ### 5.2 Phase A — free (complete)
 
@@ -236,9 +296,9 @@ denial stops the run without losing what it already measured.
 
 Selection bias is corrected by bootstrap rather than by a held-out draw. Rev 2 carried a held-out
 sample; at the N this budget affords it would spend a third of the generations confirming a rule
-against a subsample whose own interval is wider than the effect. The optimism the holdout guards
-against — the rule takes the *minimum arm clearing a threshold*, so it is biased — is estimated
-directly by a bootstrap optimism correction, which uses every generation and costs nothing.
+against a subsample whose own interval is wider than the effect. The procedure that replaces it is
+specified numerically in §6.3 — "a bootstrap optimism correction" on its own is not an executable
+precommitment, which is what rev 3 offered.
 
 ## 6. Precommitted decision rule (fixed before any spend)
 
@@ -258,60 +318,119 @@ as the floor any such bound has to clear. That is a legitimate outcome, not a fa
 exists to determine, so no arm is compared against it as a criterion. It appears only as the
 incumbent arm, described alongside the others.
 
-## 7. Sample size, cost, and the extension rule
+### 6.1 Ordering is unambiguous; selection is the risk
 
-### 7.1 What the money buys
+Both components of an arm move at the fixed 0.72 ratio, so ordering by stated maximum also orders the
+target and "smallest" is well-defined across `t120 < t180 < t250`. The hazard is not semantic, it is
+statistical: the rule takes the **minimum over arms of a threshold crossing**, on a small sample, so
+noise in a single arm can promote it. With ΔL moving in steps of 0.05, one or two judge verdicts can
+make `t120` pass while `t180` fails — a non-monotone ordering that a compression curve should not
+produce, and that the rule as stated would happily reward with the smallest bound.
+
+### 6.2 Monotonicity is a precondition, not an observation
+
+> **Precommitted:** if the observed loss ordering is non-monotone — a tighter arm showing *lower* ΔL
+> than a looser one by more than one session's worth (0.05) — the curve is **not behaving as a
+> compression curve** and the rule returns **inconclusive** for the affected region. It does not
+> select the tighter arm.
+
+### 6.3 Selection stability, specified
+
+> Resample **sessions** (not cells) with replacement, B = 10,000. On each replicate, recompute L(T)
+> for every judged arm from that replicate's sessions and **re-apply §6's full rule, including §6.2**.
+> Record which arm it selects, or that it returned inconclusive.
+>
+> **The selected arm must be selected in ≥60% of replicates.** Below that, the run reports the
+> selection frequency table and returns **inconclusive** rather than a bound. The optimism of the
+> point estimate is reported as the gap between the nominal ΔL of the selected arm and the mean ΔL of
+> whichever arm each replicate selected.
+
+Resampling sessions rather than cells is what preserves the pairing: a session enters or leaves a
+replicate with all four of its judged arms attached.
+
+## 7. Sample size and cost
+
+### 7.1 The caps, and when the run can happen
 
 The `study` lane's standing caps are **$5.00 daily / $7.00 weekly** (FRE-839). No cap is to be
 raised — master's dispatch is explicit, and FRE-996 set the precedent by fitting inside it. The
-`_total` weekly cap of $30 is at $25.26 for the week ending 2026-07-26, so **the run happens on or
+`_total` weekly cap of $30 stands at $25.26 for the week ending 2026-07-26, so **the run happens on or
 after Monday 2026-07-27**, when the daily, weekly and total windows have all reset.
 
-Projection at N=24 × 5 arms = 120 generation calls, from real assembled prompts:
+### 7.2 Three projections, because one number would be a lie
 
-| Stage | Billed tokens | Upper-bound cost |
-|---|---:|---:|
-| Generation (input) | 851k | $2.55 |
-| Generation (output) | 115k | $1.73 |
-| Extraction + judging | 178k in / 72k out | $0.45 |
-| **Total** | | **$4.73** |
+Rev 3 multiplied a *median* input ratio by a *mean* envelope by a *p90* overshoot and called the
+product an upper bound. It is not one — the product of three central-or-tail marginals bounds
+nothing — and the conclusion it was used to support ("no budget denial is possible mid-run") was
+false. Every projection is now reported on three explicitly-labelled bases:
 
-Inside the $5 daily cap, so **no budget denial is possible mid-run**. Expected actual is materially
-lower: FRE-996 spent $1.21 against a $2.33 worst case (52%), because the projection prices output at
-the p90 overshoot rather than the median.
+| Basis | Input ratio | Output | Answers |
+|---|---|---|---|
+| `expected` | p50 1.535 | p50 envelope × p50 overshoot | what the run most likely costs |
+| `planning` | max 1.697 | p90 envelope × p90 overshoot | what it costs if the tail arrives |
+| `ceiling` | max 1.697 | **every call at its own output ceiling** | the only true upper bound |
 
-**The projection itself is a corrected number, and the correction is the point.** Rev 2 priced this
-run at $12.64 using the cl100k estimator alone. Measured against FRE-996's 90 committed call records,
-that estimator undercounts Anthropic's billed input by **1.535×**, and the contract's tool definition
-adds **1,663 tokens to every call** — neither was counted. The old figure was not conservative, it
-was wrong in the direction that gets a run denied halfway through.
+At the precommitted **N=20 × 5 arms = 100 generation calls**, priced from real assembled prompts:
 
-### 7.2 Precommitted extension rule
+| | expected | planning | **ceiling** |
+|---|---:|---:|---:|
+| Generation | $3.70 | $4.60 | $5.80 |
+| Extraction + judging | $0.38 | $0.38 | $0.38 |
+| **Total** | **$4.08** | **$4.98** | **$6.18** |
 
-> **If, after the run completes, measured spend leaves ≥ $1.60 of the weekly `study` cap, the sample
-> extends from N=24 to N=36 at the same seed** — a strict prefix extension, so the first 24 sessions
-> are unchanged — and every reported quantity is recomputed over N=36.
+**The ceiling is the number that faces the cap**: $6.18 against $7.00 weekly, and the `planning`
+figure of $4.98 against $5.00 daily. FRE-996 landed at 52% of its worst case, so ~$2.5 actual is the
+realistic expectation — but the design is sized so that even the physically-maximal run stays inside
+the standing caps, which is what makes "no cap is raised" a property of the plan rather than a hope.
 
-Precommitted rather than decided on seeing results, and stated in the write-up either way. This
-converts a deliberately pessimistic projection from wasted statistical power into optional extra N.
+Three residual honesty notes:
 
-### 7.3 What N=24 can and cannot support
+- **A denial is still possible and is handled, not denied.** Reservations are taken against each
+  call's `max_tokens`, so transient reservation pressure can exceed realised spend. The `study` lane
+  is `on_denial: raise`, records are written incrementally, and a denial is therefore a loud,
+  resumable stop rather than a silently thinned sample.
+- **The unbounded arm is priced at its ceiling on every basis**, including `expected`. There is no
+  contract-mode measurement of an unconstrained digest — FRE-996's unconstrained arm was free-text —
+  so any expected value would be invention. It is the single largest line in the projection ($1.94 of
+  $4.08) and that is the honest cost of not knowing.
+- **The bounded arm's tool-definition cost is an estimate, not a measurement.** The plain definition's
+  1,663 billed tokens is exact (FRE-996 arm B minus arm A, zero variance across 30 sessions). The
+  bounded definition was never sent through a priced call, so its 1,702 is that measurement scaled by
+  the two definitions' cl100k ratio, and is labelled as such in the code.
+
+**The correction is itself a finding.** Rev 2 priced this run at $12.64 on the cl100k estimator
+alone; the same design bills nearer $17 once the 1.535× estimator gap and the 1,663-token tool
+definition are counted. That is the same class of error as the defect this ticket exists to fix — a
+number that looks measured because it came out of code — and it is worth FRE-993 knowing that the
+cost gate reserves against an estimator that runs a third light.
+
+### 7.3 Sample size is fixed at 20, with no extension rule
+
+Rev 3 carried a rule extending N from 24 to 36 if measured spend left room in the weekly cap. It is
+withdrawn: **spend is driven by realised output length, and realised output length *is* the
+reachability endpoint.** A run whose outputs are long and poorly controlled would stop at the small
+N; a run whose outputs are short and well controlled would buy more observations. Precommitting the
+rule prevents discretion, but it does not make fixed-N bootstrap intervals valid under an
+outcome-dependent sample size, and no adjustment for it was specified. N is fixed at 20 before the
+run, in code (`PRECOMMITTED_N`), and is not revised on seeing any result.
+
+### 7.4 What N=20 can and cannot support
 
 Stated plainly, because it is the weakest part of this plan and the owner should see it before
 authorising.
 
-- The **delivery endpoint** is well served: 24 sessions × 5 arms is 120 length observations, and the
-  quantities of interest (p50, p90, all-pass threshold, content-bearing rate) are the same statistics
-  FRE-996 reported usefully at N=30.
-- The **loss endpoint** is tighter. As a paired difference its precision depends on discordant pairs
-  rather than on N alone, so it is better than rev 2's unpaired table suggested — but a ΔL of exactly
-  0.10 will not be separable from 0.20 at this N. The rule can therefore return **inconclusive**, and
-  §8 requires it to say so rather than to round toward a decision.
+- The **delivery endpoint is decision-grade**: 20 sessions × 5 arms is 100 length observations, and
+  the quantities of interest — p50, p90, the all-pass threshold, content-bearing rate, empty rate,
+  truncation rate, the content/structural token split — are the same statistics FRE-996 reported
+  usefully at N=30. This half lands regardless of what the judge does.
+- The **loss endpoint is exploratory** (§4.2): ΔL moves in steps of 0.05, so the rule can rule an arm
+  out, and can return inconclusive, but should not on its own move a production constant.
 
 If the owner would rather buy loss precision than breadth, the lever is dropping `t120` and
-`t250_bounded` and spending the same money on N≈40 over three arms. **My recommendation is the
-five-arm design**: the completion arm answers a question master asked for by name, and a curve with
-three points plus an unbounded reference is the minimum that can show a shape at all.
+`t250_bounded` and spending the same ceiling on N≈33 over three arms. **My recommendation is the
+five-arm design**: the completion arm answers a question master asked for by name, and three policy
+points plus an unbounded reference is the minimum that can show a shape at all — and the shape, not
+the threshold crossing, is what this budget can actually establish.
 
 ## 8. Halt conditions
 
@@ -332,18 +451,39 @@ three points plus an unbounded reference is the minimum that can show a shape at
 | 1 | Arms are structural (items/slot × tokens/item) | Arms are prompt token-policy pairs; one structural arm survives for the completion question | FRE-996 §5 measured item ceilings moving the rendered median by 3 tokens |
 | 2 | Harness declares its own response schema and uses `response_format` | Harness sends production's `digest_tool()` | FRE-996 shipped the contract, and proved `response_format` overwrites `finish_reason` on this model |
 | 3 | `system_prompt()` takes five parameters | Three — the structural pair had no caller left | Change 1 |
-| 4 | Fit N=60 + held-out N=12, $11.94 | N=24 with a precommitted extension to 36, $4.73 | The `study` cap is not to be raised; and the rev-2 price was understated by a third |
+| 4 | Fit N=60 + held-out N=12, $11.94 | N=20 fixed, $6.18 ceiling / $4.08 expected | The `study` cap is not to be raised; and the rev-2 price was understated by a third |
 | 5 | Cost projected from the cl100k estimator | Projected from billed tokens: ×1.535 estimator correction + 1,663 tool tokens | Measured against FRE-996's 90 committed call records |
 | 6 | Held-out confirmation | Bootstrap optimism correction | A holdout at this N costs a third of the run to confirm nothing decisively |
 | 7 | One endpoint (loss), delivery incidental | Two endpoints, delivery free and guaranteed | Master's dispatch: "where the bound must sit for the generator to reach it at all" is co-equal |
-| 8 | Frame excludes 1,169 unparsable captures; 14 of 72 sessions unreadable | Filter retained as a guard; 0 of 36 unreadable | Master's 2026-07-26 corpus cleanup |
+| 8 | Frame excludes 1,169 unparsable captures; 14 of 72 sessions unreadable | Filter retained as a guard; 0 of 20 unreadable | Master's 2026-07-26 corpus cleanup |
 
 Rev 2's five codex findings all still hold and are all still honoured: the precommitted decision rule
 (§6), the hand-authored reference set with numeric discard gates (§4.3), the honestly-powered
 absolute-vs-relative comparison (§4.5), the content-vs-structural token split (§4.4), and numeric
 anchor stop conditions (§8).
 
-## 10. Deliverables
+## 10. Codex plan-review of rev 3 — findings and resolutions
+
+Seven findings: two critical, four major, one minor. All seven are accepted; none required abandoning
+the approach, and all are fixed before any spend, which is what the review was for.
+
+| # | Severity | Finding | Resolution |
+|---|---|---|---|
+| 1 | **Critical** | The executable arm set contradicted the design: `ARMS` still carried `t400` and the driver defaulted to N=36 over all registered arms, so the defaults would have run 216 calls against a plan that priced 120 — pricing one experiment and executing another | `t400` removed from the registry; `PRECOMMITTED_N` and the judged-arm set live in code and **are** the defaults; §5.1 states that the registry is the precommitment |
+| 2 | **Critical** | "Upper bound" was a median input ratio × a mean envelope × a p90 overshoot — a product of marginals bounds nothing; the unbounded arm was priced at 2,048 while its ceiling was 4,096; scoring counts were "rough", not maxima. So "no budget denial is possible mid-run" was false | Three labelled bases (`expected` / `planning` / `ceiling`); `ceiling` prices every call at its own output ceiling with the worst observed input ratio and is the only figure compared against a cap; the false claim is withdrawn and replaced by "a denial is a loud, resumable stop" (§7.2) |
+| 2b | — | The 1,663-token tool increment was measured for the *plain* definition and applied to the bounded one, which carries extra `maxItems` fields | Separate constant, scaled by the two definitions' cl100k ratio and **labelled an estimate, not a measurement**, in both code and §7.2 |
+| 3 | Major | The N=24→36 extension was outcome-dependent optional stopping: spend is driven by output length, and output length *is* the reachability endpoint | Extension rule **withdrawn**. N fixed at 20 in code before the run (§7.3) |
+| 4 | Major | The validity gates check agreement with the author, who also designs the arms and knows the thresholds; the extractor-failure fallback allowed selecting a production bound from 8 sessions | Fallback narrowed: a failed gate makes the loss endpoint **descriptive only, unable to select the bound**; calibration subset fixed as the first 8 of the draw; hand references committed for audit; anchors reclassified as plumbing checks; the limitation stated in the write-up's own words (§4.3) |
+| 5 | Major | "Pairing needs roughly half the N" was asserted, not computed; N=24 cannot separate ΔL=0.10 from 0.20 — the exact boundary the rule uses | Claim withdrawn; ΔL granularity (0.05 at N=20) stated; the loss endpoint is explicitly **exploratory** and insufficient on its own to move a production constant (§4.2, §7.4) |
+| 6 | Major | "Smallest passing arm" can select a noise winner; the promised "bootstrap optimism correction" named no statistic, algorithm or pass/fail effect, so it was not an executable precommitment | §6.2 adds monotonicity as a **precondition** (non-monotone ⟹ inconclusive); §6.3 specifies B=10,000 session-level resampling, re-application of the full rule per replicate, and a **≥60% selection-frequency requirement** or the run returns inconclusive |
+| 7 | Minor | "The prompt rule appears to be doing real work" is an uncontrolled inference — FRE-996 held the prompt constant, so its numbers cannot support it | §4.0 rewritten: prompt inertness is named as a live hypothesis the design detects, not a prior it assumes. Codex confirmed the experimental contrast itself survives |
+
+One correction to the review, recorded because it matters to the design rather than to the score:
+codex noted it could not reproduce the 1.535 and 2.7 constants because FRE-996's raw records are
+gitignored. They are not — `telemetry/evaluation/fre996-pilot-final.json` was committed with PR #683,
+and both constants are recomputed from it in this branch's own measurement step.
+
+## 11. Deliverables
 
 - `docs/research/2026-07-27-fre994-digest-compression-curve.md` — method, corpus, per-arm delivery
   table, ΔL curve with intervals, token decomposition, absolute-vs-relative comparison, trivial

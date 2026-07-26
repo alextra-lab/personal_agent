@@ -41,11 +41,15 @@ from personal_agent.second_brain.session_summary import system_prompt
 #: share its blind spots between the ground truth and its own scorer.
 SCORING_MODEL_KEY = "gpt-5.4-mini"
 
-#: Output ceiling for every generation call. Above production's 2,048 so the ceiling is
-#: never the binding constraint — a curve measured against a wall measures the wall. The
-#: highest contract output FRE-996 recorded was 1,050, so this binds nothing but the
-#: unbounded arm, which is exactly the arm whose natural length is the question.
-CALL_OUTPUT_CEILING = 4_096
+#: Output ceiling for a bounded arm. Production's own value: the highest contract output
+#: FRE-996 recorded was 1,050, so at every policy under test this is roughly twice the
+#: observed maximum and binds nothing.
+BOUNDED_CALL_CEILING = 2_048
+
+#: Output ceiling for the unbounded arm, which is the one arm whose natural length is the
+#: open question — a curve measured against a wall measures the wall. Doubled rather than
+#: removed, because an unbounded ceiling would also remove the cost bound.
+UNBOUNDED_CALL_CEILING = 4_096
 
 #: ADR-0124 D3's own ratio between the target it states and the maximum it enforces
 #: (180 / 250). Each arm moves both together at this ratio, so an arm is a **policy
@@ -79,18 +83,29 @@ class Arm:
         """The target the prompt states, derived at ADR-0124 D3's own ratio."""
         return int(self.max_tokens * TARGET_TO_MAX_RATIO)
 
+    @property
+    def call_ceiling(self) -> int:
+        """Output ceiling for this arm's calls."""
+        return UNBOUNDED_CALL_CEILING if self.unbounded else BOUNDED_CALL_CEILING
 
-#: The curve. ``t250`` is the policy deployed today, so it anchors the curve to the
-#: incumbent rather than floating free of it; ``t400`` sits in the region FRE-996 §2.2
-#: measured as where every content-bearing contract digest passes (413–419).
+
+#: The curve. Exactly the arms the plan prices and the decision rule reads — the registry
+#: **is** the precommitment, so an arm that is not run is not left here for a default to
+#: pick up. ``t250`` is the policy deployed today, so the curve is anchored to the
+#: incumbent rather than floating free of it.
 ARMS: tuple[Arm, ...] = (
     Arm("t120", 120),
     Arm("t180", 180),
     Arm("t250", 250),  # deployed today: 180 target / 250 maximum
-    Arm("t400", 400),
     Arm("unbounded", unbounded=True),
     Arm("t250_bounded", 250, bounded_schema=True),
 )
+
+#: Arms whose digests are scored for consequential-conclusion loss. Delivery is read off
+#: every generated arm for free; only the loss endpoint costs a judging call, and
+#: ``t250_bounded`` shares ``t250``'s length policy, so judging it would buy a second
+#: estimate of the same point on the curve.
+JUDGED_ARM_NAMES: tuple[str, ...] = ("t120", "t180", "t250", "unbounded")
 
 ARMS_BY_NAME = {a.name: a for a in ARMS}
 
@@ -177,7 +192,8 @@ def decompose_tokens(raw: str, *, output_tokens: int) -> TokenParts:
     """Split one call's billed output into content and structural tokens.
 
     The content count uses the same cl100k estimator the budget path uses, which
-    undercounts Anthropic tokenisation by about half again (:data:`PROVIDER_TOKEN_RATIO`);
+    undercounts Anthropic tokenisation by about half again
+    (:data:`PROVIDER_TOKEN_RATIO_P50`);
     the structural residual therefore skews high and is read as an upper bound on the
     envelope, not a point estimate. The comparison the study draws — content against the
     *bound*, both on the same estimator — is unaffected.
@@ -212,59 +228,95 @@ def decompose_tokens(raw: str, *, output_tokens: int) -> TokenParts:
 # looks measured because it came out of code, that this ticket exists to correct.
 
 #: Anthropic's billed ``prompt_tokens`` divided by this repo's cl100k estimate of the
-#: same prompt. Measured over FRE-996's 30 sessions: p50 1.535, mean 1.544, range
-#: 1.49–1.70. The estimator the cost gate reserves against is systematically low, so a
-#: projection that skips this correction under-prices the run by a third.
-PROVIDER_TOKEN_RATIO = 1.535
+#: same prompt, at the median and the observed maximum of FRE-996's 30 sessions (p50
+#: 1.535, mean 1.544, max 1.697). The estimator the cost gate reserves against is
+#: systematically low, so a projection that skips this correction under-prices the run by
+#: a third.
+PROVIDER_TOKEN_RATIO_P50 = 1.535
+PROVIDER_TOKEN_RATIO_MAX = 1.697
 
-#: Billed input tokens the contract's tool definition adds to every call. Measured
-#: exactly — FRE-996's arm B minus arm A prompt tokens was 1,663 on all 30 sessions,
-#: with zero variance, because the definition is identical every time.
+#: Billed input the contract's tool definition adds to every call. The plain definition is
+#: measured exactly — FRE-996's arm B minus arm A was 1,663 on all 30 sessions, with zero
+#: variance, because the definition is identical every time. The bounded definition was
+#: never sent through a priced call, so its figure is the plain measurement scaled by the
+#: two definitions' cl100k ratio (1,179 / 1,152) and is an estimate, not a measurement.
 TOOL_DEFINITION_TOKENS = 1_663
+TOOL_DEFINITION_TOKENS_BOUNDED = 1_702
 
-#: Billed output tokens per rendered digest token, over FRE-996's 60 contract calls
-#: (p50 2.4, mean 2.7). Most of a digest call's output is envelope — braces, keys and
+#: Billed output tokens per rendered digest token, over FRE-996's 60 contract calls: p50
+#: 2.4, p90 3.5, max 6.4. Most of a digest call's output is envelope — braces, keys and
 #: basis tags — which is why a rendered-token bound and a call ceiling are different
 #: numbers and must be stated separately (AC-3).
-OUTPUT_ENVELOPE_PER_RENDERED_TOKEN = 2.7
+ENVELOPE_PER_RENDERED_P50 = 2.4
+ENVELOPE_PER_RENDERED_P90 = 3.5
 
-#: Rendered tokens produced as a multiple of the maximum the prompt states, at the p90
-#: of FRE-996's contract arms (341/250 = 1.36 and 389/250 = 1.56). Taken at the p90 and
-#: not the median deliberately: this projection is the upper bound the owner authorises
-#: spend against, and a median-priced run is one that overspends half the time.
-RENDERED_OVERSHOOT_P90 = 1.5
+#: Rendered tokens produced as a multiple of the maximum the prompt states, from FRE-996's
+#: contract arms told 250: medians 208 and 224 (0.83–0.90), p90s 341 and 389 (1.36–1.56).
+RENDERED_VS_STATED_P50 = 0.9
+RENDERED_VS_STATED_P90 = 1.5
 
-#: Upper bound for the unbounded arm's output. No contract-mode measurement of an
-#: unconstrained digest exists — FRE-996's free-text arm A ran to production's 2,048
-#: ceiling on 5 of 30 calls — so the ceiling itself is the only honest bound to price.
-UNBOUNDED_OUTPUT_UPPER_BOUND = 2_048
+#: The three bases every projection is reported on. They answer different questions and
+#: conflating them is how rev 3 of this plan came to call a product of a median, a mean
+#: and a p90 an "upper bound" — it is not one; it is a plausible middle.
+#:
+#: * ``expected`` — medians throughout. What the run most likely costs.
+#: * ``planning`` — maxima and p90s. What it costs if the tail arrives.
+#: * ``ceiling`` — the maximum the call parameters physically permit: every call billed at
+#:   its own output ceiling with the worst observed input ratio. **This is the only true
+#:   upper bound**, and it is the one to compare against a cap.
+COST_BASES = ("expected", "planning", "ceiling")
 
 
-def projected_input_tokens(estimated_prompt_tokens: int) -> int:
+def projected_input_tokens(estimated_prompt_tokens: int, *, arm: Arm, basis: str) -> int:
     """Billed input for one generation call, corrected to what the provider bills.
 
     Args:
         estimated_prompt_tokens: cl100k estimate of transcript plus system prompt.
+        arm: The arm being priced — the bounded contract is slightly larger.
+        basis: One of :data:`COST_BASES`.
 
     Returns:
         Projected billed ``prompt_tokens``, including the tool definition.
+
+    Raises:
+        ValueError: If ``basis`` is not one of :data:`COST_BASES`.
     """
-    return round(estimated_prompt_tokens * PROVIDER_TOKEN_RATIO) + TOOL_DEFINITION_TOKENS
+    if basis not in COST_BASES:
+        raise ValueError(f"unknown cost basis {basis!r}; expected one of {COST_BASES}")
+    ratio = PROVIDER_TOKEN_RATIO_P50 if basis == "expected" else PROVIDER_TOKEN_RATIO_MAX
+    tool = TOOL_DEFINITION_TOKENS_BOUNDED if arm.bounded_schema else TOOL_DEFINITION_TOKENS
+    return round(estimated_prompt_tokens * ratio) + tool
 
 
-def projected_output_tokens(arm: Arm) -> int:
-    """Upper-bound billed output for one call on this arm.
+def projected_output_tokens(arm: Arm, *, basis: str) -> int:
+    """Billed output for one call on this arm, on the requested basis.
+
+    The unbounded arm is priced at its call ceiling on **every** basis. No contract-mode
+    measurement of an unconstrained digest exists — FRE-996's unconstrained arm was
+    free-text, and ran to production's ceiling on 5 of 30 calls — so any expected value
+    here would be invention. Pricing it at the ceiling says what is actually known.
 
     Args:
         arm: The arm being priced.
+        basis: One of :data:`COST_BASES`.
 
     Returns:
-        Projected billed ``completion_tokens``, never above the call ceiling.
+        Projected billed ``completion_tokens``, never above the arm's call ceiling.
+
+    Raises:
+        ValueError: If ``basis`` is not one of :data:`COST_BASES`.
     """
-    if arm.unbounded:
-        return min(UNBOUNDED_OUTPUT_UPPER_BOUND, CALL_OUTPUT_CEILING)
-    rendered = arm.max_tokens * RENDERED_OVERSHOOT_P90
-    return min(round(rendered * OUTPUT_ENVELOPE_PER_RENDERED_TOKEN), CALL_OUTPUT_CEILING)
+    if basis not in COST_BASES:
+        raise ValueError(f"unknown cost basis {basis!r}; expected one of {COST_BASES}")
+    if arm.unbounded or basis == "ceiling":
+        return arm.call_ceiling
+    if basis == "expected":
+        rendered = arm.max_tokens * RENDERED_VS_STATED_P50
+        envelope = ENVELOPE_PER_RENDERED_P50
+    else:
+        rendered = arm.max_tokens * RENDERED_VS_STATED_P90
+        envelope = ENVELOPE_PER_RENDERED_P90
+    return min(round(rendered * envelope), arm.call_ceiling)
 
 
 @dataclass(frozen=True)

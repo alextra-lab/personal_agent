@@ -231,6 +231,32 @@ async def test_finish_reason_length_raises_truncated(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
+async def test_a_reply_truncated_to_nothing_is_truncation_not_emptiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generation that exhausted its budget before emitting anything is truncated.
+
+    Scoring it as ``empty`` would understate the truncation rate and point the
+    remediation at the wrong thing — the model did not decline to answer, it ran out of
+    room. The pilot harness made exactly this mistake on its first pass.
+    """
+    client = _FakeClient(
+        {
+            "content": "",
+            "tool_calls": [],
+            "finish_reason": "length",
+            "usage": {"completion_tokens": ss._MAX_OUTPUT_TOKENS},
+        }
+    )
+    _install(monkeypatch, client)
+
+    with pytest.raises(ss.OutputTruncated):
+        await ss._call_model(
+            "prompt", role_name="claude_sonnet", provider="anthropic", session_id="s"
+        )
+
+
+@pytest.mark.asyncio
 async def test_hitting_the_ceiling_raises_even_when_the_stop_reason_lies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

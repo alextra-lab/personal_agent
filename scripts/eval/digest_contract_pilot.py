@@ -89,6 +89,12 @@ _OUTCOMES = (
 
 _ENUM_ERROR_MARKERS = ("invalid basis", "invalid tier")
 
+#: Cap on a recorded error string, mirroring ``_MAX_FAILURE_DETAIL_CHARS`` in the
+#: producer. A parse error can embed the offending value, and the digest is built from
+#: real conversation — so an uncapped error field is a channel for writing session text
+#: to disk. The producer guards this deliberately; an eval script gets no exemption.
+_MAX_ERROR_CHARS = 500
+
 #: Consecutive failures that mean the harness is broken rather than the model failing.
 _ABORT_AFTER_CONSECUTIVE_ERRORS = 3
 
@@ -225,14 +231,18 @@ def _classify(response: dict[str, Any], *, ended_at: datetime) -> dict[str, Any]
     }
 
     if not payload.strip():
-        record["outcome"] = "empty"
+        # Ceiling first: a generation that exhausted its budget before emitting anything
+        # usable is a truncation, not a model that chose to say nothing. Checking `empty`
+        # ahead of `at_ceiling` mislabels it and understates the truncation rate — which
+        # it did on this pilot's own first pass.
+        record["outcome"] = "truncated" if at_ceiling else "empty"
         return record
 
     try:
         _, digest = parse_model_output(payload, ended_at=ended_at)
     except ValueError as e:
         detail = str(e)
-        record["error"] = detail
+        record["error"] = detail[:_MAX_ERROR_CHARS]
         if at_ceiling:
             record["outcome"] = "truncated"
         elif "not valid JSON" in detail:
@@ -249,7 +259,7 @@ def _classify(response: dict[str, Any], *, ended_at: datetime) -> dict[str, Any]
         record["wire_valid"] = True
     except Exception as e:  # noqa: BLE001 — a secondary signal, never fatal
         record["wire_valid"] = False
-        record["error"] = f"wire: {e}"
+        record["error"] = f"wire: {e}"[:_MAX_ERROR_CHARS]
 
     # A digest cut off mid-list still parses as a valid, shorter digest. Scoring that as
     # clean is the cheapest way this measurement produces a false success, so it gets its
@@ -377,7 +387,7 @@ async def _run(args: argparse.Namespace) -> int:
                 consecutive_errors += 1
                 record = {
                     "outcome": "provider_error",
-                    "error": f"{type(e).__name__}: {e}",
+                    "error": f"{type(e).__name__}: {e}"[:_MAX_ERROR_CHARS],
                     "wrapped": False,
                     "at_ceiling": False,
                     "cost_usd": 0.0,
@@ -397,7 +407,10 @@ async def _run(args: argparse.Namespace) -> int:
                     ) from e
             record |= {"arm": arm, "session_id": sid, "turns": len(captures)}
             records.append(record)
-            print(f"  {sid[:12]}… arm {arm}: {record['outcome']}")
+            # Flushed: a full run is ~90 sequential calls over ~40 minutes, and with
+            # stdout redirected to a file Python block-buffers, so an unflushed progress
+            # line is invisible until the run ends — exactly when it stops being useful.
+            print(f"  {sid[:12]}… arm {arm}: {record['outcome']}", flush=True)
 
     actual = round(sum(r["cost_usd"] or 0.0 for r in records), 4)
     report = {

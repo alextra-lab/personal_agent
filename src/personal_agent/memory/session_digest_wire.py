@@ -29,7 +29,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from personal_agent.memory.session_digest import (
     MAX_LABEL_CHARS,
@@ -83,7 +83,14 @@ LocatorField = Literal["assistant_text"]
 
 
 class WireLocator(BaseModel):
-    """Where a verbatim span was taken from, as the model reports it."""
+    """Where a verbatim span was taken from, as the model reports it.
+
+    Attributes:
+        capture_id: The capture's ``trace_id`` — one capture is one turn.
+        field: Where inside that capture. Closed to ``assistant_text``, so an
+            off-vocabulary value is rejected at parse time rather than surviving to
+            fail the span check and discard the whole digest.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -97,6 +104,10 @@ class WireItem(BaseModel):
     ``span``/``locator`` are deliberately absent: Amendment B retired ``tool_evidence``,
     the only basis that ever obliged a citation outside ``corrections``, and the prose
     prompt already asks only for ``text`` and ``basis``.
+
+    Attributes:
+        text: The item itself — what is established, decided or open.
+        basis: Provenance tag.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -113,6 +124,15 @@ class WireCorrection(BaseModel):
     Unlike :class:`WireItem`, every provenance field here is required — a correction
     without a resolvable citation is exactly the cheap failure mode ADR-0124's located-span
     contract exists to make impossible.
+
+    Attributes:
+        text: The self-correction.
+        basis: Provenance tag.
+        tier: ``self_correction`` — the only kind Amendment B allows.
+        span: Verbatim text of the claim, from the assistant's own message.
+        locator: Where that claim lives.
+        evidence_span: Verbatim supporting evidence, also from the assistant's own message.
+        evidence_locator: Where that evidence lives.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -129,14 +149,21 @@ class WireCorrection(BaseModel):
 
 
 class WireDigest(BaseModel):
-    """The four slots, as the model authors them."""
+    """The four slots, as the model authors them.
+
+    Attributes:
+        established: Facts and observations that survived the interaction.
+        decisions: Conclusions that materially constrain future reasoning.
+        unresolved: Unfinished state a future reader could wrongly treat as settled.
+        corrections: Self-corrections. Usually empty, and that scarcity is correct.
+    """
 
     model_config = ConfigDict(frozen=True)
 
-    established: list[WireItem] = []
-    decisions: list[WireItem] = []
-    unresolved: list[WireItem] = []
-    corrections: list[WireCorrection] = []
+    established: list[WireItem] = Field(default_factory=list)
+    decisions: list[WireItem] = Field(default_factory=list)
+    unresolved: list[WireItem] = Field(default_factory=list)
+    corrections: list[WireCorrection] = Field(default_factory=list)
 
 
 class DigestEnvelope(BaseModel):
@@ -145,6 +172,10 @@ class DigestEnvelope(BaseModel):
     The 90-character label bound is **not** declared here. The schema dialect has no
     ``maxLength``, so it stays a Python check in :func:`to_storage` — see FRE-995's audit
     §8.2. Declaring it would advertise an enforcement that does not exist.
+
+    Attributes:
+        label: A short distinguishing noun phrase.
+        digest: The structured record.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -167,7 +198,7 @@ def to_storage(envelope: DigestEnvelope, *, ended_at: datetime) -> tuple[str, Se
         The label and the storage-shaped digest.
 
     Raises:
-        ValueError: If the label exceeds :data:`MAX_LABEL_CHARS`.
+        ValueError: If the label is blank, or exceeds :data:`MAX_LABEL_CHARS`.
     """
     label = envelope.label.strip()
     if not label:

@@ -190,6 +190,34 @@ Verified against the installed litellm 1.89.2 source, not inherited from the aud
 Consequently the contract eliminates wrapping structurally, constrains shape and enum strongly but
 without guarantee, and does nothing about truncation.
 
+### 9.1 A newer litellm does not fix any of this — checked, not assumed
+
+We pin `litellm>=1.84.0` and run 1.89.2. The current release is **1.93.0**, 19 stable releases newer.
+All three properties above were checked against 1.93.0's own source:
+
+| Property | 1.89.2 | 1.93.0 |
+|---|---|---|
+| `output_format` allowlist includes `sonnet-5` | No | **No** — the substring set is byte-identical |
+| `stop_reason` overwritten to `"stop"` under `json_mode` | Yes | **Yes** — same line, unchanged |
+| Anthropic strict tool use reachable | No | **No** — `strict` occurs once in the module, in an unrelated comment |
+
+So upgrading would neither have made `response_format` usable on our model nor made conformance
+enforceable. **The design choice holds against current upstream, not merely against our pin.**
+
+Two forward-looking notes:
+
+1. **The allowlist is hand-maintained per model, so this recurs by construction.** Every new Claude
+   release is unsupported until someone edits that set —
+   [BerriAI/litellm#20533](https://github.com/BerriAI/litellm/issues/20533) is the same complaint for
+   Opus 4.5/4.6, and [#16949](https://github.com/BerriAI/litellm/pull/16949) was the manual PR that
+   added Sonnet 4.5 / Opus 4.1. "Wait for an upgrade" is therefore not a plan; reaching native
+   structured outputs on sonnet-5 would need an upstream contribution or a local override.
+2. **Unverified, flagged as such:** the upstream thread states Anthropic has deprecated
+   `output_format` in favour of `output_config.format`, scheduled for removal. litellm 1.93.0 uses
+   `output_config` only for *reasoning effort*, so that migration is still pending there. This has
+   **not** been confirmed against Anthropic's own documentation and should be before anyone relies
+   on it.
+
 ---
 
 ## 10. Recommendation

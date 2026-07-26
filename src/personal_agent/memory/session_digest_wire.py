@@ -19,9 +19,16 @@ carry what English can only request:
 **What this does and does not enforce.** The payload travels in a tool-call argument
 field, so fence wrapping and trailing prose have nowhere to occur — that class is
 eliminated structurally. Shape and enum conformance are *guided*, not guaranteed:
-Anthropic's strict tool use is not reachable through litellm 1.89.2 (it sets no
-``strict`` on its synthetic tool and drops the key on the explicit-tool path), so those
-remain measured failure classes rather than assumed-impossible ones.
+Anthropic's strict tool use is not reachable through litellm (it sets no ``strict`` on
+its synthetic tool and drops the key on the explicit-tool path), so those remain measured
+failure classes rather than assumed-impossible ones.
+
+**Not fixed by upgrading.** Checked against litellm 1.93.0, the current release and 19
+ahead of the pinned 1.89.2: the ``output_format`` model allowlist is byte-identical and
+still omits ``sonnet-5``, the ``stop_reason`` overwrite is unchanged, and ``strict``
+appears nowhere in the Anthropic path. The allowlist is hand-maintained per model
+(BerriAI/litellm#20533 is the same gap for Opus 4.5/4.6), so it recurs with each release
+rather than converging — "wait for an upgrade" is not a remedy here.
 """
 
 from __future__ import annotations

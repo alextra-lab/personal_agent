@@ -785,3 +785,70 @@ async def test_token_estimate_carries_a_safety_factor(captured_calls: list[str])
     the true limit becomes a provider 400 the failure taxonomy retries forever.
     """
     assert ss._TOKEN_ESTIMATE_SAFETY_FACTOR > 1.0
+
+
+# ── system_prompt() parameterisation (FRE-994) ──────────────────────────────
+#
+# The compression curve varies the digest's length policy per call, so the bounds
+# can no longer be read only from settings. The curve must run against the
+# *deployed* prompt — a copy would measure a prompt that is not in production and
+# would drift silently on the next edit — so the parameterisation lives here rather
+# than in the harness.
+
+
+def test_system_prompt_defaults_reproduce_the_settings_prompt() -> None:
+    """No arguments must yield byte-identical output to the settings-driven prompt.
+
+    This is the guard that makes the change safe for the live producer: every
+    existing caller passes nothing, so a drift here is a silent prompt change in
+    production.
+    """
+    settings = ss.get_settings()
+
+    assert ss.system_prompt() == ss._SYSTEM_PROMPT.replace(
+        "__TARGET_TOKENS__", str(settings.session_digest_target_tokens)
+    ).replace("__MAX_TOKENS__", str(settings.session_digest_max_tokens))
+
+
+def test_system_prompt_overrides_both_token_bounds() -> None:
+    prompt = ss.system_prompt(target_tokens=504, max_tokens=700)
+
+    assert "about 504 tokens" in prompt
+    assert "never exceed 700" in prompt
+    assert "__TARGET_TOKENS__" not in prompt
+    assert "__MAX_TOKENS__" not in prompt
+
+
+def test_system_prompt_can_drop_the_length_rule_entirely() -> None:
+    """The unbounded arm measures what the generator writes when nothing constrains
+    it, so the LENGTH paragraph has to leave the prompt — not merely get a large
+    number, which is still an instruction.
+    """
+    prompt = ss.system_prompt(include_length_rule=False)
+
+    assert "LENGTH" not in prompt
+    assert "__TARGET_TOKENS__" not in prompt
+    assert "__MAX_TOKENS__" not in prompt
+    # The rest of the contract must survive — dropping the length rule must not
+    # drop the slots, the corrections precision rules, or the JSON shape.
+    assert "SLOTS" in prompt
+    assert "CORRECTIONS" in prompt
+    assert '"label"' in prompt
+
+
+def test_system_prompt_states_structural_limits_when_given() -> None:
+    """ADR-0124 D3's bound is a global token count; the KG destination constrains
+    shape instead (items per slot, length per item). Structural arms state both.
+    """
+    prompt = ss.system_prompt(max_items_per_slot=3, max_tokens_per_item=35)
+
+    assert "3" in prompt
+    assert "35" in prompt
+    assert "LIMITS" in prompt
+
+
+def test_system_prompt_omits_the_limits_clause_when_not_given() -> None:
+    """Absent structural arguments the prompt must be exactly today's prompt — the
+    clause is additive, never a default the live producer silently inherits.
+    """
+    assert "LIMITS" not in ss.system_prompt()

@@ -296,16 +296,83 @@ def build_prompt(captures: Sequence[TaskCapture]) -> str:
     return header + "\n" + "\n\n".join(rendered)
 
 
-def _system_prompt() -> str:
-    """Render the system prompt with the configured length bounds.
+#: Opening words of the LENGTH paragraph. Located rather than duplicated: a second
+#: copy of the text would drift from the prompt on the next edit, and the whole point
+#: of parameterising here instead of in the eval harness is that there is exactly one
+#: prompt.
+_LENGTH_RULE_MARKER = "LENGTH — include an item only"
+
+_LIMITS_RULE = """\
+LIMITS — this digest is stored as a structured record, so its bounds are \
+structural: at most {max_items} items in any one slot, and at most {max_item_tokens} \
+tokens per item. Fewer is always acceptable; the caps are ceilings, not quotas.
+"""
+
+
+def system_prompt(
+    *,
+    target_tokens: int | None = None,
+    max_tokens: int | None = None,
+    max_items_per_slot: int | None = None,
+    max_tokens_per_item: int | None = None,
+    include_length_rule: bool = True,
+) -> str:
+    """Render the system prompt, optionally overriding its length policy.
 
     Substituted rather than ``format``-ed: the prompt embeds a literal JSON schema,
     and every brace in it would have to be doubled to survive ``str.format``.
+
+    Called with no arguments — which is every production caller — this returns
+    exactly the settings-driven prompt it always did. The overrides exist for the
+    FRE-994 compression curve, which varies the length policy per call and must run
+    against the *deployed* prompt: a copy in the harness would calibrate a prompt
+    that is not in production and would drift silently on the next edit.
+
+    Args:
+        target_tokens: Overrides ``session_digest_target_tokens``.
+        max_tokens: Overrides ``session_digest_max_tokens``.
+        max_items_per_slot: When given, adds a structural ceiling on items per slot.
+        max_tokens_per_item: When given, adds a structural ceiling on item length.
+        include_length_rule: When False, the LENGTH paragraph is removed rather than
+            given a large number — a large number is still an instruction, and the
+            unbounded arm measures what the generator writes when nothing constrains
+            it.
+
+    Returns:
+        The rendered system prompt.
     """
     settings = get_settings()
-    return _SYSTEM_PROMPT.replace(
-        "__TARGET_TOKENS__", str(settings.session_digest_target_tokens)
-    ).replace("__MAX_TOKENS__", str(settings.session_digest_max_tokens))
+    prompt = _SYSTEM_PROMPT.replace(
+        "__TARGET_TOKENS__",
+        str(settings.session_digest_target_tokens if target_tokens is None else target_tokens),
+    ).replace(
+        "__MAX_TOKENS__",
+        str(settings.session_digest_max_tokens if max_tokens is None else max_tokens),
+    )
+
+    if not include_length_rule:
+        start = prompt.find(_LENGTH_RULE_MARKER)
+        if start != -1:
+            end = prompt.find("\n\n", start)
+            prompt = prompt[:start] + (prompt[end + 2 :] if end != -1 else "")
+
+    if max_items_per_slot is not None and max_tokens_per_item is not None:
+        prompt = (
+            prompt.rstrip("\n")
+            + "\n\n"
+            + _LIMITS_RULE.format(max_items=max_items_per_slot, max_item_tokens=max_tokens_per_item)
+        )
+
+    return prompt
+
+
+def _system_prompt() -> str:
+    """Render the system prompt with the configured length bounds.
+
+    Retained as the module-internal call site; the policy lives in
+    :func:`system_prompt`.
+    """
+    return system_prompt()
 
 
 def _strip_fences(content: str) -> str:

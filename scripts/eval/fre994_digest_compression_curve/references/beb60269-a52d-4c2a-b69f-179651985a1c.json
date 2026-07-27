@@ -1,0 +1,13 @@
+{
+  "session_id": "beb60269-a52d-4c2a-b69f-179651985a1c",
+  "authored_by": "build session (Opus), by hand, before any digest was generated",
+  "definition": "ADR-0124 D3 \u2014 see README.md",
+  "conclusions": [
+    "Project Atlas is a satellite-imagery data pipeline built on Apache Kafka for ingestion and Apache Spark for processing.",
+    "Maria Chen is the team lead for Project Atlas.",
+    "Project Atlas targets a throughput of 500 images per hour.",
+    "Project Atlas is being deployed to AWS.",
+    "Memory recall returned nothing for Project Atlas: none of these details had been stored from any previous session, so the assistant knew only what was said in this conversation.",
+    "Left open: whether to store the Project Atlas details in memory was offered and never answered."
+  ]
+}

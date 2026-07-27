@@ -1,0 +1,13 @@
+{
+  "session_id": "9eca2e47-5099-4609-b3df-2e11400ac3af",
+  "authored_by": "build session (Opus), by hand, before any digest was generated",
+  "definition": "ADR-0124 D3 \u2014 see README.md",
+  "conclusions": [
+    "PostgreSQL was chosen as the primary database for the new project.",
+    "The choice was made on PostgreSQL's JSONB support and the team's existing familiarity with it.",
+    "That PostgreSQL was already running in the existing stack weighed heavily in the recommendation, because switching would mean rebuilding connections, migrations, ORM layer and healthchecks.",
+    "CockroachDB was rejected: it only wins when multi-region active-active replication is a hard requirement, and it adds operational overhead and cost on a single-VPS deployment.",
+    "MySQL was rejected: it would add a second relational engine with no unique advantage over PostgreSQL for this stack.",
+    "Left open: which task to start with (schema initialisation, JSONB indexing strategy, connection pooling, backups, or migrations tooling) was asked and never answered."
+  ]
+}

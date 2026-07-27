@@ -319,6 +319,21 @@ def decide(
             monotonicity_violations=violations,
         )
 
+    if not any(r.n_judged for r in rows):
+        # Distinguished from "no bound is safe", which is a finding about the digest.
+        # This is a finding about the *instrument*: without a loss verdict the rule's
+        # first condition was never evaluated, and reporting the §6 message here would
+        # claim evidence the run does not have.
+        return rows, Decision(
+            selected_arm=None,
+            inconclusive_reason=(
+                "no arm carries a loss verdict, so §6's first condition was never "
+                "evaluated. The delivery endpoint below stands on its own; the loss "
+                "endpoint did not run, or its §4.3 validity gates failed and it is "
+                "barred from selecting the bound"
+            ),
+        )
+
     nominal = _select(rows, order=order, check_interval=True)
     if nominal is None:
         return rows, Decision(

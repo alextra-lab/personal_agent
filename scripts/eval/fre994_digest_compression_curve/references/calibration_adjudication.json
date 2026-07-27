@@ -1,0 +1,125 @@
+{
+  "adjudicated_by": "build session (Opus), by hand",
+  "method": "Reference sets were authored first, from the transcripts, before any digest existed. Extractor recall and spuriousness were then adjudicated against those reference sets. Coverage verdicts were assigned by reading each t250 digest against each extractor conclusion. The rule applied throughout: an item counts as recovered or covered when a reader could draw the conclusion from what is there \u2014 meaning survives, phrasing need not.",
+  "verdicts": {
+    "beb60269-a52d-4c2a-b69f-179651985a1c": [
+      "covered",
+      "covered",
+      "covered",
+      "covered",
+      "covered"
+    ],
+    "9eca2e47-5099-4609-b3df-2e11400ac3af": [
+      "covered",
+      "covered",
+      "covered",
+      "covered"
+    ],
+    "2812df1c-d2d0-4c7f-b526-ecd845fd269e": [
+      "covered",
+      "covered",
+      "covered",
+      "covered",
+      "covered",
+      "covered"
+    ],
+    "99eeb42c-5a10-4090-ab4e-7fde6bb549f6": [
+      "missing",
+      "missing",
+      "missing",
+      "missing",
+      "missing",
+      "missing",
+      "missing",
+      "missing",
+      "missing",
+      "covered",
+      "covered",
+      "covered",
+      "covered",
+      "covered"
+    ],
+    "3ea431d3-2cdf-46e2-bb3a-5730d1164c51": [
+      "covered",
+      "covered"
+    ],
+    "8a545f14-eb2a-42c7-8523-5fee7f84350f": [
+      "partial",
+      "covered",
+      "covered",
+      "covered",
+      "covered"
+    ],
+    "19a981f2-1b18-4fa7-869c-6a43b225fa67": [
+      "covered",
+      "covered",
+      "covered",
+      "covered",
+      "covered",
+      "partial",
+      "covered"
+    ],
+    "84af8da2-56a5-41cd-a491-6fc3533db9c3": [
+      "covered",
+      "missing",
+      "missing",
+      "missing",
+      "partial",
+      "partial",
+      "missing",
+      "covered",
+      "covered",
+      "partial"
+    ]
+  },
+  "extractor": {
+    "beb60269-a52d-4c2a-b69f-179651985a1c": {
+      "matched": 5,
+      "reference_total": 6,
+      "spurious": 0,
+      "note": "missed the open question about whether to persist the details to memory"
+    },
+    "9eca2e47-5099-4609-b3df-2e11400ac3af": {
+      "matched": 4,
+      "reference_total": 6,
+      "spurious": 0,
+      "note": "missed the MySQL rejection and the unanswered 'what first' question"
+    },
+    "2812df1c-d2d0-4c7f-b526-ecd845fd269e": {
+      "matched": 6,
+      "reference_total": 7,
+      "spurious": 0,
+      "note": "recovered the call count but not the latency figures"
+    },
+    "99eeb42c-5a10-4090-ab4e-7fde6bb549f6": {
+      "matched": 7,
+      "reference_total": 8,
+      "spurious": 7,
+      "note": "seven items are retrieved travel-guide content (church architecture, artworks, a spelling correction) rather than conclusions the session reached; missed that the Cini Foundation requires advance booking"
+    },
+    "3ea431d3-2cdf-46e2-bb3a-5730d1164c51": {
+      "matched": 2,
+      "reference_total": 5,
+      "spurious": 0,
+      "note": "missed all three concrete recommendations: key namespace, JSON-not-pickle, cache-aside"
+    },
+    "8a545f14-eb2a-42c7-8523-5fee7f84350f": {
+      "matched": 5,
+      "reference_total": 6,
+      "spurious": 0,
+      "note": "missed the unanswered offer to scaffold the config files"
+    },
+    "19a981f2-1b18-4fa7-869c-6a43b225fa67": {
+      "matched": 5,
+      "reference_total": 6,
+      "spurious": 0,
+      "note": "covered Elasticsearch but not the full service health check"
+    },
+    "84af8da2-56a5-41cd-a491-6fc3533db9c3": {
+      "matched": 7,
+      "reference_total": 8,
+      "spurious": 0,
+      "note": "missed that none of the three offered first steps was chosen"
+    }
+  }
+}

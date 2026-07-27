@@ -407,7 +407,7 @@ async def _phase_b(*, n: int, seed: int, run_dir: Path) -> Any:
         }
     finally:
         await es.close()
-        await gate.close()
+        await gate.disconnect()
 
 
 def _conclusions(raw: str | None) -> list[str]:
@@ -524,7 +524,7 @@ async def _execute(
         return payload
     finally:
         await es.close()
-        await gate.close()
+        await gate.disconnect()
 
 
 def _verdict(raw: str | None) -> str:

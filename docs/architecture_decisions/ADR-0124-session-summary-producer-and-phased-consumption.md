@@ -672,9 +672,17 @@ stated separately:
 
 **One qualification on the 400, stated because it is the number this amendment adopts.** It holds for
 arms that were *given* a length instruction. The `unbounded` arm — no LENGTH rule at all — reaches
-only 0.84 at 400 and does not clear 90% until **450**. Since C1 keeps a prompt target, the producer
-always sits in the instructed regime, so 400 is the right ceiling for the deployed configuration. But
-if a future change removes the length instruction, the ceiling has to move to 450 with it.
+only 0.84 at 400, and **never clears 90% at any threshold below 600**: it sits at 0.895 (17 of 19) at
+both 450 and 500. Since C1 keeps a prompt target, the producer always sits in the instructed regime,
+so 400 is the right ceiling for the deployed configuration. But if a future change removes the length
+instruction, no ceiling below 600 restores the ≥90% property — 450 is *not* sufficient.
+
+*(Master gate, 2026-07-27: this paragraph originally read "does not clear 90% until 450". That was
+the self-review's correction to an earlier, larger error, and it inherited a rounding artifact — the
+note's table renders 0.895 as `0.90`. Recomputed from the run records via `--analyse`: `unbounded`
+`within` is 0.842 at 400, 0.895 at 450, 0.895 at 500, 1.0 at 600. At n=19 one item moves this figure
+five points, so the distinction is precision, not significance — but the sentence stated a threshold
+as cleared when it is not, and C-AC-2 cites it.)*
 
 **C2 — The bound is a rejection threshold of last resort, not the sizing mechanism.** Length is
 steered by the prompt target and *measured* at the ceiling. A digest between the target and the
@@ -738,7 +746,7 @@ toward declaring tight bounds safe. Any future attempt at the loss half must fix
 | # | Criterion | Evidence |
 |---|---|---|
 | C-AC-1 | The bound is measured, with the curve and the sample size behind it | Research note §3, N=20, 100 calls, per-arm delivery table |
-| C-AC-2 | The chosen bound is achievable in practice without truncation | §3.3 — ≥90% of content-bearing digests render within 400 on every **instructed** arm (the uninstructed arm needs 450, stated in C1); zero truncations in 100 calls |
+| C-AC-2 | The chosen bound is achievable in practice without truncation | §3.3 — ≥90% of content-bearing digests render within 400 on every **instructed** arm (the uninstructed arm reaches only 0.895 at 450–500 and needs 600, stated in C1); zero truncations in 100 calls |
 | C-AC-3 | The implied call output ceiling is stated | §3.6 — 400 + structural p95 617 (content-bearing), ×1.2 ⇒ ~1,220; production's 2,048 already covers it |
 | C-AC-4 | The relative bound was considered, not only the absolute | §4 — r = +0.56…+0.77, ratio ≈8–11% **of the conversation** (4% of billed prompt — see C3 on the denominator), reported as directional per the plan's precommitment |
 | C-AC-5 | Cost stated before running and reported after | $4.08 expected / $6.18 ceiling, **$1.74 actual**; no cap raised |

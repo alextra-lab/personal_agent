@@ -113,13 +113,20 @@ Share of content-bearing digests rendering within a candidate threshold:
 | `t180` | 0.05 | 0.25 | 0.50 | 0.70 | 0.85 | **0.90** | 1.00 | 1.00 | 1.00 |
 | `t250` | 0.00 | 0.21 | 0.53 | 0.74 | 0.90 | **0.95** | 0.95 | 1.00 | 1.00 |
 | `t250_bounded` | 0.00 | 0.16 | 0.42 | 0.74 | 0.90 | **0.95** | 1.00 | 1.00 | 1.00 |
-| `unbounded` | 0.00 | 0.21 | 0.42 | 0.58 | 0.74 | 0.84 | **0.90** | 0.90 | 1.00 |
+| `unbounded` | 0.00 | 0.21 | 0.42 | 0.58 | 0.74 | 0.84 | 0.895 | 0.895 | **1.00** |
 
 **About 400 rendered tokens is where ≥90% pass — on every arm that is given a length instruction.**
-The arm given none does not reach 90% until **450**, which is the honest statement of the row and is
-not a quibble: it is the arm that says what the generator does when nothing constrains it. An
-earlier revision of this note claimed 400 held "under any instruction", which the `unbounded` row
-(0.84 at 400) contradicts; the claim is corrected here and in the ADR.
+The arm given none never clears 90% below **600**: it sits at 0.895 — 17 of 19 — at both 450 and
+500. That is the honest statement of the row and is not a quibble: it is the arm that says what the
+generator does when nothing constrains it. An earlier revision of this note claimed 400 held "under
+any instruction", which the `unbounded` row (0.84 at 400) contradicts.
+
+*(Master gate, 2026-07-27. The correction to that earlier claim was itself imprecise: this row read
+`0.90` at 450 and the prose treated it as clearing the threshold, but 17/19 is 0.895 and the cell was
+a 2-dp rounding. Recomputed from the run records via `--analyse`. At n=19 one item moves this five
+points, so the distinction is precision rather than significance — and it changes nothing about the
+deployed configuration, which always carries a prompt target and therefore sits at 0.947–1.00 at 400.
+It is corrected because the ADR adopts the number and C-AC-2 cites it.)*
 
 The 400 figure lands on FRE-996's independently measured all-pass thresholds of 413 and 419, from a
 different sample and a different arm design — two studies agreeing is worth more than either alone.

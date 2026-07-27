@@ -4,7 +4,9 @@
 **Date:** 2026-07-27
 **Deciders:** Project owner; adr session (Opus)
 **Tags:** architecture, observability, capture, verification, self-improvement, memory, boundary
-**Supersedes:** ADR-0067 (Reflection Surfacing in Context Assembly) — see D2
+**Supersedes (on acceptance):** ADR-0067 (Reflection Surfacing in Context Assembly) — see D2. While
+this ADR is `Proposed`, ADR-0067 correctly still reads `Accepted`; the header change is an
+implementation consequence, not a claim of present fact.
 **Backing ticket:** FRE-999
 **Evidence base:** `docs/research/2026-07-27-feedback-layer-and-evidence-contract-audit.md`
 
@@ -32,7 +34,7 @@ the other, and the confusion became structural rather than incidental.
 ### The evidence that the distinction is missing
 
 The decisive finding is what a capture records about memory recall — in full
-(`captains_log/models.py`):
+(`captains_log/capture.py:69-70`):
 
 ```
 memory_context_used: bool = False
@@ -123,10 +125,15 @@ isolated store, and the isolated store exists precisely so self-improvement data
 the user knowledge graph or user context. ADR-0067 is superseded rather than deleted, per the
 owner's instruction.
 
-Consequently `reflection_recall_enabled` defaults to **`False`**, and the recall path is **removed**
-rather than left disabled. Today the default is `True` in `settings.py:2307` and only the prod
-`.env` turns it off, so any fresh deploy, test stack, or rebuilt image lacking that line
-re-enables the behaviour silently.
+Consequently the recall path is **removed**, not merely defaulted off. Today
+`request_gateway/context.py:309` reads `if settings.reflection_recall_enabled:` and then imports and
+injects the reflections section — a live, configuration-gated injection point — while
+`settings.py:2307` defaults that setting to `True` and only the prod `.env` turns it off. So any
+fresh deploy, test stack, or rebuilt image lacking that line re-enables the behaviour silently.
+
+**Flipping the default is insufficient and this ADR does not accept it as the remedy.** "May never"
+is a configuration-independent claim: while the call site exists, the invariant holds only by
+setting. The call site goes.
 
 The general rule this encodes, for future surfaces:
 
@@ -152,9 +159,12 @@ is cheap now and expensive once a corpus must be migrated.
 | 7 | trace / session / turn identifiers | joinability |
 | 8 | model and parameters | attributes a failure mode |
 
-Items 1, 2, 6, 7 and 8 exist today. Item 3 is partial. **Item 5 does not exist** — a boolean and a
-count only. **Item 4 requires confirmation**: ADR-0124 Amendment B stopped tool payload *delivery to
-the digest* while storage was retained, and whether the full payload survives durably is unverified.
+Items 1, 2, 7 and 8 exist today. Item 3 is partial. **Item 5 does not exist** — a boolean and a
+count only. **Items 4 and 6 require confirmation before their chain tickets are sized**: for item 4,
+ADR-0124 Amendment B stopped tool payload *delivery to the digest* while storage was retained, and
+whether the full payload survives durably is unverified; for item 6, `prompt_manifest` (FRE-409) is
+a *likely* but unconfirmed satisfier. Neither was established by the backing audit, and this ADR
+does not assert them.
 
 ### D4 — Recall identities carry a usage edge
 
@@ -163,8 +173,11 @@ system can answer *which turns relied on this claim* — and, joined to ADR-0098
 *which turns relied on it before it was replaced, and why it was replaced*.
 
 This is the single change that pays into both dimensions: trust calibration for the memory layer
-(dimension 1 — `corroboration_count` and `last_confirmed` on `KnowledgeWeight` currently have no
-populator) and the evidence base for verification (dimension 2).
+(dimension 1) and the evidence base for verification (dimension 2). On the dimension-1 side,
+`corroboration_count` and `last_confirmed` on `KnowledgeWeight` are the natural consumers — the
+backing audit **found no populator for them, but did not exhaustively prove one absent**, so the
+claim here is only that *no consumption signal currently feeds them*, not that the fields are
+entirely unwritten. The implementation ticket confirms this before relying on it.
 
 ### D5 — No silent truncation on any evidence path
 
@@ -172,10 +185,18 @@ Content on a path feeding a durable artifact or assembled context is stored **wh
 with an **explicit marker** recording that it was shortened and by how much. Silent truncation is
 prohibited.
 
-This retires the 200-character idiom, which survives at nine sites and is condemned by the project's
-own measurement: user messages sit at p50 58 characters — already below the cut — while assistant
-responses sit at p50 1,847, so the clip discarded roughly **89% of the assistant text** where a
-session's outcome lives (`second_brain/session_summary.py:14-19`).
+This retires the 200-character idiom. The figures that condemn it are **recorded in the digest
+producer's own docstring** (`second_brain/session_summary.py:14-19`): user messages at p50 58
+characters — already below the cut — against assistant responses at p50 1,847, so the clip discarded
+roughly **89% of the assistant text** where a session's outcome lives. *That docstring asserts the
+result without carrying the query or dataset that produced it*, so it is a recorded project figure
+rather than an independently reproducible measurement; the implementation ticket re-derives it before
+sizing anything on it.
+
+The idiom is known at **at least eleven sites, and the enumeration is not exhaustive** — codex review
+of this ADR found two the backing audit had missed (`orchestrator/executor.py:3442`,
+`captains_log/reflection_dspy.py:434`) on top of the nine it listed. The implementation therefore
+owes a **guard**, not a fixed list of edits (see AC-5).
 
 The most damaging instance is live in context assembly (`request_gateway/context.py:240`): when an
 episode has no digest, assembled context receives the **user message clipped to 200 characters and
@@ -301,10 +322,9 @@ choosing the diagnosed disease.
 - The reflection-recall class of failure becomes structurally impossible rather than
   configuration-dependent, and stops depending on one line of one `.env` file.
 - ADR-0105's AC-1 becomes a type rather than a convention.
-- The memory layer gains the consumption signal its trust fields were designed for and never
-  received.
-- Silent truncation stops destroying the assistant text where session outcomes live, on nine paths
-  including the live context-assembly fallback.
+- The memory layer gains a consumption signal its trust fields were designed to accept.
+- Silent truncation stops destroying the assistant text where session outcomes live — enforced by a
+  guard rather than a one-time sweep, so newly introduced clips cannot reappear.
 - The dimension-1 machine is freed to be judged on its own terms — and its remaining defect is
   identified precisely: one undeployed seam, not architectural incoherence.
 
@@ -340,9 +360,14 @@ choosing the diagnosed disease.
 - **FRE-717 sequencing.** Closing the ADR-0105 loop is dimension-1 work and is master's to deploy.
   It should follow the dimension-1 fixes rather than lead them, so realized value measures a
   producer whose known defects have been addressed.
-- **Item 4 is a verification task before it is a build task.** Confirm whether full tool payloads
-  survive durably; the answer sizes the capture chain.
-- **Doc drift for master.** Two distinct ADRs are numbered 0067
+- **Items 4 and 6 are verification tasks before they are build tasks.** Confirm whether full tool
+  payloads survive durably, and whether `prompt_manifest` genuinely satisfies item 6. Both answers
+  size the capture chain and neither is established today.
+- **Doc drift for master, on acceptance.** Flip the ADR-0067 reflection-surfacing header to
+  `Superseded by ADR-0125`. This is deliberately *not* an acceptance criterion — a header edit
+  proves nothing about behaviour, which AC-2 covers — but it is drift master should reconcile at
+  the gate.
+- **Doc drift for master, pre-existing.** Two distinct ADRs are numbered 0067
   (`ADR-0067-reflection-surfacing-in-context-assembly.md` and
   `ADR-0067-skill-nudge-injection.md`). This ADR supersedes the former only. The collision predates
   this work and should be reconciled separately.
@@ -358,48 +383,60 @@ choosing the diagnosed disease.
   query the proposal store for rows with a null source and require zero. · *Fails if* a null-source
   row can be created by any code path, or if any production row carries a null after the migration.
 
-- **AC-2 — No dimension-1 producer output reaches assembled user context under default
-  configuration.** · **Check:** with a corpus containing reflections and findings, assemble context
-  for a turn using stock defaults (no `.env` overrides) and assert no reflection or finding body
-  appears in the assembled prompt. · *Fails if* any finding-class text is present, or if the
-  behaviour depends on a non-default setting to stay absent.
+- **AC-2 — Dimension-1 output cannot reach assembled context under *any* configuration.** The
+  invariant is configuration-independent, so the test is too. · **Check:** with a corpus containing
+  reflections and findings, assemble context for a turn **with `reflection_recall_enabled` forced
+  `True`** (and every other related toggle forced to its most permissive value), and assert no
+  reflection or finding body appears in the assembled prompt — which can only hold once the call
+  site at `request_gateway/context.py:309` is gone rather than gated. Repeat with stock defaults.
+  · *Fails if* any finding-class text appears under any setting, or if absence holds only because a
+  flag is off. **A flag flip alone fails this criterion.**
 
-- **AC-3 — For a turn where recall returned results, the capture holds the identity of every
-  recalled item, not a count.** · **Check:** run a turn with a known non-zero recall hit set, then
-  read the durable capture for that trace and compare its recorded identifiers against the
-  identifiers the recall controller ranked. · *Fails if* the capture holds only a boolean or a
-  count, if the identifier set is empty, or if it does not match what was ranked.
+- **AC-3 — The capture records the memory items actually *admitted into the assembled context*, by
+  identity — not the candidate set, and not a count.** · **Check:** run a turn where the ranked
+  candidate set is deliberately larger than the admitted set (force budget trimming), then compare
+  the capture's recorded identifiers against the identifiers present in the assembled prompt.
+  Require exact equality with the **admitted** set; items dropped by compaction must appear as
+  dropped, not as used. · *Fails if* the capture holds only a boolean or count, if it records the
+  ranked set instead of the admitted set, or if a trimmed item is indistinguishable from a used one.
 
-- **AC-4 — The record answers "which turns used this claim before it was superseded."** · **Check:**
-  select a claim with a supersession record, join recalled-item records to it, and confirm the
-  using turns are returned with timestamps preceding the supersession. · *Fails if* the join cannot
-  be expressed, or returns nothing for a claim known to have been recalled before replacement.
+- **AC-4 — The usage join returns exactly the turns that used a claim, and nothing else.** ·
+  **Check:** construct a claim used in a known set of turns, subsequently superseded, and also
+  ranked-but-not-admitted in at least one further turn. Join recalled-item records to the
+  supersession chain and require the returned turn set to **equal** the known using-turn set —
+  excluding the ranked-but-not-admitted turn and excluding turns after the supersession. · *Fails
+  if* the returned set is a superset, a subset, or includes a post-supersession or
+  ranked-but-unused turn. **Returning "something" is not a pass.**
 
-- **AC-5 — Assistant text on an evidence path survives whole, or is marked.** · **Check:** run a turn
-  whose assistant response materially exceeds 200 characters; compare the durably stored response
-  byte length against the emitted response, and separately assert that the episode fallback in
-  context assembly no longer emits a bare user-message clip with no assistant content. · *Fails if*
-  stored length is less than emitted length with no truncation marker recording the fact, or if the
-  fallback still produces question-only context.
+- **AC-5 — A guard fails CI on a newly introduced silent clip on any evidence path.** The decision
+  is path-general, so the criterion is a guard rather than an enumeration — the site list is known
+  to be incomplete. · **Check:** add the guard, then feed it a **known-bad input** — a newly
+  introduced bare `[:N]` clip on an evidence path — and confirm CI fails; feed it a properly marked
+  truncation and confirm CI passes. Separately, run a turn whose assistant response materially
+  exceeds 200 characters and confirm stored byte length equals emitted byte length. · *Fails if* the
+  guard passes the known-bad input, if it fires on a correctly marked truncation, or if stored
+  length is less than emitted with no marker.
 
-- **AC-6 — SEAM: the contract is sufficient for verification, proven without building the
-  oracle.** · **Check:** over a sample of at least twenty captured sessions, run a dry-run harness
-  that extracts checkable assertions and, for each, either *locates* the evidence required to
-  adjudicate it or classifies it `UNVERIFIABLE` with a stated reason. Count assertions that can be
-  adjudicated neither way **because the record was not kept**. Require zero. · *Fails if* any
-  assertion is unadjudicable for a capture-gap reason — that is a hole in D3, not an absence of
-  evidence in the world.
+- **AC-6 — SEAM: the record is *sufficient to contradict a false claim*, proven deterministically
+  and without the oracle.** · **Check:** two parts, neither requiring a model. **(i) Coverage:** over
+  every session in a defined 7-day window, mechanically assert that all eight D3 records are present
+  and mutually joinable — every tool call named in the assistant text resolves to a tool record,
+  every recorded recall identifier resolves to a live claim, every turn joins to its session.
+  **(ii) Negative control:** on a deliberately constructed turn whose assistant text asserts an
+  action that was *not* performed, confirm the stored record alone is sufficient to contradict it —
+  by a deterministic check comparing asserted action to tool records. · *Fails if* any session in
+  the window has a missing or unjoinable required record, **or if the planted false claim cannot be
+  contradicted from the record alone.** Part (ii) is the discriminating half: a contract that merely
+  stores fields passes coverage and fails the negative control.
 
-- **AC-7 — ADR-0067's decision is retired in behaviour, not only on paper.** · **Check:** the
-  ADR-0067 reflection-surfacing header reads `Superseded by ADR-0125`, and no import path exists
-  from context assembly to the reflection-recall module. · *Fails if* the module is still reachable
-  from context assembly, or the status still reads `Accepted`.
-
-**Seam owner (assembled intent):** **AC-6** is the assembled seam. The evidence contract is not
-delivered because its child tickets merged — it is delivered when a dry run over real sessions shows
-**zero capture-gap unadjudicables**. No single child ticket proves this; master holds the ADR against
-AC-6, and the seam ticket asserting it is named in the capture chain. AC-1 through AC-5 are asserted
-independently by their own children; AC-7 is asserted by the dimension-1 chain.
+**Seam owner (assembled intent):** **AC-6** is the assembled seam, and specifically its **negative
+control**. The evidence contract is not delivered because its child tickets merged, nor because
+fields exist and are populated — it is delivered when a planted false claim is demonstrably
+refutable from the record. No single child ticket proves that; master holds the ADR against AC-6.
+AC-1 through AC-5 are asserted independently by their own children. **AC-2 additionally carries the
+behavioural retirement of ADR-0067** — its status-header change is documentation drift for master to
+reconcile at the gate, deliberately *not* an acceptance criterion, because a header edit proves
+nothing about behaviour.
 
 ---
 

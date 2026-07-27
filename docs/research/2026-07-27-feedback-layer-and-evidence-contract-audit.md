@@ -39,7 +39,7 @@ The audit's job was to establish whether that reading is correct, and what it im
 | Cadence | continuous / background | post-session |
 
 The decisive evidence is what a capture records about memory recall — in full
-(`captains_log/models.py`):
+(`captains_log/capture.py:69-70`):
 
 ```
 memory_context_used: bool = False
@@ -216,16 +216,26 @@ the architecture says must live in an isolated store and injected it into user c
 
 ## 6. The 200-character clip is a codebase-wide idiom
 
-The measurement that condemns it is in the digest producer's own docstring
+The figures that condemn it are recorded in the digest producer's own docstring
 (`second_brain/session_summary.py:14-19`): user messages sit at **p50 58 chars** — already below
 the cut — while assistant responses sit at **p50 1,847**, so the old clip "barely touched the user
 text while discarding roughly **89% of the assistant text** where a session's outcome lives."
 
-The idiom survives at nine sites:
+> **Provenance caveat** (raised in codex review): that docstring *asserts* the figures without
+> carrying the query, dataset, or calculation behind them. It is a recorded project figure, not an
+> independently reproducible measurement. Re-derive before sizing anything on it.
 
-`request_gateway/context.py:240` · `memory/proactive.py:133` · `second_brain/consolidator.py:611` ·
-`second_brain/entity_extraction.py:1089` · `captains_log/reflection.py:158, 411, 764` ·
-`request_gateway/recall_controller.py:392` · `request_gateway/state_document.py:101`
+**The enumeration below is known to be incomplete.** Nine sites were found by this audit; codex
+review of ADR-0125 found two more, so the working count is **at least eleven** and no exhaustive
+sweep has been done. This is why ADR-0125 D5 specifies a guard rather than a list of edits.
+
+Found by this audit: `request_gateway/context.py:240` · `memory/proactive.py:133` ·
+`second_brain/consolidator.py:611` · `second_brain/entity_extraction.py:1089` ·
+`captains_log/reflection.py:158, 411, 764` · `request_gateway/recall_controller.py:392` ·
+`request_gateway/state_document.py:101`
+
+Found subsequently in codex review: `orchestrator/executor.py:3442`
+(`conv.summary or conv.user_message[:200]`) · `captains_log/reflection_dspy.py:434`
 
 **The first one is live in the context-assembly path and is worse than what the owner rejected:**
 

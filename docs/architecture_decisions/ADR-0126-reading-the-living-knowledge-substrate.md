@@ -23,6 +23,9 @@ across `src/` returns exactly six files — `memory/service.py`, `memory/superse
 `brainstem/scheduler.py`. All write-side. There are **zero** references in `request_gateway/`,
 `orchestrator/`, `gateway/`, or `tools/`. The system has two read surfaces — automatic context
 assembly, and the model-callable `search_memory` tool — and **both are blind to both structures.**
+`search_memory` returns entities, turns and session metadata only, on both its entity-match and broad
+paths (`tools/memory_search.py:157-212`). *(This verifies the absence of direct references to those
+six symbols; it does not exclude some hypothetical generic consumer, and none was found.)*
 
 Recall still runs entirely on the legacy Entity layer. The capability ADR-0098 shipped — that a wrong
 fact is correctable, that a superseded original is retained rather than overwritten, that the owner's
@@ -113,12 +116,16 @@ implementation nicety.
 
 ### A finding that lands outside this ADR's scope but changes a neighbour's premise
 
-Because `source_type` is constant, `confidence` is constant: `_build_claim` sets
-`confidence=KnowledgeWeight.from_source(source_type).confidence`, and the claim path only ever passes
-`"conversation"` → `0.8`. In `adjudicate()` (`memory/supersession.py:180-194`) the guard
-`if new_confidence < candidate.confidence: return REJECT` — the line whose own comment reads *"not
-naive last-write-wins"* — **can never fire**, and neither can the `>` branch. Only the
-`new_observed_at < candidate.observed_at` staleness check survives.
+Because `source_type` is constant, `confidence` is constant: provenance hard-codes
+`"source_type": "conversation"` (`entity_extraction.py:588-595`), `_build_claim` sets
+`confidence=KnowledgeWeight.from_source(source_type).confidence` (`consolidator.py:106-120`), and
+`conversation` maps to `0.8` (`weight.py:15-24`). In `adjudicate()` (`memory/supersession.py:180-194`)
+the guard `if new_confidence < candidate.confidence: return REJECT` — the line whose own comment reads
+*"not naive last-write-wins"* — **is unreachable on the production producer path**, and so is the `>`
+label branch. Only the `new_observed_at < candidate.observed_at` staleness check survives. *(Precisely
+stated: this is a property of the current producer path, not of `adjudicate()` itself — the function
+still discriminates correctly when called with differing confidences, as tests and any future
+non-conversation producer would.)*
 
 Supersession therefore degenerates to **newer-wins-with-a-staleness-guard**, which is the naive
 last-write-wins model ADR-0098 D2 names and rejects. The `correction`/`evolution` labels that do
@@ -136,12 +143,16 @@ This matters to a neighbour: **ADR-0100 demoted the hard recency gate on the exp
 Stated so a reviewer can attack the inference without re-deriving the data.
 
 - **Measured** (live graph and tree, verified independently by the adr and master sessions): every
-  count, cardinality, index, population figure, and code path cited above.
+  count, cardinality, index, population figure, and code path cited above. That `mastery` is wired end
+  to end is measured from source; that all 27 nulls are *correct* is not (below).
 - **Inferred** (judgment, open to challenge): the ~48/91 System-subject classification is *this
   session's reading* of ADR-0098 D1 applied by hand, not a classifier output — the exact number is
   arguable, the order of magnitude is not, and it is corroborated by the independent ~46% entity
-  figure from FRE-636. The behavioural/topic-scoped split of the 27 stances (D2) is likewise a
-  reading, which is precisely why D3 makes the cut revisable rather than baking it in.
+  figure from FRE-636. That `mastery=null` is correct for all 27 is a reading of the 27 affect texts
+  against the prompt's own rule; source proves the field is wired and the rule exists, not that the
+  extractor never missed an implied skill statement. The behavioural/topic-scoped split of the 27
+  stances (D2) is likewise a reading, which is precisely why D3 makes the cut revisable rather than
+  baking it in.
 - **Not independent:** the adr and master sessions agreeing is *one* reading reached twice from the
   same measurements. The data is the independent part, and was re-verified by the owner.
 
@@ -167,14 +178,16 @@ decision rather than leaving it to the reader.
 
 ### D2 — Stance has two distinct surfaces, because one mechanism cannot serve both
 
-A single entity-gated surface **provably cannot produce this decision's motivating examples**. The
-stances *"prefers explicit request before creation"* (`Artifact`) and *"prefers by default for
-follow-up data"* (`Plain text responses`) are standing instructions about how the agent should
-behave. Entity-gated, they fire only once the user has already raised artifacts or output format —
-which is after the behaviour they govern has occurred. Shipping one mechanism would reproduce the
-exact pattern this ADR exists to end, one level down.
+A single entity-gated surface **cannot produce this decision's motivating examples** — that much is
+demonstrable. The stances *"prefers explicit request before creation"* (`Artifact`) and *"prefers by
+default for follow-up data"* (`Plain text responses`) are standing instructions about how the agent
+should behave. Entity-gated, they fire only once the user has already raised artifacts or output
+format — which is after the behaviour they govern has occurred. Shipping one mechanism would reproduce
+the exact pattern this ADR exists to end, one level down.
 
-Therefore:
+What is demonstrated is that **one entity-gated surface is insufficient**, not that an always-present
+layer is the unique remedy — an action-gated policy surface is a genuine alternative and is weighed as
+Option 6. Therefore, on the balance of those options:
 
 - **Standing behavioural preference → an always-present profile layer.** Not gated on entity recall.
   Present on every turn, because its entire purpose is to govern behaviour before the topic arises.
@@ -267,8 +280,18 @@ is not. This ADR applies the rule to itself — AC-8 is its self-test.
 
 - **The supersession degeneracy is out of scope** and carries its own ticket against ADR-0098.
   Folding a write-path fix into a read-path ADR would make this one unshippable, and it is ADR-0098's
-  problem. This ADR notes it, relies on none of it, and is safe under it: D5 keys on
-  `valid_to`/`invalid_at`, which the degeneracy does not affect.
+  problem.
+
+  **What D5 does and does not buy under it, stated precisely.** D5 keys on `valid_to`/`invalid_at`, so
+  it reliably prevents a row *marked* non-current from being pushed. It does **not** make the surviving
+  current row trustworthy: the degeneracy governs *which* claim receives those flags — `adjudicate()`
+  chooses `SUPERSEDE` versus `REJECT`, and `assert_claim` then marks either the prior rows or the
+  incoming one non-current — so with confidence comparison inert, the row the graph calls current is
+  whichever arrived later, not necessarily the correct fact. **D5 filters the adjudicator's chosen
+  winner; it does not adjudicate.** This is a real residual exposure on the push surface, bounded today
+  because only Stance is pushed (2 supersessions, both manually verified correct) and Claims are
+  pull-only, where a wrong current value arrives as a weighable tool result rather than an assertion.
+  It is a further reason the write-side ticket should not linger.
 - **The claim classifier is out of scope.** D4 routes around it rather than depending on it.
 - **ADR-0100 gets an appended note**, because it demoted the hard recency gate on the premise that
   ADR-0098 owns correctness-over-time, and on live data that premise does not hold. A note, not a
@@ -348,12 +371,41 @@ stance as behavioural or topic-scoped at write time.
 
 **Cons:**
 - ADR-0125 D7 reserves write-time dispatch for isolation boundaries; this is retrieval.
-- **Write-time routing is first-write-wins for location** — a misclassified stance is in the wrong
-  surface permanently, and the always-present surface is the one where being wrong is expensive.
+- **Write-time routing is first-write-wins for location** — correcting a misclassified stance requires
+  a migration or a recompute pass, and the always-present surface is the one where being wrong is
+  expensive in the meantime.
 - It is a third classifier bet, on the highest-stakes surface.
 
 **Why Rejected:** The cut is a judgment likely to be revised as the stance corpus grows, and D7 exists
-to keep revisable cuts revisable. A read-time facet can be re-derived; a write-time property cannot.
+to keep revisable cuts revisable. A read-time facet is re-derived for free on the next turn; a stored
+property is recoverable only by migration or recompute. *(Not "permanent" — that would overstate it —
+but the asymmetry in cost of being wrong is the deciding factor, on top of the classifier risk.)*
+
+### Option 6: An action-gated behavioural policy surface
+
+**Description:** Instead of an always-present layer, retrieve behavioural stances at the moment an
+action they govern is about to be taken — inject *"prefers explicit request before creation"* when the
+model is about to call an artifact-creating tool.
+
+**Pros:**
+- Zero per-turn floor; cost is paid only when the governed action actually occurs.
+- Precisely targeted — the stance arrives exactly where it applies, with no irrelevant firing.
+- Scales cleanly as the behavioural corpus grows, unlike a curated always-present set.
+
+**Cons:**
+- It requires knowing which action is imminent, and that is decided by the model *mid-turn*, after
+  context assembly has already run — so the surface would have to live in the tool-dispatch path, not
+  in recall.
+- It governs only preferences expressible as tool-call preconditions. *"Prefers plain text by default
+  for follow-up data"* constrains prose the model writes directly, where there is no action to gate on.
+- It is a materially larger build touching the orchestrator loop, for a subset of the cases.
+
+**Why Rejected — for now, and explicitly not on principle.** It is the better long-run shape for the
+subset it covers, and it is the natural home for a preference that maps to a specific tool call. It is
+rejected here because it cannot cover response-style preferences at all, and because it moves the work
+from the recall path into the orchestrator loop, which is a much larger change than the one this ADR
+is sized for. The always-present layer is bounded (AC-7) and revisable (D3); if the curated set ever
+approaches its ceiling, action-gating is the first thing to reconsider — that is the stated trigger.
 
 ### Option 5: Curate nothing — inject all 27 stances on every turn
 
@@ -397,8 +449,8 @@ make. Rejected on scaling, not on present cost.
 ### Negative Consequences
 
 - The always-present layer is a genuine per-turn token cost on **every** turn — the first surface in
-  the system with that property. It is bounded by curation, not by a trimmer, so the bound holds only
-  as long as curation is disciplined.
+  the system with that property. AC-7 caps it at 12 curated stances and 1,500 bytes, so growth beyond
+  that requires amending this ADR rather than a quiet curation decision.
 - A curated set is manual work that will drift as the stance corpus grows; D3 accepts this in exchange
   for revisability and precision, and the trigger for revisiting is the curated set becoming large
   enough that maintaining it is the dominant cost.
@@ -413,7 +465,8 @@ make. Rejected on scaling, not on present cost.
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | The curated behavioural set drifts stale as stances accumulate | High | Medium | D3 makes it a read-time facet, revisable without migration; the set is small by construction and AC-2 fails loudly if a curated stance stops arriving |
-| The always-present layer becomes a per-turn cost nobody notices growing | Medium | Medium | Bounded by curation rather than by a trimmer; growth is a curation decision, visible at the moment it is made |
+| The always-present layer becomes a per-turn cost nobody notices growing | Medium | Medium | AC-7 fixes the ceiling in this ADR (≤12 stances, ≤1,500 bytes) and fails on breach; raising it requires an amendment, and Option 6 (action-gating) is the named alternative once the ceiling is approached |
+| The current row D5 pushes is the wrong fact, because adjudication is degenerate | Medium | Medium | D5 filters the adjudicator's winner but does not adjudicate (D8); exposure is bounded to Stance today (2 supersessions, verified) since Claims are pull-only, and the ADR-0098 write-side ticket is the real fix |
 | Pull-only Claims means the tool is never called, so Claims remain effectively unread | Medium | High | AC-4(b) proves reachability, not usage; usage is a tool-description and routing question the implementation ticket carries — and AC-8 fails if the pull path is removed |
 | Topic-scoped enrichment injects an irrelevant stance | Medium | Low | It rides on an entity the recall path already selected; a wrong stance implies a wrong entity, which is the existing recall path's failure, not a new one |
 | D5 relies on `valid_to`/`invalid_at` while supersession adjudication is degenerate | Low | Medium | The degeneracy affects *which* claim wins, never whether the loser is marked superseded; D5's filter is unaffected. Tracked separately (D8) |
@@ -452,18 +505,28 @@ Each is outcome-level and discriminating; a broken or half-built implementation 
 every criterion that could be satisfied by a component doing nothing is paired with a positive
 companion, and **AC-8 is the suite's self-test.**
 
+**Observation point, fixed for the whole suite.** Every "reaches the model" assertion below is made
+against the **actual serialized provider request** — the bytes sent to the model — and **not** against
+`prompt_manifest` or any other component manifest. ADR-0125 D3 records `prompt_manifest` as a *likely
+but unconfirmed* satisfier for "the assembled context actually sent to the model," and until that
+fidelity is independently proven a half-wired implementation could populate a manifest while omitting
+the content from the request. A manifest may be substituted **only** once an invariant or test proving
+manifest-to-request fidelity exists and is cited by identifier. *(This ADR checks affect strings, which
+appear in rendered text — unlike ADR-0125 AC-3, which needs the manifest precisely because recall
+identifiers need not appear in rendered content. The two are not in tension.)*
+
 - **AC-1 — A topic-scoped stance reaches the model when its target entity is recalled, and does not
   when it is not.** · **Check:** run a turn whose message is about a concept carrying a stance (e.g.
-  `Python`, affect *"prefers over Java"*) and assert the affect string is present in the **final
-  serialized model input** (or its component manifest). Run a second turn on an unrelated topic with
-  no stance-bearing entity in its recall set and assert the same string is absent. · *Fails if* the
-  affect is absent in the first case, present in the second, **or if the first assertion still passes
-  with the stance-read call site removed** — a vacuous pass is a failure of the test.
+  `Python`, affect *"prefers over Java"*) and assert the affect string is present in the **serialized
+  provider request**. Run a second turn on an unrelated topic with no stance-bearing entity in its
+  recall set and assert the same string is absent. · *Fails if* the affect is absent in the first
+  case, or present in the second. *(Vacuity for this criterion is covered systematically by AC-8's
+  mutation matrix rather than restated here.)*
 
 - **AC-2 — A standing behavioural stance is present on a turn that mentions none of its targets.**
   · **Check:** issue a probe message with no lexical or semantic overlap with `Artifact` or
   `Plain text responses`, and confirm the recall set for that turn contains **neither** entity. Assert
-  the curated behavioural affects are nonetheless present in the final serialized model input.
+  the curated behavioural affects are nonetheless present in the serialized provider request.
   · *Fails if* a behavioural stance appears only when its target entity was independently recalled —
   that is Option 3 shipped under D2's name, and it is the specific failure this criterion exists to
   catch.
@@ -502,27 +565,44 @@ companion, and **AC-8 is the suite's self-test.**
   a bullet, **or if the section is never rendered at all** — suppressing everything passes the first
   half and fails the decision.
 
-- **AC-7 — The always-present layer's per-turn cost is bounded and observable.** · **Check:** measure
-  the serialized byte length the behavioural layer contributes to a turn's model input, and assert it
-  is non-zero and below the bound the implementation ticket records. Add a stance to the curated set
-  and assert the measured contribution rises accordingly. · *Fails if* the contribution is zero (the
-  layer is not actually injected — AC-2's failure by another route), if it is unmeasurable, or if it
-  does not respond to the curated set changing, which would mean the measurement is reading something
-  other than the layer.
+- **AC-7 — The always-present layer's per-turn cost is bounded by a limit fixed *here*, not chosen
+  after observing output.** The bound is decided by this ADR so it cannot be back-fitted: **the
+  curated behavioural set holds at most 12 stances, and its contribution to the serialized provider
+  request is at most 1,500 bytes.** (Sized from the measured corpus — 4–6 behavioural stances today at
+  ~120 bytes each rendered — with headroom, deliberately far below any trimmer threshold.)
+  · **Check:** measure the byte length the behavioural layer contributes to the serialized provider
+  request; assert it is **non-zero** and **≤ 1,500**. Assert the curated set's cardinality is **≤ 12**.
+  Then add one stance to the curated set and assert the measured contribution rises. · *Fails if* the
+  contribution is zero (the layer is not injected — AC-2's failure by another route), exceeds 1,500
+  bytes, if the set exceeds 12 entries, if the measurement is taken anywhere other than the serialized
+  request, or if it does not respond to the curated set changing — which would mean the measurement is
+  reading something other than the layer. **Raising either limit requires amending this ADR**, which is
+  the point: unbounded curation growth is the acknowledged risk, and a bound the implementation may set
+  for itself does not constrain it.
 
-- **AC-8 — SEAM: removing the consumers turns the suite red.** *This ADR's self-application of D7,
-  and the criterion ADR-0098 lacked.* · **Check:** with the stance-read call site removed from context
-  assembly, run the acceptance suite and require **at least one** criterion to fail. Independently,
-  with the Claims pull path removed from `search_memory`, run the suite and require at least one
-  criterion to fail. · *Fails if* the suite is **green with no consumer present** — which is precisely
-  ADR-0098's shipped condition, and the condition this ADR exists to make impossible to reach
-  undetected.
+- **AC-8 — SEAM: each consumer removal turns *named* assertions red, from a green baseline.** *This
+  ADR's self-application of D7, and the criterion ADR-0098 lacked.* A generic "at least one criterion
+  fails" is not sufficient — an unrelated pre-existing failure would satisfy it — so the expected
+  failures are named per mutation. · **Check:** first establish a **green baseline**: AC-1 through
+  AC-7 all pass unmutated. An unrelated failure invalidates the run and must be fixed before
+  proceeding. Then apply each mutation independently, restoring between runs:
+
+  | Mutation | Assertions that MUST fail |
+  |---|---|
+  | Remove topic-scoped stance enrichment from context assembly | AC-1 positive half · AC-5 current-stance-present half |
+  | Remove behavioural-profile injection | AC-2 · AC-7 non-zero-contribution half |
+  | Remove the Claims path from `search_memory` | AC-4(b) · AC-5 supersession-chain-on-pull half |
+
+  · *Fails if* any named assertion still passes under its mutation, if the baseline is not green
+  before mutating, or if a failure under mutation is traceable to a cause other than the removed
+  consumer. **Green with no consumer present is precisely ADR-0098's shipped condition** — the
+  condition this ADR exists to make impossible to reach undetected.
 
 **Seam owner (assembled intent):** **AC-8.** It can only be run once both surfaces exist, and it is
 the assembled proof that the write-only state has actually ended — not that fields are populated, not
-that children merged. AC-1 through AC-7 are asserted independently by their own tickets. **This ADR
-does not close because its last child merged; it closes when removing the readers turns the suite
-red.**
+that children merged. AC-1 through AC-7 are asserted independently by their own tickets; AC-8 is the
+only criterion no single child can satisfy, and it is master's to hold. **This ADR does not close
+because its last child merged; it closes when removing each reader turns its named assertions red.**
 
 ---
 
@@ -534,8 +614,8 @@ red.**
 - ADR-0115 — Knowledge Class Axis: Emission, Persistence, Dispatch (Implemented 2026-07-12) — supersedes ADR-0098 §D1's class-as-stored-property
 - ADR-0107 — User Identity Resolution and Log Propagation (Accepted 2026-07-02) — a Claim anchors to the acting authenticated user, which is how D4's pull path scopes
 - ADR-0097 — Ingested-Knowledge Taxonomy (Proposed — hypothesis, held loosely)
-- ADR-0052 — Owner Identity Primitive — the `is_owner` anchor the Stance edge originates from
-- ADR-0087 — Memory Recall Quality — the pillar this lands under
+- ADR-0052 — Seshat Owner Identity Primitive (Accepted, amended 2026-05-09) — the `is_owner` anchor the Stance edge originates from
+- ADR-0087 — Memory Recall Quality Measurement Program (Accepted 2026-06-27; reconciled with ADR-0098) — the pillar this lands under
 - FRE-1012 — this ADR's backing ticket (text corrected 2026-07-27: claim embeddings exist; the write side is not sound)
 - FRE-1005 — ADR-0125 T3, the usage edge; blocked on this decision
 - FRE-1006 — ADR-0125 T5 seam; inherits the same premise

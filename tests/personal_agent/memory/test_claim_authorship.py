@@ -2,9 +2,12 @@
 
 Before this ticket every Claim carried ``confidence=0.8`` (``source_type`` was the
 hard-coded literal ``"conversation"``, and confidence derived solely from it), so in
-:func:`~personal_agent.memory.supersession.adjudicate` the REJECT branch and the
-``correction`` label arm were both **unreachable** — supersession degenerated to the
-naive last-write-wins model ADR-0098 D2 names and rejects.
+:func:`~personal_agent.memory.supersession.adjudicate` the *confidence* comparison could
+never be unequal: the weaker-claim REJECT and the confidence-heuristic ``correction`` label
+were both **unreachable**, leaving only the ``observed_at`` staleness check. Supersession
+degenerated to newer-wins — the naive last-write-wins model ADR-0098 D2 names and rejects.
+(The staleness REJECT and the extractor's explicit ``update_kind`` label were reachable in
+principle throughout; live, neither had ever produced a rejection — 94 claims, zero.)
 
 These tests pin the producer path end to end: authorship is derived **in Python** from
 the role-partitioned captured text (never self-reported by the model — ADR-0098 AC-9),
@@ -88,6 +91,25 @@ def test_empty_content_is_agent() -> None:
     assert _attribute_claim_authorship("", _USER_MESSAGE, _ASSISTANT_RESPONSE) == "agent"
 
 
+def test_accented_words_are_not_shredded_into_fragments() -> None:
+    """Attribution must survive a French corpus — ``[a-z0-9]+`` split "café" into "caf".
+
+    The owner's captures routinely contain accented French (place names, cooking terms),
+    so an ASCII-only word class would score grounding on truncated fragments and flip
+    attributions in both directions.
+    """
+    user_message = "I bought a crème brûlée torch in Forcalquier for my café setup."
+    claim = "The user bought a crème brûlée torch in Forcalquier."
+    assert _attribute_claim_authorship(claim, user_message, "Noted.") == "user"
+
+
+def test_accented_claim_grounded_in_assistant_is_not_awarded_to_user() -> None:
+    user_message = "What is the weather?"
+    assistant = "Météo France reports the user's Forcalquier crème brûlée festival is Saturday."
+    claim = "The Forcalquier crème brûlée festival is on Saturday per Météo France."
+    assert _attribute_claim_authorship(claim, user_message, assistant) == "agent"
+
+
 # ------------------------------------------------------------------- producer path
 
 
@@ -151,7 +173,7 @@ def _claim_for(content: str, extractor_payload: dict[str, object] | None = None)
 
 
 def test_agent_derived_claim_cannot_clobber_a_user_asserted_one() -> None:
-    """AC-B: the D2 safety guard is live — this REJECTed nothing before FRE-1020."""
+    """AC-B: the weaker-claim guard is live — unreachable on constant confidence."""
     user_current = _record(KnowledgeWeight.from_claim_provenance("conversation", "user").confidence)
     incoming = _claim_for(_AGENT_CLAIM)
     assert incoming is not None
@@ -165,7 +187,7 @@ def test_agent_derived_claim_cannot_clobber_a_user_asserted_one() -> None:
 
 
 def test_user_asserted_claim_corrects_an_agent_derived_one() -> None:
-    """AC-C: the ``correction`` label arm is reachable — live it had never fired."""
+    """AC-C: the confidence-heuristic ``correction`` arm is reachable — never fired live."""
     agent_current = _record(0.8)
     incoming = _claim_for(_USER_CLAIM)
     assert incoming is not None
@@ -177,6 +199,20 @@ def test_user_asserted_claim_corrects_an_agent_derived_one() -> None:
     )
     assert decision.action is SupersessionAction.SUPERSEDE
     assert decision.reason == "correction"
+
+
+def test_off_vocabulary_authorship_never_reaches_the_adjudicator() -> None:
+    """A payload bypassing _finalize_extraction cannot smuggle an unknown authority tier."""
+    claim = _build_claim(
+        {
+            "content": _USER_CLAIM,
+            "asserted_by": "superuser",
+            "provenance": {"source_type": "conversation", "observed_at": _TURN_TS.isoformat()},
+        }
+    )
+    assert claim is not None
+    assert claim.asserted_by == "agent"
+    assert claim.confidence == 0.8
 
 
 def test_agent_derived_claim_still_supersedes_a_legacy_row() -> None:

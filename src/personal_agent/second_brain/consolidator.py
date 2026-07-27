@@ -97,7 +97,8 @@ def _build_claim(data: dict[str, Any]) -> Claim | None:
     Python-derived co-authorship (``asserted_by``, FRE-1020) via
     :meth:`KnowledgeWeight.from_claim_provenance` — the weight the correction path
     adjudicates on. Deriving it from the channel alone left it constant at 0.8 for every
-    claim, which made ADR-0098 D2's "not naive last-write-wins" guard unreachable.
+    claim, which made ADR-0098 D2's weaker-claim guard ("not naive last-write-wins")
+    unreachable — only the ``observed_at`` staleness check still discriminated.
     Returns None (skip) when content or ``observed_at`` is absent.
 
     Args:
@@ -112,7 +113,10 @@ def _build_claim(data: dict[str, Any]) -> Claim | None:
     if not content or observed_at is None:
         return None
     source_type = str(provenance.get("source_type", "conversation"))
-    asserted_by = str(data.get("asserted_by", "agent") or "agent")
+    # Only ever "user"/"agent" on the production path (Python stamps it in
+    # _finalize_extraction); anything else — a direct caller, a legacy payload — resolves to
+    # the untrusted tier rather than silently reaching the adjudicator as an unknown value.
+    asserted_by = "user" if data.get("asserted_by") == "user" else "agent"
     return Claim(
         content=content,
         knowledge_class=str(data.get("class", "Personal")),

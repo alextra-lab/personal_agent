@@ -77,7 +77,8 @@ from a hard filter to a ranking signal.
 > data** when this ADR was accepted, and the demotion must not rest on it. ADR-0098's
 > supersession *code* discriminated correctly, but its producer path fed it a **constant
 > confidence** (every Claim: `source_type="conversation"` → `0.8`), so the guard that rejects
-> a weaker later claim was unreachable and supersession degenerated to newer-wins — the naive
+> a weaker later claim was unreachable (only the staleness check still discriminated) and
+> supersession degenerated to newer-wins — the naive
 > last-write-wins model ADR-0098 D2 explicitly rejects. Measured on the live graph: 94 Claims,
 > one distinct confidence, **zero rejections ever**. FRE-1020 repairs the producer path
 > (co-authorship as a distinct provenance axis, ADR-0098 D6), so 0098 now genuinely owns

@@ -193,7 +193,7 @@ async def test_assert_claim_logs_rejection_with_both_attributions() -> None:
     """FRE-1020 AC-G: a REJECT is never silent — it permanently sidelines the new claim.
 
     An agent-derived claim loses to a user-asserted incumbent in the same slot (the
-    ADR-0098 D2 guard, unreachable before this ticket). The structured signal carries both
+    ADR-0098 D2 weaker-claim guard, unreachable on constant confidence). The signal carries both
     sides so a wrong rejection — the known residual risk of an attribution miss — is
     measurable rather than invisible.
     """
@@ -230,6 +230,8 @@ async def test_assert_claim_logs_rejection_with_both_attributions() -> None:
     rejected = [c for c in mock_log.info.call_args_list if c.args and c.args[0] == "claim_rejected"]
     assert len(rejected) == 1
     kwargs = rejected[0].kwargs
+    # Names the branch adjudicate() actually took, not a condition that merely also holds.
+    assert kwargs["cause"] == "weaker_provenance"
     assert kwargs["new_asserted_by"] == "agent"
     assert kwargs["blocker_asserted_by"] == "user"
     assert kwargs["new_confidence"] == 0.8

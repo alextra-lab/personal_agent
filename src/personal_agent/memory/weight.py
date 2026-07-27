@@ -26,8 +26,9 @@ _DEFAULT_CONFIDENCE: dict[str, float] = {
 # FRE-1020: co-authorship (ADR-0098 D6) is a *different axis* from ``source_type``.
 # ``source_type`` records the **channel** a fact arrived through; every extracted Claim
 # arrives through ``conversation``, so the channel vocabulary is structurally incapable of
-# expressing *who asserted* the fact — which is why claim confidence was constant and the
-# ADR-0098 D2 supersession guard was unreachable.
+# expressing *who asserted* the fact — which is why claim confidence was constant and, with
+# it, the ADR-0098 D2 weaker-claim guard unreachable (the confidence comparison could never
+# be unequal; only the observed_at staleness check still discriminated).
 AssertedBy = Literal["user", "agent"]
 
 # Authorship is an **uplift over the channel base**, and the agent tier *is* the channel

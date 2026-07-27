@@ -282,3 +282,23 @@ class TestMtimeCache:
 
         second = get_skill_block()
         assert "v2 content" in second
+
+
+class TestGetSkillBodies:
+    """``get_skill_bodies`` names what ``get_skill_block`` only renders (FRE-1004)."""
+
+    def test_names_match_the_bodies_in_the_text(self, monkeypatch) -> None:
+        from personal_agent.orchestrator.skills import get_skill_block, get_skill_bodies
+
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        text, names = get_skill_bodies(message="show me logs")
+
+        assert text == get_skill_block(message="show me logs")
+        assert "bash" in names
+        assert len(names) == len(set(names))
+
+    def test_disabled_returns_empty_text_and_no_names(self, monkeypatch) -> None:
+        from personal_agent.orchestrator.skills import get_skill_bodies
+
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
+        assert get_skill_bodies(message="show me logs") == ("", ())

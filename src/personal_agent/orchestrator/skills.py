@@ -293,6 +293,58 @@ def assemble_skill_usage_directives(
     return f"<{_SKILL_USAGE_DIRECTIVES_TAG}>\n{inner}\n</{_SKILL_USAGE_DIRECTIVES_TAG}>"
 
 
+def get_skill_bodies(
+    message: str | None = None,
+    loaded_skills: frozenset[str] | set[str] | None = None,
+) -> tuple[str, tuple[str, ...]]:
+    """Return the skill library block *and* the names of the skills it contains.
+
+    Same selection as :func:`get_skill_block`, which delegates here. The names are what
+    the turn evidence record needs (ADR-0125 D3 item 6, FRE-1004): "which skill bodies
+    were loaded" is answerable only by name, not by the presence flag the existing
+    prompt-component taxonomy records.
+
+    Args:
+        message: The original user message used for keyword-based routing.
+            Pass ``None`` to get the bash-only block.
+        loaded_skills: Skill names already loaded this conversation. Bodies for
+            these skills are suppressed to avoid duplication. Ignored when None.
+
+    Returns:
+        Tuple of (block text, ordered skill names). Both are empty when no skill loads.
+    """
+    if not settings.prefer_primitives_enabled:
+        return "", ()
+
+    _already_loaded = loaded_skills or set()
+    cache = _get_cache()
+    chunks: list[str] = []
+    seen: list[str] = []
+
+    bash_doc = cache.docs.get("bash")
+    if bash_doc and bash_doc.body and "bash" not in _already_loaded:
+        chunks.append(bash_doc.body)
+        seen.append("bash")
+
+    if message:
+        msg_lower = message.lower()
+        for skill in cache.docs.values():
+            if skill.name in seen or skill.name in _already_loaded:
+                continue
+            if skill.keywords and any(kw.lower() in msg_lower for kw in skill.keywords):
+                chunks.append(skill.body)
+                seen.append(skill.name)
+                log.debug(
+                    "skill_route_matched",
+                    skill=skill.name,
+                    message_preview=message[:80],
+                )
+
+    if not chunks:
+        return "", ()
+    return SKILL_BLOCK_HEADER + _SEPARATOR.join(chunks), tuple(seen)
+
+
 def get_skill_block(
     message: str | None = None,
     loaded_skills: frozenset[str] | set[str] | None = None,
@@ -316,36 +368,7 @@ def get_skill_block(
         Skill library block prefixed with a header, or an empty string when
         ``settings.prefer_primitives_enabled`` is ``False`` or no skills load.
     """
-    if not settings.prefer_primitives_enabled:
-        return ""
-
-    _already_loaded = loaded_skills or set()
-    cache = _get_cache()
-    chunks: list[str] = []
-    seen: set[str] = set()
-
-    bash_doc = cache.docs.get("bash")
-    if bash_doc and bash_doc.body and "bash" not in _already_loaded:
-        chunks.append(bash_doc.body)
-        seen.add("bash")
-
-    if message:
-        msg_lower = message.lower()
-        for skill in cache.docs.values():
-            if skill.name in seen or skill.name in _already_loaded:
-                continue
-            if skill.keywords and any(kw.lower() in msg_lower for kw in skill.keywords):
-                chunks.append(skill.body)
-                seen.add(skill.name)
-                log.debug(
-                    "skill_route_matched",
-                    skill=skill.name,
-                    message_preview=message[:80],
-                )
-
-    if not chunks:
-        return ""
-    return SKILL_BLOCK_HEADER + _SEPARATOR.join(chunks)
+    return get_skill_bodies(message=message, loaded_skills=loaded_skills)[0]
 
 
 def find_skills_for_tool(tool_name: str) -> list[SkillDoc]:

@@ -13,6 +13,13 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
+from personal_agent.captains_log.turn_evidence import (
+    InlineOutcome,
+    build_recall_candidates,
+    build_turn_evidence,
+    derive_evidence_presence,
+    memory_item_identity,
+)
 from personal_agent.config import settings
 from personal_agent.config.env_loader import Environment
 from personal_agent.llm_client import ModelRole
@@ -1190,6 +1197,127 @@ _TURN_CONTEXT_OPEN = "<turn_context>"
 _TURN_CONTEXT_CLOSE = "</turn_context>"
 
 
+def build_wire_messages(
+    messages: list[dict[str, Any]],
+    system_prompt: str | None,
+    trace_id: str,
+) -> list[dict[str, Any]]:
+    """Return the provider-neutral message list the LLM clients will dispatch.
+
+    Both clients perform this identical pre-flight before serializing a request —
+    prepend the system prompt, then sanitise (``llm_client/client.py`` and
+    ``llm_client/litellm_client.py``). It is not cosmetic: ``sanitise_messages`` strips
+    ``<tool_code>`` blocks, drops orphaned tool messages, can truncate the history, and
+    can append a synthetic continuation. A turn-evidence record built from the
+    pre-client pair could therefore describe messages that never reached the provider.
+
+    Provider-specific decoration downstream of this (the Anthropic ``cache_control``
+    copy) is additive metadata and never removes content, so this form is the correct
+    basis for the evidence record and the record does not vary by provider.
+
+    Args:
+        messages: The message list the executor hands to ``respond()``.
+        system_prompt: The system prompt for the same call.
+        trace_id: Trace identifier, for the sanitiser's logging.
+
+    Returns:
+        The wire-form message list, system message included.
+    """
+    from personal_agent.llm_client.history_sanitiser import sanitise_messages  # noqa: PLC0415
+
+    wire = list(messages)
+    if system_prompt:
+        wire.insert(0, {"role": "system", "content": system_prompt})
+    # emit_telemetry=False: this is an observation of the wire form, not a dispatch.
+    # The real call sanitises again inside the client, and ``history_sanitised`` is
+    # documented as counting real-world occurrence rates — double-emitting would
+    # inflate that series on exactly the turns that reach the admission point.
+    return sanitise_messages(wire, trace_id=trace_id, emit_telemetry=False)[0]
+
+
+def _record_turn_evidence(
+    ctx: ExecutionContext,
+    *,
+    system_prompt: str,
+    request_messages: list[dict[str, Any]],
+    rendered_memory_ids: tuple[str, ...],
+    inline_outcome: InlineOutcome,
+    skill_body_names: tuple[str, ...],
+) -> None:
+    """Build and store this turn's evidence record (ADR-0125 D3 items 5 and 6).
+
+    Best-effort: a failure here must never break the turn, but it is logged rather than
+    swallowed, because a silently missing record is exactly the ambiguity the evidence
+    contract exists to remove — and ``TaskCapture`` will mark it ``not_recorded``.
+
+    Args:
+        ctx: Execution context. ``ctx.turn_evidence`` is set on success.
+        system_prompt: System prompt for this call.
+        request_messages: Message list handed to the client for this call.
+        rendered_memory_ids: Identities the memory renderer actually emitted.
+        inline_outcome: What the volatile-block inliner did.
+        skill_body_names: Names of the skill bodies loaded into the prompt.
+    """
+    try:
+        gw_context = ctx.gateway_output.context if ctx.gateway_output is not None else None
+        ctx.turn_evidence = build_turn_evidence(
+            candidates=ctx.recall_candidates,
+            memory_context_present=bool(ctx.memory_context),
+            rendered_identities=rendered_memory_ids,
+            inline_outcome=inline_outcome,
+            session_facts_injected=(
+                gw_context.session_facts_injected if gw_context is not None else False
+            ),
+            wire_messages=build_wire_messages(request_messages, system_prompt, ctx.trace_id),
+            system_prompt=system_prompt,
+            user_message=ctx.user_message,
+            skill_bodies=skill_body_names,
+            call_index=0,
+        )
+    except Exception:
+        log.exception(
+            "turn_evidence_build_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+
+
+def _inline_volatile_with_outcome(
+    messages: list[dict[str, Any]], volatile_block: str
+) -> tuple[list[dict[str, Any]], InlineOutcome]:
+    """Inline the volatile block and report *what happened* (FRE-1004).
+
+    Same behaviour as :func:`_inline_volatile_into_last_user_message`, which delegates
+    here. The outcome is what makes recall admission decidable structurally: the block
+    can be rendered and still never reach the model input, and ADR-0125 D3 item 5
+    requires that case to be recorded as a drop rather than assumed to be an admission.
+
+    Args:
+        messages: Working message list. Not mutated.
+        volatile_block: Pre-joined volatile content.
+
+    Returns:
+        Tuple of (message list, outcome). The list is the input object unchanged
+        whenever the outcome is not :attr:`InlineOutcome.INLINED`.
+    """
+    block = volatile_block.strip() if volatile_block else ""
+    if not block:
+        return messages, InlineOutcome.EMPTY_BLOCK
+    out = deepcopy(messages)
+    for i in range(len(out) - 1, -1, -1):
+        if out[i].get("role") != "user":
+            continue
+        content = out[i].get("content")
+        if not isinstance(content, str):
+            return messages, InlineOutcome.NO_TARGET
+        if content.lstrip().startswith(_TURN_CONTEXT_OPEN):
+            # Already wrapped this turn — never double-wrap (byte stability).
+            return out, InlineOutcome.ALREADY_WRAPPED
+        out[i]["content"] = f"{_TURN_CONTEXT_OPEN}\n{block}\n{_TURN_CONTEXT_CLOSE}\n\n{content}"
+        return out, InlineOutcome.INLINED
+    return messages, InlineOutcome.NO_TARGET
+
+
 def _inline_volatile_into_last_user_message(
     messages: list[dict[str, Any]], volatile_block: str
 ) -> list[dict[str, Any]]:
@@ -1216,22 +1344,7 @@ def _inline_volatile_into_last_user_message(
         the input list unchanged when there is nothing to inline, the last user
         content is non-string, or no user message exists.
     """
-    block = volatile_block.strip() if volatile_block else ""
-    if not block:
-        return messages
-    out = deepcopy(messages)
-    for i in range(len(out) - 1, -1, -1):
-        if out[i].get("role") != "user":
-            continue
-        content = out[i].get("content")
-        if not isinstance(content, str):
-            return messages
-        if content.lstrip().startswith(_TURN_CONTEXT_OPEN):
-            # Already wrapped this turn — never double-wrap (byte stability).
-            return out
-        out[i]["content"] = f"{_TURN_CONTEXT_OPEN}\n{block}\n{_TURN_CONTEXT_CLOSE}\n\n{content}"
-        return out
-    return messages
+    return _inline_volatile_with_outcome(messages, volatile_block)[0]
 
 
 def _frozen_backend() -> str:
@@ -2097,21 +2210,28 @@ async def _maybe_confirm_attachment_cost(
     return False
 
 
-def _render_memory_section(entity_items: list[dict[str, Any]]) -> str:
-    """Build the ## Your Memory Graph entity section string.
+def _render_memory_section_with_ids(
+    entity_items: list[dict[str, Any]],
+) -> tuple[str, tuple[str, ...]]:
+    """Build the ## Your Memory Graph entity section, and name what it rendered.
 
     Skips entities with None or blank descriptions (FRE-374 D1) so the
     LLM does not receive empty lines like '- [LOCATION] Paris:  (mentioned 328x)'.
+
+    The rank cap and that blank-description filter both drop candidates silently. The
+    identities returned here (FRE-1004) are what makes those drops recordable at the
+    admission point instead of invisible (ADR-0125 D3 item 5).
 
     Args:
         entity_items: List of entity dicts from memory_context.
 
     Returns:
-        Formatted memory section string, or empty string if no described entities.
+        Tuple of (section string, identities rendered). Both empty when nothing renders.
     """
     described = [m for m in entity_items[:15] if (m.get("description") or "").strip()]
     if not described:
-        return ""
+        return "", ()
+    rendered_ids = tuple(memory_item_identity(m)[1] for m in described)
     entity_lines = [
         f"- [{m.get('entity_type', '')}] {m.get('name', '')}: {m.get('description', '').strip()} "
         f"(mentioned {m.get('mentions', 1)}x)"
@@ -2123,7 +2243,7 @@ def _render_memory_section(entity_items: list[dict[str, Any]]) -> str:
         "\n\nUse this list to directly answer questions about what the user "
         "has previously discussed. Do NOT say you have no memory."
     )
-    return section
+    return section, rendered_ids
 
 
 async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
@@ -2370,6 +2490,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     cap_prompt_tokens = 0
                     cap_completion_tokens = 0
                     cap_total_tokens = 0
+                    cap_llm_calls = 0
                     for step in ctx.steps:
                         if step.get("type") == "tool_call":
                             tool_name = (step.get("metadata") or {}).get("tool_name")
@@ -2377,6 +2498,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                                 tools_used.append(tool_name)
                         elif step.get("type") == "llm_call":
                             meta = step.get("metadata") or {}
+                            cap_llm_calls += 1
                             cap_prompt_tokens += meta.get("prompt_tokens", 0)
                             cap_completion_tokens += meta.get("completion_tokens", 0)
                             cap_total_tokens += meta.get("tokens", 0)
@@ -2411,6 +2533,27 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                         tool_results=ctx.tool_results,
                         user_id=ctx.user_id,
                         eval_mode=ctx.eval_mode,
+                        # ADR-0125 D3 (FRE-1004). The turn evidence is stamped with the
+                        # turn's real primary-call count here, at the only point it is
+                        # known; the record itself still describes call 0 alone.
+                        recall_admission=(ctx.turn_evidence.recall if ctx.turn_evidence else None),
+                        assembled_context=(
+                            ctx.turn_evidence.assembled_context.model_copy(
+                                update={"primary_call_count": cap_llm_calls}
+                            )
+                            if ctx.turn_evidence
+                            else None
+                        ),
+                        evidence_presence=derive_evidence_presence(
+                            user_message=ctx.user_message,
+                            assistant_response=ctx.final_reply,
+                            tool_results=ctx.tool_results,
+                            llm_call_count=cap_llm_calls,
+                            turn_evidence=ctx.turn_evidence,
+                            trace_id=ctx.trace_id,
+                            session_id=ctx.session_id,
+                            user_id=ctx.user_id,
+                        ),
                     )
                     write_capture(capture)
 
@@ -3123,7 +3266,11 @@ async def step_init(
             messages_truncated=0,
             estimated_tokens=estimate_messages_tokens(ctx.messages),
         )
-        # Use pre-assembled memory context
+        # Use pre-assembled memory context.
+        # FRE-1004: candidates are taken unconditionally — when Stage 7 dropped the
+        # memory context to fit budget, ``memory_context`` is None but the candidates
+        # are exactly what has to be recorded as dropped.
+        ctx.recall_candidates = gw.context.recall_candidates
         if gw.context.memory_context:
             ctx.memory_context = gw.context.memory_context
             log.info(
@@ -3389,6 +3536,9 @@ async def step_init(
                             authenticated=ctx.authenticated,
                         )
                         ctx.memory_context = _format_broad_recall(broad)
+                        # FRE-1004: legacy path — no gateway candidates to inherit,
+                        # so the recalled set is its own candidate set.
+                        ctx.recall_candidates = build_recall_candidates(ctx.memory_context, {})
                         conversations_found = len(ctx.memory_context)
                         log.info(
                             "memory_recall_broad_query",
@@ -3444,6 +3594,8 @@ async def step_init(
                             }
                             for conv in result.conversations
                         ]
+                        # FRE-1004: legacy path — see the broad-recall branch above.
+                        ctx.recall_candidates = build_recall_candidates(ctx.memory_context, {})
                         conversations_found = len(ctx.memory_context)
                         log.info(
                             "memory_enrichment_completed",
@@ -3686,6 +3838,9 @@ async def step_llm_call(
     # memory_section. Declared here so it survives into the try block regardless
     # of whether the prefer_primitives_enabled path runs.
     _skill_bodies_tail = ""
+    # FRE-1004: same reason — the turn evidence record reads the loaded body names at
+    # the admission point, which is reached whether or not the skill path ran.
+    _skill_body_names: tuple[str, ...] = ()
 
     # Phase B skill routing (FRE-skill-routing, ADR-0063 §D7).
     # Routing mode controls what gets injected:
@@ -3699,7 +3854,7 @@ async def step_llm_call(
         assemble_skill_index_directive,
         assemble_skill_usage_directives,
         get_all_skills,
-        get_skill_block,
+        get_skill_bodies,
     )
 
     if settings.prefer_primitives_enabled:
@@ -3771,6 +3926,9 @@ async def step_llm_call(
         # never enter the static-prefix capture.
         _skill_index_text: str = ""  # STABLE — deterministic catalog render
         _skill_bodies_text: str = ""  # VOLATILE — per-turn selected bodies
+        # FRE-1004: _skill_body_names is declared above this block — D3 item 6 asks
+        # *which* bodies were loaded, and the admission point reads it whether or not
+        # this path runs.
 
         _all_skills = get_all_skills()
 
@@ -3778,20 +3936,23 @@ async def step_llm_call(
             # Index (stable) + bodies of any pre-loaded (router-selected) skills.
             _skill_index_text = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
             _preloaded_bodies: list[str] = []
+            _preloaded_names: list[str] = []
             if ctx.loaded_skills:
                 for _name in sorted(ctx.loaded_skills):
                     _doc = _all_skills.get(_name)
                     if _doc and _doc.body:
                         _preloaded_bodies.append(_doc.body)
+                        _preloaded_names.append(_name)
             _skill_bodies_text = "\n\n".join(p for p in _preloaded_bodies if p)
+            _skill_body_names = tuple(_preloaded_names)
         elif _routing_mode == "hybrid":
             _skill_index_text = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
-            _skill_bodies_text = get_skill_block(
+            _skill_bodies_text, _skill_body_names = get_skill_bodies(
                 message=_user_message,
                 loaded_skills=ctx.loaded_skills,
             )
         else:  # keyword (default / legacy) — bodies only, no index
-            _skill_bodies_text = get_skill_block(message=_user_message)
+            _skill_bodies_text, _skill_body_names = get_skill_bodies(message=_user_message)
 
         _has_index = bool(_skill_index_text)
         _has_bodies = bool(_skill_bodies_text)
@@ -4035,16 +4196,27 @@ async def step_llm_call(
         # This ensures the KV-cache boundary sits between the stable prefix and
         # the per-turn dynamic content, fixing the cross-turn reuse ≈ 0 issue.
         memory_section: str | None = None
+        # FRE-1004: the identities this render actually emitted. Both branches below
+        # drop candidates silently — the entity branch skips 'session' items and caps
+        # at 15 described entities, the task-assist branch caps at 3 — so without this
+        # the evidence record could not tell a used item from a dropped one.
+        _rendered_memory_ids: tuple[str, ...] = ()
         if ctx.memory_context and len(ctx.memory_context) > 0:
             if ctx.memory_context[0].get("type") in ("entity", "session"):
                 # Broad recall path — format as direct knowledge summary
                 entity_items = [m for m in ctx.memory_context if m.get("type") == "entity"]
-                memory_section = _render_memory_section(entity_items) or None
+                _section_text, _rendered_memory_ids = _render_memory_section_with_ids(entity_items)
+                memory_section = _section_text or None
+                if memory_section is None:
+                    _rendered_memory_ids = ()
             else:
                 # Task-assist path — inject conversation summaries
                 _ms = "\n\n## Relevant Past Conversations\n"
                 _ms += (
                     "The following past conversations may be relevant to the current request:\n\n"
+                )
+                _rendered_memory_ids = tuple(
+                    memory_item_identity(mem)[1] for mem in ctx.memory_context[:3]
                 )
                 for i, mem in enumerate(ctx.memory_context[:3], 1):  # Limit to top 3
                     _ms += f"{i}. {mem.get('summary', mem.get('user_message', ''))[:150]}...\n"
@@ -4135,7 +4307,7 @@ async def step_llm_call(
             )
             if p
         )
-        ctx.messages = _inline_volatile_into_last_user_message(ctx.messages, _volatile_block)
+        ctx.messages, _inline_outcome = _inline_volatile_with_outcome(ctx.messages, _volatile_block)
 
         # Call LocalLLMClient.respond()
         # Pass previous_response_id for stateful /v1/responses API
@@ -4215,6 +4387,22 @@ async def step_llm_call(
             full_prompt=system_prompt or "",
             component_ids=tuple(_component_ids),
         )
+
+        # ── The admission point (ADR-0125 D3 items 5 and 6, FRE-1004) ────────────
+        # Recorded once per turn, on the first primary call — the one that serializes
+        # context assembly's output after all trimming and compaction. Later calls in
+        # the tool/hybrid loop are continuations, not fresh assemblies, so recording
+        # them would produce a record describing a different model call than the one
+        # the recall admission belongs to.
+        if ctx.tool_iteration_count == 0 and ctx.turn_evidence is None:
+            _record_turn_evidence(
+                ctx,
+                system_prompt=system_prompt or "",
+                request_messages=request_messages,
+                rendered_memory_ids=_rendered_memory_ids,
+                inline_outcome=_inline_outcome,
+                skill_body_names=_skill_body_names,
+            )
 
         # FRE-973: bound this call to the turn's remaining wall-clock budget so a
         # slow primary generation cannot run past the SLM/tunnel read-timeout with

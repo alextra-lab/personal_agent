@@ -257,7 +257,9 @@ async def test_ac3_assembled_request_messages_preserve_image_block(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch("personal_agent.orchestrator.skills.get_skill_block", return_value=""),
+        patch("personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=("", ()),
+        ),
         patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
         patch(
             "personal_agent.orchestrator.skills.assemble_skill_index_directive",
@@ -330,7 +332,9 @@ async def test_vision_routing_decision_log_fires_for_raster_attachment(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch("personal_agent.orchestrator.skills.get_skill_block", return_value=""),
+        patch("personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=("", ()),
+        ),
         patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
         patch(
             "personal_agent.orchestrator.skills.assemble_skill_index_directive",
@@ -388,7 +392,9 @@ async def test_vision_routing_decision_log_absent_for_no_attachments(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch("personal_agent.orchestrator.skills.get_skill_block", return_value=""),
+        patch("personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=("", ()),
+        ),
         patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
         patch(
             "personal_agent.orchestrator.skills.assemble_skill_index_directive",
@@ -453,7 +459,9 @@ async def test_vision_routing_decision_log_fires_for_document_forced_routing(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch("personal_agent.orchestrator.skills.get_skill_block", return_value=""),
+        patch("personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=("", ()),
+        ),
         patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
         patch(
             "personal_agent.orchestrator.skills.assemble_skill_index_directive",
@@ -527,7 +535,9 @@ async def test_vision_routing_decision_log_absent_for_tier1_pdf_attachment(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch("personal_agent.orchestrator.skills.get_skill_block", return_value=""),
+        patch("personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=("", ()),
+        ),
         patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
         patch(
             "personal_agent.orchestrator.skills.assemble_skill_index_directive",

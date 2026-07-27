@@ -28,7 +28,7 @@ logger = structlog.get_logger(__name__)
 
 
 # Marker the primary injects when proactive-memory/KG entities are in context
-# (executor._render_memory_section). Scanned in sub-agent context to answer the
+# (executor._render_memory_section_with_ids). Scanned in sub-agent context to answer the
 # question FRE-505 exists for: "was memory/KG in the sub-agent's input?"
 _MEMORY_CONTEXT_MARKER = "## Your Memory Graph"
 # Per-message content preview length (mirrors executor.llm_call_messages_debug).

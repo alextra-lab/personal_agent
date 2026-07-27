@@ -18,6 +18,13 @@ from uuid import UUID
 
 import structlog
 
+from personal_agent.captains_log.turn_evidence import (
+    CandidateSource,
+    MemoryItemKind,
+    RecallCandidateRecord,
+    build_recall_candidates,
+    memory_item_identity,
+)
 from personal_agent.config import settings
 from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.memory.protocol import BroadRecallResult, MemoryProtocol, MemoryRecallQuery
@@ -138,6 +145,35 @@ def _format_broad_recall_context(
     return context
 
 
+def _session_fact_candidates(
+    recall_context: RecallResult | None,
+) -> tuple[RecallCandidateRecord, ...]:
+    """Build candidate records for the recall controller's session facts (FRE-1004).
+
+    These bypass ``memory_context`` by design — they are injected as a system message
+    (see :func:`assemble_context`) — so they would be invisible to the evidence contract
+    unless captured separately. Facts the controller found but did not inject are still
+    recorded, and resolve to a drop at the admission point rather than being omitted.
+
+    Args:
+        recall_context: Recall controller result from Stage 4b, or None.
+
+    Returns:
+        One record per candidate fact, identified by its source turn.
+    """
+    if recall_context is None or not recall_context.candidates:
+        return ()
+    return tuple(
+        RecallCandidateRecord(
+            kind=MemoryItemKind.SESSION_FACT,
+            identity=f"turn:{c.source_turn}",
+            score=c.confidence,
+            source=CandidateSource.SESSION_FACT_SECTION,
+        )
+        for c in recall_context.candidates
+    )
+
+
 async def _query_memory_for_intent(
     intent: IntentResult,
     user_message: str,
@@ -147,7 +183,7 @@ async def _query_memory_for_intent(
     session_messages: Sequence[dict[str, Any]],
     user_id: UUID | None = None,
     authenticated: bool = False,
-) -> list[dict[str, Any]] | None:
+) -> tuple[list[dict[str, Any]] | None, dict[str, float]]:
     """Query memory based on intent type.
 
     Args:
@@ -161,12 +197,15 @@ async def _query_memory_for_intent(
         authenticated: Whether the request carries a verified identity (FRE-229).
 
     Returns:
-        Memory context list, or None if no relevant memory found.
+        Tuple of (memory context list or None, relevance scores keyed by item
+        identity). The proactive and entity-match paths both supply real scores; the
+        broad-recall path computes none and returns an empty mapping rather than a
+        fabricated one (ADR-0125 D3 item 5, FRE-1004).
     """
     try:
         if not await memory_adapter.is_connected():
             logger.warning("memory_unavailable", trace_id=trace_id)
-            return None
+            return None, {}
 
         if intent.task_type == TaskType.MEMORY_RECALL:
             broad = await memory_adapter.recall_broad(
@@ -178,7 +217,7 @@ async def _query_memory_for_intent(
                 authenticated=authenticated,
                 query_text=user_message,
             )
-            return _format_broad_recall_context(broad)
+            return _format_broad_recall_context(broad), {}
 
         if settings.proactive_memory_enabled:
             suggestions = await memory_adapter.suggest_relevant(
@@ -191,13 +230,21 @@ async def _query_memory_for_intent(
                 authenticated=authenticated,
             )
             if suggestions.candidates:
-                return [c.payload for c in suggestions.candidates]
+                # FRE-1004: the payload is returned unchanged — the score rides a
+                # sibling map rather than the item, so nothing the model sees or the
+                # budget counts changes. Before this, relevance_score died here.
+                scores = {
+                    identity: c.relevance_score
+                    for c in suggestions.candidates
+                    if (identity := memory_item_identity(c.payload)[1])
+                }
+                return [c.payload for c in suggestions.candidates], scores
 
         # Entity-name matching for analysis and other task types (Slice 2).
         # Extract capitalised words > 3 chars as potential entity names.
         entity_names = _capitalized_entity_hints(user_message)
         if not entity_names:
-            return None
+            return None, {}
 
         query = MemoryRecallQuery(
             entity_names=entity_names[:5],
@@ -236,16 +283,26 @@ async def _query_memory_for_intent(
             context.append(
                 {
                     "type": "episode",
+                    # FRE-1004: the episode's durable identity. The adapter supplies it
+                    # (protocol_adapter builds episodes with ``turn_id``) and this dict
+                    # dropped it, so every episode on this path was anonymous — and this
+                    # is the default path, since proactive_memory_enabled defaults False.
+                    # Without it the evidence record cannot name which episode was used,
+                    # and two episodes in one turn are indistinguishable.
+                    "conversation_id": ep.get("turn_id"),
                     "user_message": ep.get("user_message"),
                     "summary": ep.get("summary") or ep.get("user_message", "")[:200],
                     "key_entities": ep.get("key_entities", []),
                 }
             )
-        return context if context else None
+        # FRE-1004: relevance_scores is keyed by turn_id (memory/service.py sorts
+        # conversations by ``relevance_scores.get(c.turn_id)``), which is exactly the
+        # episode identity above, so the scores land on the right items.
+        return (context if context else None), dict(result.relevance_scores)
 
     except Exception:
         logger.exception("memory_query_failed", trace_id=trace_id)
-        return None
+        return None, {}
 
 
 async def assemble_context(
@@ -281,6 +338,7 @@ async def assemble_context(
     """
     messages: list[dict[str, Any]] = []
     memory_context: list[dict[str, Any]] | None = None
+    memory_scores: dict[str, float] = {}
 
     # Include session history
     messages.extend(session_messages)
@@ -292,7 +350,7 @@ async def assemble_context(
 
     # Query memory if adapter is available
     if memory_adapter is not None:
-        memory_context = await _query_memory_for_intent(
+        memory_context, memory_scores = await _query_memory_for_intent(
             intent=intent,
             user_message=user_message,
             memory_adapter=memory_adapter,
@@ -327,6 +385,9 @@ async def assemble_context(
     # Inject session fact candidates from recall controller (as system message
     # in the main message list, not memory_context, to avoid schema mismatch
     # and budget-trimming that silently drops memory_context items).
+    session_facts_injected = bool(
+        recall_context and recall_context.reclassified and recall_context.candidates
+    )
     if recall_context and recall_context.reclassified and recall_context.candidates:
         recall_section = "## Session Fact Recall\n"
         recall_section += "The user appears to be referring to something discussed earlier.\n"
@@ -352,10 +413,21 @@ async def assemble_context(
         trace_id=trace_id,
     )
 
+    # ADR-0125 D3 item 5 (FRE-1004): record what recall offered *before* Stage 7 can
+    # drop it. Session-fact candidates are carried here too — they ride a system
+    # message rather than memory_context, so without them the record would omit a
+    # live, model-visible recalled-fact producer.
+    recall_candidates = (
+        *build_recall_candidates(memory_context, memory_scores),
+        *_session_fact_candidates(recall_context),
+    )
+
     return AssembledContext(
         messages=messages,
         memory_context=memory_context,
         tool_definitions=None,  # Populated by executor's existing tool logic
         token_count=estimated_tokens,
         trimmed=False,  # Slice 1: no budget trimming
+        recall_candidates=recall_candidates,
+        session_facts_injected=session_facts_injected,
     )

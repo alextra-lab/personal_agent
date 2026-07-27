@@ -108,6 +108,8 @@ def _ensure_trailing_role(
 def sanitise_messages(
     messages: list[dict[str, Any]],
     trace_id: str | None = None,
+    *,
+    emit_telemetry: bool = True,
 ) -> tuple[list[dict[str, Any]], SanitiseReport]:
     """Strip orphaned tool_result / tool_call entries from a message history.
 
@@ -137,6 +139,10 @@ def sanitise_messages(
         messages: OpenAI-format message list (role / content / tool_calls /
             tool_call_id fields). Not mutated.
         trace_id: Optional trace ID for structured log correlation.
+        emit_telemetry: Whether to emit ``history_sanitised``. Callers that compute the
+            wire form for observation rather than dispatch pass False, so the event
+            keeps counting real dispatches only (FRE-1004: the turn-evidence record
+            derives the wire form and would otherwise double the count).
 
     Returns:
         Tuple of (sanitised_messages, SanitiseReport). When the history was
@@ -186,17 +192,18 @@ def sanitise_messages(
             truncated=False,
             trailing_assistant_fixed=trailing_fixed,
         )
-        log.debug(
-            HISTORY_SANITISED,
-            orphaned_results_stripped=0,
-            orphaned_calls_stripped=0,
-            assistant_messages_modified=modified,
-            tool_code_blocks_stripped=tool_code_stripped,
-            truncated=False,
-            trailing_assistant_fixed=trailing_fixed,
-            message_count=len(messages),
-            trace_id=trace_id,
-        )
+        if emit_telemetry:
+            log.debug(
+                HISTORY_SANITISED,
+                orphaned_results_stripped=0,
+                orphaned_calls_stripped=0,
+                assistant_messages_modified=modified,
+                tool_code_blocks_stripped=tool_code_stripped,
+                truncated=False,
+                trailing_assistant_fixed=trailing_fixed,
+                message_count=len(messages),
+                trace_id=trace_id,
+            )
         return messages, report
 
     # Pass 2: rebuild, stripping orphans.
@@ -259,17 +266,18 @@ def sanitise_messages(
         trailing_assistant_fixed=trailing_fixed,
     )
 
-    log.info(
-        HISTORY_SANITISED,
-        orphaned_results_stripped=results_stripped,
-        orphaned_calls_stripped=calls_stripped,
-        assistant_messages_modified=assistants_modified,
-        truncated=was_truncated,
-        trailing_assistant_fixed=trailing_fixed,
-        original_message_count=len(messages),
-        sanitised_message_count=len(sanitised),
-        trace_id=trace_id,
-    )
+    if emit_telemetry:
+        log.info(
+            HISTORY_SANITISED,
+            orphaned_results_stripped=results_stripped,
+            orphaned_calls_stripped=calls_stripped,
+            assistant_messages_modified=assistants_modified,
+            truncated=was_truncated,
+            trailing_assistant_fixed=trailing_fixed,
+            original_message_count=len(messages),
+            sanitised_message_count=len(sanitised),
+            trace_id=trace_id,
+        )
 
     return sanitised, report
 

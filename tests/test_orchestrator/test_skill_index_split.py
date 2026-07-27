@@ -103,8 +103,8 @@ async def _drive(
             return_value=index_text,
         ),
         patch(
-            "personal_agent.orchestrator.skills.get_skill_block",
-            return_value=body_text,
+            "personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=(body_text, ()),
         ),
         patch(
             "personal_agent.orchestrator.skills.assemble_skill_index_directive",

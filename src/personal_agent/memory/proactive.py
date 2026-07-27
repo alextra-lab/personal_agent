@@ -129,6 +129,10 @@ def _build_payload_for_row(row: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             "episode",
             {
                 "type": "episode",
+                # FRE-1004: carry the episode's durable identity so the turn evidence
+                # record can name which episode was admitted. Without it every proactive
+                # episode is anonymous and two in one turn are indistinguishable.
+                "conversation_id": turn_id,
                 "user_message": user_message,
                 "summary": summary or (user_message or "")[:200],
                 "key_entities": key_entities,

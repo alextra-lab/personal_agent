@@ -201,6 +201,33 @@ behavioural** (`Artifact`, `Plain text responses`, `production transactions`, `H
 ~21 are topic-scoped. The always-present layer is small by nature, so its per-turn cost is bounded by
 construction rather than by a trimmer.
 
+**The topic-scoped surface inherits entity-selection quality, deliberately — including its failure
+modes.** This is the price of the safety argument above and it is stated here rather than discovered
+later. Production evidence gathered the evening this ADR was written (FRE-1021) shows entity
+participation in the recall candidate set is not stable: on an identical question asked twice six
+hours apart, the earlier turn returned three entities alongside two episodes, and the later returned
+five episodes and **zero** entities — because entities and turn/episode candidates compete in one
+ranked, capped pool, and accumulated episodes on a topic displace the entities beneath them. The
+displacing candidates were verified to come from *other* sessions, so this is genuine corpus growth
+rather than a session recalling itself.
+
+The consequence for this decision: **as a topic accumulates history, topic-scoped stance on that topic
+fades toward silence.** That is accepted, on three grounds. First, it is a **miss, not a false
+positive** — under ADR-0125 D2's asymmetry a miss on an injected surface is the cheap failure, so this
+surface degrades in the safe direction. Second, the fault is in the entity recall layer's candidate
+competition, not in this decision; fixing it here would mean giving stance an independent selection
+path, which would create exactly the new relevance-guessing surface the asymmetry argument exists to
+avoid. Third, and decisively, **the load-bearing stances are unaffected**: the behavioural profile does
+not depend on entity selection at all, so the motivating examples survive entity fade completely. Only
+the low-stakes topic-scoped stances degrade. This is a second, independent validation of splitting the
+two surfaces — a single entity-gated surface (Option 3) would have been fatally exposed to it.
+
+**Trigger for revisiting:** if FRE-1021 measures entity participation and finds topic-scoped stance
+would fire on a materially smaller share of turns than the entity layer's own recall quality would
+predict — i.e. the fade is a stance-surface problem rather than an entity-recall problem — then giving
+stance its own bounded selection path is reconsidered, and it must be re-justified against the
+asymmetry rule rather than inheriting this decision's justification.
+
 ### D3 — The behavioural/topic-scoped split is a read-time facet, first realised as a curated set
 
 The substrate carries no field marking the distinction: `Artifact` and `Plain text responses` are
@@ -469,6 +496,7 @@ make. Rejected on scaling, not on present cost.
 | The current row D5 pushes is the wrong fact, because adjudication is degenerate | Medium | Medium | D5 filters the adjudicator's winner but does not adjudicate (D8); exposure is bounded to Stance today (2 supersessions, verified) since Claims are pull-only, and the ADR-0098 write-side ticket is the real fix |
 | Pull-only Claims means the tool is never called, so Claims remain effectively unread | Medium | High | AC-4(b) proves reachability, not usage; usage is a tool-description and routing question the implementation ticket carries — and AC-8 fails if the pull path is removed |
 | Topic-scoped enrichment injects an irrelevant stance | Medium | Low | It rides on an entity the recall path already selected; a wrong stance implies a wrong entity, which is the existing recall path's failure, not a new one |
+| Topic-scoped stance fades as a topic accumulates episodes, so the surface is weakest where the owner engages most | **High** (mechanism observed in production, FRE-1021; rate not yet measured) | Medium | Accepted by D2 with reasoning: it is a miss rather than a false positive, so it degrades in the safe direction, and the load-bearing behavioural stances do not depend on entity selection at all. FRE-1021 measures the rate; D2 carries the named trigger for reconsidering an independent selection path. The real fix is entity-layer candidate competition, not this surface |
 | D5 relies on `valid_to`/`invalid_at` while supersession adjudication is degenerate | Low | Medium | The degeneracy affects *which* claim wins, never whether the loser is marked superseded; D5's filter is unaffected. Tracked separately (D8) |
 | The behavioural/topic split is simply the wrong cut | Medium | Medium | Read-time facet (D3) — re-derivable at any time with no write-path migration and no stored state to unwind |
 
@@ -514,6 +542,16 @@ the content from the request. A manifest may be substituted **only** once an inv
 manifest-to-request fidelity exists and is cited by identifier. *(This ADR checks affect strings, which
 appear in rendered text — unlike ADR-0125 AC-3, which needs the manifest precisely because recall
 identifiers need not appear in rendered content. The two are not in tension.)*
+
+**Entity-selection precondition, for every criterion that depends on one.** AC-1's positive half, AC-5's
+push half and AC-6's populated control all require the stance's target entity to be *in the recall set*
+for that turn. Per D2, entity participation is not stable — production evidence (FRE-1021) shows a topic
+with accumulated episodes can return zero entities. Each of these criteria must therefore **assert the
+target entity is in the recall set as an explicit precondition**, before asserting anything about the
+stance. If the precondition does not hold, the run is **INCONCLUSIVE and must be re-fixtured — it is
+neither a pass nor a stance defect.** Silently treating a precondition failure as a stance failure would
+send an implementer to debug the wrong layer; silently treating it as a pass would be the vacuity this
+suite exists to prevent.
 
 - **AC-1 — A topic-scoped stance reaches the model when its target entity is recalled, and does not
   when it is not.** · **Check:** run a turn whose message is about a concept carrying a stance (e.g.
@@ -628,6 +666,7 @@ because its last child merged; it closes when removing each reader turns its nam
 - FRE-1005 — ADR-0125 T3, the usage edge; blocked on this decision
 - FRE-1006 — ADR-0125 T5 seam; inherits the same premise
 - FRE-1010 — Task-assist recall renders entities as empty bullets — the empty-render pattern D6 generalises
+- FRE-1021 — Entity participation in the recall candidate set decays as a topic accumulates episodes — the production evidence behind D2's inheritance clause and its revisit trigger; measures the rate this ADR does not assert
 - FRE-636 — taxonomy-validation spike (`docs/research/2026-06-27-fre-636-taxonomy-validation.md`) — the ~46% entity-pollution figure this ADR's ~53% claim figure corroborates
 - FRE-768 — Claim embedding backfill — why all 91 claims are already vector-ready
 

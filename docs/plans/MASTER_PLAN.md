@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-27 (batch deployed at 18:21Z — `a24f4d0f`; ADR-0126 Proposed)
+> **Last updated**: 2026-07-27 (deployed `a24f4d0f`; ADR-0126 Proposed, D2 amended)
 
 ## 0. ADR-0125 — the turn evidence contract (Accepted; the live build)
 
@@ -32,11 +32,20 @@ current-only pre-committed on every push surface; and D7 encodes the authoring r
 a producer must carry at least one criterion that fails if nothing reads its output.*
 
 **FRE-1021 — the finding that bears on 0126 D2, from live records.** The same question asked at 12:04 and
-18:32 returned 3 entities then **zero**: the conversation's own recent turns became recall candidates and
-displaced the entities out of a top-5 set ranked on raw similarity across mixed kinds. So **the KG's
-contribution to a topic decays as the owner engages with it** — and D2's chosen surface fades exactly
-where use is highest. Verified by candidate identity, not by timing; the deploy is exonerated. n=4, no
-measured rate yet — that is what FRE-1021 exists to establish.
+18:32 returned 3 entities then **zero**: entities and episode-derived candidates compete in one ranked,
+capped, fused pool, so **recent prior sessions** on a subject displace the older entities distilled from
+it. So **the KG's contribution to a topic decays as that topic accumulates conversation**. Verified by
+candidate identity, not by timing; the deploy is exonerated. n=4, no measured rate — that is FRE-1021's job.
+
+**Master got the mechanism wrong first time and the adr seat corrected it** (PR #707): all four turns are
+in *different sessions*, so this is ordinary cross-session recall, **not** a session consuming its own
+window. Same evidence, different remedy — the measurement must record session identity, not just kind.
+
+**ADR-0126 D2 amended and merged (#707), still Proposed.** D2's decision is unchanged — an unselected
+entity is a *miss*, the cheap failure under the asymmetry rule, and the behavioural-profile surface
+doesn't depend on entity selection at all. Its real value is a **suite-wide precondition**: three ACs
+silently assumed the target entity would be in the recall set, and a precondition failure is now
+**INCONCLUSIVE** rather than a pass or a stance defect.
 
 **New at the FRE-1010 gate: FRE-1014** — the admission resolver's docstring justifies its multiset match
 on the renderer emitting an order-preserving prefix; FRE-1010 made it a *subsequence*. Low frequency, but

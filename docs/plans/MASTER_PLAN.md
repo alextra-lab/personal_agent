@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-27 (FRE-1002/993/1010 merged; deploys held for a batch)
+> **Last updated**: 2026-07-27 (batch deployed at 18:21Z — `a24f4d0f`; ADR-0126 Proposed)
 
 ## 0. ADR-0125 — the turn evidence contract (Accepted; the live build)
 
@@ -12,19 +12,31 @@ Names harness health and output quality as distinct dimensions, bars a dimension
 user-facing context, and decides what every turn must durably record. The verification oracle is
 **deferred** — only its feasibility bounds are decided.
 
-**Merged, awaiting the batched deploy:** FRE-1002 (evidence-path boundary + CI truncation guard) ·
-FRE-1010 (per-item-kind render; the cap of 3 retired). The guard half of 1002 is live now — CI is not
-the gateway — but both marking halves are runtime and need the rebuild. FRE-1010 emptied FRE-1002's
-allowlist by **deleting** the truncation it exempted, which is that file's intended steady state.
+**Deployed 2026-07-27 18:21Z:** FRE-1002 · FRE-1010 · FRE-1001 (with FRE-993, §1). **FRE-1010 is Done** —
+the only ticket closed on live evidence: three post-deploy turns admitted their whole candidate set,
+where the old cap of 3 would have discarded items 4–5. Its entity criteria stay **seam-test-proven, not
+observed**, for the reason in FRE-1021 below.
 
-**In flight:** **FRE-1001** on build1 (non-nullable producer `source`; pairs with FRE-1007, same fix on
-two fields) · **FRE-1003** on build2 (remove the reflection-recall path — the behavioural half of
-retiring ADR-0067) · **FRE-1012** on the adr seat.
+**In flight:** **FRE-1003** on build2 (remove the reflection-recall path — the behavioural half of
+retiring ADR-0067). **build1 is idle with an empty queue.**
 
-**FRE-1012 is the unlock.** ADR-0098's Claim substrate is write-only, so FRE-1005's AC-4 fixture cannot
-exist and **FRE-1006 inherits the same premise** — meaning ADR-0125 could not close. It is Approved and
-dispatched as ADR work, and its output must be a *decision* about whether claims become recallable and
-how, not an implementation. FRE-1005 stays blocked by it and un-blocks automatically at its merge.
+**FRE-1012 produced ADR-0126, merged at Proposed — and the ticket is deliberately still open.** Its
+deliverable is a *decision*, and merging a proposal is not making one. Closing it would resolve
+FRE-1005's block and let a worker build against an unratified design. **Owner acceptance is the gate**;
+on acceptance master flips the status header, closes 1012, drops the block, and 0126's seven criteria
+become ticketable with AC-8 held as the seam.
+
+**ADR-0126 in one line:** Stance is ADR-0098's first consumer on two surfaces (always-present behavioural
+profile · topic-scoped enrichment riding an entity selection already made); Claims are **pull-only**;
+current-only pre-committed on every push surface; and D7 encodes the authoring rule — *an ADR that ships
+a producer must carry at least one criterion that fails if nothing reads its output.*
+
+**FRE-1021 — the finding that bears on 0126 D2, from live records.** The same question asked at 12:04 and
+18:32 returned 3 entities then **zero**: the conversation's own recent turns became recall candidates and
+displaced the entities out of a top-5 set ranked on raw similarity across mixed kinds. So **the KG's
+contribution to a topic decays as the owner engages with it** — and D2's chosen surface fades exactly
+where use is highest. Verified by candidate identity, not by timing; the deploy is exonerated. n=4, no
+measured rate yet — that is what FRE-1021 exists to establish.
 
 **New at the FRE-1010 gate: FRE-1014** — the admission resolver's docstring justifies its multiset match
 on the renderer emitting an order-preserving prefix; FRE-1010 made it a *subsequence*. Low frequency, but
@@ -45,7 +57,7 @@ still convey nothing).
 Background LLM streams stay **disabled** and the summary sweep stays **off** until both gates are met;
 no budget cap is to be raised.
 
-**FRE-993 merged 2026-07-27, awaiting the batched deploy.** Trim-not-discard shipped: measured on
+**FRE-993 merged and deployed 2026-07-27, but inert.** Trim-not-discard shipped: measured on
 FRE-994's own 96 content-bearing records at zero model calls, the rejection rate goes **0.469 → 0.000** at
 the old 250 bound and **0.073 → 0.000** at Amendment C's 400. The 0.469 reproduces C1's 47% from the
 records rather than restating it. Sizing moved to target 120 / ceiling 400; call ceiling unchanged.
@@ -55,10 +67,10 @@ Two boundaries held: reasoning configuration stayed with **FRE-1007**, and the w
 recorded in the ADR as a **study, not a refuted lever** — C4 and the prompt-signature guard refute only
 the items-per-slot half, and trimming drops the urgency. Not filed as a ticket; recording beats filing.
 
-**Building now on build2: FRE-988** (cost-tracker connection pooling), with FRE-1003 queued behind it.
-Quick to build, **not** quick to close — its acceptance criterion is a post-deploy measurement of connect
-events against priced-call counts over a window, so it will land in Awaiting Deploy and wait like the
-others.
+**FRE-988 was BOUNCED at the gate** (PR 703) — a src-logic diff on the cost path reviewed as if trivial:
+no codex plan-review, code review at `low` effort, security review skipped. Plus an unanswered question:
+`connect()` returns early whenever the pool is non-null, so a pool that goes terminal is never rebuilt,
+where the old per-call pool re-established by construction. build2 is fixing it, then takes FRE-1003.
 
 **Then FRE-987** — bound the *transient* retry path. The reason-based terminality split is correct
 design; the defect is that transient has no bound at all.
@@ -80,25 +92,25 @@ user node with an owns relationship.
 
 ## 3. Deploy + verification queue
 
-**Deploys are HELD for a batched deploy** (owner, 2026-07-27 14:00Z). Deployed image is `af29060d`;
-main carries **four undeployed source commits** (FRE-1002, FRE-993 ×2, FRE-1010). Standing-approval classes
-batch too unless urgent.
+**Batch deployed 2026-07-27 18:21Z**, owner-authorised. Running `a24f4d0f`; health green on all five
+components; **zero undeployed source commits**. `cloud-sim-embeddings` revived on rebuild and was
+re-stopped (standing rule). Rollback: rebuild at `af29060d`.
 
-Fourteen tickets in Awaiting Deploy. **None to be closed on "deployed and healthy"** — each needs its
-acceptance criterion proven. Verified 2026-07-27 that every one of the pre-hold merges is already an
-ancestor of the running SHA, so that column was never a deploy queue: it is master's *verification*
-backlog. From the hold onward it means what it says again.
+**Fourteen tickets in Awaiting Deploy, and all fourteen are now deployed.** So the column is once again
+master's *verification* backlog, not a deploy queue. **None to be closed on "deployed and healthy"** —
+each needs its acceptance criterion proven.
 
-**FRE-997 closed Done 2026-07-27** on live evidence — its fail-open signal fired seven times on real
-traffic — and the first reading inverted the audit's prediction: the model emits *nothing* for entity
-class, so every entity is filed under the `World` default. Filed as **FRE-1013**.
+**Blocked on the sweep, not on deploy:** FRE-993, FRE-996 and FRE-992 all need the summary sweep running
+to verify, and that is gated on **FRE-987**. Deploying changed nothing for them.
 
-**FRE-996 is UNVERIFIABLE, not passing** — zero digest calls have run since deploy, so its hypothesis has
-nothing to test against. **FRE-992**'s code claims verify in the deployed source, but its runtime is
-untested for the same reason, and its 46 stranded sessions were **not** recovered (118 of 119 sessions
-carry a generated-at stamp; 6 hold a digest). Recover them only *after* FRE-993 and FRE-987 land —
-clearing the stamps sooner arms 46 sessions against a producer that still discards and still retries
-unbounded.
+**FRE-992's framing was corrected** at the deploy: the capture store is a Docker *named volume* on the VPS
+filesystem — durable, survives rebuilds (proven: a 12:04 capture outlived the 18:21 rebuild and supplied
+the evidence that exonerated the deploy). The stale thing is the host bind path under `telemetry/`, which
+holds ~1,600 files and nothing from today. Stale-bind-path vs live-volume, not ephemeral vs durable.
+
+**Post-deploy watch, cost audit:** entity-extraction call rate (FRE-1002's fallback fix should raise it
+slightly, bounded at 5 attempts) and assembled-context size (FRE-1010). Expected directions pre-recorded
+on both tickets so they stay separable.
 
 ## 4. Reduce the backlog
 

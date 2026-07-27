@@ -10,18 +10,12 @@
 #     line: int     (1-based; must match current source)
 #     kind: str     (the violation kind the lint reports)
 #     reason: str
-
-# --- Deferred to FRE-1010 (queued next in this stream). That ticket redesigns
-#     this render branch's score-blind cap of 3 and its entity-empty-bullet
-#     defect — the same two lines this truncation lives on — so fixing the
-#     truncation here in isolation would conflict with or be made redundant by
-#     that redesign. The guard is proven to catch this exact shape by a
-#     dedicated test in tests/scripts/test_check_evidence_truncation.py that
-#     runs --strict (allowlist bypassed) against the real file. ---
-- path: src/personal_agent/orchestrator/executor.py
-  line: 4223
-  kind: bare_slice
-  reason: >
-    mem.get('summary', mem.get('user_message', ''))[:150] in the task-assist
-    render branch of step_llm_call. FRE-1010 owns the fix (score-blind cap of
-    3 + empty-bullet rendering + this truncation, same two lines).
+#
+# Currently EMPTY. The single entry this file shipped with — the task-assist
+# render branch's `mem.get('summary', ...)[:150]` in `step_llm_call`, deferred
+# by FRE-1002 to FRE-1010 — was retired by FRE-1010, which removed that
+# truncation entirely rather than marking it: the rendered value is now bounded
+# by `_MAX_ITEM_CHARS` through `mark_truncated`, so there is no silent clip left
+# to exempt. An empty allowlist is the intended steady state; an entry here is a
+# debt, not a configuration.
+[]

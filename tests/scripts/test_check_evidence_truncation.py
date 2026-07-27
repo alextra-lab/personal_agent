@@ -289,15 +289,20 @@ def test_real_state_document_module_is_clean_post_fix() -> None:
     assert violations == []
 
 
-def test_real_executor_fre_1010_site_is_flagged_when_strict(tmp_path: Path) -> None:
-    """Proves the guard catches the real FRE-1010 shape, not just synthetic fixtures.
+def test_real_executor_is_clean_with_no_allowlist_entry() -> None:
+    """The task-assist render truncation FRE-1002 deferred is gone, not exempted.
 
-    Uses --strict semantics directly (empty allowlist) against the real file —
-    the merged allowlist defers this exact site to FRE-1010.
+    This test previously asserted the *opposite*: that the guard flagged
+    ``mem.get('summary', ...)[:150]`` in ``step_llm_call`` when the allowlist was
+    bypassed, which was FRE-1002's proof it caught real code rather than only
+    synthetic fixtures. FRE-1010 removed that truncation (the value is now bounded by
+    ``_MAX_ITEM_CHARS`` through ``mark_truncated``), so the subject no longer exists
+    and the allowlist entry was retired with it.
+
+    Inverted rather than deleted: as a real-tree assertion with an empty allowlist it
+    still fails if the clip is ever reintroduced — which is the regression that
+    actually matters now. The guard's ``.get(key, ...)``-chain detection stays covered
+    by ``test_get_chain_on_evidence_key_is_flagged``.
     """
     real = REPO_ROOT / "src/personal_agent/orchestrator/executor.py"
-    violations = lint_file(real, allowlist=[])
-    assert any("mem.get" in v.detail for v in violations), (
-        "expected executor.py's FRE-1010 mem.get(...) shape to be flagged with the "
-        "allowlist bypassed"
-    )
+    assert lint_file(real, allowlist=[]) == []

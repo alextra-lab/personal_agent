@@ -1,6 +1,6 @@
 # ADR-0126: Reading the Living-Knowledge Substrate — Stance-First Push, Pull-Only Claims
 
-**Status:** Proposed — 2026-07-27
+**Status:** Accepted — 2026-07-27 (owner)
 **Date:** 2026-07-27
 **Deciders:** Project owner; adr session (Opus); master session (independent verification)
 **Tags:** memory, recall, knowledge-substrate, context-assembly, boundary, criteria-quality

@@ -103,9 +103,16 @@ non-interchangeable. Every producer of a durable derived artifact — a proposal
 — **declares which dimension it serves**, and that declaration is **structurally required, not
 conventional**.
 
-Concretely, ADR-0105's `source` discriminator becomes **non-nullable**: a write that omits it is
-rejected, not defaulted. This closes the enforcement gap in ADR-0105 AC-1, where
-`source: ProposalSource | None` left the invariant as a convention.
+Two mechanisms, because ADR-0105's `source` alone is insufficient — it identifies a *producer*
+(`statistical_detector`, `reflection`), not a dimension:
+
+- **`source` becomes non-nullable.** A write that omits it is rejected, not defaulted. This closes
+  the enforcement gap in ADR-0105 AC-1, where `source: ProposalSource | None` left the invariant as
+  a convention.
+- **A producer → dimension mapping that is total and enforced.** Every value of the producer
+  vocabulary maps to exactly one dimension, and adding a producer without declaring its dimension is
+  a build-time failure, not a runtime default. Both current producers are dimension 1; the mapping
+  exists so that the first dimension-2 producer cannot be added silently.
 
 **Dimension is a property of the producer, not of the subject.** A dimension-1 producer may reason
 about anything it likes; what is constrained is where its output may go (D2). This preserves
@@ -158,6 +165,13 @@ is cheap now and expensive once a corpus must be migrated.
 | 6 | the assembled context actually sent to the model, or its component manifest | establishes what the model *could* have used |
 | 7 | trace / session / turn identifiers | joinability |
 | 8 | model and parameters | attributes a failure mode |
+
+**Absence must be explicit.** Several of these records are legitimately empty for a given turn — no
+tool was called, nothing was recalled, the provider emitted no reasoning trace. In every such case
+the record carries an **explicit not-applicable / empty state**, so that *"this turn called no
+tools"* is distinguishable from *"this turn's tool calls were not recorded."* An implicitly missing
+field is indistinguishable from a capture gap, which is precisely the failure this contract exists
+to prevent. This is the same discipline as `UNVERIFIABLE` in D6, one layer down.
 
 Items 1, 2, 7 and 8 exist today. Item 3 is partial. **Item 5 does not exist** — a boolean and a
 count only. **Items 4 and 6 require confirmation before their chain tickets are sized**: for item 4,
@@ -276,8 +290,9 @@ record — recall identities cannot be reconstructed after the fact, because the
 them is not deterministic across index state changes.
 
 **Why Rejected:** Asymmetric and irreversible cost. Additionally, D4's usage edge pays into
-dimension 1 on its own — it is the missing populator for `corroboration_count` and `last_confirmed`
-— so it is justified even if the oracle is never built.
+dimension 1 on its own — it is a candidate consumption signal for `corroboration_count` and
+`last_confirmed`, whose existing populators must first be confirmed — so it is justified even if the
+oracle is never built.
 
 ### Option 3: Capture everything at full fidelity and decide later
 
@@ -344,7 +359,7 @@ choosing the diagnosed disease.
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| The contract captures the wrong things because no consumer has validated it | Medium | High — an expensive, wrong schema | AC-6 requires a dry run over real sessions that only *locates* evidence and never judges; it fails on capture gaps, so the contract is validated before an oracle exists |
+| The contract captures the wrong things because no consumer has validated it | Medium | High — an expensive, wrong schema | AC-6 splits validation in two: **mechanical coverage** over real sessions, which only checks presence and joinability and never judges content; and a **bounded deterministic negative control** on a synthetic planted turn, which does adjudicate — but only by exact token comparison against a tool record, with no extraction or classification of natural language. The oracle is still not built |
 | Capture growth becomes a cost or sharding problem | Medium | Medium | Artifact-store pointers for large payloads; retention policy named as owed; FRE-983 already open |
 | Non-nullable `source` breaks a live producer | Low | Medium | Both producers already set it (`insights/engine.py` sets `STATISTICAL_DETECTOR`); change is enforcement, not new plumbing |
 | Legacy nulls block the constraint | Medium | Low | Backfill or an explicit sentinel decided in the implementation ticket, not here |
@@ -378,56 +393,78 @@ choosing the diagnosed disease.
 
 ## Verification / Acceptance Criteria
 
-- **AC-1 — A produced proposal cannot exist without a declared dimension.** · **Check:** attempt a
-  proposal write with the source omitted and confirm it is rejected rather than defaulted; then
-  query the proposal store for rows with a null source and require zero. · *Fails if* a null-source
-  row can be created by any code path, or if any production row carries a null after the migration.
+- **AC-1 — No durable derived artifact can be written by a producer whose dimension is undeclared.**
+  · **Check:** three parts. Attempt a proposal write with `source` omitted and confirm it is
+  rejected rather than defaulted; query the proposal store for null-source rows and require zero;
+  and assert the producer → dimension mapping is **total** by adding a synthetic producer value to
+  the vocabulary without a mapping entry and confirming the build or an exhaustiveness test fails.
+  · *Fails if* a null-source row can be created by any path, if any production row carries a null
+  after migration, **or if an unmapped producer value can be introduced without a failure.**
 
-- **AC-2 — Dimension-1 output cannot reach assembled context under *any* configuration.** The
-  invariant is configuration-independent, so the test is too. · **Check:** with a corpus containing
-  reflections and findings, assemble context for a turn **with `reflection_recall_enabled` forced
-  `True`** (and every other related toggle forced to its most permissive value), and assert no
-  reflection or finding body appears in the assembled prompt — which can only hold once the call
-  site at `request_gateway/context.py:309` is gone rather than gated. Repeat with stock defaults.
-  · *Fails if* any finding-class text appears under any setting, or if absence holds only because a
-  flag is off. **A flag flip alone fails this criterion.**
+- **AC-2 — Dimension-1 output cannot reach assembled context under *any* configuration, proven with
+  a fixture that would definitely be injected if the path existed.** · **Check:** seed a **sentinel
+  reflection constructed to satisfy every selection filter** the old path applied — recency,
+  `seen_count`, non-empty proposed change, entity-hint overlap with the probe message — carrying an
+  unmistakable marker string. Assemble context for that probe turn with `reflection_recall_enabled`
+  forced `True` and every related toggle at its most permissive value, and assert the marker is
+  absent from the final serialized model input. Repeat at stock defaults. Separately assert no
+  call site or import from context assembly to the reflection-recall module remains. · *Fails if*
+  the marker appears under any setting, **or if the test would have passed with the call site still
+  present** — i.e. a vacuous pass because the query returned nothing is a failure of the test, not a
+  pass of the criterion. **A flag flip alone fails this criterion.**
 
-- **AC-3 — The capture records the memory items actually *admitted into the assembled context*, by
-  identity — not the candidate set, and not a count.** · **Check:** run a turn where the ranked
-  candidate set is deliberately larger than the admitted set (force budget trimming), then compare
-  the capture's recorded identifiers against the identifiers present in the assembled prompt.
-  Require exact equality with the **admitted** set; items dropped by compaction must appear as
-  dropped, not as used. · *Fails if* the capture holds only a boolean or count, if it records the
-  ranked set instead of the admitted set, or if a trimmed item is indistinguishable from a used one.
+- **AC-3 — The capture records, by identity, the memory items actually admitted to the final model
+  input — not the candidate set, and not a count.** *Admission point is defined as the final
+  serialized model input (equivalently, its component manifest) after all trimming and compaction.*
+  · **Check:** run a turn where the ranked candidate set is deliberately larger than the admitted
+  set (force budget trimming), and compare the capture's recorded identifiers against the
+  **manifest of that final serialized input**, not against rendered prompt text — rendered content
+  need not contain identifiers. Require exact set equality with the admitted set; items dropped by
+  trimming or compaction must be recorded as dropped. · *Fails if* the capture holds only a boolean
+  or count, records the ranked set, is compared against prompt text rather than the manifest, or
+  leaves a trimmed item indistinguishable from a used one.
 
-- **AC-4 — The usage join returns exactly the turns that used a claim, and nothing else.** ·
-  **Check:** construct a claim used in a known set of turns, subsequently superseded, and also
-  ranked-but-not-admitted in at least one further turn. Join recalled-item records to the
-  supersession chain and require the returned turn set to **equal** the known using-turn set —
-  excluding the ranked-but-not-admitted turn and excluding turns after the supersession. · *Fails
-  if* the returned set is a superset, a subset, or includes a post-supersession or
-  ranked-but-unused turn. **Returning "something" is not a pass.**
+- **AC-4 — The usage join returns exactly the turns that admitted a claim, and cannot be satisfied
+  by inferring usage from supersession time.** · **Check:** construct a claim with a **2×2 fixture** —
+  admitted and ranked-but-not-admitted turns on *both* sides of its supersession, four cases in all.
+  Join recalled-item records to the supersession chain and require the returned turn set to **equal**
+  the two admitted turns, one from each side. · *Fails if* the returned set is a superset or subset,
+  if it includes a ranked-but-not-admitted turn, or **if it can be reproduced by a rule keyed on
+  supersession timestamp rather than on recorded admission** — the post-supersession admitted turn
+  is the discriminator that catches this.
 
-- **AC-5 — A guard fails CI on a newly introduced silent clip on any evidence path.** The decision
-  is path-general, so the criterion is a guard rather than an enumeration — the site list is known
-  to be incomplete. · **Check:** add the guard, then feed it a **known-bad input** — a newly
-  introduced bare `[:N]` clip on an evidence path — and confirm CI fails; feed it a properly marked
-  truncation and confirm CI passes. Separately, run a turn whose assistant response materially
-  exceeds 200 characters and confirm stored byte length equals emitted byte length. · *Fails if* the
-  guard passes the known-bad input, if it fires on a correctly marked truncation, or if stored
-  length is less than emitted with no marker.
+- **AC-5 — A guard fails CI on a silent clip introduced by *any* shortening mechanism the codebase
+  uses, on a defined evidence path.** The decision is path-general and the site enumeration is known
+  incomplete, so this is a guard, not a fixed list of edits. The implementation must first **define
+  the evidence-path boundary explicitly** (which modules and call paths feed durable artifacts or
+  assembled context). · **Check:** feed the guard one **representative known-bad mutation per
+  shortening mechanism in use** — at minimum a bare slice, a helper/utility-function clip, and a
+  byte/character limit — on an evidence path, and confirm CI fails for each; feed it a correctly
+  marked truncation and confirm CI passes. Separately, run a turn whose assistant response
+  materially exceeds 200 characters and confirm stored byte length equals emitted byte length.
+  · *Fails if* the guard passes any known-bad mutation, fires on a correctly marked truncation, or
+  if the evidence-path boundary is left undefined so the guard's scope is unverifiable.
 
-- **AC-6 — SEAM: the record is *sufficient to contradict a false claim*, proven deterministically
-  and without the oracle.** · **Check:** two parts, neither requiring a model. **(i) Coverage:** over
-  every session in a defined 7-day window, mechanically assert that all eight D3 records are present
-  and mutually joinable — every tool call named in the assistant text resolves to a tool record,
-  every recorded recall identifier resolves to a live claim, every turn joins to its session.
-  **(ii) Negative control:** on a deliberately constructed turn whose assistant text asserts an
-  action that was *not* performed, confirm the stored record alone is sufficient to contradict it —
-  by a deterministic check comparing asserted action to tool records. · *Fails if* any session in
-  the window has a missing or unjoinable required record, **or if the planted false claim cannot be
-  contradicted from the record alone.** Part (ii) is the discriminating half: a contract that merely
-  stores fields passes coverage and fails the negative control.
+- **AC-6 — SEAM: the record is sufficient to contradict a false claim, proven deterministically and
+  without the oracle.** · **Check:** two parts, neither performing natural-language extraction or
+  classification.
+  **(i) Mechanical coverage** over a **fixed, non-empty 7-day window that is asserted to contain at
+  least one session exercising each of: a tool call, a memory recall, and a reasoning trace.** For
+  every session, assert each of the eight D3 records is either present or carries an **explicit
+  not-applicable / empty state** — "no tool was called" must be representable and distinguishable
+  from "tool calls were not recorded". Assert mutual joinability: every recorded recall identifier
+  resolves to its **durable claim record including superseded originals retained for history** (not
+  to current liveness), and every turn joins to its session.
+  **(ii) Deterministic negative control** on a synthetic planted turn. The planted assistant text
+  contains a **machine-readable assertion token** naming a specific tool invocation — not prose to
+  be interpreted — and no such invocation is performed. The comparator is an **exact token match
+  against the tool record**; no extraction grammar, no classifier, no model. Confirm the stored
+  record alone contradicts the planted claim.
+  · *Fails if* any session in the window has a required record neither present nor explicitly marked
+  not-applicable; if a recall identifier fails to resolve to a retained historical claim; **or if the
+  planted assertion cannot be contradicted from the record by exact comparison.** Part (ii) is the
+  discriminating half: a contract that merely stores populated fields passes coverage and fails the
+  negative control.
 
 **Seam owner (assembled intent):** **AC-6** is the assembled seam, and specifically its **negative
 control**. The evidence contract is not delivered because its child tickets merged, nor because

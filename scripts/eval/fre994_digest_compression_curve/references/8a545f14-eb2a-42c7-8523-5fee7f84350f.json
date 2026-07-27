@@ -1,0 +1,13 @@
+{
+  "session_id": "8a545f14-eb2a-42c7-8523-5fee7f84350f",
+  "authored_by": "build session (Opus), by hand, before any digest was generated",
+  "definition": "ADR-0124 D3 \u2014 see README.md",
+  "conclusions": [
+    "Terraform was confirmed as the infrastructure-as-code tool for the Docker-based VPS stack.",
+    "The proposed Terraform module layout is one module each for docker, postgres, neo4j, elasticsearch, redis, and services (embeddings on 8503 and reranker on 8504), plus a new monitoring module.",
+    "Prometheus plus Grafana, with Alertmanager, was confirmed as the monitoring stack, scraping node, postgres, redis and neo4j exporters plus custom /metrics endpoints on the embeddings and reranker services.",
+    "Memory recall failed for the user's question about an earlier tool discussion: the assistant found no record of it, and reported that the memory graph holds only generic entity mentions rather than conversation summaries.",
+    "Left unresolved: which tool the user was actually asking about. Terraform, Docker Compose, Ansible and Nomad were all offered as possibilities and none was confirmed.",
+    "Left open: whether to scaffold the Terraform files and the Prometheus/Grafana configuration was offered and never answered."
+  ]
+}

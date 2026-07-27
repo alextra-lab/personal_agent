@@ -1,0 +1,15 @@
+{
+  "session_id": "84af8da2-56a5-41cd-a491-6fc3533db9c3",
+  "authored_by": "build session (Opus), by hand, before any digest was generated",
+  "definition": "ADR-0124 D3 \u2014 see README.md",
+  "conclusions": [
+    "More photoreceptors does not mean richer colour perception: mantis shrimp, with 16 receptor types, discriminate similar colours worse than humans do, because the brain architecture behind the eye determines what is perceived.",
+    "A wave cannot be focused by an aperture smaller than its wavelength (the diffraction limit), which is why a biological eye cannot focus radio and why radio astronomy uses aperture-synthesis interferometry instead.",
+    "Sensory substitution is established and working \u2014 the vOICe and BrainPort are real devices, and the visual cortex is recruited to process substitute signals \u2014 so a brain could in principle learn to perceive radar as spatial data.",
+    "The assistant marked which parts of its account were established science and which were its own extrapolation, after the user said they could not verify any of it: the 20-50x brain-size estimate was invented, and the alien eye designs and the experiential descriptions were flagged as speculation.",
+    "The user stated Seshat's raison d'etre: a dynamic teacher and collaborator that turns conversations into future structured learning sessions, not a smart assistant.",
+    "A five-layer pedagogical architecture was proposed: conversation-to-knowledge extraction, a learning model weighting what needs reinforcement, spaced repetition with active recall, thread-pulling over a concept graph, and cross-thread correlation.",
+    "Seshat today has conversation memory, session search and artifacts, but no pedagogical layer that tracks what was understood, what needs revisiting, and which threads connect.",
+    "Left open: three practical first steps were offered \u2014 a structured learning profile, a closing-ritual lesson extract, and the user naming their domains \u2014 and none was chosen."
+  ]
+}

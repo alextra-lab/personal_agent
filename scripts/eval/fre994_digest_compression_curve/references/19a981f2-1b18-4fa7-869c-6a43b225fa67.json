@@ -1,0 +1,14 @@
+{
+  "session_id": "19a981f2-1b18-4fa7-869c-6a43b225fa67",
+  "authored_by": "build session (Opus), by hand, before any digest was generated",
+  "definition": "ADR-0124 D3 \u2014 see README.md",
+  "conclusions": [
+    "All backend services were reachable and healthy at the time of the check: PostgreSQL, Neo4j 5.26.24 Community, Elasticsearch, Redis, the embeddings service and the reranker.",
+    "Elasticsearch reports yellow because all 24 indices carry one replica each and the cluster runs on a single node, so no replica can be allocated. This is expected behaviour, not a fault: the primaries are all started and the data is intact, but there is no redundancy.",
+    "Two remedies were offered for the yellow status \u2014 set number_of_replicas to 0 across all indices, or add a second node \u2014 and setting replicas to 0 was recommended for a single-VPS setup. The user never chose between them.",
+    "The question about new entities and relationships in the knowledge graph was not answered: the assistant hit its tool-use limit, and two query_elasticsearch calls failed with HTTP 400 on an unknown field [format] in the ES|QL query.",
+    "The user stated their current city and a nearby city they planned to visit the following day. [locations redacted]",
+    "The user's question about a physical characteristic said to be common in the local population was not answered: the assistant hit its tool-use limit again after three web searches."
+  ],
+  "redaction": "Personal specifics \u2014 locations, itineraries, named individuals and venues \u2014 are redacted. This repository is public and these are the owner's own sessions. What is being audited is which *kinds* of statement were judged consequential, and that survives redaction. The unredacted items are reproducible from the corpus via --dump-calibration."
+}

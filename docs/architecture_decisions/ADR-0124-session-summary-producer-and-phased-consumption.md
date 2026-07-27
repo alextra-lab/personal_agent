@@ -1,6 +1,6 @@
 # ADR-0124: Session-summary producer correction and phased consumption
 
-**Status:** Accepted — 2026-07-23 (owner), **amended 2026-07-23 (Amendment A — conversation-scoped input; tool payloads removed from D2; D3 corrections narrowed to payload-free kinds), further amended 2026-07-24 (Amendment B — the summariser is conversation-*only*: tool metadata removed from D2's input entirely; the `tool_evidence` basis and the `status_contradiction` correction removed to the verification oracle; `corrections` reduced to `self_correction`).** Implementation chain FRE-947 → FRE-948 → FRE-949 → FRE-950 → FRE-951; Phase 4 unfiled, gated on AC-24.
+**Status:** Accepted — 2026-07-23 (owner), **amended 2026-07-23 (Amendment A — conversation-scoped input; tool payloads removed from D2; D3 corrections narrowed to payload-free kinds), further amended 2026-07-24 (Amendment B — the summariser is conversation-*only*: tool metadata removed from D2's input entirely; the `tool_evidence` basis and the `status_contradiction` correction removed to the verification oracle; `corrections` reduced to `self_correction`), further amended 2026-07-27 (Amendment C — D3's length bound measured by the FRE-994 compression curve: the prompt target becomes 120, the enforced rendered ceiling becomes 400, the call ceiling stays 2,048, and per-slot item ceilings leave the sizing role entirely).** Implementation chain FRE-947 → FRE-948 → FRE-949 → FRE-950 → FRE-951; Phase 4 unfiled, gated on AC-24.
 **Date:** 2026-07-23
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** memory, second-brain, knowledge-graph, retrieval, telemetry, privacy
@@ -278,9 +278,12 @@ counts, and `dominant_entities` are queryable and remain structured properties. 
 regenerated in prose, so they cannot be hallucinated and cost no tokens.
 
 **Length is bounded by marginal utility, not characters.** Include an item only if its expected
-future value exceeds the cost of displacing retrieved evidence. Starting budget ~180 tokens target
-/ 250 hard maximum, to be set empirically by a compression curve. Digest length is **not**
-proportional to turn count.
+future value exceeds the cost of displacing retrieved evidence. ~~Starting budget ~180 tokens target
+/ 250 hard maximum, to be set empirically by a compression curve.~~ *(Superseded by Amendment C,
+2026-07-27: the curve was run. Prompt target **120**, enforced rendered ceiling **400**, call output
+ceiling **2,048** unchanged — three numbers, kept distinct. The 250 was rejecting 47% of usable
+output.)* Digest length is **not** proportional to turn count — though Amendment C C3 records that it
+does scale with conversation size, at roughly 8-11% of the conversation.
 
 **Storage is structured; rendering is derived.** The structured record is canonical. Consumers
 receive dense labelled prose assembled at read time (no stored rendered field, no second staleness
@@ -630,6 +633,116 @@ until all three hold. **That seam is owned by the Amendment B implementation tic
 single edit to this document — the ADR change alone does not deliver Amendment B.
 
 ---
+
+## Amendment C — 2026-07-27: D3's length bound is measured, and its instrument is replaced
+
+**Status of this amendment:** Accepted — FRE-994 ran the compression curve D3 promised. Evidence:
+`docs/research/2026-07-27-fre994-digest-compression-curve.md` (100 generation calls over 20
+stratified sessions on the durable corpus, $1.74, producer disabled throughout).
+
+### What D3 said, and what was wrong with it
+
+D3 set the budget at "~180 tokens target / 250 hard maximum, **to be set empirically by a compression
+curve**" — and named the figure provisional in the same sentence that shipped it. The curve was never
+run. The placeholder became an *enforced* constraint: `session_summary.py` rejects any digest whose
+rendered token count exceeds `session_digest_max_tokens`.
+
+The curve has now been run, and the finding is not that 250 is the wrong number. It is that
+**a rendered-token maximum, enforced by rejecting the generation, is the wrong instrument.**
+
+> Told 120 tokens the generator writes a median of 207. Told 250 it writes 241. Told nothing at all
+> it writes 287. Raising the stated maximum by 108% raises output by 17% — an elasticity of **0.16**.
+> The direction is consistent (16 of 18 sessions), so the prompt is not inert; the magnitude is not
+> nearly enough to deliver any bound tested.
+
+At the deployed 250, **47% of content-bearing digests are rejected for length**. They parse, they
+carry content, they are not truncated, and they are discarded.
+
+### The decision
+
+**C1 — Three numbers, kept distinct.** D3 conflated a prompt target, an enforced rendered ceiling and
+a call output ceiling. They were set by different people solving different problems and are now
+stated separately:
+
+| Number | Was | Is | Why |
+|---|---:|---:|---|
+| Prompt target (what the model is asked for) | 180 | **120** | The lever is weak, so aiming below the ceiling lands closer to it: asking for 120 delivers 79% within 250, asking for 250 delivers 53% |
+| Enforced rendered ceiling (what the producer rejects above) | 250 | **400** | Where ≥90% of content-bearing digests pass **on every arm given a length instruction** (t120 1.00, t180 0.90, t250 0.95, t250_bounded 0.95). Independently corroborated by FRE-996's all-pass thresholds of 413/419 |
+| Call output ceiling (what the cost gate reserves against) | 2,048 | **2,048 — unchanged** | Never binding: zero truncations in 100 calls, largest billed output 1,568. A 400-token bound implies ~1,220 from the measured structural p95 of 617 |
+
+**One qualification on the 400, stated because it is the number this amendment adopts.** It holds for
+arms that were *given* a length instruction. The `unbounded` arm — no LENGTH rule at all — reaches
+only 0.84 at 400 and does not clear 90% until **450**. Since C1 keeps a prompt target, the producer
+always sits in the instructed regime, so 400 is the right ceiling for the deployed configuration. But
+if a future change removes the length instruction, the ceiling has to move to 450 with it.
+
+**C2 — The bound is a rejection threshold of last resort, not the sizing mechanism.** Length is
+steered by the prompt target and *measured* at the ceiling. A digest between the target and the
+ceiling is delivered, not discarded. This reverses the operative half of D3: the maximum stops being
+the thing the design tries to achieve and becomes the thing it refuses to exceed.
+
+**C3 — The relative bound is the better shape, and is recorded as directional rather than settled.**
+D4 already states the principle: annotation may never exceed the token count of the facts it
+annotates. Measured, rendered length correlates with input size at r = +0.56 to +0.77 on every arm,
+and varies less as a ratio than as an absolute on **all five**.
+
+**The ratio is about 8–11% of the conversation** — and the denominator is the load-bearing half of
+that sentence. Measured against *billed prompt* the figure is 4%, but billed prompt carries roughly
+3,100 tokens of fixed overhead (the tool definition and the system prompt) which are not "the facts
+being annotated". D4's principle is about the conversation, so the conversation is the denominator: 
+0.076 under the tightest instruction, 0.106 with none. An implementation that took the 4% figure
+would under-budget the digest by a factor of 2.2–2.6.
+
+This sample (N=20; conversations spanning 1,279–14,870 tokens) does not formally separate the two
+shapes; separating them needs a wider size range, not a larger N. Until then the absolute ceiling in
+C1 stands, with the ratio recorded as the shape a later revision should adopt.
+
+**C4 — Per-slot item ceilings are removed from any sizing role.** FRE-996 measured that they do not
+bound length (rendered median 221 → 224). FRE-994 tested the remaining hypothesis — that they might
+improve *completion* — and it does not replicate: 19 of 20 content-bearing with and without. The
+original signal was two or three sessions at N=30.
+
+**C5 — The delivery metric is non-delivery, split loud from silent.** Not parse rate. Truncation is
+now zero (100 of 100 calls under the FRE-996 contract), and the failure that remains is the **empty
+digest** — 2 of 100 — which returns `GENERATED`, marks its session clean and is never retried. Also
+measured for the first time: **contract drift at 2%** (one over-long label, one off-vocabulary
+`basis`), the guided-not-guaranteed residue of strict tool use being unreachable through litellm.
+
+### What is still open, and is not being papered over
+
+**The loss half of D3's question is unanswered.** D3 defines a digest as wrong when it "omits a
+consequential conclusion needed to avoid repeating settled work". FRE-994 built an instrument for
+that and **the instrument failed its own precommitted validity gate** — extractor recall 0.788
+against a required 0.80. Under the plan's precommitment the loss endpoint was barred from selecting
+the bound rather than rescued by relaxing the threshold, so **C1's 400 is where the bound *can* sit,
+not where it is proven *safe* to sit.**
+
+The failure mode is worth recording in the ADR rather than only in the research note, because it
+bears on this design directly: the automated reference set systematically dropped **explicitly-left-
+open questions**. `unresolved` has its own slot in D3 precisely because a reader who believes an open
+question was settled is wrong — and an instrument blind to open questions would have been biased
+toward declaring tight bounds safe. Any future attempt at the loss half must fix that first.
+
+### Consequential changes elsewhere in this ADR
+
+- **D3's length paragraph** — "Starting budget ~180 tokens target / 250 hard maximum, to be set
+  empirically by a compression curve" is superseded by C1. The curve is run; the figures are measured;
+  the instrument changed.
+- **D3's "Definition of wrong"** is unchanged and remains the standard. What changed is that no
+  instrument has yet met the bar for measuring it (see above).
+- **D4's proportionality principle** is strengthened by C3 rather than replaced: it is now the shape
+  the measurement favours, not only the shape the design intends.
+
+### Verification / acceptance of this amendment
+
+| # | Criterion | Evidence |
+|---|---|---|
+| C-AC-1 | The bound is measured, with the curve and the sample size behind it | Research note §3, N=20, 100 calls, per-arm delivery table |
+| C-AC-2 | The chosen bound is achievable in practice without truncation | §3.3 — ≥90% of content-bearing digests render within 400 on every **instructed** arm (the uninstructed arm needs 450, stated in C1); zero truncations in 100 calls |
+| C-AC-3 | The implied call output ceiling is stated | §3.6 — 400 + structural p95 617 (content-bearing), ×1.2 ⇒ ~1,220; production's 2,048 already covers it |
+| C-AC-4 | The relative bound was considered, not only the absolute | §4 — r = +0.56…+0.77, ratio ≈8–11% **of the conversation** (4% of billed prompt — see C3 on the denominator), reported as directional per the plan's precommitment |
+| C-AC-5 | Cost stated before running and reported after | $4.08 expected / $6.18 ceiling, **$1.74 actual**; no cap raised |
+
 
 ## Alternatives Considered
 

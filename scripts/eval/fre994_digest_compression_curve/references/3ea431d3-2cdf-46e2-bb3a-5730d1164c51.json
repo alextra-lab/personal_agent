@@ -1,0 +1,12 @@
+{
+  "session_id": "3ea431d3-2cdf-46e2-bb3a-5730d1164c51",
+  "authored_by": "build session (Opus), by hand, before any digest was generated",
+  "definition": "ADR-0124 D3 \u2014 see README.md",
+  "conclusions": [
+    "Redis was decided on as the caching layer, on the basis of TTL eviction, in-memory speed, and LRU/LFU eviction policies.",
+    "The recommended cache-key namespace is `agent:<session_id>:<data_type>`.",
+    "JSON was recommended for serialising cached objects rather than Python pickle, for safety.",
+    "The cache-aside pattern was recommended: read, on miss fetch from the database and write to Redis with a TTL; on write, invalidate or update the entry.",
+    "The conversation moved on to monitoring but reached no decision there: deployment scale, budget, alerting needs and Redis-specific dashboards were all raised as open questions and left unanswered."
+  ]
+}

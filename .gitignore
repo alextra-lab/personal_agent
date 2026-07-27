@@ -209,3 +209,8 @@ scripts/study/snapshots/
 
 # `remember` plugin session-continuity scratch — must never land on tracked main
 .remember/
+
+# FRE-994 compression-curve run records: raw generations, verdicts and the
+# calibration transcripts. Session text and per-call dumps, never committed — only
+# the curated write-up under docs/research/ and the hand-authored reference sets are.
+telemetry/fre994_curve/

@@ -1,0 +1,16 @@
+{
+  "session_id": "99eeb42c-5a10-4090-ab4e-7fde6bb549f6",
+  "authored_by": "build session (Opus), by hand, before any digest was generated",
+  "definition": "ADR-0124 D3 \u2014 see README.md",
+  "conclusions": [
+    "The user visited three monuments in sequence on this trip, spanning three architectural periods, and the assistant guided each one. [itinerary redacted]",
+    "A factual art-history answer was given about one monument's sculptors, completion date and commissioning patron. [subject redacted]",
+    "The assistant twice named the wrong iteration of a recurring cultural event, each time confidently, and was corrected by the user, who supplied the current date and the correct iteration. [event and date redacted]",
+    "The user set out a plan for their last day, covering four activities. [itinerary redacted]",
+    "The assistant's first restaurant recommendation was withdrawn: it was recommended on the claim that the venue suited a stated dietary constraint, and the user reported the menu did not. [venue redacted]",
+    "A replacement venue was recommended nearby, with a named backup. [venues and distances redacted]",
+    "The user recorded a dietary constraint for a dining companion and a preference of their own. [details redacted]",
+    "One of the sites on the itinerary requires advance booking. [venue redacted]"
+  ],
+  "redaction": "Personal specifics \u2014 locations, itineraries, named individuals and venues \u2014 are redacted. This repository is public and these are the owner's own sessions. What is being audited is which *kinds* of statement were judged consequential, and that survives redaction. The unredacted items are reproducible from the corpus via --dump-calibration."
+}

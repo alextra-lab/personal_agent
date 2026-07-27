@@ -1,0 +1,14 @@
+{
+  "session_id": "2812df1c-d2d0-4c7f-b526-ecd845fd269e",
+  "authored_by": "build session (Opus), by hand, before any digest was generated",
+  "definition": "ADR-0124 D3 \u2014 see README.md",
+  "conclusions": [
+    "Over the past hour there were 175 LLM calls, averaging about 16.8 seconds latency with a p95 of about 47.5 seconds.",
+    "The error rate over that hour was about 2.9% (5 error events across 175 calls).",
+    "The local Qwen model carried over 98% of token traffic; the cloud model was about 0.6%.",
+    "Across six hours there were 49 errors, of which 41 were against the SLM relay host: 27 HTTP 404s and 14 HTTP 524 timeouts, with the timeouts still firing in the most recent hour. This was identified as the dominant problem.",
+    "The Linear integration's list_linear_projects tool is broken by a GraphQL bug: it selects subfields on `state`, which is declared `String!` and has none. This was identified as a code bug in the agent requiring a fix.",
+    "The local Qwen model exceeded its context window twice, identified as a conversation-history hygiene issue rather than a service fault.",
+    "SearXNG connection errors, the deprecated Perplexity model, and generic empty error events were assessed as not worth acting on."
+  ]
+}

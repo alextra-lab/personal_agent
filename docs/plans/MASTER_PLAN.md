@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-26
+> **Last updated**: 2026-07-27
 
 ## 0. Cost, Process and Monitoring Audit — the live thread
 
@@ -27,13 +27,22 @@ digest marks a session clean and is never retried.
 including that role-attributed spend is unanswerable from Elasticsearch), FRE-990 (reflection has no
 enable flag; the cadence flag inverts), FRE-988 (cost-tracker connection pooling).
 
-## 1. Summarizer redesign — brainstorm, not yet held
+## 1. ADR-0125 — two quality dimensions + the turn evidence contract (awaiting acceptance)
 
-Owner's call: the session summarizer needs redoing, and continuously re-reading every turn to maintain a
-summary is unrealistic. Two candidate directions, both open — **chunk summaries** with periodic rebuild,
-or **no summaries at all**, using the knowledge graph. Brief with the evidence, ADR chain and measurement
-traps is on main (`docs/research/2026-07-26-session-summarizer-brainstorm-brief.md`). Master to drive it
-in `cc-adrs`. Gates FRE-993.
+The summarizer brainstorm was held 2026-07-26/27 and opened into something broader. **ADR-0125 is on main
+at `Proposed`** (PR 686, merge `cbb7f321`); acceptance is the owner's and has not happened. It names
+harness health and output quality as distinct dimensions, bars a dimension-1 producer from user-facing
+context (superseding ADR-0067 reflection-surfacing **on acceptance**), and decides the turn evidence
+contract. The verification oracle is **deferred** — only its feasibility bounds are recorded.
+
+Nothing is dispatchable until the owner accepts. On acceptance, master labels and wires the chain in one
+action: **FRE-1000** (blocking measurement gate — sizes the rest) → **FRE-1004** → **FRE-1005**;
+**FRE-1001** and **FRE-1002** run in parallel; **FRE-1006** is the seam and closes ADR-0125 — *not* its
+last merged child, and *not* populated fields. Dimension-1 chain **FRE-1003** (remove the reflection-recall
+path) is independent and parallel. Recommendation carried from the ADR seat: **FRE-717 follows FRE-1003**,
+so realized value measures a producer whose known defects are already fixed.
+
+Gates FRE-993 (the summarizer decision now sits inside this frame).
 
 ## 2. Knowledge-graph identity — FRE-998
 
@@ -72,6 +81,8 @@ Linear async feedback · Seshat Inference.
 
 ## Awaiting an owner decision
 
+- **ADR-0125** — accept or reject (§1). Acceptance unlocks **FRE-999** + its seven children
+  (FRE-1000–1006), all `Needs Approval` and unlabelled. Approve them individually; master labels.
 - **ADR-0120 cost governance** — Proposed. All cost work ask-first.
 - **Backlog cull scope + gate** (§4).
 - **FRE-937** — the owner has reversed its recorded design: the turn-progress surface should *fade* after
@@ -88,3 +99,6 @@ Linear async feedback · Seshat Inference.
 - **Worker seats strand on non-edit prompts** — FRE-911's `acceptEdits` covers file edits only.
 - **Duplicate ADR-0067** — two Accepted ADRs share the number (skill-nudge-injection, and
   reflection-surfacing-in-context-assembly). Renumber; it makes "supersede ADR-0067" ambiguous.
+  ADR-0125 supersedes only the reflection-surfacing one, by title.
+- **Research index unmaintained since March** — `docs/research/README.md` lists no July documents. The
+  2026-07-27 audit was added; the rest were not backfilled.

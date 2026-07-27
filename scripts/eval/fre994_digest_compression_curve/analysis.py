@@ -19,6 +19,7 @@ Three guards, all precommitted:
 
 from __future__ import annotations
 
+import json
 import random
 import statistics
 from dataclasses import dataclass, field
@@ -683,4 +684,96 @@ def delivery_tables(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "mean": round(statistics.fmean(deltas), 1),
                 "looser_longer_on": sum(1 for d in deltas if d > 0),
             }
+    return out
+
+
+def trim_baseline(
+    records: list[dict[str, Any]], *, bounds: tuple[int, ...] = (250, 400)
+) -> dict[str, Any]:
+    """The trivial baseline this study named in its plan and never ran (FRE-993).
+
+    FRE-994 measured how often a digest renders within a bound. It never measured what
+    happens if an over-bound digest is *trimmed* instead of discarded — which is the
+    cheapest available intervention, costs no model call, and is what ADR-0124
+    Amendment C2 adopted. Reported here from the run's own records so the before/after
+    is a measurement rather than an assertion.
+
+    Delivery ``after`` is the property that matters: a digest that renders over the
+    bound and is trimmed to fit is *delivered*, where the deployed producer discarded
+    it and paid for a regeneration that landed at the same length.
+
+    Args:
+        records: The run's generation records, as written to ``generations.jsonl``.
+        bounds: Rendered-token ceilings to evaluate. Defaults to the deployed bound
+            before this change and the Amendment C1 bound after it.
+
+    Returns:
+        Per-bound, per-arm and pooled delivery before and after trimming, plus the
+        distribution of items dropped.
+    """
+    # Imported here rather than at module scope: this is the only function in an
+    # analysis module that needs the production digest code, and importing it at the
+    # top would pull the memory package into every other mode's import path.
+    from personal_agent.memory.session_digest import (  # noqa: PLC0415
+        digest_token_count,
+        parse_stored_digest,
+        trim_digest_to_budget,
+    )
+
+    parsed: list[tuple[str, Any]] = []
+    for record in records:
+        raw = record.get("digest")
+        if not record.get("content_bearing") or not isinstance(raw, dict):
+            continue
+        # Copied before parsing: parse_stored_digest rewrites retired basis tags in
+        # place, and mutating the loaded record would make a second call disagree with
+        # the first.
+        parsed.append((str(record["arm"]), parse_stored_digest(json.loads(json.dumps(raw)))))
+
+    out: dict[str, Any] = {"n_content_bearing": len(parsed), "bounds": {}}
+    for bound in bounds:
+        by_arm: dict[str, dict[str, int]] = {}
+        dropped_counts: list[int] = []
+        rejected_before = rejected_after = 0
+        for arm, digest in parsed:
+            stats = by_arm.setdefault(
+                arm, {"n": 0, "over_before": 0, "over_after": 0, "trimmed": 0}
+            )
+            stats["n"] += 1
+            over_before = digest_token_count(digest) > bound
+            trimmed, dropped = trim_digest_to_budget(digest, bound)
+            over_after = digest_token_count(trimmed) > bound
+
+            stats["over_before"] += int(over_before)
+            stats["over_after"] += int(over_after)
+            stats["trimmed"] += int(dropped > 0)
+            rejected_before += int(over_before)
+            rejected_after += int(over_after)
+            dropped_counts.append(dropped)
+
+        dropped_counts.sort()
+        n = len(parsed)
+        out["bounds"][str(bound)] = {
+            # "rejected" is discard semantics: the deployed producer threw these away
+            # and regenerated. "after" is trim semantics: it keeps them.
+            "rejected_before_rate": round(rejected_before / n, 3) if n else None,
+            "rejected_after_rate": round(rejected_after / n, 3) if n else None,
+            "digests_trimmed_rate": round(sum(1 for d in dropped_counts if d > 0) / n, 3)
+            if n
+            else None,
+            "items_dropped": {
+                "total": sum(dropped_counts),
+                "p50": _percentile(dropped_counts, 0.5),
+                "p90": _percentile(dropped_counts, 0.9),
+                "max": dropped_counts[-1] if dropped_counts else None,
+            },
+            "per_arm": {
+                arm: {
+                    **stats,
+                    "rejected_before_rate": round(stats["over_before"] / stats["n"], 3),
+                    "rejected_after_rate": round(stats["over_after"] / stats["n"], 3),
+                }
+                for arm, stats in sorted(by_arm.items())
+            },
+        }
     return out

@@ -245,6 +245,20 @@ class SessionDigest(BaseModel):
     unresolved: list[UnresolvedItem] = Field(default_factory=list)
     corrections: list[Correction] = Field(default_factory=list)
 
+    #: Items dropped by :func:`trim_digest_to_budget` to fit the rendered ceiling.
+    #:
+    #: **Stored, not merely logged, and rendered** (FRE-993). Trimming fires on ~7% of
+    #: content-bearing digests at the 400 ceiling, so a reader that cannot tell a
+    #: trimmed digest from a whole one is being misled at a real rate rather than a
+    #: theoretical one. ADR-0125 D5 states the rule this obeys: content shortened on an
+    #: evidence path is marked, never silently cut. Telemetry alone cannot carry it —
+    #: the log line does not survive into the artifact the Phase-1 gateway view and any
+    #: Phase-2 consumer actually read.
+    #:
+    #: Same reasoning as :attr:`UnresolvedItem.as_of`: state the producer knows and the
+    #: reader cannot recover is stamped onto the record.
+    items_dropped: int = 0
+
     def is_empty(self) -> bool:
         """Whether every slot is empty."""
         return not (self.established or self.decisions or self.unresolved or self.corrections)
@@ -441,7 +455,101 @@ def render_digest(digest: SessionDigest) -> str:
                 suffix = f" (as of {item.as_of.date().isoformat()})"
             lines.append(f"- {item.text}{suffix}")
         sections.append(f"{label}: \n" + "\n".join(lines))
+
+    # Declared, never silent (ADR-0125 D5). A trimmed digest is a bounded subset of
+    # what the session produced, and a reader treating it as the whole would read
+    # absence of an item as absence of the thing — the same error the producer's own
+    # input-side rule exists to prevent. Rendered rather than only stored, because the
+    # rendering is what a consumer reads.
+    if digest.items_dropped and sections:
+        sections.append(
+            f"(Trimmed to fit the digest budget: {digest.items_dropped} lower-priority "
+            "item(s) omitted.)"
+        )
+
     return "\n\n".join(sections)
+
+
+#: Slot order for trimming — least costly to lose first (FRE-993, ADR-0124 C2).
+#:
+#: Ordered by value to a future reader, which is what D3's definition of a wrong digest
+#: is about, not by what each slot cost to produce:
+#:
+#: * ``established`` — D3 names it the slot "most at risk of re-deriving facts that are
+#:   already stored elsewhere". The cheapest loss.
+#: * ``corrections`` — this module's own asymmetry applies: "a missed error is
+#:   recoverable from the raw evidence, whereas a false error writes self-confirming
+#:   state". A *dropped* correction is a missed one, so it is recoverable. Usually
+#:   empty in any case, so this rarely fires.
+#: * ``unresolved`` — no other home, and Amendment C's instrument post-mortem names
+#:   losing explicitly-left-open questions as the biased failure mode.
+#: * ``decisions`` — the conclusions D3's definition of wrong is *about* ("omits a
+#:   consequential conclusion needed to avoid repeating settled work"). Dropped last.
+_TRIM_ORDER: tuple[str, ...] = ("established", "corrections", "unresolved", "decisions")
+
+
+def _next_trim_slot(slots: dict[str, list[DigestItem]]) -> str | None:
+    """Name the slot to take the next item from, or ``None`` when nothing may go.
+
+    Two phases, so that a slot is never annihilated while another still has slack. The
+    failure this exists to prevent is a trimmed digest that keeps several recoverable
+    corrections while deleting every trace that work remains open — which is what
+    draining each slot to zero in turn produces.
+    """
+    for name in _TRIM_ORDER:
+        if len(slots[name]) > 1:
+            return name
+
+    # Every slot is down to one item. Only now may a slot go to zero — and never the
+    # last one standing: an empty digest returns GENERATED, marks its session clean and
+    # is never retried, which Amendment C5 names as the remaining delivery failure.
+    if sum(1 for name in _TRIM_ORDER if slots[name]) <= 1:
+        return None
+    return next((name for name in _TRIM_ORDER if slots[name]), None)
+
+
+def trim_digest_to_budget(digest: SessionDigest, max_tokens: int) -> tuple[SessionDigest, int]:
+    """Drop items until the rendered digest fits its ceiling.
+
+    ADR-0124 Amendment C2: the ceiling is "a rejection threshold of last resort, not the
+    sizing mechanism". A digest over it is trimmed and delivered, not discarded and
+    regenerated — the discard path measured a 47% loss of content-bearing digests at the
+    deployed bound, and re-generating buys nothing at a prompt elasticity of 0.16.
+
+    Drop order is :data:`_TRIM_ORDER` across slots and **tail-first within** one. The
+    generator is asked to emit most-consequential-first, but that ordering is model
+    judgment; the slot order and the tail rule are the deterministic mechanism
+    underneath it, so what survives never depends on the model having obeyed.
+
+    Never returns an empty digest for a digest that had content: when a single item
+    exceeds the whole ceiling, that item is kept and the result is still over budget.
+    The caller decides what to do about it — this function does not hide it.
+
+    The result records what it lost in :attr:`SessionDigest.items_dropped`, and the
+    ceiling is measured **with** the resulting marker included, so the declaration is
+    paid for out of the budget rather than pushing the rendering back over it.
+
+    Args:
+        digest: The parsed, validated digest.
+        max_tokens: The rendered-token ceiling.
+
+    Returns:
+        The trimmed digest and the number of items dropped by this call.
+    """
+    slots: dict[str, list[DigestItem]] = {name: list(getattr(digest, name)) for name in _TRIM_ORDER}
+    dropped = 0
+
+    def _candidate() -> SessionDigest:
+        return digest.model_copy(update={**slots, "items_dropped": digest.items_dropped + dropped})
+
+    while digest_token_count(_candidate()) > max_tokens:
+        target = _next_trim_slot(slots)
+        if target is None:
+            break
+        slots[target].pop()
+        dropped += 1
+
+    return (_candidate() if dropped else digest), dropped
 
 
 def digest_token_count(digest: SessionDigest) -> int:

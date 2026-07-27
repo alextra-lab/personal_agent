@@ -2280,25 +2280,29 @@ class AppConfig(BaseSettings):
     )
 
     session_digest_target_tokens: int = Field(
-        default=180,
+        default=120,
         ge=1,
         alias="AGENT_SESSION_DIGEST_TARGET_TOKENS",
         description=(
-            "Target size of the rendered digest (ADR-0124 D3). Length is bounded by "
-            "marginal utility rather than characters, and is NOT proportional to turn "
-            "count. Starting value, to be set empirically by a compression curve. "
+            "What the generator is ASKED for, in the prompt's LENGTH rule (ADR-0124 D3, "
+            "measured by Amendment C1). Not a bound — the lever is weak (elasticity "
+            "0.16), which is why it aims below the ceiling rather than at it: asking "
+            "for 120 delivers 79% within 250, asking for 250 delivers 53%. "
             "Env var: AGENT_SESSION_DIGEST_TARGET_TOKENS"
         ),
     )
 
     session_digest_max_tokens: int = Field(
-        default=250,
+        default=400,
         ge=1,
         alias="AGENT_SESSION_DIGEST_MAX_TOKENS",
         description=(
-            "Hard ceiling on the rendered digest (ADR-0124 D3). Exceeding it fails "
-            "validation and costs the one retry, because an over-long digest displaces "
-            "the retrieved evidence it exists to annotate. "
+            "Ceiling on the rendered digest (ADR-0124 D3, measured by Amendment C1). "
+            "Where >=90% of content-bearing digests pass on every arm given a length "
+            "instruction. Exceeding it TRIMS items until it fits (Amendment C2) rather "
+            "than discarding the digest — it is a rejection threshold of last resort, "
+            "not the sizing mechanism, and not a hydration entitlement for a consumer "
+            "(D4's relative bound governs that). "
             "Env var: AGENT_SESSION_DIGEST_MAX_TOKENS"
         ),
     )

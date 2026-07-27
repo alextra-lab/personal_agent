@@ -95,10 +95,17 @@ def test_truncation_stays_terminal_eligible() -> None:
 
 
 @pytest.mark.asyncio
-async def test_truncation_still_costs_only_the_one_retry(
+async def test_truncation_costs_exactly_one_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Behaviour preserved: the same bound schema_invalid has today, not a new one."""
+    """Superseded by FRE-993 — this pilot deferred the bound, and it is now decided.
+
+    FRE-996 left truncation on the retry it had inherited from ``SCHEMA_INVALID``,
+    saying in terms that changing that bound was a sizing decision belonging to
+    FRE-993. It does: the retry re-issues a byte-identical request against the same
+    output ceiling, so a reply cut off *by that ceiling* cannot be argued into fitting
+    on a second try.
+    """
     attempts = 0
 
     async def fake_call(_prompt: str, **_: Any) -> str:
@@ -109,13 +116,20 @@ async def test_truncation_still_costs_only_the_one_retry(
     monkeypatch.setattr(ss, "_call_model", fake_call)
     await ss.generate_session_digest(_session(), session_id="sess-1", ended_at=_T0)
 
-    assert attempts == ss._MAX_GENERATION_ATTEMPTS
+    assert attempts == 1
 
 
 @pytest.mark.asyncio
-async def test_a_retry_after_truncation_can_still_succeed(
+async def test_the_reply_a_truncation_retry_would_have_won_is_never_requested(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The inverse of the test this replaces, and the point of the change.
+
+    A second call *could* be sampled into a valid reply — that is true of any resample
+    and is why the fail-safe is scoped to truncation alone rather than applied to the
+    stochastic validation failures. What it cannot do is change the ceiling that cut the
+    first reply off, so the producer stops rather than paying to find out.
+    """
     replies = iter([ss.OutputTruncated("ceiling"), _valid_output()])
 
     async def fake_call(_prompt: str, **_: Any) -> str:
@@ -127,7 +141,9 @@ async def test_a_retry_after_truncation_can_still_succeed(
     monkeypatch.setattr(ss, "_call_model", fake_call)
     outcome = await ss.generate_session_digest(_session(), session_id="sess-1", ended_at=_T0)
 
-    assert outcome.status is SessionSummaryStatus.GENERATED
+    assert outcome.status is SessionSummaryStatus.FAILED
+    assert outcome.failure_reason is SummaryFailureReason.OUTPUT_TRUNCATED
+    assert next(replies, None) is not None, "the second reply was never asked for"
 
 
 # ── Detection inside _call_model ──────────────────────────────────────────────

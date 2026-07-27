@@ -8,9 +8,9 @@ it's awaiting. ``asyncio.CancelledError`` is a ``BaseException``, not an
 ``litellm.acompletion`` would silently miss it, leaving the reservation
 minted at ``gate.reserve()`` un-refunded until the cost-gate reaper sweeps it
 at TTL. This test proves the dedicated ``except asyncio.CancelledError:``
-branch refunds + disconnects and re-raises the cancellation untouched
-(never wrapped into ``LLMClientError``, which would mask it as a normal
-failure and break asyncio's cancellation propagation contract).
+branch refunds and re-raises the cancellation untouched (never wrapped into
+``LLMClientError``, which would mask it as a normal failure and break
+asyncio's cancellation propagation contract).
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ async def _call_respond_cancelled() -> tuple[MagicMock, AsyncMock]:
     """Run LiteLLMClient.respond() where litellm.acompletion is cancelled mid-flight.
 
     Returns the mock gate and mock tracker so the caller can assert on
-    refund/disconnect call state.
+    refund call state.
     """
     from personal_agent.llm_client.litellm_client import LiteLLMClient
     from personal_agent.llm_client.types import ModelRole
@@ -63,7 +63,7 @@ async def _call_respond_cancelled() -> tuple[MagicMock, AsyncMock]:
             side_effect=lambda msgs, trace_id: (msgs, []),
         ),
         patch(
-            "personal_agent.llm_client.cost_tracker.CostTrackerService",
+            "personal_agent.llm_client.cost_tracker.get_cost_tracker_service",
             return_value=mock_tracker,
         ),
         patch(
@@ -90,12 +90,6 @@ class TestCancellationRefundsReservation:
         refund_kwargs = mock_gate.refund.call_args
         # First positional arg is the reservation_id returned by reserve().
         assert refund_kwargs.args[0] == "res-cancel-001"
-
-    @pytest.mark.asyncio
-    async def test_cancellation_disconnects_cost_tracker(self) -> None:
-        _, mock_tracker = await _call_respond_cancelled()
-
-        assert mock_tracker.disconnect.called
 
     @pytest.mark.asyncio
     async def test_cancellation_is_not_wrapped_into_llm_client_error(self) -> None:

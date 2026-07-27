@@ -108,7 +108,7 @@ async def _call_respond(captured_log_calls: list[tuple]) -> None:
             side_effect=lambda msgs, trace_id: (msgs, []),
         ),
         patch(
-            "personal_agent.llm_client.cost_tracker.CostTrackerService",
+            "personal_agent.llm_client.cost_tracker.get_cost_tracker_service",
             return_value=mock_tracker,
         ),
         patch(
@@ -239,7 +239,7 @@ async def test_gate_reserve_and_commit_receive_session_id() -> None:
             side_effect=lambda msgs, trace_id: (msgs, []),
         ),
         patch(
-            "personal_agent.llm_client.cost_tracker.CostTrackerService",
+            "personal_agent.llm_client.cost_tracker.get_cost_tracker_service",
             return_value=mock_tracker,
         ),
         patch(
@@ -312,7 +312,7 @@ async def _call_respond_failing(captured_error_calls: list[tuple]) -> None:
             side_effect=lambda msgs, trace_id: (msgs, []),
         ),
         patch(
-            "personal_agent.llm_client.cost_tracker.CostTrackerService",
+            "personal_agent.llm_client.cost_tracker.get_cost_tracker_service",
             return_value=mock_tracker,
         ),
         patch(

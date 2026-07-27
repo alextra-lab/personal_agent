@@ -84,7 +84,15 @@ class CostTrackerService:
         self.db_url = _normalize_asyncpg_dsn(settings.database_url)
 
     async def connect(self) -> None:
-        """Connect to PostgreSQL database."""
+        """Open the asyncpg connection pool.
+
+        Idempotent: a second call while already connected is a no-op (FRE-988,
+        mirrors ``RouteTraceLedger.connect``), so callers can call it on every
+        use of the shared singleton (:func:`get_cost_tracker_service`) without
+        churning a fresh pool per operation.
+        """
+        if self.pool is not None:
+            return
         try:
             self.pool = await asyncpg.create_pool(
                 self.db_url,
@@ -469,7 +477,7 @@ async def record_vendor_cost(
         )
         return
 
-    tracker = CostTrackerService()
+    tracker = get_cost_tracker_service()
     try:
         await tracker.connect()
         await tracker.record_api_call(
@@ -491,8 +499,6 @@ async def record_vendor_cost(
             trace_id=trace_id,
             session_id=session_id,
         )
-    finally:
-        await tracker.disconnect()
 
 
 def _normalize_asyncpg_dsn(database_url: str) -> str:
@@ -509,3 +515,14 @@ def _normalize_asyncpg_dsn(database_url: str) -> str:
     if database_url.startswith("postgres+asyncpg://"):
         return database_url.replace("postgres+asyncpg://", "postgres://", 1)
     return database_url
+
+
+# Module-level singleton (FRE-988): one pooled connection held for the process's
+# lifetime instead of a fresh asyncpg pool opened and closed around every priced
+# call. Mirrors the cost-gate / route-trace-ledger accessor pattern.
+cost_tracker_service = CostTrackerService()
+
+
+def get_cost_tracker_service() -> CostTrackerService:
+    """Return the process-wide cost-tracker singleton."""
+    return cost_tracker_service

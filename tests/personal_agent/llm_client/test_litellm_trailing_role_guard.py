@@ -81,7 +81,7 @@ async def _respond_and_capture(messages: list[dict[str, object]]) -> list[dict[s
             return_value=Decimal("0.01"),
         ),
         patch(
-            "personal_agent.llm_client.cost_tracker.CostTrackerService",
+            "personal_agent.llm_client.cost_tracker.get_cost_tracker_service",
             return_value=mock_tracker,
         ),
         patch(

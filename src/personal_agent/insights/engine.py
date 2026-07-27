@@ -30,7 +30,7 @@ from personal_agent.insights.fingerprints import (
 from personal_agent.insights.fingerprints import (
     pattern_fingerprint as _pattern_fingerprint,
 )
-from personal_agent.llm_client.cost_tracker import CostTrackerService
+from personal_agent.llm_client.cost_tracker import CostTrackerService, get_cost_tracker_service
 from personal_agent.memory.service import MemoryService
 from personal_agent.sysgraph import SysgraphRepository
 from personal_agent.sysgraph.dedup import ReadBeforeEmitDecision, check_before_emit
@@ -111,7 +111,7 @@ class InsightsEngine:
         """
         self._queries = telemetry_queries or TelemetryQueries()
         self._memory = memory_service or MemoryService()
-        self._cost_tracker = cost_tracker or CostTrackerService()
+        self._cost_tracker = cost_tracker or get_cost_tracker_service()
         self._sysgraph_repo = sysgraph_repo
 
     async def analyze_patterns(self, days: int = 7) -> list[Insight]:
@@ -1123,10 +1123,10 @@ class InsightsEngine:
 
     async def _get_daily_costs(self, days: int) -> dict[str, float]:
         """Return daily API cost totals from PostgreSQL for anomaly detection."""
-        connected_here = False
-        if self._cost_tracker.pool is None:
-            await self._cost_tracker.connect()
-            connected_here = self._cost_tracker.pool is not None
+        # FRE-988: connect() is idempotent, so this is a no-op once the shared
+        # singleton's pool already exists — no per-call disconnect, since the
+        # pool's lifetime is owned by the process, not this one query.
+        await self._cost_tracker.connect()
         if self._cost_tracker.pool is None:
             return {}
 
@@ -1152,9 +1152,6 @@ class InsightsEngine:
         except Exception as exc:
             log.warning("insights_cost_query_failed", error=str(exc))
             return {}
-        finally:
-            if connected_here:
-                await self._cost_tracker.disconnect()
 
     def _index_insights(self, insights: list[Insight], days: int) -> None:
         """Index generated insights into `agent-insights-*` for dashboarding.

@@ -122,9 +122,9 @@ class TestSkillBlockFunctionalInjection:
 
         with (
             patch(
-                "personal_agent.orchestrator.skills.get_skill_block",
-                return_value=_SENTINEL,
-            ),
+                "personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=(_SENTINEL, ()),
+        ),
             patch(
                 "personal_agent.llm_client.factory.get_llm_client",
                 return_value=mock_llm,
@@ -168,9 +168,9 @@ class TestSkillBlockFunctionalInjection:
 
         with (
             patch(
-                "personal_agent.orchestrator.skills.get_skill_block",
-                return_value="",
-            ),
+                "personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=("", ()),
+        ),
             patch(
                 "personal_agent.llm_client.factory.get_llm_client",
                 return_value=mock_llm,
@@ -202,7 +202,9 @@ def _make_nudge_patches(
     usage_directives_return: str,
 ) -> tuple:
     return (
-        patch("personal_agent.orchestrator.skills.get_skill_block", return_value=skill_injection),
+        patch("personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=(skill_injection, ()),
+        ),
         patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
         patch(
             "personal_agent.orchestrator.skills.assemble_skill_index_directive",
@@ -248,7 +250,9 @@ class TestSkillNudgeInjection:
         mock_session.get_messages = AsyncMock(return_value=[])
 
         with (
-            patch("personal_agent.orchestrator.skills.get_skill_block", return_value=_SENTINEL),
+            patch("personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=(_SENTINEL, ()),
+        ),
             patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
             patch(
                 "personal_agent.orchestrator.skills.assemble_skill_index_directive",
@@ -294,7 +298,9 @@ class TestSkillNudgeInjection:
         mock_session.get_messages = AsyncMock(return_value=[])
 
         with (
-            patch("personal_agent.orchestrator.skills.get_skill_block", return_value=_SENTINEL),
+            patch("personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=(_SENTINEL, ()),
+        ),
             patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
             patch(
                 "personal_agent.orchestrator.skills.assemble_skill_index_directive",
@@ -340,7 +346,9 @@ class TestSkillNudgeInjection:
         mock_session.get_messages = AsyncMock(return_value=[])
 
         with (
-            patch("personal_agent.orchestrator.skills.get_skill_block", return_value=""),
+            patch("personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=("", ()),
+        ),
             patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
             patch(
                 "personal_agent.orchestrator.skills.assemble_skill_index_directive",

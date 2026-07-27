@@ -133,12 +133,62 @@
             "chars": { "type": "integer" },
             "content_preview": { "type": "text" }
           }
+        },
+        "recall_admission": {
+          "properties": {
+            "state": { "type": "keyword" },
+            "candidate_count": { "type": "integer" },
+            "admitted_count": { "type": "integer" },
+            "items": {
+              "type": "nested",
+              "properties": {
+                "kind": { "type": "keyword" },
+                "identity": { "type": "keyword", "ignore_above": 1024 },
+                "score": { "type": "float" },
+                "admitted": { "type": "boolean" },
+                "drop_reason": { "type": "keyword" }
+              }
+            }
+          }
+        },
+        "assembled_context": {
+          "properties": {
+            "state": { "type": "keyword" },
+            "message_count": { "type": "integer" },
+            "system_prompt_chars": { "type": "integer" },
+            "skill_bodies": { "type": "keyword", "ignore_above": 1024 },
+            "memory_identities": { "type": "keyword", "ignore_above": 1024 },
+            "primary_call_index": { "type": "integer" },
+            "primary_call_count": { "type": "integer" },
+            "conversation_slice": {
+              "type": "nested",
+              "properties": {
+                "index": { "type": "integer" },
+                "role": { "type": "keyword" },
+                "origin_trace_id": { "type": "keyword" },
+                "timestamp": { "type": "keyword" },
+                "chars": { "type": "integer" }
+              }
+            }
+          }
+        },
+        "evidence_presence": {
+          "properties": {
+            "user_message": { "type": "keyword" },
+            "assistant_response": { "type": "keyword" },
+            "reasoning_trace": { "type": "keyword" },
+            "tool_calls": { "type": "keyword" },
+            "recalled_memory": { "type": "keyword" },
+            "assembled_context": { "type": "keyword" },
+            "identifiers": { "type": "keyword" },
+            "model_and_params": { "type": "keyword" }
+          }
         }
       }
     }
   },
   "_meta": {
-    "description": "Captain's Log capture docs (turn captures). Daily index agent-captains-captures-YYYY-MM-DD. Split out of the shared agent-captains-template in FRE-534/A2 so each doc shape (captures / reflections / subagents) owns non-colliding properties. metrics_summary.* pinned float/integer to defend against stray-0 type flips.",
+    "description": "Captain's Log capture docs (turn captures). Daily index agent-captains-captures-YYYY-MM-DD. Split out of the shared agent-captains-template in FRE-534/A2 so each doc shape (captures / reflections / subagents) owns non-colliding properties. metrics_summary.* pinned float/integer to defend against stray-0 type flips. FRE-1004 adds the ADR-0125 D3 turn-evidence records (recall_admission / assembled_context / evidence_presence), mapped explicitly rather than left to the root's dynamic:true so their fixed schemas cannot walk the field limit; conversation_slice.timestamp is keyword not date because it carries whatever the message was persisted with and a non-parsable value would reject the whole capture. Identity keywords carry ignore_above:1024 for the same fail-safe reason: an entity name is LLM-extracted and unbounded upstream, and a term over Lucene's 32766-byte limit rejects the ENTIRE capture document (reproduced against a live index), which would silently lose the whole turn's record while the disk copy survived.",
     "managed_by": "scripts/setup-elasticsearch.sh"
   }
 }

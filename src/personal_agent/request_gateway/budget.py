@@ -348,4 +348,8 @@ def apply_budget(
         token_count=total_tokens,
         trimmed=trimmed,
         overflow_action=overflow_action,
+        # FRE-1004: candidates outlive the memory drop above on purpose — a dropped
+        # item must stay nameable at the admission point, not vanish with the context.
+        recall_candidates=context.recall_candidates,
+        session_facts_injected=context.session_facts_injected,
     )

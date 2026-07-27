@@ -7,8 +7,8 @@ class TestMemoryRenderFilter:
     """Render-time empty-description filter (FRE-374 D1)."""
 
     def _render(self, entities: list[dict]) -> str:
-        from personal_agent.orchestrator.executor import _render_memory_section
-        return _render_memory_section(entities)
+        from personal_agent.orchestrator.executor import _render_memory_section_with_ids
+        return _render_memory_section_with_ids(entities)[0]
 
     def test_entity_with_description_is_included(self) -> None:
         result = self._render([

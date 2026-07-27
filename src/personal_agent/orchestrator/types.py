@@ -17,6 +17,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
 
+from personal_agent.captains_log.turn_evidence import RecallCandidateRecord, TurnEvidence
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.loop_gate import ToolLoopGate
@@ -326,6 +327,11 @@ class ExecutionContext:
 
     # Memory enrichment (Phase 2.2)
     memory_context: list[dict[str, Any]] | None = None  # Retrieved conversations for context
+    # ADR-0125 D3 item 5 (FRE-1004): everything recall offered this turn, captured
+    # before budget trimming so a dropped item stays nameable; and the turn's evidence
+    # record, built once at the admission point and read by TaskCapture.
+    recall_candidates: tuple["RecallCandidateRecord", ...] = ()
+    turn_evidence: "TurnEvidence | None" = None
 
     # Request timing (FRE-37): inline span-based instrumentation
     request_timer: "RequestTimer | None" = None

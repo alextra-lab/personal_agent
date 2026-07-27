@@ -17,6 +17,11 @@ import orjson
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from personal_agent.captains_log.es_indexer import schedule_es_index
+from personal_agent.captains_log.turn_evidence import (
+    AssembledContextRecord,
+    EvidenceState,
+    RecallAdmissionRecord,
+)
 from personal_agent.config import get_settings as _get_settings
 from personal_agent.telemetry import get_logger
 
@@ -85,6 +90,16 @@ class TaskCapture(BaseModel):
     # eval runs stays traceable (joins with FRE-521/522). Legacy on-disk capture
     # files predate this key — Pydantic defaults it to False on read.
     eval_mode: bool = False
+    # ADR-0125 D3 (FRE-1004) — the turn evidence contract.
+    # item 5: which memory items the turn actually relied on, by identity and score,
+    # with the ones trimming or rendering dropped named rather than vanished.
+    recall_admission: RecallAdmissionRecord | None = None
+    # item 6: what the assembled context contained, at item-identity granularity.
+    assembled_context: AssembledContextRecord | None = None
+    # The state of all eight D3 records: an implicitly missing field is
+    # indistinguishable from a capture gap, which is the failure the contract
+    # exists to prevent. All three default so legacy on-disk captures still read.
+    evidence_presence: dict[str, EvidenceState] = Field(default_factory=dict)
 
     @field_validator("user_id", mode="before")
     @classmethod

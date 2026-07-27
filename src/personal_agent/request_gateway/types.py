@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from personal_agent.captains_log.turn_evidence import RecallCandidateRecord
 from personal_agent.governance.models import Mode
 
 
@@ -116,6 +117,13 @@ class AssembledContext:
         token_count: Estimated total token count.
         trimmed: Whether context was trimmed to fit budget.
         overflow_action: What was done if over budget (None = fit fine).
+        recall_candidates: Everything recall offered this turn, captured *before*
+            budget trimming (ADR-0125 D3 item 5, FRE-1004). Sibling metadata only —
+            never rendered, never counted against the token budget — so that an item
+            ``apply_budget`` drops stays nameable instead of vanishing.
+        session_facts_injected: Whether the recall controller's session-fact section
+            was written into ``messages``. Decided here so the admission point does not
+            re-derive the condition and the two definitions cannot drift.
     """
 
     messages: list[dict[str, Any]]
@@ -126,6 +134,8 @@ class AssembledContext:
     token_count: int = 0
     trimmed: bool = False
     overflow_action: str | None = None
+    recall_candidates: tuple[RecallCandidateRecord, ...] = ()
+    session_facts_injected: bool = False
 
 
 @dataclass(frozen=True)

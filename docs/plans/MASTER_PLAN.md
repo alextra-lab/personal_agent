@@ -44,15 +44,15 @@ amendment.
 Background LLM streams stay **disabled** and the summary sweep stays **off** until both gates are met;
 **no budget cap is to be raised.**
 
-**FRE-987 is now the only gate left** before the sweep returns — FRE-988 merged (PR #703). Its bounce paid
-off twice over: codex, once its dead broker was repaired, returned a **block** naming a second real defect
-(unlocked check-then-act in `connect()`, so racing coroutines could each build a pool and a loser could
-null a winner's). Fixed with double-checked locking, and the tests were **mutation-verified** — the lock
-reverted, the tests confirmed failing, then restored.
+**FRE-987 is the only gate left** before the sweep returns — bound the *transient* retry path. Three
+tickets in §4 cannot be verified until it lands. When the sweep returns, gate on the **empty-digest rate**,
+not the parse rate.
 
-**FRE-987** — bound the *transient* retry path. This is the **second and only remaining gate** before
-the sweep returns, and three tickets in §4 cannot be verified until it lands. When the sweep returns, gate
-on the **empty-digest rate**, not the parse rate.
+FRE-988 (the other gate) is merged and deployed; its bounce paid off twice over — codex, once its dead
+broker was repaired, returned a **block** naming a second real defect (unlocked check-then-act in
+`connect()`, so racing coroutines could each build a pool and a loser could null a winner's). Fixed with
+double-checked locking, and the tests were **mutation-verified**: the lock reverted, the tests confirmed
+failing, then restored.
 
 **Also open:** FRE-989 (cost attribution) · FRE-990 (reflection has no enable flag; the cadence flag
 inverts) · FRE-1007 (producers declare reasoning configuration, fail-closed) · FRE-1008 (the two prompt
@@ -60,12 +60,19 @@ hashes cannot differ) · FRE-1013 (entity class never emitted).
 
 ## 3. Memory recall — FRE-1021 and FRE-1020
 
-**FRE-1020 merged** (PR #712) — co-authorship (`Claim.asserted_by`, derived in Python from the
-role-partitioned turn, never from the model) makes ADR-0098 D2's guard reachable. **The ADR-0100 note is
-written** — it keeps the recency demotion on its own merits while removing the false premise beneath it,
-so that debt is discharged. **Undeployed.** Watch after deploy: making the guard reachable makes its bad
-cases reachable — a user correction phrased below the attribution floor can now be rejected. D6's
-corroboration gate stays open as **FRE-1022** (Needs Approval); ADR-0098 does **not** close here.
+**FRE-1020 is Done** — deployed and verified live: 6 new Claims in two distinct `(asserted_by, confidence)`
+pairs, where the whole graph had exactly one before. The **ADR-0100 note is written**, so that debt is
+discharged. D6's corroboration gate stays open as **FRE-1022**; ADR-0098 does **not** close here.
+
+**Two things the verification found, which set the next work here:**
+- **FRE-1023** (filed, Needs Approval) — the borderline-attribution signal logs its overlap scores but **no
+  claim key**, and a turn yields several claims, so a decision can't be joined to the claim it decided. The
+  retune evidence FRE-1020 leaned on is unusable as built. One-field fix.
+- **The accepted residual fired inside the first six claims**, not as a tail event: a first-person symptom
+  report landed `agent` on an exact 0.571/0.571 tie. Safe direction (a tie must never mint `user`), but
+  **do not read an attribution split as ground truth** until FRE-1023 lands. Related design property:
+  authorship comes from the *turn a claim was extracted from*, not the fact's origin — a fact you stated
+  days ago, re-extracted from the assistant's restatement, is `agent`-derived by construction.
 
 **FRE-1021** — entities and episode-derived candidates compete in one ranked, capped, fused pool, so a
 subject's accumulating conversation pushes its own entities beneath the cap. **Measure the rate first**;
@@ -74,12 +81,14 @@ D2, whose topic-scoped surface rides the selection that fades.
 
 ## 4. Verification backlog — master's own debt
 
-**Fourteen tickets sit in Awaiting Deploy — twelve deployed, two not.** The column is master's
-*verification* backlog, not a deploy queue, **except** for the two newest, which genuinely do await a
-deploy. **None closes on "deployed and healthy"** — each needs its acceptance criterion proven, and
-**UNVERIFIABLE is a first-class verdict**.
+**Thirteen tickets sit in Awaiting Deploy and all thirteen are deployed.** The column is master's
+*verification* backlog, not a deploy queue. **None closes on "deployed and healthy"** — each needs its
+acceptance criterion proven, and **UNVERIFIABLE is a first-class verdict**.
 
-- **Genuinely awaiting deploy** (gateway rebuild, ask-first, owner's call): FRE-1020 · FRE-988.
+- **Verifiable tomorrow, on a clock already running:** FRE-988 — needs a 24h window comparing connect
+  events against priced-call volume. Deployed 20:49Z; **baseline is 90 connects in the preceding 24h**
+  (not the ticket's headline 527 — the harness has been far quieter under the cost halt). If connects
+  still track calls, this is **Verify Failed**, not Done.
 - **Nine never checked at all:** FRE-717 · 739 · 986 · 936 · 970 · 972 · 943 · 971 · 969.
 - **Three blocked on the sweep** (so on FRE-987): FRE-993 · FRE-996 · FRE-992.
 

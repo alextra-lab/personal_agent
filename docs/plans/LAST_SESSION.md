@@ -44,9 +44,8 @@ re-learned, twice, that a docs PR title carrying a ticket token corrupts the boa
 
 - **build1** — `fre-1002-evidence-path-boundary-guard`, **freshly reset at 12:31Z** after a 3-hour stall
   (below). No context to preserve; it started clean.
-- **build2** — `fre-1005-recall-usage-edge`, **warm on purpose**. It carries FRE-1004's admission-point
-  context under `context:keep`, which is why FRE-1005 went to that seat. Note it therefore runs on **Opus**
-  despite a Tier-2:Sonnet label — a deliberate trade to avoid re-deriving the admission point.
+- **build2** — stood down at 12:50Z. It was warm on FRE-1005 under `context:keep`, then found that
+  ticket unbuildable (below) and stopped before writing code. Ticket parked; seat free to clear.
 - **adrs** — idle on the merged `adr-0125-evidence-contract`; wants a fresh-start before its next ticket.
 - **`master-914`** — still a stale worktree on the closed `fre-909-seat-rename`, the only reason that
   branch survives. Removal offered previously and not taken.
@@ -98,3 +97,22 @@ directly, which also avoids its back-attach step that the runbook forbids.
   needs a *feasibility* ticket first — on the bound Anthropic models the raw chain of thought is never
   returned, so "capture the reasoning trace" may mean capturing a summary and calling it evidence. Offered,
   not yet written.
+- **THE BIGGEST FINDING OF THE DAY, and it arrived last. ADR-0098's Claim substrate is write-only.**
+  build2 refused to build FRE-1005 because AC-4's fixture has no true-positive instance, and master
+  verified all three legs: **91 Claims / 3 superseded**, **`HAS_FACT` is the only relationship type
+  touching a Claim** (no edge to Entity or Turn), and **zero references to `Claim` in `request_gateway/`
+  or `orchestrator/`**. Ninety-one claims written, three supersessions correctly adjudicated, **never once
+  read into a turn** — ADR-0098's correctable-facts capability does not reach the model, because recall
+  still runs entirely on the legacy Entity layer. Also proven absent: `corroboration_count` and
+  `last_confirmed` have no populators anywhere. Owner decided to gate FRE-1005 behind claim-recallability
+  and treat it as ADR work → **FRE-1012**. FRE-1005 parked (Approved, unlabelled); **FRE-1006 inherits the
+  same premise** and must be decided with it.
+- **The pattern to carry forward.** Four capabilities found in one day that exist, are correct, and never
+  reach a consumer: structured output wired-and-unused (FRE-995), the prompt manifest built-and-discarded
+  (FRE-1000), entities recalled-and-rendered-empty (FRE-1010), and the Claim substrate written-and-never-read
+  (FRE-1012). That is ADR-0125's two-dimensions thesis validating itself four times over, and it suggests
+  the standing question is not just *is it built* but *does anything consume it*.
+- **A third stall variant, on top of the two above.** build1 ended its turn saying "I'll wait for the
+  background codex review to complete" — the review had already finished in 32s, and nothing woke the seat.
+  So the seat-stall family now has three shapes: unsubmitted prompt-buffer text, modal dialogs, and
+  turn-ended-awaiting-a-completed-background-task. All three need a human to notice. All three are FRE-976.

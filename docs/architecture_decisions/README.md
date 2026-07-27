@@ -193,7 +193,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0108](ADR-0108-stored-artifact-vision-reprocessing.md) | Stored-Artifact Vision Re-processing (analyze-to-text, explicit tool) | Proposed |
 | [ADR-0109](ADR-0109-entity-taxonomy-redesign.md) | Entity & Relationship Taxonomy — V1 (inherited) → V2 (first principled derivation) | Accepted |
 
-### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0124)
+### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0126)
 
 | ADR | Title | Status |
 |-----|-------|--------|
@@ -213,6 +213,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0123](ADR-0123-turn-progress-surface.md) | Turn Progress Surface — Make the Wait Legible, So the User Stays Attached | Accepted — 2026-07-24 |
 | [ADR-0124](ADR-0124-session-summary-producer-and-phased-consumption.md) | Session-Summary Producer Correction and Phased Consumption | Accepted (amended 2026-07-23 — Amendment A, conversation-scoped input; 2026-07-24 — Amendment B, conversation-only: `tool_evidence` + `status_contradiction` removed) |
 | [ADR-0125](ADR-0125-two-quality-dimensions-and-turn-evidence-contract.md) | The Two Quality Dimensions and the Turn Evidence Contract (supersedes ADR-0067 reflection surfacing; verification oracle deferred) | Accepted |
+| [ADR-0126](ADR-0126-reading-the-living-knowledge-substrate.md) | Reading the Living-Knowledge Substrate — Stance-First Push, Pull-Only Claims (supplies ADR-0098's read half) | Proposed |
 
 ### Supplementary
 

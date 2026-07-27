@@ -62,8 +62,8 @@ design; the defect is that transient has no bound at all.
 not the parse rate — an empty digest marks a session clean and is never retried; first measurement is 2%.
 
 **Also open:** FRE-989 (cost attribution — four confirmed read-path defects) · FRE-990 (reflection has no
-enable flag; the cadence flag inverts) · FRE-988 (cost-tracker connection pooling) · FRE-1007 (producers
-declare their reasoning configuration, fail-closed) · FRE-1008 (the two prompt hashes cannot differ).
+enable flag; the cadence flag inverts) · FRE-1007 (producers declare their reasoning configuration,
+fail-closed) · FRE-1008 (the two prompt hashes cannot differ) · FRE-1013 (entity class never emitted).
 
 ## 2. Knowledge-graph identity — FRE-998
 

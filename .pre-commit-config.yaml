@@ -30,6 +30,13 @@ repos:
         files: ^src/personal_agent/.*\.py$
         pass_filenames: false
         args: [src/personal_agent/]
+      - id: check-evidence-truncation
+        name: ADR-0125 D5/AC-5 no silent truncation on an evidence path
+        entry: uv run python scripts/check_evidence_truncation.py
+        language: system
+        files: ^src/personal_agent/.*\.py$
+        pass_filenames: false
+        args: [src/personal_agent/]
       - id: check-config-guard
         name: ADR-0099 D1/D4 cross-config guard (roles, orphan env, secrets)
         entry: uv run python scripts/check_config.py

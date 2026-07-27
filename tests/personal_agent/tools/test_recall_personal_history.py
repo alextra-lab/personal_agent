@@ -66,6 +66,33 @@ async def test_returns_user_scoped_turns(monkeypatch) -> None:
     assert out["user_id"] == str(uid)
     assert out["turns"][0]["turn_id"] == "t1"
     assert out["turns"][0]["entities"] == ["Athens", "Acropolis"]
+    assert out["turns"][0]["user_message"] == "Athens trip planning"
+
+
+@pytest.mark.asyncio
+async def test_long_user_message_is_marked_not_silently_clipped(monkeypatch) -> None:
+    """ADR-0125 D5: a recalled past message over the cap carries an explicit marker."""
+    uid = uuid4()
+    now = datetime.now(timezone.utc)
+    long_message = "considering the tradeoffs between options " * 20  # > 400 chars
+    records = [
+        {
+            "turn_id": "t2",
+            "timestamp": (now - timedelta(days=1)).isoformat(),
+            "session_id": "s1",
+            "user_message": long_message,
+            "summary": "",
+            "entities": [],
+        },
+    ]
+    svc = _mock_memory_service(records)
+    monkeypatch.setattr("personal_agent.tools.personal_history._get_memory_service", lambda: svc)
+
+    out = await recall_personal_history_executor(days_ago=7, ctx=_ctx(uid))
+
+    returned = out["turns"][0]["user_message"]
+    assert len(returned) < len(long_message)
+    assert "...[truncated" in returned
 
 
 @pytest.mark.asyncio
@@ -80,7 +107,7 @@ async def test_days_ago_out_of_range_raises(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_limit_clamped_to_1_50(monkeypatch) -> None:
-    """limit is clamped, not rejected."""
+    """Limit is clamped, not rejected."""
     uid = uuid4()
     svc = _mock_memory_service([])
     monkeypatch.setattr("personal_agent.tools.personal_history._get_memory_service", lambda: svc)
@@ -96,7 +123,7 @@ async def test_limit_clamped_to_1_50(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_cypher_contains_topic_filter_when_set(monkeypatch) -> None:
-    """topic substring appears as a Cypher parameter."""
+    """Topic substring appears as a Cypher parameter."""
     uid = uuid4()
     svc = _mock_memory_service([])
     monkeypatch.setattr("personal_agent.tools.personal_history._get_memory_service", lambda: svc)

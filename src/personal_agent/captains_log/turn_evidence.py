@@ -1,4 +1,4 @@
-"""Turn evidence contract primitives (ADR-0125 D3 items 5 and 6, plus D4).
+"""Turn evidence contract primitives (ADR-0125 D3 items 5 and 6, plus D4 and D5).
 
 The capture layer records a boolean and a count for memory recall
 (``captains_log/capture.py``) and per-turn entity identities only in
@@ -32,6 +32,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -115,6 +116,45 @@ def _text(value: object) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def mark_truncated(text: str, limit: int, *, unit: Literal["chars", "bytes"] = "chars") -> str:
+    """Shorten ``text`` to ``limit``, embedding an explicit marker of what was cut.
+
+    ADR-0125 D5 forbids silent truncation on any evidence path: content must be
+    stored whole, or shortened with an explicit marker recording that it was
+    shortened and by how much. This is that marker — the one shortening path
+    ``scripts/check_evidence_truncation.py`` recognises as compliant, resolved
+    by import binding rather than bare callee name, so a shadowed or unrelated
+    function of the same name cannot suppress a real violation.
+
+    Args:
+        text: The text to shorten.
+        limit: Maximum length in ``unit``. Text at or under this length is
+            returned unchanged — no marker is appended for text that was never
+            shortened.
+        unit: ``"chars"`` counts Python string length; ``"bytes"`` counts
+            UTF-8 encoded length, decoding the truncated head with
+            ``errors="ignore"`` so a split multibyte sequence at the cut point
+            never produces invalid output.
+
+    Returns:
+        ``text`` unchanged if it fits within ``limit``; otherwise the head of
+        ``text`` plus a ``"...[truncated N <unit>]"`` marker naming exactly how
+        much was cut.
+    """
+    if unit == "bytes":
+        encoded = text.encode("utf-8")
+        if len(encoded) <= limit:
+            return text
+        omitted = len(encoded) - limit
+        head = encoded[:limit].decode("utf-8", errors="ignore")
+        return f"{head}...[truncated {omitted} bytes]"
+
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    return f"{text[:limit]}...[truncated {omitted} chars]"
 
 
 def memory_item_identity(item: object) -> tuple[MemoryItemKind, str]:

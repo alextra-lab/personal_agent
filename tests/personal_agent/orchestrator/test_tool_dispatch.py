@@ -11,8 +11,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
 
+from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.types import ToolDefinition, ToolResult
 
@@ -89,3 +89,32 @@ class TestDispatchToolCall:
         assert out["success"] is False
         assert out["output_hash"] is None
         assert "error" in out["content"]
+
+    @pytest.mark.asyncio
+    async def test_long_error_hint_is_marked_not_silently_clipped(self) -> None:
+        """ADR-0125 D5: the tool-role ``content`` hint is assembled context — a
+        long error must carry an explicit marker, not a silent 150-char clip.
+        """
+        long_error = "the underlying service returned a detailed diagnostic: " * 5  # > 150 chars
+        result = ToolResult(
+            tool_name="read",
+            success=False,
+            output={},
+            error=long_error,
+            latency_ms=1.0,
+        )
+        layer = _fake_tool_layer(result)
+
+        out = await dispatch_tool_call(
+            tool_call_id="tc-3",
+            tool_name="read",
+            arguments={"path": "/tmp/x"},
+            tool_layer=layer,
+            trace_ctx=_trace(),
+            trace_id="t-1",
+            session_id=None,
+            loaded_skills=set(),
+        )
+
+        assert "...[truncated" in out["content"]
+        assert long_error not in out["content"]

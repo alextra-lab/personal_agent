@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.telemetry import get_logger
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.types import ToolDefinition, ToolParameter
@@ -181,7 +182,7 @@ async def search_memory_executor(
                     {
                         "turn_id": t.turn_id,
                         "timestamp": t.timestamp.isoformat(),
-                        "user_message": t.user_message[:300],
+                        "user_message": mark_truncated(t.user_message, 400),
                         "summary": t.summary or "",
                         "key_entities": t.key_entities,
                     }

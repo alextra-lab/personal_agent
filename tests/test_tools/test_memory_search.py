@@ -118,6 +118,33 @@ async def test_search_memory_executor_entity_path_returns_matched_turns() -> Non
 
 
 @pytest.mark.asyncio
+async def test_search_memory_executor_long_user_message_is_marked_not_clipped() -> None:
+    """ADR-0125 D5: a matched turn's user_message over the cap carries an explicit marker."""
+    long_message = "considering the tradeoffs between options " * 20  # > 400 chars
+    turn = TurnNode(
+        turn_id="turn-2",
+        timestamp=datetime.now(timezone.utc),
+        user_message=long_message,
+        summary="",
+        key_entities=[],
+    )
+    query_result = MemoryQueryResult(conversations=[turn], entities=[])
+
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=query_result)
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        result = await search_memory_executor(
+            query_text="tradeoffs",
+            entity_names=["tradeoffs"],
+        )
+    returned = result["matched_turns"][0]["user_message"]
+    assert len(returned) < len(long_message)
+    assert "...[truncated" in returned
+
+
+@pytest.mark.asyncio
 async def test_search_memory_executor_broad_path_returns_entities() -> None:
     """Test search_memory_executor returns entities/sessions on broad-recall path."""
     broad_result = {

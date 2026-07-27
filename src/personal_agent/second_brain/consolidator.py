@@ -33,7 +33,10 @@ from personal_agent.second_brain.attempts import (
     previous_attempt_count,
     record_consolidation_attempt,
 )
-from personal_agent.second_brain.entity_extraction import extract_entities_and_relationships
+from personal_agent.second_brain.entity_extraction import (
+    default_extraction_summary,
+    extract_entities_and_relationships,
+)
 from personal_agent.sysgraph import get_default_sysgraph_repo
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.trace import SystemTraceContext
@@ -584,7 +587,7 @@ class SecondBrainConsolidator:
         summary = extraction_result.get("summary", "")
         is_fallback = (
             not extraction_result.get("entities")
-            and summary.strip() == capture.user_message.strip()[:200]
+            and summary.strip() == default_extraction_summary(capture.user_message or "").strip()
         )
         if is_fallback:
             time_since_first = (datetime.now(timezone.utc) - attempt_started_at).total_seconds()
@@ -608,7 +611,9 @@ class SecondBrainConsolidator:
                     reason="exhausted extraction retries; writing stub Turn for joinability",
                 )
 
-                stub_summary = (capture.user_message or "").strip()[:200] or "(empty)"
+                stub_summary = default_extraction_summary((capture.user_message or "").strip()) or (
+                    "(empty)"
+                )
                 stub_turn = TurnNode(
                     turn_id=capture.trace_id,
                     trace_id=capture.trace_id,

@@ -16,6 +16,8 @@ from typing import Any
 
 import structlog
 
+from personal_agent.captains_log.turn_evidence import mark_truncated
+
 logger = structlog.get_logger(__name__)
 
 _MIN_TURNS_FOR_STATE_DOC = 3
@@ -98,7 +100,7 @@ def _extract_goal(messages: Sequence[dict[str, Any]]) -> str | None:
         if msg.get("role") == "user":
             content = msg.get("content", "")
             if isinstance(content, str) and content.strip():
-                return content.strip()[:200]
+                return mark_truncated(content.strip(), 200)
     return None
 
 
@@ -123,7 +125,7 @@ def _extract_constraints(
         for line in content.split("\n"):
             line = line.strip()
             if _DECISION_PATTERNS.search(line) and len(line) > 10:
-                constraints.append(line[:150])
+                constraints.append(mark_truncated(line, 150))
                 if len(constraints) >= 5:
                     return constraints
     return constraints
@@ -149,7 +151,7 @@ def _extract_recent_actions(
         content = msg.get("content", "")
         if not isinstance(content, str) or not content.strip():
             continue
-        first_line = content.strip().split("\n")[0][:150]
+        first_line = mark_truncated(content.strip().split("\n")[0], 150)
         actions.append(first_line)
         if len(actions) >= max_actions:
             break
@@ -189,7 +191,7 @@ def _extract_open_questions(
         if has_response:
             continue
 
-        first_question_line = content.strip().split("\n")[0][:150]
+        first_question_line = mark_truncated(content.strip().split("\n")[0], 150)
         questions.append(first_question_line)
         if len(questions) >= max_questions:
             break

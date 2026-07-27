@@ -68,3 +68,32 @@ class TestGenerateReflectionDspyTagsReflectionSource:
 
         assert entry.proposed_change is not None
         assert entry.proposed_change.source == ProposalSource.REFLECTION
+
+
+class TestGenerateReflectionDspyMarksLongUserMessage:
+    """ADR-0125 D5: the DSPy input is marked, not silently clipped, past the cap."""
+
+    def test_long_user_message_passed_to_predictor_is_marked(self) -> None:
+        fake_predictor = MagicMock(return_value=_FakeDspyResult())
+        fake_dspy = MagicMock()
+        fake_dspy.ChainOfThought.return_value = fake_predictor
+
+        llm_client = MagicMock()
+        llm_client.get_dspy_lm.return_value = MagicMock()
+
+        long_message = "considering the tradeoffs between options " * 20  # > 400 chars
+
+        with patch.object(reflection_dspy_module, "dspy", fake_dspy):
+            generate_reflection_dspy(
+                user_message=long_message,
+                trace_id="trace-1",
+                steps_count=1,
+                final_state="COMPLETED",
+                reply_length=5,
+                telemetry_summary="none",
+                llm_client=llm_client,
+            )
+
+        passed_user_message = fake_predictor.call_args.kwargs["user_message"]
+        assert len(passed_user_message) < len(long_message)
+        assert "...[truncated" in passed_user_message

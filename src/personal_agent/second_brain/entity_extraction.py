@@ -14,6 +14,7 @@ from uuid import UUID
 
 import orjson
 
+from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import load_model_config, resolve_role_model_key, settings
 from personal_agent.cost_gate import BudgetDenied
 from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, LocalLLMClient, ModelRole
@@ -1076,6 +1077,32 @@ async def extract_entities_and_relationships(
         return _default_extraction_result(user_message)
 
 
+DEFAULT_SUMMARY_CHAR_LIMIT = 400
+"""Cap for :func:`default_extraction_summary` (ADR-0125 D5). Re-derived
+2026-07-27 against real captures (``agent-captains-captures-*``, N=1864
+non-empty user messages): p50=66, p90=151, p99=400 chars — this limit clears
+p99, so it is a genuine safety cap rather than the dominant case, unlike the
+retired 200-char idiom (p90 alone already exceeded it)."""
+
+
+def default_extraction_summary(user_message: str) -> str:
+    """The ``summary`` value used when extraction fails or has no better summary.
+
+    Shortened-with-a-marker rather than silently clipped (ADR-0125 D5) — a
+    consumer (``second_brain/consolidator.py``'s fallback-Turn detection) must
+    reconstruct this exact value, so it is a shared function rather than
+    duplicated inline logic.
+
+    Args:
+        user_message: The user's message.
+
+    Returns:
+        ``user_message`` unchanged if it fits :data:`DEFAULT_SUMMARY_CHAR_LIMIT`,
+        otherwise its head plus an explicit truncation marker.
+    """
+    return mark_truncated(user_message, DEFAULT_SUMMARY_CHAR_LIMIT)
+
+
 def _default_extraction_result(user_message: str) -> dict[str, Any]:
     """Return default extraction result when extraction fails.
 
@@ -1086,7 +1113,7 @@ def _default_extraction_result(user_message: str) -> dict[str, Any]:
         Default extraction result dict
     """
     return {
-        "summary": user_message[:200] + "..." if len(user_message) > 200 else user_message,
+        "summary": default_extraction_summary(user_message),
         "entities": [],
         "relationships": [],
         "entity_names": [],

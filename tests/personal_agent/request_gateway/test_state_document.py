@@ -80,5 +80,18 @@ class TestBuildStateDocument:
         assert doc is not None
         assert len(doc) < len(long_msg)
 
+    def test_truncated_goal_carries_an_explicit_marker(self) -> None:
+        """ADR-0125 D5: a shortened goal must say it was shortened, not clip silently."""
+        long_msg = "x" * 300
+        messages = [
+            _msg("user", long_msg),
+            _msg("assistant", "OK"),
+            _msg("user", "more"),
+            _msg("assistant", "sure"),
+        ]
+        doc = build_state_document(messages)
+        assert doc is not None
+        assert "...[truncated 100 chars]" in doc
+
     def test_min_turns_constant(self) -> None:
         assert _MIN_TURNS_FOR_STATE_DOC == 3

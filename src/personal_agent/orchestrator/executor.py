@@ -18,6 +18,7 @@ from personal_agent.captains_log.turn_evidence import (
     build_recall_candidates,
     build_turn_evidence,
     derive_evidence_presence,
+    mark_truncated,
     memory_item_identity,
 )
 from personal_agent.config import settings
@@ -3589,7 +3590,7 @@ async def step_init(
                                 "conversation_id": conv.turn_id,
                                 "timestamp": conv.timestamp.isoformat(),
                                 "user_message": conv.user_message,
-                                "summary": conv.summary or conv.user_message[:200],
+                                "summary": conv.summary or mark_truncated(conv.user_message, 400),
                                 "key_entities": conv.key_entities,
                             }
                             for conv in result.conversations

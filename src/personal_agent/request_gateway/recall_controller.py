@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 import structlog
 
+from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import settings
 from personal_agent.events.bus import EventBus, get_event_bus
 from personal_agent.llm_client.message_content import get_text_content
@@ -389,7 +390,7 @@ def _scan_session_facts(
                         break
 
                 if not matching_sentence:
-                    matching_sentence = content[:200]
+                    matching_sentence = mark_truncated(content, 200)
 
                 # Score by recency (newer = higher)
                 turn_index = total_turns - 1 - i

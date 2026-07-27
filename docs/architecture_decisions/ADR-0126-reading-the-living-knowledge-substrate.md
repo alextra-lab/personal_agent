@@ -557,13 +557,15 @@ identifiers need not appear in rendered content. The two are not in tension.)*
   return the superseded original — retention without retrievability is not the audit trail ADR-0098 D2
   decided on.
 
-- **AC-6 — An empty item is filtered before render, and a non-empty one still renders.** · **Check:**
-  run a turn recalling `Barrage républicain` (`affect=""`, `mastery` null) and assert the rendered
-  stance section contains **no** entry for it — no empty bullet, no bare label. Repeat with a
-  synthetic whitespace-only affect. Then run a turn recalling a populated stance and assert the
-  section **is** rendered with its content. · *Fails if* an empty or whitespace-only stance renders as
-  a bullet, **or if the section is never rendered at all** — suppressing everything passes the first
-  half and fails the decision.
+- **AC-6 — An empty item is filtered before it reaches the model, and a non-empty one still arrives.**
+  · **Check:** run a turn recalling `Barrage républicain` (`affect=""`, `mastery` null) and assert the
+  **serialized provider request** contains **no** entry for it — no empty bullet, no bare label, no
+  orphaned target name. Repeat with a synthetic whitespace-only affect. Then run a turn recalling a
+  populated **topic-scoped** stance and assert its affect **is** present in the serialized provider
+  request. · *Fails if* an empty or whitespace-only stance appears in the request in any form, **or if
+  the populated control is absent** — suppressing the section entirely passes the first half and fails
+  the decision. Observing a renderer's output rather than the request does not satisfy this criterion:
+  a section can be rendered correctly and never sent.
 
 - **AC-7 — The always-present layer's per-turn cost is bounded by a limit fixed *here*, not chosen
   after observing output.** The bound is decided by this ADR so it cannot be back-fitted: **the
@@ -587,15 +589,21 @@ identifiers need not appear in rendered content. The two are not in tension.)*
   AC-7 all pass unmutated. An unrelated failure invalidates the run and must be fixed before
   proceeding. Then apply each mutation independently, restoring between runs:
 
-  | Mutation | Assertions that MUST fail |
-  |---|---|
-  | Remove topic-scoped stance enrichment from context assembly | AC-1 positive half · AC-5 current-stance-present half |
-  | Remove behavioural-profile injection | AC-2 · AC-7 non-zero-contribution half |
-  | Remove the Claims path from `search_memory` | AC-4(b) · AC-5 supersession-chain-on-pull half |
+  | # | Mutation (one consumer removed) | Assertions that MUST fail |
+  |---|---|---|
+  | 1 | Topic-scoped stance enrichment, from context assembly | AC-1 positive half · AC-5 current-stance-present half · AC-6 populated-control half |
+  | 2 | Behavioural-profile injection | AC-2 · AC-7 non-zero-contribution half |
+  | 3 | **Claim** retrieval from `search_memory` | AC-4(b) |
+  | 4 | **Stance supersession-chain** retrieval from `search_memory` | AC-5 chain-on-pull half |
 
-  · *Fails if* any named assertion still passes under its mutation, if the baseline is not green
-  before mutating, or if a failure under mutation is traceable to a cause other than the removed
-  consumer. **Green with no consumer present is precisely ADR-0098's shipped condition** — the
+  **Four consumers, four mutations — the count is the point.** D4 and D5 together create two distinct
+  pull consumers (claim retrieval, and stance history), and D2 creates two distinct push consumers.
+  Mutations 3 and 4 are deliberately separate because AC-5's fixture (`Sorbet`) is a **Stance**
+  supersession, not a Claim: removing the Claim path would leave AC-5's chain assertion passing, so
+  collapsing them into one row would leave the stance-history consumer unmutated and D5's pull half
+  unproven. · *Fails if* any named assertion still passes under its mutation, if any of the four
+  consumers has no mutation, if the baseline is not green before mutating, or if a failure under
+  mutation is traceable to a cause other than the removed consumer. **Green with no consumer present is precisely ADR-0098's shipped condition** — the
   condition this ADR exists to make impossible to reach undetected.
 
 **Seam owner (assembled intent):** **AC-8.** It can only be run once both surfaces exist, and it is

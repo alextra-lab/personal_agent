@@ -9,6 +9,7 @@ from typing import Any
 
 import structlog
 
+from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import settings
 from personal_agent.memory.proactive_types import (
     ProactiveMemoryCandidate,
@@ -134,7 +135,7 @@ def _build_payload_for_row(row: dict[str, Any]) -> tuple[str, dict[str, Any]]:
                 # episode is anonymous and two in one turn are indistinguishable.
                 "conversation_id": turn_id,
                 "user_message": user_message,
-                "summary": summary or (user_message or "")[:200],
+                "summary": summary or mark_truncated(user_message or "", 400),
                 "key_entities": key_entities,
             },
         )

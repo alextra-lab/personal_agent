@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.telemetry import get_logger
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.types import ToolDefinition, ToolParameter
@@ -162,7 +163,7 @@ async def recall_personal_history_executor(
             "turn_id": r["turn_id"],
             "timestamp": r["timestamp"],
             "session_id": r["session_id"],
-            "user_message": (r.get("user_message") or "")[:300],
+            "user_message": mark_truncated(r.get("user_message") or "", 400),
             "summary": r.get("summary") or "",
             "entities": r.get("entities") or [],
         }

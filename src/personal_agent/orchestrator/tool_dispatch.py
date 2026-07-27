@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import settings
 from personal_agent.orchestrator.loop_gate import GateResult, ToolLoopPolicy, stable_hash
 from personal_agent.telemetry import get_logger
@@ -239,7 +240,11 @@ async def dispatch_tool_call(
                         trace_id=trace_id,
                     )
         else:
-            short_error = (result.error or "execution failed")[:150]
+            # ADR-0125 D5: this "hint" is the tool-role message content sent back
+            # to the model (assembled context) — the full error is separately
+            # preserved in the durable tool_results record, but what the model
+            # sees here must not be silently clipped.
+            short_error = mark_truncated(result.error or "execution failed", 150)
             content = json.dumps({"status": "error", "hint": f"{tool_name}: {short_error}"})
             output_hash = None
 

@@ -231,6 +231,53 @@ class TestAssembleContext:
         mock_adapter.recall.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_digestless_episode_marks_rather_than_silently_clips(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ADR-0125 D5 — the "worst instance": an episode with no digest, on the
+        entity-name-match fallback path (proactive recall disabled or empty),
+        must carry an explicit marker on its user-message fallback, not a
+        silent 200-char clip.
+        """
+        monkeypatch.setattr(ctx_module.settings, "proactive_memory_enabled", False)
+        intent = IntentResult(
+            task_type=TaskType.CONVERSATIONAL,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=[],
+        )
+        long_user_message = "considering the tradeoffs between options " * 20  # > 800 chars
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.recall = AsyncMock(
+            return_value=MagicMock(
+                entities=[],
+                episodes=[
+                    {
+                        "turn_id": "turn-9",
+                        "user_message": long_user_message,
+                        "summary": None,
+                        "key_entities": [],
+                    }
+                ],
+            )
+        )
+
+        result = await assemble_context(
+            user_message="What about Athens?",
+            session_messages=[{"role": "user", "content": "we discussed options"}],
+            intent=intent,
+            memory_adapter=mock_adapter,
+            trace_id="t-episode",
+            session_id="sess-1",
+        )
+        assert result.memory_context is not None
+        mock_adapter.recall.assert_awaited_once()
+        summary = result.memory_context[0]["summary"]
+        assert len(summary) < len(long_user_message)
+        assert "...[truncated" in summary
+
+    @pytest.mark.asyncio
     async def test_proactive_memory_disabled_skips_suggest_relevant(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

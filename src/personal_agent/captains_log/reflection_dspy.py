@@ -42,6 +42,7 @@ from personal_agent.captains_log.models import (
     ProposedChange,
     TelemetryRef,
 )
+from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.llm_client import LocalLLMClient, ModelRole
 from personal_agent.telemetry import get_logger
 
@@ -431,7 +432,7 @@ def generate_reflection_dspy(
             # Generate reflection
             # Metrics are pre-formatted (deterministic), LLM only generates insights
             result = reflection_generator(
-                user_message=user_message[:200],
+                user_message=mark_truncated(user_message, 400),
                 trace_id=trace_id,
                 steps_count=steps_count,
                 final_state=final_state,

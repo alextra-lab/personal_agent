@@ -34,6 +34,7 @@ from personal_agent.captains_log.prompt_manifest import (
     build_prompt_manifest,
     load_mean_rating_lookup,
 )
+from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import settings
 from personal_agent.llm_client import LocalLLMClient, ModelRole
 from personal_agent.sysgraph import SysgraphRepository, get_default_sysgraph_repo
@@ -155,7 +156,9 @@ def _extract_failure_excerpt(trace_events: Sequence[dict[str, Any]]) -> FailureE
     if not failed_calls:
         return None
 
-    error_summary = last_error[:200] if last_error else f"{len(failed_calls)} tool failure(s)"
+    error_summary = (
+        mark_truncated(last_error, 200) if last_error else f"{len(failed_calls)} tool failure(s)"
+    )
     return FailureExcerpt(
         failed_tool_calls=failed_calls,
         error_summary=error_summary,
@@ -408,7 +411,7 @@ async def generate_reflection_entry(
 
         # Manual approach: Create reflection prompt
         prompt = REFLECTION_PROMPT.format(
-            user_message=user_message[:200],  # Truncate for prompt
+            user_message=mark_truncated(user_message, 400),
             trace_id=trace_id,
             steps_count=steps_count,
             final_state=effective_final_state,

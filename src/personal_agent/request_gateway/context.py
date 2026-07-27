@@ -23,6 +23,7 @@ from personal_agent.captains_log.turn_evidence import (
     MemoryItemKind,
     RecallCandidateRecord,
     build_recall_candidates,
+    mark_truncated,
     memory_item_identity,
 )
 from personal_agent.config import settings
@@ -291,7 +292,14 @@ async def _query_memory_for_intent(
                     # and two episodes in one turn are indistinguishable.
                     "conversation_id": ep.get("turn_id"),
                     "user_message": ep.get("user_message"),
-                    "summary": ep.get("summary") or ep.get("user_message", "")[:200],
+                    # ADR-0125 D5: the "worst instance" — a digest-less episode
+                    # carries no assistant text on this shape at all (the episode
+                    # payload proactive.py builds has no assistant_response field;
+                    # restoring that is a separate, deeper gap than this marker fix).
+                    # 800 chars clears the re-derived p99 user-message length (400,
+                    # measured 2026-07-27 against agent-captains-captures-*, N=1864)
+                    # with margin, so this is a safety cap, not the dominant case.
+                    "summary": ep.get("summary") or mark_truncated(ep.get("user_message", ""), 800),
                     "key_entities": ep.get("key_entities", []),
                 }
             )

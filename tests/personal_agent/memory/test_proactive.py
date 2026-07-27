@@ -9,7 +9,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import personal_agent.memory.proactive as proactive_mod
-from personal_agent.memory.proactive import build_proactive_suggestions, estimate_tokens_from_text
+from personal_agent.memory.proactive import (
+    _build_payload_for_row,
+    build_proactive_suggestions,
+    estimate_tokens_from_text,
+)
 from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 
 
@@ -56,6 +60,22 @@ def test_build_empty_raw(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(proactive_mod.settings, "proactive_memory_min_score", 0.3)
     out = build_proactive_suggestions([], set(), None, "tr", None)
     assert out.candidates == []
+
+
+def test_episode_payload_marks_long_user_message_fallback_summary() -> None:
+    """ADR-0125 D5: no digest (`summary=None`) falls back to a marked, not
+    silently clipped, user_message excerpt.
+    """
+    long_message = "considering the tradeoffs between options " * 20  # > 400 chars
+    row = _row(turn_id="t1")
+    row["summary"] = None
+    row["user_message"] = long_message
+
+    kind, payload = _build_payload_for_row(row)
+
+    assert kind == "episode"
+    assert len(payload["summary"]) < len(long_message)
+    assert "...[truncated" in payload["summary"]
 
 
 @pytest.mark.asyncio

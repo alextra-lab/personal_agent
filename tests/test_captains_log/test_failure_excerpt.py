@@ -13,7 +13,6 @@ from personal_agent.captains_log.reflection import (
     _extract_failure_excerpt,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -106,6 +105,16 @@ def test_extract_failure_excerpt_error_summary_non_empty() -> None:
     result = _extract_failure_excerpt(events)
     assert result is not None
     assert len(result.error_summary) > 0
+
+
+def test_extract_failure_excerpt_long_error_is_marked_not_silently_clipped() -> None:
+    """ADR-0125 D5: a long error message is shortened with an explicit marker."""
+    long_error = "connection reset while streaming response body: " * 5  # > 200 chars
+    events = [_make_failed_event(error=long_error)]
+    result = _extract_failure_excerpt(events)
+    assert result is not None
+    assert len(result.error_summary) < len(long_error)
+    assert "...[truncated" in result.error_summary
 
 
 def test_extract_failure_excerpt_multiple_failures() -> None:

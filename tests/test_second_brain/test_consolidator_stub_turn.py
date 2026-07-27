@@ -23,6 +23,7 @@ import pytest
 
 from personal_agent.captains_log.capture import TaskCapture
 from personal_agent.second_brain.consolidator import SecondBrainConsolidator
+from personal_agent.second_brain.entity_extraction import default_extraction_summary
 
 
 def _make_capture(trace_id: str | None = None, *, eval_mode: bool = False) -> TaskCapture:
@@ -42,14 +43,18 @@ def _make_capture(trace_id: str | None = None, *, eval_mode: bool = False) -> Ta
 
 
 def _fallback_extraction(capture: TaskCapture) -> dict[str, Any]:
-    """Mirror the shape ``extract_entities_and_relationships`` returns on LLM crash."""
+    """Mirror the shape ``extract_entities_and_relationships`` returns on LLM crash.
+
+    ``summary`` uses the same shared ``default_extraction_summary`` the
+    production fallback and the consolidator's ``is_fallback`` comparison both
+    route through (ADR-0125 D5) — building it any other way here would test a
+    shape the real code no longer produces.
+    """
     return {
         "entities": [],
         "relationships": [],
         "entity_names": [],
-        # Fallback summary == user_message[:200]; this is the sentinel the
-        # consolidator uses to detect fallbacks.
-        "summary": capture.user_message.strip()[:200],
+        "summary": default_extraction_summary(capture.user_message),
     }
 
 
@@ -199,6 +204,52 @@ async def test_at_cap_fallback_writes_stub_turn(
 
     # No entity-creation calls.
     memory_service.create_entity.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_at_cap_fallback_detected_for_long_message_via_marker(
+    consolidator: SecondBrainConsolidator, memory_service: MagicMock
+) -> None:
+    """ADR-0125 D5 regression: is_fallback detection and the stub Turn's summary
+    must stay in sync with entity_extraction's actual (mark_truncated-based)
+    default-summary shape for a message long enough to actually be shortened —
+    the old `[:200] + "..."` vs `[:200]` (no suffix) shapes could never compare
+    equal for a message over the cap, silently defeating fallback detection.
+    """
+    long_message = "considering the tradeoffs between options " * 20  # > 400 chars
+    capture = _make_capture()
+    capture = capture.model_copy(update={"user_message": long_message})
+
+    fallback_result = {
+        "entities": [],
+        "relationships": [],
+        "entity_names": [],
+        "summary": default_extraction_summary(long_message),
+    }
+    with (
+        patch(
+            "personal_agent.second_brain.consolidator.extract_entities_and_relationships",
+            new_callable=AsyncMock,
+            return_value=fallback_result,
+        ),
+        patch(
+            "personal_agent.second_brain.consolidator.previous_attempt_count",
+            new_callable=AsyncMock,
+            return_value=4,
+        ),
+        patch(
+            "personal_agent.second_brain.consolidator.record_consolidation_attempt",
+            new_callable=AsyncMock,
+        ) as mock_record,
+    ):
+        result = await consolidator._process_capture(capture)
+
+    # is_fallback correctly detected -> stub Turn path taken, not the retry-skip path.
+    assert result["turns_created"] == 1
+    assert mock_record.await_args.kwargs.get("outcome") == "extraction_capped"
+    turn_arg = memory_service.create_conversation.await_args.args[0]
+    assert "...[truncated" in turn_arg.summary
+    assert turn_arg.user_message == long_message  # full text preserved on the node
 
 
 # ---------------------------------------------------------------------------

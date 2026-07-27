@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-27 (FRE-1002 merged, deploys held for a batch, FRE-997 Done)
+> **Last updated**: 2026-07-27 (FRE-993 + FRE-1002 merged, deploys held for a batch)
 
 ## 0. ADR-0125 — the turn evidence contract (Accepted; the live build)
 
@@ -40,15 +40,19 @@ still convey nothing).
 Background LLM streams stay **disabled** and the summary sweep stays **off** until both gates are met;
 no budget cap is to be raised.
 
-**Building now on build2: FRE-993** — approved 2026-07-27 and narrowed to four things, led by **trim an
-over-long digest instead of discarding it** (today rejection *regenerates*, so ~47% of sessions pay twice
-and store nothing). Then Amendment C's sizing and the deterministic-call fail-safe. Sequencing: **once
-trimming exists the 250→400 flip stops being urgent** — trimming removes the destruction, the bound only
-sets how often it runs. The reasoning-configuration clause was **cut out of 993 and given whole to
-FRE-1007** — a hand-declaration on one producer would special-case it ahead of that ticket's fail-closed
-enforcement pass. The items×words cap is **deferred to a study**: FRE-996 measured items-per-slot moving
-the rendered median by three tokens, and the untested half (words-per-item) needs a curve arm, not a
-build — and trimming removes its urgency anyway.
+**FRE-993 merged 2026-07-27, awaiting the batched deploy.** Trim-not-discard shipped: measured on
+FRE-994's own 96 content-bearing records at zero model calls, the rejection rate goes **0.469 → 0.000** at
+the old 250 bound and **0.073 → 0.000** at Amendment C's 400. The 0.469 reproduces C1's 47% from the
+records rather than restating it. Sizing moved to target 120 / ceiling 400; call ceiling unchanged.
+A trimmed digest now **declares** itself (`items_dropped` stored and rendered, marker tokens counted
+against the ceiling) — self-review's find, and the trim fires on ~7.3% of digests, so it is a real rate.
+Two boundaries held: reasoning configuration stayed with **FRE-1007**, and the words-per-item cap is
+recorded in the ADR as a **study, not a refuted lever** — C4 and the prompt-signature guard refute only
+the items-per-slot half, and trimming drops the urgency. Not filed as a ticket; recording beats filing.
+
+**Next on build2: FRE-988** (cost-tracker connection pooling). Quick to build, **not** quick to close —
+its acceptance criterion is a post-deploy measurement of connect events against priced-call counts over a
+window, so it will land in Awaiting Deploy and wait like the others.
 
 **Then FRE-987** — bound the *transient* retry path. The reason-based terminality split is correct
 design; the defect is that transient has no bound at all.
@@ -71,9 +75,10 @@ user node with an owns relationship.
 ## 3. Deploy + verification queue
 
 **Deploys are HELD for a batched deploy** (owner, 2026-07-27 14:00Z). Deployed image is `af29060d`;
-main carries undeployed source from FRE-1002 onward. Standing-approval classes batch too unless urgent.
+main carries **three undeployed source commits** (FRE-1002 ×1, FRE-993 ×2). Standing-approval classes
+batch too unless urgent.
 
-Twelve tickets in Awaiting Deploy. **None to be closed on "deployed and healthy"** — each needs its
+Thirteen tickets in Awaiting Deploy. **None to be closed on "deployed and healthy"** — each needs its
 acceptance criterion proven. Verified 2026-07-27 that every one of the pre-hold merges is already an
 ancestor of the running SHA, so that column was never a deploy queue: it is master's *verification*
 backlog. From the hold onward it means what it says again.

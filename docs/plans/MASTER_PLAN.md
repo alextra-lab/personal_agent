@@ -44,15 +44,15 @@ amendment.
 Background LLM streams stay **disabled** and the summary sweep stays **off** until both gates are met;
 **no budget cap is to be raised.**
 
-**FRE-987 is now the only gate left** before the sweep returns — FRE-988 merged (PR #703). Its bounce paid
-off twice over: codex, once its dead broker was repaired, returned a **block** naming a second real defect
-(unlocked check-then-act in `connect()`, so racing coroutines could each build a pool and a loser could
-null a winner's). Fixed with double-checked locking, and the tests were **mutation-verified** — the lock
-reverted, the tests confirmed failing, then restored.
+**FRE-987 is the only gate left** before the sweep returns — bound the *transient* retry path. Three
+tickets in §4 cannot be verified until it lands. When the sweep returns, gate on the **empty-digest rate**,
+not the parse rate.
 
-**FRE-987** — bound the *transient* retry path. This is the **second and only remaining gate** before
-the sweep returns, and three tickets in §4 cannot be verified until it lands. When the sweep returns, gate
-on the **empty-digest rate**, not the parse rate.
+FRE-988 (the other gate) is merged and deployed; its bounce paid off twice over — codex, once its dead
+broker was repaired, returned a **block** naming a second real defect (unlocked check-then-act in
+`connect()`, so racing coroutines could each build a pool and a loser could null a winner's). Fixed with
+double-checked locking, and the tests were **mutation-verified**: the lock reverted, the tests confirmed
+failing, then restored.
 
 **Also open:** FRE-989 (cost attribution) · FRE-990 (reflection has no enable flag; the cadence flag
 inverts) · FRE-1007 (producers declare reasoning configuration, fail-closed) · FRE-1008 (the two prompt

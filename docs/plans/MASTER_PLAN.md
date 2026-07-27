@@ -17,11 +17,22 @@ deployed 250 **47% of content-bearing digests are rejected for length**. ADR-012
 the three numbers D3 conflated — prompt target 180→**120**, enforced rendered ceiling 250→**400**, call
 ceiling 2,048 unchanged and never binding.
 
-**Next: FRE-993** (producer generation + sizing + fail-safe) implements Amendment C. It is the ticket
-that actually moves 250→400 in the deployed config, so that flip is an owner decision at *its* gate —
-FRE-994 changed no runtime behaviour. Two inputs it must not lose: the digest costs **8–11% of the
-conversation** (not the 4%-of-billed-prompt figure — a 2.2–2.6× under-budget if confused), and asking
-for **120 delivers 79% within 250** while asking for 250 delivers 53%.
+**Next: FRE-993**, rewritten 2026-07-27 — its original premise (truncation at the 2,048 ceiling) was
+falsified by FRE-994. Scope is now four things: **trim an over-long digest instead of discarding it**
+(the big one — today rejection *regenerates*, so ~47% of sessions pay twice and store nothing);
+Amendment C's sizing; an items×words cap (the untested cell — tokens aren't countable by the model);
+and the deterministic-call fail-safe. Note the sequencing: **once trimming exists, the 250→400 flip
+stops being urgent** — trimming removes the destruction, the bound only sets how often it runs. The
+flip is still an owner decision at FRE-993's gate; FRE-994 changed no runtime behaviour.
+
+**Every backend producer must declare its reasoning configuration** (owner direction 2026-07-27).
+Verified against litellm 1.89.2: with no effort hint, litellm sends no `thinking` and no
+`output_config`, so the *provider* default applies — on `claude-sonnet-5` that is adaptive thinking at
+**`high`** effort. `session_summary` and `insights` sit there **by omission**; only `captains_log`
+chose (`medium`). The parameter vocabulary is **provider-specific** — effort/thinking are Anthropic
+concepts and two roles are bound to OpenAI — so study each provider's surface and verify what litellm
+forwards. Never disable thinking on a tool-using model: on Opus 5 it can emit a tool call as visible
+text, silently.
 
 **Then the retry policy.** FRE-987 — bound the *transient* failure path. Owner's constraint: the
 reason-based terminality split is correct design; the defect is that transient has no bound at all.

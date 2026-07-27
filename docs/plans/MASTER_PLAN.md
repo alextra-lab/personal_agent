@@ -6,91 +6,81 @@
 > per-ticket state → [Linear](https://linear.app/frenchforest).
 > **Last updated**: 2026-07-27
 
-## 0. Cost, Process and Monitoring Audit — the live thread
+## 0. ADR-0125 — the turn evidence contract (Accepted; the live build)
 
-The only active workstream. Background LLM streams stay **disabled** and the summary sweep stays **off**
-until the two gates below are met; no budget cap is to be raised.
+Names harness health and output quality as distinct dimensions, bars a dimension-1 producer from
+user-facing context, and decides what every turn must durably record. The verification oracle is
+**deferred** — only its feasibility bounds are decided.
 
-**Digest chain.** FRE-994 **is done** — the curve ran ($1.74, study lane). Its answer was not a
-different constant: elasticity is **0.16**, so the prompt cannot deliver any bound tested, and at the
-deployed 250 **47% of content-bearing digests are rejected for length**. ADR-0124 **Amendment C** splits
-the three numbers D3 conflated — prompt target 180→**120**, enforced rendered ceiling 250→**400**, call
-ceiling 2,048 unchanged and never binding.
+**In flight:** FRE-1002 (evidence-path boundary + CI truncation guard) · FRE-1005 (usage edge, joins
+recall records to the supersession chain).
 
-**Next: FRE-993**, rewritten 2026-07-27 — its original premise (truncation at the 2,048 ceiling) was
-falsified by FRE-994. Scope is now four things: **trim an over-long digest instead of discarding it**
-(the big one — today rejection *regenerates*, so ~47% of sessions pay twice and store nothing);
-Amendment C's sizing; an items×words cap (the untested cell — tokens aren't countable by the model);
-and the deterministic-call fail-safe. Note the sequencing: **once trimming exists, the 250→400 flip
-stops being urgent** — trimming removes the destruction, the bound only sets how often it runs. The
-flip is still an owner decision at FRE-993's gate; FRE-994 changed no runtime behaviour.
+**Awaiting approval, in the order they should go:** **FRE-1001** (non-nullable producer `source` —
+pairs with FRE-1007, same fix on two fields) · **FRE-1003** (remove the reflection-recall path; this is
+what actually retires ADR-0067, whose header is already superseded) · **FRE-1010** (blocked by FRE-1002)
+· **FRE-1006** the seam, genuinely blocked until 1001/1002/1005 land.
 
-**Every backend producer must declare its reasoning configuration** (owner direction 2026-07-27).
-Verified against litellm 1.89.2: with no effort hint, litellm sends no `thinking` and no
-`output_config`, so the *provider* default applies — on `claude-sonnet-5` that is adaptive thinking at
-**`high`** effort. `session_summary` and `insights` sit there **by omission**; only `captains_log`
-chose (`medium`). The parameter vocabulary is **provider-specific** — effort/thinking are Anthropic
-concepts and two roles are bound to OpenAI — so study each provider's surface and verify what litellm
-forwards. Never disable thinking on a tool-using model: on Opus 5 it can emit a tool call as visible
-text, silently.
+**FRE-1006 closes the ADR — not the last child to merge, and not "the fields are populated."** It closes
+when a planted machine-readable false claim is refuted from the stored record by exact comparison.
 
-**Then the retry policy.** FRE-987 — bound the *transient* failure path. Owner's constraint: the
-reason-based terminality split is correct design; the defect is that transient has no bound at all.
+Two things the contract still owes, both deliberately deferred and neither yet ticketed:
+**evidence item 3** (reasoning trace — no capture field exists, and on the bound Anthropic models the raw
+chain of thought is never returned, so this needs a *feasibility* ticket first), and an amendment so that
+**`admitted` requires non-empty rendered content** (FRE-1010 proved an item can be `admitted: true` and
+still convey nothing).
 
-**Two gates before the sweep is re-enabled.** The bound calibrated — **FRE-994 discharges this** — and
-the retry path bounded (FRE-987, still open). Amendment C's 400 is **not** licence to re-enable. When it
-does go back on, gate on the **empty-digest rate**, not the parse rate — an empty digest marks a session
-clean and is never retried. FRE-994 gives the first measurement of it: **2%**, alongside 2% contract
-drift.
+## 1. Cost, Process and Monitoring Audit
 
-**Also open in the project:** FRE-989 (cost attribution — now carries four confirmed read-path defects,
-including that role-attributed spend is unanswerable from Elasticsearch), FRE-990 (reflection has no
-enable flag; the cadence flag inverts), FRE-988 (cost-tracker connection pooling).
+Background LLM streams stay **disabled** and the summary sweep stays **off** until both gates are met;
+no budget cap is to be raised.
 
-## 1. ADR-0125 — two quality dimensions + the turn evidence contract (awaiting acceptance)
+**Next: FRE-993** — four things, led by **trim an over-long digest instead of discarding it** (today
+rejection *regenerates*, so ~47% of sessions pay twice and store nothing). Then Amendment C's sizing, an
+items×words cap, and the deterministic-call fail-safe. Sequencing: **once trimming exists the 250→400
+flip stops being urgent** — trimming removes the destruction, the bound only sets how often it runs.
 
-The summarizer brainstorm was held 2026-07-26/27 and opened into something broader. **ADR-0125 is on main
-at `Proposed`** (PR 686, merge `cbb7f321`); acceptance is the owner's and has not happened. It names
-harness health and output quality as distinct dimensions, bars a dimension-1 producer from user-facing
-context (superseding ADR-0067 reflection-surfacing **on acceptance**), and decides the turn evidence
-contract. The verification oracle is **deferred** — only its feasibility bounds are recorded.
+**Then FRE-987** — bound the *transient* retry path. The reason-based terminality split is correct
+design; the defect is that transient has no bound at all.
 
-Nothing is dispatchable until the owner accepts. On acceptance, master labels and wires the chain in one
-action: **FRE-1000** (blocking measurement gate — sizes the rest) → **FRE-1004** → **FRE-1005**;
-**FRE-1001** and **FRE-1002** run in parallel; **FRE-1006** is the seam and closes ADR-0125 — *not* its
-last merged child, and *not* populated fields. Dimension-1 chain **FRE-1003** (remove the reflection-recall
-path) is independent and parallel. Recommendation carried from the ADR seat: **FRE-717 follows FRE-1003**,
-so realized value measures a producer whose known defects are already fixed.
+**The two gates before the sweep returns:** bound calibrated (**done** — FRE-994) and retry path bounded
+(FRE-987, open). Amendment C's 400 is **not** licence. When it returns, gate on the **empty-digest rate**,
+not the parse rate — an empty digest marks a session clean and is never retried; first measurement is 2%.
 
-Gates FRE-993 (the summarizer decision now sits inside this frame).
+**Also open:** FRE-989 (cost attribution — four confirmed read-path defects) · FRE-990 (reflection has no
+enable flag; the cadence flag inverts) · FRE-988 (cost-tracker connection pooling) · FRE-1007 (producers
+declare their reasoning configuration, fail-closed) · FRE-1008 (the two prompt hashes cannot differ).
 
 ## 2. Knowledge-graph identity — FRE-998
 
 No Session or Turn node has ever carried `user_id`; the write path never populates it. Existing sessions
 were backfilled 2026-07-26, so this ticket is the **write path**, without which the gap reopens. Also
-covers 1,828 turn nodes attached to no session at all. Decide deliberately: property on the nodes, or a
-first-class user node with an owns relationship.
+covers 1,828 turn nodes attached to no session at all. Decide: property on the nodes, or a first-class
+user node with an owns relationship.
 
 ## 3. Deploy + verification queue
 
-Twelve tickets in Awaiting Deploy. **FRE-996 and FRE-997 are deployed** (18:10Z) but not verifiable yet —
-997 needs days of traffic, 996 needs the sweep enabled. The other ten predate 2026-07-26. None to be
-closed on "deployed and healthy"; each needs its acceptance criterion proven.
+Thirteen tickets in Awaiting Deploy, most predating 2026-07-26. **None to be closed on "deployed and
+healthy"** — each needs its acceptance criterion proven. FRE-996/997 are deployed but unverifiable yet
+(997 needs traffic days; 996 needs the sweep on).
 
 ## 4. Reduce the backlog
 
-~80 Approved, most unlabelled (parked). Method: verify per cluster, cancel the provable with a one-line
-reason, bring judgment calls to the owner. Provable cull classes — already-fixed ghosts · superseded-ADR
-trees (FRE-729–732, FRE-810/811/814) · `[Thread]` placeholders that can never be Done (FRE-401/418/397) ·
-work gated on events that never happened (FRE-443). Run `scripts/reconcile_board.py` before culling.
-Owner to settle scope (Approved only vs all open states) and gate (cancel directly vs list-first).
+40+ at Needs Approval and ~80 Approved, most unlabelled (parked), including **twelve P0s months old** —
+FRE-940 (replayed approval cards), FRE-927 (broken seat escapes both reconcilers), FRE-867 (seats hang on
+non-allowlisted prompts). The last two are the same class as the stalls that keep needing a human.
+Method: verify per cluster, cancel the provable with a one-line reason, bring judgment calls to the owner.
+Provable cull classes — already-fixed ghosts · superseded-ADR trees (FRE-729–732, FRE-810/811/814) ·
+`[Thread]` placeholders that can never be Done (FRE-401/418/397) · work gated on events that never
+happened (FRE-443). Run `scripts/reconcile_board.py` first.
 
-## 5. Pipeline hardening — filed, held
+## 5. Pipeline hardening — filed, held, and now overdue
 
 **FRE-976** (Linear-reconciled dispatch) · **FRE-975** (gate master on a review-complete signal) ·
-**FRE-977** (explore first-class dispatch). Held for the explore pipeline-architecture study. FRE-976 bit
-four times on 2026-07-26 — stale dispatch claims and modal dialogs silently swallowing dispatches, each
-needing a human to notice.
+**FRE-977** (explore first-class dispatch) · **FRE-1011** (guard docs PRs against ticket tokens).
+FRE-976 has now bitten ~6 times in two days — dispatch pokes landing in a seat's prompt buffer
+unsubmitted, each needing a human to notice; one cost three hours. FRE-1011 addresses a board-corruption
+trap that has fired 11 times across 7 sessions and is explicitly a *mechanical guard* problem, not a
+discipline one.
 
 ## 6. Then, in order
 
@@ -101,38 +91,33 @@ Linear async feedback · Seshat Inference.
 
 ## Awaiting an owner decision
 
-- **ADR-0125** — accept or reject (§1). Acceptance unlocks **FRE-999** + its seven children
-  (FRE-1000–1006), all `Needs Approval` and unlabelled. Approve them individually; master labels.
-- **ADR-0120 cost governance** — Proposed. All cost work ask-first.
+- **ADR-0120 cost governance** — Proposed, and it gates a **seven-ticket P0 chain** (FRE-898–905). All
+  cost work stays ask-first until it is settled.
+- **FRE-999** is an umbrella sitting at `Needs Approval` — by our own rules umbrellas belong in `Backlog`.
+  Master will move it on a word.
 - **Backlog cull scope + gate** (§4).
-- **FRE-937** — the owner has reversed its recorded design: the turn-progress surface should *fade* after
-  the response completes rather than collapse to a persistent summary. Also carries a blank tools counter
-  and a synthesis label that reads as a stutter. Parked.
-- **FRE-991** — Analyzer-pillar investigation, Urgent. Master recommends dropping to High so the queue has
-  one unambiguous front.
+- **FRE-937** — design reversed: the turn-progress surface should *fade* after the response completes,
+  not collapse to a persistent summary. Also a blank tools counter and a stuttering synthesis label.
+- **FRE-991** — Analyzer-pillar investigation, Urgent. Master recommends High so the queue has one front.
 - **FRE-885** · **FRE-805** · **FRE-621** — Needs Approval.
 
 ## To fix, unscheduled
 
-- **Personal data already committed to the public repo** (surfaced by FRE-994's security pass, *not*
-  introduced by it — FRE-994 redacted its own files). Cities, venues and a personal name sit in
+- **Personal data already committed to the public repo** — cities, venues and a personal name in
   `scripts/study/eval_artifacts/frozen/`, `scripts/eval/fre435_memory_recall/semantic_probe.yaml`,
-  `docs/research/EVALUATION_DATASET.md` and `docs/plans/completed/`. Repo-wide, spans several prior
-  tickets. **Owner sets the scope** — redact-in-place, or history rewrite. Note that redaction alone
-  leaves it in the git history.
-- **The cost gate reserves against an estimator that runs a third light.** cl100k undercounts billed
-  Anthropic input by **1.535×**, and the tool definition adds **1,663 tokens/call** uncounted. Measured
-  in FRE-994 against FRE-996's committed records. Belongs with the cost audit (FRE-989 neighbourhood).
-- **D3's loss question is still unanswered.** FRE-994's loss endpoint failed its own precommitted
-  validity gate (extractor recall 0.788 vs 0.80) and was barred rather than rescued. The cause is
-  reusable: the automated reference set systematically dropped explicitly-left-open questions — exactly
-  what `unresolved` exists for. Any retry needs a different extraction design first.
-
+  `docs/research/EVALUATION_DATASET.md`, `docs/plans/completed/`. Repo-wide, spans prior tickets.
+  **Owner sets scope** — redact-in-place or history rewrite; redaction alone leaves it in git history.
+- **The cost gate reserves against an estimator that runs a third light** — cl100k undercounts billed
+  Anthropic input by **1.535×**, and the tool definition adds **1,663 tokens/call** uncounted.
+- **D3's loss question is unanswered.** FRE-994's loss endpoint failed its own validity gate (extractor
+  recall 0.788 vs 0.80) and was barred rather than rescued. Any retry needs a different extraction design
+  first — the reference set systematically dropped explicitly-left-open questions.
 - **Frozen-reset action never fires on gateway turns** (ADR-0092 #7). FRE-954 sits behind it.
 - **FRE-912** — narrowed by FRE-913, not eliminated; parked-Approved.
 - **Worker seats strand on non-edit prompts** — FRE-911's `acceptEdits` covers file edits only.
-- **Duplicate ADR-0067** — two Accepted ADRs share the number (skill-nudge-injection, and
-  reflection-surfacing-in-context-assembly). Renumber; it makes "supersede ADR-0067" ambiguous.
-  ADR-0125 supersedes only the reflection-surfacing one, by title.
-- **Research index unmaintained since March** — `docs/research/README.md` lists no July documents. The
-  2026-07-27 audit was added; the rest were not backfilled.
+- **Duplicate ADR-0067** — two ADRs share the number. ADR-0125 supersedes only reflection-surfacing, by
+  title; renumber so "supersede ADR-0067" stops being ambiguous.
+- **Research index unmaintained since March** — `docs/research/README.md` lists no July documents beyond
+  the 2026-07-27 audit.
+- **`master-914`** — stale worktree on the closed `fre-909-seat-rename`, the only reason that branch
+  survives.

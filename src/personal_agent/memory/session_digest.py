@@ -444,6 +444,81 @@ def render_digest(digest: SessionDigest) -> str:
     return "\n\n".join(sections)
 
 
+#: Slot order for trimming — least costly to lose first (FRE-993, ADR-0124 C2).
+#:
+#: Ordered by value to a future reader, which is what D3's definition of a wrong digest
+#: is about, not by what each slot cost to produce:
+#:
+#: * ``established`` — D3 names it the slot "most at risk of re-deriving facts that are
+#:   already stored elsewhere". The cheapest loss.
+#: * ``corrections`` — this module's own asymmetry applies: "a missed error is
+#:   recoverable from the raw evidence, whereas a false error writes self-confirming
+#:   state". A *dropped* correction is a missed one, so it is recoverable. Usually
+#:   empty in any case, so this rarely fires.
+#: * ``unresolved`` — no other home, and Amendment C's instrument post-mortem names
+#:   losing explicitly-left-open questions as the biased failure mode.
+#: * ``decisions`` — the conclusions D3's definition of wrong is *about* ("omits a
+#:   consequential conclusion needed to avoid repeating settled work"). Dropped last.
+_TRIM_ORDER: tuple[str, ...] = ("established", "corrections", "unresolved", "decisions")
+
+
+def _next_trim_slot(slots: dict[str, list[DigestItem]]) -> str | None:
+    """Name the slot to take the next item from, or ``None`` when nothing may go.
+
+    Two phases, so that a slot is never annihilated while another still has slack. The
+    failure this exists to prevent is a trimmed digest that keeps several recoverable
+    corrections while deleting every trace that work remains open — which is what
+    draining each slot to zero in turn produces.
+    """
+    for name in _TRIM_ORDER:
+        if len(slots[name]) > 1:
+            return name
+
+    # Every slot is down to one item. Only now may a slot go to zero — and never the
+    # last one standing: an empty digest returns GENERATED, marks its session clean and
+    # is never retried, which Amendment C5 names as the remaining delivery failure.
+    if sum(1 for name in _TRIM_ORDER if slots[name]) <= 1:
+        return None
+    return next((name for name in _TRIM_ORDER if slots[name]), None)
+
+
+def trim_digest_to_budget(digest: SessionDigest, max_tokens: int) -> tuple[SessionDigest, int]:
+    """Drop items until the rendered digest fits its ceiling.
+
+    ADR-0124 Amendment C2: the ceiling is "a rejection threshold of last resort, not the
+    sizing mechanism". A digest over it is trimmed and delivered, not discarded and
+    regenerated — the discard path measured a 47% loss of content-bearing digests at the
+    deployed bound, and re-generating buys nothing at a prompt elasticity of 0.16.
+
+    Drop order is :data:`_TRIM_ORDER` across slots and **tail-first within** one. The
+    generator is asked to emit most-consequential-first, but that ordering is model
+    judgment; the slot order and the tail rule are the deterministic mechanism
+    underneath it, so what survives never depends on the model having obeyed.
+
+    Never returns an empty digest for a digest that had content: when a single item
+    exceeds the whole ceiling, that item is kept and the result is still over budget.
+    The caller decides what to do about it — this function does not hide it.
+
+    Args:
+        digest: The parsed, validated digest.
+        max_tokens: The rendered-token ceiling.
+
+    Returns:
+        The trimmed digest and the number of items dropped.
+    """
+    slots: dict[str, list[DigestItem]] = {name: list(getattr(digest, name)) for name in _TRIM_ORDER}
+    dropped = 0
+
+    while digest_token_count(digest.model_copy(update=slots)) > max_tokens:
+        target = _next_trim_slot(slots)
+        if target is None:
+            break
+        slots[target].pop()
+        dropped += 1
+
+    return (digest.model_copy(update=slots) if dropped else digest), dropped
+
+
 def digest_token_count(digest: SessionDigest) -> int:
     """Token count of the digest as a consumer would read it.
 

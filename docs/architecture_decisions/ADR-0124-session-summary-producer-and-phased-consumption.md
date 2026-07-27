@@ -751,6 +751,48 @@ toward declaring tight bounds safe. Any future attempt at the loss half must fix
 | C-AC-4 | The relative bound was considered, not only the absolute | §4 — r = +0.56…+0.77, ratio ≈8–11% **of the conversation** (4% of billed prompt — see C3 on the denominator), reported as directional per the plan's precommitment |
 | C-AC-5 | Cost stated before running and reported after | $4.08 expected / $6.18 ceiling, **$1.74 actual**; no cap raised |
 
+### Implemented by FRE-993
+
+C1's numbers and C2's instrument reached the producer on 2026-07-27.
+
+**C2 is implemented as trimming, and the trivial baseline was finally run.** The producer
+now drops items until the rendering fits instead of discarding the digest — deterministic
+slot order (`established` → `corrections` → `unresolved` → `decisions`, tail-first within a
+slot) underneath the model's most-consequential-first ordering, so what survives never
+rests on the model having obeyed. Measured on this study's own 96 content-bearing records
+(`run_curve.py --trim-baseline`, zero model calls):
+
+| Bound | Rejected, discard semantics | Rejected, trim semantics | Digests trimmed |
+|---:|---:|---:|---:|
+| 250 (was deployed) | **0.469** | **0.000** | 0.469 |
+| 400 (C1) | 0.073 | **0.000** | 0.073 |
+
+The 0.469 reproduces C1's 47% from the records rather than restating it. This is the
+baseline §3 named and did not run, and it is why C2's "delivered, not discarded" is now a
+mechanism rather than an intention.
+
+**One clause C1 did not state, and a reader will need.** 400 is a *producer rejection
+ceiling*, not a hydration entitlement. D4 measures five digests at ~250 tokens as ~74% of a
+p50 assembled context; at 400 the same five would dwarf the facts they annotate further.
+Nothing consumes digests into an assembled context today — the only reader is the Phase-1
+gateway view — so this constrains **Phase 2**, which must size against D4's relative bound
+("annotation may never exceed the token count of the facts it annotates") and not against
+this number.
+
+**What C4 does and does not settle.** C4 retires *per-slot item ceilings*. It says nothing
+about a **words-per-item** cap, which is untested in either direction and rests on a
+different argument: tokens are invisible to a generator, words are countable. That remains
+a study needing a measured curve arm, not a build — and its urgency is now lower, because
+once an over-bound digest is trimmed rather than destroyed, landing outside the bound
+stops being destructive. Same logic C1 applies to the 250→400 move.
+
+**`OUTPUT_TRUNCATED` no longer retries.** The retry re-issues a byte-identical request
+against the same output ceiling, so truncation by that ceiling cannot be resampled away.
+Scoped to truncation alone: `SCHEMA_INVALID` and `SPAN_VALIDATION_FAILED` are stochastic
+and keep their retry, which is what recovers C5's measured 2% contract drift. A guard, not
+a saving — C5 also measured zero truncations in 100 calls, so it protects a path that does
+not currently fire.
+
 
 ## Alternatives Considered
 

@@ -30,6 +30,7 @@ from personal_agent.memory.session_digest import (
     TERMINAL_ELIGIBLE_REASONS,
     SessionSummaryStatus,
     SummaryFailureReason,
+    digest_token_count,
 )
 from personal_agent.second_brain import session_summary as ss
 
@@ -538,18 +539,70 @@ async def test_overlong_label_is_rejected(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_digest_over_the_hard_maximum_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ADR-0124 D3's 250-token ceiling is enforced, not merely measured.
+async def test_an_over_long_digest_is_trimmed_and_stored_not_discarded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-993 / ADR-0124 Amendment C2 — the ceiling trims, it does not destroy.
 
-    An over-long digest displaces the retrieved evidence it exists to annotate.
+    The defect this replaces: an already-parsed, already-provenance-checked digest was
+    thrown away for length and the identical call re-issued, which at a measured prompt
+    elasticity of 0.16 lands at the same length and fails identically. 47% of
+    content-bearing digests were lost that way at the deployed bound. **One** model
+    call, and a stored result.
     """
+    calls: list[str] = []
     bloated = orjson.dumps(
         {
             "label": "Bloated",
             "digest": {
+                "established": [
+                    {"text": f"An established fact {i} that runs on and on. " * 8}
+                    | {"basis": "user_statement"}
+                    for i in range(8)
+                ],
                 "decisions": [
-                    {"text": "A decision that runs on and on. " * 40, "basis": "user_statement"}
-                    for _ in range(5)
+                    {"text": f"A decision {i} that runs on and on. " * 8}
+                    | {"basis": "user_statement"}
+                    for i in range(8)
+                ],
+            },
+        }
+    ).decode()
+
+    async def fake_call(prompt: str, **_: Any) -> str:
+        calls.append(prompt)
+        return bloated
+
+    monkeypatch.setattr(ss, "_call_model", fake_call)
+
+    outcome = await ss.generate_session_digest(
+        _two_turn_session(), session_id="sess-1", ended_at=_T0
+    )
+
+    max_tokens = ss.get_settings().session_digest_max_tokens
+    assert outcome.status is SessionSummaryStatus.GENERATED
+    assert outcome.digest is not None
+    assert digest_token_count(outcome.digest) <= max_tokens
+    assert not outcome.digest.is_empty(), "trimming must never manufacture an empty digest"
+    assert len(calls) == 1, "no regeneration — the digest was already paid for"
+    # The cheapest slot absorbed the loss; the conclusions D3 defines wrongness by did not.
+    assert len(outcome.digest.decisions) >= len(outcome.digest.established)
+
+
+@pytest.mark.asyncio
+async def test_trimming_is_reported_so_the_rate_is_observable_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without these fields the trim rate is measurable only on FRE-994's frozen corpus."""
+    captured: dict[str, Any] = {}
+    bloated = orjson.dumps(
+        {
+            "label": "Bloated",
+            "digest": {
+                "established": [
+                    {"text": f"An established fact {i} that runs on and on. " * 8}
+                    | {"basis": "user_statement"}
+                    for i in range(8)
                 ]
             },
         }
@@ -559,12 +612,99 @@ async def test_digest_over_the_hard_maximum_is_rejected(monkeypatch: pytest.Monk
         return bloated
 
     monkeypatch.setattr(ss, "_call_model", fake_call)
+    monkeypatch.setattr(
+        ss.log,
+        "info",
+        lambda event, **kw: captured.update(kw) if event == "session_summary_generated" else None,
+    )
+
+    await ss.generate_session_digest(_two_turn_session(), session_id="sess-1", ended_at=_T0)
+
+    assert captured["digest_items_dropped"] > 0
+    assert captured["pre_trim_digest_tokens"] > captured["digest_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_one_item_larger_than_the_whole_ceiling_still_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trimming stops before emptying the digest, so this stays a loud failure.
+
+    Storing it would breach the ceiling; trimming it to nothing would return
+    ``GENERATED`` over an empty digest, mark the session clean and never retry —
+    which Amendment C5 names as the remaining delivery failure. Neither is silent.
+
+    Unreachable in practice: the largest single item across FRE-994's 549 renders at
+    118 tokens against a 400 ceiling.
+    """
+    single_huge_item = orjson.dumps(
+        {
+            "label": "One enormous item",
+            "digest": {
+                "decisions": [
+                    {"text": "A decision that runs on and on. " * 200, "basis": "user_statement"}
+                ]
+            },
+        }
+    ).decode()
+
+    async def fake_call(_prompt: str, **_: Any) -> str:
+        return single_huge_item
+
+    monkeypatch.setattr(ss, "_call_model", fake_call)
 
     outcome = await ss.generate_session_digest(
         _two_turn_session(), session_id="sess-1", ended_at=_T0
     )
 
     assert outcome.failure_reason is SummaryFailureReason.DIGEST_OVER_BUDGET
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_reply_is_not_re_issued(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-993 — the deterministic-call fail-safe, scoped to the one reason it fits.
+
+    The retry re-issues a byte-identical request against the same output ceiling, so a
+    reply cut off *by that ceiling* cannot be argued into fitting on a second try. This
+    is a guard rather than a saving: FRE-994 recorded zero truncations in 100 calls, so
+    it protects a path that does not currently fire.
+    """
+    calls: list[str] = []
+
+    async def fake_call(prompt: str, **_: Any) -> str:
+        calls.append(prompt)
+        raise ss.OutputTruncated("provider stopped with finish_reason='length'")
+
+    monkeypatch.setattr(ss, "_call_model", fake_call)
+
+    outcome = await ss.generate_session_digest(
+        _two_turn_session(), session_id="sess-1", ended_at=_T0
+    )
+
+    assert outcome.failure_reason is SummaryFailureReason.OUTPUT_TRUNCATED
+    assert len(calls) == 1, "an identical call against an identical ceiling is not re-issued"
+
+
+@pytest.mark.asyncio
+async def test_a_stochastic_validation_failure_keeps_its_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fail-safe is deliberately NOT extended to reasons a resample can fix.
+
+    Amendment C5 measured 2% contract drift. Retiring this retry would spend delivery
+    to save a call the fail-safe was never about.
+    """
+    calls: list[str] = []
+
+    async def fake_call(prompt: str, **_: Any) -> str:
+        calls.append(prompt)
+        return '{"label": "x"}'  # no digest object
+
+    monkeypatch.setattr(ss, "_call_model", fake_call)
+
+    await ss.generate_session_digest(_two_turn_session(), session_id="sess-1", ended_at=_T0)
+
+    assert len(calls) == 2
 
 
 # --------------------------------------------------------------------------

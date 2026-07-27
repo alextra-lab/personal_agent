@@ -13,6 +13,9 @@ Four modes, in the order they are meant to be run::
     --analyse             Recompute every table the write-up quotes, from a completed
                           run's own records. Free, and the reason the published figures
                           are reproducible rather than hand-derived.
+    --trim-baseline       FRE-993. Delivery before and after trimming an over-bound
+                          digest instead of discarding it — the trivial baseline this
+                          plan named and never ran. Free, from the same records.
 
 ``--dry-run`` prices the run on three labelled bases. The `ceiling` figure — every call
 billed at its own output ceiling with the worst observed input ratio — is the only true
@@ -556,6 +559,14 @@ def main() -> int:
         action="store_true",
         help="Recompute the write-up's tables from a completed run's records. Free.",
     )
+    mode.add_argument(
+        "--trim-baseline",
+        action="store_true",
+        help=(
+            "FRE-993: delivery before and after trimming an over-bound digest instead "
+            "of discarding it, from a completed run's records. Free."
+        ),
+    )
 
     # Defaults ARE the precommitted design, not a starting point to be overridden: the
     # plan's cost, multiplicity and selection claims are all computed for exactly this
@@ -597,10 +608,14 @@ def main() -> int:
         report = {k: v for k, v in report.items() if k != "sessions"}
     elif args.dump_calibration:
         report = asyncio.run(_dump_calibration(n=args.n, seed=args.seed))
-    elif args.analyse:
+    elif args.analyse or args.trim_baseline:
         path = run_dir / "generations.jsonl"
         records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-        report = analysis.delivery_tables(records)
+        report = (
+            analysis.trim_baseline(records)
+            if args.trim_baseline
+            else analysis.delivery_tables(records)
+        )
     elif args.phase_b:
         report = asyncio.run(_phase_b(n=args.n, seed=args.seed, run_dir=run_dir))
     else:

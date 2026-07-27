@@ -59,6 +59,7 @@ from personal_agent.memory.session_digest import (
     SummaryFailureReason,
     UnresolvedItem,
     digest_token_count,
+    trim_digest_to_budget,
     validate_digest_provenance,
 )
 from personal_agent.memory.session_digest_wire import (
@@ -92,9 +93,12 @@ _FALLBACK_CONTEXT_LENGTH = 32_000
 #: One retry on a validation failure (ADR-0124 Risks — "validator with one retry").
 _MAX_GENERATION_ATTEMPTS = 2
 
-#: Output ceiling for the call. The digest is bounded at ~250 tokens and the label
-#: at 90 characters, so this is generous headroom for the JSON envelope — and it
-#: keeps the cost gate's pre-call reservation proportionate to the real spend.
+#: Output ceiling for the call. Unchanged by ADR-0124 Amendment C1 and never binding:
+#: zero truncations across FRE-994's 100 calls, largest billed output 1,568. The
+#: rendered digest is bounded at 400 tokens and the label at 90 characters, which
+#: implies ~1,220 once the measured structural overhead is added — so this is real
+#: headroom for the JSON envelope, and it keeps the cost gate's pre-call reservation
+#: proportionate to the real spend.
 _MAX_OUTPUT_TOKENS = 2_048
 
 #: Safety factor on the pre-dispatch token estimate. ``estimate_tokens`` uses
@@ -145,7 +149,9 @@ correction = {
 You are given only the conversation — never cite a field that isn't a turn's assistant \
 response.
 
-SLOTS — all optional, omit any that has nothing to say. Empty is a valid digest.
+SLOTS — all optional, omit any that has nothing to say. Empty is a valid digest. \
+Within each slot, put the MOST CONSEQUENTIAL item first: if the digest has to be \
+shortened to fit, items are dropped from the end of a slot.
 - established: facts and observations that survived the interaction. Filter this \
 hardest; it is the slot most at risk of re-deriving facts that are already stored \
 elsewhere.
@@ -572,7 +578,7 @@ async def _call_model(
             tools=[digest_tool()] if use_contract else None,
             tool_choice=digest_tool_choice() if use_contract else None,
             # Without this the client falls back to the deployment's max_tokens
-            # (128k) for an artifact bounded at ~250 tokens, and the cost gate
+            # (128k) for an artifact bounded at 400 rendered tokens, and the cost gate
             # reserves against that ceiling on every call — exhausting a shared
             # budget lane far faster than the actual spend warrants.
             max_tokens=_MAX_OUTPUT_TOKENS,
@@ -720,12 +726,21 @@ async def generate_session_digest(
                 detail=f"{e.denial_reason} role={e.role} cap={e.cap} spend={e.current_spend}",
             )
         except OutputTruncated as e:
-            # A validation-class failure, not a client failure: it retries once, exactly
-            # as it did when it arrived disguised as SCHEMA_INVALID. Retrying a
-            # deterministic truncation is unlikely to pay, but changing that bound is a
-            # sizing decision and belongs to FRE-993, not to re-labelling the reason.
+            # The one failure a retry cannot address, so it is the one that does not get
+            # one (FRE-993, resolving the bound FRE-996 deferred here). The retry
+            # re-issues a byte-identical request — same transcript, same system prompt,
+            # same ceiling — and truncation is a property of that ceiling rather than of
+            # what was sampled beneath it.
+            #
+            # Deliberately NOT extended to SCHEMA_INVALID or SPAN_VALIDATION_FAILED.
+            # Those are stochastic: the same request can be resampled into a valid
+            # reply, and Amendment C5 measured 2% contract drift that a retry plausibly
+            # recovers. Retiring their retry would spend delivery to save a call.
+            #
+            # This is a guard, not a saving: FRE-994 recorded zero truncations in 100
+            # calls, so it protects a path that does not currently fire.
             last_validation_failure = (SummaryFailureReason.OUTPUT_TRUNCATED, str(e))
-            continue
+            break
         except (LLMTimeout, InferenceSlotTimeout) as e:
             return _failed(
                 SummaryFailureReason.TIMEOUT,
@@ -759,11 +774,24 @@ async def generate_session_digest(
             )
             continue
 
+        # Trim, do not discard (ADR-0124 Amendment C2, FRE-993). The ceiling is a
+        # rejection threshold of last resort, not the sizing mechanism: a digest over it
+        # is already parsed, already provenance-checked and already paid for, and
+        # regenerating buys nothing at a measured prompt elasticity of 0.16 — the second
+        # attempt lands at the same length and fails the same check. Discarding here
+        # rejected 47% of content-bearing digests at the deployed bound.
+        pre_trim_tokens = digest_token_count(digest)
+        digest, items_dropped = trim_digest_to_budget(digest, settings.session_digest_max_tokens)
         tokens = digest_token_count(digest)
         if tokens > settings.session_digest_max_tokens:
+            # Reachable only when ONE item exceeds the whole ceiling — 3.4× the largest
+            # item observed across FRE-994's 549. Failing is deliberate: the
+            # alternatives are storing over the ceiling, or storing the empty digest
+            # Amendment C5 names as the remaining delivery failure.
             last_validation_failure = (
                 SummaryFailureReason.DIGEST_OVER_BUDGET,
-                f"{tokens} tokens exceeds {settings.session_digest_max_tokens}",
+                f"{tokens} tokens exceeds {settings.session_digest_max_tokens} "
+                "and no further item may be dropped",
             )
             continue
 
@@ -775,6 +803,10 @@ async def generate_session_digest(
             attempt=attempt,
             label_chars=len(label),
             digest_tokens=tokens,
+            # The live before/after signal for FRE-993. Without these two the trim rate
+            # is measurable only on FRE-994's frozen corpus, never in production.
+            pre_trim_digest_tokens=pre_trim_tokens,
+            digest_items_dropped=items_dropped,
             established=len(digest.established),
             decisions=len(digest.decisions),
             unresolved=len(digest.unresolved),

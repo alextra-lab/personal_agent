@@ -32,6 +32,8 @@ from personal_agent.memory.session_digest import (
     SessionDigest,
     UnresolvedItem,
     digest_token_count,
+    parse_stored_digest,
+    render_digest,
     trim_digest_to_budget,
 )
 
@@ -123,10 +125,11 @@ def test_established_is_the_first_slot_drawn_from() -> None:
         decisions=[_item(f"decision {i} {_FILLER}") for i in range(4)],
     )
 
-    # 8 items render at 312 tokens; 280 forces exactly one drop, so which slot it
-    # comes from is the whole assertion.
-    trimmed, _ = trim_digest_to_budget(digest, 280)
+    # 8 items render at 312 tokens; 300 forces a single drop, so which slot it comes
+    # from is the whole assertion.
+    trimmed, dropped = trim_digest_to_budget(digest, 300)
 
+    assert dropped == 1
     assert len(trimmed.established) == 3
     assert len(trimmed.decisions) == 4
 
@@ -240,6 +243,63 @@ def test_trimming_never_empties_a_digest_that_had_content() -> None:
 
     assert not trimmed.is_empty()
     assert dropped == 0
+
+
+# --------------------------------------------------------------------------
+# Declared, not silent (ADR-0125 D5)
+# --------------------------------------------------------------------------
+
+
+def test_a_trimmed_digest_records_and_renders_what_it_lost() -> None:
+    """A reader must be able to tell a trimmed digest from a whole one.
+
+    Telemetry cannot carry this: the log line does not survive into the stored
+    artifact that the gateway view and any Phase-2 consumer read back.
+    """
+    digest = SessionDigest(
+        established=[_item(f"established {i} {_FILLER}") for i in range(6)],
+        decisions=[_item(f"decision {i} {_FILLER}") for i in range(2)],
+    )
+
+    trimmed, dropped = trim_digest_to_budget(digest, 200)
+
+    assert dropped > 0
+    assert trimmed.items_dropped == dropped
+    assert "Trimmed to fit" in render_digest(trimmed)
+    assert str(dropped) in render_digest(trimmed)
+
+
+def test_an_untrimmed_digest_renders_no_marker() -> None:
+    digest = SessionDigest(established=[_item("short")])
+
+    trimmed, _ = trim_digest_to_budget(digest, 400)
+
+    assert trimmed.items_dropped == 0
+    assert "Trimmed to fit" not in render_digest(trimmed)
+
+
+def test_the_marker_is_paid_for_out_of_the_budget() -> None:
+    """The declaration must not push the rendering back over the ceiling it declares."""
+    digest = SessionDigest(
+        established=[_item(f"established {i} {_FILLER}") for i in range(9)],
+    )
+
+    trimmed, dropped = trim_digest_to_budget(digest, 200)
+
+    assert dropped > 0
+    assert "Trimmed to fit" in render_digest(trimmed)
+    assert digest_token_count(trimmed) <= 200
+
+
+def test_items_dropped_survives_a_storage_round_trip() -> None:
+    """Stored, not merely computed — old digests without the field still parse."""
+    digest = SessionDigest(established=[_item("kept")], items_dropped=3)
+
+    round_tripped = parse_stored_digest(digest.model_dump(mode="json"))
+    legacy = parse_stored_digest({"established": [{"text": "x", "basis": "mixed"}]})
+
+    assert round_tripped.items_dropped == 3
+    assert legacy.items_dropped == 0
 
 
 def test_a_single_item_over_the_whole_ceiling_survives_and_stays_over() -> None:

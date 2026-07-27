@@ -245,6 +245,20 @@ class SessionDigest(BaseModel):
     unresolved: list[UnresolvedItem] = Field(default_factory=list)
     corrections: list[Correction] = Field(default_factory=list)
 
+    #: Items dropped by :func:`trim_digest_to_budget` to fit the rendered ceiling.
+    #:
+    #: **Stored, not merely logged, and rendered** (FRE-993). Trimming fires on ~7% of
+    #: content-bearing digests at the 400 ceiling, so a reader that cannot tell a
+    #: trimmed digest from a whole one is being misled at a real rate rather than a
+    #: theoretical one. ADR-0125 D5 states the rule this obeys: content shortened on an
+    #: evidence path is marked, never silently cut. Telemetry alone cannot carry it —
+    #: the log line does not survive into the artifact the Phase-1 gateway view and any
+    #: Phase-2 consumer actually read.
+    #:
+    #: Same reasoning as :attr:`UnresolvedItem.as_of`: state the producer knows and the
+    #: reader cannot recover is stamped onto the record.
+    items_dropped: int = 0
+
     def is_empty(self) -> bool:
         """Whether every slot is empty."""
         return not (self.established or self.decisions or self.unresolved or self.corrections)
@@ -441,6 +455,18 @@ def render_digest(digest: SessionDigest) -> str:
                 suffix = f" (as of {item.as_of.date().isoformat()})"
             lines.append(f"- {item.text}{suffix}")
         sections.append(f"{label}: \n" + "\n".join(lines))
+
+    # Declared, never silent (ADR-0125 D5). A trimmed digest is a bounded subset of
+    # what the session produced, and a reader treating it as the whole would read
+    # absence of an item as absence of the thing — the same error the producer's own
+    # input-side rule exists to prevent. Rendered rather than only stored, because the
+    # rendering is what a consumer reads.
+    if digest.items_dropped and sections:
+        sections.append(
+            f"(Trimmed to fit the digest budget: {digest.items_dropped} lower-priority "
+            "item(s) omitted.)"
+        )
+
     return "\n\n".join(sections)
 
 
@@ -499,24 +525,31 @@ def trim_digest_to_budget(digest: SessionDigest, max_tokens: int) -> tuple[Sessi
     exceeds the whole ceiling, that item is kept and the result is still over budget.
     The caller decides what to do about it — this function does not hide it.
 
+    The result records what it lost in :attr:`SessionDigest.items_dropped`, and the
+    ceiling is measured **with** the resulting marker included, so the declaration is
+    paid for out of the budget rather than pushing the rendering back over it.
+
     Args:
         digest: The parsed, validated digest.
         max_tokens: The rendered-token ceiling.
 
     Returns:
-        The trimmed digest and the number of items dropped.
+        The trimmed digest and the number of items dropped by this call.
     """
     slots: dict[str, list[DigestItem]] = {name: list(getattr(digest, name)) for name in _TRIM_ORDER}
     dropped = 0
 
-    while digest_token_count(digest.model_copy(update=slots)) > max_tokens:
+    def _candidate() -> SessionDigest:
+        return digest.model_copy(update={**slots, "items_dropped": digest.items_dropped + dropped})
+
+    while digest_token_count(_candidate()) > max_tokens:
         target = _next_trim_slot(slots)
         if target is None:
             break
         slots[target].pop()
         dropped += 1
 
-    return (digest.model_copy(update=slots) if dropped else digest), dropped
+    return (_candidate() if dropped else digest), dropped
 
 
 def digest_token_count(digest: SessionDigest) -> int:

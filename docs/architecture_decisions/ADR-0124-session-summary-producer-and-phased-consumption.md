@@ -771,6 +771,16 @@ The 0.469 reproduces C1's 47% from the records rather than restating it. This is
 baseline §3 named and did not run, and it is why C2's "delivered, not discarded" is now a
 mechanism rather than an intention.
 
+**Trimming is declared, never silent.** A trimmed digest records what it lost in
+`SessionDigest.items_dropped` and says so in its rendering. This is stored rather than only
+logged because telemetry does not survive into the artifact a consumer reads back, and a
+digest that is a bounded subset of the session must not be readable as the whole — the
+output-side form of the input-side rule this producer already keeps, and the rule ADR-0125
+D5 states generally. It is not a theoretical concern at C1's ceiling: 7.3% of
+content-bearing digests are trimmed at 400, roughly one in fourteen. The marker's own
+tokens are counted against the ceiling, so declaring the loss cannot push the rendering
+back over the bound it declares.
+
 **One clause C1 did not state, and a reader will need.** 400 is a *producer rejection
 ceiling*, not a hydration entitlement. D4 measures five digests at ~250 tokens as ~74% of a
 p50 assembled context; at 400 the same five would dwarf the facts they annotate further.

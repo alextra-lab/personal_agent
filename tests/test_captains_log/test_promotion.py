@@ -66,6 +66,7 @@ class TestFormatLinearDescription:
                 scope=ChangeScope.LLM_CLIENT,
                 seen_count=5,
                 first_seen=datetime(2026, 2, 1, tzinfo=timezone.utc),
+                source=ProposalSource.STATISTICAL_DETECTOR,
             ),
             supporting_metrics=["cpu: 45%", "duration: 3.2s"],
         )
@@ -96,6 +97,7 @@ class TestFormatLinearDescription:
                 scope=ChangeScope.LLM_CLIENT,
                 fingerprint=fp,
                 seen_count=3,
+                source=ProposalSource.STATISTICAL_DETECTOR,
             ),
         )
         desc = _format_linear_description(entry)
@@ -142,6 +144,7 @@ class TestVerbatimSubstanceCarryThrough:
                 how="Use tenacity",
                 category=ChangeCategory.RELIABILITY,
                 scope=ChangeScope.LLM_CLIENT,
+                source=ProposalSource.STATISTICAL_DETECTOR,
             ),
         )
         desc = _format_linear_description(entry)
@@ -164,6 +167,7 @@ class TestVerbatimSubstanceCarryThrough:
                 how="Use tenacity",
                 category=ChangeCategory.RELIABILITY,
                 scope=ChangeScope.LLM_CLIENT,
+                source=ProposalSource.STATISTICAL_DETECTOR,
             ),
             experiment_design=steps,
         )
@@ -189,6 +193,7 @@ class TestVerbatimSubstanceCarryThrough:
                 how="Use tenacity",
                 category=ChangeCategory.RELIABILITY,
                 scope=ChangeScope.LLM_CLIENT,
+                source=ProposalSource.STATISTICAL_DETECTOR,
             ),
             expected_outcome=expected_outcome,
             potential_implementation=implementation_steps,
@@ -213,6 +218,7 @@ class TestVerbatimSubstanceCarryThrough:
                 how="Use tenacity",
                 category=ChangeCategory.RELIABILITY,
                 scope=ChangeScope.LLM_CLIENT,
+                source=ProposalSource.STATISTICAL_DETECTOR,
             ),
         )
         desc = _format_linear_description(entry)
@@ -233,9 +239,15 @@ def _write_entry(
     scope: ChangeScope = ChangeScope.LLM_CLIENT,
     linear_issue_id: str | None = None,
     eval_mode: bool = False,
-    source: ProposalSource | None = None,
+    source: ProposalSource | None = ProposalSource.STATISTICAL_DETECTOR,
 ) -> pathlib.Path:
-    """Helper to write a CL entry JSON file to disk."""
+    """Helper to write a CL entry JSON file to disk.
+
+    ``source`` defaults to a valid producer (ADR-0125 D1: source is required
+    for a file to validate) -- pass ``source=None`` explicitly to write a
+    legacy-shaped, pre-migration null-source entry for a test that exercises
+    that specific case.
+    """
     if first_seen is None:
         first_seen = datetime.now(timezone.utc) - timedelta(days=14)
 
@@ -746,6 +758,7 @@ class TestIntegrationDedupToPromotion:
                         scope=scope,
                         fingerprint=fp,
                         first_seen=old_first_seen,
+                        source=ProposalSource.STATISTICAL_DETECTOR,
                     ),
                     status=CaptainLogStatus.AWAITING_APPROVAL,
                 )
@@ -849,13 +862,54 @@ class TestAdr0105BidirectionalLinkage:
         assert kwargs["linear_issue_id"] == "FF-EXISTING"
 
     @pytest.mark.asyncio
-    async def test_run_skips_sysgraph_linkage_when_source_is_none(
+    async def test_run_skips_unmigrated_legacy_entries_entirely(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """Legacy entries with no source discriminator are skipped, not fabricated."""
+        """ADR-0125 D1: a stored entry with no source discriminator no longer validates at all.
+
+        So it is never promoted (not just skipped for
+        sysgraph linkage). scan_promotable_entries's existing try/except
+        around CaptainLogEntry.model_validate (promotion.py) turns the
+        ValidationError into a soft skip -- this is the behavior that makes
+        AC-1 hold for reads of the historical corpus, not just new writes.
+        Bringing this entry back into promotion requires running
+        scripts/migrate_fre1001_captains_log_source_backfill.py first.
+        """
         log_dir = tmp_path / "captains_log"
         log_dir.mkdir()
         _write_entry(log_dir, source=None)
+
+        sysgraph_repo = MagicMock()
+        sysgraph_repo.record_promotion = AsyncMock()
+        sysgraph_repo.get_signal = AsyncMock(return_value=SignalValue(0.0, 0, False))
+
+        async def mock_create(*args: object) -> str | None:
+            return "FRE-NEW"
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir, create_issue_fn=mock_create, sysgraph_repo=sysgraph_repo
+        )
+        promoted = await pipeline.run()
+
+        assert promoted == []
+        sysgraph_repo.record_promotion.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_run_skips_sysgraph_linkage_for_migrated_legacy_entries(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A migrated entry (source=LEGACY_UNATTRIBUTABLE) validates and promotes.
+
+        But never reaches sysgraph -- `sysgraph.proposal.source` is `NOT NULL
+        CHECK (source IN ('statistical_detector', 'reflection'))` (migration
+        0014) and has no slot for a value that isn't a real producer. Without
+        this guard, PromotionPipeline._record_sysgraph_linkage would attempt to
+        write a CHECK-violating row for every promoted entry that went through
+        scripts/migrate_fre1001_captains_log_source_backfill.py.
+        """
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir, source=ProposalSource.LEGACY_UNATTRIBUTABLE)
 
         sysgraph_repo = MagicMock()
         sysgraph_repo.record_promotion = AsyncMock()

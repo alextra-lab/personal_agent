@@ -11,17 +11,26 @@
 The only active workstream. Background LLM streams stay **disabled** and the summary sweep stays **off**
 until the two gates below are met; no budget cap is to be raised.
 
-**Digest chain, in order.** FRE-994 (compression curve — *in flight*) → FRE-993 (producer generation +
-sizing + fail-safe). FRE-994 sets the token bound empirically; ADR-0124 D3 flagged the incumbent 250 as
-provisional and its curve was never run. FRE-993 then makes the call ceiling and the digest bound
-consistent and adds the fail-safe: never re-issue an identical deterministic call.
+**Digest chain.** FRE-994 **is done** — the curve ran ($1.74, study lane). Its answer was not a
+different constant: elasticity is **0.16**, so the prompt cannot deliver any bound tested, and at the
+deployed 250 **47% of content-bearing digests are rejected for length**. ADR-0124 **Amendment C** splits
+the three numbers D3 conflated — prompt target 180→**120**, enforced rendered ceiling 250→**400**, call
+ceiling 2,048 unchanged and never binding.
+
+**Next: FRE-993** (producer generation + sizing + fail-safe) implements Amendment C. It is the ticket
+that actually moves 250→400 in the deployed config, so that flip is an owner decision at *its* gate —
+FRE-994 changed no runtime behaviour. Two inputs it must not lose: the digest costs **8–11% of the
+conversation** (not the 4%-of-billed-prompt figure — a 2.2–2.6× under-budget if confused), and asking
+for **120 delivers 79% within 250** while asking for 250 delivers 53%.
 
 **Then the retry policy.** FRE-987 — bound the *transient* failure path. Owner's constraint: the
 reason-based terminality split is correct design; the defect is that transient has no bound at all.
 
-**Two gates before the sweep is re-enabled.** The bound calibrated (FRE-994), and the retry path bounded
-(FRE-987). When it does go back on, gate on the **empty-digest rate**, not the parse rate — an empty
-digest marks a session clean and is never retried.
+**Two gates before the sweep is re-enabled.** The bound calibrated — **FRE-994 discharges this** — and
+the retry path bounded (FRE-987, still open). Amendment C's 400 is **not** licence to re-enable. When it
+does go back on, gate on the **empty-digest rate**, not the parse rate — an empty digest marks a session
+clean and is never retried. FRE-994 gives the first measurement of it: **2%**, alongside 2% contract
+drift.
 
 **Also open in the project:** FRE-989 (cost attribution — now carries four confirmed read-path defects,
 including that role-attributed spend is unanswerable from Elasticsearch), FRE-990 (reflection has no
@@ -93,6 +102,20 @@ Linear async feedback · Seshat Inference.
 - **FRE-885** · **FRE-805** · **FRE-621** — Needs Approval.
 
 ## To fix, unscheduled
+
+- **Personal data already committed to the public repo** (surfaced by FRE-994's security pass, *not*
+  introduced by it — FRE-994 redacted its own files). Cities, venues and a personal name sit in
+  `scripts/study/eval_artifacts/frozen/`, `scripts/eval/fre435_memory_recall/semantic_probe.yaml`,
+  `docs/research/EVALUATION_DATASET.md` and `docs/plans/completed/`. Repo-wide, spans several prior
+  tickets. **Owner sets the scope** — redact-in-place, or history rewrite. Note that redaction alone
+  leaves it in the git history.
+- **The cost gate reserves against an estimator that runs a third light.** cl100k undercounts billed
+  Anthropic input by **1.535×**, and the tool definition adds **1,663 tokens/call** uncounted. Measured
+  in FRE-994 against FRE-996's committed records. Belongs with the cost audit (FRE-989 neighbourhood).
+- **D3's loss question is still unanswered.** FRE-994's loss endpoint failed its own precommitted
+  validity gate (extractor recall 0.788 vs 0.80) and was barred rather than rescued. The cause is
+  reusable: the automated reference set systematically dropped explicitly-left-open questions — exactly
+  what `unresolved` exists for. Any retry needs a different extraction design first.
 
 - **Frozen-reset action never fires on gateway turns** (ADR-0092 #7). FRE-954 sits behind it.
 - **FRE-912** — narrowed by FRE-913, not eliminated; parked-Approved.

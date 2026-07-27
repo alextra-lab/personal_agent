@@ -21,6 +21,7 @@ from personal_agent.captains_log.models import (
     CaptainLogEntry,
     CaptainLogEntryType,
     Metric,
+    ProposalSource,
     ProposedChange,
 )
 
@@ -233,6 +234,7 @@ class TestCaptainLogEntryWithMetrics:
             what="Cache GPU metrics",
             why="Tool calls are slow (3.6s)",
             how="Add MetricsCache singleton",
+            source=ProposalSource.STATISTICAL_DETECTOR,
         )
 
         entry = CaptainLogEntry(

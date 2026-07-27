@@ -12,6 +12,7 @@ from personal_agent.captains_log.manager import CaptainLogManager
 from personal_agent.captains_log.models import (
     CaptainLogEntry,
     CaptainLogEntryType,
+    ProposalSource,
     ProposedChange,
     TelemetryRef,
 )
@@ -19,7 +20,6 @@ from personal_agent.events.models import (
     CaptainLogEntryCreatedEvent,
     parse_stream_event,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,6 +45,7 @@ def _make_entry(
             fingerprint=fingerprint,
             category=ChangeCategory.PERFORMANCE,
             scope=ChangeScope.ORCHESTRATOR,
+            source=ProposalSource.STATISTICAL_DETECTOR,
         )
     refs = [TelemetryRef(trace_id=trace_id)] if trace_id else []
     return CaptainLogEntry(

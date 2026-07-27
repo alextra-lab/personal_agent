@@ -8,7 +8,7 @@ Extended by ADR-0030: Categorization, dedup fingerprinting, and Linear promotion
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, assert_never
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -55,11 +55,65 @@ class ProposalSource(str, Enum):
     The self-improvement pipeline has one promotion path fed by multiple
     producers; this discriminator makes the origin queryable without a
     second pipeline. Extensible — a new producer adds a member here rather
-    than a competing promotion path.
+    than a competing promotion path. Adding a member also requires a new
+    ``case`` in :func:`producer_dimension` (ADR-0125 D1) — see that
+    function's docstring.
     """
 
     STATISTICAL_DETECTOR = "statistical_detector"
     REFLECTION = "reflection"
+    # ADR-0125 D1: migration-only sentinel for a stored entry whose original
+    # source predates this field and cannot be recovered. No producer may
+    # construct a ProposedChange with this value — only
+    # scripts/migrate_fre1001_captains_log_source_backfill.py emits it, and
+    # tests/test_captains_log/test_models_adr_0105.py's
+    # test_legacy_unattributable_never_used_by_a_real_producer enforces that.
+    LEGACY_UNATTRIBUTABLE = "legacy_unattributable"
+
+
+class Dimension(str, Enum):
+    """The two quality dimensions a producer's output serves (ADR-0125 D1).
+
+    Dimension is a property of the *producer*, not of the subject matter —
+    a dimension-1 producer may reason about anything, but its output may
+    never enter user-facing context (ADR-0125 D2).
+    """
+
+    HARNESS_HEALTH = "dimension_1_harness_health"
+    OUTPUT_QUALITY = "dimension_2_output_quality"
+
+
+def producer_dimension(source: ProposalSource) -> Dimension:
+    """Map a producer to the exactly-one dimension it serves (ADR-0125 D1).
+
+    Total over the ``ProposalSource`` vocabulary and build-enforced: the
+    ``case _: assert_never(source)`` fallback makes an unmapped member fail
+    both statically (mypy rejects passing a non-``Never``-narrowed value to
+    ``assert_never`` — verified against this repo's ``strict = true`` mypy
+    config) and at runtime (``assert_never`` raises ``AssertionError``),
+    so a new producer can never silently fall through to a runtime default.
+
+    ``LEGACY_UNATTRIBUTABLE`` maps to ``HARNESS_HEALTH`` as a conservative
+    quarantine classification, not a claim of recovered provenance — a
+    dimension-1 producer's output can never reach user-facing context
+    (ADR-0125 D2), so treating un-attributable legacy material as
+    dimension-1 is the safe default regardless of what actually produced it.
+
+    Args:
+        source: The producer discriminator.
+
+    Returns:
+        The dimension that producer's output belongs to.
+    """
+    match source:
+        case ProposalSource.STATISTICAL_DETECTOR:
+            return Dimension.HARNESS_HEALTH
+        case ProposalSource.REFLECTION:
+            return Dimension.HARNESS_HEALTH
+        case ProposalSource.LEGACY_UNATTRIBUTABLE:
+            return Dimension.HARNESS_HEALTH
+        case _:
+            assert_never(source)
 
 
 class Metric(BaseModel):
@@ -119,7 +173,10 @@ class ProposedChange(BaseModel):
     """Proposed improvement or change.
 
     Extended by ADR-0030 with category/scope for dedup and a merge counter.
-    All new fields are optional for backward compatibility with existing entries.
+    Most later fields are optional for backward compatibility with existing
+    entries — ``source`` is the exception (ADR-0125 D1): it is required, so a
+    stored payload written before ADR-0105 introduced it no longer validates
+    as-is. See ``scripts/migrate_fre1001_captains_log_source_backfill.py``.
     """
 
     what: str = Field(..., description="What to change")
@@ -127,12 +184,14 @@ class ProposedChange(BaseModel):
     how: str = Field(..., description="How to implement it")
     category: ChangeCategory | None = Field(None, description="Improvement category (ADR-0030)")
     scope: ChangeScope | None = Field(None, description="Target subsystem (ADR-0030)")
-    source: ProposalSource | None = Field(
-        None,
+    source: ProposalSource = Field(
+        ...,
         description=(
-            "Producer that generated this proposal (ADR-0105 D1). Optional for "
-            "backward compatibility with proposals recorded before this field "
-            "existed; every current producer sets it explicitly."
+            "Producer that generated this proposal (ADR-0105 D1). Non-nullable "
+            "(ADR-0125 D1) — a write that omits it is rejected, not defaulted. "
+            "Every current producer sets it explicitly; a stored entry that "
+            "predates this field must be migrated (ProposalSource."
+            "LEGACY_UNATTRIBUTABLE) before it validates."
         ),
     )
     fingerprint: str | None = Field(

@@ -144,6 +144,7 @@ class TestDedupOnWrite:
                 scope=scope,
                 fingerprint=fingerprint,
                 first_seen=datetime(2026, 3, 1, tzinfo=timezone.utc),
+                source=ProposalSource.STATISTICAL_DETECTOR,
             ),
             status=CaptainLogStatus.AWAITING_APPROVAL,
         )
@@ -212,6 +213,7 @@ class TestDedupOnWrite:
                     ChangeCategory.COST, ChangeScope.LLM_CLIENT, "Reduce token usage"
                 ),
                 first_seen=datetime(2026, 3, 1, tzinfo=timezone.utc),
+                source=ProposalSource.STATISTICAL_DETECTOR,
             ),
             status=CaptainLogStatus.AWAITING_APPROVAL,
         )
@@ -237,6 +239,7 @@ class TestDedupOnWrite:
                 what="Something",
                 why="Because",
                 how="Somehow",
+                source=ProposalSource.STATISTICAL_DETECTOR,
             ),
             status=CaptainLogStatus.AWAITING_APPROVAL,
         )
@@ -249,6 +252,7 @@ class TestDedupOnWrite:
                 what="Something",
                 why="Because",
                 how="Somehow",
+                source=ProposalSource.STATISTICAL_DETECTOR,
             ),
             status=CaptainLogStatus.AWAITING_APPROVAL,
         )
@@ -361,7 +365,13 @@ class TestBackwardCompatibility:
     """Test that old entries without ADR-0030 fields load correctly."""
 
     def test_old_entry_without_new_fields_loads(self, tmp_path: pathlib.Path) -> None:
-        """Test that old entry without new fields loads correctly."""
+        """Test that old entry without new (ADR-0030) fields loads correctly.
+
+        ``source`` (ADR-0105/ADR-0125) is included here since it is required
+        regardless of ADR-0030 vintage — its own omission is covered
+        separately by test_models_adr_0105.py's
+        test_legacy_payload_without_source_key_is_rejected.
+        """
         old_data = {
             "entry_id": "CL-20260101-000000-001",
             "timestamp": "2026-01-01T00:00:00+00:00",
@@ -372,6 +382,7 @@ class TestBackwardCompatibility:
                 "what": "Something",
                 "why": "Reason",
                 "how": "Method",
+                "source": "statistical_detector",
             },
             "supporting_metrics": [],
             "status": "awaiting_approval",

@@ -13,6 +13,7 @@ from personal_agent.captains_log.manager import (
 from personal_agent.captains_log.models import (
     CaptainLogEntry,
     CaptainLogEntryType,
+    ProposalSource,
     ProposedChange,
     TelemetryRef,
 )
@@ -214,6 +215,7 @@ class TestCaptainLogManager:
                 what="Increase web search rate limit from 20 to 50 requests/hour",
                 why="Current limit is too restrictive for research-heavy workflows",
                 how="Update config/governance/safety.yaml rate_limits.NORMAL.web_search from 20 to 50",
+                source=ProposalSource.STATISTICAL_DETECTOR,
             ),
         )
 

@@ -476,7 +476,9 @@ class PromotionPipeline:
         scored: list[tuple[float, CaptainLogEntry]] = []
         for entry in entries:
             pc = entry.proposed_change
-            if pc is None or pc.source is None or pc.category is None:
+            # source is required (ADR-0125 D1) whenever pc is not None, so only
+            # pc/category (still Optional) gate the ranked branch below.
+            if pc is None or pc.category is None:
                 scored.append((float(pc.seen_count) if pc else 0.0, entry))
                 continue
             try:
@@ -658,9 +660,13 @@ class PromotionPipeline:
     async def _record_sysgraph_linkage(self, entry: CaptainLogEntry, linear_issue_id: str) -> None:
         """Write the proposal<->ticket PROMOTED_TO edge (ADR-0105 D4), best-effort.
 
-        Skips (logged, not fabricated) when the entry predates the ADR-0105 D1
-        source discriminator — `sysgraph.proposal.source` is NOT NULL and cannot
-        hold a guessed value.
+        Skips (logged, not fabricated) when the entry has no source discriminator
+        set to a real producer — `sysgraph.proposal.source` is `NOT NULL CHECK
+        (source IN ('statistical_detector', 'reflection'))` (migration 0014) and
+        cannot hold a guessed value. ADR-0125 D1 made `source` itself required, so
+        the remaining case here is `ProposalSource.LEGACY_UNATTRIBUTABLE` — a
+        migrated pre-ADR-0105 entry whose original producer is unknown, not a
+        value the sysgraph CHECK constraint accepts.
 
         Args:
             entry: The promoted Captain's Log entry.
@@ -669,7 +675,7 @@ class PromotionPipeline:
         if self._sysgraph_repo is None:
             return
         pc = entry.proposed_change
-        if pc is None or pc.source is None or not pc.fingerprint:
+        if pc is None or pc.source is ProposalSource.LEGACY_UNATTRIBUTABLE or not pc.fingerprint:
             log.info(
                 "sysgraph_linkage_skipped_no_source",
                 entry_id=entry.entry_id,

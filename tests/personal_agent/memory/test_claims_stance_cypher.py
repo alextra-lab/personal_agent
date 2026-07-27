@@ -163,6 +163,87 @@ async def test_assert_claim_scopes_candidate_pool_to_acting_user() -> None:
 
 
 @pytest.mark.asyncio
+async def test_assert_claim_persists_and_reads_back_authorship() -> None:
+    """FRE-1020 AC-E: co-authorship is durable and auditable on the :Claim node."""
+    service, captured = _service_capturing(current_rows=[])
+    claim = Claim(
+        content="The user has an HKoenig glacier ice cream maker.",
+        confidence=0.9,
+        observed_at=_NOW,
+        facet="kitchen_equipment",
+        asserted_by="user",
+    )
+
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(return_value=[1.0, 0.0]),
+    ):
+        await service.assert_claim(claim, user_id=_USER_A, trace_id="trace-1")
+
+    fetch_cypher, _ = captured[0]
+    write_cypher, write_params = captured[1]
+    assert "cl.asserted_by AS asserted_by" in fetch_cypher
+    assert "asserted_by: $asserted_by" in write_cypher
+    assert write_params["asserted_by"] == "user"
+    assert write_params["confidence"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_assert_claim_logs_rejection_with_both_attributions() -> None:
+    """FRE-1020 AC-G: a REJECT is never silent — it permanently sidelines the new claim.
+
+    An agent-derived claim loses to a user-asserted incumbent in the same slot (the
+    ADR-0098 D2 weaker-claim guard, unreachable on constant confidence). The signal carries both
+    sides so a wrong rejection — the known residual risk of an attribution miss — is
+    measurable rather than invisible.
+    """
+    service, captured = _service_capturing(
+        current_rows=[
+            {
+                "claim_id": "incumbent",
+                "content": "The user has an HKoenig glacier ice cream maker.",
+                "confidence": 0.9,
+                "observed_at": _NOW.isoformat(),
+                "embedding": [1.0, 0.0],
+                "facet": "kitchen_equipment",
+                "asserted_by": "user",
+            }
+        ]
+    )
+    claim = Claim(
+        content="The user has a Cuisinart ice cream maker.",
+        confidence=0.8,
+        observed_at=_NOW,
+        facet="kitchen_equipment",
+        asserted_by="agent",
+    )
+
+    with (
+        patch(
+            "personal_agent.memory.service.generate_embedding",
+            new=AsyncMock(return_value=[1.0, 0.0]),
+        ),
+        patch("personal_agent.memory.service.log") as mock_log,
+    ):
+        await service.assert_claim(claim, user_id=_USER_A, trace_id="trace-1")
+
+    rejected = [c for c in mock_log.info.call_args_list if c.args and c.args[0] == "claim_rejected"]
+    assert len(rejected) == 1
+    kwargs = rejected[0].kwargs
+    # Names the branch adjudicate() actually took, not a condition that merely also holds.
+    assert kwargs["cause"] == "weaker_provenance"
+    assert kwargs["new_asserted_by"] == "agent"
+    assert kwargs["blocker_asserted_by"] == "user"
+    assert kwargs["new_confidence"] == 0.8
+    assert kwargs["blocker_confidence"] == 0.9
+
+    # The losing claim is retained, but written already non-current (audit record).
+    _, write_params = captured[1]
+    assert write_params["new_invalid_at"] is not None
+    assert write_params["supersede_ids"] == []
+
+
+@pytest.mark.asyncio
 async def test_assert_claim_skips_when_user_person_absent() -> None:
     # Write returns no record → :Person {user_id: ...} does not exist.
     service, captured = _service_capturing(current_rows=[])

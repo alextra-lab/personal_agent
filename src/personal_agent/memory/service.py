@@ -96,12 +96,30 @@ _VALID_DESCRIPTION_UPDATE_KINDS = frozenset(
 )
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Attach UTC to a naive datetime, leaving aware ones untouched (FRE-1020).
+
+    Args:
+        value: A datetime that may or may not carry a timezone.
+
+    Returns:
+        The same instant, guaranteed timezone-aware.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 def _parse_iso(value: Any, *, fallback: datetime) -> datetime:
     """Parse a stored ISO-8601 string back to a datetime, tolerating bad data.
 
     Claim ``observed_at`` is written as an ISO string, so it reads back as a string;
     Neo4j native temporals expose ``.to_native()``. Anything unparseable falls back
     so a single corrupt row cannot break supersession ordering.
+
+    A parsed value with no UTC offset is assumed UTC rather than returned naive
+    (FRE-1020): every writer stamps offset-bearing ISO, but a legacy or
+    hand-edited row without one would otherwise return naive and raise
+    ``TypeError`` on the ``observed_at`` ordering comparison in
+    :func:`~personal_agent.memory.supersession.adjudicate`.
 
     Args:
         value: The raw property value (str, native temporal, or None).
@@ -112,16 +130,16 @@ def _parse_iso(value: Any, *, fallback: datetime) -> datetime:
     """
     if isinstance(value, str):
         try:
-            return datetime.fromisoformat(value)
+            return _as_utc(datetime.fromisoformat(value))
         except ValueError:
             return fallback
     to_native = getattr(value, "to_native", None)
     if callable(to_native):
         native = to_native()
         if isinstance(native, datetime):
-            return native
+            return _as_utc(native)
     if isinstance(value, datetime):
-        return value
+        return _as_utc(value)
     return fallback
 
 
@@ -2340,7 +2358,8 @@ class MemoryService:
                     "WHERE cl.valid_to IS NULL AND cl.invalid_at IS NULL\n"
                     "RETURN cl.claim_id AS claim_id, cl.content AS content,\n"
                     "       cl.confidence AS confidence, cl.observed_at AS observed_at,\n"
-                    "       cl.embedding AS embedding, cl.facet AS facet",
+                    "       cl.embedding AS embedding, cl.facet AS facet,\n"
+                    "       cl.asserted_by AS asserted_by",
                     user_id=user_id_str,
                 )
                 candidates: list[ClaimRecord] = []
@@ -2357,6 +2376,10 @@ class MemoryService:
                             # Legacy rows predate facet → property reads back None; "" is
                             # neutral in the facet-weighted matcher (FRE-712, Codex #5).
                             facet=row["facet"] or "",
+                            # Pre-FRE-1020 rows carry no authorship; "" reads as unknown
+                            # and is diagnostics-only (their confidence already ranks them
+                            # at the agent tier, so adjudication is unaffected).
+                            asserted_by=row["asserted_by"] or "",
                         )
                     )
 
@@ -2364,12 +2387,38 @@ class MemoryService:
                 # so a weaker new claim never supersedes past a higher-confidence one, and
                 # invalidate ALL matches on supersede so ≤1-current-per-slot self-heals.
                 matches = matching_candidates(claim.facet, embedding, candidates)
+                blocker = strongest_blocker(matches)
                 decision = adjudicate(
                     new_confidence=claim.confidence,
                     new_observed_at=claim.observed_at,
-                    candidate=strongest_blocker(matches),
+                    candidate=blocker,
                     new_update_kind=claim.update_kind,
                 )
+                if decision.action is SupersessionAction.REJECT and blocker is not None:
+                    # FRE-1020: no REJECT of any kind had ever fired in production (live:
+                    # 94 claims, zero non-current-on-arrival rows) — the weaker-claim guard
+                    # was unreachable on constant confidence, and no stale claim had
+                    # arrived. Emit the adjudication inputs: a REJECT permanently retains
+                    # the incoming claim as non-current, so a wrong one must be measurable
+                    # rather than silent (an attribution miss on a genuine user correction
+                    # is the known residual risk). ``cause`` mirrors adjudicate()'s
+                    # evaluation order so it names the branch that actually fired, rather
+                    # than re-deriving a condition that may also be true.
+                    log.info(
+                        "claim_rejected",
+                        cause=(
+                            "weaker_provenance"
+                            if claim.confidence < blocker.confidence
+                            else "stale_observation"
+                        ),
+                        claim_facet=claim.facet,
+                        new_confidence=claim.confidence,
+                        new_asserted_by=claim.asserted_by,
+                        blocker_claim_id=blocker.claim_id,
+                        blocker_confidence=blocker.confidence,
+                        blocker_asserted_by=blocker.asserted_by,
+                        trace_id=trace_id,
+                    )
                 supersede_ids: list[str] = []
                 new_valid_to: str | None = None
                 new_invalid_at: str | None = None
@@ -2398,6 +2447,7 @@ class MemoryService:
                     "    valid_from: $valid_from, valid_to: $new_valid_to, invalid_at: $new_invalid_at,\n"
                     "    superseded_by: null, supersession_reason: null,\n"
                     "    trace_id: $trace_id, session_id: $session_id, source_type: $source_type,\n"
+                    "    asserted_by: $asserted_by,\n"
                     "    observed_at: $observed_at, extracted_at: $extracted_at\n"
                     "})\n"
                 ]
@@ -2418,6 +2468,7 @@ class MemoryService:
                     "trace_id": claim.trace_id or trace_id,
                     "session_id": claim.session_id,
                     "source_type": claim.source_type,
+                    "asserted_by": claim.asserted_by,
                     "observed_at": claim.observed_at.isoformat(),
                     "extracted_at": claim.extracted_at.isoformat() if claim.extracted_at else None,
                 }

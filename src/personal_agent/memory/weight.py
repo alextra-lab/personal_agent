@@ -23,6 +23,21 @@ _DEFAULT_CONFIDENCE: dict[str, float] = {
     "inferred": 0.4,
 }
 
+# FRE-1020: co-authorship (ADR-0098 D6) is a *different axis* from ``source_type``.
+# ``source_type`` records the **channel** a fact arrived through; every extracted Claim
+# arrives through ``conversation``, so the channel vocabulary is structurally incapable of
+# expressing *who asserted* the fact — which is why claim confidence was constant and, with
+# it, the ADR-0098 D2 weaker-claim guard unreachable (the confidence comparison could never
+# be unequal; only the observed_at staleness check still discriminated).
+AssertedBy = Literal["user", "agent"]
+
+# Authorship is an **uplift over the channel base**, and the agent tier *is* the channel
+# base. The direction is load-bearing: demoting agent-derived below the base would put every
+# pre-FRE-1020 row above the new floor, so no new claim could ever supersede a legacy one and
+# the substrate would freeze. Uplifting instead leaves every existing path untouched and adds
+# only one narrow REJECT — an agent-derived claim can no longer clobber a user-asserted fact.
+USER_ASSERTED_UPLIFT = 0.1
+
 
 class KnowledgeWeight(BaseModel):
     """Confidence and provenance metadata for a knowledge graph entity.
@@ -77,3 +92,42 @@ class KnowledgeWeight(BaseModel):
             else _DEFAULT_CONFIDENCE.get(source_type, 0.5)
         )
         return cls(confidence=confidence, source_type=source_type)  # type: ignore[arg-type]
+
+    @classmethod
+    def from_claim_provenance(
+        cls,
+        source_type: str,
+        asserted_by: str,
+    ) -> "KnowledgeWeight":
+        """Create a weight from a Claim's channel *and* its co-authorship (FRE-1020).
+
+        Realizes ADR-0098 D6's co-authorship→trust rule for durable Claims: the owner is
+        the authority on their own life, so a fact they asserted themselves outranks one
+        the agent asserted or inferred. ``asserted_by`` is derived in Python from the
+        role-partitioned captured text and is never self-reported by the extraction model
+        (ADR-0098 AC-9) — see
+        :func:`~personal_agent.second_brain.entity_extraction._attribute_claim_authorship`.
+
+        Anything other than ``"user"`` — including an absent or off-vocabulary value —
+        yields the channel base, i.e. exactly the pre-FRE-1020 confidence, so an
+        attribution miss is never worse than today's behaviour.
+
+        Args:
+            source_type: The origin channel (``conversation`` for extracted Claims).
+            asserted_by: ``"user"`` (the owner stated it) or ``"agent"`` (the assistant
+                asserted or inferred it).
+
+        Returns:
+            KnowledgeWeight whose confidence is the channel base, uplifted by
+            :data:`USER_ASSERTED_UPLIFT` (clamped to 1.0) when user-asserted.
+
+        Example:
+            >>> KnowledgeWeight.from_claim_provenance("conversation", "user").confidence
+            0.9
+            >>> KnowledgeWeight.from_claim_provenance("conversation", "agent").confidence
+            0.8
+        """
+        base = _DEFAULT_CONFIDENCE.get(source_type, 0.5)
+        if asserted_by == "user":
+            base = min(1.0, round(base + USER_ASSERTED_UPLIFT, 4))
+        return cls(confidence=base, source_type=source_type)  # type: ignore[arg-type]

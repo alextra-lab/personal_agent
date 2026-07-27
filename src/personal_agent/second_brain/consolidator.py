@@ -93,9 +93,13 @@ def _build_stance(data: dict[str, Any]) -> Stance | None:
 def _build_claim(data: dict[str, Any]) -> Claim | None:
     """Build a :class:`Claim` from an extractor claim dict (ADR-0098 D2/D5).
 
-    Confidence is derived from the provenance source type via
-    :meth:`KnowledgeWeight.from_source` — the weight the correction path
-    adjudicates on. Returns None (skip) when content or ``observed_at`` is absent.
+    Confidence is derived from the provenance source *channel* together with the
+    Python-derived co-authorship (``asserted_by``, FRE-1020) via
+    :meth:`KnowledgeWeight.from_claim_provenance` — the weight the correction path
+    adjudicates on. Deriving it from the channel alone left it constant at 0.8 for every
+    claim, which made ADR-0098 D2's weaker-claim guard ("not naive last-write-wins")
+    unreachable — only the ``observed_at`` staleness check still discriminated.
+    Returns None (skip) when content or ``observed_at`` is absent.
 
     Args:
         data: One claim object from the extractor's ``claims`` array.
@@ -109,15 +113,20 @@ def _build_claim(data: dict[str, Any]) -> Claim | None:
     if not content or observed_at is None:
         return None
     source_type = str(provenance.get("source_type", "conversation"))
+    # Only ever "user"/"agent" on the production path (Python stamps it in
+    # _finalize_extraction); anything else — a direct caller, a legacy payload — resolves to
+    # the untrusted tier rather than silently reaching the adjudicator as an unknown value.
+    asserted_by = "user" if data.get("asserted_by") == "user" else "agent"
     return Claim(
         content=content,
         knowledge_class=str(data.get("class", "Personal")),
         facet=str(data.get("facet", "") or ""),
         update_kind=str(data.get("update_kind", "new") or "new"),
-        confidence=KnowledgeWeight.from_source(source_type).confidence,
+        confidence=KnowledgeWeight.from_claim_provenance(source_type, asserted_by).confidence,
         trace_id=provenance.get("trace_id"),
         session_id=provenance.get("session_id"),
         source_type=source_type,
+        asserted_by=asserted_by,
         observed_at=observed_at,
         extracted_at=_parse_provenance_dt(provenance, "extracted_at"),
     )

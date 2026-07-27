@@ -18,6 +18,7 @@ from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import load_model_config, resolve_role_model_key, settings
 from personal_agent.cost_gate import BudgetDenied
 from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, LocalLLMClient, ModelRole
+from personal_agent.memory.weight import AssertedBy
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.trace import SystemTraceContext
 
@@ -595,6 +596,115 @@ def _build_provenance(
     }
 
 
+# FRE-1020: co-authorship attribution. A claim earns the user tier only when the owner's
+# own words clearly ground it — at least this share of its content words appear in the user
+# message, and by this margin over the assistant's. Measured against the live 94-claim
+# corpus: the split is stable across the whole threshold grid (18-28 % user-attributed), and
+# at these values ~21 % earn the uplift. Deliberately conservative — a miss lands on the
+# agent tier, which is exactly the pre-FRE-1020 confidence.
+_USER_GROUNDING_FLOOR = 0.5
+_USER_GROUNDING_MARGIN = 0.15
+
+# A user_overlap this close below the floor is a near-miss worth recording: these are the
+# rows that would flip if the thresholds were retuned.
+_GROUNDING_BORDERLINE_BAND = 0.15
+
+# Function words carry no grounding signal; they would float every claim's overlap toward
+# whichever message is longer.
+_GROUNDING_STOPWORDS = frozenset(
+    """the a an is are was were be been being of to in on at for with and or but as by from
+    that this these those it its he she they them his her their i you your my me we us our
+    has have had do does did not no yes will would can could should may might must s t re
+    user users owner about into over under more most very much many some any all""".split()
+)
+# Unicode-aware: ``[a-z0-9]+`` would split every accented word into fragments ("café" ->
+# "caf", "résumé" -> "r"/"sum"), silently corrupting overlap for a corpus that is routinely
+# French. ``[^\W_]`` is Python's unicode word class minus the underscore.
+_GROUNDING_WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def _grounding_terms(text: str) -> set[str]:
+    """Reduce a message to the content words usable as grounding evidence (FRE-1020).
+
+    Args:
+        text: Raw message text (may be empty).
+
+    Returns:
+        Lowercased content words longer than two characters, stopwords removed.
+    """
+    return {
+        word
+        for word in _GROUNDING_WORD_RE.findall((text or "").lower())
+        if word not in _GROUNDING_STOPWORDS and len(word) > 2
+    }
+
+
+def _attribute_claim_authorship(
+    content: str,
+    user_message: str,
+    assistant_response: str,
+    *,
+    trace_id: UUID | str | None = None,
+    session_id: str | None = None,
+) -> AssertedBy:
+    """Derive a Claim's co-authorship from the captured turn, in Python (FRE-1020).
+
+    ADR-0098 D6 makes co-authorship the trust discriminator: the owner is the authority on
+    their own life, so a fact they asserted outranks one the agent asserted or inferred.
+    Before FRE-1020 nothing carried that axis — ``source_type`` was the hard-coded channel
+    ``"conversation"`` for every claim — so confidence was constant and ADR-0098 D2's
+    weaker-claim guard ("not naive last-write-wins") unreachable: the adjudicator's
+    confidence comparison could never be unequal, leaving only the ``observed_at``
+    staleness check to discriminate.
+
+    The determination is made **here, from the role-partitioned captured text**, and never
+    read from the model's output. ADR-0098 AC-9 requires trust to pin to independently
+    recorded source identity rather than a self-attributed label: were the extractor allowed
+    to declare a claim user-asserted, a hallucinated fact could mint the very credential
+    that makes it outrank a correct one.
+
+    Grounding is measured as the share of the claim's content words present in each
+    speaker's message. The user tier requires clear dominance
+    (:data:`_USER_GROUNDING_FLOOR` and :data:`_USER_GROUNDING_MARGIN`); everything else —
+    including an unrecognisable or ungrounded claim — falls to the agent tier, which carries
+    exactly the pre-FRE-1020 confidence.
+
+    Near-miss decisions are logged with their raw overlap scores (mirroring the FRE-997
+    fail-open signal convention in this module): the thresholds are tunable, and without the
+    borderline rows there is no evidence on which to retune them.
+
+    Args:
+        content: The claim's fact sentence.
+        user_message: The turn's user message.
+        assistant_response: The turn's assistant response.
+        trace_id: Originating capture's trace_id, for the borderline signal (ADR-0074 §I3).
+        session_id: Originating capture's session_id, for the borderline signal.
+
+    Returns:
+        ``"user"`` when the owner's own words clearly ground the claim, else ``"agent"``.
+    """
+    terms = _grounding_terms(content)
+    if not terms:
+        return "agent"
+    user_overlap = len(terms & _grounding_terms(user_message)) / len(terms)
+    agent_overlap = len(terms & _grounding_terms(assistant_response)) / len(terms)
+    if (
+        user_overlap >= _USER_GROUNDING_FLOOR
+        and user_overlap > agent_overlap + _USER_GROUNDING_MARGIN
+    ):
+        return "user"
+    if user_overlap >= _USER_GROUNDING_FLOOR - _GROUNDING_BORDERLINE_BAND:
+        log.info(
+            "claim_authorship_borderline",
+            user_overlap=round(user_overlap, 3),
+            agent_overlap=round(agent_overlap, 3),
+            resolved_to="agent",
+            trace_id=str(trace_id) if trace_id else None,
+            session_id=session_id,
+        )
+    return "agent"
+
+
 def _coerce_mastery(value: Any) -> float | None:
     """Coerce a model-emitted mastery value to a clamped float or None.
 
@@ -692,23 +802,32 @@ def _finalize_extraction(
     trace_id: UUID | str | None,
     session_id: str | None,
     turn_timestamp: datetime | None,
+    user_message: str = "",
+    assistant_response: str = "",
 ) -> None:
     """Normalize entity class/output_kind and stamp provenance on stances/claims, in place.
 
     This is the Python side of the ADR-0098 D5 + ADR-0115 D1 contract: the LLM emits
     the semantic content of stances/claims/entities; Python owns the ``class`` +
-    ``output_kind`` defaulting and the provenance + timestamp (the model cannot know
-    real trace/session identity or wall-clock time). Runs *after* Person
+    ``output_kind`` defaulting, the provenance + timestamp (the model cannot know
+    real trace/session identity or wall-clock time), and each claim's ``asserted_by``
+    co-authorship — derived from the captured turn and always overwritten, never trusted
+    from the model (FRE-1020, ADR-0098 AC-9). Runs *after* Person
     supplementation so supplemented rows also receive a class and output_kind.
-    Stances/claims are always user-authored, so their ``output_kind`` is
+    Stances/claims are always *about* the user, so their ``output_kind`` is
     unconditionally ``knowledge`` — only entities can be System-natured and need the
-    fail-open normalize.
+    fail-open normalize. (Distinct from ``asserted_by``, which records *who asserted*
+    the fact: a claim about the owner can still be one the agent asserted.)
 
     Args:
         result: The parsed extraction dict (mutated in place).
         trace_id: Originating capture's trace_id.
         session_id: Originating capture's session_id.
         turn_timestamp: The turn's timestamp for ``observed_at``.
+        user_message: The turn's user message — grounding evidence for claim
+            co-authorship (FRE-1020).
+        assistant_response: The turn's assistant response — the other half of that
+            evidence.
     """
     extracted_at = datetime.now(timezone.utc)
     provenance = _build_provenance(
@@ -752,6 +871,17 @@ def _finalize_extraction(
         claim["facet"] = _normalize_facet(claim.get("facet"))
         claim["update_kind"] = _normalize_update_kind(
             claim.get("update_kind"), trace_id=trace_id, session_id=session_id
+        )
+        # FRE-1020: co-authorship (ADR-0098 D6) — the axis the D2 supersession guard
+        # adjudicates on. Always *overwritten* from the captured text, never read from the
+        # model's output, so the extractor cannot self-attribute a claim to the user and
+        # mint the trust uplift that would let it outrank a correct claim (ADR-0098 AC-9).
+        claim["asserted_by"] = _attribute_claim_authorship(
+            str(claim.get("content", "")),
+            user_message,
+            assistant_response,
+            trace_id=trace_id,
+            session_id=session_id,
         )
         claim["provenance"] = dict(provenance)
     result["claims"] = claims
@@ -1010,6 +1140,8 @@ async def extract_entities_and_relationships(
             trace_id=trace_id,
             session_id=session_id,
             turn_timestamp=turn_timestamp,
+            user_message=user_message,
+            assistant_response=assistant_response,
         )
 
         # Extract entity names for convenience

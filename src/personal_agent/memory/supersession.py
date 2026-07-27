@@ -68,6 +68,10 @@ class ClaimRecord:
         observed_at: The stored Claim's turn time — the bitemporal ordering axis.
         embedding: The stored Claim's content embedding, for similarity matching.
         facet: The stored Claim's normalized slot key; "" for legacy/no-facet rows.
+        asserted_by: The stored Claim's co-authorship (FRE-1020); "" for pre-FRE-1020
+            rows. **Diagnostics only** — adjudication reads ``confidence``, which already
+            encodes authorship; this carries the raw axis so a REJECT can be logged with
+            both sides' attribution.
     """
 
     claim_id: str
@@ -76,6 +80,7 @@ class ClaimRecord:
     observed_at: datetime
     embedding: list[float]
     facet: str = ""
+    asserted_by: str = ""
 
 
 @dataclass(frozen=True)

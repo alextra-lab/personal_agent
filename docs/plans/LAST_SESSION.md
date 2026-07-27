@@ -1,118 +1,95 @@
-# Last session — 2026-07-27 (ADR-0125 accepted; the evidence contract shipped and immediately found a bug)
+# Last session — 2026-07-27 (evening: batch deploy, ADR-0126 accepted, and the instrument turned on its author)
 
-## READ THIS FIRST — the environment is UP, streams still OFF, gateway redeployed today
+## READ THIS FIRST — environment is UP and fully deployed
 
-- `cloud-sim-seshat-gateway` rebuilt **12:00Z at `af29060d`**, health green on all five components.
-  Owner authorised the rebuild explicitly (ask-first class).
+- **Batch deployed 18:21Z at `a24f4d0f`**, owner-authorised after a hold from 14:00Z. Health green on all
+  five components. **Zero undeployed source commits** — main is docs-ahead only.
 - **`cloud-sim-embeddings` was re-stopped after the rebuild** (it revives every time — standing rule).
-- **The six background LLM streams remain disabled in `.env` and must stay that way.** Nothing this
-  session re-enabled anything. The summary sweep stays off; its two gates (FRE-994 bound — now done —
-  and FRE-987 retry bound — still open) are not both met.
-- The captures index template was registered **before** the rebuild, deliberately (see drift below).
+- **The six background LLM streams and the summary sweep remain OFF.** Nothing this session re-enabled
+  anything. The sweep's second gate, **FRE-987**, is still open and still unlabelled.
+- Captures live in a **Docker named volume** at `/var/lib/docker/volumes/seshat_seshat_captains_log_cloud/_data`
+  — on the VPS filesystem, durable across rebuilds. Read them there, not via `docker exec`: it works when
+  the container is down. The host bind path under `telemetry/` is **stale** (~1,600 files, nothing today).
 
 ## Doing / discussing (≤5 sentences)
 
-The owner accepted **ADR-0125** and the evidence-contract chain went from proposal to shipped-and-verified
-in one day: FRE-1000 (measurement gate) and FRE-1004 (the capture change) both closed Done, with FRE-1002
-and FRE-1005 now building. The day's through-line was **instruments that lie** — a digest bound scored
-against itself, two prompt hashes that cannot differ, producers inheriting the most expensive reasoning
-config by omission, and a memory record that counted rather than named. FRE-1004's first live turn found a
-real recall defect within five minutes, which is the best possible argument for the contract. Four new
-tickets came out of verification rather than planning (FRE-1007, 1008, 1010, 1011). The session also
-re-learned, twice, that a docs PR title carrying a ticket token corrupts the board.
+ADR-0126 was written, reviewed over three codex rounds, amended once on new evidence, and **accepted by the
+owner** — it gives ADR-0098's write-only Claim/Stance substrate its first consumer, and encodes the rule
+that an ADR shipping a producer must carry a criterion that fails if nothing reads its output. Four merges
+and a batch deploy landed; three owner turns on the PWA then verified FRE-1010 live and produced a new
+finding (FRE-1021) about entities being displaced from recall. The through-line was **instruments that lie**
+— vacuous acceptance criteria, a docstring justifying itself on a property the code no longer has, a
+"currently yellow" cluster status frozen as a permanent claim. Master was corrected five times, twice by
+the adrs seat and twice by the owner. The immediate open thread is the **nine-ticket verification backlog**
+and **FRE-987**, which gates three of them.
 
 ## Commits — the story behind the last 10
 
-- **PR #688 → FRE-994** — the compression curve. The headline is *the instrument is wrong, not the
-  constant*: elasticity 0.16, so the prompt cannot deliver any bound tested, and at the deployed 250
-  **47% of content-bearing digests are discarded**. Zero truncations in 100 calls, which **falsified
-  FRE-993's founding premise**. $1.74 actual against $4.08 expected.
-- **PR #689** — master's close-out. Its `--analyse` reproducibility check caught an error the build's own
-  self-review had *introduced* while fixing a larger one: Amendment C said the uninstructed arm clears 90%
-  at 450; it is 0.895 at 450 and 500, clearing only at 600. Precision, not significance — but the ADR
-  adopts the number.
-- **PR #691 → the owner accepted ADR-0125**, writing status `Approved`. That word is not in the project's
-  vocabulary (83 Accepted / 0 Approved) and the index checker rejects it outright. **PR #692** normalised
-  it to `Accepted` and applied the two on-acceptance consequences: index row, and ADR-0067
-  reflection-surfacing → `Superseded by ADR-0125` (decision superseded, *code* not — that is FRE-1003).
-- **PR #693 → FRE-1000** — the measurement gate. It **inverted the backing audit on both counts**: item 4
-  (tool payloads) was flagged as the likely gap and is fine; item 6 (assembled context) was assumed fine
-  and is the larger gap.
-- **PR #694 → FRE-1004** — the capture change, +2680/-98. Verified live on the owner's turn at 12:04Z.
+- **PR #697 → FRE-1002** — evidence-path guard. Its `is_fallback` fold-in was *required*, not optional: once
+  the summary carries a truncation marker the old comparison against a raw 200-char clip can never match.
+  Side effect recorded before deploy: long-message extractions that were wrongly counted successful now
+  correctly enter the retry path, so entity-extraction calls rise slightly (bounded at 5).
+- **PR #699 → FRE-993** — digest trim. Rejection 0.469 → 0.000 at the old bound, measured on FRE-994's own
+  96 records at **zero model calls**. The 0.469 *reproduces* Amendment C's 47% rather than restating it.
+  Self-review's own find is the best part: a trimmed digest reached storage indistinguishable from a whole
+  one, now fixed with `items_dropped` whose marker tokens count against the ceiling. **Inert until the
+  sweep returns.**
+- **PR #701 → FRE-1010** — per-item-kind render, cap of 3 retired. Master set a bounding condition; the
+  seat discharged it *better*, bounding entity descriptions too (the larger exposure — never truncated
+  before). Worst case unbounded → ~20,000 chars.
+- **PR #704 → FRE-1001** — the day's strongest handoff. **Codex earned its keep**: it caught, before any
+  code, that the 49 null-source files are stale April host data, not the deployed store. Without it a
+  migration would have run against orphaned data and been reported as AC proof.
+- **PRs #705/#707/#709 → ADR-0126.** Written, three codex rounds (blocking findings in 1 and 2), then a
+  *self-initiated* amendment when master's FRE-1021 evidence arrived. Accepted by the owner at 19:16Z.
 
 ## Worktrees — anything special
 
-- **build1** — `fre-1002-evidence-path-boundary-guard`, **freshly reset at 12:31Z** after a 3-hour stall
-  (below). No context to preserve; it started clean.
-- **build2** — stood down at 12:50Z. It was warm on FRE-1005 under `context:keep`, then found that
-  ticket unbuildable (below) and stopped before writing code. Ticket parked; seat free to clear.
-- **adrs** — idle on the merged `adr-0125-evidence-contract`; wants a fresh-start before its next ticket.
-- **`master-914`** — still a stale worktree on the closed `fre-909-seat-rename`, the only reason that
-  branch survives. Removal offered previously and not taken.
+- **build1** — building **FRE-1020** (write-side supersession guard unreachable), Opus, started 19:16:11Z.
+- **build2** — on the **FRE-988 bounce**, PR #703 still open. Bounced for review tier: a src-logic diff on
+  the *cost* path with no codex plan-review, code review at `low` effort, security review skipped. Plus an
+  unanswered availability question (`connect()` never rebuilds a pool that goes terminal). FRE-1003 queued.
+- **adrs** — free; FRE-1012 closed Done. It corrected master twice today and was right both times.
+- **`master-914`** — still a stale worktree on the closed `fre-909-seat-rename`. Removal offered, not taken.
 
 ## Plan position + drift
 
-MASTER_PLAN was rewritten this session and is current. ADR-0125 is now the live thread alongside the audit.
+MASTER_PLAN was rewritten three times today and is current. **Deliberate deviation, and it was right:** the
+owner held deploys for a batch at 14:00Z, so four merges accumulated before going out together — which is
+also why the 12:04 pre-deploy capture survived to exonerate the deploy later.
 
-**Deliberate deviation, and it mattered.** FRE-1004's handoff runbook ordered *rebuild then register the
-index template*. Master **reversed it** — today's captures index did not exist yet (404), so registering
-first made the explicit mapping a guarantee rather than a race against the first write. Confirmed live
-afterwards: `items` and `conversation_slice` are `nested`, which dynamic inference would have made
-`object` — different query semantics, unfixable in place. Master also **declined to run
-`setup-elasticsearch.sh`** (it applies 13 templates; only one was authorised) and PUT the single template
-directly, which also avoids its back-attach step that the runbook forbids.
+**Known drift, now recorded rather than left verbal:** `reconcile_board.py` reports **3 FAIL** — FRE-432,
+FRE-875, FRE-983 — each a merged PR against a non-Done state, dating from 3 / 14 / 25 July. None was
+introduced this session. They are *not* closed blind because that would violate the evidence contract;
+they need acceptance verification like the rest of the backlog.
 
 ## Answers for the fresh start
 
-- **Do NOT re-enable the summary sweep, and do NOT raise any budget cap.** Both standing. Amendment C's
-  400 is *not* licence — FRE-987 is still open.
-- **Two seats stalled today, silently, for hours.** build1 had **four** dispatch pokes sitting unsubmitted
-  in its prompt buffer; build2 had one. Both needed a human to notice. This is **FRE-976's** subject, still
-  parked, and it has now bitten ~6 times in two days. Master's own gap: it verified the *queue*
-  (`--eligible` returned the ticket) and read that as healthy — **eligible ≠ started**. Check seat progress,
-  not queue state.
-- **The docs-PR token trap fired twice more** (FRE-994 knocked Done→Awaiting Deploy 2s after PR #689
-  merged; FRE-993 dragged into Awaiting Deploy despite never being built). Both restored at this check.
-  Now **11 occurrences / 7 sessions** — filed **FRE-1011** for the mechanical guard the memory has been
-  asking for. Until it exists, the Awaiting-Deploy board check at reset is the only reliable catch.
-- **FRE-1010 is the instrument's first find, and it is real.** On a melon-ice-cream turn, two ice-cream
-  entities scoring 0.562/0.560 were recalled and dropped against an admitted 0.563. Mechanism confirmed:
-  the task-assist render branch takes `ctx.memory_context[:3]` (score-blind positional cap) **and** reads
-  `summary`/`user_message`, which entity payloads do not have — so a surviving entity renders as an **empty
-  bullet**. The `"Ice cream"` entity's description literally answers the question asked.
-- **A hole in ADR-0125's own contract, found by using it.** That empty-bullet entity was recorded
-  `admitted: true` — correct by the ADR's definition (emitted, inlined, reached the wire) but the emitted
-  content was empty. The contract cannot distinguish *emitted with content* from *emitted empty*. Master's
-  view: `admitted` should require non-empty content; it is a small amendment, and it belongs to the next
-  contract ticket, not folded into FRE-1010.
-- **Reasoning config is inherited by omission.** Verified against litellm 1.89.2: with no effort hint
-  litellm sends neither `thinking` nor `output_config`, so the provider default applies — on
-  `claude-sonnet-5` that is adaptive thinking at **`high`**. `session_summary` and `insights` sit there by
-  omission; only `captains_log` chose (`medium`). Owner direction: the parameter vocabulary is
-  **provider-specific** and must be verified per provider through litellm, never copied from the Anthropic
-  shape. **FRE-1007** owns the general rule.
-- **FRE-999 is an umbrella sitting at `Needs Approval`** — by our own rules umbrellas belong in `Backlog`.
-  Flagged to the owner, not yet moved.
-- **Item 3 (reasoning trace) has no capture field at all** and is deliberately out of FRE-1004's scope. It
-  needs a *feasibility* ticket first — on the bound Anthropic models the raw chain of thought is never
-  returned, so "capture the reasoning trace" may mean capturing a summary and calling it evidence. Offered,
-  not yet written.
-- **THE BIGGEST FINDING OF THE DAY, and it arrived last. ADR-0098's Claim substrate is write-only.**
-  build2 refused to build FRE-1005 because AC-4's fixture has no true-positive instance, and master
-  verified all three legs: **91 Claims / 3 superseded**, **`HAS_FACT` is the only relationship type
-  touching a Claim** (no edge to Entity or Turn), and **zero references to `Claim` in `request_gateway/`
-  or `orchestrator/`**. Ninety-one claims written, three supersessions correctly adjudicated, **never once
-  read into a turn** — ADR-0098's correctable-facts capability does not reach the model, because recall
-  still runs entirely on the legacy Entity layer. Also proven absent: `corroboration_count` and
-  `last_confirmed` have no populators anywhere. Owner decided to gate FRE-1005 behind claim-recallability
-  and treat it as ADR work → **FRE-1012**. FRE-1005 parked (Approved, unlabelled); **FRE-1006 inherits the
-  same premise** and must be decided with it.
-- **The pattern to carry forward.** Four capabilities found in one day that exist, are correct, and never
-  reach a consumer: structured output wired-and-unused (FRE-995), the prompt manifest built-and-discarded
-  (FRE-1000), entities recalled-and-rendered-empty (FRE-1010), and the Claim substrate written-and-never-read
-  (FRE-1012). That is ADR-0125's two-dimensions thesis validating itself four times over, and it suggests
-  the standing question is not just *is it built* but *does anything consume it*.
-- **A third stall variant, on top of the two above.** build1 ended its turn saying "I'll wait for the
-  background codex review to complete" — the review had already finished in 32s, and nothing woke the seat.
-  So the seat-stall family now has three shapes: unsubmitted prompt-buffer text, modal dialogs, and
-  turn-ended-awaiting-a-completed-background-task. All three need a human to notice. All three are FRE-976.
+- **Do NOT re-enable the summary sweep and do NOT raise any budget cap.** Both standing.
+- **The Awaiting-Deploy column is not a deploy queue.** All 14 entries are deployed; what they await is
+  *master's acceptance verification*. Nine have never been checked at all (FRE-717, 739, 986, 936, 970,
+  972, 943, 971, 969). Three more (FRE-993, 996, 992) cannot be verified until the sweep runs — gated on
+  FRE-987. This backlog is the single biggest thing master owes.
+- **FRE-1021 is the live finding and it is n=4, not a rate.** Entities and episode-derived candidates
+  compete in one ranked, capped, fused pool, so accumulating conversation on a subject pushes that
+  subject's entities beneath the cap. Master first described this as "the conversation's own turns" — that
+  was **wrong**; all four turns are in *different sessions*, so it is ordinary cross-session recall. The
+  measurement must record **session identity**, not just kind and score.
+- **ADR-0126's five implementation tickets are Approved and parked**, sequence written as relations
+  (1015 → 1017, 1016 → 1018, seam 1019 blocked by all four). Unlabelled deliberately: both streams were
+  occupied, and unlabelled-Approved = parked is the safe default. Label the head when a stream frees.
+- **A relay gap to check.** The D2 precondition reached the ADR and AC-3 on FRE-1017 but **not** AC-1 on
+  FRE-1015; master added it as a binding comment there. **1016, 1018 and 1019 were not checked** for the
+  same gap.
+- **ADR-0100 is owed a correction** — it demoted its recency gate on the stated premise that ADR-0098 owns
+  correctness-over-time, and on live data it does not (FRE-1020). Small docs change, master's to make.
+- **Master's failure mode this session, stated plainly so the next one watches for it.** Five times master
+  asserted a state before checking it: a seat "stalled" when it was mid-turn; a ticket "in flight" before
+  verifying the launch; "the conversation's own turns" before checking session IDs; "before the tickets
+  exist" when six had existed for 70 minutes; and a sequencing flip written into Linear **inverted**,
+  against a module dependency stated plainly in the tickets' own text. The pattern is reasoning from the
+  proxy instead of opening the artifact — the exact failure this whole ADR thread exists to remove. The
+  adrs seat caught two; the owner caught two.
+- **Owner-set boundary, now in memory:** master does **not** send plan/design feedback to a build seat
+  unless asked. Surface the recommendation and stop — don't relay, don't offer to. Dispatch actuation
+  (labels, relations, `/build` pokes) stays master's.

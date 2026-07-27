@@ -130,11 +130,18 @@ class Claim(BaseModel):
         update_kind: The extractor's contradiction signal — "new"/"correction"/
             "evolution" (FRE-712) — driving the correction-vs-evolution supersession
             label instead of a confidence-delta guess. Defaults to "new".
-        confidence: Confidence in [0.0, 1.0], derived from the source type; the
-            weight the correction path adjudicates on.
+        confidence: Confidence in [0.0, 1.0], derived from the source channel *and*
+            ``asserted_by`` (FRE-1020); the weight the correction path adjudicates on.
         trace_id: Originating capture's trace_id (provenance).
         session_id: Originating capture's session_id (provenance).
         source_type: Origin channel; "conversation" for extracted claims.
+        asserted_by: Co-authorship (ADR-0098 D6) — "user" when the owner asserted the
+            fact themselves, "agent" when the assistant asserted or inferred it. A
+            *different axis* from ``source_type``, which records only the channel:
+            every extracted claim arrives by conversation, so the channel cannot
+            express who asserted it. Derived in Python from the captured turn, never
+            self-reported by the extractor (ADR-0098 AC-9). Defaults to "agent" — the
+            untrusted tier, equal to the pre-FRE-1020 constant.
         observed_at: Turn time — the authoritative bitemporal ordering axis
             (``valid_from`` is set from this at write time).
         extracted_at: Wall-clock when extraction ran (forensics only).
@@ -150,6 +157,7 @@ class Claim(BaseModel):
     trace_id: str | None = None
     session_id: str | None = None
     source_type: str = "conversation"
+    asserted_by: str = "agent"
     observed_at: datetime
     extracted_at: datetime | None = None
 

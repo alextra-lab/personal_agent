@@ -123,7 +123,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0064](ADR-0064-inbound-user-identity-cloudflare-access.md) | Inbound User Identity via Cloudflare Access | Accepted (Implemented) |
 | [ADR-0065](ADR-0065-cost-check-gate.md) | Cost Check Gate — Atomic Reservation, Layered Budgets, Retry Telemetry | Superseded by ADR-0120 (2026-07-16) |
 | [ADR-0066](ADR-0066-skill-routing-defaults-and-feedback-loop.md) | Skill Routing Defaults, Library-Size Threshold, and Missing-Skill Feedback Loop | Accepted |
-| [ADR-0067](ADR-0067-reflection-surfacing-in-context-assembly.md) | Reflection Surfacing in Context Assembly | Accepted |
+| [ADR-0067](ADR-0067-reflection-surfacing-in-context-assembly.md) | Reflection Surfacing in Context Assembly | Superseded |
 | [ADR-0067b](ADR-0067-skill-nudge-injection.md) | Skill Nudge Injection | Accepted |
 | [ADR-0068](ADR-0068-agent-self-telemetry-data-plane.md) | Agent Self-Telemetry Data Plane and Query Interface | Accepted |
 
@@ -212,7 +212,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0122](ADR-0122-build-time-artifact-builder-selection.md) | Per-Build Artifact Builder Selection — Choose the Model Before the Plan Is Written | Implemented — 2026-07-22 (amended 2026-07-21 — card at turn start) |
 | [ADR-0123](ADR-0123-turn-progress-surface.md) | Turn Progress Surface — Make the Wait Legible, So the User Stays Attached | Accepted — 2026-07-24 |
 | [ADR-0124](ADR-0124-session-summary-producer-and-phased-consumption.md) | Session-Summary Producer Correction and Phased Consumption | Accepted (amended 2026-07-23 — Amendment A, conversation-scoped input; 2026-07-24 — Amendment B, conversation-only: `tool_evidence` + `status_contradiction` removed) |
-| [ADR-0125](ADR-0125-two-quality-dimensions-and-turn-evidence-contract.md) | The Two Quality Dimensions and the Turn Evidence Contract (supersedes ADR-0067 reflection surfacing; verification oracle deferred) | Proposed |
+| [ADR-0125](ADR-0125-two-quality-dimensions-and-turn-evidence-contract.md) | The Two Quality Dimensions and the Turn Evidence Contract (supersedes ADR-0067 reflection surfacing; verification oracle deferred) | Accepted |
 
 ### Supplementary
 

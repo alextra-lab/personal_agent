@@ -1,6 +1,6 @@
 # ADR-0125: The Two Quality Dimensions and the Turn Evidence Contract
 
-**Status:** Approved
+**Status:** Accepted — 2026-07-27 (owner)
 **Date:** 2026-07-27
 **Deciders:** Project owner; adr session (Opus)
 **Tags:** architecture, observability, capture, verification, self-improvement, memory, boundary

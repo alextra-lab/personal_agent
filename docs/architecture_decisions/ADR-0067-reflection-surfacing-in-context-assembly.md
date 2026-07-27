@@ -1,6 +1,6 @@
 # ADR-0067: Reflection Surfacing in Context Assembly
 
-**Status**: Accepted
+**Status**: Superseded by [ADR-0125](ADR-0125-two-quality-dimensions-and-turn-evidence-contract.md) — 2026-07-27. ADR-0125 D2 bars a dimension-1 producer from writing into user-facing context, which is exactly what this ADR decided to do. **The *decision* is superseded, not yet the code**: the recall path is flag-disabled today and its behavioural retirement is FRE-1003. ADR-0125's own header pre-authorised this header change on acceptance, and deliberately kept it out of its acceptance criteria — a header edit proves nothing behavioural.
 **Date**: 2026-05-09
 **Deciders**: Project owner
 **Related**: ADR-0030 (Captain's Log dedup + promotion pipeline — write side); FRE-346 (cross-session continuity audit § Gap G2); FRE-348 (this implementation)

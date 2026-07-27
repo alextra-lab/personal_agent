@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-27
+> **Last updated**: 2026-07-27 (FRE-1002 merged, deploys held for a batch, FRE-997 Done)
 
 ## 0. ADR-0125 — the turn evidence contract (Accepted; the live build)
 
@@ -12,13 +12,19 @@ Names harness health and output quality as distinct dimensions, bars a dimension
 user-facing context, and decides what every turn must durably record. The verification oracle is
 **deferred** — only its feasibility bounds are decided.
 
-**In flight:** FRE-1002 (evidence-path boundary + CI truncation guard) · FRE-1005 (usage edge, joins
-recall records to the supersession chain).
+**Merged, awaiting the batched deploy:** FRE-1002 (evidence-path boundary + CI truncation guard). The
+guard half is live now — CI is not the gateway — but the marking half is runtime and needs the rebuild.
+
+**Next on build1: FRE-1010** — unblocked at FRE-1002's merge, carries `context:keep` so the seat that
+built the guard keeps it for the render-branch redesign that also removes the guard's one allowlist entry.
+
+**FRE-1005 is parked, not in flight** — blocked by **FRE-1012** (ADR-0098's Claim substrate is
+write-only, so AC-4's fixture cannot exist). **FRE-1006** inherits the same premise through 1005.
 
 **Awaiting approval, in the order they should go:** **FRE-1001** (non-nullable producer `source` —
 pairs with FRE-1007, same fix on two fields) · **FRE-1003** (remove the reflection-recall path; this is
-what actually retires ADR-0067, whose header is already superseded) · **FRE-1010** (blocked by FRE-1002)
-· **FRE-1006** the seam, genuinely blocked until 1001/1002/1005 land.
+what actually retires ADR-0067, whose header is already superseded) · **FRE-1012**, which now gates the
+ADR's own closure.
 
 **FRE-1006 closes the ADR — not the last child to merge, and not "the fields are populated."** It closes
 when a planted machine-readable false claim is refuted from the stored record by exact comparison.
@@ -34,10 +40,15 @@ still convey nothing).
 Background LLM streams stay **disabled** and the summary sweep stays **off** until both gates are met;
 no budget cap is to be raised.
 
-**Next: FRE-993** — four things, led by **trim an over-long digest instead of discarding it** (today
-rejection *regenerates*, so ~47% of sessions pay twice and store nothing). Then Amendment C's sizing, an
-items×words cap, and the deterministic-call fail-safe. Sequencing: **once trimming exists the 250→400
-flip stops being urgent** — trimming removes the destruction, the bound only sets how often it runs.
+**Building now on build2: FRE-993** — approved 2026-07-27 and narrowed to four things, led by **trim an
+over-long digest instead of discarding it** (today rejection *regenerates*, so ~47% of sessions pay twice
+and store nothing). Then Amendment C's sizing and the deterministic-call fail-safe. Sequencing: **once
+trimming exists the 250→400 flip stops being urgent** — trimming removes the destruction, the bound only
+sets how often it runs. The reasoning-configuration clause was **cut out of 993 and given whole to
+FRE-1007** — a hand-declaration on one producer would special-case it ahead of that ticket's fail-closed
+enforcement pass. The items×words cap is **deferred to a study**: FRE-996 measured items-per-slot moving
+the rendered median by three tokens, and the untested half (words-per-item) needs a curve arm, not a
+build — and trimming removes its urgency anyway.
 
 **Then FRE-987** — bound the *transient* retry path. The reason-based terminality split is correct
 design; the defect is that transient has no bound at all.
@@ -59,9 +70,24 @@ user node with an owns relationship.
 
 ## 3. Deploy + verification queue
 
-Thirteen tickets in Awaiting Deploy, most predating 2026-07-26. **None to be closed on "deployed and
-healthy"** — each needs its acceptance criterion proven. FRE-996/997 are deployed but unverifiable yet
-(997 needs traffic days; 996 needs the sweep on).
+**Deploys are HELD for a batched deploy** (owner, 2026-07-27 14:00Z). Deployed image is `af29060d`;
+main carries undeployed source from FRE-1002 onward. Standing-approval classes batch too unless urgent.
+
+Twelve tickets in Awaiting Deploy. **None to be closed on "deployed and healthy"** — each needs its
+acceptance criterion proven. Verified 2026-07-27 that every one of the pre-hold merges is already an
+ancestor of the running SHA, so that column was never a deploy queue: it is master's *verification*
+backlog. From the hold onward it means what it says again.
+
+**FRE-997 closed Done 2026-07-27** on live evidence — its fail-open signal fired seven times on real
+traffic — and the first reading inverted the audit's prediction: the model emits *nothing* for entity
+class, so every entity is filed under the `World` default. Filed as **FRE-1013**.
+
+**FRE-996 is UNVERIFIABLE, not passing** — zero digest calls have run since deploy, so its hypothesis has
+nothing to test against. **FRE-992**'s code claims verify in the deployed source, but its runtime is
+untested for the same reason, and its 46 stranded sessions were **not** recovered (118 of 119 sessions
+carry a generated-at stamp; 6 hold a digest). Recover them only *after* FRE-993 and FRE-987 land —
+clearing the stamps sooner arms 46 sessions against a producer that still discards and still retries
+unbounded.
 
 ## 4. Reduce the backlog
 
@@ -93,8 +119,8 @@ Linear async feedback · Seshat Inference.
 
 - **ADR-0120 cost governance** — Proposed, and it gates a **seven-ticket P0 chain** (FRE-898–905). All
   cost work stays ask-first until it is settled.
-- **FRE-999** is an umbrella sitting at `Needs Approval` — by our own rules umbrellas belong in `Backlog`.
-  Master will move it on a word.
+- **FRE-1013** — entity class is never emitted; 100% of entities filed under the `World` default. Test the
+  cheap hypothesis first: the field may simply be absent from the extraction prompt.
 - **Backlog cull scope + gate** (§4).
 - **FRE-937** — design reversed: the turn-progress surface should *fade* after the response completes,
   not collapse to a persistent summary. Also a blank tools counter and a stuttering synthesis label.

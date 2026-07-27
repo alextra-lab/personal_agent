@@ -10,6 +10,9 @@ Four modes, in the order they are meant to be run::
                           hand-authored references. Cheap, and it can end the loss
                           endpoint.
     --execute             Phase C. The run.
+    --analyse             Recompute every table the write-up quotes, from a completed
+                          run's own records. Free, and the reason the published figures
+                          are reproducible rather than hand-derived.
 
 ``--dry-run`` prices the run on three labelled bases. The `ceiling` figure — every call
 billed at its own output ceiling with the worst observed input ratio — is the only true
@@ -496,6 +499,7 @@ async def _execute(
                     within_bound=record.within_bound,
                     content_bearing=record.content_bearing,
                     truncated=record.truncated,
+                    outcome=record.outcome,
                 )
             )
 
@@ -547,6 +551,11 @@ def main() -> int:
     )
     mode.add_argument("--phase-b", action="store_true", help="Phase B: the validity gate.")
     mode.add_argument("--execute", action="store_true", help="Phase C: the run.")
+    mode.add_argument(
+        "--analyse",
+        action="store_true",
+        help="Recompute the write-up's tables from a completed run's records. Free.",
+    )
 
     # Defaults ARE the precommitted design, not a starting point to be overridden: the
     # plan's cost, multiplicity and selection claims are all computed for exactly this
@@ -588,6 +597,10 @@ def main() -> int:
         report = {k: v for k, v in report.items() if k != "sessions"}
     elif args.dump_calibration:
         report = asyncio.run(_dump_calibration(n=args.n, seed=args.seed))
+    elif args.analyse:
+        path = run_dir / "generations.jsonl"
+        records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        report = analysis.delivery_tables(records)
     elif args.phase_b:
         report = asyncio.run(_phase_b(n=args.n, seed=args.seed, run_dir=run_dir))
     else:

@@ -19,6 +19,7 @@ from typing import Any
 import orjson
 from scripts.eval.fre994_digest_compression_curve.arms import (
     Arm,
+    TokenParts,
     decompose_tokens,
     generation_model_key,
     system_prompt_for,
@@ -169,7 +170,15 @@ def classify(
         isinstance(completion_tokens, int) and completion_tokens >= arm.call_ceiling
     )
 
-    parts = decompose_tokens(payload, output_tokens=completion_tokens or 0)
+    # `None` rather than 0 when the provider reported no usage: substituting 0 makes
+    # structural_tokens = -content_tokens, and a large negative row entering the p95 pulls
+    # the recommended call ceiling DOWN — the direction that causes truncation. A missing
+    # measurement is reported as missing, exactly as a provider_error row is.
+    parts = (
+        decompose_tokens(payload, output_tokens=completion_tokens)
+        if isinstance(completion_tokens, int)
+        else TokenParts(content_tokens=None, structural_tokens=None, unusable=True)
+    )
     base: dict[str, Any] = {
         "session_id": session_id,
         "arm": arm.name,

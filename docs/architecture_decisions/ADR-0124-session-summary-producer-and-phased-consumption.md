@@ -283,7 +283,7 @@ future value exceeds the cost of displacing retrieved evidence. ~~Starting budge
 2026-07-27: the curve was run. Prompt target **120**, enforced rendered ceiling **400**, call output
 ceiling **2,048** unchanged — three numbers, kept distinct. The 250 was rejecting 47% of usable
 output.)* Digest length is **not** proportional to turn count — though Amendment C C3 records that it
-does scale with conversation size, at roughly 4% of input tokens.
+does scale with conversation size, at roughly 8-11% of the conversation.
 
 **Storage is structured; rendering is derived.** The structured record is canonical. Consumers
 receive dense labelled prose assembled at read time (no stored rendered field, no second staleness
@@ -667,8 +667,14 @@ stated separately:
 | Number | Was | Is | Why |
 |---|---:|---:|---|
 | Prompt target (what the model is asked for) | 180 | **120** | The lever is weak, so aiming below the ceiling lands closer to it: asking for 120 delivers 79% within 250, asking for 250 delivers 53% |
-| Enforced rendered ceiling (what the producer rejects above) | 250 | **400** | Where ≥90% of content-bearing digests pass under any instruction. Independently corroborated by FRE-996's all-pass thresholds of 413/419 |
-| Call output ceiling (what the cost gate reserves against) | 2,048 | **2,048 — unchanged** | Never binding: zero truncations in 100 calls, largest billed output 1,568. A 400-token bound implies ~1,260 from the measured structural p95 of 648 |
+| Enforced rendered ceiling (what the producer rejects above) | 250 | **400** | Where ≥90% of content-bearing digests pass **on every arm given a length instruction** (t120 1.00, t180 0.90, t250 0.95, t250_bounded 0.95). Independently corroborated by FRE-996's all-pass thresholds of 413/419 |
+| Call output ceiling (what the cost gate reserves against) | 2,048 | **2,048 — unchanged** | Never binding: zero truncations in 100 calls, largest billed output 1,568. A 400-token bound implies ~1,220 from the measured structural p95 of 617 |
+
+**One qualification on the 400, stated because it is the number this amendment adopts.** It holds for
+arms that were *given* a length instruction. The `unbounded` arm — no LENGTH rule at all — reaches
+only 0.84 at 400 and does not clear 90% until **450**. Since C1 keeps a prompt target, the producer
+always sits in the instructed regime, so 400 is the right ceiling for the deployed configuration. But
+if a future change removes the length instruction, the ceiling has to move to 450 with it.
 
 **C2 — The bound is a rejection threshold of last resort, not the sizing mechanism.** Length is
 steered by the prompt target and *measured* at the ceiling. A digest between the target and the
@@ -677,11 +683,19 @@ the thing the design tries to achieve and becomes the thing it refuses to exceed
 
 **C3 — The relative bound is the better shape, and is recorded as directional rather than settled.**
 D4 already states the principle: annotation may never exceed the token count of the facts it
-annotates. Measured, rendered length correlates with conversation size at r = +0.56 to +0.77 on every
-arm, and varies less as a ratio than as an absolute on four arms of five. The ratio is **about 4% of
-input tokens**. This sample (N=20, inputs 2.5k–20k tokens) does not formally separate the two shapes;
-separating them needs a wider size range, not a larger N. Until then the absolute ceiling in C1
-stands, with the ratio recorded as the shape a later revision should adopt.
+annotates. Measured, rendered length correlates with input size at r = +0.56 to +0.77 on every arm,
+and varies less as a ratio than as an absolute on **all five**.
+
+**The ratio is about 8–11% of the conversation** — and the denominator is the load-bearing half of
+that sentence. Measured against *billed prompt* the figure is 4%, but billed prompt carries roughly
+3,100 tokens of fixed overhead (the tool definition and the system prompt) which are not "the facts
+being annotated". D4's principle is about the conversation, so the conversation is the denominator: 
+0.076 under the tightest instruction, 0.106 with none. An implementation that took the 4% figure
+would under-budget the digest by a factor of 2.2–2.6.
+
+This sample (N=20; conversations spanning 1,279–14,870 tokens) does not formally separate the two
+shapes; separating them needs a wider size range, not a larger N. Until then the absolute ceiling in
+C1 stands, with the ratio recorded as the shape a later revision should adopt.
 
 **C4 — Per-slot item ceilings are removed from any sizing role.** FRE-996 measured that they do not
 bound length (rendered median 221 → 224). FRE-994 tested the remaining hypothesis — that they might
@@ -724,9 +738,9 @@ toward declaring tight bounds safe. Any future attempt at the loss half must fix
 | # | Criterion | Evidence |
 |---|---|---|
 | C-AC-1 | The bound is measured, with the curve and the sample size behind it | Research note §3, N=20, 100 calls, per-arm delivery table |
-| C-AC-2 | The chosen bound is achievable in practice without truncation | §3.3 — ≥90% of content-bearing digests render within 400 on every arm; zero truncations in 100 calls |
-| C-AC-3 | The implied call output ceiling is stated | §3.6 — 400 + structural p95 648, ×1.2 ⇒ ~1,260; production's 2,048 already covers it |
-| C-AC-4 | The relative bound was considered, not only the absolute | §4 — r = +0.56…+0.77, ratio ≈4% of input, reported as directional per the plan's precommitment |
+| C-AC-2 | The chosen bound is achievable in practice without truncation | §3.3 — ≥90% of content-bearing digests render within 400 on every **instructed** arm (the uninstructed arm needs 450, stated in C1); zero truncations in 100 calls |
+| C-AC-3 | The implied call output ceiling is stated | §3.6 — 400 + structural p95 617 (content-bearing), ×1.2 ⇒ ~1,220; production's 2,048 already covers it |
+| C-AC-4 | The relative bound was considered, not only the absolute | §4 — r = +0.56…+0.77, ratio ≈8–11% **of the conversation** (4% of billed prompt — see C3 on the denominator), reported as directional per the plan's precommitment |
 | C-AC-5 | Cost stated before running and reported after | $4.08 expected / $6.18 ceiling, **$1.74 actual**; no cap raised |
 
 

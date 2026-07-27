@@ -416,10 +416,14 @@ def test_the_implied_call_ceiling_comes_from_the_token_split_not_a_ratio() -> No
     assert result["rendered_bound"] == 250
 
 
-def test_empty_and_truncated_are_counted_separately() -> None:
-    """Both mean the session got no memory, but one leaves it dirty and retryable and the other marks it clean forever.
+def test_empty_truncated_and_unusable_are_three_different_failures() -> None:
+    """All three mean the session got no memory, and they are not interchangeable.
 
-    Folding them together hides the failure that hides.
+    A truncation and a parse failure leave the session dirty and retryable. An
+    empty digest returns GENERATED, marks the session clean and is never retried
+    — it is the failure that hides, and it is the one the sweep is meant to gate
+    on. Counting "not content-bearing" as empty folds the loud classes into the
+    silent one and overstates it.
     """
     sessions = _sessions(4)
     outcomes = [
@@ -431,6 +435,7 @@ def test_empty_and_truncated_are_counted_separately() -> None:
             within_bound=False,
             content_bearing=False,
             truncated=True,
+            outcome="truncated",
         ),
         analysis.SessionOutcome(
             session_id=sessions[1],
@@ -440,8 +445,18 @@ def test_empty_and_truncated_are_counted_separately() -> None:
             within_bound=False,
             content_bearing=False,
             truncated=False,
+            outcome="empty",
         ),
-        _outcome(sessions[2], "t250", lost=None),
+        analysis.SessionOutcome(
+            session_id=sessions[2],
+            arm="t250",
+            lost_a_conclusion=None,
+            rendered_tokens=None,
+            within_bound=False,
+            content_bearing=False,
+            truncated=False,
+            outcome="contract_drift",
+        ),
         _outcome(sessions[3], "t250", lost=None),
     ]
 
@@ -449,7 +464,131 @@ def test_empty_and_truncated_are_counted_separately() -> None:
 
     assert row.truncation_rate == pytest.approx(0.25)
     assert row.empty_rate == pytest.approx(0.25)
-    assert row.content_bearing_rate == pytest.approx(0.5)
+    assert row.unusable_rate == pytest.approx(0.25)
+    assert row.content_bearing_rate == pytest.approx(0.25)
+
+
+def test_an_arm_with_no_content_at_all_fails_reachability_closed() -> None:
+    """Returning 1.0 when there is nothing to measure conflates "no bound to exceed" with "produced nothing".
+
+    The second must fail: an arm whose every digest was empty has not
+    demonstrated it can hit its bound, and failing open would let the rule
+    recommend it.
+    """
+    empty = [
+        analysis.SessionOutcome(
+            session_id=s,
+            arm="t120",
+            lost_a_conclusion=False,
+            rendered_tokens=None,
+            within_bound=False,
+            content_bearing=False,
+            truncated=False,
+            outcome="empty",
+        )
+        for s in _sessions(20)
+    ]
+
+    assert analysis.summarise_arm(empty, reference=[], bound=120).reachability == 0.0
+    # An arm with no bound is still trivially reachable.
+    assert analysis.summarise_arm(empty, reference=[], bound=None).reachability == 1.0
+
+
+def test_delta_loss_is_paired_on_both_sides() -> None:
+    """The point estimate the gate reads and the interval that describes it must be the same estimand.
+
+    Cells drop out per-arm — a digest that failed to parse carries no verdict —
+    so differencing each arm's own rate over its own sessions is two unpaired
+    proportions subtracted, and the estimate can land outside its own interval.
+    """
+    sessions = _sessions(20)
+    # The reference loses on session 0; the arm is unjudged there.
+    outcomes = [_outcome(s, "t250", lost=False) for s in sessions[1:]]
+    reference = [_outcome(s, "unbounded", lost=(i == 0)) for i, s in enumerate(sessions)]
+
+    row = analysis.summarise_arm(outcomes, reference=reference, bound=250)
+
+    # Over the 19 shared sessions neither loses anything, so ΔL is exactly zero.
+    # An unpaired difference would report 0 - 1/20 = -0.05.
+    assert row.delta_loss == pytest.approx(0.0)
+    assert row.delta_loss_ci == (0.0, 0.0)
+
+
+def test_a_missing_reference_arm_is_reported_as_such_not_as_absolute_loss() -> None:
+    """Without the unbounded arm, ΔL silently becomes an absolute loss rate — which confuses "the bound is too tight" with "the generator is imperfect"."""
+    sessions = _sessions(20)
+    by_arm = {
+        "t250": [_outcome(s, "t250", lost=i < 6) for i, s in enumerate(sessions)],
+        "unbounded": [_outcome(s, "unbounded", lost=None) for s in sessions],
+    }
+
+    _, decision = analysis.decide(
+        by_arm,
+        order=["t250"],
+        reference_arm="unbounded",
+        bounds={"t250": 250, "unbounded": None},
+        n_sessions=20,
+        replicates=50,
+    )
+
+    assert decision.selected_arm is None
+    assert "reference arm" in decision.inconclusive_reason
+
+
+def test_an_unjudged_arm_does_not_manufacture_a_non_monotone_curve() -> None:
+    """An unjudged arm's loss rate defaults to zero, which reads as "loses nothing" and inverts the ordering against every judged arm.
+
+    That would report a finding about the digest when the truth is a missing
+    measurement.
+    """
+    sessions = _sessions(20)
+    by_arm = {
+        "t120": [_outcome(s, "t120", lost=None) for s in sessions],  # never judged
+        "t250": [_outcome(s, "t250", lost=i < 6) for i, s in enumerate(sessions)],
+        "unbounded": [_outcome(s, "unbounded", lost=i < 4) for i, s in enumerate(sessions)],
+    }
+
+    _, decision = analysis.decide(
+        by_arm,
+        order=["t120", "t250"],
+        reference_arm="unbounded",
+        bounds={"t120": 120, "t250": 250, "unbounded": None},
+        n_sessions=20,
+        replicates=200,
+    )
+
+    assert decision.monotonicity_violations == []
+
+
+def test_bootstrap_replicates_apply_the_monotonicity_precondition_too() -> None:
+    """§6.3 requires the FULL rule per replicate, including §6.2.
+
+    Applying only the selection step lets a replicate whose curve inverted still
+    return its tightest passing arm, inflating that arm's re-selection share with
+    exactly the noise §6.2 exists to suppress. A replicate that inverts must
+    contribute no pick, so the frequencies cannot sum to one.
+    """
+    sessions = _sessions(20)
+    # Rates close enough that resampling flips the ordering in a meaningful share.
+    by_arm = {
+        "t120": [_outcome(s, "t120", lost=i < 4) for i, s in enumerate(sessions)],
+        "t180": [_outcome(s, "t180", lost=i < 3) for i, s in enumerate(sessions)],
+        "t250": [_outcome(s, "t250", lost=i < 3) for i, s in enumerate(sessions)],
+        "unbounded": [_outcome(s, "unbounded", lost=i < 2) for i, s in enumerate(sessions)],
+    }
+
+    _, decision = analysis.decide(
+        by_arm,
+        order=["t120", "t180", "t250"],
+        reference_arm="unbounded",
+        bounds={"t120": 120, "t180": 180, "t250": 250, "unbounded": None},
+        n_sessions=20,
+        replicates=2_000,
+    )
+
+    assert sum(decision.selection_frequency.values()) < 1.0, (
+        "some replicates must return no pick — either inconclusive by §6.2 or by §6"
+    )
 
 
 def test_rendered_digest_carries_only_what_a_reader_would_see() -> None:

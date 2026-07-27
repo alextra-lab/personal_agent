@@ -28,8 +28,9 @@ rendered-token maximum, enforced by rejecting the generation — cannot be met b
 Two secondary results matter as much:
 
 - **The relative bound (D4's principle) describes the data better than any constant.** Rendered
-  length correlates with conversation size at r = +0.56 to +0.77 on every arm, and varies less as a
-  ratio than as an absolute on four of five. The measured ratio is about **4% of input tokens**.
+  length correlates with input size at r = +0.56 to +0.77 on every arm, and varies less as a ratio
+  than as an absolute on **all five**. The ratio is **7.6–10.6% of the conversation** (§4 — the
+  denominator matters and is easy to get wrong).
 - **The 2,048 call ceiling is not the problem and does not need changing.** Zero truncations in 100
   calls; the largest billed output was 1,568. The eight-fold gap the ticket describes was a property
   of the *free-text* producer, which FRE-996 already fixed. What remains is over-rejection at 250.
@@ -77,7 +78,7 @@ not establish under uncontrollable temperature:
 
 But the magnitude is small. Raising the stated maximum from 120 to 250 — **+108% of permission** —
 raises mean rendered length from 212 to 249, **+17%**. That is an elasticity of **0.16**. Deleting
-the length rule entirely buys only 40% over the tightest instruction. And between 180 and 250 the
+the length rule entirely buys only 41% over the tightest instruction. And between 180 and 250 the
 lever does essentially nothing: +5 tokens, 11 sessions of 19, indistinguishable from noise.
 
 **The generator writes roughly 200–290 rendered tokens whatever it is told.** The prompt nudges that
@@ -108,15 +109,20 @@ Share of content-bearing digests rendering within a candidate threshold:
 
 | Arm | 120 | 180 | 250 | 300 | 350 | 400 | 450 | 500 | 600 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `t120` | 0.05 | 0.42 | 0.79 | 0.84 | 0.89 | **1.00** | 1.00 | 1.00 | 1.00 |
+| `t120` | 0.05 | 0.42 | 0.79 | 0.84 | 0.90 | **1.00** | 1.00 | 1.00 | 1.00 |
 | `t180` | 0.05 | 0.25 | 0.50 | 0.70 | 0.85 | **0.90** | 1.00 | 1.00 | 1.00 |
-| `t250` | 0.00 | 0.21 | 0.53 | 0.74 | 0.89 | **0.95** | 0.95 | 1.00 | 1.00 |
-| `t250_bounded` | 0.00 | 0.16 | 0.42 | 0.74 | 0.89 | **0.95** | 1.00 | 1.00 | 1.00 |
-| `unbounded` | 0.00 | 0.21 | 0.42 | 0.58 | 0.74 | 0.84 | **0.89** | 0.89 | 1.00 |
+| `t250` | 0.00 | 0.21 | 0.53 | 0.74 | 0.90 | **0.95** | 0.95 | 1.00 | 1.00 |
+| `t250_bounded` | 0.00 | 0.16 | 0.42 | 0.74 | 0.90 | **0.95** | 1.00 | 1.00 | 1.00 |
+| `unbounded` | 0.00 | 0.21 | 0.42 | 0.58 | 0.74 | 0.84 | **0.90** | 0.90 | 1.00 |
 
-**About 400 rendered tokens is where ≥90% pass, under any instruction.** This lands on FRE-996's
-independently measured all-pass thresholds of 413 and 419, from a different sample and a different
-arm design — two studies agreeing on the number is worth more than either alone.
+**About 400 rendered tokens is where ≥90% pass — on every arm that is given a length instruction.**
+The arm given none does not reach 90% until **450**, which is the honest statement of the row and is
+not a quibble: it is the arm that says what the generator does when nothing constrains it. An
+earlier revision of this note claimed 400 held "under any instruction", which the `unbounded` row
+(0.84 at 400) contradicts; the claim is corrected here and in the ADR.
+
+The 400 figure lands on FRE-996's independently measured all-pass thresholds of 413 and 419, from a
+different sample and a different arm design — two studies agreeing is worth more than either alone.
 
 ### 3.4 The counterintuitive, directly usable result
 
@@ -150,24 +156,29 @@ it does not survive replication. **Item ceilings are the wrong lever for both pr
 
 Derived from the token decomposition, not from a ratio of successes:
 
-| Arm | billed output p50 | content p50 | structural p50 | structural p95 | output / rendered |
-|---|---:|---:|---:|---:|---:|
-| `t120` | 521 | 193 | 319 | 591 | 2.47 |
-| `t180` | 608 | 244 | 363 | 881 | 2.36 |
-| `t250` | 590 | 239 | 363 | 648 | 2.33 |
-| `t250_bounded` | 618 | 242 | 373 | 749 | 2.36 |
-| `unbounded` | 687 | 271 | 421 | 912 | 2.30 |
+Over **content-bearing calls only** — a digest that produced nothing has no length, and mixing the
+two filters is how two correct computations disagree:
+
+| Arm | billed output p50 | structural p50 | structural p95 | output / rendered |
+|---|---:|---:|---:|---:|
+| `t120` | 489 | 313 | 591 | 2.47 |
+| `t180` | 608 | 363 | 881 | 2.36 |
+| `t250` | 583 | 351 | 634 | 2.33 |
+| `t250_bounded` | 618 | 373 | 749 | 2.36 |
+| `unbounded` | 659 | 406 | 794 | 2.30 |
 
 Most of a digest call's billed output is **envelope** — braces, keys, `basis` tags, locators — at a
 consistent ~2.3–2.5 billed tokens per rendered token, matching FRE-996's 2.4. Pooled structural p95
-is **648**.
+over content-bearing calls is **617**. (An earlier revision quoted 648, pooled over *all* calls;
+that value is literally the structural count of the one empty `t250` generation, so the ceiling
+recommendation was anchored on a failed call. The conclusion is unchanged either way.)
 
-| Rendered bound | + structural p95 | × 1.2 safety | Implied call ceiling |
+| Rendered bound | + structural p95 (617) | × 1.2 safety | Implied call ceiling |
 |---:|---:|---:|---:|
-| 250 | 898 | | **1,078** |
-| 350 | 998 | | **1,198** |
-| 400 | 1,048 | | **1,258** |
-| 450 | 1,098 | | **1,318** |
+| 250 | 867 | | **1,040** |
+| 350 | 967 | | **1,160** |
+| 400 | 1,017 | | **1,220** |
+| 450 | 1,067 | | **1,280** |
 
 **Production's 2,048 already covers every one of these.** The ticket's premise — that an eight-fold
 gap between 250 and 2,048 produces the truncation — was true of the free-text producer and is no
@@ -179,24 +190,43 @@ is between the bound and **what the generator produces**.
 D4 states the principle the design actually intends: annotation may never exceed the token count of
 the facts it annotates. The data supports the *shape*, though not decisively at this N.
 
-| Arm | Pearson r (rendered vs input) | rendered/input p50 | range | CV absolute | CV relative |
+| Arm | Pearson r (rendered vs billed prompt) | rendered / billed prompt p50 | range | CV absolute | CV relative |
 |---|---:|---:|---|---:|---:|
-| `t120` | +0.71 | 0.034 | 0.021–0.055 | 0.35 | **0.25** |
-| `t180` | +0.77 | 0.039 | 0.024–0.057 | 0.35 | **0.26** |
-| `t250` | +0.56 | 0.041 | 0.023–0.061 | 0.33 | **0.26** |
-| `t250_bounded` | +0.68 | 0.042 | 0.024–0.067 | 0.30 | 0.29 |
-| `unbounded` | +0.74 | 0.048 | 0.029–0.075 | 0.40 | **0.26** |
+| `t120` | +0.71 | 0.034 | 0.021–0.055 | 0.347 | **0.253** |
+| `t180` | +0.77 | 0.038 | 0.024–0.056 | 0.348 | **0.259** |
+| `t250` | +0.56 | 0.041 | 0.023–0.061 | 0.335 | **0.264** |
+| `t250_bounded` | +0.68 | 0.041 | 0.023–0.065 | 0.304 | **0.283** |
+| `unbounded` | +0.74 | 0.048 | 0.029–0.075 | 0.403 | **0.259** |
 
-Digest length scales with conversation size on every arm, and the ratio is a **tighter** description
-of the data than the absolute on four arms of five. The measured ratio is roughly **4% of input
-tokens** (0.034 under the tightest instruction, 0.048 with none).
+Digest length scales with input size on every arm, and the ratio is a **tighter** description of the
+data than the absolute on **all five** — including `t250_bounded`, which an earlier revision of this
+note misread as the exception.
 
-**Precommitted honesty:** the plan requires this to be reported as unsettled unless the two shapes
-separate. They do not separate decisively at N=20 — the CV gaps are 0.04–0.14 with no interval
-computed on them. So: **the relative shape describes the data better on every arm but one, and is
+### 4.1 Which denominator — the part that would have been implemented wrong
+
+The ratios above are against **billed prompt tokens**, and billed prompt includes the ~1,663-token
+tool definition and the ~1,500-token system prompt. Those are fixed overhead, not "the facts being
+annotated", so they are the wrong denominator for D4's principle. Against the **conversation alone**:
+
+| Arm | rendered / billed prompt | rendered / conversation |
+|---|---:|---:|
+| `t120` | 0.034 | **0.076** |
+| `t180` | 0.038 | **0.100** |
+| `t250` | 0.041 | **0.095** |
+| `t250_bounded` | 0.041 | **0.100** |
+| `unbounded` | 0.048 | **0.106** |
+
+**So the digest runs at roughly 8–11% of the conversation, not 4%.** The two differ by 2.2–2.6×, and
+an amendment that said "4% of input" would have been implemented against the wrong denominator by
+the ticket that consumes it. Billed prompt spans 4,368–18,063 tokens across this sample; the
+conversation alone spans 1,279–14,870.
+
+**Precommitted honesty:** the plan requires this reported as unsettled unless the two shapes
+separate. They do not separate decisively at N=20 — the CV gaps are 0.02–0.14 with no interval
+computed on them. So: **the relative shape describes the data better on every arm, and is
 directionally clear, but this sample does not formally establish it.** Separating them would need
-the size axis widened rather than N raised — this sample's inputs span roughly 2.5k to 20k tokens,
-and a study that deliberately sampled the extremes would settle it at a similar N.
+the size axis widened rather than N raised; a study that deliberately sampled the extremes would
+settle it at a similar N.
 
 ## 5. The loss endpoint failed its validity gate, and was barred from the answer
 
@@ -274,6 +304,11 @@ and the cost audit knowing independently of this ticket.
 
 1. **N = 20.** Adequate for the delivery statistics (100 length observations) and the paired
    comparisons, which is why those carry the conclusion. Nothing here rests on a small difference.
+   Two conventions are stated rather than buried: percentiles are nearest-rank-upper
+   (`sorted(v)[int(q·n)]`), so `t180`'s p50 of 263 is the 11th of 20 rather than the conventional
+   256.5; and every length statistic is over **content-bearing** calls only. Both are applied
+   consistently, and `--analyse` regenerates every table in this note from the run's own records so
+   the conventions are inspectable rather than asserted.
 2. **Temperature could not be controlled** (`claude-sonnet-5` rejects any value but 1), so arm means
    are not deterministic counterfactuals. The paired within-session comparisons in §3.1 are the
    evidence for the lever's direction; the arm means alone would not support it.
@@ -299,8 +334,9 @@ For **FRE-993**, in descending order of confidence:
    output 1,568. A 400-token bound implies ~1,260 (§3.6).
 4. **Drop the per-slot `maxItems`** from any sizing role. They do not bound length (FRE-996) and do
    not improve completion (§3.5, non-replication).
-5. **Prefer a size-relative bound** — about 4% of input tokens — over a constant, with the caveat in
-   §4 that this sample does not formally separate the two shapes.
+5. **Prefer a size-relative bound** — about **8–11% of the conversation**, not of the billed prompt
+   (§4.1) — over a constant, with the caveat in §4 that this sample does not formally separate the
+   two shapes.
 6. **Watch the empty rate, not the parse rate.** 2 of 100 here; it is the failure that marks a
    session clean and is never retried.
 

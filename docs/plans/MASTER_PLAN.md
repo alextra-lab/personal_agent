@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-27 (FRE-993 + FRE-1002 merged, deploys held for a batch)
+> **Last updated**: 2026-07-27 (FRE-1002/993/1010 merged; deploys held for a batch)
 
 ## 0. ADR-0125 — the turn evidence contract (Accepted; the live build)
 
@@ -12,19 +12,24 @@ Names harness health and output quality as distinct dimensions, bars a dimension
 user-facing context, and decides what every turn must durably record. The verification oracle is
 **deferred** — only its feasibility bounds are decided.
 
-**Merged, awaiting the batched deploy:** FRE-1002 (evidence-path boundary + CI truncation guard). The
-guard half is live now — CI is not the gateway — but the marking half is runtime and needs the rebuild.
+**Merged, awaiting the batched deploy:** FRE-1002 (evidence-path boundary + CI truncation guard) ·
+FRE-1010 (per-item-kind render; the cap of 3 retired). The guard half of 1002 is live now — CI is not
+the gateway — but both marking halves are runtime and need the rebuild. FRE-1010 emptied FRE-1002's
+allowlist by **deleting** the truncation it exempted, which is that file's intended steady state.
 
-**Next on build1: FRE-1010** — unblocked at FRE-1002's merge, carries `context:keep` so the seat that
-built the guard keeps it for the render-branch redesign that also removes the guard's one allowlist entry.
+**In flight:** **FRE-1001** on build1 (non-nullable producer `source`; pairs with FRE-1007, same fix on
+two fields) · **FRE-1003** on build2 (remove the reflection-recall path — the behavioural half of
+retiring ADR-0067) · **FRE-1012** on the adr seat.
 
-**FRE-1005 is parked, not in flight** — blocked by **FRE-1012** (ADR-0098's Claim substrate is
-write-only, so AC-4's fixture cannot exist). **FRE-1006** inherits the same premise through 1005.
+**FRE-1012 is the unlock.** ADR-0098's Claim substrate is write-only, so FRE-1005's AC-4 fixture cannot
+exist and **FRE-1006 inherits the same premise** — meaning ADR-0125 could not close. It is Approved and
+dispatched as ADR work, and its output must be a *decision* about whether claims become recallable and
+how, not an implementation. FRE-1005 stays blocked by it and un-blocks automatically at its merge.
 
-**Awaiting approval, in the order they should go:** **FRE-1001** (non-nullable producer `source` —
-pairs with FRE-1007, same fix on two fields) · **FRE-1003** (remove the reflection-recall path; this is
-what actually retires ADR-0067, whose header is already superseded) · **FRE-1012**, which now gates the
-ADR's own closure.
+**New at the FRE-1010 gate: FRE-1014** — the admission resolver's docstring justifies its multiset match
+on the renderer emitting an order-preserving prefix; FRE-1010 made it a *subsequence*. Low frequency, but
+it is a false justification sitting in an instrument, which is the failure class this thread exists to
+kill. Sequence it with the "admitted must mean non-empty" amendment if both are built together.
 
 **FRE-1006 closes the ADR — not the last child to merge, and not "the fields are populated."** It closes
 when a planted machine-readable false claim is refuted from the stored record by exact comparison.
@@ -50,9 +55,10 @@ Two boundaries held: reasoning configuration stayed with **FRE-1007**, and the w
 recorded in the ADR as a **study, not a refuted lever** — C4 and the prompt-signature guard refute only
 the items-per-slot half, and trimming drops the urgency. Not filed as a ticket; recording beats filing.
 
-**Next on build2: FRE-988** (cost-tracker connection pooling). Quick to build, **not** quick to close —
-its acceptance criterion is a post-deploy measurement of connect events against priced-call counts over a
-window, so it will land in Awaiting Deploy and wait like the others.
+**Building now on build2: FRE-988** (cost-tracker connection pooling), with FRE-1003 queued behind it.
+Quick to build, **not** quick to close — its acceptance criterion is a post-deploy measurement of connect
+events against priced-call counts over a window, so it will land in Awaiting Deploy and wait like the
+others.
 
 **Then FRE-987** — bound the *transient* retry path. The reason-based terminality split is correct
 design; the defect is that transient has no bound at all.
@@ -75,10 +81,10 @@ user node with an owns relationship.
 ## 3. Deploy + verification queue
 
 **Deploys are HELD for a batched deploy** (owner, 2026-07-27 14:00Z). Deployed image is `af29060d`;
-main carries **three undeployed source commits** (FRE-1002 ×1, FRE-993 ×2). Standing-approval classes
+main carries **four undeployed source commits** (FRE-1002, FRE-993 ×2, FRE-1010). Standing-approval classes
 batch too unless urgent.
 
-Thirteen tickets in Awaiting Deploy. **None to be closed on "deployed and healthy"** — each needs its
+Fourteen tickets in Awaiting Deploy. **None to be closed on "deployed and healthy"** — each needs its
 acceptance criterion proven. Verified 2026-07-27 that every one of the pre-hold merges is already an
 ancestor of the running SHA, so that column was never a deploy queue: it is master's *verification*
 backlog. From the hold onward it means what it says again.

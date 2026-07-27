@@ -376,14 +376,14 @@ Completeness needs a reference set, and only three of four sources exist:
 | 1 | user message, full | the question completeness is judged against | present; threatened by §6 |
 | 2 | assistant response, full text | the claims to be extracted | present |
 | 3 | reasoning / thinking trace | diagnose *why* a claim was wrong | partial — known undercount |
-| 4 | per tool call: name, arguments, status, **full result payload**, ordering | adjudicate "I did X" and "the data says Y" | **must verify** — Amendment B stopped *delivery* to the digest, storage retained |
+| 4 | per tool call: name, arguments, status, **full result payload**, ordering | adjudicate "I did X" and "the data says Y" | present — confirmed §10, resolved 2026-07-27 (FRE-1000) |
 | 5 | **identities of recalled memory items** (+ scores) | check assertions about stored knowledge; detect available-but-unused facts | **missing — a boolean and a count only** (§2) |
-| 6 | the assembled context actually sent | establishes what the model *could* have used | likely present via `prompt_manifest` (FRE-409) |
+| 6 | the assembled context actually sent | establishes what the model *could* have used | **missing — confirmed §10, resolved 2026-07-27 (FRE-1000)**; category checklist + opaque hash only |
 | 7 | trace / session / turn ids | joinability | present; known `user_id` gap on older captures |
 | 8 | model + params | attribute a failure mode | present |
 
-**Two real gaps: #5 (certain) and #4 (needs confirmation).** #5 is the same change as the usage
-edge in §7.
+**Two real gaps: #5 and #6 (both certain as of 2026-07-27); #4 confirmed present.** #5 is the same
+change as the usage edge in §7; #6 should be built alongside it as one capture surface (§10).
 
 ### 9.4 Cost posture
 
@@ -400,6 +400,23 @@ Stated explicitly so the ADR does not over-claim, and so a reader can bound the 
 - **Tool-payload retention (§9.3 #4) was not verified.** Whether full tool result payloads survive
   in durable storage, or only name/status/error metadata, is unconfirmed. This is the one input map
   entry that could change the capture chain's size.
+  **Resolved 2026-07-27 (FRE-1000): YES, full payloads are durably retained, inline.**
+  `TaskCapture.tool_results[].output` is fed from `dr["tool_layer_output"]`
+  (`orchestrator/executor.py:4966`), which is `result.output` straight from tool execution
+  (`orchestrator/tool_dispatch.py:256`) — the same object before the intra-turn tool-result-digest
+  pass (`orchestrator/tool_result_digest.py`) ever runs. That digest pass operates only on the
+  separate `tool_results` transcript batch that becomes `ctx.messages` (executor.py:5018-5040,
+  by its own docstring: "so the verbatim bytes of a digested result never enter ctx.messages") —
+  it never touches `ctx.tool_results`, the list `TaskCapture` is built from. Both durable sinks
+  preserve it whole: disk write is an unmodified `orjson.dumps` of the full model
+  (`capture.py:219-223`), and the ES path only JSON-stringifies `output`/`arguments` for mapping
+  compatibility (`es_indexer.py:normalize_capture_doc_for_es`), never truncates. Confirmed live
+  against `agent-captains-captures-2026-07-2*`: sampled `tool_results[].output` sizes up to 20,451
+  chars (`read_skill`), 6,712 chars (`bash`), 3,923 chars (`web_search`) — no clipping observed.
+  **Size implication: none.** No new capture work is needed for item 4; it is already satisfied by
+  the existing `TaskCapture.tool_results` shape. (Out of scope for this ticket, noted for a future
+  one: payloads are stored inline rather than by artifact-store pointer, so an unusually large tool
+  result is a growth vector worth watching, not a correctness gap today.)
 - **`corroboration_count` populators were not exhaustively searched.** None found; absence not
   proven.
 - **Whether within-session compression re-summarises its own prior summary** — the drift question
@@ -419,6 +436,35 @@ Stated explicitly so the ADR does not over-claim, and so a reader can bound the 
 - **No claim is made about whether long sessions actually degrade from context pressure.** That
   hypothesis was raised and explicitly left untested; the p50 assembled context of 448 tokens
   suggests recall starvation rather than overflow, but the two were not disentangled.
+- **Whether `prompt_manifest` (FRE-409) satisfies §9.3 #6 was flagged "likely" but not confirmed.**
+  **Resolved 2026-07-27 (FRE-1000): NO, it does not.** Two independent reasons. First, `prompt_manifest`
+  (`captains_log/prompt_manifest.py`) is not a durable per-turn record at all — it is a 3-line string
+  built on demand inside `generate_reflection_entry` (`captains_log/reflection.py:288`) purely as an
+  input to the dimension-1 reflection producer's prompt, and is discarded after that call; it is
+  never written to `TaskCapture` or any other durable store. Second, even its ingredients —
+  `prompt_component_ids` / `prompt_static_prefix_hash` / `prompt_dynamic_hash`, durably logged per
+  model call on `model_call_completed` (`llm_client/telemetry.py:153-156`) — do not reach the bar.
+  `component_ids` is a fixed 9-entry taxonomy of system-prompt *section categories*
+  (`llm_client/prompt_identity.py:47-57`: `tool_awareness`, `deployment_context`, `operator_stanza`,
+  `skill_index`, `skill_bodies`, `memory_section`, `artifact_builder_planning_note`,
+  `tool_use_rules`, `decomposition_instructions`) recording only coarse presence/absence of a
+  section, never which specific memory items, skill bodies, or conversation slice it contained. The
+  two hashes are one-way SHA-256 (16 hex chars) — sufficient to detect whether two prompts were
+  byte-identical (their designed purpose, ADR-0078 cache-erosion measurement), not to retrieve or
+  reconstruct what the content was. The full assembled prompt text itself (`full_prompt` in
+  `llm_client/client.py:551` / `litellm_client.py:719`) is passed into the hash function and never
+  persisted anywhere. Confirmed live against `agent-logs-*`: sampled `orchestrator.primary`
+  `model_call_completed` events return `component_ids` no finer than the 9-category list (e.g.
+  `['tool_awareness', 'deployment_context', 'operator_stanza', 'skill_index', 'memory_section',
+  'tool_use_rules']`), and `prompt_static_prefix_hash == prompt_dynamic_hash` on every sampled
+  primary-turn call — the two hashes are not even distinguishing static from dynamic content in
+  practice, let alone standing in for it. **Size implication: real, and probably the larger of the
+  two capture-chain items.** Item 6 is an unresolved gap, not a satisfied one: durably recording
+  "what the model could have used" needs the admitted content at item-identity granularity (which
+  memory items survived trimming — the same admission-point requirement AC-3 already states for
+  item 5, which conversation slice was in the window, which skill bodies were loaded), not a
+  category checklist plus a hash. The implementation ticket should treat items 5 and 6 as one
+  capture surface rather than building a second, narrower one.
 
 ---
 

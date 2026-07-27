@@ -25,8 +25,8 @@ FRE-1018 and FRE-1019 were never checked** for the same relay gap.
 
 ## 1. ADR-0125 — the turn evidence contract (Accepted; residual)
 
-**In flight:** FRE-1003 on build2 (remove the reflection-recall path — the behavioural half of retiring
-ADR-0067). **FRE-1005** is unblocked and parked-Approved.
+**Next on build2:** FRE-1003 (remove the reflection-recall path — the behavioural half of retiring
+ADR-0067), Approved and queued behind FRE-988, not started. **FRE-1005** is unblocked and parked-Approved.
 
 **FRE-1006 closes the ADR** — when a planted machine-readable false claim is refuted from the stored record
 by exact comparison. Not when the fields are populated.
@@ -67,13 +67,18 @@ D2, whose topic-scoped surface rides the selection that fades.
 
 ## 4. Verification backlog — master's own debt
 
-**Fourteen tickets sit in Awaiting Deploy and all fourteen are already deployed.** The column is master's
+**Twelve tickets sit in Awaiting Deploy and all twelve are already deployed.** The column is master's
 *verification* backlog, not a deploy queue. **None closes on "deployed and healthy"** — each needs its
 acceptance criterion proven, and **UNVERIFIABLE is a first-class verdict**.
 
 - **Nine never checked at all:** FRE-717 · 739 · 986 · 936 · 970 · 972 · 943 · 971 · 969.
 - **Three blocked on the sweep** (so on FRE-987): FRE-993 · FRE-996 · FRE-992.
-- **Two verifiable now:** FRE-1001 · FRE-1002.
+
+**Verification residual carried forward from FRE-1002** (closed Done): that shortened excerpts actually
+carry the truncation marker is **UNVERIFIABLE at current traffic** — zero markers across 6,047 log docs
+and 121 captures, but the limits are 400/800 chars against a p99 user message of 400, only three short
+turns have run since deploy, and the reflection excerpt paths are off under the cost halt. Re-check when
+the background streams return; it is not a defect signal.
 
 **Known board drift, not yet cleared:** `reconcile_board.py` reports 3 FAIL — **FRE-432** (Backlog),
 **FRE-875** and **FRE-983** (Approved) — each with a merged PR against a non-Done state, from 3 / 14 / 25
@@ -137,3 +142,6 @@ Linear async feedback · Seshat Inference.
   the 2026-07-27 audit.
 - **`master-914`** — stale worktree on the closed `fre-909-seat-rename`, the only reason that branch
   survives.
+- **49 orphaned capture files** under `telemetry/captains_log` — pre-containerisation April dev data, not
+  the deployed store (which is the Docker volume). Surfaced by FRE-1001; owner's call to remove or ignore.
+  They are what nearly caused a migration to be run against the wrong substrate and reported as AC proof.

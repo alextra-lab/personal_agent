@@ -25,8 +25,9 @@ FRE-1018 and FRE-1019 were never checked** for the same relay gap.
 
 ## 1. ADR-0125 — the turn evidence contract (Accepted; residual)
 
-**Next on build2:** FRE-1003 (remove the reflection-recall path — the behavioural half of retiring
-ADR-0067), Approved and queued behind FRE-988, not started. **FRE-1005** is unblocked and parked-Approved.
+**Head on build2:** FRE-1003 (remove the reflection-recall path — the behavioural half of retiring
+ADR-0067) — now the stream's sole eligible ticket, High-pinned, dispatching. **FRE-1005** is unblocked and
+parked-Approved.
 
 **FRE-1006 closes the ADR** — when a planted machine-readable false claim is refuted from the stored record
 by exact comparison. Not when the fields are populated.
@@ -43,10 +44,13 @@ amendment.
 Background LLM streams stay **disabled** and the summary sweep stays **off** until both gates are met;
 **no budget cap is to be raised.**
 
-**FRE-988** is bounced and being fixed on build2 (PR #703) — a cost-path diff reviewed as trivial, plus an
-unanswered question: `connect()` never rebuilds a pool that goes terminal.
+**FRE-987 is now the only gate left** before the sweep returns — FRE-988 merged (PR #703). Its bounce paid
+off twice over: codex, once its dead broker was repaired, returned a **block** naming a second real defect
+(unlocked check-then-act in `connect()`, so racing coroutines could each build a pool and a loser could
+null a winner's). Fixed with double-checked locking, and the tests were **mutation-verified** — the lock
+reverted, the tests confirmed failing, then restored.
 
-**Then FRE-987** — bound the *transient* retry path. This is the **second and only remaining gate** before
+**FRE-987** — bound the *transient* retry path. This is the **second and only remaining gate** before
 the sweep returns, and three tickets in §4 cannot be verified until it lands. When the sweep returns, gate
 on the **empty-digest rate**, not the parse rate.
 
@@ -56,9 +60,12 @@ hashes cannot differ) · FRE-1013 (entity class never emitted).
 
 ## 3. Memory recall — FRE-1021 and FRE-1020
 
-**FRE-1020** (building, build1) — the supersession safety guard is unreachable because confidence is
-constant, leaving naive last-write-wins. Also owes **ADR-0100 a note**: it demoted its recency gate on the
-premise that ADR-0098 owns correctness-over-time, and on live data it does not.
+**FRE-1020 merged** (PR #712) — co-authorship (`Claim.asserted_by`, derived in Python from the
+role-partitioned turn, never from the model) makes ADR-0098 D2's guard reachable. **The ADR-0100 note is
+written** — it keeps the recency demotion on its own merits while removing the false premise beneath it,
+so that debt is discharged. **Undeployed.** Watch after deploy: making the guard reachable makes its bad
+cases reachable — a user correction phrased below the attribution floor can now be rejected. D6's
+corroboration gate stays open as **FRE-1022** (Needs Approval); ADR-0098 does **not** close here.
 
 **FRE-1021** — entities and episode-derived candidates compete in one ranked, capped, fused pool, so a
 subject's accumulating conversation pushes its own entities beneath the cap. **Measure the rate first**;
@@ -67,10 +74,12 @@ D2, whose topic-scoped surface rides the selection that fades.
 
 ## 4. Verification backlog — master's own debt
 
-**Twelve tickets sit in Awaiting Deploy and all twelve are already deployed.** The column is master's
-*verification* backlog, not a deploy queue. **None closes on "deployed and healthy"** — each needs its
-acceptance criterion proven, and **UNVERIFIABLE is a first-class verdict**.
+**Fourteen tickets sit in Awaiting Deploy — twelve deployed, two not.** The column is master's
+*verification* backlog, not a deploy queue, **except** for the two newest, which genuinely do await a
+deploy. **None closes on "deployed and healthy"** — each needs its acceptance criterion proven, and
+**UNVERIFIABLE is a first-class verdict**.
 
+- **Genuinely awaiting deploy** (gateway rebuild, ask-first, owner's call): FRE-1020 · FRE-988.
 - **Nine never checked at all:** FRE-717 · 739 · 986 · 936 · 970 · 972 · 943 · 971 · 969.
 - **Three blocked on the sweep** (so on FRE-987): FRE-993 · FRE-996 · FRE-992.
 

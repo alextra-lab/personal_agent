@@ -59,9 +59,7 @@ def _capitalized_entity_hints(text: str) -> list[str]:
     """Cheap entity-hint extractor — capitalised words longer than 3 chars.
 
     Mirrors ``request_gateway/context.py:_capitalized_entity_hints`` to keep
-    this module free of cross-package imports on a module-private symbol
-    (the same duplication convention ``captains_log/recall.py`` already
-    follows for this exact heuristic, per its own docstring).
+    this module free of cross-package imports on a module-private symbol.
     """
     if not text:
         return []

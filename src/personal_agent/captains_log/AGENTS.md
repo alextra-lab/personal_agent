@@ -103,7 +103,6 @@ class GenerateReflection(dspy.Signature):
 
     # Inputs
     user_message: str
-    trace_id: str
     steps_count: int
     final_state: str
     reply_length: int
@@ -152,7 +151,6 @@ with dspy.context(lm=lm):
 # Generate structured reflection
 result = reflection_generator(
     user_message=user_message[:200],
-    trace_id=trace_id,
     steps_count=steps_count,
     final_state=final_state,
     reply_length=reply_length,
@@ -479,7 +477,6 @@ DSPy signature **simplified** (no longer generates metrics):
 class GenerateReflection(dspy.Signature):
     # Inputs (metrics pre-formatted)
     user_message: str
-    trace_id: str
     metrics_summary: str  # "cpu: 9.3%, duration: 5.4s" (pre-formatted)
     telemetry_summary: str
 

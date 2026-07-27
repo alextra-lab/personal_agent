@@ -22,7 +22,6 @@ def _mock_cost_tracker_service() -> tuple[MagicMock, AsyncMock]:
     """Return a mock CostTrackerService instance and its record_api_call mock."""
     instance = MagicMock()
     instance.connect = AsyncMock()
-    instance.disconnect = AsyncMock()
     instance.record_api_call = AsyncMock(return_value=1)
     return instance, instance.record_api_call
 
@@ -34,7 +33,9 @@ async def test_records_on_valid_identity() -> None:
     trace_id = str(uuid4())
     session_id = str(uuid4())
 
-    with patch("personal_agent.llm_client.cost_tracker.CostTrackerService", return_value=instance):
+    with patch(
+        "personal_agent.llm_client.cost_tracker.get_cost_tracker_service", return_value=instance
+    ):
         await record_vendor_cost(
             provider="voyage",
             model="rerank-2.5",
@@ -57,7 +58,6 @@ async def test_records_on_valid_identity() -> None:
     assert kwargs["purpose"] == "reranker"
     assert kwargs["latency_ms"] == 42
     instance.connect.assert_awaited_once()
-    instance.disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -66,7 +66,9 @@ async def test_records_with_system_session_sentinel() -> None:
     instance, record_api_call = _mock_cost_tracker_service()
     trace_id = str(uuid4())
 
-    with patch("personal_agent.llm_client.cost_tracker.CostTrackerService", return_value=instance):
+    with patch(
+        "personal_agent.llm_client.cost_tracker.get_cost_tracker_service", return_value=instance
+    ):
         await record_vendor_cost(
             provider="ovh",
             model="Qwen3-Embedding-8B",
@@ -86,7 +88,9 @@ async def test_skips_on_missing_trace_id() -> None:
     """No trace_id -> never touches the DB, never raises."""
     instance, record_api_call = _mock_cost_tracker_service()
 
-    with patch("personal_agent.llm_client.cost_tracker.CostTrackerService", return_value=instance):
+    with patch(
+        "personal_agent.llm_client.cost_tracker.get_cost_tracker_service", return_value=instance
+    ):
         await record_vendor_cost(
             provider="ovh",
             model="Qwen3-Embedding-8B",
@@ -106,7 +110,9 @@ async def test_skips_on_missing_session_id() -> None:
     """No session_id -> never touches the DB, never raises."""
     instance, record_api_call = _mock_cost_tracker_service()
 
-    with patch("personal_agent.llm_client.cost_tracker.CostTrackerService", return_value=instance):
+    with patch(
+        "personal_agent.llm_client.cost_tracker.get_cost_tracker_service", return_value=instance
+    ):
         await record_vendor_cost(
             provider="ovh",
             model="Qwen3-Embedding-8B",
@@ -125,7 +131,9 @@ async def test_skips_on_malformed_identity() -> None:
     """A non-UUID string (e.g. the 'unknown' sentinel some tool call sites use) is skipped, not raised."""
     instance, record_api_call = _mock_cost_tracker_service()
 
-    with patch("personal_agent.llm_client.cost_tracker.CostTrackerService", return_value=instance):
+    with patch(
+        "personal_agent.llm_client.cost_tracker.get_cost_tracker_service", return_value=instance
+    ):
         await record_vendor_cost(
             provider="ovh",
             model="Qwen3-Embedding-8B",
@@ -145,7 +153,9 @@ async def test_swallows_db_error_without_raising() -> None:
     instance, record_api_call = _mock_cost_tracker_service()
     record_api_call.side_effect = RuntimeError("db exploded")
 
-    with patch("personal_agent.llm_client.cost_tracker.CostTrackerService", return_value=instance):
+    with patch(
+        "personal_agent.llm_client.cost_tracker.get_cost_tracker_service", return_value=instance
+    ):
         await record_vendor_cost(
             provider="voyage",
             model="rerank-2.5",

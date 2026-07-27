@@ -372,11 +372,14 @@ class LiteLLMClient:
         trace_id = str(trace_ctx.trace_id)
 
         # ── Settings + cost tracking ──────────────────────────────────────
+        # FRE-988: the shared singleton holds one pooled connection for the
+        # process's lifetime; connect() is idempotent, so this is a cheap
+        # no-op once the pool exists rather than a fresh asyncpg pool per call.
         from personal_agent.config.settings import get_settings
-        from personal_agent.llm_client.cost_tracker import CostTrackerService
+        from personal_agent.llm_client.cost_tracker import get_cost_tracker_service
 
         _settings = get_settings()
-        cost_tracker = CostTrackerService()
+        cost_tracker = get_cost_tracker_service()
         await cost_tracker.connect()
 
         # Prepend system prompt as a system message if provided
@@ -490,7 +493,6 @@ class LiteLLMClient:
                 budget_role=self.budget_role,
                 reservation_amount_usd=float(reservation_amount),
             )
-            await cost_tracker.disconnect()
             raise
 
         start_time = time.monotonic()
@@ -532,7 +534,6 @@ class LiteLLMClient:
                     reservation_id=str(reservation_id),
                     error=str(refund_exc),
                 )
-            await cost_tracker.disconnect()
             raise
         except Exception as e:
             # Refund the reservation so the counter doesn't leak headroom.
@@ -554,7 +555,6 @@ class LiteLLMClient:
                 error=str(e),
                 exc_info=True,
             )
-            await cost_tracker.disconnect()
             raise LLMClientError(f"LiteLLM call failed: {e}") from e
 
         elapsed = time.monotonic() - start_time
@@ -738,7 +738,6 @@ class LiteLLMClient:
                 "cache_creation_input_tokens": _cache_creation,
             },
         )
-        await cost_tracker.disconnect()
 
         return LLMResponseType(
             role="assistant",

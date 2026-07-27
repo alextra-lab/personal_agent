@@ -12,7 +12,7 @@ from personal_agent.llm_client.concurrency import (
     InferencePriority,
     InferenceSlotTimeout,
 )
-from personal_agent.llm_client.cost_tracker import CostTrackerService
+from personal_agent.llm_client.cost_tracker import CostTrackerService, get_cost_tracker_service
 from personal_agent.llm_client.models import ToolCallingStrategy
 from personal_agent.llm_client.tool_call_parser import parse_text_tool_calls
 from personal_agent.llm_client.types import (
@@ -81,6 +81,7 @@ __all__ = [
     "ToolCall",
     "parse_text_tool_calls",
     "CostTrackerService",
+    "get_cost_tracker_service",
     "ToolCallingStrategy",
     "LLMClient",
     "get_llm_client",

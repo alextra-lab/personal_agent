@@ -72,7 +72,7 @@ def _patches(acompletion_mock: AsyncMock) -> list[Any]:
             side_effect=lambda msgs, trace_id: (msgs, []),
         ),
         patch(
-            "personal_agent.llm_client.cost_tracker.CostTrackerService",
+            "personal_agent.llm_client.cost_tracker.get_cost_tracker_service",
             return_value=AsyncMock(),
         ),
         patch(

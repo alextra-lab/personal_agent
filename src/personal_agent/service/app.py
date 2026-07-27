@@ -587,6 +587,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await get_route_trace_ledger().connect()
 
+    # Cost tracker singleton (FRE-988): connect the shared pool once at startup
+    # rather than paying asyncpg.create_pool() setup on the first priced call.
+    # connect() is idempotent, so a call site's own connect() later is a no-op.
+    from personal_agent.llm_client.cost_tracker import get_cost_tracker_service
+
+    await get_cost_tracker_service().connect()
+
     # Cost Check Gate (ADR-0065 / FRE-305): atomic Postgres-backed reservation
     # primitive in front of every paid LLM call. Loaded here so the
     # subsequent service-init code can already issue paid calls if needed.
@@ -1313,6 +1320,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from personal_agent.observability.route_trace import get_route_trace_ledger
 
     await get_route_trace_ledger().disconnect()
+
+    # Cost tracker singleton teardown (FRE-988)
+    from personal_agent.llm_client.cost_tracker import get_cost_tracker_service
+
+    await get_cost_tracker_service().disconnect()
 
     # Cost Check Gate teardown (FRE-305)
     if cost_gate_reaper_task is not None:

@@ -3,13 +3,14 @@
   "authored_by": "build session (Opus), by hand, before any digest was generated",
   "definition": "ADR-0124 D3 \u2014 see README.md",
   "conclusions": [
-    "The user visited three Venice churches in sequence on this trip: the Frari (Gothic), San Pantalon (Baroque), and Santa Maria Assunta on Torcello (Byzantine).",
+    "The user visited three churches in sequence on this trip, spanning Gothic, Baroque and Byzantine, and the assistant guided each one. [itinerary redacted]",
     "Titian's tomb in the Frari was sculpted by Luigi and Pietro Zandomeneghi, completed in 1852, commissioned by the Austrian Emperor Ferdinand I.",
     "The assistant twice gave the wrong Biennale: first the 2024 Art Biennale (already closed), then the 2025 Architecture Biennale. The user corrected it \u2014 the date is May 2026 and the current event is the 61st International Art Exhibition, 'In Minor Keys', curated by the late Koyo Kouoh.",
-    "The user's planned last day was San Marco Basilica, then San Giorgio Maggiore, then shopping, then possibly the Biennale Giardini.",
-    "The assistant's first restaurant recommendation, Antiche Carampane, was withdrawn: it was recommended on the claim that it had moved away from shellfish, and the user reported the menu was in fact shellfish-dominated.",
-    "The replacement recommendation is Osteria Mocenigo, about eight minutes' walk from Campo San Polo, with Al Ponte Storto as the backup.",
-    "The user's dining companion does not eat shellfish, and the user wants a large pasta selection.",
-    "Visiting the Cini Foundation sites on San Giorgio Maggiore requires advance booking."
-  ]
+    "The user set out a plan for their last day: a basilica, an island church, shopping, and possibly an art exhibition. [itinerary redacted]",
+    "The assistant's first restaurant recommendation was withdrawn: it was recommended on the claim that the venue had moved away from shellfish, and the user reported the menu was in fact shellfish-dominated. [venue redacted]",
+    "A replacement venue was recommended, about eight minutes' walk from the reference square, with a named backup. [venues redacted]",
+    "The user recorded a dietary constraint for a dining companion and a preference of their own. [details redacted]",
+    "One of the island sites requires advance booking. [venue redacted]"
+  ],
+  "redaction": "Personal specifics \u2014 locations, itineraries, named individuals and venues \u2014 are redacted. This repository is public and these are the owner's own sessions. What is being audited is which *kinds* of statement were judged consequential, and that survives redaction. The unredacted items are reproducible from the corpus via --dump-calibration."
 }

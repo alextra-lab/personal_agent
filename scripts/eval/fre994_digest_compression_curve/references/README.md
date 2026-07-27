@@ -43,8 +43,18 @@ uv run python -m scripts.eval.fre994_digest_compression_curve.run_curve --dump-c
 
 They land under `telemetry/fre994_curve/calibration-transcripts/` (gitignored).
 
-## A note on wording
+## Redaction, and why it does not undermine the audit
 
-Where a session named a real deployment host, the reference item names its role instead
-("the SLM relay host"). The conclusion is unchanged; the identifier is not this repo's to
-publish.
+**This repository is public, and these are the owner's own sessions.** Personal specifics are
+therefore redacted from the committed items: locations and itineraries, named individuals, named
+venues, dietary details, and — where a session named a real deployment host — the hostname, which is
+replaced by its role ("the SLM relay host"). Each redacted file carries a `redaction` field saying so.
+
+The redaction does not weaken what these files are for. The audit question is **which kinds of
+statement were judged consequential** — a decision that was left open, a recommendation that was
+made, a correction the assistant issued — and that survives intact. What is removed is the content
+that identifies the owner's movements and associates, which was never the thing under review.
+
+The unredacted items are reproducible: regenerate the transcripts with `--dump-calibration` and read
+them against these files. The redacted spans are unambiguous — each session names one city, one
+venue, one person.

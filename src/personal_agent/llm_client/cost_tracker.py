@@ -1,5 +1,6 @@
 """Cost tracking service for API calls."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Literal, cast
@@ -82,35 +83,68 @@ class CostTrackerService:
         """Initialize cost tracker service."""
         self.pool: asyncpg.Pool | None = None
         self.db_url = _normalize_asyncpg_dsn(settings.database_url)
+        # Serializes connect()/disconnect() (FRE-988 codex review): the shared
+        # singleton can be entered concurrently by several coroutines (or, for
+        # standalone scripts, without any FastAPI lifespan enforcing a single
+        # startup connect), so a bare check-then-act on self.pool would let
+        # concurrent first-connects race — each seeing pool=None and building
+        # its own asyncpg pool, with a losing coroutine's failure handler able
+        # to null out a winning coroutine's already-installed pool.
+        self._connect_lock = asyncio.Lock()
+
+    def _pool_is_usable(self) -> bool:
+        """True if ``self.pool`` is set and not closed/closing."""
+        return self.pool is not None and not self.pool.is_closing()
 
     async def connect(self) -> None:
         """Open the asyncpg connection pool.
 
-        Idempotent: a second call while already connected is a no-op (FRE-988,
-        mirrors ``RouteTraceLedger.connect``), so callers can call it on every
-        use of the shared singleton (:func:`get_cost_tracker_service`) without
-        churning a fresh pool per operation.
+        Idempotent while the pool is live: a second call while already
+        connected is a no-op (FRE-988, mirrors ``RouteTraceLedger.connect``),
+        so callers can call it on every use of the shared singleton
+        (:func:`get_cost_tracker_service`) without churning a fresh pool per
+        operation. Concurrent callers are serialized on an internal lock, so
+        two coroutines racing to connect a still-empty pool build exactly one
+        pool between them rather than two.
+
+        A single dropped *connection* inside a live pool is not this method's
+        concern — ``asyncpg`` replaces individual dead connections on the next
+        ``acquire()`` internally, so a transient Postgres blip self-heals
+        without help. What this guards against is the *pool object* itself
+        going terminal (``close()``/``terminate()`` called on it, e.g. by
+        something outside this class): ``is_closing()`` catches that case and
+        rebuilds the pool, so the shared singleton can't wedge into a
+        permanent no-op the way a one-shot per-call pool never could.
         """
-        if self.pool is not None:
+        if self._pool_is_usable():
             return
-        try:
-            self.pool = await asyncpg.create_pool(
-                self.db_url,
-                min_size=1,
-                max_size=5,
-                command_timeout=10,
-            )
-            log.info("cost_tracker_connected", database="postgresql")
-        except Exception as e:
-            log.error("cost_tracker_connection_failed", error=str(e), exc_info=True)
-            self.pool = None
+        async with self._connect_lock:
+            # Re-check under the lock: another coroutine may have already
+            # (re)built the pool while this one was waiting for the lock.
+            if self._pool_is_usable():
+                return
+            if self.pool is not None:
+                log.warning("cost_tracker_pool_terminal_reconnecting")
+                self.pool = None
+            try:
+                self.pool = await asyncpg.create_pool(
+                    self.db_url,
+                    min_size=1,
+                    max_size=5,
+                    command_timeout=10,
+                )
+                log.info("cost_tracker_connected", database="postgresql")
+            except Exception as e:
+                log.error("cost_tracker_connection_failed", error=str(e), exc_info=True)
+                self.pool = None
 
     async def disconnect(self) -> None:
         """Disconnect from database."""
-        if self.pool:
-            await self.pool.close()
-            self.pool = None
-            log.info("cost_tracker_disconnected")
+        async with self._connect_lock:
+            if self.pool:
+                await self.pool.close()
+                self.pool = None
+                log.info("cost_tracker_disconnected")
 
     async def record_api_call(
         self,

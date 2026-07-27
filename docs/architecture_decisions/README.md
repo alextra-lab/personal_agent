@@ -212,6 +212,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0122](ADR-0122-build-time-artifact-builder-selection.md) | Per-Build Artifact Builder Selection — Choose the Model Before the Plan Is Written | Implemented — 2026-07-22 (amended 2026-07-21 — card at turn start) |
 | [ADR-0123](ADR-0123-turn-progress-surface.md) | Turn Progress Surface — Make the Wait Legible, So the User Stays Attached | Accepted — 2026-07-24 |
 | [ADR-0124](ADR-0124-session-summary-producer-and-phased-consumption.md) | Session-Summary Producer Correction and Phased Consumption | Accepted (amended 2026-07-23 — Amendment A, conversation-scoped input; 2026-07-24 — Amendment B, conversation-only: `tool_evidence` + `status_contradiction` removed) |
+| [ADR-0125](ADR-0125-two-quality-dimensions-and-turn-evidence-contract.md) | The Two Quality Dimensions and the Turn Evidence Contract (supersedes ADR-0067 reflection surfacing; verification oracle deferred) | Proposed |
 
 ### Supplementary
 

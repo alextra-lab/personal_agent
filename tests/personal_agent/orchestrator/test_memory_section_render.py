@@ -1,0 +1,374 @@
+"""Task-assist recall renders every kind, and is bounded by stated constants (FRE-1010).
+
+Three defects motivated this, all in one render site (``executor.step_llm_call``):
+
+* a score-blind positional cap of 3 discarded candidates the upstream gates had
+  already admitted — observed live on trace 94b70cd9, where two described
+  ice-cream entities scoring 0.562/0.560 were cut against an admitted 0.563;
+* the task-assist branch read ``summary``/``user_message``, keys an **entity**
+  payload does not carry, so an entity rendered as a bare numbered bullet;
+* the branch was chosen by the *first* item's type, so a mixed set was rendered
+  wholesale by whichever renderer its top item happened to select.
+
+The acceptance criteria are asserted at the executor seam rather than against the
+pure renderer: ADR-0125 defines admission as the **final serialized model input**,
+so a pure-function test could pass while the block never reached the wire.
+
+Note on where the section lands: it is **not** in the system prompt. ADR-0081 §D2
+inlines it as the volatile tail of the *current user turn*
+(``_inline_volatile_into_last_user_message``), which is why it sits after every
+cache breakpoint and cannot erode the cached prefix. ``test_section_rides_the_user_turn_not_the_system_prompt``
+pins that so the question does not have to be re-investigated.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from personal_agent.captains_log.turn_evidence import DropReason
+
+
+def _make_ctx(**overrides: object) -> object:
+    from personal_agent.governance.models import Mode
+    from personal_agent.orchestrator.channels import Channel
+    from personal_agent.orchestrator.types import ExecutionContext
+
+    kwargs: dict[str, object] = {
+        "session_id": "test-session",
+        "trace_id": "test-trace",
+        "user_message": "how do I make melon ice cream?",
+        "mode": Mode.NORMAL,
+        "channel": Channel.CHAT,
+        "messages": [{"role": "user", "content": "how do I make melon ice cream?"}],
+    }
+    kwargs.update(overrides)
+    return ExecutionContext(**kwargs)  # type: ignore[arg-type]
+
+
+def _mock_llm() -> MagicMock:
+    client = MagicMock()
+    client.respond = AsyncMock(
+        return_value={
+            "content": "Use less water.",
+            "tool_calls": [],
+            "response_id": None,
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+    )
+    client.model_configs = {}
+    return client
+
+
+@pytest.fixture(autouse=True)
+def _restore_executor_tool_globals():
+    import personal_agent.orchestrator.executor as _ex
+
+    saved_registry = _ex._tool_registry
+    saved_layer = _ex._tool_execution_layer
+    yield
+    _ex._tool_registry = saved_registry
+    _ex._tool_execution_layer = saved_layer
+
+
+async def _run(ctx: object, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Drive the real ``step_llm_call`` and return the mocked client."""
+    from personal_agent.config import settings
+    from personal_agent.telemetry.trace import TraceContext
+
+    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
+
+    client = _mock_llm()
+    session = MagicMock()
+    session.add_message = AsyncMock()
+    session.get_messages = AsyncMock(return_value=[])
+
+    with (
+        patch("personal_agent.llm_client.factory.get_llm_client", return_value=client),
+        patch(
+            "personal_agent.orchestrator.executor.get_default_registry",
+            return_value=MagicMock(get_tool_definitions_for_llm=MagicMock(return_value=[])),
+        ),
+    ):
+        from personal_agent.orchestrator.executor import step_llm_call
+
+        await step_llm_call(ctx, session, TraceContext.new_trace())  # type: ignore[arg-type]
+    return client
+
+
+def _dispatched_user_text(client: MagicMock) -> str:
+    """The text of the last user message actually dispatched to the provider."""
+    messages = client.respond.call_args.kwargs["messages"]
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            content = msg.get("content")
+            return content if isinstance(content, str) else str(content)
+    return ""
+
+
+def _episode(ident: str, summary: str) -> dict[str, Any]:
+    return {
+        "type": "episode",
+        "conversation_id": ident,
+        "user_message": f"earlier question {ident}",
+        "summary": summary,
+        "key_entities": [],
+    }
+
+
+def _entity(name: str, description: str = "a described thing", **extra: Any) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "type": "entity",
+        "name": name,
+        "entity_type": "CONCEPT",
+        "description": description,
+    }
+    item.update(extra)
+    return item
+
+
+# ---------------------------------------------------------------------------
+# Acceptance criteria — asserted at the executor seam
+# ---------------------------------------------------------------------------
+
+
+class TestAcceptanceAtTheSeam:
+    """The ticket's HOW IT IS PROVEN, against the real dispatched input."""
+
+    @pytest.mark.asyncio
+    async def test_described_entity_beyond_position_three_reaches_the_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-1: the melon case. A described entity at index 4 of a mixed set must
+        reach the model — under the cap of 3 it was recalled and then discarded.
+        """
+        from personal_agent.captains_log.turn_evidence import build_recall_candidates
+
+        melon = "a frozen dessert whose texture needs adjustment with watery fruit like melon"
+        memory = [
+            _episode("t1", "we talked about desserts"),
+            _episode("t2", "we talked about fruit"),
+            _episode("t3", "we talked about freezing"),
+            _entity("Ice cream", melon),
+        ]
+        ctx = _make_ctx(
+            memory_context=memory, recall_candidates=build_recall_candidates(memory, {})
+        )
+        client = await _run(ctx, monkeypatch)
+
+        assert melon in _dispatched_user_text(client)
+
+    @pytest.mark.asyncio
+    async def test_no_item_is_dropped_for_position_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-2: every item the upstream gates admitted renders and is recorded."""
+        from personal_agent.captains_log.turn_evidence import build_recall_candidates
+
+        memory = [_episode(f"t{i}", f"summary number {i}") for i in range(5)]
+        ctx = _make_ctx(
+            memory_context=memory, recall_candidates=build_recall_candidates(memory, {})
+        )
+        client = await _run(ctx, monkeypatch)
+
+        text = _dispatched_user_text(client)
+        for i in range(5):
+            assert f"summary number {i}" in text
+        evidence = ctx.turn_evidence  # type: ignore[attr-defined]
+        assert {i.identity for i in evidence.recall.items if i.admitted} == {
+            f"t{i}" for i in range(5)
+        }
+
+    @pytest.mark.asyncio
+    async def test_admitted_entity_rendered_non_empty_content(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-3: an entity must never render as a bare numbered bullet."""
+        from personal_agent.captains_log.turn_evidence import build_recall_candidates
+
+        memory = [_episode("t1", "we talked about desserts"), _entity("Sorbet", "an icy dessert")]
+        ctx = _make_ctx(
+            memory_context=memory, recall_candidates=build_recall_candidates(memory, {})
+        )
+        client = await _run(ctx, monkeypatch)
+
+        text = _dispatched_user_text(client)
+        assert "Sorbet" in text
+        assert "an icy dessert" in text
+        # The empty-bullet signature: a numbered marker with nothing after it.
+        assert "1. \n" not in text
+        assert "2. \n" not in text
+
+    @pytest.mark.asyncio
+    async def test_record_admits_exactly_the_items_that_contributed_content(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-4: a blank-description entity contributes no content, so it is not admitted."""
+        from personal_agent.captains_log.turn_evidence import build_recall_candidates
+
+        memory = [
+            _episode("t1", "we talked about desserts"),
+            _entity("Sorbet", "an icy dessert"),
+            _entity("Ghost", ""),
+        ]
+        ctx = _make_ctx(
+            memory_context=memory, recall_candidates=build_recall_candidates(memory, {})
+        )
+        await _run(ctx, monkeypatch)
+
+        evidence = ctx.turn_evidence  # type: ignore[attr-defined]
+        assert {i.identity for i in evidence.recall.items if i.admitted} == {"t1", "Sorbet"}
+        ghost = next(i for i in evidence.recall.items if i.identity == "Ghost")
+        assert ghost.admitted is False
+        assert ghost.drop_reason is DropReason.NOT_RENDERED
+
+    @pytest.mark.asyncio
+    async def test_section_rides_the_user_turn_not_the_system_prompt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ADR-0081 §D2: the section is the volatile tail of the current user turn.
+
+        Pinned because the opposite assumption — that it lands in the system prompt —
+        implies a prompt-cache erosion risk that does not exist: every cache
+        breakpoint precedes this content.
+        """
+        from personal_agent.captains_log.turn_evidence import build_recall_candidates
+
+        marker = "zzz-distinctive-recalled-text-zzz"
+        memory = [_entity("Sorbet", marker)]
+        ctx = _make_ctx(
+            memory_context=memory, recall_candidates=build_recall_candidates(memory, {})
+        )
+        client = await _run(ctx, monkeypatch)
+
+        assert marker in _dispatched_user_text(client)
+        assert marker not in (client.respond.call_args.kwargs.get("system_prompt") or "")
+
+
+# ---------------------------------------------------------------------------
+# Unit — the renderer itself
+# ---------------------------------------------------------------------------
+
+
+class TestRendererDispatchesPerItemKind:
+    def _render(self, items: list[dict[str, Any]]) -> tuple[str, tuple[str, ...]]:
+        from personal_agent.orchestrator.executor import _render_memory_section_with_ids
+
+        return _render_memory_section_with_ids(items)
+
+    def test_mixed_set_renders_both_kinds(self) -> None:
+        text, ids = self._render([_episode("t1", "a past chat"), _entity("Sorbet", "icy")])
+        assert "a past chat" in text
+        assert "Sorbet" in text and "icy" in text
+        assert set(ids) == {"t1", "Sorbet"}
+
+    def test_entity_only_set_still_renders_when_first_item_is_an_episode(self) -> None:
+        """The old branch selection read item[0]'s type; a mixed set broke by construction."""
+        text, ids = self._render([_episode("t1", "a past chat"), _entity("Sorbet", "icy")])
+        assert "icy" in text
+        assert "Sorbet" in ids
+
+    def test_memory_graph_header_is_preserved(self) -> None:
+        """sub_agent.py scans for this exact string (_MEMORY_CONTEXT_MARKER, FRE-505)."""
+        from personal_agent.orchestrator.sub_agent import _MEMORY_CONTEXT_MARKER
+
+        text, _ = self._render([_entity("Sorbet", "icy")])
+        assert _MEMORY_CONTEXT_MARKER in text
+
+    def test_blank_description_entity_contributes_no_line_and_no_id(self) -> None:
+        text, ids = self._render([_entity("Sorbet", "icy"), _entity("Ghost", "")])
+        assert "Ghost" not in text
+        assert ids == ("Sorbet",)
+
+    def test_empty_input_renders_nothing(self) -> None:
+        assert self._render([]) == ("", ())
+
+    def test_mention_count_key_is_read(self) -> None:
+        text, _ = self._render([_entity("Sorbet", "icy", mention_count=328)])
+        assert "328" in text
+
+    def test_legacy_mentions_key_is_read(self) -> None:
+        """_format_broad_recall writes 'mentions'; the other three producers write
+        'mention_count'. Reading only one fabricated '(mentioned 1x)' for the rest.
+        """
+        text, _ = self._render([_entity("Sorbet", "icy", mentions=42)])
+        assert "42" in text
+
+    def test_absent_count_is_not_fabricated_as_one(self) -> None:
+        text, _ = self._render([_entity("Sorbet", "icy")])
+        assert "mentioned" not in text.lower()
+
+    def test_zero_count_is_rendered_not_dropped(self) -> None:
+        text, _ = self._render([_entity("Sorbet", "icy", mention_count=0)])
+        assert "0" in text
+
+
+class TestRendererIsBoundedByStatedConstants:
+    """The volatile tail is outside the prompt cache, so its size is a per-turn cost."""
+
+    def _render(self, items: list[dict[str, Any]]) -> tuple[str, tuple[str, ...]]:
+        from personal_agent.orchestrator.executor import _render_memory_section_with_ids
+
+        return _render_memory_section_with_ids(items)
+
+    def test_oversized_summary_is_marked_not_silently_clipped(self) -> None:
+        from personal_agent.orchestrator.executor import _MAX_ITEM_CHARS
+
+        text, _ = self._render([_episode("t1", "x" * (_MAX_ITEM_CHARS + 500))])
+        assert "...[truncated 500 chars]" in text
+
+    def test_upstream_800_char_value_is_not_double_marked(self) -> None:
+        """Gateway entity-match already writes mark_truncated(..., 800); the render
+        bound sits above 800 + marker so it never truncates an already-marked value.
+        """
+        from personal_agent.captains_log.turn_evidence import mark_truncated
+
+        upstream = mark_truncated("y" * 2000, 800)
+        text, _ = self._render([_episode("t1", upstream)])
+        assert text.count("...[truncated") == 1
+
+    def test_episode_cardinality_is_bounded(self) -> None:
+        from personal_agent.orchestrator.executor import _MAX_RENDERED_EPISODES
+
+        items = [_episode(f"t{i}", f"summary {i}") for i in range(_MAX_RENDERED_EPISODES + 3)]
+        _, ids = self._render(items)
+        assert len(ids) == _MAX_RENDERED_EPISODES
+
+    def test_entity_rank_cap_is_unchanged(self) -> None:
+        """Pre-existing bound, deliberately retained (FRE-374 D1) — explicit non-goal."""
+        from personal_agent.orchestrator.executor import _MAX_RENDERED_ENTITIES
+
+        items = [_entity(f"E{i}") for i in range(_MAX_RENDERED_ENTITIES + 1)]
+        _, ids = self._render(items)
+        assert len(ids) == _MAX_RENDERED_ENTITIES
+
+    def test_blank_items_do_not_consume_bound_slots(self) -> None:
+        """The bound caps rendered content, not candidates considered.
+
+        Cap-then-filter would let blank leading items burn the budget and exclude a
+        later item that does have content — the same "recalled then discarded" shape
+        this ticket fixes.
+        """
+        from personal_agent.orchestrator.executor import _MAX_RENDERED_EPISODES
+
+        # Genuinely contentless: summary AND user_message both empty, else the
+        # fallback correctly renders the user message and these are not blank at all.
+        items = [
+            {"type": "episode", "conversation_id": f"blank{i}", "summary": "", "user_message": ""}
+            for i in range(_MAX_RENDERED_EPISODES)
+        ]
+        items.append(_episode("real", "genuine recalled content"))
+        text, ids = self._render(items)
+
+        assert "genuine recalled content" in text
+        assert "real" in ids
+
+    def test_whitespace_only_summary_falls_back_to_user_message(self) -> None:
+        """``" "`` is truthy — a naive ``or`` chain would suppress a good user_message."""
+        item = _episode("t1", " ")
+        text, ids = self._render([item])
+
+        assert item["user_message"] in text
+        assert ids == ("t1",)

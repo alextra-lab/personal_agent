@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 
 from personal_agent.captains_log.turn_evidence import (
     InlineOutcome,
+    MemoryItemKind,
     build_recall_candidates,
     build_turn_evidence,
     derive_evidence_presence,
@@ -2211,40 +2212,152 @@ async def _maybe_confirm_attachment_cost(
     return False
 
 
+_MAX_RENDERED_ENTITIES = 15
+"""Rank cap on described entities (pre-existing, FRE-374 D1).
+
+Bounds broad recall's ``limit=20`` (``request_gateway/context.py``). Retained
+deliberately by FRE-1010 as an explicit non-goal: it was not the reported mechanism
+(the observed turn had five candidates) and its drop is already recordable.
+"""
+
+_MAX_RENDERED_EPISODES = 5
+"""Cardinality bound on rendered episodes (FRE-1010).
+
+Restates, at render time, the bound every episode producer already enforces
+upstream — gateway proactive ``proactive_memory_max_injected_items=5``, gateway
+entity-match ``limit=5``, legacy entity-match ``limit=5``. It therefore cannot bite
+on any current path; it exists so a future producer cannot quietly unbound the
+volatile tail on the legacy path, which has no token budget.
+"""
+
+_MAX_ITEM_CHARS = 1000
+"""Per-item character bound on rendered memory content (FRE-1010).
+
+The volatile tail sits *outside* the prompt cache by construction (ADR-0081 §D2 —
+every cache breakpoint precedes it), so each character here is a fresh input token
+on **every** turn, never amortised. The legacy recall path has no token budget, and
+its episode ``summary`` is a stored digest with no inherent length bound, so the
+bound is applied here by construction rather than shipped-and-watched — ADR-0078's
+cache-erosion instrument cannot detect the problem (FRE-1008: the static-prefix and
+dynamic prompt hashes are computed from the same input).
+
+Set **above** the largest upstream value so it never double-truncates: gateway
+entity-match writes ``mark_truncated(..., 800)`` (``request_gateway/context.py``),
+i.e. up to 800 chars plus a ~26-char marker. Also ≈ ADR-0124's ~250-token digest
+target. Truncation that does bite is marked, never silent (ADR-0125 D5).
+"""
+
+
+def _entity_line(item: dict[str, Any]) -> str:
+    """Render one described entity.
+
+    The mention count is read as ``mention_count`` first and legacy ``mentions``
+    second: three of the four producers write ``mention_count``
+    (``memory/proactive.py``, ``request_gateway/context.py`` ×2) and only
+    ``_format_broad_recall`` writes ``mentions``, so reading one key alone rendered a
+    fabricated "(mentioned 1x)" for every gateway-sourced entity. When neither key is
+    present the clause is omitted rather than defaulted — an absent count is absent,
+    not one.
+    """
+    description = mark_truncated((item.get("description") or "").strip(), _MAX_ITEM_CHARS)
+    line = f"- [{item.get('entity_type', '')}] {item.get('name', '')}: {description}"
+    count = item.get("mention_count", item.get("mentions"))
+    if count is not None:
+        line += f" (mentioned {count}x)"
+    return line
+
+
+def _episode_text(item: dict[str, Any]) -> str:
+    """The renderable text of one episode, bounded and marked.
+
+    ``or`` rather than ``dict.get`` defaults deliberately: a payload carrying
+    ``summary=None`` must fall back to the user message, not render the string
+    ``"None"``. Each candidate is stripped *before* the fallback, so a
+    whitespace-only summary also falls through — otherwise ``" "`` is truthy and
+    would suppress a perfectly good ``user_message``, losing content on a path whose
+    whole purpose is not losing it.
+    """
+    summary = (item.get("summary") or "").strip()
+    raw = summary or (item.get("user_message") or "").strip()
+    return mark_truncated(raw, _MAX_ITEM_CHARS)
+
+
 def _render_memory_section_with_ids(
-    entity_items: list[dict[str, Any]],
+    items: list[dict[str, Any]],
 ) -> tuple[str, tuple[str, ...]]:
-    """Build the ## Your Memory Graph entity section, and name what it rendered.
+    """Render recalled memory for the volatile tail, dispatching **per item kind**.
 
-    Skips entities with None or blank descriptions (FRE-374 D1) so the
-    LLM does not receive empty lines like '- [LOCATION] Paris:  (mentioned 328x)'.
+    Replaces a branch selected by the *first* item's type (FRE-1010). That selection
+    was unsound by construction: a mixed set was rendered wholesale by whichever
+    renderer its top-scoring item happened to pick, so on a set led by an episode
+    every entity fell through the conversation renderer — which reads ``summary`` /
+    ``user_message``, keys an entity payload does not carry — and rendered as a bare
+    numbered bullet. Observed live on trace 94b70cd9.
 
-    The rank cap and that blank-description filter both drop candidates silently. The
-    identities returned here (FRE-1004) are what makes those drops recordable at the
-    admission point instead of invisible (ADR-0125 D3 item 5).
+    An item that yields no content contributes **no line and no id**. That is what
+    keeps "admitted" honest in the evidence record (ADR-0125 D3 item 5): drops stay
+    recordable as candidates − rendered, rather than being reported as admitted while
+    contributing nothing.
+
+    Session items are deliberately not rendered — an explicit FRE-1010 non-goal. Two
+    incompatible session shapes exist and the legacy one (``_format_broad_recall``)
+    carries no summary field at all, so rendering would fix one producer and leave the
+    other silently dropped.
 
     Args:
-        entity_items: List of entity dicts from memory_context.
+        items: Memory-context items of any kind, in upstream relevance order.
 
     Returns:
-        Tuple of (section string, identities rendered). Both empty when nothing renders.
+        Tuple of (section string, identities that actually rendered content). Both
+        empty when nothing renders.
     """
-    described = [m for m in entity_items[:15] if (m.get("description") or "").strip()]
-    if not described:
-        return "", ()
-    rendered_ids = tuple(memory_item_identity(m)[1] for m in described)
-    entity_lines = [
-        f"- [{m.get('entity_type', '')}] {m.get('name', '')}: {m.get('description', '').strip()} "
-        f"(mentioned {m.get('mentions', 1)}x)"
-        for m in described
+    entities: list[dict[str, Any]] = []
+    episodes: list[dict[str, Any]] = []
+    for item in items:
+        kind, _ = memory_item_identity(item)
+        if kind is MemoryItemKind.ENTITY:
+            entities.append(item)
+        elif kind is MemoryItemKind.EPISODE:
+            episodes.append(item)
+
+    # Filter for content BEFORE applying the bound, so the bound caps what is actually
+    # rendered rather than what was merely considered. Cap-then-filter would let blank
+    # items consume slots and silently exclude a later item that does have content —
+    # the exact "recalled then discarded" failure this ticket exists to fix, and it
+    # would undermine the bounds' own purpose (bounding the volatile tail's cost, which
+    # only rendered content contributes to).
+    described = [m for m in entities if (m.get("description") or "").strip()][
+        :_MAX_RENDERED_ENTITIES
     ]
-    section = "\n\n## Your Memory Graph — Known Entities\n"
-    section += "\n".join(entity_lines)
-    section += (
-        "\n\nUse this list to directly answer questions about what the user "
-        "has previously discussed. Do NOT say you have no memory."
-    )
-    return section, rendered_ids
+    recalled = [m for m in episodes if _episode_text(m)][:_MAX_RENDERED_EPISODES]
+
+    sections: list[str] = []
+    rendered_ids: list[str] = []
+
+    if described:
+        rendered_ids.extend(memory_item_identity(m)[1] for m in described)
+        section = "\n\n## Your Memory Graph — Known Entities\n"
+        section += "\n".join(_entity_line(m) for m in described)
+        section += (
+            "\n\nUse this list to directly answer questions about what the user "
+            "has previously discussed. Do NOT say you have no memory."
+        )
+        sections.append(section)
+
+    if recalled:
+        rendered_ids.extend(memory_item_identity(m)[1] for m in recalled)
+        section = "\n\n## Relevant Past Conversations\n"
+        section += "The following past conversations may be relevant to the current request:\n\n"
+        for index, item in enumerate(recalled, 1):
+            section += f"{index}. {_episode_text(item)}\n"
+            if item.get("key_entities"):
+                section += f"   Entities: {', '.join(item['key_entities'][:5])}\n"
+        section += (
+            "\nYou can reference these past conversations to provide more context-aware responses."
+        )
+        sections.append(section)
+
+    return "".join(sections), tuple(rendered_ids)
 
 
 async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
@@ -4197,34 +4310,20 @@ async def step_llm_call(
         # This ensures the KV-cache boundary sits between the stable prefix and
         # the per-turn dynamic content, fixing the cross-turn reuse ≈ 0 issue.
         memory_section: str | None = None
-        # FRE-1004: the identities this render actually emitted. Both branches below
-        # drop candidates silently — the entity branch skips 'session' items and caps
-        # at 15 described entities, the task-assist branch caps at 3 — so without this
-        # the evidence record could not tell a used item from a dropped one.
+        # FRE-1004: the identities this render actually emitted, so a dropped candidate
+        # stays distinguishable from a used one in the evidence record (ADR-0125 D3
+        # item 5). FRE-1010: one renderer for every kind — the previous pair of branches
+        # was selected by the FIRST item's type, so a mixed set was rendered wholesale
+        # by whichever renderer its top item picked, and entities fell through the
+        # conversation renderer as empty bullets.
         _rendered_memory_ids: tuple[str, ...] = ()
-        if ctx.memory_context and len(ctx.memory_context) > 0:
-            if ctx.memory_context[0].get("type") in ("entity", "session"):
-                # Broad recall path — format as direct knowledge summary
-                entity_items = [m for m in ctx.memory_context if m.get("type") == "entity"]
-                _section_text, _rendered_memory_ids = _render_memory_section_with_ids(entity_items)
-                memory_section = _section_text or None
-                if memory_section is None:
-                    _rendered_memory_ids = ()
-            else:
-                # Task-assist path — inject conversation summaries
-                _ms = "\n\n## Relevant Past Conversations\n"
-                _ms += (
-                    "The following past conversations may be relevant to the current request:\n\n"
-                )
-                _rendered_memory_ids = tuple(
-                    memory_item_identity(mem)[1] for mem in ctx.memory_context[:3]
-                )
-                for i, mem in enumerate(ctx.memory_context[:3], 1):  # Limit to top 3
-                    _ms += f"{i}. {mem.get('summary', mem.get('user_message', ''))[:150]}...\n"
-                    if mem.get("key_entities"):
-                        _ms += f"   Entities: {', '.join(mem['key_entities'][:5])}\n"
-                _ms += "\nYou can reference these past conversations to provide more context-aware responses."
-                memory_section = _ms
+        if ctx.memory_context:
+            _section_text, _rendered_memory_ids = _render_memory_section_with_ids(
+                ctx.memory_context
+            )
+            memory_section = _section_text or None
+            if memory_section is None:
+                _rendered_memory_ids = ()
 
         # If we are passing tools (native or prompt-injected), include tool-use guidance
         # in the system prompt to reduce malformed tool calls and looping (ADR-0032).

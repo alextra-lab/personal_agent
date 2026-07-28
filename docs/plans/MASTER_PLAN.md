@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-27
+> **Last updated**: 2026-07-28
 
 ## 0. ADR-0126 — reading the living-knowledge substrate (Accepted; the next build)
 
@@ -14,21 +14,21 @@ Claims are **pull-only**; current-only is pre-committed on every push surface; a
 generalisable rule — *an ADR that ships a producer must carry at least one criterion that fails if nothing
 reads its output.*
 
-> ✅ **HOLD LIFTED 2026-07-28.** It should not have been set. Master held this chain claiming four of
-> five tickets "consume assembled context" that FRE-991 might change — a characterisation made from
-> ADR-0126's *summary* without reading the tickets. Checked since, against the durable source:
-> **ADR-0126 contains no mention of `digest` or `capture` anywhere.** Its tickets read the Claim/Stance
-> layer in Neo4j; ADR-0127 concerns the unit of analysis over digests and captures. No overlap — and
-> FRE-1016's whole purpose is keeping claims *out* of assembled context. Chain is dispatchable.
+**Chain is dispatchable** — a hold set on 2026-07-28 was lifted the same day (it rested on a summary, not
+the tickets; ADR-0126 never mentions `digest` or `capture`). Do not re-set it.
 
-**Five tickets Approved and parked, sequence written as relations:** FRE-1015 → FRE-1017 ·
-FRE-1016 → FRE-1018 · **FRE-1019** the seam, blocked by all four. **The ADR closes on FRE-1019 only**:
-removing each of the four consumers must turn *named* assertions red from a green baseline. Not on the
-last child merging.
+**Delivered:** FRE-1016 (claims pull). **In flight:** FRE-1018 (chain-on-pull, `context:keep`, dispatched
+but held on an unactioned approval card). **Remaining:** FRE-1015 → FRE-1017, then **FRE-1019** the seam.
+**The ADR closes on FRE-1019 only** — removing each of the four consumers must turn *named* assertions
+red from a green baseline.
 
-**Before dispatching, check one thing:** the D2 precondition (target entity must be in the recall set;
-failure is **INCONCLUSIVE**) reached FRE-1017's AC-3 and was added by master to FRE-1015's AC-1. **FRE-1016,
-FRE-1018 and FRE-1019 were never checked** for the same relay gap.
+**FRE-1015 is deliberately unlabelled**: it rides the entity selection FRE-1021 says fades. Leave it
+parked until FRE-1021 is approved and measured.
+
+**Relay-gap check is COMPLETE** (2026-07-28): FRE-1016 and FRE-1018 are clear; the D2 precondition binds
+AC-1's positive half, AC-5's *push* half and AC-6's populated control only. **FRE-1019 had the gap and it
+is now a binding comment on that ticket** — without the precondition, a precondition failure is
+indistinguishable from a successful mutation, which is a *false pass of the seam*.
 
 ## 1. ADR-0125 — the turn evidence contract (Accepted; residual)
 
@@ -52,69 +52,34 @@ amendment.
 
 ## 2. Cost, Process and Monitoring Audit
 
-Background LLM streams stay **disabled**; **no budget cap is to be raised.**
+Background LLM streams stay **disabled**; **no budget cap is to be raised.** The **summary sweep is LIVE
+again** since 2026-07-28 12:26Z, bounded by FRE-987's retry pacing (ADR-0124 Amendment D).
 
-**BOTH SWEEP GATES ARE NOW MET** — FRE-988 merged+deployed, FRE-987 merged (PR #719, ADR-0124
-**Amendment D**: D5 per-failure retry stamp, D6 global stand-down, D7 shared-resource failures don't
-spend the session's retry budget). The standing "sweep stays off" condition is therefore **satisfied**,
-but re-enabling is still **two owner actions, not one**:
+**Watch it:** gate on the **empty-digest rate**, not the parse rate. A failing session should log once and
+stay quiet through its backoff; an exhausted cap should produce **one stand-down**, not a denial per
+session. **This bounds a *failing session* (~8 attempts/day, was 288); it does NOT bound aggregate spend.**
 
-1. **Gateway rebuild** (ask-first) — carries FRE-987 *and* FRE-1003.
-2. **Flip `AGENT_SESSION_SUMMARY_ENABLED` back to true + restart.** A rebuild alone changes nothing
-   observable: the sweep is disabled in host env and the nine stuck sessions were marked non-eligible
-   on 2026-07-26.
+**FRE-987 fixes unbounded *retry*. Unbounded *input* is a separate, unowned problem.** ADR-0124 triggers
+wholesale regeneration on an **idle clock**; the 2026-07-26 explore note (`docs/research/2026-07-26-session-analyzer-pillar.md`
+§2) and the session-summarizer brainstorm brief (§4A) both conclude rebuild should fire **on accumulated
+delta**, as a hybrid of incremental deltas plus periodic full rebuild. ADR-0127 **D9** assigns this fork to
+**ADR-0124's trigger** — so it is written down at last, **and it still has no owner.** That is the open item.
 
-**When the sweep returns, gate on the empty-digest rate, not the parse rate.** Watch the first three
-sweep intervals: a failing session should log once and stay quiet through its backoff, and an exhausted
-cap should produce **one stand-down**, not a denial per session. At +24h, divide captains_log daily
-spend by session-summary-generated events — that is the **cost per digest** nobody has yet, and it is
-FRE-987's remaining unproven criterion along with Phase-1 population growth.
-
-**Known and stated:** this bounds a *failing session* (~8 attempts/day, was 288). It does **not** bound
-aggregate spend — new sessions stay unrestricted and the ceiling remains the cost gate.
-
-**FRE-987 fixes unbounded *retry*. Unbounded *input* is a separate, unowned problem** — and the
-resolution has now been reached **independently twice** without ever landing in an ADR, so it is named
-here to stop it being rediscovered a third time.
-
-ADR-0124 triggers wholesale regeneration on an **idle clock**. Both the 2026-07-26 explore note
-(`docs/research/2026-07-26-session-analyzer-pillar.md` §2) and the session-summarizer brainstorm brief
-(§4A, which credits the explore note) conclude the opposite: rebuild should fire **on accumulated delta,
-not a clock**, as a **hybrid** — cheap incremental deltas plus periodic full rebuild (keyframes,
-event-sourcing snapshots, log compaction).
-
-The explore note's *correction of record* is the part to keep: the cost incident was **a bug, not an
-indictment of wholesale regeneration**. Wholesale is correct for sessions that end. It breaks under
-never-ending sessions for a *different* reason — `f(all captures)` grows monotonically, so turn 500
-costs 500 turns of tokens on every rebuild. Neither FRE-987 nor ADR-0124 addresses that, and neither
-should: ADR-0124 was scoped to sessions that end, and that assumption is what is failing.
-
-**FRE-991 delivered this as ADR-0127 (Proposed, PR #724) — but did NOT decide it.** ADR-0127 **D9**
-records the delta-vs-clock fork as belonging to **ADR-0124's trigger**, not to the analysis pillar. So
-it is finally written into an ADR and stops being rediscovered — **and it still has no owner.** That is
-the open item here, not the writing-down.
+Keep the correction that goes with it: the cost incident was **a bug, not an indictment of wholesale
+regeneration**. Wholesale is right for sessions that end; it breaks under never-ending ones because
+`f(all captures)` grows monotonically.
 
 **Still open, explicitly not done:** the March `CONTEXT_INTELLIGENCE_SPEC.md` and its cited survey
-`docs/research/context_management_research.md` cover *within-session* context construction and are cited
-by **neither** ADR-0124 nor ADR-0125 nor ADR-0127. The adrs seat said plainly it did not reconcile them.
-Two layers still to reconcile; do not start a third.
+`docs/research/context_management_research.md` cover *within-session* context construction and are cited by
+**neither** ADR-0124, ADR-0125 nor ADR-0127. **Two layers to reconcile; do not start a third.**
 
-**ADR-0127 corrected a load-bearing premise of its own ticket** — worth carrying because both research
-notes are cited from this plan and the false figure would keep propagating. There is **no labelled
-corpus**: of 1,943 rating documents, **1,916 are backfilled defaults written on send**, leaving **27
-expressed judgments**. FRE-991's "1,933 rated turns supply the labelled signal a DSPy loop needs" is
-false. Also: the capture corpus is **1,941 turns, not 8,880** (the larger figure is an index doc count
-inflated by four nested-mapped fields).
-
-FRE-988 (the other gate) is merged and deployed; its bounce paid off twice over — codex, once its dead
-broker was repaired, returned a **block** naming a second real defect (unlocked check-then-act in
-`connect()`, so racing coroutines could each build a pool and a loser could null a winner's). Fixed with
-double-checked locking, and the tests were **mutation-verified**: the lock reverted, the tests confirmed
-failing, then restored.
+**Do not re-propagate two false figures** (corrected by ADR-0127, measured): there is **no labelled corpus**
+— 1,916 of 1,943 ratings are backfilled defaults, leaving **27** expressed judgments, so "1,933 rated turns
+as DSPy signal" is false. And the capture corpus is **1,941 turns, not 8,880**.
 
 **Also open:** FRE-989 (cost attribution) · FRE-990 (reflection has no enable flag; the cadence flag
 inverts) · FRE-1007 (producers declare reasoning configuration, fail-closed) · FRE-1008 (the two prompt
-hashes cannot differ) · FRE-1013 (entity class never emitted).
+hashes cannot differ) · FRE-1013 (entity class — premise stale, re-measure first).
 
 ## 3. Memory recall — FRE-1021 and FRE-1020
 
@@ -139,28 +104,33 @@ D2, whose topic-scoped surface rides the selection that fades.
 
 ## 4. Verification backlog — master's own debt
 
-**Fourteen tickets sit in Awaiting Deploy; thirteen are deployed.** FRE-1003 is the exception — merged
-after the 20:49Z deploy, and behaviourally inert in prod (the path has been flag-disabled since
-2026-07-26), so it batches with the next rebuild rather than needing one. The column is master's
-*verification* backlog, not a deploy queue. **None closes on "deployed and healthy"** — each needs its
-acceptance criterion proven, and **UNVERIFIABLE is a first-class verdict**.
+**Seventeen sit in Awaiting Deploy. This column is a *verification* queue, not a deploy queue.** None
+closes on "deployed and healthy" — each needs its acceptance criterion proven, and **UNVERIFIABLE is a
+first-class verdict**.
 
-- **Verifiable tomorrow, on a clock already running:** FRE-988 — needs a 24h window comparing connect
-  events against priced-call volume. Deployed 20:49Z; **baseline is 90 connects in the preceding 24h**
-  (not the ticket's headline 527 — the harness has been far quieter under the cost halt). If connects
-  still track calls, this is **Verify Failed**, not Done.
-- **Nine never checked at all:** FRE-717 · 739 · 986 · 936 · 970 · 972 · 943 · 971 · 969.
-- **Three blocked on the sweep** (so on FRE-987): FRE-993 · FRE-996 · FRE-992.
+**Read this before working the column.** It regrows on its own: Linear's GitHub integration links a PR
+that names a ticket in its **branch, title _or body_**, then drives that ticket's state from that PR's
+lifecycle. Master's own docs PRs dragged ~12 tickets backwards on 2026-07-28 alone (FRE-1001 went
+`Done → In Progress` **45 seconds** after being closed). **Name tickets by subject, not identifier, in
+docs PR bodies.** A ticket carrying a full evidence comment while sitting here is the tell. **FRE-1011**
+is the mechanical guard; narrowing Linear's linking rule is the owner-side alternative.
 
-**Verification residual carried forward from FRE-1002** (closed Done): that shortened excerpts actually
-carry the truncation marker is **UNVERIFIABLE at current traffic** — zero markers across 6,047 log docs
-and 121 captures, but the limits are 400/800 chars against a p99 user message of 400, only three short
-turns have run since deploy, and the reflection excerpt paths are off under the cost halt. Re-check when
-the background streams return; it is not a defect signal.
+- **Verifiable NOW — all four unblocked by the sweep returning:** **FRE-993** (trim) · **FRE-996** (JSON
+  contract) · **FRE-992** (durable capture store) · **FRE-1003** (reflection-recall removal — the most
+  mechanically checkable: the module is either gone from the running container or it is not).
+- **On a 24h clock, cannot close before ~08:00Z 2026-07-29:** **FRE-987** (captains_log daily spend ÷
+  session-summary-generated events = the cost-per-digest figure nobody has) · **FRE-988** (connect events
+  vs priced-call volume; **baseline 90 connects/24h** pre-deploy, *not* the ticket's headline 527).
+- **Merged but NOT deployed:** **FRE-1016** — landed at `61210170`, after the 12:26Z deploy at `3c9d8f08`.
+- **Deployed 12:26Z, needs verification:** **FRE-998** (graph identity write path).
+- **Nine never checked at all**, oldest from 1 July: FRE-717 · 739 · 986 · 936 · 970 · 972 · 943 · 971 · 969.
 
-**Known board drift, not yet cleared:** `reconcile_board.py` reports 3 FAIL — **FRE-432** (Backlog),
-**FRE-875** and **FRE-983** (Approved) — each with a merged PR against a non-Done state, from 3 / 14 / 25
-July. Not closed blind: they need the same acceptance verification as the rest.
+**Carried residual (FRE-1002, closed):** that shortened excerpts actually carry the truncation marker is
+**UNVERIFIABLE at the traffic seen so far** — zero markers, but the limits are 400/800 chars against a p99
+user message of 400. Re-check once the sweep has run a full day. Not a defect signal.
+
+**Known board drift:** `reconcile_board.py` reports **FRE-432** (Backlog), **FRE-875** and **FRE-983**
+(Approved) — each a merged PR against a non-Done state. Not closed blind; they need the same verification.
 
 ## 5. Reduce the backlog
 

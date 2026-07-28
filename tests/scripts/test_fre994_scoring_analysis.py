@@ -11,13 +11,30 @@ answer — including every path on which it must refuse to answer.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 from scripts.eval.fre994_digest_compression_curve import analysis, arms, generate, scoring
 
+from personal_agent.captains_log.capture import TaskCapture
 from personal_agent.memory.session_digest import DigestItem, SessionDigest
 
 _T0 = datetime(2026, 7, 27, tzinfo=timezone.utc)
+
+#: The evidence a correction's spans are quoted from (FRE-1024). None of the payloads
+#: below carry a correction, so the content is immaterial — but `classify` builds the
+#: storage record, and that now requires the captures to quote from.
+_CAPTURES = [
+    TaskCapture(
+        trace_id="cap-1",
+        session_id="s",
+        timestamp=_T0,
+        user_message="check the cluster",
+        assistant_response="The cluster is green.",
+        outcome="completed",
+        user_id=uuid4(),
+    )
+]
 
 
 # ── Validity gates ──────────────────────────────────────────────────────────
@@ -131,7 +148,9 @@ def test_an_empty_reply_at_the_ceiling_is_truncation_not_silence() -> None:
         finish_reason="length", usage={"prompt_tokens": 100, "completion_tokens": arm.call_ceiling}
     )
 
-    record = generate.classify(at_ceiling, arm=arm, session_id="s", ended_at=_T0)
+    record = generate.classify(
+        at_ceiling, arm=arm, session_id="s", ended_at=_T0, captures=_CAPTURES
+    )
 
     assert record.outcome == "truncated"
     assert record.truncated is True
@@ -140,7 +159,9 @@ def test_an_empty_reply_at_the_ceiling_is_truncation_not_silence() -> None:
 def test_an_empty_reply_below_the_ceiling_is_empty() -> None:
     arm = arms.ARMS_BY_NAME["t250"]
 
-    record = generate.classify(_response(), arm=arm, session_id="s", ended_at=_T0)
+    record = generate.classify(
+        _response(), arm=arm, session_id="s", ended_at=_T0, captures=_CAPTURES
+    )
 
     assert record.outcome == "empty"
     assert record.truncated is False
@@ -157,7 +178,11 @@ def test_a_digest_that_parses_but_fills_no_slot_is_not_delivered() -> None:
     payload += '"unresolved": [], "corrections": []}}'
 
     record = generate.classify(
-        _response(tool_calls=_tool_reply(payload)), arm=arm, session_id="s", ended_at=_T0
+        _response(tool_calls=_tool_reply(payload)),
+        arm=arm,
+        session_id="s",
+        ended_at=_T0,
+        captures=_CAPTURES,
     )
 
     assert record.outcome == "empty"
@@ -173,7 +198,11 @@ def test_a_valid_digest_records_its_delivery_measurements() -> None:
     )
 
     record = generate.classify(
-        _response(tool_calls=_tool_reply(payload)), arm=arm, session_id="s", ended_at=_T0
+        _response(tool_calls=_tool_reply(payload)),
+        arm=arm,
+        session_id="s",
+        ended_at=_T0,
+        captures=_CAPTURES,
     )
 
     assert record.outcome == "ok"
@@ -205,6 +234,7 @@ def test_a_parsed_digest_at_the_ceiling_gets_its_own_class() -> None:
         arm=arm,
         session_id="s",
         ended_at=_T0,
+        captures=_CAPTURES,
     )
 
     assert record.outcome == "ok_at_ceiling"
@@ -220,7 +250,11 @@ def test_the_unbounded_arm_cannot_fall_outside_a_bound_it_does_not_have() -> Non
     )
 
     record = generate.classify(
-        _response(tool_calls=_tool_reply(payload)), arm=arm, session_id="s", ended_at=_T0
+        _response(tool_calls=_tool_reply(payload)),
+        arm=arm,
+        session_id="s",
+        ended_at=_T0,
+        captures=_CAPTURES,
     )
 
     assert record.within_bound is True

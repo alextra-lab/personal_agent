@@ -42,13 +42,26 @@ querying; treat zero matches as a hard error. Needs approval. The recipe fix is 
 
 ## 3. Master's verification backlog — standing debt
 
-Ten sit in Awaiting Deploy. **All are deployed; what they await is acceptance verification.** None closes
-on "deployed and healthy" — each needs its criterion proven, and **UNVERIFIABLE is a first-class verdict**.
+**Ten in Awaiting Deploy, all of them deployed.** The column name misleads: what they await is master's
+acceptance verification, not a deploy. None closes on "deployed and healthy" — each needs its own
+criterion proven, and **UNVERIFIABLE is a first-class verdict**.
 
-FRE-970 · FRE-1016 · FRE-1018 · FRE-739 · FRE-998 · FRE-717 · FRE-986 · FRE-936 · FRE-972 · FRE-943.
+| ticket | subject | what it awaits |
+|---|---|---|
+| **FRE-970** | ES telemetry skills misdirect cost/budget queries | one owner turn — "7-day budget spend, by budget then role". Skills verified correct in-image |
+| **FRE-1016** | ADR-0126 T3 — claims reachable via the memory search tool | live AC proof against the graph |
+| **FRE-1018** | ADR-0126 T4 — supersession chain on pull | live AC proof; AC-5 chain half |
+| **FRE-739** | ADR-0107 T2 — user_id into structured logs | **cannot close.** AC-3a passes 154/154; **AC-3b UNVERIFIABLE** — see below |
+| **FRE-998** | the knowledge graph holds no user identity | live proof that Session/Turn now carry `user_id` |
+| **FRE-717** | ADR-0105 T4 — outcome ingestion (assembled-ADR seam) | never checked; owns a seam |
+| **FRE-986** | ADR-0123 §6 — server-side phase-state projection | never checked |
+| **FRE-936** | ADR-0123 T3 — the live phase surface | never checked; PWA, likely needs an owner turn |
+| **FRE-972** | compaction gate uses the static 96K qwen window | never checked; needs a non-qwen session |
+| **FRE-943** | session config endpoint reports the role-default window | never checked |
 
-**FRE-739 cannot close**: its AC-3b is UNVERIFIABLE while `request.completed` stays dead (FRE-1033), so
-**ADR-0107 cannot close either**, despite FRE-740 being Done.
+**FRE-739 is blocked, not merely unverified.** Its AC-3b requires the hand-rolled request-trace documents
+to carry `user_id`, and that path has emitted **nothing since 2026-05-10** (FRE-1033). There is no document
+to check. So **ADR-0107 cannot close either**, despite FRE-740 being Done — FRE-739 owns that seam.
 
 Board drift: `reconcile_board.py` reports 3 FAIL — **FRE-432**, **FRE-875**, **FRE-983** — merged PRs
 against non-Done states. Not closed blind; they need the same verification.

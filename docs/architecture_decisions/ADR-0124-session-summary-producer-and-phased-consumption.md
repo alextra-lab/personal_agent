@@ -804,6 +804,100 @@ a saving — C5 also measured zero truncations in 100 calls, so it protects a pa
 not currently fire.
 
 
+## Amendment D — 2026-07-28: the transient retry path is paced, not unbounded
+
+**Status of this amendment:** Accepted — implemented by FRE-987, which closes a live production cost
+regression. Evidence: FRE-987's investigation record (budget counter snapshots, the sweep's own
+telemetry) and the code cited below.
+
+### What the ADR said, and what was missing from it
+
+The terminal-failure rule states that a session is excluded only when it carries **both** a
+deterministic failure reason **and** an attempt count at the retry limit, and that "a budget denial is
+never terminal, since it is transient by nature (this is why AC-4 requires failures to stay
+retryable)". That classification is correct and Amendment D does not change it.
+
+What the rule never said is **how often** a retryable failure may be retried. The implementation
+answered "as often as the sweep runs", and the sweep runs on a wall clock:
+`_session_summary_sweep_loop` sleeps `session_summary_sweep_interval_seconds` (300 s) and re-scans —
+no session-end, no turn, no user activity is involved. Eligibility is idleness, which is a
+*qualification* and not a cooldown, so a quiet failing session satisfies every gate on every tick
+forever. Zero user activity is the worst case, not the safe one.
+
+D1 also specifies regeneration as **wholesale** — `f(canonical captures)`, never a patch of a previous
+digest — so each of those attempts is a full session summarisation at up to two model calls. The two
+decisions are individually sound and compose into an unbounded paid loop.
+
+> Measured over the incident: $14.19 produced 6 digests (~$2.37 each). $12.79 of that, across 289
+> calls, came from 9 stuck sessions. Daily spend on the `captains_log` cap went from ~$0.05 to $5.02,
+> at which point the cap — not the design — was the only thing bounding it.
+
+### D5 — a failure carries the instant it may next be attempted
+
+Every recorded failure now stamps `Session.summary_retry_after`, and the eligibility scan holds a
+session whose stamp is in the future. Two regimes:
+
+* **The clearing instant is known.** A `BudgetDenied` carries its cap's `window_resets_at` — the exact
+  moment the condition it failed on ends. Retrying before then cannot succeed; retrying after it is
+  not a guess. This is the "awareness of when the condition could plausibly clear" the incident found
+  missing.
+* **It is not.** Exponential backoff on consecutive failures, `min(base × 2^(n−1), max)`, defaulting
+  to 15 minutes doubling to a 6-hour ceiling. A first failure still retries promptly, so a genuine
+  blip is not punished; a permanently-failing session settles at a handful of attempts a day.
+
+**This is pacing, not retirement.** The stamp delays selection and nothing else — once its instant
+passes the session is chosen exactly as before, so AC-2 and AC-4 are unchanged. Nothing is excluded
+that the terminal-failure rule did not already exclude.
+
+### D6 — a global failure stands the sweep down; a per-session one does not
+
+A budget denial belongs to the *cap* and an unwritable graph belongs to the *store*: if one session
+hits either, every other session in that sweep hits it too. The sweep therefore stops at the first
+and stands down until a stated instant. A **refused** write is the opposite case — a turn landed
+mid-generation, the feature working — and must not stand anything down, or one active conversation
+would pause digests for every other session.
+
+This required distinguishing two outcomes the write layer had collapsed into one `False`: *refused*
+(the predicate did not match; self-correcting on the next quiet period) and *unavailable* (nothing was
+persisted; for a generated digest the model call is already paid for and no stamp records that it
+happened). Collapsed, the second was an unbounded paid retry hiding inside a normal-looking outcome.
+
+The stand-down is in-process and lost on restart **by design**: it is an optimisation, and the durable
+bound is D5's per-session stamp. A restarting service re-scans, stamps, and settles rather than
+replaying the spend.
+
+### D7 — a failure about a shared resource does not spend the session's retry budget
+
+`summary_attempt_count` is shared across every reason while terminality tests only the *current*
+reason, so any failure that spends it shortens the budget of every **other** reason. Two failure
+classes must therefore stop spending it:
+
+* **A budget denial** — nothing was ever sent, so it is evidence about the *cap*, not the session.
+* **Unreadable evidence** — already bounded by its own counter since FRE-992, so spending the shared
+  one adds no bound and only shortens someone else's.
+
+Both left a session whose **first** genuine deterministic failure retires it: two store outages or a
+week of denials put the shared counter past `max_attempts` before any deterministic failure occurred.
+This generalises the asymmetry FRE-992 established for `summary_evidence_failure_count` — a
+resource-availability failure is not evidence about the session that happened to be swept when the
+resource was down.
+
+Deterministic failures continue to spend it, and must: `OVERSIZED_INPUT` and the other
+terminal-eligible reasons reach terminality *through* this counter.
+
+### What this amendment deliberately does not do
+
+* **It does not flatten the failure taxonomy.** `EMPTY_OUTPUT` and `BUDGET_DENIED` stay transient. The
+  defect was never the classification.
+* **It does not raise the cap.** A cap can only be sized against an unconstrained, understood day, and
+  none exists yet.
+* **It does not slow the sweep interval.** That interval bounds detection lag for *healthy* sessions;
+  slowing it would penalise the working path to bound the failing one.
+* **It does not bound aggregate daily spend.** Newly-eligible sessions remain unrestricted — that is
+  the feature working — and the aggregate ceiling remains the cost gate. What is bounded is a
+  *failing* population re-attempted forever, which is what the regression was.
+
+
 ## Alternatives Considered
 
 ### Option 1: Lazy generation on first read (ADR-0024's original resolution)
@@ -1345,6 +1439,20 @@ ADR does not close because its last child merged.
 ---
 
 ## Status Updates
+
+### 2026-07-28 - Amendment D (Accepted)
+**Changed By:** cc-build (Opus), implementing FRE-987
+**Reason:** A live cost regression, not a design disagreement. The terminal-failure rule says which
+failures may be retried and never said how often; the implementation answered "every 300-second sweep
+tick", and D1's wholesale regeneration made each of those a full paid summarisation. Nine stuck
+sessions spent $12.79 across 289 calls and took the `captains_log` cap to 100.3% of its daily limit.
+D5 stamps each failure with the instant it may next be attempted — the cap's own window reset where
+that is knowable, exponential backoff where it is not. D6 stands the whole sweep down on a condition
+shared by every session, and separates a refused write (a turn landed; normal) from an unavailable one
+(nothing persisted; the model call already paid for). D7 stops a failure about a shared resource — an exhausted cap, an
+unreadable store — spending the session's own attempt budget, which had left a session that its first
+genuine deterministic failure would retire. The failure taxonomy, the cap, the sweep interval, AC-2 and AC-4 are all unchanged:
+this paces the transient path, it does not retire anything.
 
 ### 2026-07-24 - Amendment B (Accepted)
 **Changed By:** Owner (architect), via cc-adrs (Opus)

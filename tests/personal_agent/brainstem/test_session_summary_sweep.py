@@ -32,6 +32,7 @@ from personal_agent.memory.session_digest import (
     SessionDigest,
     SessionSummaryOutcome,
     SessionSummaryStatus,
+    SessionWriteResult,
     SummaryFailureReason,
 )
 
@@ -76,6 +77,9 @@ class _FakeMemory:
         self.sessions: dict[str, dict[str, Any]] = sessions or {}
         self.writes: list[dict[str, Any]] = []
         self.failures: list[dict[str, Any]] = []
+        #: When set, every write comes back UNAVAILABLE — the graph is reachable enough
+        #: to have been swept but nothing it is told survives (FRE-987).
+        self.unavailable = False
 
     async def find_dirty_idle_sessions(
         self, *, idle_threshold_seconds: float, max_attempts: int, limit: int = 25, trace_id=None
@@ -100,6 +104,12 @@ class _FakeMemory:
             # unrelated model error cannot spend the budget that retires it.
             if s.get("summary_evidence_failure_count", 0) >= max_attempts:
                 continue
+            # HELD, not excluded (FRE-987): a stamp in the future delays selection and
+            # nothing else. Modelled here because the sweep's bound is only real if the
+            # scan honours it.
+            retry_after = s.get("summary_retry_after")
+            if retry_after is not None and retry_after > _now():
+                continue
             rows.append(
                 {
                     "session_id": sid,
@@ -108,6 +118,7 @@ class _FakeMemory:
                     # Counted from Turn nodes in production — a lower bound on the
                     # turns that genuinely existed, NOT the s.turn_count property.
                     "graph_turn_count": s.get("graph_turns", 0),
+                    "summary_attempt_count": s.get("summary_attempt_count", 0),
                 }
             )
         return sorted(rows, key=lambda r: r["ended_at"])[:limit]
@@ -122,10 +133,12 @@ class _FakeMemory:
         label: str | None = None,
         digest: SessionDigest | None = None,
         trace_id=None,
-    ) -> bool:
+    ) -> SessionWriteResult:
+        if self.unavailable:
+            return SessionWriteResult.UNAVAILABLE
         session = self.sessions[session_id]
         if session["ended_at"] != expected_ended_at:
-            return False  # refused — the session advanced
+            return SessionWriteResult.REFUSED  # the session advanced
         session["summary_generated_at"] = generated_at
         session["session_label"] = label
         session["session_digest"] = digest
@@ -133,8 +146,9 @@ class _FakeMemory:
         session["summary_failure_reason"] = None
         session["summary_attempt_count"] = 0
         session["summary_evidence_failure_count"] = 0
+        session["summary_retry_after"] = None
         self.writes.append({"session_id": session_id, "label": label, "digest": digest})
-        return True
+        return SessionWriteResult.ACCEPTED
 
     async def mark_session_projection_clean(
         self,
@@ -143,16 +157,19 @@ class _FakeMemory:
         expected_ended_at: datetime,
         generated_at: datetime,
         trace_id=None,
-    ) -> bool:
+    ) -> SessionWriteResult:
+        if self.unavailable:
+            return SessionWriteResult.UNAVAILABLE
         session = self.sessions[session_id]
         if session["ended_at"] != expected_ended_at:
-            return False
+            return SessionWriteResult.REFUSED
         session["summary_generated_at"] = generated_at
         session["summary_failure_reason"] = None
         session["summary_attempt_count"] = 0
         session["summary_evidence_failure_count"] = 0
+        session["summary_retry_after"] = None
         # Deliberately touches neither session_label/session_digest nor turn_count.
-        return True
+        return SessionWriteResult.ACCEPTED
 
     async def record_session_summary_failure(
         self,
@@ -161,19 +178,33 @@ class _FakeMemory:
         expected_ended_at: datetime,
         failure_reason: str,
         evidence_failure: bool = False,
+        retry_after: datetime | None = None,
+        spend_attempt: bool = True,
         trace_id=None,
-    ) -> bool:
+    ) -> SessionWriteResult:
+        if self.unavailable:
+            return SessionWriteResult.UNAVAILABLE
         session = self.sessions[session_id]
         if session["ended_at"] != expected_ended_at:
-            return False
+            return SessionWriteResult.REFUSED
         session["summary_failure_reason"] = failure_reason
-        session["summary_attempt_count"] = session.get("summary_attempt_count", 0) + 1
+        if spend_attempt:
+            session["summary_attempt_count"] = session.get("summary_attempt_count", 0) + 1
         if evidence_failure:
             session["summary_evidence_failure_count"] = (
                 session.get("summary_evidence_failure_count", 0) + 1
             )
-        self.failures.append({"session_id": session_id, "reason": failure_reason})
-        return True
+        if retry_after is not None:
+            session["summary_retry_after"] = retry_after
+        self.failures.append(
+            {
+                "session_id": session_id,
+                "reason": failure_reason,
+                "retry_after": retry_after,
+                "spend_attempt": spend_attempt,
+            }
+        )
+        return SessionWriteResult.ACCEPTED
 
 
 def _session(*, ended_minutes_ago: float, turns: int = 3, graph_turns: int = 0) -> dict[str, Any]:
@@ -407,7 +438,11 @@ async def test_a_failed_session_stays_dirty_and_retryable(
     session = memory.sessions["sess-1"]
     assert session["summary_generated_at"] is None, "a failed session must not look clean"
     assert session["summary_failure_reason"] == "budget_denied"
-    # Still selected next sweep — a budget denial is never terminal.
+    # Still selected — a budget denial is never terminal. It is now *paced* (FRE-987):
+    # held until its cap's window resets rather than re-attempted on the next tick, so
+    # the retryability this asserts is observed from past that instant.
+    assert session["summary_retry_after"] > _now()
+    session["summary_retry_after"] = None
     still_dirty = await memory.find_dirty_idle_sessions(
         idle_threshold_seconds=_IDLE, max_attempts=2
     )
@@ -616,6 +651,7 @@ async def test_evidence_failures_are_bounded_and_then_excluded(
     _patch_producer(monkeypatch, captures_by_session={"sess-1": []})
 
     for _ in range(4):  # max_attempts is 2
+        memory.sessions["sess-1"]["summary_retry_after"] = None  # step past FRE-987 pacing
         await scheduler.run_session_summary_sweep(trace_id="t-1")
 
     assert memory.sessions["sess-1"]["summary_evidence_failure_count"] == 2
@@ -652,11 +688,19 @@ async def test_a_store_outage_never_spends_the_retry_budget(
     monkeypatch.setattr("personal_agent.captains_log.capture.load_session_captures", unreachable)
 
     for _ in range(5):
+        # Cleared between sweeps: FRE-987 paces retries, so consecutive sweeps would
+        # otherwise be held. The bound under test here is the counter, not the cadence.
+        memory.sessions["sess-1"]["summary_retry_after"] = None
         await scheduler.run_session_summary_sweep(trace_id="t-1")
 
     session = memory.sessions["sess-1"]
     assert session["summary_failure_reason"] == "evidence_unavailable", "loud, every time"
     assert session.get("summary_evidence_failure_count", 0) == 0, "an outage is not a write-off"
+    # Nor the SHARED budget (FRE-987). This test's name promised it and only ever checked
+    # the evidence counter; five outages were silently leaving attempt_count at 5, which a
+    # single later schema failure would then read as "already past the limit".
+    assert session.get("summary_attempt_count", 0) == 0, "an outage is not an attempt"
+    session["summary_retry_after"] = None
     still_dirty = await memory.find_dirty_idle_sessions(
         idle_threshold_seconds=_IDLE, max_attempts=2
     )
@@ -685,6 +729,7 @@ async def test_an_unrelated_model_error_does_not_shorten_the_evidence_bound(
     await scheduler.run_session_summary_sweep(trace_id="t-1")
 
     assert memory.sessions["sess-1"]["summary_evidence_failure_count"] == 1
+    memory.sessions["sess-1"]["summary_retry_after"] = None
     still_dirty = await memory.find_dirty_idle_sessions(
         idle_threshold_seconds=_IDLE, max_attempts=2
     )
@@ -891,3 +936,270 @@ def test_graph_timestamps_are_parsed_and_made_aware() -> None:
     assert _parse_graph_timestamp("2026-07-23T10:00:00") == aware
     assert _parse_graph_timestamp("not a timestamp") is None
     assert _parse_graph_timestamp(None) is None
+
+
+# --------------------------------------------------------------------------
+# FRE-987 — the transient path is paced, never unbounded
+# --------------------------------------------------------------------------
+
+
+def _denied(resets_at: datetime) -> SessionSummaryOutcome:
+    """A budget denial that knows when its cap's window rolls over."""
+    return SessionSummaryOutcome(
+        status=SessionSummaryStatus.FAILED,
+        failure_reason=SummaryFailureReason.BUDGET_DENIED,
+        retry_after=resets_at,
+    )
+
+
+def _model_failure() -> SessionSummaryOutcome:
+    """A transient failure with no knowable clearing instant — paced by backoff."""
+    return SessionSummaryOutcome(
+        status=SessionSummaryStatus.FAILED,
+        failure_reason=SummaryFailureReason.EMPTY_OUTPUT,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_session_waits_out_its_backoff_before_being_retried(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The core of FRE-987: a failure is not re-attempted on the next 300-second tick.
+
+    Every attempt is a wholesale regeneration at up to two model calls, so an
+    every-tick retry of a session that keeps failing is what took daily spend on this
+    role from five cents to the cap. Two sweeps back to back must buy exactly one
+    generation.
+    """
+    memory = _FakeMemory({"s1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory
+    calls = _patch_producer(monkeypatch, _model_failure())
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+    await scheduler.run_session_summary_sweep(trace_id="t-2")
+
+    assert len(calls) == 1, "the second sweep re-attempted a session inside its backoff"
+    assert memory.sessions["s1"]["summary_retry_after"] > _now()
+
+
+@pytest.mark.asyncio
+async def test_the_retry_stamp_delays_rather_than_excludes(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Paced, not retired — ADR-0124 AC-2/AC-4 forbid retiring a transient failure.
+
+    Asserted by moving the stamp into the past and watching the session come back,
+    which is a real proof; "no dirty sessions remain" is not, since an excluded session
+    trivially satisfies it.
+    """
+    memory = _FakeMemory({"s1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory
+    calls = _patch_producer(monkeypatch, _model_failure())
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+    memory.sessions["s1"]["summary_retry_after"] = _now() - timedelta(seconds=1)
+    await scheduler.run_session_summary_sweep(trace_id="t-2")
+
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_backoff_lengthens_with_consecutive_failures(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session that keeps failing costs progressively less, never a flat 288/day."""
+    memory = _FakeMemory({"s1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory
+    _patch_producer(monkeypatch, _model_failure())
+
+    delays = []
+    for i in range(3):
+        memory.sessions["s1"]["summary_retry_after"] = None
+        await scheduler.run_session_summary_sweep(trace_id=f"t-{i}")
+        delays.append(memory.sessions["s1"]["summary_retry_after"] - _now())
+
+    assert delays[0] < delays[1] < delays[2]
+
+
+@pytest.mark.asyncio
+async def test_a_budget_denial_defers_to_the_window_reset(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retry when the cap resets, not twelve times an hour against an exhausted one.
+
+    ADR-0124 AC-4 still holds throughout: the stored digest and label are untouched,
+    freshness does not advance, and the session stays retryable.
+    """
+    resets_at = _now() + timedelta(hours=14)
+    memory = _FakeMemory({"s1": _session(ended_minutes_ago=30)})
+    memory.sessions["s1"]["session_digest"] = "an older but perfectly good digest"
+    scheduler.memory_service = memory
+    _patch_producer(monkeypatch, _denied(resets_at))
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert memory.sessions["s1"]["summary_retry_after"] == resets_at
+    assert memory.sessions["s1"]["summary_generated_at"] is None
+    assert memory.sessions["s1"]["session_digest"] == "an older but perfectly good digest"
+    assert memory.sessions["s1"]["summary_failure_reason"] == "budget_denied"
+
+
+@pytest.mark.asyncio
+async def test_a_budget_denial_does_not_spend_the_shared_retry_budget(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing reached the model, so it is evidence about the cap, not the session.
+
+    `summary_attempt_count` is shared across reasons while terminality tests only the
+    current one, so denials spending it would leave a session that its FIRST genuine
+    deterministic failure retires.
+    """
+    memory = _FakeMemory({"s1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory
+    _patch_producer(monkeypatch, _denied(_now() + timedelta(hours=14)))
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert memory.sessions["s1"].get("summary_attempt_count", 0) == 0
+    assert memory.failures[0]["spend_attempt"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_budget_denial_stands_the_sweep_down_until_the_window_resets(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A denial belongs to the cap, not the session — every other session would deny too.
+
+    Without the stand-down the sweep walks the backlog one session per tick, each
+    inflating its own counters and emitting a denial, and a restart replays the lot.
+    """
+    memory = _FakeMemory(
+        {
+            "s1": _session(ended_minutes_ago=30),
+            "s2": _session(ended_minutes_ago=40),
+            "s3": _session(ended_minutes_ago=50),
+        }
+    )
+    scheduler.memory_service = memory
+    calls = _patch_producer(monkeypatch, _denied(_now() + timedelta(hours=14)))
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+    assert len(calls) == 1, "the sweep kept attempting after the cap was known exhausted"
+    assert len(memory.failures) == 1
+
+    await scheduler.run_session_summary_sweep(trace_id="t-2")
+    assert len(calls) == 1, "a later sweep re-attempted before the window reset"
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_resumes_once_the_window_has_reset(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stand-down is a delay with a stated end, not an off switch."""
+    memory = _FakeMemory({"s1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory
+    calls = _patch_producer(monkeypatch, _denied(_now() + timedelta(hours=14)))
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+    assert scheduler._summary_sweep_paused_until is not None
+
+    # The window has now rolled over: both the sweep-wide stand-down and this session's
+    # own stamp have expired.
+    scheduler._summary_sweep_paused_until = _now() - timedelta(seconds=1)
+    memory.sessions["s1"]["summary_retry_after"] = None
+    await scheduler.run_session_summary_sweep(trace_id="t-2")
+
+    # Attempted again, and — since this run denies too — stood down again on the new
+    # window. The stand-down renews per denial; it never latches.
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_an_unpublishable_digest_does_not_pay_again_next_tick(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The paid path that survived the first draft of this fix.
+
+    The model call succeeded and was billed; the graph then refused to record anything.
+    The session is still dirty, so on the old behaviour the next tick bought the same
+    digest again, and again, for as long as the store stayed broken.
+    """
+    memory = _FakeMemory(
+        {"s1": _session(ended_minutes_ago=30), "s2": _session(ended_minutes_ago=40)}
+    )
+    memory.unavailable = True
+    scheduler.memory_service = memory
+    calls = _patch_producer(monkeypatch)
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+    await scheduler.run_session_summary_sweep(trace_id="t-2")
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_unrecordable_failure_stands_the_sweep_down(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure that cannot be written is a failure with no bound at all.
+
+    The pacing stamp lives in the same store that just refused to accept it, so there is
+    nothing durable holding this session back — the sweep must stop instead.
+    """
+    memory = _FakeMemory(
+        {"s1": _session(ended_minutes_ago=30), "s2": _session(ended_minutes_ago=40)}
+    )
+    memory.unavailable = True
+    scheduler.memory_service = memory
+    calls = _patch_producer(monkeypatch, _model_failure())
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+    await scheduler.run_session_summary_sweep(trace_id="t-2")
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_refused_write_is_not_treated_as_a_store_outage(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn landing mid-generation is normal and must not stand the sweep down.
+
+    Conflating it with an outage would make every busy session pause the whole sweep —
+    the cure becoming a second denial-of-service on the feature.
+    """
+    memory = _FakeMemory(
+        {"s1": _session(ended_minutes_ago=30), "s2": _session(ended_minutes_ago=40)}
+    )
+    scheduler.memory_service = memory
+
+    async def a_turn_lands_during_s1(captures, *, session_id, ended_at, trace_id="x"):
+        if session_id == "s1":
+            memory.sessions["s1"]["ended_at"] += timedelta(seconds=1)
+        return _generated()
+
+    _patch_producer(monkeypatch)
+    monkeypatch.setattr(
+        "personal_agent.second_brain.session_summary.generate_session_digest",
+        a_turn_lands_during_s1,
+    )
+
+    result = await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert result["refused"] == 1
+    assert result["generated"] == 1, "the refusal stopped the sweep instead of skipping one"
+
+
+@pytest.mark.asyncio
+async def test_a_successful_write_clears_the_retry_stamp(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recovered session must not sit out a cooldown earned by a failure it survived."""
+    memory = _FakeMemory({"s1": _session(ended_minutes_ago=30)})
+    memory.sessions["s1"]["summary_retry_after"] = _now() - timedelta(seconds=1)
+    scheduler.memory_service = memory
+    _patch_producer(monkeypatch)
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert memory.sessions["s1"]["summary_retry_after"] is None

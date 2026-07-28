@@ -615,6 +615,7 @@ def _failed(
     session_id: str,
     trace_id: str,
     detail: str = "",
+    retry_after: datetime | None = None,
 ) -> SessionSummaryOutcome:
     """Emit the failure event and build the failure outcome.
 
@@ -632,7 +633,9 @@ def _failed(
         # it is not a channel for shipping session text into the log index.
         detail=detail[:_MAX_FAILURE_DETAIL_CHARS],
     )
-    return SessionSummaryOutcome(status=SessionSummaryStatus.FAILED, failure_reason=reason)
+    return SessionSummaryOutcome(
+        status=SessionSummaryStatus.FAILED, failure_reason=reason, retry_after=retry_after
+    )
 
 
 async def generate_session_digest(
@@ -718,12 +721,18 @@ async def generate_session_digest(
                 prompt, role_name=role_name, provider=provider, session_id=session_id
             )
         except BudgetDenied as e:
-            # Never terminal: transient by nature, so the session stays retryable.
+            # Never terminal: transient by nature, so the session stays retryable. Paced
+            # rather than unbounded, though (FRE-987): the gate knows the instant this
+            # cap's window rolls over, which is the only moment a retry could succeed, so
+            # it is carried out to the sweep instead of leaving it to guess on a
+            # 300-second clock. Transient is a statement about recovery, not a licence to
+            # re-attempt 288 times a day.
             return _failed(
                 SummaryFailureReason.BUDGET_DENIED,
                 session_id=session_id,
                 trace_id=trace_id,
                 detail=f"{e.denial_reason} role={e.role} cap={e.cap} spend={e.current_spend}",
+                retry_after=e.window_resets_at,
             )
         except OutputTruncated as e:
             # The one failure a retry cannot address, so it is the one that does not get

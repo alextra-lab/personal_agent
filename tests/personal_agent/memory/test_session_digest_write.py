@@ -22,7 +22,7 @@ Neo4j; the genuine two-writer concurrency proof is the integration test in
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import orjson
@@ -33,10 +33,18 @@ from personal_agent.memory.service import MemoryService
 from personal_agent.memory.session_digest import (
     DigestItem,
     SessionDigest,
+    SessionWriteResult,
     SummaryFailureReason,
 )
 
 _ENDED_AT = datetime(2026, 7, 23, 10, 0, 0, tzinfo=timezone.utc)
+
+
+def _flat(cypher: str) -> str:
+    """Collapse the statement's wrapping so shape assertions survive reformatting."""
+    return " ".join(cypher.split())
+
+
 _STARTED_AT = datetime(2026, 7, 23, 9, 0, 0, tzinfo=timezone.utc)
 
 
@@ -191,7 +199,7 @@ async def test_stale_writer_is_refused() -> None:
         digest=_digest(),
     )
 
-    assert accepted is False
+    assert accepted is SessionWriteResult.REFUSED
 
 
 @pytest.mark.asyncio
@@ -207,7 +215,7 @@ async def test_accepted_write_reports_true() -> None:
         digest=_digest(),
     )
 
-    assert accepted is True
+    assert accepted is SessionWriteResult.ACCEPTED
 
 
 @pytest.mark.asyncio
@@ -245,7 +253,7 @@ async def test_floor_skip_advances_freshness_through_the_same_predicate() -> Non
         generated_at=_ENDED_AT,
     )
 
-    assert accepted is True
+    assert accepted is SessionWriteResult.ACCEPTED
     cypher, params = captured[0]
     assert "WHERE s.ended_at = $expected_ended_at" in cypher
     assert params["generated_at"] == _ENDED_AT.isoformat()
@@ -262,7 +270,7 @@ async def test_floor_skip_write_is_refused_when_ended_at_moved() -> None:
         generated_at=_ENDED_AT,
     )
 
-    assert accepted is False
+    assert accepted is SessionWriteResult.REFUSED
 
 
 @pytest.mark.asyncio
@@ -341,18 +349,21 @@ async def test_failure_is_inert_and_loud() -> None:
     recorded = await service.record_session_summary_failure(
         "sess-1",
         expected_ended_at=_ENDED_AT,
-        failure_reason=SummaryFailureReason.BUDGET_DENIED.value,
+        failure_reason=SummaryFailureReason.MODEL_ERROR.value,
     )
 
-    assert recorded is True
+    assert recorded is SessionWriteResult.ACCEPTED
     cypher, params = captured[0]
     # Inert: the artifacts and the freshness stamp are untouched.
     for untouched in ("session_label", "session_digest", "summary_generated_at"):
         assert f"s.{untouched} =" not in cypher
-    # Loud + retryable: the reason is stored and the attempt counter advances.
+    # Loud + retryable: the reason is stored and the attempt counter advances. Asserted
+    # on a reason that reached the model — FRE-987 stopped budget denials spending the
+    # shared counter, since nothing was ever sent for them to be evidence about.
     assert "s.summary_failure_reason = $failure_reason" in cypher
-    assert "s.summary_attempt_count = coalesce(s.summary_attempt_count, 0) + 1" in cypher
-    assert params["failure_reason"] == "budget_denied"
+    assert _flat(cypher).count("coalesce(s.summary_attempt_count, 0) + (CASE WHEN") == 1
+    assert params["spend_attempt"] is True
+    assert params["failure_reason"] == "model_error"
 
 
 @pytest.mark.asyncio
@@ -575,3 +586,213 @@ async def test_new_turns_restore_a_written_off_sessions_retry_budget() -> None:
     # Still no encroachment on the sweep's own fields (ADR-0124 D1).
     assert "summary_generated_at" not in cypher
     assert "summary_failure_reason" not in cypher
+
+
+# --------------------------------------------------------------------------
+# FRE-987 — retry pacing at the write layer
+# --------------------------------------------------------------------------
+
+
+def _make_failing_service() -> MemoryService:
+    """A connected service whose driver raises on every statement.
+
+    Models the case the accept/refuse bool could not express: the graph is reachable
+    enough to have been marked connected, but the write itself blows up.
+    """
+    service = MemoryService.__new__(MemoryService)
+    service.connected = True
+
+    mock_session = AsyncMock()
+    mock_session.run = AsyncMock(side_effect=RuntimeError("neo4j is having a day"))
+    service.driver = MagicMock()
+    service.driver.session = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_session),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    return service
+
+
+@pytest.mark.asyncio
+async def test_failure_record_stores_the_retry_stamp() -> None:
+    """A failure records WHEN it may next be attempted, not only that it failed."""
+    service, captured = _make_service_with_mock(
+        single_returns={"attempts": 1, "evidence_attempts": 0}
+    )
+    retry_after = datetime(2026, 7, 24, 0, 0, 0, tzinfo=timezone.utc)
+
+    await service.record_session_summary_failure(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        failure_reason=SummaryFailureReason.BUDGET_DENIED.value,
+        retry_after=retry_after,
+    )
+
+    cypher, params = captured[0]
+    assert "s.summary_retry_after = coalesce($retry_after, s.summary_retry_after)" in _flat(cypher)
+    assert params["retry_after"] == retry_after.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_the_retry_stamp_is_normalised_to_utc() -> None:
+    """Eligibility compares ISO strings lexicographically, as `ended_at` already does.
+
+    That ordering is only sound if every stored instant carries the same offset, so the
+    normalisation is done at the boundary rather than assumed of every caller: a stamp
+    written as +02:00 would sort as if it were two hours later than it is, and the
+    session would be released early.
+    """
+    service, captured = _make_service_with_mock(
+        single_returns={"attempts": 1, "evidence_attempts": 0}
+    )
+    cest = timezone(timedelta(hours=2))
+
+    await service.record_session_summary_failure(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        failure_reason=SummaryFailureReason.MODEL_ERROR.value,
+        retry_after=datetime(2026, 7, 24, 2, 0, 0, tzinfo=cest),
+    )
+
+    assert captured[0][1]["retry_after"] == "2026-07-24T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_a_budget_denial_does_not_spend_the_shared_retry_budget() -> None:
+    """FRE-987: a denial never reached the model, so it is not evidence about the session.
+
+    `summary_attempt_count` is shared across every reason while terminality tests only
+    the current one. A week of denials would otherwise leave a session that its FIRST
+    genuine deterministic failure retires — the shared-counter hazard FRE-992 removed
+    for evidence failures, arriving through the other transient door.
+    """
+    service, captured = _make_service_with_mock(
+        single_returns={"attempts": 0, "evidence_attempts": 0}
+    )
+
+    await service.record_session_summary_failure(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        failure_reason=SummaryFailureReason.BUDGET_DENIED.value,
+        spend_attempt=False,
+    )
+
+    cypher, params = captured[0]
+    assert params["spend_attempt"] is False
+    # One statement branching on the flag, so the reason and the stamp are still stored.
+    assert "CASE WHEN $spend_attempt THEN 1 ELSE 0 END" in _flat(cypher)
+    assert "s.summary_failure_reason = $failure_reason" in cypher
+
+
+@pytest.mark.asyncio
+async def test_the_dirty_scan_holds_a_stamped_session_until_its_instant_passes() -> None:
+    """The predicate that turns 288 attempts a day into a bounded few.
+
+    Carries the explicit IS NULL disjunct for the same reason AC-2 demands one on
+    freshness: a NULL comparison yields NULL, and every session that has never failed
+    would silently drop out of the scan.
+    """
+    service, captured = _make_service_with_mock()
+    service.driver.session.return_value.__aenter__.return_value.run.return_value.data = AsyncMock(
+        return_value=[]
+    )
+
+    await service.find_dirty_idle_sessions(idle_threshold_seconds=900.0, max_attempts=2)
+
+    cypher, params = captured[0]
+    assert "s.summary_retry_after IS NULL OR s.summary_retry_after <= $now" in _flat(cypher)
+    assert params["now"].endswith("+00:00")
+
+
+@pytest.mark.asyncio
+async def test_the_dirty_scan_returns_the_attempt_count() -> None:
+    """The sweep sizes the next backoff from it, so it must come back with the row."""
+    service, captured = _make_service_with_mock()
+    service.driver.session.return_value.__aenter__.return_value.run.return_value.data = AsyncMock(
+        return_value=[]
+    )
+
+    await service.find_dirty_idle_sessions(idle_threshold_seconds=900.0, max_attempts=2)
+
+    assert "AS summary_attempt_count" in captured[0][0]
+
+
+@pytest.mark.asyncio
+async def test_every_rehabilitating_write_clears_the_retry_stamp() -> None:
+    """A recovered session must not sit out a cooldown earned by a failure it survived.
+
+    Includes `create_session`: new turns are new input, so the condition that failed may
+    simply not exist any more — and holding the session for up to six hours would delay
+    the digest the user is waiting on.
+    """
+    service, captured = _make_service_with_mock(single_returns={"session_id": "sess-1"})
+
+    await service.write_session_digest(
+        "sess-1",
+        expected_ended_at=_ENDED_AT,
+        generated_at=_ENDED_AT,
+        turn_count=3,
+        label="A label",
+        digest=_digest(),
+    )
+    await service.mark_session_projection_clean(
+        "sess-1", expected_ended_at=_ENDED_AT, generated_at=_ENDED_AT
+    )
+    await service.create_session(_session_node(), trace_id="t-1")
+
+    for cypher, _ in captured:
+        assert "s.summary_retry_after = null" in cypher
+
+
+@pytest.mark.asyncio
+async def test_a_broken_graph_is_distinguishable_from_a_refused_write() -> None:
+    """The Critical finding from the FRE-987 plan review.
+
+    Both used to return False, so the sweep could not tell "a turn landed, come back
+    next quiet period" from "nothing was persisted at all". The second is the expensive
+    one: the model call was already paid for, nothing recorded it, and the session is
+    still dirty on the next 300-second tick.
+    """
+    service = _make_failing_service()
+
+    assert (
+        await service.write_session_digest(
+            "sess-1",
+            expected_ended_at=_ENDED_AT,
+            generated_at=_ENDED_AT,
+            turn_count=3,
+            label="A label",
+            digest=_digest(),
+        )
+        is SessionWriteResult.UNAVAILABLE
+    )
+    assert (
+        await service.mark_session_projection_clean(
+            "sess-1", expected_ended_at=_ENDED_AT, generated_at=_ENDED_AT
+        )
+        is SessionWriteResult.UNAVAILABLE
+    )
+    assert (
+        await service.record_session_summary_failure(
+            "sess-1",
+            expected_ended_at=_ENDED_AT,
+            failure_reason=SummaryFailureReason.MODEL_ERROR.value,
+        )
+        is SessionWriteResult.UNAVAILABLE
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_disconnected_graph_reports_unavailable_not_refused() -> None:
+    """Same distinction on the other no-write path."""
+    service = MemoryService.__new__(MemoryService)
+    service.connected = False
+    service.driver = None
+
+    assert (
+        await service.mark_session_projection_clean(
+            "sess-1", expected_ended_at=_ENDED_AT, generated_at=_ENDED_AT
+        )
+        is SessionWriteResult.UNAVAILABLE
+    )

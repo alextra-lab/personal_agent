@@ -804,6 +804,59 @@ async def test_budget_denial_is_reported_as_transient(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
+async def test_budget_denial_carries_the_instant_its_window_resets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The producer surfaces WHEN the denial clears, not merely that it happened (FRE-987).
+
+    Transient is not the same as unbounded. The gate knows the exact instant the cap's
+    window rolls over, and that is the only moment a retry could succeed; without it the
+    sweep can do nothing better than re-attempt on its 300-second clock.
+    """
+    resets_at = _T0 + timedelta(days=1)
+
+    async def fake_call(_prompt: str, **_: Any) -> str:
+        raise BudgetDenied(
+            role="captains_log",
+            time_window="daily",
+            current_spend=Decimal("5.02"),
+            cap=Decimal("5.00"),
+            window_resets_at=resets_at,
+        )
+
+    monkeypatch.setattr(ss, "_call_model", fake_call)
+
+    outcome = await ss.generate_session_digest(
+        _two_turn_session(), session_id="sess-1", ended_at=_T0
+    )
+
+    assert outcome.retry_after == resets_at
+
+
+@pytest.mark.asyncio
+async def test_a_failure_with_no_known_clearing_instant_carries_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a denial knows when it clears; everything else is paced by the caller.
+
+    Asserted so the field can never quietly become "some default instant" — a wrong
+    instant is worse than none, because the sweep would trust it.
+    """
+
+    async def fake_call(_prompt: str, **_: Any) -> str:
+        raise RuntimeError("provider exploded")
+
+    monkeypatch.setattr(ss, "_call_model", fake_call)
+
+    outcome = await ss.generate_session_digest(
+        _two_turn_session(), session_id="sess-1", ended_at=_T0
+    )
+
+    assert outcome.failure_reason is SummaryFailureReason.MODEL_ERROR
+    assert outcome.retry_after is None
+
+
+@pytest.mark.asyncio
 async def test_model_error_does_not_escape(monkeypatch: pytest.MonkeyPatch) -> None:
     """A sweep must never crash the scheduler."""
 

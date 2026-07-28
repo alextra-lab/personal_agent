@@ -19,6 +19,7 @@ from personal_agent.telemetry.events import (
 )
 from personal_agent.telemetry.metrics import (
     _parse_time_window,
+    _read_log_entries,
     get_recent_cpu_load,
     get_recent_event_count,
     get_request_latency_breakdown,
@@ -400,3 +401,200 @@ class TestLogQueryFunctions:
         self._write_log_file(log_file, [])
 
         assert get_request_latency_breakdown("no-such-trace") == []
+
+
+class TestLineFilterPrefilter:
+    """FRE-1034: _read_log_entries' line_filter must bound memory and preserve correctness.
+
+    Root cause: get_trace_events materialized the entire log corpus (262k lines / 83MB in
+    production) into memory on every turn before filtering. These tests prove the line-level
+    prefilter fix actually bounds memory regardless of corpus size, and that it cannot
+    introduce false negatives (JSON-escaped trace_ids) or false positives (substring
+    collisions in unrelated fields), across malformed lines and rotated backup files.
+    """
+
+    def _create_log_entry(
+        self,
+        event: str,
+        trace_id: str | None = None,
+        component: str = "test",
+        timestamp: datetime | None = None,
+        **kwargs: object,
+    ) -> dict:
+        """Create a mock log entry (mirrors TestLogQueryFunctions._create_log_entry)."""
+        if timestamp is None:
+            timestamp = datetime.now(timezone.utc)
+        entry = {
+            "event": event,
+            "timestamp": timestamp.isoformat(),
+            "component": component,
+            "logger": f"personal_agent.{component}",
+            "level": "info",
+            **kwargs,
+        }
+        if trace_id:
+            entry["trace_id"] = trace_id
+        return entry
+
+    def _write_log_file(self, log_file: pathlib.Path, entries: list[dict]) -> None:
+        """Write log entries to a JSONL file."""
+        with open(log_file, "w", encoding="utf-8") as f:
+            for entry in entries:
+                f.write(json.dumps(entry) + "\n")
+
+    @patch("personal_agent.telemetry.metrics._get_log_file_path")
+    def test_read_log_entries_line_filter_bounds_memory_regardless_of_corpus_size(
+        self, mock_get_log_file: Any, tmp_path: pathlib.Path
+    ) -> None:
+        """Peak memory for a filtered read must not scale with corpus size (AC-1)."""
+        import tracemalloc
+
+        log_file = tmp_path / "current.jsonl"
+        mock_get_log_file.return_value = log_file
+
+        now = datetime.now(timezone.utc)
+        target_trace_id = "trace-target-only-3-matches"
+
+        entries = [
+            self._create_log_entry(
+                TASK_STARTED, trace_id=f"trace-noise-{i}", timestamp=now - timedelta(seconds=i)
+            )
+            for i in range(8000)
+        ]
+        entries.extend(
+            self._create_log_entry(
+                MODEL_CALL_COMPLETED, trace_id=target_trace_id, timestamp=now - timedelta(seconds=i)
+            )
+            for i in range(3)
+        )
+        self._write_log_file(log_file, entries)
+
+        tracemalloc.start()
+        filtered_result = _read_log_entries(line_filter=target_trace_id)
+        _, filtered_peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        assert len(filtered_result) == 3
+
+        tracemalloc.start()
+        unfiltered_result = _read_log_entries()
+        _, unfiltered_peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        assert len(unfiltered_result) == 8003
+        # The filtered read must be an order of magnitude cheaper in peak memory — it must
+        # not scale with corpus size the way the unfiltered read does.
+        assert filtered_peak * 5 < unfiltered_peak, (
+            f"filtered peak ({filtered_peak}B) is not meaningfully smaller than "
+            f"unfiltered peak ({unfiltered_peak}B) — memory is not bounded by matches"
+        )
+
+    @patch("personal_agent.telemetry.metrics._get_log_file_path")
+    def test_get_trace_events_handles_json_escaped_trace_id(
+        self, mock_get_log_file: Any, tmp_path: pathlib.Path
+    ) -> None:
+        r"""A trace_id containing JSON metacharacters must still be found (AC-3).
+
+        A naive raw-substring prefilter (searching for the unescaped Python string) misses
+        this line entirely, because json.dumps escapes the quote — the raw line contains
+        ``trace\"needs-escaping``, not ``trace"needs-escaping``.
+        """
+        log_file = tmp_path / "current.jsonl"
+        mock_get_log_file.return_value = log_file
+
+        trace_id = 'trace"needs-escaping'
+        now = datetime.now(timezone.utc)
+        entries = [
+            self._create_log_entry(
+                TASK_STARTED, trace_id=trace_id, timestamp=now - timedelta(seconds=5)
+            ),
+            self._create_log_entry(
+                MODEL_CALL_COMPLETED, trace_id=trace_id, timestamp=now - timedelta(seconds=1)
+            ),
+            self._create_log_entry(TASK_STARTED, trace_id="other-trace", timestamp=now),
+        ]
+        self._write_log_file(log_file, entries)
+
+        results = get_trace_events(trace_id)
+        assert len(results) == 2
+        assert all(e.get("trace_id") == trace_id for e in results)
+
+    @patch("personal_agent.telemetry.metrics._get_log_file_path")
+    def test_get_trace_events_substring_in_unrelated_field_does_not_leak(
+        self, mock_get_log_file: Any, tmp_path: pathlib.Path
+    ) -> None:
+        """A trace_id appearing only inside another entry's unrelated field must not leak (AC-3)."""
+        log_file = tmp_path / "current.jsonl"
+        mock_get_log_file.return_value = log_file
+
+        target_trace_id = "trace-real"
+        now = datetime.now(timezone.utc)
+        entries = [
+            self._create_log_entry(
+                TASK_STARTED, trace_id=target_trace_id, timestamp=now - timedelta(seconds=5)
+            ),
+            self._create_log_entry(
+                MODEL_CALL_COMPLETED,
+                trace_id="unrelated-trace",
+                timestamp=now - timedelta(seconds=2),
+                message=f"reference to {target_trace_id} appears here",
+            ),
+        ]
+        self._write_log_file(log_file, entries)
+
+        results = get_trace_events(target_trace_id)
+        assert len(results) == 1
+        assert results[0]["trace_id"] == target_trace_id
+
+    @patch("personal_agent.telemetry.metrics._get_log_file_path")
+    def test_get_trace_events_skips_malformed_lines_without_crashing(
+        self, mock_get_log_file: Any, tmp_path: pathlib.Path
+    ) -> None:
+        """Malformed lines — including ones that pass the substring prefilter — must not crash (AC-3)."""
+        log_file = tmp_path / "current.jsonl"
+        mock_get_log_file.return_value = log_file
+
+        target_trace_id = "trace-robust"
+        now = datetime.now(timezone.utc)
+        valid_entry = self._create_log_entry(TASK_STARTED, trace_id=target_trace_id, timestamp=now)
+
+        with open(log_file, "w", encoding="utf-8") as f:
+            f.write("not json at all\n")
+            f.write("{broken json missing quotes}\n")
+            f.write(json.dumps(valid_entry) + "\n")
+            # This noise line contains the target trace_id substring but is not valid JSON —
+            # it passes the prefilter but must still fail json.loads gracefully.
+            f.write(f"garbage line mentioning {target_trace_id} but not valid json {{\n")
+
+        results = get_trace_events(target_trace_id)
+        assert len(results) == 1
+        assert results[0]["trace_id"] == target_trace_id
+
+    @patch("personal_agent.telemetry.metrics._get_log_file_path")
+    def test_get_trace_events_finds_matches_across_rotated_files(
+        self, mock_get_log_file: Any, tmp_path: pathlib.Path
+    ) -> None:
+        """Matches split across the live file and a rotated backup must all be found (AC-3)."""
+        log_file = tmp_path / "current.jsonl"
+        log_file_1 = tmp_path / "current.jsonl.1"
+        mock_get_log_file.return_value = log_file
+
+        target_trace_id = "trace-rotated"
+        now = datetime.now(timezone.utc)
+        current_entries = [
+            self._create_log_entry(MODEL_CALL_COMPLETED, trace_id=target_trace_id, timestamp=now),
+        ]
+        rotated_entries = [
+            self._create_log_entry(
+                TASK_STARTED, trace_id=target_trace_id, timestamp=now - timedelta(hours=1)
+            ),
+            self._create_log_entry(
+                TASK_STARTED, trace_id="other-trace", timestamp=now - timedelta(hours=1)
+            ),
+        ]
+        self._write_log_file(log_file, current_entries)
+        self._write_log_file(log_file_1, rotated_entries)
+
+        results = get_trace_events(target_trace_id)
+        assert len(results) == 2
+        assert all(e["trace_id"] == target_trace_id for e in results)

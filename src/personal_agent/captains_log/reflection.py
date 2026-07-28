@@ -281,8 +281,11 @@ async def generate_reflection_entry(
         - Final fallback: basic reflection with task metadata only
         - Includes performance metrics for richer context (ADR-0012)
     """
-    # Query telemetry for this trace (needed for both DSPy and manual)
-    trace_events = get_trace_events(trace_id)
+    # Query telemetry for this trace (needed for both DSPy and manual). FRE-1034:
+    # offloaded to a thread — get_trace_events does synchronous file I/O + JSON
+    # parsing and must not block the event loop this reflection task shares with
+    # concurrent requests.
+    trace_events = await asyncio.to_thread(get_trace_events, trace_id=trace_id)
     telemetry_summary = _summarize_telemetry(trace_events, metrics_summary)
 
     # FRE-409: Build prompt-composition manifest from already-fetched trace events.

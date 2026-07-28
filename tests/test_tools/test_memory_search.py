@@ -428,3 +428,125 @@ async def test_search_memory_claims_key_present_even_when_empty() -> None:
         result = await search_memory_executor(query_text="Athens", entity_names=["Athens"])
 
     assert result["claims"] == []
+
+
+# ---------------------------------------------------------------------------
+# ADR-0126 D5 (FRE-1018): Supersession chain on pull via search_memory
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_include_history_false_omits_history_keys() -> None:
+    """Default (include_history=False) reproduces T3 behaviour exactly — no new keys."""
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
+    mock_service.query_claims = AsyncMock(return_value=[])
+    mock_service.query_stance_history = AsyncMock(return_value=[])
+    mock_service.query_claims_history = AsyncMock(return_value=[])
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        result = await search_memory_executor(query_text="Athens", entity_names=["Athens"])
+
+    assert "stance_history" not in result
+    assert "claims_history" not in result
+    mock_service.query_stance_history.assert_not_awaited()
+    mock_service.query_claims_history.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_include_history_true_with_explicit_entity_names_returns_stance_chain() -> None:
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
+    mock_service.query_claims = AsyncMock(return_value=[])
+    mock_service.query_claims_history = AsyncMock(return_value=[])
+    mock_service.query_stance_history = AsyncMock(
+        return_value=[
+            {"target": "Sorbet", "affect": "prefers it", "is_current": False},
+            {
+                "target": "Sorbet",
+                "affect": "prefers a sorbet-leaning texture",
+                "is_current": True,
+            },
+        ]
+    )
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        result = await search_memory_executor(
+            query_text="Sorbet", entity_names=["Sorbet"], include_history=True
+        )
+
+    mock_service.query_stance_history.assert_awaited_once()
+    assert mock_service.query_stance_history.call_args.args[0] == "Sorbet"
+    assert "Sorbet" in result["stance_history"]
+    assert len(result["stance_history"]["Sorbet"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_include_history_true_query_text_only_still_reaches_stance_history() -> None:
+    """Codex finding #3 regression: query_text alone (no entity_names) must still work,
+
+    mirroring the ordinary entity-match path's capitalised-word extraction — an explicit
+    entity_names=["Sorbet"] must not be the only way to reach Sorbet's history.
+    """
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
+    mock_service.query_claims = AsyncMock(return_value=[])
+    mock_service.query_claims_history = AsyncMock(return_value=[])
+    mock_service.query_stance_history = AsyncMock(return_value=[{"target": "Sorbet"}])
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        await search_memory_executor(query_text="Sorbet", include_history=True)
+
+    mock_service.query_stance_history.assert_awaited_once()
+    assert mock_service.query_stance_history.call_args.args[0] == "Sorbet"
+
+
+@pytest.mark.asyncio
+async def test_include_history_true_threads_identity_into_claims_history() -> None:
+    from uuid import uuid4
+
+    uid = uuid4()
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
+    mock_service.query_claims = AsyncMock(return_value=[])
+    mock_service.query_stance_history = AsyncMock(return_value=[])
+    mock_service.query_claims_history = AsyncMock(return_value=[])
+
+    from personal_agent.telemetry.trace import TraceContext
+
+    ctx = TraceContext(trace_id="t-1018", session_id="s-1018", user_id=uid, authenticated=True)
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        await search_memory_executor(
+            query_text="Athens", entity_names=["Athens"], include_history=True, ctx=ctx
+        )
+
+    mock_service.query_claims_history.assert_awaited_once()
+    kwargs = mock_service.query_claims_history.call_args.kwargs
+    assert mock_service.query_claims_history.call_args.args[0] == "Athens"
+    assert kwargs.get("user_id") == uid
+    assert kwargs.get("authenticated") is True
+    assert kwargs.get("trace_id") == "t-1018"
+    assert kwargs.get("session_id") == "s-1018"
+
+
+@pytest.mark.asyncio
+async def test_include_history_true_empty_chain_omits_target_from_dict() -> None:
+    """A target with no stance history is left out of the stance_history dict entirely."""
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
+    mock_service.query_claims = AsyncMock(return_value=[])
+    mock_service.query_claims_history = AsyncMock(return_value=[])
+    mock_service.query_stance_history = AsyncMock(return_value=[])
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        result = await search_memory_executor(
+            query_text="Unknown", entity_names=["Unknown"], include_history=True
+        )
+
+    assert result["stance_history"] == {}

@@ -97,8 +97,18 @@ is empty, the sets below are hand-authored to the per-class minima ADR-0124 stat
 with each item's ground truth fixed here before any arm ran.
 
 Synthetic sessions are written as real `TaskCapture` records so they traverse the
-exact production path — `build_prompt`, the parser, and
-`validate_digest_provenance` — with no test-only shortcut.
+exact production path — `build_prompt`, the parser, and `ground_correction` — with no
+test-only shortcut.
+
+> **Amendment E / FRE-1024.** The path's last stage was `validate_digest_provenance`, which
+> compared a model-transcribed span against the text at its locator and discarded the whole
+> digest on any drift. The model no longer emits a span at all: it emits the locator and the
+> producer quotes the text there. Each positive's `reference_correction` therefore keeps its
+> recorded `span`/`evidence_span` as **documentation of what the case is about**, not as
+> anything the producer must reproduce — the pre-validation check asserts the reference
+> *locators ground*, which is now the necessary condition. A correction whose locators do
+> not resolve is dropped from the digest rather than failing it, so a fixture flaw of that
+> kind shows up as a missing correction, not as an errored case.
 
 ---
 

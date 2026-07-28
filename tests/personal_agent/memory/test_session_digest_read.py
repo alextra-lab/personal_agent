@@ -286,6 +286,8 @@ def test_parse_stored_digest_coerces_tool_evidence_in_every_slot() -> None:
                 "text": "c",
                 "basis": "tool_evidence",
                 "tier": "self_correction",
+                "span": "cl",
+                "locator": {"capture_id": "cap-1", "field": "assistant_text"},
                 "evidence_span": "ev",
                 "evidence_locator": {"capture_id": "cap-1", "field": "assistant_text"},
             }
@@ -298,6 +300,41 @@ def test_parse_stored_digest_coerces_tool_evidence_in_every_slot() -> None:
     assert digest.decisions[0].basis == "mixed"
     assert digest.unresolved[0].basis == "mixed"
     assert digest.corrections[0].basis == "mixed"
+
+
+def test_parse_stored_digest_reads_a_pre_fre1024_correction() -> None:
+    """A digest stored while the model still transcribed its own spans must still read.
+
+    The write path changed (spans are now quoted from the locator), but nothing rewrote
+    what is already on disk. The stored shape is unchanged — all four provenance fields
+    were required before and are required now — so an old record parses as-is, and its
+    model-authored span text is preserved rather than reinterpreted.
+
+    Verified against the live graph before tightening the type: the one stored correction
+    there carries all four fields.
+    """
+    raw = {
+        "established": [{"text": "The sweep ran hourly.", "basis": "mixed"}],
+        "corrections": [
+            {
+                "text": "The assistant corrected the token ceiling.",
+                "basis": "assistant_reasoning",
+                "tier": "self_correction",
+                "span": "I said 2048",
+                "locator": {"capture_id": "cap-1", "field": "assistant_text"},
+                "evidence_span": "it is actually 2856",
+                "evidence_locator": {"capture_id": "cap-1", "field": "assistant_text"},
+            }
+        ],
+    }
+
+    digest = parse_stored_digest(raw)
+
+    assert digest.corrections[0].span == "I said 2048"
+    assert digest.corrections[0].evidence_span == "it is actually 2856"
+    # Absent on an old record, so it must default rather than fail the read.
+    assert digest.corrections_dropped == 0
+    assert "Corrections" in render_digest(digest)
 
 
 def test_parse_stored_digest_leaves_valid_basis_untouched() -> None:

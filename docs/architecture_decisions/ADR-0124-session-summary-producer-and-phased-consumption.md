@@ -1,6 +1,6 @@
 # ADR-0124: Session-summary producer correction and phased consumption
 
-**Status:** Accepted — 2026-07-23 (owner), **amended 2026-07-23 (Amendment A — conversation-scoped input; tool payloads removed from D2; D3 corrections narrowed to payload-free kinds), further amended 2026-07-24 (Amendment B — the summariser is conversation-*only*: tool metadata removed from D2's input entirely; the `tool_evidence` basis and the `status_contradiction` correction removed to the verification oracle; `corrections` reduced to `self_correction`), further amended 2026-07-27 (Amendment C — D3's length bound measured by the FRE-994 compression curve: the prompt target becomes 120, the enforced rendered ceiling becomes 400, the call ceiling stays 2,048, and per-slot item ceilings leave the sizing role entirely).** Implementation chain FRE-947 → FRE-948 → FRE-949 → FRE-950 → FRE-951; Phase 4 unfiled, gated on AC-24.
+**Status:** Accepted — 2026-07-23 (owner), **amended 2026-07-23 (Amendment A — conversation-scoped input; tool payloads removed from D2; D3 corrections narrowed to payload-free kinds), further amended 2026-07-24 (Amendment B — the summariser is conversation-*only*: tool metadata removed from D2's input entirely; the `tool_evidence` basis and the `status_contradiction` correction removed to the verification oracle; `corrections` reduced to `self_correction`), further amended 2026-07-27 (Amendment C — D3's length bound measured by the FRE-994 compression curve: the prompt target becomes 120, the enforced rendered ceiling becomes 400, the call ceiling stays 2,048, and per-slot item ceilings leave the sizing role entirely), further amended 2026-07-28 (Amendment D — the transient retry path is paced by backoff, not unbounded), further amended 2026-07-28 (Amendment E — the model emits only the locator and the producer quotes the span from it; an ungroundable correction is dropped rather than discarding the digest; `span_validation_failed` retired).** Implementation chain FRE-947 → FRE-948 → FRE-949 → FRE-950 → FRE-951; Phase 4 unfiled, gated on AC-24.
 **Date:** 2026-07-23
 **Deciders:** Owner (architect), cc-adrs (Opus)
 **Tags:** memory, second-brain, knowledge-graph, retrieval, telemetry, privacy
@@ -238,10 +238,13 @@ ratatouille → coaching a couscous has no single intent, and is normal rather t
 is backed by an enforcement step: **every `corrections` entry must carry a verbatim span plus a
 locator** — the capture id and the turn's assistant text the correction is grounded in *(Amendment B:
 the locator names a turn's assistant text only; the tool-result field it once allowed is gone with
-`tool_evidence` and `status_contradiction`)*. The validator resolves the locator and requires the
-span to occur *at that location*, not merely somewhere in the session. Bare containment is not
-sufficient: a common word appears everywhere and would pass while supporting nothing. This turns the
-evidence-versus-interpretation invariant from a prompt instruction into a machine-checkable one.
+`tool_evidence` and `status_contradiction`)*. The span must occur *at that location*, not merely
+somewhere in the session. Bare containment is not sufficient: a common word appears everywhere and
+would pass while supporting nothing. This turns the evidence-versus-interpretation invariant from a
+prompt instruction into a machine-checkable one. *(Amendment E: the model supplies only the locator
+and the producer quotes the text there, so the requirement is met by construction rather than by a
+post-hoc validator, and the span is the whole cited turn. A correction whose locator does not resolve
+is dropped from the digest, never a reason to discard it.)*
 
 **Error-flagging is precision-first, deliberately asymmetric.** A missed error is recoverable from
 raw evidence; a false error writes self-confirming state into the graph and feeds its own
@@ -898,6 +901,84 @@ terminal-eligible reasons reach terminality *through* this counter.
   *failing* population re-attempted forever, which is what the regression was.
 
 
+## Amendment E — 2026-07-28: the model points, the code quotes
+
+**Status of this amendment:** Accepted — implemented by FRE-1024, which closes a live production
+delivery failure. Evidence: the two `span_validation_failed` events for session
+`73417fbd-d2c6-4aed-9411-88a6f8a8196b` (2026-07-28 07:45 and 08:00), the capture index confirming that
+session's evidence was fully readable, and the code cited below.
+
+### What the ADR said, and why it could not hold
+
+D3 requires every `corrections` entry to carry "a verbatim span plus a locator", and AC-11 checks it by
+resolving the locator and requiring the span to occur *at that location*. The implementation asked the
+**model** for the span — "verbatim text copied from the assistant's own message" — and discarded the
+entire digest when its transcription drifted from the source.
+
+The locator already names the text. Given the locator, quoting is a dictionary lookup with perfect
+fidelity. The design therefore asked a sampler to perform lossless copying, which is the one operation
+it is structurally worst at, and then validated the copy against the very source the code was about to
+read anyway. The check itself was well built — whitespace-normalised, case-preserving so that `ERROR`
+could not match `error` — and that is beside the point. **The check should not have needed to exist.**
+
+Its cost was not theoretical. Session `73417fbd` is a five-turn session that summarises perfectly well;
+it failed twice on one optional field, reached the attempt ceiling, and was permanently retired.
+
+### The change
+
+1. **The span is derived, not authored.** The model emits `locator` and `evidence_locator` and nothing
+   else; `ground_correction` quotes the text at each. Verbatim-ness becomes an identity rather than a
+   claim to be checked, and the prompt and the tool schema both stop asking for a span. This
+   *strengthens* provenance rather than relaxing it — the transcription step, which was the only place
+   drift could enter, is gone.
+2. **An ungroundable citation costs its item, never the digest.** A locator that does not resolve
+   drops that correction and keeps the rest, recorded in `SessionDigest.corrections_dropped` and
+   declared in the rendering. This is Amendment C2's trim-not-discard rule (FRE-993) applied to the
+   same producer: an optional, deliberately-scarce field must not destroy a complete artefact.
+3. **`span_validation_failed` is removed, not reclassified.** Nothing can raise it once grounding
+   holds by construction. Because `TERMINAL_ELIGIBLE_REASONS` is matched against the *stored* reason
+   string, removing it also returns every session already retired on it to the sweep — recovery
+   without a migration.
+4. **A digest emptied *by* grounding is a failure, not a success.** Dropping corrections before the
+   trim step opens a path the trim guard cannot cover: a digest whose only content was corrections,
+   all ungroundable, would be stored empty, clearing the session's failure state and advancing its
+   freshness stamp — the delivery failure Amendment C5 names. It now records the new
+   `ungrounded_digest` reason and resamples. That reason is **transient**: the producer retries, and a
+   resample can plausibly return a different slot or a resolvable locator, so terminalising it would
+   repeat the exact error this amendment removes. Its cost is bounded by Amendment D's backoff.
+
+### What this amendment changes in the text above
+
+- **D3, "Provenance is structural and verifiable"** — the sentence "The validator resolves the locator
+  and requires the span to occur *at that location*" describes the retired mechanism. The obligation
+  is unchanged; it is now met by construction, and the span is the **whole cited turn** rather than a
+  model-chosen sentence, since the locator grammar is turn-granular.
+- **AC-11** — the *Check* becomes: the producer resolves each locator to the named capture's assistant
+  text and quotes it, and a correction whose locator does not resolve is dropped from the digest. It
+  *fails if* any stored `corrections` entry carries a locator that does not resolve, if any span is
+  not identical to the text at its locator, or if a digest is discarded because a single corrections
+  item could not be grounded. The **stated limitation is unchanged and still governs**: this proves
+  the citation resolves, not that the quoted turn *supports* the proposition. Semantic support remains
+  carried by AC-12's labelled fixtures and AC-16's human review.
+
+### What it deliberately does not do
+
+* **It does not narrow the locator grammar to sub-turn precision.** A `{capture_id, field, sentence: N}`
+  pointer would restore sentence-level precision and shrink the stored record, but it asks the model
+  for an *index*, and an off-by-one mis-quotes **silently** — strictly worse than the loud failure
+  being removed.
+* **It does not bound the stored span.** A derived span is the full cited turn, so a stored correction
+  grows roughly 40× against the live sample (57 and 48 characters today). Spans are not rendered, so
+  the digest budget is untouched; the growth lands only in the stored record. A `correction_span_chars`
+  telemetry field is emitted so the real distribution is observable, and any bound is a later decision
+  driven by that measurement rather than a pre-emptive cap that would contradict the identity above.
+* **It does not relax the correction bar.** Precision-first, `self_correction` only, conversation-only
+  — all of Amendment B stands. What changes is who types the quote.
+* **It does not fold shape errors into the drop path.** An off-vocabulary `tier` stays
+  `schema_invalid` (FRE-956), so `corrections_dropped` means exactly one thing to a reader: the
+  citation did not resolve.
+
+
 ## Alternatives Considered
 
 ### Option 1: Lazy generation on first read (ADR-0024's original resolution)
@@ -1281,13 +1362,15 @@ permitted response is a pre-registered synthetic supplement, labelled as such in
 - **AC-11** — Every `corrections` entry carries a span **and a locator**, and the span occurs at that
   location. **Amendment B:** `tool_evidence` items no longer exist, and the locator grammar names a
   **turn's assistant text only** — the `tool_result[N].error` / `tool_result[N]` targets are removed
-  with `status_contradiction`, since `self_correction` is grounded in the conversation. · **Check:**
-  validator resolves each locator to the named capture and the cited turn's assistant text, then
-  requires the span there. · *Fails if* any locator is absent, unresolvable, or names a tool-result
-  field, or the span is not found at the cited location — bare containment anywhere in the
-  session does not pass. **Stated limitation:** this proves the citation resolves, not that the span
-  *supports* the proposition. A fabricated item citing a real but irrelevant span at a valid locator
-  passes this check. Mechanical entailment is not available to us, so semantic support is carried by
+  with `status_contradiction`, since `self_correction` is grounded in the conversation.
+  **Amendment E:** the model emits only the locator; the producer quotes the span from it. ·
+  **Check:** the producer resolves each locator to the named capture's assistant text and quotes it,
+  and a correction whose locator does not resolve is dropped from the digest. · *Fails if* any stored
+  `corrections` entry carries a locator that is absent, unresolvable, or names a tool-result field; if
+  any span is not identical to the text at its locator; or if a digest is discarded because a single
+  corrections item could not be grounded. **Stated limitation:** this proves the citation resolves, not
+  that the quoted turn *supports* the proposition. A fabricated item citing a real but irrelevant turn
+  at a valid locator passes this check. Mechanical entailment is not available to us, so semantic support is carried by
   AC-12's labelled fixtures and AC-16's human review; AC-11 is a necessary condition that makes the
   cheap failure mode — invented citations — impossible, and is claimed as nothing more.
 - **AC-12** — **Corrections fire when they should and stay silent when they should not.** On a

@@ -14,21 +14,34 @@ Two artifacts come out of one model call and are stored independently:
   first-60-characters title hack.
 * ``SessionDigest`` — the structured record below.
 
-**Provenance is structural and verifiable, not aspirational.** ``basis`` is a
-model-assigned tag, and nothing stops a model labelling its own inference as
-evidence. So every ``corrections`` entry must carry a verbatim span *plus a
-locator* — the capture id and the turn's assistant text it is grounded in.
-:func:`validate_digest_provenance` resolves the locator and requires the span to
-occur **at that location**. Bare containment somewhere in the session is not
-sufficient: a common word appears everywhere and would pass while supporting
-nothing.
+**Provenance is structural, and true by construction** (ADR-0124 Amendment E,
+FRE-1024). ``basis`` is a model-assigned tag, and nothing stops a model labelling
+its own inference as evidence. So every ``corrections`` entry carries a verbatim
+span *plus a locator* — the capture id and the turn's assistant text it is
+grounded in. **The model supplies only the locator; the code quotes the text
+there** (:func:`ground_correction`). Verbatim-ness is therefore an identity, not
+a claim to be checked: the span *is* the resolved text.
+
+This replaces a validator that asked the model to transcribe the span and then
+compared its transcription against the source the code was about to read anyway.
+Asking a sampler for lossless copying is asking it for the one thing it is
+structurally bad at, and a drifted transcription discarded the whole digest. The
+failure class no longer exists rather than being managed.
+
+**A citation that cannot be grounded costs its item, never the digest.** A
+locator naming an unknown capture, a field outside the grammar, or a turn with no
+assistant response quotes nothing, so that correction is dropped and the rest of
+the digest is kept — recorded in :attr:`SessionDigest.corrections_dropped` and
+declared in the rendering. Corrections are rare and optional by design; losing a
+whole session's digest to one of them inverts the cost and the benefit. Same rule
+the trim path already obeys (FRE-993, ADR-0124 Amendment C2).
 
 **Stated limitation (ADR-0124 AC-11).** This proves the citation *resolves*, not
-that the span *supports* the proposition. A fabricated item citing a real but
-irrelevant span at a valid locator passes. Mechanical entailment is not available
-to us; semantic support is carried by the labelled fixture sets (AC-12) and human
-review (AC-16). This module is a necessary condition that makes the cheap failure
-mode — invented citations — impossible, and is claimed as nothing more.
+that the quoted turn *supports* the proposition. A fabricated item citing a real
+but irrelevant turn passes. Mechanical entailment is not available to us; semantic
+support is carried by the labelled fixture sets (AC-12) and human review (AC-16).
+This module is a necessary condition that makes the cheap failure mode — invented
+citations — impossible, and is claimed as nothing more.
 
 **Storage is structured; rendering is derived.** The record is canonical.
 Consumers receive :func:`render_digest`'s labelled prose assembled at read time —
@@ -98,7 +111,6 @@ class SummaryFailureReason(StrEnum):
     # Deterministic — the same input fails the same way, so it can go terminal.
     OVERSIZED_INPUT = "oversized_input"
     SCHEMA_INVALID = "schema_invalid"
-    SPAN_VALIDATION_FAILED = "span_validation_failed"
     DIGEST_OVER_BUDGET = "digest_over_budget"
     # The reply was cut off at the output ceiling (FRE-996). Split out of
     # SCHEMA_INVALID, where it was previously indistinguishable from format drift: a
@@ -111,6 +123,17 @@ class SummaryFailureReason(StrEnum):
     MODEL_ERROR = "model_error"
     TIMEOUT = "timeout"
     EMPTY_OUTPUT = "empty_output"
+    # Every item the model produced was an ungroundable correction, so grounding left
+    # nothing (FRE-1024). Distinct from EMPTY_OUTPUT, which is a model that said nothing:
+    # conflating a sizing/grounding fault with a silence is the exact measurement collapse
+    # FRE-996 had to undo for truncation, so this is split at the point it is visible.
+    #
+    # Transient by the same argument the ticket makes against the reason it replaces: the
+    # producer resamples, and a resample can plausibly return `established`/`decisions`
+    # instead, or a resolvable locator. Classifying a failure the code itself retries as
+    # deterministic is what permanently retired a recoverable session. Cost is bounded by
+    # `next_retry_after`'s backoff (FRE-987), which exists for exactly this shape.
+    UNGROUNDED_DIGEST = "ungrounded_digest"
     # Bounded by its OWN counter, deliberately outside the split above (FRE-992).
     # The producer could not read the session's evidence — the durable store was
     # unreachable, a capture would not parse, or the graph knows of more turns than
@@ -123,11 +146,17 @@ class SummaryFailureReason(StrEnum):
     EVIDENCE_UNAVAILABLE = "evidence_unavailable"
 
 
+#: Reasons a session may be permanently retired on, once it has spent its attempts.
+#:
+#: ``span_validation_failed`` was removed here with the reason itself (FRE-1024). Its
+#: absence is load-bearing beyond tidiness: this frozenset is matched against the
+#: **stored** ``summary_failure_reason`` string, so sessions already retired on it become
+#: eligible again the moment this ships — which is how the live case that motivated the
+#: ticket recovers without a migration.
 TERMINAL_ELIGIBLE_REASONS: frozenset[str] = frozenset(
     {
         SummaryFailureReason.OVERSIZED_INPUT,
         SummaryFailureReason.SCHEMA_INVALID,
-        SummaryFailureReason.SPAN_VALIDATION_FAILED,
         SummaryFailureReason.DIGEST_OVER_BUDGET,
         # Membership preserves behaviour rather than changing it: truncation used to
         # arrive as SCHEMA_INVALID, which is terminal-eligible. Omitting it here would
@@ -294,15 +323,33 @@ class Correction(DigestItem):
     ``evidence_*`` cite what supports it (the assistant's own corrective text) —
     both against a turn's ``assistant_text``.
 
+    **Both spans are producer-derived, never model-authored** (Amendment E,
+    FRE-1024). :func:`ground_correction` is the only thing that builds one, and it
+    quotes each span from its own locator, so a ``Correction`` that exists is a
+    ``Correction`` whose spans are the text at their locators. The four provenance
+    fields are all required for the same reason: once the old post-hoc validator is
+    gone, this type is the last boundary before ``write_session_digest`` serialises
+    whatever it is handed, so an ungrounded correction must not be representable.
+
+    A consequence worth stating plainly: :func:`resolve_locator` is turn-granular,
+    so a span is the **whole cited turn**, not the sentence a transcribing model
+    would have picked out. Provenance is stronger (a paraphrase is impossible) and
+    reader precision is weaker (the reader gets the turn and locates the sentence
+    themselves). Spans are not rendered, so this does not touch the digest budget —
+    it lands only in the stored record's size.
+
     Attributes:
         tier: ``self_correction`` — the only kind Amendment B allows. The agent
             corrected the record within the session, and the correction is
             supported by evidence visible in the assistant's own text.
-        evidence_span: Verbatim supporting evidence, from the assistant's own text.
+        evidence_span: The assistant's own supporting text, quoted from
+            ``evidence_locator``.
         evidence_locator: Where that evidence lives.
     """
 
     tier: CorrectionTier
+    span: str
+    locator: Locator
     evidence_span: str
     evidence_locator: Locator
 
@@ -337,6 +384,19 @@ class SessionDigest(BaseModel):
     #: Same reasoning as :attr:`UnresolvedItem.as_of`: state the producer knows and the
     #: reader cannot recover is stamped onto the record.
     items_dropped: int = 0
+
+    #: Corrections dropped by :func:`ground_correction` because their citation did not
+    #: resolve (FRE-1024).
+    #:
+    #: **A separate counter from :attr:`items_dropped`, deliberately.** Two different
+    #: causes with two different meanings to a reader: one says the digest was too long,
+    #: the other says a claimed self-correction could not be grounded in the session's own
+    #: text. Folding them together would make the trim path's rendered declaration —
+    #: "Trimmed to fit the digest budget" — assert something untrue.
+    #:
+    #: Stored and rendered under the same rule as :attr:`items_dropped` (ADR-0125 D5):
+    #: content cut on an evidence path is marked, never silently cut.
+    corrections_dropped: int = 0
 
     def is_empty(self) -> bool:
         """Whether every slot is empty."""
@@ -389,18 +449,6 @@ class SessionDigestView(BaseModel):
     digest_text: str | None = None
 
 
-def _normalise(text: str) -> str:
-    """Collapse whitespace runs and strip, for span comparison.
-
-    The stated canonical comparison. Raw byte equality is not well-defined once a
-    structured payload has been serialised and escaped into a prompt and quoted
-    back by a model, so spans are compared with whitespace normalised and case
-    preserved — case-folding would let "ERROR" match "error", which is exactly the
-    kind of near-miss a provenance check exists to catch.
-    """
-    return " ".join(text.split())
-
-
 def resolve_locator(locator: Locator, captures: Sequence[TaskCapture]) -> str | None:
     """Resolve a locator to the exact text it names.
 
@@ -412,6 +460,11 @@ def resolve_locator(locator: Locator, captures: Sequence[TaskCapture]) -> str | 
         The text at that location, or ``None`` if the capture is unknown or the
         field is outside the grammar — which now covers only ``assistant_text``;
         the user's message and any tool result field both return ``None``.
+
+        Note the two distinct empties: ``None`` means *this location does not
+        exist*, while ``""`` means *it exists and holds nothing* (a turn with no
+        recorded assistant response). :func:`ground_correction` rejects both, but
+        the caller can tell them apart.
     """
     capture = next((c for c in captures if c.trace_id == locator.capture_id), None)
     if capture is None:
@@ -423,60 +476,59 @@ def resolve_locator(locator: Locator, captures: Sequence[TaskCapture]) -> str | 
     return None
 
 
-def _check_located_span(
-    span: str | None,
-    locator: Locator | None,
-    captures: Sequence[TaskCapture],
+def ground_correction(
     *,
-    where: str,
-) -> list[str]:
-    """Check one span/locator pair, returning any violations."""
-    if span is None or locator is None:
-        return [f"{where}: requires both a span and a locator"]
+    text: str,
+    basis: BasisTag,
+    tier: CorrectionTier,
+    locator: Locator | None,
+    evidence_locator: Locator | None,
+    captures: Sequence[TaskCapture],
+) -> Correction | None:
+    """Quote a correction's spans from the locators the model pointed at.
 
-    resolved = resolve_locator(locator, captures)
-    if resolved is None:
-        return [
-            f"{where}: locator {locator.capture_id}/{locator.field} does not resolve",
-        ]
-    if _normalise(span) not in _normalise(resolved):
-        return [
-            f"{where}: span not found at {locator.capture_id}/{locator.field} "
-            "(bare containment elsewhere in the session does not count)",
-        ]
-    return []
+    The one constructor of a :class:`Correction` on the write path, and the reason
+    the located-span contract (ADR-0124 AC-11) holds by construction: it takes **no
+    span argument**, so no caller can reintroduce model-authored text here even by
+    mistake. The model points; this quotes.
 
-
-def validate_digest_provenance(digest: SessionDigest, captures: Sequence[TaskCapture]) -> list[str]:
-    """Enforce the located-span contract (ADR-0124 AC-11, as narrowed by Amendment B).
-
-    Every ``corrections`` entry must carry a span and a locator, and the span must
-    occur **at that location**. No other slot obliges a citation: Amendment B
-    retired ``tool_evidence``, the only basis that ever required one on
-    ``established``/``decisions``/``unresolved``.
+    Both citations must ground independently — the claim and the evidence are
+    separate propositions and may name different turns. A blank quote is rejected
+    along with an unresolvable one: a turn with no recorded assistant response
+    resolves to ``""``, which a containment check would have passed vacuously while
+    supporting nothing.
 
     Args:
-        digest: The digest to check.
+        text: The self-correction itself.
+        basis: Provenance tag, as the model assigned it. Not a gate — a mislabelled
+            basis does not exempt an item from grounding.
+        tier: The correction kind.
+        locator: Where the claim lives. ``None`` when the model omitted it.
+        evidence_locator: Where the supporting text lives. ``None`` when omitted.
         captures: The session's captures, which the locators are resolved against.
 
     Returns:
-        Human-readable violations, empty when the digest passes.
+        The grounded correction, or ``None`` when either citation does not resolve —
+        in which case the caller **drops this item and keeps the digest**, recording
+        the loss in :attr:`SessionDigest.corrections_dropped`.
     """
-    violations: list[str] = []
+    if locator is None or evidence_locator is None:
+        return None
 
-    for i, correction in enumerate(digest.corrections):
-        where = f"corrections[{i}] (tier {correction.tier})"
-        violations += _check_located_span(
-            correction.span, correction.locator, captures, where=where
-        )
-        violations += _check_located_span(
-            correction.evidence_span,
-            correction.evidence_locator,
-            captures,
-            where=f"{where} evidence",
-        )
+    span = resolve_locator(locator, captures)
+    evidence_span = resolve_locator(evidence_locator, captures)
+    if not (span and span.strip()) or not (evidence_span and evidence_span.strip()):
+        return None
 
-    return violations
+    return Correction(
+        text=text,
+        basis=basis,
+        tier=tier,
+        span=span,
+        locator=locator,
+        evidence_span=evidence_span,
+        evidence_locator=evidence_locator,
+    )
 
 
 def parse_stored_digest(raw: dict[str, object]) -> SessionDigest:
@@ -550,6 +602,16 @@ def render_digest(digest: SessionDigest) -> str:
         sections.append(
             f"(Trimmed to fit the digest budget: {digest.items_dropped} lower-priority "
             "item(s) omitted.)"
+        )
+
+    # Same rule, different cause — and deliberately NOT gated on `sections` (FRE-1024).
+    # That guard is a no-op above, since trimming only ever fires on a content-bearing
+    # digest. Copying it here would silence the one record whose reader most needs
+    # telling: one that kept nothing at all.
+    if digest.corrections_dropped:
+        sections.append(
+            f"({digest.corrections_dropped} correction(s) omitted: citation did not "
+            "resolve to the session's own text.)"
         )
 
     return "\n\n".join(sections)

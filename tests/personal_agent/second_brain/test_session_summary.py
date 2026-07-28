@@ -31,7 +31,9 @@ from personal_agent.memory.session_digest import (
     SessionSummaryStatus,
     SummaryFailureReason,
     digest_token_count,
+    render_digest,
 )
+from personal_agent.memory.session_digest_wire import digest_schema
 from personal_agent.second_brain import session_summary as ss
 
 _USER_ID = uuid4()
@@ -448,29 +450,45 @@ async def test_retired_tool_evidence_basis_fails_schema_validation(
     assert outcome.failure_reason is SummaryFailureReason.SCHEMA_INVALID
 
 
-@pytest.mark.asyncio
-async def test_uncitable_self_correction_fails_span_validation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A fabricated citation must not reach the graph."""
-    bad = orjson.dumps(
+def _output_with_correction_slots(correction: dict[str, Any]) -> str:
+    """A content-bearing digest carrying one correction, so a drop is observable.
+
+    The other three slots exist precisely so a test can tell "the correction was
+    dropped" apart from "the digest was discarded".
+    """
+    return orjson.dumps(
         {
-            "label": "Fabricated correction",
+            "label": "Elasticsearch cluster shard triage",
             "digest": {
-                "corrections": [
-                    {
-                        "text": "The assistant corrected itself.",
-                        "basis": "assistant_reasoning",
-                        "tier": "self_correction",
-                        "span": "this never appears anywhere",
-                        "locator": {"capture_id": "cap-2", "field": "assistant_text"},
-                        "evidence_span": "nor does this",
-                        "evidence_locator": {"capture_id": "cap-2", "field": "assistant_text"},
-                    }
-                ]
+                "established": [
+                    {"text": "The cluster was red with four unassigned shards.", "basis": "mixed"}
+                ],
+                "decisions": [{"text": "Deferred the reindex.", "basis": "user_statement"}],
+                "unresolved": [{"text": "Whether to shard by date.", "basis": "mixed"}],
+                "corrections": [correction],
             },
         }
     ).decode()
+
+
+@pytest.mark.asyncio
+async def test_ungroundable_correction_is_dropped_and_the_digest_survives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1 (FRE-1024) — one optional item may not destroy the whole artefact.
+
+    The live regression this closes: session 73417fbd failed twice, and was terminally
+    retired, over a single corrections entry in a five-turn session that summarised fine.
+    """
+    bad = _output_with_correction_slots(
+        {
+            "text": "The assistant corrected itself.",
+            "basis": "assistant_reasoning",
+            "tier": "self_correction",
+            "locator": {"capture_id": "cap-404", "field": "assistant_text"},
+            "evidence_locator": {"capture_id": "cap-404", "field": "assistant_text"},
+        }
+    )
 
     async def fake_call(_prompt: str, **_: Any) -> str:
         return bad
@@ -481,31 +499,133 @@ async def test_uncitable_self_correction_fails_span_validation(
         _two_turn_session(), session_id="sess-1", ended_at=_T0
     )
 
-    assert outcome.failure_reason is SummaryFailureReason.SPAN_VALIDATION_FAILED
+    assert outcome.status is SessionSummaryStatus.GENERATED
+    assert outcome.failure_reason is None
+    assert outcome.digest is not None
+    assert outcome.digest.corrections == [], "the ungroundable item must not reach the graph"
+    assert outcome.digest.corrections_dropped == 1, "and the loss must be recorded"
+    # The rest of the session's epistemic state survives — the whole point.
+    assert len(outcome.digest.established) == 1
+    assert len(outcome.digest.decisions) == 1
+    assert len(outcome.digest.unresolved) == 1
+    assert "1 correction(s) omitted" in render_digest(outcome.digest)
 
 
 @pytest.mark.asyncio
-async def test_self_correction_evidence_from_user_text_is_rejected(
+async def test_self_correction_evidence_from_user_text_is_dropped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Amendment B's narrowed locator grammar.
+    """Amendment B's narrowed locator grammar, enforced by grounding rather than a check.
 
-    Evidence cited from the user's own message — legal under Amendment A — must
-    now fail validation.
+    Evidence cited from the user's own message — legal under Amendment A — is outside
+    the grammar, so it resolves to nothing and the item is dropped. It must not reach the
+    graph, and it must not take the digest with it.
+    """
+    bad = _output_with_correction_slots(
+        {
+            "text": "The assistant corrected itself.",
+            "basis": "assistant_reasoning",
+            "tier": "self_correction",
+            "locator": {"capture_id": "cap-2", "field": "assistant_text"},
+            "evidence_locator": {"capture_id": "cap-2", "field": "user_text"},
+        }
+    )
+
+    async def fake_call(_prompt: str, **_: Any) -> str:
+        return bad
+
+    monkeypatch.setattr(ss, "_call_model", fake_call)
+
+    outcome = await ss.generate_session_digest(
+        _two_turn_session(), session_id="sess-1", ended_at=_T0
+    )
+
+    assert outcome.status is SessionSummaryStatus.GENERATED
+    assert outcome.digest is not None
+    assert outcome.digest.corrections == []
+    assert outcome.digest.corrections_dropped == 1
+
+
+@pytest.mark.asyncio
+async def test_the_persisted_span_is_quoted_from_the_locator_not_the_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-2 (FRE-1024) — the model's own span text is not on the path at all.
+
+    The payload carries a `span` and an `evidence_span` that appear **nowhere** in the
+    session. Under the retired validator that discarded the whole digest; now the keys
+    are simply not read, and the stored spans are the text at the locators.
+    """
+    captures = _two_turn_session()
+    payload = _output_with_correction_slots(
+        {
+            "text": "The assistant corrected itself.",
+            "basis": "assistant_reasoning",
+            "tier": "self_correction",
+            "span": "this never appears anywhere",
+            "locator": {"capture_id": "cap-1", "field": "assistant_text"},
+            "evidence_span": "nor does this",
+            "evidence_locator": {"capture_id": "cap-2", "field": "assistant_text"},
+        }
+    )
+
+    async def fake_call(_prompt: str, **_: Any) -> str:
+        return payload
+
+    monkeypatch.setattr(ss, "_call_model", fake_call)
+
+    outcome = await ss.generate_session_digest(captures, session_id="sess-1", ended_at=_T0)
+
+    assert outcome.status is SessionSummaryStatus.GENERATED
+    assert outcome.digest is not None
+    assert outcome.digest.corrections_dropped == 0
+    correction = outcome.digest.corrections[0]
+
+    assert correction.span == captures[0].assistant_response
+    assert correction.evidence_span == captures[1].assistant_response
+    assert "this never appears anywhere" not in correction.span
+    assert "nor does this" not in correction.evidence_span
+
+
+def test_the_prompt_does_not_ask_the_model_for_a_span() -> None:
+    """AC-2 (FRE-1024), the other half — asked at both surfaces the model reads.
+
+    The prose system prompt and the forced-tool schema are two independent statements of
+    the same contract; a span surviving in either would still be model-authored text.
+    """
+    prompt = ss.system_prompt()
+    schema = orjson.dumps(digest_schema()).decode()
+
+    for surface in (prompt, schema):
+        assert "evidence_span" not in surface
+        assert '"span"' not in surface
+
+    # The citation itself is still demanded — this must not read as "provenance dropped".
+    assert "evidence_locator" in prompt
+    assert "evidence_locator" in schema
+
+
+@pytest.mark.asyncio
+async def test_a_digest_left_empty_by_grounding_is_not_stored_as_a_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The empty-digest delivery failure (ADR-0124 Amendment C5), reached via grounding.
+
+    A digest whose only content was corrections, all ungroundable, would otherwise be
+    written as GENERATED — clearing the session's failure state and advancing its
+    freshness stamp, which drops it out of the dirty population permanently.
     """
     bad = orjson.dumps(
         {
-            "label": "User-text evidence",
+            "label": "Only an ungroundable correction",
             "digest": {
                 "corrections": [
                     {
                         "text": "The assistant corrected itself.",
                         "basis": "assistant_reasoning",
                         "tier": "self_correction",
-                        "span": "Four shards are unassigned.",
-                        "locator": {"capture_id": "cap-2", "field": "assistant_text"},
-                        "evidence_span": "and the shards?",
-                        "evidence_locator": {"capture_id": "cap-2", "field": "user_text"},
+                        "locator": {"capture_id": "cap-404", "field": "assistant_text"},
+                        "evidence_locator": {"capture_id": "cap-404", "field": "assistant_text"},
                     }
                 ]
             },
@@ -521,7 +641,29 @@ async def test_self_correction_evidence_from_user_text_is_rejected(
         _two_turn_session(), session_id="sess-1", ended_at=_T0
     )
 
-    assert outcome.failure_reason is SummaryFailureReason.SPAN_VALIDATION_FAILED
+    assert outcome.status is SessionSummaryStatus.FAILED
+    assert outcome.failure_reason is SummaryFailureReason.UNGROUNDED_DIGEST
+    assert outcome.digest is None
+
+
+def test_an_ungrounded_digest_never_retires_a_session() -> None:
+    """Transient by classification, so a resample is always still allowed.
+
+    The mistake this avoids is the one the ticket names: terminalising a failure the
+    producer itself retries. Paced by FRE-987's backoff, not by retirement.
+    """
+    assert SummaryFailureReason.UNGROUNDED_DIGEST not in TERMINAL_ELIGIBLE_REASONS
+
+
+def test_span_validation_no_longer_retires_the_sessions_it_already_retired() -> None:
+    """AC-3's mechanism (FRE-1024) — recovery without a migration.
+
+    ``TERMINAL_ELIGIBLE_REASONS`` is matched against the **stored** failure-reason string,
+    so dropping this value is what makes sessions already retired on it — session
+    73417fbd among them — eligible for the next sweep.
+    """
+    assert "span_validation_failed" not in TERMINAL_ELIGIBLE_REASONS
+    assert not hasattr(SummaryFailureReason, "SPAN_VALIDATION_FAILED")
 
 
 @pytest.mark.asyncio

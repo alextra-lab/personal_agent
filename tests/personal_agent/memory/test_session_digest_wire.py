@@ -18,10 +18,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 import orjson
 import pytest
 
+from personal_agent.captains_log.capture import TaskCapture
 from personal_agent.memory.session_digest import MAX_LABEL_CHARS
 from personal_agent.memory.session_digest_wire import (
     DIGEST_TOOL_NAME,
@@ -32,6 +34,26 @@ from personal_agent.memory.session_digest_wire import (
 )
 
 ENDED_AT = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
+
+
+def _capture(trace_id: str, assistant: str) -> TaskCapture:
+    return TaskCapture(
+        trace_id=trace_id,
+        session_id="sess-wire",
+        timestamp=ENDED_AT,
+        user_message="how many tokens?",
+        assistant_response=assistant,
+        outcome="completed",
+        user_id=uuid4(),
+    )
+
+
+#: Captures the correction locators below are quoted from (FRE-1024). Both paths must be
+#: handed the same evidence, or "the two parsers agree" would compare two different reads.
+_CAPTURES = [
+    _capture("t1", "I said 2048 tokens, which was the call ceiling and not the digest bound."),
+    _capture("t2", "Re-reading it, the digest bound is actually 2856."),
+]
 
 
 def _walk(node: object) -> list[dict[str, Any]]:
@@ -98,10 +120,28 @@ def test_label_bound_is_not_in_the_schema() -> None:
         assert "minLength" not in obj
 
 
-def test_corrections_require_their_provenance() -> None:
+def test_corrections_require_their_citations() -> None:
     required = _schema()["$defs"]["WireCorrection"]["required"]
-    for field in ("span", "locator", "evidence_span", "evidence_locator"):
+    for field in ("locator", "evidence_locator"):
         assert field in required
+
+
+def test_the_contract_never_asks_the_model_for_a_span() -> None:
+    """AC-2 (FRE-1024) — the same reason ``as_of`` is absent, applied to the spans.
+
+    A span is quoted from its locator by the producer, so declaring one here would ask
+    the model to author a producer-owned field and reintroduce the transcription step
+    this change removes.
+    """
+    assert "span" not in _schema()["$defs"]["WireCorrection"]["properties"]
+
+    # And nowhere else either — asserted on declared *properties* rather than the schema
+    # text, which legitimately says "span" in the prose explaining their absence.
+    for node in _walk(_schema()):
+        declared = node.get("properties")
+        if isinstance(declared, dict):
+            assert "span" not in declared
+            assert "evidence_span" not in declared
 
 
 def test_bounded_variant_adds_maxitems_and_nothing_else() -> None:
@@ -135,7 +175,7 @@ def test_to_storage_stamps_as_of_from_ended_at() -> None:
             {"text": "who owns the sweep", "basis": "user_statement"},
         ]
     )
-    _, digest = to_storage(envelope, ended_at=ENDED_AT)
+    _, digest = to_storage(envelope, ended_at=ENDED_AT, captures=_CAPTURES)
 
     assert [item.as_of for item in digest.unresolved] == [ENDED_AT, ENDED_AT]
 
@@ -148,7 +188,7 @@ def test_to_storage_enforces_the_label_bound_in_python() -> None:
         }
     )
     with pytest.raises(ValueError, match="label is"):
-        to_storage(envelope, ended_at=ENDED_AT)
+        to_storage(envelope, ended_at=ENDED_AT, captures=_CAPTURES)
 
 
 def test_to_storage_agrees_with_the_prose_parser() -> None:
@@ -170,19 +210,19 @@ def test_to_storage_agrees_with_the_prose_parser() -> None:
                     "text": "the earlier count was wrong",
                     "basis": "assistant_reasoning",
                     "tier": "self_correction",
-                    "span": "I said 2048",
                     "locator": {"capture_id": "t1", "field": "assistant_text"},
-                    "evidence_span": "it is actually 2856",
-                    "evidence_locator": {"capture_id": "t1", "field": "assistant_text"},
+                    "evidence_locator": {"capture_id": "t2", "field": "assistant_text"},
                 }
             ],
         },
     }
 
     via_prose_label, via_prose = parse_model_output(
-        orjson.dumps(payload).decode(), ended_at=ENDED_AT
+        orjson.dumps(payload).decode(), ended_at=ENDED_AT, captures=_CAPTURES
     )
-    via_wire_label, via_wire = to_storage(DigestEnvelope.model_validate(payload), ended_at=ENDED_AT)
+    via_wire_label, via_wire = to_storage(
+        DigestEnvelope.model_validate(payload), ended_at=ENDED_AT, captures=_CAPTURES
+    )
 
     assert via_wire_label == via_prose_label
     assert via_wire == via_prose

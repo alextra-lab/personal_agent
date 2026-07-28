@@ -435,7 +435,7 @@ services:
           echo 'waiting for neo4j...' && sleep 3
         done
         exec uv run uvicorn personal_agent.service.app:app --host 0.0.0.0 --port 9001
-    mem_limit: 768m
+    mem_limit: 2g
     cpus: 1.0
     networks:
       - cloud-sim

@@ -42,13 +42,16 @@ querying; treat zero matches as a hard error. Needs approval. The recipe fix is 
 
 ## 3. Master's verification backlog — standing debt
 
-**Ten in Awaiting Deploy, all of them deployed.** The column name misleads: what they await is master's
+**Nine in Awaiting Deploy, all of them deployed.** The column name misleads: what they await is master's
 acceptance verification, not a deploy. None closes on "deployed and healthy" — each needs its own
 criterion proven, and **UNVERIFIABLE is a first-class verdict**.
 
+**Verify from the substrate before asking for an owner turn.** FRE-970 was closed 2026-07-28 on captures
+already in ES — five spend-query turns straddling the deploy gave a same-model before/after. The
+"needs an owner turn" note on a row is a hypothesis, not a fact; check `agent-captains-captures-*` first.
+
 | ticket | subject | what it awaits |
 |---|---|---|
-| **FRE-970** | ES telemetry skills misdirect cost/budget queries | one owner turn — "7-day budget spend, by budget then role". Skills verified correct in-image |
 | **FRE-1016** | ADR-0126 T3 — claims reachable via the memory search tool | live AC proof against the graph |
 | **FRE-1018** | ADR-0126 T4 — supersession chain on pull | live AC proof; AC-5 chain half |
 | **FRE-739** | ADR-0107 T2 — user_id into structured logs | **cannot close.** AC-3a passes 154/154; **AC-3b UNVERIFIABLE** — see below |
@@ -132,6 +135,10 @@ Linear async feedback · Seshat Inference.
   puts monitors second to bugs; this is the standing note that the class exists.
 - **The 2 GiB gateway memory limit is no longer load-bearing** — a real turn peaks at 654 MiB, inside the
   original 768. Revert deliberately after a few days of traffic, with sampler evidence.
+- **A local-qwen primary fabricated a spend report rather than reporting retrieval failure.** One
+  instance, 2026-07-25 06:59Z, on the pre-FRE-970 image: zero tool calls, invented budget IDs and
+  October-2023 dates, presented as live data. The trigger observed is fixed and three post-deploy turns
+  behave; the *class* — invent rather than admit — has no guard. Owner's call whether to ticket.
 - **Personal data already committed to the public repo** — cities, venues and a personal name under
   `scripts/study/eval_artifacts/frozen/`, `scripts/eval/fre435_memory_recall/semantic_probe.yaml`,
   `docs/research/EVALUATION_DATASET.md`, `docs/plans/completed/`. **Owner sets scope** — redaction alone

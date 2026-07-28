@@ -1,5 +1,7 @@
 """Tests for telemetry Elasticsearch analytics queries."""
 
+import asyncio
+import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
@@ -167,3 +169,103 @@ class TestTelemetryQueries:
         )
 
         assert daily_counts == {"2026-02-20": 2, "2026-02-21": 5}
+
+    async def test_get_trace_events_builds_exact_term_query(self) -> None:
+        """FRE-1034: trace_id is keyword-mapped — the query must be an exact term match."""
+        mock_client = AsyncMock()
+        mock_client.search.return_value = {"hits": {"hits": []}}
+        queries = TelemetryQueries(es_client=mock_client)
+
+        await queries.get_trace_events("trace-abc")
+
+        _, kwargs = mock_client.search.call_args
+        assert kwargs["query"] == {"term": {"trace_id": "trace-abc"}}
+        assert kwargs["index"] == f"{queries._logs_index_prefix}-*"
+        assert kwargs["sort"] == [{"@timestamp": "asc"}]
+
+    async def test_get_trace_events_translates_es_field_names(self) -> None:
+        """FRE-1034: event_type/@timestamp must be translated to event/timestamp.
+
+        ElasticsearchHandler stores the structlog `event` key as `event_type` and
+        stamps `@timestamp` instead of the original `timestamp` field — every
+        downstream consumer of trace events (_summarize_telemetry,
+        _extract_failure_excerpt, build_prompt_manifest) reads `event`/`timestamp`,
+        so an untranslated ES hit would silently look like an event-less entry.
+        """
+        mock_client = AsyncMock()
+        mock_client.search.return_value = {
+            "hits": {
+                "hits": [
+                    {
+                        "_source": {
+                            "@timestamp": "2026-07-28T16:35:34.034593",
+                            "event_type": "tool_executed",
+                            "trace_id": "trace-abc",
+                            "tool": "read_file",
+                            "duration_ms": 12.5,
+                            "success": True,
+                        }
+                    }
+                ]
+            }
+        }
+        queries = TelemetryQueries(es_client=mock_client)
+
+        events = await queries.get_trace_events("trace-abc")
+
+        assert len(events) == 1
+        entry = events[0]
+        assert entry["event"] == "tool_executed"
+        assert entry["timestamp"] == "2026-07-28T16:35:34.034593"
+        assert "event_type" not in entry
+        assert "@timestamp" not in entry
+        # Custom fields pass through unchanged.
+        assert entry["tool"] == "read_file"
+        assert entry["duration_ms"] == 12.5
+        assert entry["success"] is True
+
+    async def test_get_trace_events_propagates_es_errors(self) -> None:
+        """FRE-1034: this method makes no fallback decision — callers decide."""
+        mock_client = AsyncMock()
+        mock_client.search.side_effect = RuntimeError("es unreachable")
+        queries = TelemetryQueries(es_client=mock_client)
+
+        with pytest.raises(RuntimeError, match="es unreachable"):
+            await queries.get_trace_events("trace-abc")
+
+    async def test_get_trace_events_concurrent_calls_do_not_scale_linearly(self) -> None:
+        """FRE-1034: concurrent ES fetches must not serialize like the GIL-bound scan.
+
+        Master measured the threaded file scan scaling linearly with concurrency
+        (1/2/4/8 concurrent -> 0.113s/0.352s/0.706s/1.544s — the pure-Python
+        `line_filter not in line` check holds the GIL, so threads serialize) versus
+        Elasticsearch over the same range (0.037s/0.036s/0.124s/0.190s — network I/O
+        releases the GIL, so queries genuinely overlap). This test reproduces that
+        distinction deterministically with a simulated network delay: if
+        get_trace_events serialized the way the thread scan does, 8 concurrent calls
+        would take ~8x a single call; real async I/O keeps it close to flat.
+        """
+        simulated_latency = 0.05
+
+        async def fake_search(*args: object, **kwargs: object) -> dict:
+            await asyncio.sleep(simulated_latency)
+            return {"hits": {"hits": []}}
+
+        mock_client = AsyncMock()
+        mock_client.search = fake_search
+        queries = TelemetryQueries(es_client=mock_client)
+
+        async def run_concurrent(n: int) -> float:
+            start = time.monotonic()
+            await asyncio.gather(*(queries.get_trace_events(f"trace-{i}") for i in range(n)))
+            return time.monotonic() - start
+
+        single_call_duration = await run_concurrent(1)
+        eight_concurrent_duration = await run_concurrent(8)
+
+        # Serialized (GIL-bound), 8 concurrent would take ~8x a single call.
+        # Genuinely concurrent I/O keeps it within a small multiple regardless of N.
+        assert eight_concurrent_duration < single_call_duration * 3, (
+            f"8 concurrent calls took {eight_concurrent_duration:.3f}s vs a single call's "
+            f"{single_call_duration:.3f}s — scaling looks linear/serialized, not concurrent"
+        )

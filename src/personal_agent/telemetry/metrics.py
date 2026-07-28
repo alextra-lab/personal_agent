@@ -135,7 +135,9 @@ def _parse_time_window(window_str: str) -> timedelta | datetime:
 
 
 def _read_log_entries(
-    start_time: datetime | None = None, end_time: datetime | None = None
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    line_filter: str | None = None,
 ) -> list[dict[str, Any]]:
     """Read log entries from the log file, optionally filtered by time.
 
@@ -144,6 +146,13 @@ def _read_log_entries(
     Args:
         start_time: Optional start time filter (inclusive).
         end_time: Optional end time filter (inclusive).
+        line_filter: Optional literal substring the raw line must contain to be
+            parsed at all. Skipping `json.loads` on lines that can't possibly match
+            keeps memory proportional to the number of candidate lines instead of the
+            full corpus (FRE-1034). This is a prefilter only — callers that need exact
+            matching (e.g. on a parsed field) must still filter the returned entries
+            themselves; the caller is responsible for passing an already-escaped value
+            if the target string could contain characters JSON would encode specially.
 
     Returns:
         List of parsed log entries (dicts).
@@ -174,6 +183,8 @@ def _read_log_entries(
                 for line in f:
                     line = line.strip()
                     if not line:
+                        continue
+                    if line_filter is not None and line_filter not in line:
                         continue
 
                     try:
@@ -445,9 +456,14 @@ def get_trace_events(trace_id: str) -> list[dict[str, Any]]:
     Returns:
         List of log entries (dicts) for the trace, ordered by timestamp.
     """
-    entries = _read_log_entries()
+    # FRE-1034: prefilter on the JSON-encoded substring (not the raw trace_id) so a
+    # trace_id containing JSON metacharacters still matches the escaped form that
+    # actually appears in the raw line. json.dumps(trace_id)[1:-1] strips only the
+    # outer quotes json.dumps adds, leaving exactly that escaped-body substring.
+    escaped_trace_id = json.dumps(trace_id)[1:-1]
+    entries = _read_log_entries(line_filter=escaped_trace_id)
 
-    # Filter entries by trace_id
+    # Filter entries by trace_id (exact match — the prefilter above is a superset test)
     trace_entries = [entry for entry in entries if entry.get("trace_id") == trace_id]
 
     # Sort by timestamp

@@ -25,9 +25,13 @@ FRE-1018 and FRE-1019 were never checked** for the same relay gap.
 
 ## 1. ADR-0125 — the turn evidence contract (Accepted; residual)
 
-**Head on build2:** FRE-1003 (remove the reflection-recall path — the behavioural half of retiring
-ADR-0067) — now the stream's sole eligible ticket, High-pinned, dispatching. **FRE-1005** is unblocked and
-parked-Approved.
+**FRE-1003 merged** (PR #715) — the reflection-recall path is *deleted*, not flag-disabled: module, call
+site and all four settings gone, so no configuration can revive it. **FRE-1005** is unblocked and
+parked-Approved; **both streams are now free with empty eligible sets.**
+
+**Still owed from FRE-1003's codex review, deliberately not built there:** an AST/import-boundary guard
+forbidding any context-assembly dependency on a dimension-1 producer module. That generalises to **D1's
+producer→dimension enforcement** — fold it into whoever scopes D1, don't re-file it.
 
 **FRE-1006 closes the ADR** — when a planted machine-readable false claim is refuted from the stored record
 by exact comparison. Not when the fields are populated.
@@ -81,7 +85,9 @@ D2, whose topic-scoped surface rides the selection that fades.
 
 ## 4. Verification backlog — master's own debt
 
-**Thirteen tickets sit in Awaiting Deploy and all thirteen are deployed.** The column is master's
+**Fourteen tickets sit in Awaiting Deploy; thirteen are deployed.** FRE-1003 is the exception — merged
+after the 20:49Z deploy, and behaviourally inert in prod (the path has been flag-disabled since
+2026-07-26), so it batches with the next rebuild rather than needing one. The column is master's
 *verification* backlog, not a deploy queue. **None closes on "deployed and healthy"** — each needs its
 acceptance criterion proven, and **UNVERIFIABLE is a first-class verdict**.
 

@@ -25,7 +25,11 @@ from personal_agent.events import (
 from personal_agent.llm_client import InferencePriority, LocalLLMClient, ModelRole
 from personal_agent.llm_client.cost_tracker import SYSTEM_SESSION_ID
 from personal_agent.llm_client.token_counter import estimate_tokens
-from personal_agent.memory.embeddings import generate_embedding, generate_embeddings_batch
+from personal_agent.memory.embeddings import (
+    cosine_similarity,
+    generate_embedding,
+    generate_embeddings_batch,
+)
 from personal_agent.memory.fact import PromotionCandidate
 from personal_agent.memory.freshness_aggregate import (
     GraphStalenessSummary,
@@ -2603,6 +2607,105 @@ class MemoryService:
                 trace_id=trace_id,
             )
             return ""
+
+    async def query_claims(
+        self,
+        query_text: str,
+        *,
+        user_id: UUID | None,
+        authenticated: bool,
+        limit: int = 10,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Pull-only Claim retrieval for ``search_memory`` (ADR-0126 D4).
+
+        Claims are never injected into assembled context (D4); this is their only read
+        surface. Current claims only (``valid_to IS NULL AND invalid_at IS NULL``, D5) —
+        the supersession chain is a separate pull (ADR-0126 T4), not this method's job.
+        Ranked by content-embedding cosine similarity to ``query_text``, computed in
+        Python: 91 claims at today's scale does not justify a dedicated vector index
+        (ADR-0126 implementation note; mirrors the existing scan in
+        ``memory/supersession.py``).
+
+        Claims carry no ``visibility`` property, so the entity-path visibility filter
+        does not apply (ADR-0126 implementation note). Scoping is the owning
+        ``:Person.user_id`` on ``HAS_FACT`` (ADR-0107) — an unauthenticated or
+        identity-less call returns nothing rather than guessing a person.
+
+        Args:
+            query_text: Free-text query to match against claim content.
+            user_id: The acting authenticated user's UUID. None returns [].
+            authenticated: Whether the request carries a verified identity. False
+                returns [] — Claims are personal facts with no visibility gate of
+                their own, so scoping requires a verified identity, not just a UUID.
+            limit: Maximum claims to return.
+            trace_id: Request trace id, for log correlation and embedding cost
+                attribution.
+            session_id: Session id, for embedding cost attribution.
+
+        Returns:
+            Current claims ranked by descending similarity, each a dict with
+            ``claim_id``, ``content``, ``confidence``, ``knowledge_class``, and
+            ``observed_at`` — keys distinct from the entity/turn rows the tool
+            returns today (ADR-0126 AC-4).
+        """
+        if not self.connected or not self.driver:
+            return []
+        if user_id is None or not authenticated:
+            return []
+        if not query_text or not query_text.strip():
+            return []
+
+        query_embedding = await generate_embedding(
+            query_text, mode="query", trace_id=trace_id, session_id=session_id
+        )
+        if not any(x != 0.0 for x in query_embedding):
+            # Embedder unavailable/degraded: a zero vector scores every current claim
+            # identically, which would return an arbitrary slice of the user's personal
+            # facts rather than nothing (mirrors the query_memory zero-vector guard).
+            return []
+
+        try:
+            async with self.driver.session() as db_session:
+                result = await db_session.run(
+                    "MATCH (:Person {user_id: $user_id})-[:HAS_FACT]->(cl:Claim)\n"
+                    "WHERE cl.valid_to IS NULL AND cl.invalid_at IS NULL\n"
+                    "RETURN cl.claim_id AS claim_id, cl.content AS content,\n"
+                    "       cl.confidence AS confidence, cl.class AS knowledge_class,\n"
+                    "       cl.observed_at AS observed_at, cl.embedding AS embedding",
+                    user_id=str(user_id),
+                )
+                scored: list[tuple[float, dict[str, Any]]] = []
+                async for row in result:
+                    embedding = row["embedding"]
+                    if embedding is None or row["claim_id"] is None:
+                        continue
+                    score = cosine_similarity(query_embedding, list(embedding))
+                    scored.append(
+                        (
+                            score,
+                            {
+                                "claim_id": row["claim_id"],
+                                "content": row["content"] or "",
+                                "confidence": float(row["confidence"] or 0.0),
+                                "knowledge_class": row["knowledge_class"] or "Personal",
+                                "observed_at": row["observed_at"],
+                            },
+                        )
+                    )
+        except Exception as e:
+            log.warning("query_claims_failed", error=str(e), trace_id=trace_id)
+            return []
+
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        log.info(
+            "claims_queried",
+            trace_id=trace_id,
+            candidate_count=len(scored),
+            result_count=min(limit, len(scored)),
+        )
+        return [item for _, item in scored[:limit]]
 
     async def ensure_vector_index(self) -> bool:
         """Create Neo4j vector index on Entity.embedding, recreating if dimensions changed.

@@ -4173,13 +4173,22 @@ async def step_llm_call(
 
         if effective_model_key == role_key:
             llm_client = get_llm_client(role_name=model_role.value)
+            respond_role = model_role
         else:
             from personal_agent.cost_gate import budget_role_for
             from personal_agent.llm_client.factory import get_llm_client_for_key
+            from personal_agent.llm_client.litellm_client import LiteLLMClient
 
             llm_client = get_llm_client_for_key(
-                effective_model_key, budget_role=budget_role_for(model_role.value)
+                effective_model_key, budget_role=budget_role_for(ModelRole.VISION.value)
             )
+            # FRE-1037: relabel the call's telemetry role to VISION only when
+            # it's provably safe — LiteLLMClient's model is fixed at
+            # construction, so `role` is label-only there. LocalLLMClient
+            # re-resolves its deployment from role.value internally, so
+            # relabeling on that client risks a second, divergent resolution
+            # if `vision` is ever rebound to a local deployment.
+            respond_role = ModelRole.VISION if isinstance(llm_client, LiteLLMClient) else model_role
 
         # Get tools for this model role and mode
         # ReAct loop: always offer tools so the model can chain calls until it
@@ -4552,7 +4561,7 @@ async def step_llm_call(
             async with phase_span(session_id=ctx.session_id, phase=_inference_phase):
                 response = await asyncio.wait_for(
                     llm_client.respond(
-                        role=model_role,
+                        role=respond_role,
                         messages=request_messages,
                         system_prompt=system_prompt,
                         tools=tools if tools else None,

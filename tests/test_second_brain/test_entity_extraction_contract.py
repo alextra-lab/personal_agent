@@ -21,6 +21,7 @@ import orjson
 import pytest
 
 from personal_agent.config import get_settings
+from personal_agent.llm_client.types import ModelRole
 from personal_agent.second_brain.entity_extraction import (
     _EXTRACTION_PROMPT_TEMPLATE,
     _EXTRACTION_SYSTEM_PROMPT,
@@ -751,6 +752,37 @@ class TestCloudPathTemperature:
             # lands in the entity_extraction budget lane rather than being silently
             # mis-billed to main_inference.
             mock_get_client.assert_called_once_with("gpt-5.4-mini", budget_role="entity_extraction")
+            # FRE-1037: the call must report its true role, not primary.
+            assert mock_client.respond.call_args.kwargs["role"] is ModelRole.ENTITY_EXTRACTION
+
+
+@pytest.mark.asyncio
+class TestLocalPathRole:
+    """FRE-1037: the local-SLM path must report role=entity_extraction, not primary."""
+
+    async def test_local_path_passes_entity_extraction_role(self) -> None:
+        """Local path (provider is None) labels its call role=ENTITY_EXTRACTION."""
+        with (
+            patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,
+            patch(
+                "personal_agent.second_brain.entity_extraction.resolve_role_model_key",
+                return_value="primary",
+            ),
+            patch(
+                "personal_agent.second_brain.entity_extraction.LocalLLMClient"
+            ) as mock_client_cls,
+        ):
+            mock_cfg.return_value.models = {}  # model_def is None -> provider None -> local path
+            mock_client = mock_client_cls.return_value
+            mock_client.respond = AsyncMock(
+                return_value=_mock_local_response(_OPERATIONAL_MODEL_JSON)
+            )
+
+            await extract_entities_and_relationships(
+                _OPERATIONAL_USER_MSG, "assistant reply", trace_id=_TRACE_ID, session_id=_SESSION_ID
+            )
+
+            assert mock_client.respond.call_args.kwargs["role"] is ModelRole.ENTITY_EXTRACTION
 
 
 class TestFewshotExemplarFlag:

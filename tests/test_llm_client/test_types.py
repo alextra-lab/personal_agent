@@ -1,5 +1,8 @@
 """Tests for LLM client types."""
 
+import pytest
+
+from personal_agent.config.config_guard import load_matrix, repo_root
 from personal_agent.llm_client.types import (
     LLMClientError,
     LLMConnectionError,
@@ -11,6 +14,13 @@ from personal_agent.llm_client.types import (
     ToolCall,
 )
 
+#: Roles that are real, currently-live background call-site roles (FRE-1037) but are
+#: not declared in config/model_roles.yaml's `bindings:` block — skill_routing resolves
+#: via a dedicated AppConfig field, study via scripts/study/categorizer.py's own
+#: convention. Kept as a named, documented exception rather than silently widening the
+#: "derived from config" claim to cover them (owner-confirmed FRE-1037 scoping).
+_MATRIX_INDEPENDENT_ROLES = frozenset({"skill_routing", "study"})
+
 
 class TestModelRole:
     """Test ModelRole enum."""
@@ -20,11 +30,53 @@ class TestModelRole:
         assert ModelRole.PRIMARY == "primary"
         assert ModelRole.SUB_AGENT == "sub_agent"
 
-    def test_model_role_exactly_four_members(self) -> None:
-        """ModelRole has exactly four members (PRIMARY, SUB_AGENT, COMPRESSOR, ARTIFACT_BUILDER)."""
-        assert len(list(ModelRole)) == 4
+    def test_model_role_matches_bindings_matrix(self) -> None:
+        """Every config/model_roles.yaml `bindings:` role must be a ModelRole member.
+
+        This is the "cannot drift apart again" guard FRE-1037 requires: a future
+        matrix role added without a corresponding ModelRole member fails CI loudly,
+        rather than silently forcing that role's call sites back to role=primary.
+        """
+        matrix = load_matrix(repo_root())
+        bindings = matrix.get("bindings", {})
+        assert bindings, "config/model_roles.yaml bindings: block must not be empty"
+
+        role_values = {role.value for role in ModelRole}
+        assert set(bindings.keys()) <= role_values
+
+    def test_model_role_matrix_independent_roles_documented(self) -> None:
+        """skill_routing/study are intentionally not in the matrix — assert they still exist."""
+        role_values = {role.value for role in ModelRole}
+        assert _MATRIX_INDEPENDENT_ROLES <= role_values
+
+    def test_model_role_fourteen_members(self) -> None:
+        """ModelRole has exactly fourteen members post-FRE-1037 widening."""
+        assert len(list(ModelRole)) == 14
         assert ModelRole.COMPRESSOR == "compressor"
         assert ModelRole.ARTIFACT_BUILDER == "artifact_builder"
+        assert ModelRole.ENTITY_EXTRACTION == "entity_extraction"
+        assert ModelRole.CAPTAINS_LOG == "captains_log"
+        assert ModelRole.SESSION_SUMMARY == "session_summary"
+        assert ModelRole.INSIGHTS == "insights"
+        assert ModelRole.EMBEDDING == "embedding"
+        assert ModelRole.RERANKER == "reranker"
+        assert ModelRole.RERANKER_FALLBACK == "reranker_fallback"
+        assert ModelRole.VISION == "vision"
+        assert ModelRole.SKILL_ROUTING == "skill_routing"
+        assert ModelRole.STUDY == "study"
+
+    def test_model_role_required_returns_matching_role(self) -> None:
+        """ModelRole.required() resolves a valid string, case-insensitively."""
+        assert ModelRole.required("captains_log") is ModelRole.CAPTAINS_LOG
+        assert ModelRole.required("PRIMARY") is ModelRole.PRIMARY
+
+    def test_model_role_required_raises_on_unassigned_role(self) -> None:
+        """ModelRole.required() raises rather than silently defaulting (FRE-1037 step 3)."""
+        with pytest.raises(ValueError, match="not a valid ModelRole"):
+            ModelRole.required("entity_extraction_role")  # a resolved model key, not a role name
+
+        with pytest.raises(ValueError, match="not a valid ModelRole"):
+            ModelRole.required("")
 
     def test_model_role_string_representation(self) -> None:
         """Test that ModelRole values are strings."""

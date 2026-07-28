@@ -594,7 +594,7 @@ async def _call_model(
         # attribution as a separate, smaller decision.
         cloud_client = get_llm_client_for_key(role_name, budget_role="captains_log")
         response: dict[str, Any] = await cloud_client.respond(
-            role=ModelRole.PRIMARY,
+            role=ModelRole.SESSION_SUMMARY,
             messages=[{"role": "user", "content": prompt}],
             system_prompt=_system_prompt(),
             # Held to the schema as a forced tool rather than a `response_format`:
@@ -617,7 +617,7 @@ async def _call_model(
 
     local_client = LocalLLMClient()
     llm_response = await local_client.respond(
-        role=ModelRole.from_str(role_name) or ModelRole.SUB_AGENT,
+        role=ModelRole.SESSION_SUMMARY,
         messages=[
             {"role": "system", "content": _system_prompt()},
             {"role": "user", "content": prompt},

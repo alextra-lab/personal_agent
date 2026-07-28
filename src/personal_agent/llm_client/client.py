@@ -211,7 +211,13 @@ class LocalLLMClient:
             LLMInvalidResponse: If response format is invalid.
             ModelConfigError: If model configuration is missing or invalid.
             InferenceSlotTimeout: If priority_timeout expires before a slot is available.
+            TypeError: If ``role`` is not a ``ModelRole`` member (FRE-1037 —
+                fail closed rather than surfacing an incidental ``AttributeError``
+                on ``role.value`` deeper in the call).
         """
+        if not isinstance(role, ModelRole):
+            raise TypeError(f"role must be a ModelRole, got {type(role).__name__}: {role!r}")
+
         # Get model configuration. Resolved against THIS client's catalog — a
         # per-turn selection still overrides the key (ADR-0121 §4); absent one
         # the role's binding decides, so a client built with an explicit config

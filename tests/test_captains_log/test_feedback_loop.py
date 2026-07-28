@@ -23,6 +23,7 @@ from personal_agent.captains_log.suppression import (
     suppression_file_path,
 )
 from personal_agent.insights.engine import InsightsEngine
+from personal_agent.llm_client.types import ModelRole
 
 
 def test_extract_fingerprint_from_html_comment() -> None:
@@ -148,6 +149,8 @@ async def test_handle_deepen_bills_insights_budget_role() -> None:
         await handle_deepen(_feedback_event(), _feedback_client())
 
         mock_get_client.assert_called_once_with("claude_sonnet", budget_role="insights")
+        _, respond_kwargs = mock_get_client.return_value.respond.call_args
+        assert respond_kwargs["role"] is ModelRole.INSIGHTS
 
 
 @pytest.mark.asyncio
@@ -167,3 +170,5 @@ async def test_handle_too_vague_bills_captains_log_budget_role() -> None:
         await handle_too_vague(_feedback_event(), _feedback_client())
 
         mock_get_client.assert_called_once_with("claude_sonnet", budget_role="captains_log")
+        _, respond_kwargs = mock_get_client.return_value.respond.call_args
+        assert respond_kwargs["role"] is ModelRole.CAPTAINS_LOG

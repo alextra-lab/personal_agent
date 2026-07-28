@@ -20,8 +20,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from personal_agent.llm_client.types import ModelRole
 from personal_agent.orchestrator.skills import get_all_skills, route_skills
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -56,6 +56,8 @@ class TestRouteSkillsHappyPath:
             routing_client=client,
         )
         assert result == ["query-elasticsearch", "bash"]
+        # FRE-1037: the call must report its true role, not primary.
+        assert client.respond.call_args.kwargs["role"] is ModelRole.SKILL_ROUTING
 
     @pytest.mark.asyncio
     async def test_drops_unknown_skill_names(self) -> None:

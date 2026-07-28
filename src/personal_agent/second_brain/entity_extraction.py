@@ -1004,7 +1004,7 @@ async def extract_entities_and_relationships(
             )
 
             cloud_response = await cloud_client.respond(
-                role=ModelRole.PRIMARY,
+                role=ModelRole.ENTITY_EXTRACTION,
                 messages=[{"role": "user", "content": prompt}],
                 system_prompt=_EXTRACTION_SYSTEM_PROMPT,
                 temperature=eff_temperature,
@@ -1029,7 +1029,7 @@ async def extract_entities_and_relationships(
         else:
             # Local SLM path
             local_client = LocalLLMClient()
-            model_role = ModelRole.from_str(entity_extraction_role) or ModelRole.PRIMARY
+            model_role = ModelRole.ENTITY_EXTRACTION
 
             log.debug(
                 "entity_extraction_calling_local_llm",

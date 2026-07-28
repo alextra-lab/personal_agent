@@ -414,7 +414,7 @@ def generate_reflection_dspy(
 
             lm = configure_dspy_lm(role=captains_log_role)
         else:
-            lm = llm_client.get_dspy_lm(role=ModelRole.PRIMARY)
+            lm = llm_client.get_dspy_lm(role=ModelRole.CAPTAINS_LOG)
 
         log.info(
             "dspy_configured_for_reflection",

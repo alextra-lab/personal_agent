@@ -149,6 +149,17 @@ models:
             assert response["usage"]["prompt_tokens"] == 10
 
     @pytest.mark.asyncio
+    async def test_respond_raises_on_non_model_role(self, client: LocalLLMClient) -> None:
+        """FRE-1037: a non-ModelRole value must raise, not fail open."""
+        trace_ctx = TraceContext.new_trace()
+        with pytest.raises(TypeError, match="must be a ModelRole"):
+            await client.respond(
+                role="primary",  # a raw string, not ModelRole.PRIMARY
+                messages=[{"role": "user", "content": "Hello"}],
+                trace_ctx=trace_ctx,
+            )
+
+    @pytest.mark.asyncio
     async def test_respond_with_system_prompt(self, client: LocalLLMClient) -> None:
         """Test response with system prompt."""
         mock_response = {

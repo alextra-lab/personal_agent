@@ -37,6 +37,7 @@ from personal_agent.captains_log.prompt_manifest import (
 from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import settings
 from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client.factory import get_llm_client_for_key
 from personal_agent.sysgraph import SysgraphRepository, get_default_sysgraph_repo
 from personal_agent.sysgraph.dedup import ReadBeforeEmitDecision, check_before_emit
 from personal_agent.sysgraph.repository import ProposalRecord
@@ -476,9 +477,16 @@ async def generate_reflection_entry(
 
         from personal_agent.llm_client.concurrency import InferencePriority
 
+        # FRE-1037: route via the factory using the already-resolved captains_log
+        # model key, not the bare local-only `llm_client` above (which has no auth
+        # headers and cannot honor captains_log's configured model when it's a
+        # cloud deployment — that shared client stays local-only for the DSPy
+        # path's get_dspy_lm() fallback, a different, narrower use).
+        manual_client = get_llm_client_for_key(_captains_log_role, budget_role="captains_log")
+
         # Call LLM with manual prompt (reasoning model)
-        response = await llm_client.respond(
-            role=ModelRole.PRIMARY,
+        response = await manual_client.respond(
+            role=ModelRole.CAPTAINS_LOG,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,  # Lower temperature for structured output
             max_tokens=3000,  # Increased for reasoning models with thinking process

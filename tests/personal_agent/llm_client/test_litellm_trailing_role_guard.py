@@ -128,3 +128,21 @@ async def test_anthropic_primary_trailing_tool_result_is_untouched() -> None:
     dispatched = await _respond_and_capture(messages)
     assert dispatched[-1]["role"] == "tool"
     assert len(dispatched) == len(messages)
+
+
+@pytest.mark.asyncio
+async def test_respond_raises_on_non_model_role() -> None:
+    """FRE-1037: a non-ModelRole value must raise, not fail open."""
+    client = LiteLLMClient(
+        model_id="claude-sonnet-5",
+        provider="anthropic",
+        max_tokens=256,
+        budget_role="main_inference",
+    )
+
+    with pytest.raises(TypeError, match="must be a ModelRole"):
+        await client.respond(
+            role="primary",  # a raw string, not ModelRole.PRIMARY
+            messages=[{"role": "user", "content": "hi"}],
+            trace_ctx=make_test_ctx("litellm_role_guard_fail_closed"),
+        )

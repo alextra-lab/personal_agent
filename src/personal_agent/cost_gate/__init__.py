@@ -114,6 +114,18 @@ _BUDGET_ROLE_BY_FACTORY_NAME: dict[str, str] = {
     "freshness": "freshness",
     # Artifact builder — own lane, not main_inference (ADR-0118 T1, FRE-879).
     "artifact_builder": "artifact_builder",
+    # FRE-1037: explicit entries for the newly-threaded ModelRole members, so
+    # none of them silently fall through to the main_inference default below.
+    # session_summary shares captains_log's lane — ADR-0124 D2's existing,
+    # explicit deferral of a dedicated budget class, now declared rather than
+    # coincidental.
+    "session_summary": "captains_log",
+    # vision escalations are part of a user-facing turn and no dedicated
+    # budget.yaml lane exists for them; main_inference is correct, now explicit.
+    "vision": "main_inference",
+    # Already correct via get_llm_client_for_key's own default budget_role
+    # param; declared here too so it doesn't depend on that default.
+    "skill_routing": "skill_routing",
 }
 
 

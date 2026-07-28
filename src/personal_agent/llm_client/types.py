@@ -14,19 +14,38 @@ from typing_extensions import NotRequired, TypedDict
 
 
 class ModelRole(str, Enum):
-    """Model roles mapping to entries in config/models.yaml.
+    """Model roles identifying what a given LLM call is for (FRE-1037).
 
     Tier 1 (Primary): The orchestrator brain — reasoning, tool calling, decomposition.
     Tier 2 (Sub-Agent): Focused single-task completion — no thinking, fast inference.
     Compressor: Lightweight summarization of evicted context turns (ADR-0038).
 
     See ADR-0033 for the two-tier taxonomy rationale.
+
+    The remaining members mirror ``config/model_roles.yaml``'s ``bindings:`` block
+    (ADR-0099/ADR-0121's single generative source of truth for role→model
+    assignment) — ``tests/test_llm_client/test_types.py::test_model_role_matches_bindings_matrix``
+    asserts every matrix role is representable here, so the two can't drift apart
+    again the way they had (FRE-1037). ``SKILL_ROUTING`` and ``STUDY`` are the two
+    documented exceptions: real, live background roles that resolve outside the
+    matrix (a dedicated ``AppConfig`` field and a script-local convention,
+    respectively) rather than through ``config/model_roles.yaml``.
     """
 
     PRIMARY = "primary"  # Tier 1: orchestrator brain
     SUB_AGENT = "sub_agent"  # Tier 2: focused task completion
     COMPRESSOR = "compressor"  # Context compression / summarization
     ARTIFACT_BUILDER = "artifact_builder"  # HTML artifact generation (ADR-0118 T1)
+    ENTITY_EXTRACTION = "entity_extraction"
+    CAPTAINS_LOG = "captains_log"
+    SESSION_SUMMARY = "session_summary"
+    INSIGHTS = "insights"
+    EMBEDDING = "embedding"
+    RERANKER = "reranker"
+    RERANKER_FALLBACK = "reranker_fallback"
+    VISION = "vision"
+    SKILL_ROUTING = "skill_routing"  # matrix-independent — AppConfig.skill_routing_model_key
+    STUDY = "study"  # matrix-independent — scripts/study/categorizer.py
 
     @classmethod
     def from_str(cls, value: str) -> "ModelRole | None":
@@ -43,6 +62,29 @@ class ModelRole(str, Enum):
             if role.value == value_lower:
                 return role
         return None
+
+    @classmethod
+    def required(cls, value: str) -> "ModelRole":
+        """Convert string to ModelRole, raising rather than silently defaulting.
+
+        Use this at call-time role *assignment* boundaries (a caller determining
+        which role a live call belongs to). ``from_str`` stays available for
+        reconstructing a role from persisted history, where a stale/corrupt value
+        is a data-resilience concern, not a live misassignment (FRE-1037 step 3).
+
+        Args:
+            value: String representation (case-insensitive).
+
+        Returns:
+            The matching ModelRole.
+
+        Raises:
+            ValueError: If ``value`` does not match any ModelRole member.
+        """
+        role = cls.from_str(value)
+        if role is None:
+            raise ValueError(f"{value!r} is not a valid ModelRole")
+        return role
 
 
 class ToolCall(TypedDict):

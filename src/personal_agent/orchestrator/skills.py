@@ -472,7 +472,7 @@ async def route_skills(
             else SystemTraceContext.new("skill_routing", session_id=session_id)
         )
         response = await routing_client.respond(
-            role=ModelRole.PRIMARY,
+            role=ModelRole.SKILL_ROUTING,
             messages=messages,
             max_tokens=256,
             temperature=0.0,

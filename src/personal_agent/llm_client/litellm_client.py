@@ -362,8 +362,16 @@ class LiteLLMClient:
 
         Raises:
             ValueError: If weekly cloud budget is exceeded.
+            TypeError: If ``role`` is not a ``ModelRole`` member (FRE-1037 —
+                fail closed rather than surfacing an incidental ``AttributeError``
+                on ``role.value`` deeper in the call).
             LLMClientError: On API failure after retries.
         """
+        from personal_agent.llm_client.types import ModelRole as _ModelRole
+
+        if not isinstance(role, _ModelRole):
+            raise TypeError(f"role must be a ModelRole, got {type(role).__name__}: {role!r}")
+
         from personal_agent.llm_client.types import LLMClientError
         from personal_agent.llm_client.types import LLMResponse as LLMResponseType
         from personal_agent.llm_client.types import ToolCall as ToolCallType

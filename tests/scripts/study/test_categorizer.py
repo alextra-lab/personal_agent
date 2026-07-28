@@ -149,3 +149,27 @@ async def test_categorize_conversation_stamps_provenance_in_python_not_the_model
 
 def test_categorizer_prompt_version_is_a_module_constant() -> None:
     assert CATEGORIZER_PROMPT_VERSION == "fre839-categorizer-v1"
+
+
+@pytest.mark.asyncio
+async def test_call_llm_passes_study_role() -> None:
+    """FRE-1037: the categorizer's LLM call must report role=STUDY, not sub_agent."""
+    from types import SimpleNamespace
+
+    from scripts.study.categorizer import _call_llm
+
+    from personal_agent.llm_client.types import ModelRole
+
+    mock_model_def = SimpleNamespace(id="claude-sonnet-5", provider="anthropic")
+    with (
+        patch("personal_agent.config.resolve_role_model_key", return_value="claude_sonnet"),
+        patch("personal_agent.config.load_model_config") as mock_load_config,
+        patch("personal_agent.llm_client.litellm_client.LiteLLMClient") as mock_client_cls,
+    ):
+        mock_load_config.return_value.models = {"claude_sonnet": mock_model_def}
+        mock_client = mock_client_cls.return_value
+        mock_client.respond = AsyncMock(return_value={"content": "{}"})
+
+        await _call_llm("prompt", trace_id=None)
+
+        assert mock_client.respond.call_args.kwargs["role"] is ModelRole.STUDY

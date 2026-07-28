@@ -149,7 +149,7 @@ async def _call_llm(prompt: str, *, trace_id: str | None) -> dict[str, Any]:
         budget_role="study",
     )
     response = await client.respond(
-        role=ModelRole.SUB_AGENT,
+        role=ModelRole.STUDY,
         messages=[{"role": "user", "content": prompt}],
         system_prompt=_CATEGORIZER_SYSTEM_PROMPT,
         trace_ctx=SystemTraceContext.new("study_categorizer", session_id=trace_id),

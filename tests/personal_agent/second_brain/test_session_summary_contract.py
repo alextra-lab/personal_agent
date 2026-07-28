@@ -15,12 +15,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import orjson
 import pytest
 
 from personal_agent.captains_log.capture import TaskCapture
+from personal_agent.llm_client.types import ModelRole
 from personal_agent.memory.session_digest import (
     TERMINAL_ELIGIBLE_REASONS,
     SessionSummaryStatus,
@@ -177,6 +179,8 @@ async def test_contract_is_sent_as_a_forced_tool(monkeypatch: pytest.MonkeyPatch
     tools = client.kwargs["tools"]
     assert [t["function"]["name"] for t in tools] == [DIGEST_TOOL_NAME]
     assert client.kwargs["tool_choice"]["function"]["name"] == DIGEST_TOOL_NAME
+    # FRE-1037: the cloud call must report its true role, not primary.
+    assert client.kwargs["role"] is ModelRole.SESSION_SUMMARY
 
 
 @pytest.mark.asyncio
@@ -297,3 +301,15 @@ async def test_hitting_the_ceiling_raises_even_when_the_stop_reason_lies(
         await ss._call_model(
             "prompt", role_name="claude_sonnet", provider="anthropic", session_id="s"
         )
+
+
+@pytest.mark.asyncio
+async def test_local_path_passes_session_summary_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-1037: local path (provider=None) labels its call role=SESSION_SUMMARY, not sub_agent."""
+    fake_client = _FakeClient({"content": _valid_output(), "tool_calls": [], "finish_reason": "stop"})
+    fake_client.respond = AsyncMock(wraps=fake_client.respond)
+    monkeypatch.setattr(ss, "LocalLLMClient", lambda: fake_client)
+
+    await ss._call_model("prompt", role_name="qwen3.6-35b-thinking", provider=None, session_id="s")
+
+    assert fake_client.kwargs["role"] is ModelRole.SESSION_SUMMARY

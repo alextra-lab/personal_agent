@@ -434,9 +434,19 @@
     },
     "timeouts": {
       "artifact_builder": 180,
+      "captains_log": 180,
       "compressor": 60,
+      "embedding": 60,
+      "entity_extraction": 60,
+      "insights": 180,
       "primary": 600,
-      "sub_agent": 90
+      "reranker": 30,
+      "reranker_fallback": 120,
+      "session_summary": 180,
+      "skill_routing": 120,
+      "study": 120,
+      "sub_agent": 90,
+      "vision": 180
     }
   }
 }

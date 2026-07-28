@@ -120,7 +120,9 @@ def _parse_seen_count(description: str) -> int:
     return 0
 
 
-async def _feedback_llm_complete(role_key: str, system: str, user: str, *, budget_role: str) -> str:
+async def _feedback_llm_complete(
+    role_key: str, system: str, user: str, *, budget_role: str, role: ModelRole
+) -> str:
     """Run a single-turn completion for feedback responses.
 
     Args:
@@ -130,12 +132,14 @@ async def _feedback_llm_complete(role_key: str, system: str, user: str, *, budge
         budget_role: Cost-gate budget role for ``role_key`` (FRE-869: passed
             explicitly since ``role_key`` is a resolved model key, not a
             budget-role name).
+        role: The call's true ``ModelRole`` (FRE-1037) — telemetry identity for
+            this call, distinct from ``budget_role``.
     """
     client = get_llm_client_for_key(role_key, budget_role=budget_role)
     ctx = SystemTraceContext.new("captains_log_feedback")
     try:
         resp = await client.respond(
-            ModelRole.PRIMARY,
+            role=role,
             messages=[{"role": "user", "content": user}],
             system_prompt=system,
             trace_ctx=ctx,
@@ -271,7 +275,9 @@ async def handle_deepen(event: FeedbackEvent, client: LinearClient) -> None:
         "Produce a deeper analysis: root cause, evidence, specific file paths to touch, "
         "and a revised What/Why/How. Keep Markdown sections."
     )
-    analysis = await _feedback_llm_complete(role_key, system, user, budget_role="insights")
+    analysis = await _feedback_llm_complete(
+        role_key, system, user, budget_role="insights", role=ModelRole.INSIGHTS
+    )
     body = (
         "## Agent Re-evaluation\n\n"
         f"**Trigger**: Deepen label\n"
@@ -313,7 +319,9 @@ async def handle_too_vague(event: FeedbackEvent, client: LinearClient) -> None:
         "exact files, config keys, acceptance criteria."
     )
     user = f"Make this proposal concrete (Markdown):\n\n{desc}"
-    refined = await _feedback_llm_complete(role_key, system, user, budget_role="captains_log")
+    refined = await _feedback_llm_complete(
+        role_key, system, user, budget_role="captains_log", role=ModelRole.CAPTAINS_LOG
+    )
     body = (
         "## Agent refinement\n\n"
         "**Trigger**: Too Vague label\n\n"

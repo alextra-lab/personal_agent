@@ -14,10 +14,16 @@ Claims are **pull-only**; current-only is pre-committed on every push surface; a
 generalisable rule — *an ADR that ships a producer must carry at least one criterion that fails if nothing
 reads its output.*
 
+> ⛔ **HELD pending FRE-991 (owner, 2026-07-28). Do NOT label the head when a stream frees.**
+> Four of these five tickets are **consumers of assembled context**. FRE-991 may change the context
+> model. Building the consumers first is rework — that is the whole reason 991 was pulled ahead. This
+> hold exists because the default behaviour (label the head at the next free stream) would silently
+> undo the decision. Lift it only when FRE-991 concludes.
+
 **Five tickets Approved and parked, sequence written as relations:** FRE-1015 → FRE-1017 ·
-FRE-1016 → FRE-1018 · **FRE-1019** the seam, blocked by all four. Unlabelled deliberately — label the head
-when a stream frees. **The ADR closes on FRE-1019 only**: removing each of the four consumers must turn
-*named* assertions red from a green baseline. Not on the last child merging.
+FRE-1016 → FRE-1018 · **FRE-1019** the seam, blocked by all four. **The ADR closes on FRE-1019 only**:
+removing each of the four consumers must turn *named* assertions red from a green baseline. Not on the
+last child merging.
 
 **Before dispatching, check one thing:** the D2 precondition (target entity must be in the recall set;
 failure is **INCONCLUSIVE**) reached FRE-1017's AC-3 and was added by master to FRE-1015's AC-1. **FRE-1016,
@@ -68,8 +74,10 @@ never-ending sessions for a *different* reason — `f(all captures)` grows monot
 costs 500 turns of tokens on every rebuild. Neither FRE-987 nor ADR-0124 addresses that, and neither
 should: ADR-0124 was scoped to sessions that end, and that assumption is what is failing.
 
-**Vehicle: FRE-991** (Urgent, Needs Approval since 2026-07-26, unlabelled) — the explore session's own
-output. Nothing moves here until it is approved. Related but distinct prior art: the March
+**Vehicle: FRE-991 — Approved 2026-07-28 and pulled ahead of the ADR-0126 chain (§0 is now HELD on it).**
+Deliberately **unlabelled**: it is an investigation whose output is a decision, so its home is the **adr
+seat**, not a build stream — a stream label would route it to the wrong kind of seat. Related but
+distinct prior art: the March
 `CONTEXT_INTELLIGENCE_SPEC.md` and its cited survey `docs/research/context_management_research.md`
 cover *within-session* context construction and are cited by **neither** ADR-0124 nor ADR-0125; whoever
 takes FRE-991 should reconcile the two layers rather than start a third.
@@ -165,7 +173,8 @@ Linear async feedback · Seshat Inference.
 - **Backlog cull scope + gate** (§5).
 - **FRE-937** — design reversed: the turn-progress surface should *fade* after the response completes,
   not collapse to a persistent summary. Also a blank tools counter and a stuttering synthesis label.
-- **FRE-991** — Analyzer-pillar investigation, Urgent. Master recommends High so the queue has one front.
+- **FRE-1013** premise is stale — 425 Personal entities now exist, so "class never emitted" is false;
+  re-measure before building (noted on the ticket).
 - **FRE-885** · **FRE-805** · **FRE-621** — Needs Approval.
 
 ## To fix, unscheduled

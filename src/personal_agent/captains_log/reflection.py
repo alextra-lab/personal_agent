@@ -225,6 +225,58 @@ Respond with ONLY valid JSON in this exact format:
 Do not include markdown formatting, explanations, or any text outside the JSON object."""
 
 
+# FRE-1034: agent-logs-* has index.refresh_interval=5s (not the 1s default —
+# confirmed on both the live index and docker/elasticsearch/index-template.json).
+# Reflection fires ~1.5s after task completion, inside that window, so querying
+# immediately would silently return fewer events than the trace actually has —
+# missing exactly the newest events of the trace being reflected on. Waiting out
+# the window is free: this reflection trigger is fire-and-forget
+# (orchestrator/executor.py's run_in_background) with nothing awaiting it.
+ES_REFRESH_WAIT_SECONDS = 5.5
+
+
+async def _fetch_trace_events(trace_id: str) -> list[dict[str, Any]]:
+    """Fetch trace events for reflection: ES hot path, file fallback (FRE-1034).
+
+    Waits out the ES refresh window (see ``ES_REFRESH_WAIT_SECONDS``), then queries
+    Elasticsearch directly with a plain ``await`` — genuine async I/O that
+    parallelizes across concurrent reflections, unlike the file-based path (which
+    stays thread-offloaded below but serializes under the GIL on its pure-Python
+    substring scan). Falls back to the file-based path only if Elasticsearch is
+    unreachable; this is a deliberate, logged fallback, not the normal path.
+
+    Args:
+        trace_id: Trace identifier to reconstruct.
+
+    Returns:
+        Trace events from Elasticsearch, or from the local log file if ES fails.
+    """
+    await asyncio.sleep(ES_REFRESH_WAIT_SECONDS)
+    from personal_agent.telemetry import TelemetryQueries
+
+    queries = TelemetryQueries()
+    try:
+        return await queries.get_trace_events(trace_id)
+    except Exception:
+        log.warning(
+            "es_trace_fetch_failed_falling_back_to_file",
+            trace_id=trace_id,
+            component="reflection",
+            exc_info=True,
+        )
+        # Deliberate fallback (FRE-1034): file-based get_trace_events already has
+        # its own line_filter prefilter and stays thread-offloaded here so this
+        # degraded path still doesn't block the event loop.
+        return await asyncio.to_thread(get_trace_events, trace_id=trace_id)
+    finally:
+        # This creates its own AsyncElasticsearch client per call (a fresh one
+        # every reflection, since this is a fire-and-forget background task with
+        # no natural place to share/pool one) — close it explicitly so it doesn't
+        # leak a connection per turn (FRE-1034: this ticket's whole theme is
+        # per-turn resource hygiene on this exact hot path).
+        await queries.disconnect()
+
+
 async def generate_reflection_entry(
     user_message: str,
     trace_id: str,
@@ -282,10 +334,9 @@ async def generate_reflection_entry(
         - Includes performance metrics for richer context (ADR-0012)
     """
     # Query telemetry for this trace (needed for both DSPy and manual). FRE-1034:
-    # offloaded to a thread — get_trace_events does synchronous file I/O + JSON
-    # parsing and must not block the event loop this reflection task shares with
-    # concurrent requests.
-    trace_events = await asyncio.to_thread(get_trace_events, trace_id=trace_id)
+    # Elasticsearch hot path (genuine async I/O, parallelizes under concurrency),
+    # falling back to the thread-offloaded file path only if ES is unreachable.
+    trace_events = await _fetch_trace_events(trace_id)
     telemetry_summary = _summarize_telemetry(trace_events, metrics_summary)
 
     # FRE-409: Build prompt-composition manifest from already-fetched trace events.

@@ -1054,6 +1054,77 @@ class TelemetryQueries:
             )
         return clusters
 
+    async def get_trace_events(self, trace_id: str, size: int = 2000) -> list[dict[str, Any]]:
+        """Fetch all log events for a trace_id via an exact ES term query (FRE-1034).
+
+        ``trace_id`` is mapped ``keyword`` on ``agent-logs-*`` (no analysis, no
+        ``.keyword`` suffix needed), so this is a cheap, exact-match query —
+        measured at ~20-30ms steady state for a real trace. Unlike the file-based
+        ``telemetry.metrics.get_trace_events`` (kept unchanged for its CLI/offline
+        callers), this is genuine async I/O: it releases control during the network
+        wait, so concurrent calls parallelize instead of serializing under the GIL.
+
+        Args:
+            trace_id: Trace identifier to reconstruct.
+            size: Max documents to return (2000 comfortably covers realistic
+                per-turn event counts; a real trace was measured at 351 docs).
+
+        Returns:
+            Log entries (dicts) for the trace, translated to the same field
+            names the file-based path uses (``event``, ``timestamp`` — ES stores
+            these as ``event_type``/``@timestamp``) and sorted by timestamp
+            ascending.
+
+        Raises:
+            Exception: Any Elasticsearch client/connection error propagates to
+                the caller. This method makes no fallback decision itself —
+                callers on the hot path (FRE-1034) catch and fall back to the
+                file-based path; this stays a raw, honest query.
+        """
+        client = await self._get_client()
+        response = await client.search(
+            index=f"{self._logs_index_prefix}-*",
+            query={"term": {"trace_id": trace_id}},
+            size=size,
+            sort=[{"@timestamp": "asc"}],
+        )
+        hits = response.get("hits", {}).get("hits", [])
+        return [_translate_es_source_to_log_entry(hit["_source"]) for hit in hits]
+
+
+# ---------------------------------------------------------------------------
+# Trace-event helpers (FRE-1034)
+# ---------------------------------------------------------------------------
+
+
+def _translate_es_source_to_log_entry(source: dict[str, Any]) -> dict[str, Any]:
+    """Translate an ES ``_source`` doc into the file-based log-entry field shape.
+
+    ``ElasticsearchHandler``/``ESLogger`` store the structlog ``event`` key under
+    the ES field ``event_type`` (with the true event name duplicated into
+    ``message``) and stamp ``@timestamp`` instead of forwarding the original
+    ``timestamp`` field. Every other custom field (``duration_ms``, ``tool``,
+    ``status``, ``arguments``, etc.) is spread through unchanged, since both the
+    file JSONL renderer and this ES path originate from the same structlog
+    event dict. Renaming just these two keys makes the returned entries
+    interchangeable with ``telemetry.metrics.get_trace_events``'s output for every
+    downstream consumer (``_summarize_telemetry``, ``_extract_failure_excerpt``,
+    ``build_prompt_manifest``).
+
+    Args:
+        source: Raw ``_source`` dict from an Elasticsearch hit.
+
+    Returns:
+        A shallow-copied dict with ``event_type`` renamed to ``event`` and
+        ``@timestamp`` renamed to ``timestamp``.
+    """
+    entry = dict(source)
+    if "event_type" in entry:
+        entry["event"] = entry.pop("event_type")
+    if "@timestamp" in entry:
+        entry["timestamp"] = entry.pop("@timestamp")
+    return entry
+
 
 # ---------------------------------------------------------------------------
 # Error-pattern helpers (ADR-0056)

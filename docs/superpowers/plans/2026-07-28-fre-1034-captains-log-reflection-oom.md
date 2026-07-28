@@ -236,3 +236,130 @@ break under that test's mock shape even though it works with the real `asyncio.t
   refactor of internal filtering, not new behavior).
 - Master should reconsider the 768MiB → 2GiB container-limit bump (applied live today as an
   unblock) once this lands and peak memory is re-measured live.
+
+## Extension after PR #731 bounce: Elasticsearch hot path for the reflection caller
+
+Master bounced PR #731 not as a rejection but an extension: keep everything above (the
+`line_filter` prefilter stays exactly as shipped, still serving the CLI/eval callers), and
+additionally give the ONE hot per-turn caller (`reflection.py`'s `generate_reflection_entry`)
+an Elasticsearch-backed path instead of the thread-offloaded file scan.
+
+**Why the fallback-only argument didn't hold.** The original plan justified skipping ES
+because `get_trace_events` has four callers and an async signature change would propagate to
+a sync CLI. Master checked: only ONE of the four runs per turn (`reflection.py:285` at the
+time). `ui/cli.py:132` and `get_request_latency_breakdown` (called only from `cli.py:194`) are
+manual CLI commands; `tests/evaluation/system_evaluation.py` is an offline eval script. None
+runs per turn — so ES never actually required touching the shared sync function. The fix:
+add a NEW async function alongside it, used only by the hot caller. No propagation, no
+refactor of the sync path.
+
+**The measurement that decided it.** Master measured concurrency against the live corpus.
+Threaded file scan (the fallback-only fix, even off the event loop): 1 concurrent → 0.113s, 2
+→ 0.352s, 4 → 0.706s, 8 → 1.544s — linear, because `line_filter not in line` is a pure-Python
+string operation that holds the GIL, so threads serialize. Elasticsearch over the same range:
+1 → 0.037s, 2 → 0.036s, 4 → 0.124s, 8 → 0.190s — network I/O releases the GIL, so queries
+genuinely run in parallel. At 8 concurrent turns that's 1.544s vs 0.190s, and the gap widens
+with both corpus size and concurrency.
+
+**What was added (line_filter and its tests untouched):**
+
+1. `TelemetryQueries.get_trace_events(trace_id, size=2000)` (new method,
+   `src/personal_agent/telemetry/queries.py`) — a plain `term` query on the `trace_id`
+   keyword field (exact match, no `.keyword` suffix, no analysis — confirmed live: 22-27ms
+   steady state for a real trace). Translates ES's `event_type`/`@timestamp` field names back
+   to `event`/`timestamp` (`_translate_es_source_to_log_entry`) so the result is
+   interchangeable with the file-based path's output for every downstream consumer
+   (`_summarize_telemetry`, `_extract_failure_excerpt`, `build_prompt_manifest`). Verified live
+   against `es_handler.py`/`es_logger.py`'s actual write shape — ES documents have
+   `event_type`/`@timestamp`/`message`, never `event`/`timestamp`; every other custom field
+   (`duration_ms`, `tool`, `status`, etc.) passes through unchanged since both paths originate
+   from the same structlog event dict. Raises on any ES error — no fallback logic inside it;
+   the caller decides.
+2. `_fetch_trace_events(trace_id)` (new function, `src/personal_agent/captains_log/reflection.py`)
+   — waits `ES_REFRESH_WAIT_SECONDS = 5.5` (see refresh-window handling below), then `await`s
+   the ES method directly (NOT wrapped in `asyncio.to_thread` — that would reintroduce the
+   GIL-bound serialization this change exists to remove), and falls back to the existing
+   thread-offloaded file path (unchanged) only if the ES call raises — a deliberate, logged
+   fallback (`es_trace_fetch_failed_falling_back_to_file`), not the normal path. Explicitly
+   disconnects its `TelemetryQueries` client in a `finally` block (a code-review pass flagged
+   that a per-call client left open would itself be a small resource leak on this exact
+   per-turn hot path — directly on-theme for an OOM ticket, so fixed rather than left
+   for later).
+3. `generate_reflection_entry`'s call site now reads `trace_events = await _fetch_trace_events(trace_id)`.
+
+**Refresh-window handling.** `agent-logs-*` has `index.refresh_interval=5s` (not the 1s
+default — confirmed on both the live index via `_settings` and
+`docker/elasticsearch/index-template.json:9`). Reflection fires ~1.5s after task completion,
+inside that window, so an immediate query would silently return fewer events than the trace
+actually has — missing exactly the newest events of the trace being reflected on. Since
+reflection is fire-and-forget (`run_in_background` → `asyncio.create_task`, nothing awaits it,
+confirmed no timeout wrapper at the `orchestrator/executor.py:2720` call site), the cheapest
+correct fix is a fixed wait before querying — not forcing an index refresh on read (which
+master explicitly ruled out). `ES_REFRESH_WAIT_SECONDS = 5.5` is asserted-by-test to exceed
+whatever `index.refresh_interval` the template actually specifies
+(`TestEsRefreshWaitExceedsConfiguredInterval`), so a future change to the refresh interval
+fails that test rather than silently regressing.
+
+**Live proof against a freshly created trace** (per master's explicit ask — this must be a
+trace young enough that the refresh window is actually being tested, not one already stale
+enough to have refreshed regardless): wrote 6 synthetic events tagged
+`trace_id=fre-1034-verify-b73c1e96-f43b-4374-b275-9a326838f76b` directly into the live
+`agent-logs-*` index (bypassing the app; same index, same mapping, same real
+`refresh_interval=5s`), then queried at two offsets from the write:
+- t=1.50s (the OLD/naive timing, matching reflection's actual ~1.5s-after-completion firing
+  point): **0/6 docs visible** — confirms the bug empirically, not just from the template config.
+- t=5.51s (the NEW wait): **6/6 docs visible** — confirms `ES_REFRESH_WAIT_SECONDS=5.5` is
+  sufficient.
+
+**Live concurrency proof**, same methodology as master's own measurement, against a real
+existing trace (`1752d25f-fbdd-4fbf-91a8-604e34733df5`, 1 event): 1 concurrent → 0.016s, 2 →
+0.017s, 4 → 0.059s, 8 → 0.147s — consistent with master's numbers (sub-linear growth, and even
+at 8x concurrency roughly an order of magnitude faster than the threaded scan's 1.544s).
+Deterministic, mocked equivalents of both the freshness proof and the concurrency proof are
+also in the test suite (see below) so CI enforces the same properties without depending on
+live infrastructure or real sleep durations.
+
+**Elasticsearch-unreachable behavior (explicit decision, per master's ask).** If the ES call
+raises for any reason (connection refused, timeout, auth failure, etc.), `_fetch_trace_events`
+logs a warning and falls back to the existing thread-offloaded file-based path — the exact
+same code that shipped in the fallback-only PR, unchanged. This is a deliberate, narrow
+fallback (only triggered by an ES exception, not on the normal path) and keeps reflection
+functional even when Elasticsearch is down, at the cost of reverting to the file scan's
+per-call concurrency characteristics for that one degraded call.
+
+### Updated test plan
+
+- `tests/test_telemetry/test_queries.py` — `TelemetryQueries.get_trace_events`: exact-term
+  query shape (`test_get_trace_events_builds_exact_term_query`), field-name translation
+  (`test_get_trace_events_translates_es_field_names`), error propagation with no fallback
+  baked in (`test_get_trace_events_propagates_es_errors`), and a deterministic concurrency
+  proof using a mocked ES client with a fixed simulated network delay
+  (`test_get_trace_events_concurrent_calls_do_not_scale_linearly` — asserts 8 concurrent calls
+  stay within 3x a single call's duration, reproducing the live measurement's shape without
+  depending on a live cluster).
+- `tests/test_captains_log/test_reflection_thread_offload.py` — restructured:
+  `TestFetchTraceEventsEsHotPath` proves ES-success never touches the file path
+  (`test_uses_es_result_and_never_touches_the_file_path`), ES-failure falls back correctly
+  (`test_falls_back_to_file_path_when_es_unreachable`), and the wait is wired correctly
+  (`test_waits_out_the_refresh_window_before_querying`, a spy on `asyncio.sleep` — deterministic,
+  doesn't actually sleep). `TestEsRefreshWaitExceedsConfiguredInterval` is the self-updating
+  consistency check against the real template value. `TestReflectionTraceEventsThreadOffload`
+  keeps the original real-`asyncio.to_thread`-plus-heartbeat proof, now forcing the ES attempt
+  to fail first so it exercises the file-fallback branch specifically.
+- `tests/test_captains_log/test_reflection_prompt_manifest_field.py` — the one pre-existing
+  test that patched the file-based `get_trace_events` directly now patches
+  `reflection._fetch_trace_events` instead (the new call site), since HOW trace events are
+  fetched is no longer that test's concern — it's about manifest-building from whatever trace
+  events come back.
+
+### Self-review (second pass, after the ES extension)
+
+`feature-dev:code-reviewer` (medium effort) — no confirmed findings against the escaping/
+translation logic, the fixed wait's justification, the fallback safety, or test quality;
+flagged (below its own reporting bar) that the new per-call `TelemetryQueries()` client was
+never closed — fixed by adding an explicit `disconnect()` in a `finally` block rather than
+left as known debt, since it's directly on-theme for an OOM ticket. `security-review` — no
+findings ≥8 confidence in any category (no query injection: `trace_id` is a JSON value in a
+parameterized client call, never parsed as query syntax; no information disclosure: same
+exact-match scope as the file path; no unsafe deserialization: standard `elasticsearch-py`
+JSON handling).

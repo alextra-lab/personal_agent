@@ -27,12 +27,9 @@ class TestGenerateReflectionSignatureField:
             pytest.skip("dspy not installed; signature is not constructed")
 
         signature_cls = reflection_dspy.GenerateReflection
-        fields = getattr(signature_cls, "model_fields", {}) or getattr(
-            signature_cls, "fields", {}
-        )
+        fields = getattr(signature_cls, "model_fields", {}) or getattr(signature_cls, "fields", {})
         assert "prompt_manifest" in fields, (
-            f"prompt_manifest not declared on GenerateReflection. "
-            f"Available fields: {list(fields)}"
+            f"prompt_manifest not declared on GenerateReflection. Available fields: {list(fields)}"
         )
 
 
@@ -72,7 +69,7 @@ class TestGenerateReflectionEntryBuildsManifest:
 
     @pytest.mark.asyncio
     async def test_non_empty_manifest_when_trace_has_identity_event(self) -> None:
-        """When get_trace_events returns an identity event, manifest is non-empty."""
+        """When the trace-events fetch returns an identity event, manifest is non-empty."""
         import asyncio
 
         identity_event: dict[str, Any] = {
@@ -109,8 +106,8 @@ class TestGenerateReflectionEntryBuildsManifest:
 
         with (
             patch(
-                "personal_agent.captains_log.reflection.get_trace_events",
-                return_value=[identity_event],
+                "personal_agent.captains_log.reflection._fetch_trace_events",
+                AsyncMock(return_value=[identity_event]),
             ),
             patch(
                 "personal_agent.captains_log.reflection.DSPY_AVAILABLE",

@@ -253,8 +253,12 @@ Three bounds are declared, and the first one reached ends the run:
    key** to the package terminates the analysis **immediately**, at that step. Not after a
    retry allowance, and regardless of remaining budget or attempt count.
 2. **A step ceiling** of 8 investigation steps per analysis, as a backstop for a run that keeps
-   producing new keys without converging.
-3. **A declared per-analysis cost budget**, set in configuration.
+   producing new keys without converging. The eighth step may complete; a ninth is never issued.
+3. **A declared per-analysis cost budget**, set in configuration. It fires **before the spend**:
+   the run stops without issuing any step whose projected cost would take the analysis past its
+   remaining budget — reserve-before-spend, the same order the cost gate already uses. A budget
+   bound that fires after the money is spent is not a bound, and the recorded spend for an
+   analysis may never exceed its declared budget.
 
 Bound 1 is the one that matters and is stated first because it is the one the sweep lacked. A
 denial, an error, or an empty result that yields no new evidence key **is** no forward progress,
@@ -550,14 +554,25 @@ prod substrate without the documented opt-in.
   without a joined row, which would let the pillar reason about dollars from the unpopulated
   `cost_usd` capture field.
 
-- **AC-6** — An analysis that stops making progress halts **at the step that made none**. ·
-  **Check:** construct a run whose step *N* adds a new evidence key and whose step *N+1* adds
-  none — the `budget_denied` shape, a denial that returns no new key while classed transient —
-  and assert the run terminates at step *N+1*, emitting *"undetermined within budget"* naming
-  bound 1 and reporting *N+1* steps taken. · *Fails if* step *N+2* is attempted for any reason,
-  including a retry allowance, a transient classification, or remaining budget. Eventual
-  termination does not pass: a run that retries twice and then emits the phrase fails, because
-  the defect being excluded is the 311-attempt loop that also terminated eventually.
+- **AC-6** — Each of D7's three bounds halts a run at the point the bound specifies, and each is
+  exercised. · **Check:** three cases, all asserting the run emits *"undetermined within budget"*
+  naming the bound that fired.
+  **(a) No progress** — construct a run whose step *N* adds a new evidence key and whose step
+  *N+1* adds none (the `budget_denied` shape: a denial returning no new key while classed
+  transient); assert termination at step *N+1*.
+  **(b) Step ceiling** — construct a run where every step adds a new key; assert step 8 completes
+  and step 9 is never issued.
+  **(c) Cost budget** — construct a run whose next step's projected cost exceeds the remaining
+  declared budget; assert that step is never issued and the analysis's recorded spend is at or
+  below its declared budget.
+  · *Fails if* step *N+2* is attempted in (a) for any reason — a retry allowance, a transient
+  classification, or remaining budget; if a ninth step is issued in (b); if the over-budget step
+  is issued in (c), or if the recorded spend exceeds the declared budget, which would mean the
+  budget fired after the money was spent. Eventual termination does not pass any of the three: a
+  run that retries twice and then emits the phrase fails, because the defect being excluded is
+  the 311-attempt loop that also terminated eventually. Passing (a) alone does not satisfy this
+  criterion — an implementation honouring only the primary bound is exactly what cases (b) and
+  (c) exist to catch.
 
 - **AC-7** — The capture indices carry an **explicitly attached** retention policy with no delete
   phase. · **Check:** resolve the effective lifecycle policy for `agent-captains-captures-*` and
@@ -606,7 +621,7 @@ proceed on it.
 - FRE-991 — the investigation this ADR answers
 - FRE-989 — cost attribution audit; the dependency behind D5's budget requirement and AC-5
 - FRE-1023 — the join failure D4 and AC-4 are written to prevent
-- FRE-1021 — the entity-selection displacement that genuinely gates FRE-1015, per D9
+- FRE-1021 — the entity-selection displacement that binds ADR-0126's topic-scoped surface, reaching FRE-1017's AC-3 and FRE-1015's AC-1; the genuine dependency of that chain, and not this ADR, per D9
 
 ---
 

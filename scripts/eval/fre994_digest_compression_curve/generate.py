@@ -12,9 +12,10 @@ any substrate, and ``AGENT_SESSION_SUMMARY_ENABLED`` is untouched (AC-5).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import orjson
 from scripts.eval.fre994_digest_compression_curve.arms import (
@@ -30,6 +31,9 @@ from personal_agent.llm_client import ModelRole
 from personal_agent.memory.session_digest import SessionDigest, digest_token_count
 from personal_agent.memory.session_digest_wire import DIGEST_TOOL_NAME, DigestEnvelope, to_storage
 from personal_agent.telemetry.trace import SystemTraceContext
+
+if TYPE_CHECKING:  # pragma: no cover — typing only
+    from personal_agent.captains_log.capture import TaskCapture
 
 #: Stop reasons meaning "the ceiling cut this off", across provider vocabularies.
 #: Mirrors the producer's own set.
@@ -149,7 +153,12 @@ def _payload(response: dict[str, Any]) -> str:
 
 
 def classify(
-    response: dict[str, Any], *, arm: Arm, session_id: str, ended_at: datetime
+    response: dict[str, Any],
+    *,
+    arm: Arm,
+    session_id: str,
+    ended_at: datetime,
+    captures: Sequence[TaskCapture],
 ) -> GenerationRecord:
     """Assign exactly one outcome and every delivery measurement.
 
@@ -159,6 +168,8 @@ def classify(
         session_id: The session.
         ended_at: The session's last-turn timestamp, stamped onto unresolved items by
             the producer-owned half of the contract.
+        captures: The session's captures, which correction spans are quoted from —
+            also producer-owned (FRE-1024).
 
     Returns:
         The classified record.
@@ -205,7 +216,7 @@ def classify(
 
     try:
         envelope = DigestEnvelope.model_validate(orjson.loads(payload))
-        _, digest = to_storage(envelope, ended_at=ended_at)
+        _, digest = to_storage(envelope, ended_at=ended_at, captures=captures)
     except orjson.JSONDecodeError as e:
         base["error"] = str(e)[:MAX_ERROR_CHARS]
         return GenerationRecord(outcome="truncated" if at_ceiling else "invalid_json", **base)

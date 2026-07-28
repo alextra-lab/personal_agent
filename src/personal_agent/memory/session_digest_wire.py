@@ -12,9 +12,14 @@ The wire model is also *tighter* than the prose prompt it replaces, because a sc
 carry what English can only request:
 
 * ``field`` is closed to ``assistant_text``. The prose prompt asks for exactly that; the
-  hand parser accepts any string and lets the span check fail later.
-* A correction's ``span``/``locator``/``evidence_*`` are **required**. Same rule the hand
-  parser enforces by raising — moved to the decoder, where it costs nothing.
+  hand parser accepts any string and lets grounding drop the item later.
+* A correction's ``locator``/``evidence_locator`` are **required** — the citation is the
+  whole obligation, and a correction without one cannot be grounded.
+
+**No span is asked for** (ADR-0124 Amendment E, FRE-1024). The model points at a turn and
+:func:`~personal_agent.memory.session_digest.ground_correction` quotes it, so this contract
+declares only what the model can author reliably. Asking it to transcribe text the code
+was about to read anyway is the defect that ticket removes.
 
 **What this does and does not enforce.** The payload travels in a tool-call argument
 field, so fence wrapping and trailing prose have nowhere to occur — that class is
@@ -33,21 +38,25 @@ rather than converging — "wait for an upgrade" is not a remedy here.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from personal_agent.memory.session_digest import (
     MAX_LABEL_CHARS,
     BasisTag,
-    Correction,
     CorrectionTier,
     DigestItem,
     Locator,
     SessionDigest,
     UnresolvedItem,
+    ground_correction,
 )
+
+if TYPE_CHECKING:  # pragma: no cover — typing only
+    from personal_agent.captains_log.capture import TaskCapture
 
 #: Named from the model's perspective — it is the action the model is taking, not the
 #: internal function it maps to.
@@ -126,20 +135,22 @@ class WireItem(BaseModel):
 
 
 class WireCorrection(BaseModel):
-    """A self-correction, with the provenance that makes it checkable.
+    """A self-correction, with the citations that make it groundable.
 
-    Unlike :class:`WireItem`, every provenance field here is required — a correction
-    without a resolvable citation is exactly the cheap failure mode ADR-0124's located-span
+    Unlike :class:`WireItem`, both locators are required — a correction without a
+    resolvable citation is exactly the cheap failure mode ADR-0124's located-span
     contract exists to make impossible.
+
+    **The spans are absent by design** (Amendment E, FRE-1024): they are quoted from these
+    locators by the producer, so asking the model for them would reintroduce the
+    transcription step this contract exists to remove.
 
     Attributes:
         text: The self-correction.
         basis: Provenance tag.
         tier: ``self_correction`` — the only kind Amendment B allows.
-        span: Verbatim text of the claim, from the assistant's own message.
-        locator: Where that claim lives.
-        evidence_span: Verbatim supporting evidence, also from the assistant's own message.
-        evidence_locator: Where that evidence lives.
+        locator: Where the claim lives.
+        evidence_locator: Where the supporting evidence lives.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -147,9 +158,7 @@ class WireCorrection(BaseModel):
     text: str
     basis: BasisTag
     tier: CorrectionTier
-    span: str
     locator: WireLocator
-    evidence_span: str
     evidence_locator: WireLocator
 
     _strip_text = field_validator("text")(_require_text)
@@ -191,15 +200,27 @@ class DigestEnvelope(BaseModel):
     digest: WireDigest
 
 
-def to_storage(envelope: DigestEnvelope, *, ended_at: datetime) -> tuple[str, SessionDigest]:
+def to_storage(
+    envelope: DigestEnvelope,
+    *,
+    ended_at: datetime,
+    captures: Sequence[TaskCapture],
+) -> tuple[str, SessionDigest]:
     """Apply the producer-owned half and return the storage record.
 
-    ``as_of`` is stamped here rather than asked of the model (ADR-0124 D3) — it is
-    computable state, so it cannot be hallucinated.
+    Two things the producer owns and the model never authors. ``as_of`` is stamped here
+    (ADR-0124 D3) because it is computable state, so it cannot be hallucinated. A
+    correction's spans are **quoted from its locators** here (Amendment E, FRE-1024) for
+    the same reason: the text is readable, so generating it only introduces drift.
+
+    A correction whose citation does not resolve is **dropped, and the digest is kept** —
+    counted into :attr:`~personal_agent.memory.session_digest.SessionDigest.corrections_dropped`
+    rather than failing the whole record over one optional item.
 
     Args:
         envelope: The model's parsed reply.
         ended_at: The session's last-turn timestamp, stamped onto unresolved items.
+        captures: The session's captures, which the locators are quoted from.
 
     Returns:
         The label and the storage-shaped digest.
@@ -219,6 +240,19 @@ def to_storage(envelope: DigestEnvelope, *, ended_at: datetime) -> tuple[str, Se
     def _item(wire: WireItem) -> DigestItem:
         return DigestItem(text=wire.text, basis=wire.basis)
 
+    grounded = [
+        ground_correction(
+            text=c.text,
+            basis=c.basis,
+            tier=c.tier,
+            locator=_locator(c.locator),
+            evidence_locator=_locator(c.evidence_locator),
+            captures=captures,
+        )
+        for c in envelope.digest.corrections
+    ]
+    corrections = [c for c in grounded if c is not None]
+
     digest = SessionDigest(
         established=[_item(i) for i in envelope.digest.established],
         decisions=[_item(i) for i in envelope.digest.decisions],
@@ -226,18 +260,8 @@ def to_storage(envelope: DigestEnvelope, *, ended_at: datetime) -> tuple[str, Se
             UnresolvedItem(text=i.text, basis=i.basis, as_of=ended_at)
             for i in envelope.digest.unresolved
         ],
-        corrections=[
-            Correction(
-                text=c.text,
-                basis=c.basis,
-                span=c.span,
-                locator=_locator(c.locator),
-                tier=c.tier,
-                evidence_span=c.evidence_span,
-                evidence_locator=_locator(c.evidence_locator),
-            )
-            for c in envelope.digest.corrections
-        ],
+        corrections=corrections,
+        corrections_dropped=len(grounded) - len(corrections),
     )
     return label, digest
 

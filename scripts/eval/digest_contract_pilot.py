@@ -36,6 +36,7 @@ import hashlib
 import json
 import pathlib
 from collections import Counter
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -204,7 +205,9 @@ def _payload(response: dict[str, Any]) -> tuple[str, bool]:
     return stripped, stripped != content.strip()
 
 
-def _classify(response: dict[str, Any], *, ended_at: datetime) -> dict[str, Any]:
+def _classify(
+    response: dict[str, Any], *, ended_at: datetime, captures: Sequence[TaskCapture]
+) -> dict[str, Any]:
     """Assign exactly one outcome, plus the measurements FRE-994 inherits."""
     payload, wrapped = _payload(response)
     usage = response.get("usage") or {}
@@ -239,7 +242,7 @@ def _classify(response: dict[str, Any], *, ended_at: datetime) -> dict[str, Any]
         return record
 
     try:
-        _, digest = parse_model_output(payload, ended_at=ended_at)
+        _, digest = parse_model_output(payload, ended_at=ended_at, captures=captures)
     except ValueError as e:
         detail = str(e)
         record["error"] = detail[:_MAX_ERROR_CHARS]
@@ -381,7 +384,7 @@ async def _run(args: argparse.Namespace) -> int:
                 response = await _dispatch(
                     prompts[sid], arm=arm, role_name=role_name, session_id=sid
                 )
-                record = _classify(response, ended_at=ended_at)
+                record = _classify(response, ended_at=ended_at, captures=captures)
                 consecutive_errors = 0
             except Exception as e:  # noqa: BLE001 — one failed call must not end the run
                 consecutive_errors += 1

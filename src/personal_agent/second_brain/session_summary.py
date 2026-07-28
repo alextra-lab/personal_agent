@@ -59,8 +59,8 @@ from personal_agent.memory.session_digest import (
     SummaryFailureReason,
     UnresolvedItem,
     digest_token_count,
+    ground_correction,
     trim_digest_to_budget,
-    validate_digest_provenance,
 )
 from personal_agent.memory.session_digest_wire import (
     DIGEST_TOOL_NAME,
@@ -139,9 +139,7 @@ correction = {
   "text":    "<the self-correction>",
   "basis":   "user_statement" | "assistant_reasoning" | "mixed",
   "tier":    "self_correction",
-  "span":    "<verbatim text copied from the assistant's own message>",
   "locator": {"capture_id": "<capture id>", "field": "assistant_text"},
-  "evidence_span":    "<verbatim supporting text, also from the assistant's own message>",
   "evidence_locator": {"capture_id": "<capture id>", "field": "assistant_text"}
 }
 
@@ -160,24 +158,25 @@ rejected alternatives and the reasons they were rejected.
 - unresolved: unfinished state a future reader could wrongly treat as settled.
 - corrections: see below. Usually empty, and that scarcity is correct.
 
-SPANS — a correction's span and evidence_span must each be copied VERBATIM from the \
-assistant's own message at the field its locator names. Do not paraphrase, and do not \
-cite text that lives somewhere else in the session.
+LOCATORS — point, do not quote. Name the turn each citation comes from and nothing \
+more; the quoted text is read from the turn you name, so never copy, paraphrase or \
+summarise it into your answer. Cite a turn only if the text you have in mind is \
+really in ITS assistant response — naming the wrong turn discards the correction.
 
 CORRECTIONS — precision above all. A missed error is recoverable from the raw \
 evidence; a false error writes self-confirming state into memory. You are given only \
 the conversation — no tool status, errors, or payloads. The only kind you may assert:
-- self_correction: the assistant corrected the record within the session. Cite the \
-self-correction in span/locator and, in evidence_span/evidence_locator, the \
-assistant's own supporting text — both must come from a turn's assistant response, \
-never the user's message. If the correcting fact came from the user, the assistant \
-must have restated it in its own reply for it to be citable here.
+- self_correction: the assistant corrected the record within the session. Point at the \
+self-correction with locator and, with evidence_locator, at the assistant's own \
+supporting text — both must be a turn's assistant response, never the user's message. \
+If the correcting fact came from the user, the assistant must have restated it in its \
+own reply for it to be citable here.
 
 NEVER assert a correction for: weak or partial conflict, text with several \
 defensible readings, state that legitimately changed over time, or disagreement \
 with a subjective judgment or recommendation. Those belong in unresolved, or are \
 omitted. NEVER infer an error from absent evidence, and NEVER assert a correction \
-whose span or evidence would need to be cited from the user's own message — only \
+whose claim or evidence would need to be cited from the user's own message — only \
 the assistant's text is citable.
 
 Before asserting a correction, apply the SAME-PROPOSITION test explicitly. A \
@@ -397,47 +396,69 @@ def _parse_item(raw: object) -> DigestItem:
         raise ValueError("item has no text")
     if basis not in ("user_statement", "assistant_reasoning", "mixed"):
         raise ValueError(f"item has invalid basis: {basis!r}")
-    span = raw.get("span")
-    return DigestItem(
-        text=text.strip(),
-        basis=basis,
-        span=span if isinstance(span, str) else None,
-        locator=_parse_locator(raw.get("locator")),
-    )
+    # `span`/`locator` are deliberately NOT read off the model's output (FRE-1024). No
+    # basis obliges a citation outside `corrections` since Amendment B retired
+    # `tool_evidence`, and reading them here would leave model-authored span text on the
+    # path — which is the thing this change removes, not merely relocates.
+    return DigestItem(text=text.strip(), basis=basis)
 
 
-def _parse_correction(raw: object) -> Correction:
-    """Parse one correction. Raises ValueError on anything unusable."""
+def _parse_correction(raw: object, captures: Sequence[TaskCapture]) -> Correction | None:
+    """Parse one correction and ground it against the session's own text.
+
+    Returns ``None`` — a drop, never a raise — when the **citation** cannot be grounded:
+    corrections are rare and optional, so an unresolvable one may not cost the whole
+    digest (FRE-1024, following FRE-993's trim-not-discard precedent).
+
+    A malformed **shape** is a different matter and still raises. An off-vocabulary
+    ``tier`` is a contract violation the schema owns and FRE-956 deliberately enforces at
+    parse time, so it stays ``SCHEMA_INVALID``. Keeping the two apart is also what lets
+    ``corrections_dropped`` mean exactly one thing to a reader — "the citation did not
+    resolve" — which is what the rendered declaration asserts.
+
+    Args:
+        raw: One entry from the model's ``corrections`` slot.
+        captures: The session's captures, which the locators are quoted from.
+
+    Returns:
+        The grounded correction, or ``None`` if its citation did not resolve.
+
+    Raises:
+        ValueError: If the item has no text or carries an invalid ``tier``.
+    """
     item = _parse_item(raw)
     assert isinstance(raw, dict)  # _parse_item already rejected non-dicts
     tier = raw.get("tier")
     if tier not in ("self_correction",):
         raise ValueError(f"correction has invalid tier: {tier!r}")
-    evidence_span = raw.get("evidence_span")
-    evidence_locator = _parse_locator(raw.get("evidence_locator"))
-    if not isinstance(evidence_span, str) or evidence_locator is None:
-        raise ValueError("correction is missing its evidence span or locator")
-    return Correction(
+
+    return ground_correction(
         text=item.text,
         basis=item.basis,
-        span=item.span,
-        locator=item.locator,
         tier=tier,
-        evidence_span=evidence_span,
-        evidence_locator=evidence_locator,
+        locator=_parse_locator(raw.get("locator")),
+        evidence_locator=_parse_locator(raw.get("evidence_locator")),
+        captures=captures,
     )
 
 
-def parse_model_output(content: str, *, ended_at: datetime) -> tuple[str, SessionDigest]:
-    """Parse and shape-check the model's JSON.
+def parse_model_output(
+    content: str, *, ended_at: datetime, captures: Sequence[TaskCapture]
+) -> tuple[str, SessionDigest]:
+    """Parse the model's JSON and apply everything the producer owns.
 
-    ``unresolved`` items are stamped with the session's ``ended_at`` here rather
-    than being asked of the model: it is computable state, and computed state is
-    never regenerated in prose (ADR-0124 D3), so it cannot be hallucinated.
+    Two fields the model never authors, for one reason: state the code can compute is
+    never regenerated in prose (ADR-0124 D3), because generating it can only introduce
+    drift. ``unresolved`` items are stamped with the session's ``ended_at``, and a
+    correction's spans are quoted from the locators it cited (Amendment E, FRE-1024).
+
+    A correction whose citation does not resolve is dropped and counted into
+    ``corrections_dropped``; the rest of the digest survives.
 
     Args:
         content: Raw model output, possibly fenced.
         ended_at: The session's last-turn timestamp, stamped onto unresolved items.
+        captures: The session's captures, which correction locators are quoted from.
 
     Returns:
         The label and the parsed digest.
@@ -472,6 +493,10 @@ def parse_model_output(content: str, *, ended_at: datetime) -> tuple[str, Sessio
             raise ValueError(f"digest slot {name!r} is not a list")
         return value
 
+    raw_corrections = _slot("corrections")
+    grounded = [_parse_correction(r, captures) for r in raw_corrections]
+    corrections = [c for c in grounded if c is not None]
+
     digest = SessionDigest(
         established=[_parse_item(r) for r in _slot("established")],
         decisions=[_parse_item(r) for r in _slot("decisions")],
@@ -479,7 +504,8 @@ def parse_model_output(content: str, *, ended_at: datetime) -> tuple[str, Sessio
             UnresolvedItem(**_parse_item(r).model_dump(), as_of=ended_at)
             for r in _slot("unresolved")
         ],
-        corrections=[_parse_correction(r) for r in _slot("corrections")],
+        corrections=corrections,
+        corrections_dropped=len(raw_corrections) - len(corrections),
     )
     return label, digest
 
@@ -741,10 +767,11 @@ async def generate_session_digest(
             # same ceiling — and truncation is a property of that ceiling rather than of
             # what was sampled beneath it.
             #
-            # Deliberately NOT extended to SCHEMA_INVALID or SPAN_VALIDATION_FAILED.
-            # Those are stochastic: the same request can be resampled into a valid
-            # reply, and Amendment C5 measured 2% contract drift that a retry plausibly
-            # recovers. Retiring their retry would spend delivery to save a call.
+            # Deliberately NOT extended to SCHEMA_INVALID or UNGROUNDED_DIGEST. Those are
+            # stochastic: the same request can be resampled into a valid reply, and
+            # Amendment C5 measured 2% contract drift that a retry plausibly recovers.
+            # Retiring their retry would spend delivery to save a call. (SPAN_VALIDATION_
+            # FAILED used to be named here too; FRE-1024 removed the reason outright.)
             #
             # This is a guard, not a saving: FRE-994 recorded zero truncations in 100
             # calls, so it protects a path that does not currently fire.
@@ -770,16 +797,23 @@ async def generate_session_digest(
             continue
 
         try:
-            label, digest = parse_model_output(content, ended_at=ended_at)
+            label, digest = parse_model_output(content, ended_at=ended_at, captures=captures)
         except ValueError as e:
             last_validation_failure = (SummaryFailureReason.SCHEMA_INVALID, str(e))
             continue
 
-        violations = validate_digest_provenance(digest, captures)
-        if violations:
+        # An ungroundable correction costs its own item, never the digest (FRE-1024) —
+        # unless it was the ONLY thing the model produced, in which case grounding has
+        # left nothing to deliver. Storing that empty record would clear the session's
+        # failure state and advance its freshness stamp, dropping it out of the dirty
+        # population for good: the delivery failure ADR-0124 Amendment C5 names, and the
+        # one the trim path's own last-item guard already refuses to cause. Narrow by
+        # construction — a digest the model simply left empty is untouched here.
+        if digest.is_empty() and digest.corrections_dropped:
             last_validation_failure = (
-                SummaryFailureReason.SPAN_VALIDATION_FAILED,
-                "; ".join(violations[:5]),
+                SummaryFailureReason.UNGROUNDED_DIGEST,
+                f"all {digest.corrections_dropped} correction(s) failed to ground and "
+                "no other slot had content",
             )
             continue
 
@@ -822,6 +856,16 @@ async def generate_session_digest(
             # Monitored as a drift signal: corrections are expected to be scarce,
             # so a rising rate is the alarm, not the achievement.
             corrections=len(digest.corrections),
+            # How often the model cites a turn that is not there (FRE-1024). Previously
+            # this discarded the whole digest and surfaced as a failure event; now it is
+            # survivable, so it needs its own counter or it becomes invisible.
+            corrections_dropped=digest.corrections_dropped,
+            # A derived span is the whole cited turn, so the stored record can grow far
+            # beyond the rendered ceiling the budget measures. Emitted so the real size
+            # distribution is observable before anyone decides whether it needs a bound.
+            correction_span_chars=sum(
+                len(c.span) + len(c.evidence_span) for c in digest.corrections
+            ),
             duration_ms=(time.perf_counter() - started_at) * 1000.0,
             model_key=role_name,
         )

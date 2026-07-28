@@ -118,6 +118,10 @@ async def _load_sample(
         loaded[ref.session_id] = {
             "skipped": False,
             "transcript": build_prompt(read.captures),
+            # Retained, not just rendered: a correction's spans are quoted from the
+            # captures at classify time (FRE-1024), so the transcript alone is no longer
+            # enough to build the storage record.
+            "captures": read.captures,
             "ended_at": read.captures[-1].timestamp,
             "turn_count": ref.turn_count,
             "quartile": ref.quartile,
@@ -291,7 +295,11 @@ async def _generate_cells(
                 arm, prompt=entry["transcript"], session_id=session_id
             )
             record = generate.classify(
-                response, arm=arm, session_id=session_id, ended_at=entry["ended_at"]
+                response,
+                arm=arm,
+                session_id=session_id,
+                ended_at=entry["ended_at"],
+                captures=entry["captures"],
             )
             consecutive_errors = 0
         except Exception as e:  # noqa: BLE001 — one failed call must not end the run

@@ -22,6 +22,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import orjson
 import pytest
 import structlog.testing
 
@@ -1352,3 +1353,123 @@ async def test_a_successful_write_clears_the_retry_stamp(
     await scheduler.run_session_summary_sweep(trace_id="t-1")
 
     assert memory.sessions["s1"]["summary_retry_after"] is None
+
+
+# --------------------------------------------------------------------------
+# Grounding (FRE-1024) — a dropped correction must not become a stored success
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ungroundable_correction_still_publishes_the_rest_of_the_digest(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end through the real producer: the item is lost, the digest is not.
+
+    Driven through ``generate_session_digest`` rather than a stubbed outcome, because the
+    thing under test is the parse-and-ground path the stub would skip.
+    """
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+    captures = [
+        _capture("sess-1", _now() - timedelta(minutes=40)),
+        _capture("sess-1", _now() - timedelta(minutes=35)),
+    ]
+    payload = orjson.dumps(
+        {
+            "label": "A session that also produced a bad citation",
+            "digest": {
+                "decisions": [{"text": "Chose the sweep.", "basis": "user_statement"}],
+                "corrections": [
+                    {
+                        "text": "The assistant corrected itself.",
+                        "basis": "assistant_reasoning",
+                        "tier": "self_correction",
+                        "locator": {"capture_id": "cap-404", "field": "assistant_text"},
+                        "evidence_locator": {"capture_id": "cap-404", "field": "assistant_text"},
+                    }
+                ],
+            },
+        }
+    ).decode()
+
+    async def fake_call(_prompt: str, **_: Any) -> str:
+        return payload
+
+    monkeypatch.setattr("personal_agent.second_brain.session_summary._call_model", fake_call)
+    _patch_load(monkeypatch, captures)
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert len(memory.writes) == 1, "the digest must reach the graph"
+    stored = memory.writes[0]["digest"]
+    assert stored is not None
+    assert stored.corrections == []
+    assert stored.corrections_dropped == 1
+    assert len(stored.decisions) == 1
+    assert memory.sessions["sess-1"]["summary_failure_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_digest_emptied_by_grounding_is_never_written_or_marked_clean(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The integration half of the empty-digest guard (ADR-0124 Amendment C5).
+
+    A producer-level assertion cannot show the consequence, because the damage is done by
+    what the *scheduler* does with a GENERATED outcome: writing an empty record clears the
+    failure state, advances the freshness stamp, and drops the session out of the dirty
+    population for good. Asserted here on the substrate the sweep actually mutates.
+    """
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+    payload = orjson.dumps(
+        {
+            "label": "Only an ungroundable correction",
+            "digest": {
+                "corrections": [
+                    {
+                        "text": "The assistant corrected itself.",
+                        "basis": "assistant_reasoning",
+                        "tier": "self_correction",
+                        "locator": {"capture_id": "cap-404", "field": "assistant_text"},
+                        "evidence_locator": {"capture_id": "cap-404", "field": "assistant_text"},
+                    }
+                ]
+            },
+        }
+    ).decode()
+
+    async def fake_call(_prompt: str, **_: Any) -> str:
+        return payload
+
+    monkeypatch.setattr("personal_agent.second_brain.session_summary._call_model", fake_call)
+    _patch_load(
+        monkeypatch,
+        [
+            _capture("sess-1", _now() - timedelta(minutes=40)),
+            _capture("sess-1", _now() - timedelta(minutes=35)),
+        ],
+    )
+
+    await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert memory.writes == [], "an empty digest must never be published"
+    assert memory.sessions["sess-1"]["summary_generated_at"] is None, (
+        "freshness must not advance, or the session leaves the dirty population for good"
+    )
+    assert memory.sessions["sess-1"]["summary_failure_reason"] == "ungrounded_digest"
+
+    # Paced, never retired — the distinction the transient classification rests on. It is
+    # held right now by FRE-987's backoff stamp...
+    assert memory.sessions["sess-1"]["summary_retry_after"] is not None
+    assert await memory.find_dirty_idle_sessions(idle_threshold_seconds=_IDLE, max_attempts=2) == []
+
+    # ...and once that stamp passes it is selectable again *even past the attempt ceiling*,
+    # which is exactly what a terminal-eligible reason would have made permanent.
+    memory.sessions["sess-1"]["summary_retry_after"] = _now() - timedelta(seconds=1)
+    memory.sessions["sess-1"]["summary_attempt_count"] = 99
+
+    assert await memory.find_dirty_idle_sessions(idle_threshold_seconds=_IDLE, max_attempts=2), (
+        "an ungrounded digest must never permanently retire a session"
+    )

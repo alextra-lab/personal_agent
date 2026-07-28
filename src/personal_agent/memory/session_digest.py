@@ -38,7 +38,7 @@ there is no stored rendered field, because that would be a second staleness surf
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
@@ -137,12 +137,91 @@ TERMINAL_ELIGIBLE_REASONS: frozenset[str] = frozenset(
 )
 
 
+#: Ceiling on the doubling exponent (FRE-987). A session in the live corpus reached 390
+#: recorded attempts; ``base * 2 ** 389`` raises ``OverflowError`` rather than saturating,
+#: so the shift is clamped before the multiply. 32 doublings already exceeds any sane
+#: ceiling, which is what makes clamping here lossless.
+_MAX_BACKOFF_SHIFT = 32
+
+
+def next_retry_after(
+    *,
+    attempt_index: int,
+    now: datetime,
+    base_seconds: float,
+    max_seconds: float,
+    condition_clears_at: datetime | None = None,
+) -> datetime:
+    """When a failed session may next be attempted (FRE-987, ADR-0124 Amendment D).
+
+    Pacing, never retirement. ADR-0124's terminal-failure rule stands untouched: a
+    transient reason stays retryable forever, it simply stops being retryable *on every
+    300-second tick*. The regression this bounds is a failing session re-selected 288
+    times a day, each attempt a wholesale regeneration at up to two model calls.
+
+    Two regimes, in priority order:
+
+    * **The clearing instant is known.** A budget denial carries its cap's
+      ``window_resets_at`` — the exact moment the condition it failed on ends. Retrying
+      before then cannot succeed, and retrying after it is not a guess. This is the
+      "awareness of when the condition could plausibly clear" the incident found missing.
+    * **It is not.** Exponential backoff on consecutive failures, saturating at a
+      ceiling — a first failure retries promptly, so a genuine blip is not punished,
+      while a permanently-failing session settles to a handful of attempts a day.
+
+    Args:
+        attempt_index: Which consecutive attempt this failure was, 1-based. Values below
+            1 are read as 1 rather than producing a delay shorter than the base.
+        now: Reference instant, from the caller so a sweep paces every session in one
+            pass against one clock.
+        base_seconds: Delay after the first failure.
+        max_seconds: Ceiling the doubling saturates at.
+        condition_clears_at: When the failing condition is known to end. Ignored if it is
+            not in the future — a stale or clock-skewed instant must not silently
+            degrade into no delay at all.
+
+    Returns:
+        The UTC instant the session becomes eligible again.
+    """
+    if condition_clears_at is not None:
+        clears_at = (
+            condition_clears_at.replace(tzinfo=timezone.utc)
+            if condition_clears_at.tzinfo is None
+            else condition_clears_at.astimezone(timezone.utc)
+        )
+        if clears_at > now:
+            return clears_at
+
+    shift = min(max(attempt_index, 1) - 1, _MAX_BACKOFF_SHIFT)
+    return now + timedelta(seconds=min(base_seconds * float(2**shift), max_seconds))
+
+
 class SessionSummaryStatus(StrEnum):
     """Terminal state of one generation attempt."""
 
     GENERATED = "generated"
     SKIPPED_BELOW_FLOOR = "skipped_below_floor"
     FAILED = "failed"
+
+
+class SessionWriteResult(StrEnum):
+    """What became of one conditional write against a session (FRE-987).
+
+    Replaces a bool that could not express the difference between the two ways a write
+    comes back unaccepted, which have **opposite** pacing consequences:
+
+    * ``REFUSED`` — the predicate did not match, so a turn landed while the sweep was
+      thinking. Normal and correct: the session is legitimately dirty again and the next
+      quiet period re-derives it. Nothing to pace.
+    * ``UNAVAILABLE`` — nothing was persisted at all. The model call was already paid
+      for, no stamp records that it happened, and the session is still dirty on the next
+      300-second tick. Collapsed into ``REFUSED``'s ``False``, this was an unbounded paid
+      retry hiding inside a normal-looking outcome.
+    """
+
+    ACCEPTED = "accepted"
+    REFUSED = "refused"
+    UNAVAILABLE = "unavailable"
 
 
 class Locator(BaseModel):
@@ -278,6 +357,11 @@ class SessionSummaryOutcome(BaseModel):
         label: The session label, when generated.
         digest: The structured digest, when generated.
         failure_reason: Why it failed, when it failed.
+        retry_after: When the failing condition is known to clear — set only where the
+            producer actually knows it, which today is a budget denial carrying its cap's
+            ``window_resets_at`` (FRE-987). ``None`` everywhere else, deliberately: the
+            caller then paces by backoff, and a fabricated instant would be worse than
+            none because the sweep trusts it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -286,6 +370,7 @@ class SessionSummaryOutcome(BaseModel):
     label: str | None = None
     digest: SessionDigest | None = None
     failure_reason: SummaryFailureReason | None = None
+    retry_after: datetime | None = None
 
 
 class SessionDigestView(BaseModel):

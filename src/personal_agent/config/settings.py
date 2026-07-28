@@ -2266,6 +2266,31 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    session_summary_retry_backoff_base_seconds: float = Field(
+        default=900.0,
+        ge=30.0,
+        alias="AGENT_SESSION_SUMMARY_RETRY_BACKOFF_BASE_SECONDS",
+        description=(
+            "Delay before a failed session is re-attempted, doubling per consecutive "
+            "failure (FRE-987, ADR-0124 Amendment D). Pacing, not retirement: a "
+            "transient failure stays retryable forever, it simply stops being retried on "
+            "every sweep tick — which cost a full wholesale regeneration each time. "
+            "Env var: AGENT_SESSION_SUMMARY_RETRY_BACKOFF_BASE_SECONDS"
+        ),
+    )
+
+    session_summary_retry_backoff_max_seconds: float = Field(
+        default=21600.0,
+        ge=60.0,
+        alias="AGENT_SESSION_SUMMARY_RETRY_BACKOFF_MAX_SECONDS",
+        description=(
+            "Ceiling the retry backoff saturates at (FRE-987). At the 6-hour default a "
+            "permanently-failing session costs at most a handful of attempts a day "
+            "instead of 288, while a first failure still retries within the base delay. "
+            "Env var: AGENT_SESSION_SUMMARY_RETRY_BACKOFF_MAX_SECONDS"
+        ),
+    )
+
     session_digest_structured_output: bool = Field(
         default=True,
         alias="AGENT_SESSION_DIGEST_STRUCTURED_OUTPUT",

@@ -52,6 +52,7 @@ from personal_agent.memory.session_digest import (
     TERMINAL_ELIGIBLE_REASONS,
     SessionDigest,
     SessionDigestView,
+    SessionWriteResult,
     parse_stored_digest,
     render_digest,
 )
@@ -1181,7 +1182,8 @@ class MemoryService:
                         s.ended_at = $ended_at,
                         s.turn_count = $turn_count,
                         s.dominant_entities = $dominant_entities,
-                        s.summary_evidence_failure_count = 0
+                        s.summary_evidence_failure_count = 0,
+                        s.summary_retry_after = null
                     """,
                     session_id=session_node.session_id,
                     started_at=session_node.started_at.isoformat(),
@@ -1216,7 +1218,7 @@ class MemoryService:
         label: str | None = None,
         digest: SessionDigest | None = None,
         trace_id: str | None = None,
-    ) -> bool:
+    ) -> SessionWriteResult:
         """Publish a digest, but only if the session has not moved (ADR-0124 D1/AC-6).
 
         The comparison against the captured ``ended_at`` and the mutation are the
@@ -1255,12 +1257,16 @@ class MemoryService:
             trace_id: Trace identifier for log correlation (ADR-0074 §I3).
 
         Returns:
-            True if the write was accepted; False if it was **refused** because the
-            session advanced. False is a normal outcome, not an error.
+            ``ACCEPTED``; ``REFUSED`` when the session advanced, which is a normal
+            outcome and not an error; or ``UNAVAILABLE`` when nothing could be written
+            at all. The sweep must be able to tell the last two apart (FRE-987): a
+            refusal is self-correcting on the next quiet period, whereas an unavailable
+            store leaves a paid-for digest unrecorded and the session eligible again on
+            the next tick.
         """
         if not self.connected or not self.driver:
             log.warning("neo4j_not_connected", trace_id=trace_id, session_id=session_id)
-            return False
+            return SessionWriteResult.UNAVAILABLE
 
         try:
             async with self.driver.session() as db_session:
@@ -1274,7 +1280,8 @@ class MemoryService:
                         s.turn_count = $turn_count,
                         s.summary_failure_reason = null,
                         s.summary_attempt_count = 0,
-                        s.summary_evidence_failure_count = 0
+                        s.summary_evidence_failure_count = 0,
+                        s.summary_retry_after = null
                     RETURN s.session_id AS session_id
                     """,
                     session_id=session_id,
@@ -1295,7 +1302,7 @@ class MemoryService:
                 trace_id=trace_id,
                 session_id=session_id,
             )
-            return False
+            return SessionWriteResult.UNAVAILABLE
 
         if accepted:
             log.info(
@@ -1315,7 +1322,7 @@ class MemoryService:
                 reason="session advanced since the sweep read it",
                 expected_ended_at=expected_ended_at.isoformat(),
             )
-        return accepted
+        return SessionWriteResult.ACCEPTED if accepted else SessionWriteResult.REFUSED
 
     async def get_session_digest_views(
         self, session_ids: Sequence[str], *, trace_id: str | None = None
@@ -1414,7 +1421,7 @@ class MemoryService:
         expected_ended_at: datetime,
         generated_at: datetime,
         trace_id: str | None = None,
-    ) -> bool:
+    ) -> SessionWriteResult:
         """Advance freshness for a session that yielded no digest, touching nothing else.
 
         Two cases reach here, and neither is a failure:
@@ -1453,11 +1460,13 @@ class MemoryService:
             trace_id: Trace identifier for log correlation (ADR-0074 §I3).
 
         Returns:
-            True if accepted; False if refused because the session advanced.
+            ``ACCEPTED``, ``REFUSED`` (the session advanced), or ``UNAVAILABLE`` when
+            nothing could be written — see :meth:`write_session_digest` for why the last
+            two must not be the same answer.
         """
         if not self.connected or not self.driver:
             log.warning("neo4j_not_connected", trace_id=trace_id, session_id=session_id)
-            return False
+            return SessionWriteResult.UNAVAILABLE
 
         try:
             async with self.driver.session() as db_session:
@@ -1468,7 +1477,8 @@ class MemoryService:
                     SET s.summary_generated_at = $generated_at,
                         s.summary_failure_reason = null,
                         s.summary_attempt_count = 0,
-                        s.summary_evidence_failure_count = 0
+                        s.summary_evidence_failure_count = 0,
+                        s.summary_retry_after = null
                     RETURN s.session_id AS session_id
                     """,
                     session_id=session_id,
@@ -1484,14 +1494,14 @@ class MemoryService:
                 trace_id=trace_id,
                 session_id=session_id,
             )
-            return False
+            return SessionWriteResult.UNAVAILABLE
 
         log.info(
             "session_projection_marked_clean" if accepted else "session_projection_clean_refused",
             session_id=session_id,
             trace_id=trace_id,
         )
-        return accepted
+        return SessionWriteResult.ACCEPTED if accepted else SessionWriteResult.REFUSED
 
     async def record_session_summary_failure(
         self,
@@ -1500,8 +1510,10 @@ class MemoryService:
         expected_ended_at: datetime,
         failure_reason: str,
         evidence_failure: bool = False,
+        retry_after: datetime | None = None,
+        spend_attempt: bool = True,
         trace_id: str | None = None,
-    ) -> bool:
+    ) -> SessionWriteResult:
         """Record a failed generation attempt — inert and loud (ADR-0124 AC-4).
 
         Deliberately does **not** touch ``session_label``, ``session_digest`` or
@@ -1524,14 +1536,28 @@ class MemoryService:
                 so a shared bound cannot express "give up after N failed evidence
                 reads" — two unrelated model errors would spend the budget and retire
                 the session on its first genuine evidence failure.
+            retry_after: When this session may next be attempted (FRE-987). Stored
+                UTC-normalised: eligibility compares ISO strings lexicographically, as
+                ``ended_at`` already does, and that ordering is only sound while every
+                stored instant carries the same offset. ``None`` leaves the previous
+                stamp in place rather than clearing it — a caller that cannot compute a
+                delay must not accidentally release the session.
+            spend_attempt: Whether this failure spends the shared retry budget. False
+                for a budget denial: nothing was ever sent to the model, so the failure
+                is evidence about the *cap*, not about this session. Since
+                ``summary_attempt_count`` is shared across reasons while terminality
+                tests only the current one, letting denials spend it would leave a
+                session that its first genuine deterministic failure retires.
             trace_id: Trace identifier for log correlation (ADR-0074 §I3).
 
         Returns:
-            True if the record was accepted; False if refused or unavailable.
+            ``ACCEPTED``, ``REFUSED`` (the session advanced), or ``UNAVAILABLE`` when
+            the record could not be written — the case that must stand the sweep down,
+            since an unrecorded failure is one that repeats on the next tick.
         """
         if not self.connected or not self.driver:
             log.warning("neo4j_not_connected", trace_id=trace_id, session_id=session_id)
-            return False
+            return SessionWriteResult.UNAVAILABLE
 
         try:
             async with self.driver.session() as db_session:
@@ -1540,10 +1566,14 @@ class MemoryService:
                     MATCH (s:Session {session_id: $session_id})
                     WHERE s.ended_at = $expected_ended_at
                     SET s.summary_failure_reason = $failure_reason,
-                        s.summary_attempt_count = coalesce(s.summary_attempt_count, 0) + 1,
+                        s.summary_attempt_count =
+                            coalesce(s.summary_attempt_count, 0)
+                            + (CASE WHEN $spend_attempt THEN 1 ELSE 0 END),
                         s.summary_evidence_failure_count =
                             coalesce(s.summary_evidence_failure_count, 0)
-                            + (CASE WHEN $evidence_failure THEN 1 ELSE 0 END)
+                            + (CASE WHEN $evidence_failure THEN 1 ELSE 0 END),
+                        s.summary_retry_after =
+                            coalesce($retry_after, s.summary_retry_after)
                     RETURN s.summary_attempt_count AS attempts,
                            s.summary_evidence_failure_count AS evidence_attempts
                     """,
@@ -1551,6 +1581,12 @@ class MemoryService:
                     expected_ended_at=expected_ended_at.isoformat(),
                     failure_reason=failure_reason,
                     evidence_failure=evidence_failure,
+                    spend_attempt=spend_attempt,
+                    retry_after=(
+                        retry_after.astimezone(timezone.utc).isoformat()
+                        if retry_after is not None
+                        else None
+                    ),
                 )
                 row = await result.single()
         except Exception as e:
@@ -1561,10 +1597,10 @@ class MemoryService:
                 trace_id=trace_id,
                 session_id=session_id,
             )
-            return False
+            return SessionWriteResult.UNAVAILABLE
 
         if row is None:
-            return False
+            return SessionWriteResult.REFUSED
 
         log.warning(
             "session_summary_failure_recorded",
@@ -1573,8 +1609,9 @@ class MemoryService:
             failure_reason=failure_reason,
             attempt_count=row["attempts"],
             evidence_attempt_count=row["evidence_attempts"],
+            retry_after=retry_after.isoformat() if retry_after is not None else None,
         )
-        return True
+        return SessionWriteResult.ACCEPTED
 
     async def find_dirty_idle_sessions(
         self,
@@ -1602,6 +1639,15 @@ class MemoryService:
         two model errors before its first unreadable sweep would otherwise be retired
         after a single evidence failure.
 
+        Sessions carrying a **retry stamp still in the future are held, not excluded**
+        (FRE-987). This is the bound the incident found missing: transient reasons stay
+        retryable forever, but "forever" used to mean *on every 300-second tick*, and
+        every tick was a wholesale regeneration at up to two model calls. The stamp
+        delays; once its instant passes the session is selected exactly as before. The
+        explicit ``IS NULL`` disjunct is required for the same reason AC-2's is — a NULL
+        comparison yields NULL, which would silently drop every session that has never
+        failed.
+
         Each row carries ``graph_turn_count`` — a count of the session's ``Turn`` nodes.
         This is the only independent signal of how many turns a session actually had,
         and it is deliberately not ``s.turn_count``: that property is overwritten by
@@ -1622,6 +1668,7 @@ class MemoryService:
 
         Returns:
             Rows of ``session_id``, ``started_at``, ``ended_at``, ``graph_turn_count``
+            and ``summary_attempt_count`` (which sizes the next backoff)
             — fewest-attempts
             first, then oldest-stale, so a backlog drains in the order it accumulated
             **without** letting repeatedly-failing sessions monopolise the window.
@@ -1634,9 +1681,8 @@ class MemoryService:
             log.warning("neo4j_not_connected", trace_id=trace_id)
             return []
 
-        cutoff = (
-            datetime.now(timezone.utc) - timedelta(seconds=idle_threshold_seconds)
-        ).isoformat()
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(seconds=idle_threshold_seconds)).isoformat()
 
         try:
             async with self.driver.session() as db_session:
@@ -1649,6 +1695,8 @@ class MemoryService:
                       AND NOT (s.summary_failure_reason IN $terminal_reasons
                                AND coalesce(s.summary_attempt_count, 0) >= $max_attempts)
                       AND coalesce(s.summary_evidence_failure_count, 0) < $max_attempts
+                      AND (s.summary_retry_after IS NULL
+                           OR s.summary_retry_after <= $now)
                     WITH s
                     ORDER BY coalesce(s.summary_attempt_count, 0) ASC, s.ended_at ASC
                     LIMIT $limit
@@ -1657,10 +1705,12 @@ class MemoryService:
                     RETURN s.session_id AS session_id,
                            s.started_at  AS started_at,
                            s.ended_at    AS ended_at,
-                           graph_turn_count
+                           graph_turn_count,
+                           coalesce(s.summary_attempt_count, 0) AS summary_attempt_count
                     ORDER BY coalesce(s.summary_attempt_count, 0) ASC, s.ended_at ASC
                     """,
                     cutoff=cutoff,
+                    now=now.isoformat(),
                     terminal_reasons=sorted(TERMINAL_ELIGIBLE_REASONS),
                     max_attempts=max_attempts,
                     limit=limit,

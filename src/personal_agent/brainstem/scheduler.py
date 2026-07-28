@@ -138,6 +138,13 @@ class BrainstemScheduler:
         # guard, following the consolidation guard's pattern.
         self._session_summary_task: asyncio.Task[None] | None = None
         self._summary_sweep_in_progress = False
+        # FRE-987: when the sweep last learned of a condition it shares across every
+        # session — an exhausted cap, an unwritable graph — and when that condition is
+        # expected to clear. In-process and lost on restart *by design*: it is an
+        # optimisation, not the bound. The durable bound is each session's own
+        # `summary_retry_after`, so a restart re-scans, stamps, and settles rather than
+        # replaying the spend.
+        self._summary_sweep_paused_until: datetime | None = None
         self.metrics_daemon = metrics_daemon
 
         # Retained (not merely forwarded) because the session-digest sweep reads the
@@ -497,6 +504,28 @@ class BrainstemScheduler:
             log.debug("session_summary_sweep_already_in_progress", trace_id=trace_id)
             return result
 
+        # Stood down on a condition that belongs to the CAP or the STORE rather than to
+        # any one session (FRE-987). Both are global: if one session is budget-denied or
+        # cannot be written, every other session this tick fails the same way. Without
+        # this the sweep walks the backlog one session per tick, each attempt inflating
+        # counters and — when the failure came after a successful model call — paying
+        # for a digest nothing records.
+        now = datetime.now(timezone.utc)
+        if self._summary_sweep_paused_until is not None:
+            if now < self._summary_sweep_paused_until:
+                log.debug(
+                    "session_summary_sweep_paused",
+                    trace_id=trace_id,
+                    resumes_at=self._summary_sweep_paused_until.isoformat(),
+                )
+                return result
+            log.info(
+                "session_summary_sweep_resumed",
+                trace_id=trace_id,
+                paused_until=self._summary_sweep_paused_until.isoformat(),
+            )
+            self._summary_sweep_paused_until = None
+
         # A consolidation pass is itself advancing `ended_at`, so sweeping across one
         # would just generate writes the conditional predicate then refuses.
         if self._consolidation_in_progress:
@@ -513,7 +542,21 @@ class BrainstemScheduler:
             result["considered"] = len(sessions)
 
             for row in sessions:
-                await self._sweep_one_session(row, result=result, trace_id=trace_id)
+                pause_until = await self._sweep_one_session(row, result=result, trace_id=trace_id)
+                if pause_until is not None:
+                    self._summary_sweep_paused_until = pause_until
+                    log.warning(
+                        "session_summary_sweep_stood_down",
+                        trace_id=trace_id,
+                        resumes_at=pause_until.isoformat(),
+                        considered=result["considered"],
+                        attempted=result["generated"]
+                        + result["skipped"]
+                        + result["failed"]
+                        + result["evidence_unavailable"]
+                        + result["refused"],
+                    )
+                    break
         finally:
             self._summary_sweep_in_progress = False
 
@@ -523,12 +566,20 @@ class BrainstemScheduler:
 
     async def _sweep_one_session(
         self, row: dict[str, Any], *, result: dict[str, int], trace_id: str
-    ) -> None:
-        """Regenerate and publish one session's digest, updating ``result`` in place."""
+    ) -> datetime | None:
+        """Regenerate and publish one session's digest, updating ``result`` in place.
+
+        Returns:
+            ``None`` to carry on sweeping, or the instant the sweep should stand down
+            until (FRE-987) — set when this session hit a condition every other session
+            shares: an exhausted budget cap, or a graph that accepted nothing.
+        """
         from personal_agent.captains_log.capture import load_session_captures  # noqa: PLC0415
         from personal_agent.memory.session_digest import (  # noqa: PLC0415
             SessionSummaryStatus,
+            SessionWriteResult,
             SummaryFailureReason,
+            next_retry_after,
         )
         from personal_agent.second_brain.session_summary import (  # noqa: PLC0415
             MIN_TURNS_FOR_DIGEST,
@@ -549,7 +600,32 @@ class BrainstemScheduler:
                 session_id=session_id,
                 trace_id=trace_id,
             )
-            return
+            return None
+
+        now = datetime.now(timezone.utc)
+
+        def paced(condition_clears_at: datetime | None = None) -> datetime:
+            """When this session may next be attempted."""
+            return next_retry_after(
+                attempt_index=int(row.get("summary_attempt_count") or 0) + 1,
+                now=now,
+                base_seconds=settings.session_summary_retry_backoff_base_seconds,
+                max_seconds=settings.session_summary_retry_backoff_max_seconds,
+                condition_clears_at=condition_clears_at,
+            )
+
+        def stand_down(what: str) -> datetime:
+            """Log and return the instant the sweep resumes after an unwritable graph."""
+            log.error(
+                "session_summary_write_unavailable",
+                session_id=session_id,
+                trace_id=trace_id,
+                write=what,
+                # The expensive half: for `digest` the model call is already paid for and
+                # nothing recorded it, so an unbounded sweep would buy it again next tick.
+                paid_for_nothing=what == "digest",
+            )
+            return paced()
 
         read = await load_session_captures(
             session_id,
@@ -595,13 +671,26 @@ class BrainstemScheduler:
                 expected_ended_at=expected_ended_at,
                 failure_reason=SummaryFailureReason.EVIDENCE_UNAVAILABLE.value,
                 evidence_failure=not read.stores_unavailable,
+                retry_after=paced(),
+                # Bounded by its OWN counter since FRE-992, so spending the shared one as
+                # well only shortens some *other* reason's budget: two store outages
+                # followed by one genuine schema failure would retire the session on that
+                # first real failure. The comment above says this path leaves the session
+                # retryable "exactly as a budget denial does" — this is the half of that
+                # claim the shared counter was quietly contradicting (FRE-987).
+                spend_attempt=False,
                 trace_id=trace_id,
             )
             # Counted on the write, not on the verdict, so the counters still partition
             # `considered` — a session that took a turn mid-read was not written off,
             # it was refused, and the next sweep sees it afresh.
-            result["evidence_unavailable" if recorded else "refused"] += 1
-            return
+            if recorded is SessionWriteResult.UNAVAILABLE:
+                result["refused"] += 1
+                return stand_down("failure")
+            result[
+                "evidence_unavailable" if recorded is SessionWriteResult.ACCEPTED else "refused"
+            ] += 1
+            return None
 
         # Below the floor on a read that IS whole — a positively-established
         # single-turn session, which ADR-0124 D2 deliberately gives no digest.
@@ -609,11 +698,14 @@ class BrainstemScheduler:
             accepted = await self.memory_service.mark_session_projection_clean(
                 session_id,
                 expected_ended_at=expected_ended_at,
-                generated_at=datetime.now(timezone.utc),
+                generated_at=now,
                 trace_id=trace_id,
             )
-            result["skipped" if accepted else "refused"] += 1
-            return
+            if accepted is SessionWriteResult.UNAVAILABLE:
+                result["refused"] += 1
+                return stand_down("clean")
+            result["skipped" if accepted is SessionWriteResult.ACCEPTED else "refused"] += 1
+            return None
 
         outcome = await generate_session_digest(
             captures, session_id=session_id, ended_at=expected_ended_at, trace_id=trace_id
@@ -621,15 +713,25 @@ class BrainstemScheduler:
 
         if outcome.status is SessionSummaryStatus.FAILED:
             result["failed"] += 1
-            await self.memory_service.record_session_summary_failure(
+            denied = outcome.failure_reason is SummaryFailureReason.BUDGET_DENIED
+            retry_after = paced(outcome.retry_after)
+            recorded = await self.memory_service.record_session_summary_failure(
                 session_id,
                 expected_ended_at=expected_ended_at,
                 failure_reason=(
                     outcome.failure_reason.value if outcome.failure_reason else "unknown"
                 ),
+                retry_after=retry_after,
+                # A denial never reached the model, so it is evidence about the cap and
+                # not about this session. Spending the shared counter on it would leave a
+                # session that its first genuine deterministic failure retires (FRE-987).
+                spend_attempt=not denied,
                 trace_id=trace_id,
             )
-            return
+            if recorded is SessionWriteResult.UNAVAILABLE:
+                return stand_down("failure")
+            # The cap is exhausted for every session, not just this one.
+            return retry_after if denied else None
 
         if outcome.status is SessionSummaryStatus.SKIPPED_BELOW_FLOOR:
             # Reachable only when the producer declines for its own reasons (the
@@ -641,28 +743,44 @@ class BrainstemScheduler:
             accepted = await self.memory_service.mark_session_projection_clean(
                 session_id,
                 expected_ended_at=expected_ended_at,
-                generated_at=datetime.now(timezone.utc),
+                generated_at=now,
                 trace_id=trace_id,
             )
-            if accepted:
+            written = "clean"
+            if accepted is SessionWriteResult.ACCEPTED:
                 result["skipped"] += 1
         else:
             accepted = await self.memory_service.write_session_digest(
                 session_id,
                 expected_ended_at=expected_ended_at,
-                generated_at=datetime.now(timezone.utc),
+                generated_at=now,
                 turn_count=len(captures),
                 label=outcome.label,
                 digest=outcome.digest,
                 trace_id=trace_id,
             )
-            if accepted:
+            written = "digest"
+            if accepted is SessionWriteResult.ACCEPTED:
                 result["generated"] += 1
 
-        if not accepted:
+        if accepted is SessionWriteResult.ACCEPTED:
+            return None
+
+        result["refused"] += 1
+        if accepted is SessionWriteResult.REFUSED:
             # The session took a turn mid-generation. It is dirty again, and the
             # next sweep picks it up — no retry here, which would race the same way.
-            result["refused"] += 1
+            # Deliberately NOT paced and deliberately not a stand-down: this is the
+            # feature working, and treating a busy session as an outage would let one
+            # active conversation pause digests for every other session.
+            return None
+
+        # Nothing was persisted. For a generated digest the model call is already paid
+        # for and no stamp records that it happened, so an unpaused sweep buys the same
+        # digest again on the next tick, and the next, for as long as the store is
+        # broken — the failure mode this ticket exists to remove, arriving through the
+        # success path (FRE-987 plan review).
+        return stand_down(written)
 
     async def _trigger_consolidation(self, *, trace_id: str | None = None) -> None:
         """Trigger second brain consolidation and publish consolidation.completed.

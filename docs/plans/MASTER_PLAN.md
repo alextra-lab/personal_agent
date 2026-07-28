@@ -14,11 +14,12 @@ Claims are **pull-only**; current-only is pre-committed on every push surface; a
 generalisable rule — *an ADR that ships a producer must carry at least one criterion that fails if nothing
 reads its output.*
 
-> ⛔ **HELD pending FRE-991 (owner, 2026-07-28). Do NOT label the head when a stream frees.**
-> Four of these five tickets are **consumers of assembled context**. FRE-991 may change the context
-> model. Building the consumers first is rework — that is the whole reason 991 was pulled ahead. This
-> hold exists because the default behaviour (label the head at the next free stream) would silently
-> undo the decision. Lift it only when FRE-991 concludes.
+> ✅ **HOLD LIFTED 2026-07-28.** It should not have been set. Master held this chain claiming four of
+> five tickets "consume assembled context" that FRE-991 might change — a characterisation made from
+> ADR-0126's *summary* without reading the tickets. Checked since, against the durable source:
+> **ADR-0126 contains no mention of `digest` or `capture` anywhere.** Its tickets read the Claim/Stance
+> layer in Neo4j; ADR-0127 concerns the unit of analysis over digests and captures. No overlap — and
+> FRE-1016's whole purpose is keeping claims *out* of assembled context. Chain is dispatchable.
 
 **Five tickets Approved and parked, sequence written as relations:** FRE-1015 → FRE-1017 ·
 FRE-1016 → FRE-1018 · **FRE-1019** the seam, blocked by all four. **The ADR closes on FRE-1019 only**:
@@ -88,13 +89,22 @@ never-ending sessions for a *different* reason — `f(all captures)` grows monot
 costs 500 turns of tokens on every rebuild. Neither FRE-987 nor ADR-0124 addresses that, and neither
 should: ADR-0124 was scoped to sessions that end, and that assumption is what is failing.
 
-**Vehicle: FRE-991 — Approved 2026-07-28 and pulled ahead of the ADR-0126 chain (§0 is now HELD on it).**
-Deliberately **unlabelled**: it is an investigation whose output is a decision, so its home is the **adr
-seat**, not a build stream — a stream label would route it to the wrong kind of seat. Related but
-distinct prior art: the March
-`CONTEXT_INTELLIGENCE_SPEC.md` and its cited survey `docs/research/context_management_research.md`
-cover *within-session* context construction and are cited by **neither** ADR-0124 nor ADR-0125; whoever
-takes FRE-991 should reconcile the two layers rather than start a third.
+**FRE-991 delivered this as ADR-0127 (Proposed, PR #724) — but did NOT decide it.** ADR-0127 **D9**
+records the delta-vs-clock fork as belonging to **ADR-0124's trigger**, not to the analysis pillar. So
+it is finally written into an ADR and stops being rediscovered — **and it still has no owner.** That is
+the open item here, not the writing-down.
+
+**Still open, explicitly not done:** the March `CONTEXT_INTELLIGENCE_SPEC.md` and its cited survey
+`docs/research/context_management_research.md` cover *within-session* context construction and are cited
+by **neither** ADR-0124 nor ADR-0125 nor ADR-0127. The adrs seat said plainly it did not reconcile them.
+Two layers still to reconcile; do not start a third.
+
+**ADR-0127 corrected a load-bearing premise of its own ticket** — worth carrying because both research
+notes are cited from this plan and the false figure would keep propagating. There is **no labelled
+corpus**: of 1,943 rating documents, **1,916 are backfilled defaults written on send**, leaving **27
+expressed judgments**. FRE-991's "1,933 rated turns supply the labelled signal a DSPy loop needs" is
+false. Also: the capture corpus is **1,941 turns, not 8,880** (the larger figure is an index doc count
+inflated by four nested-mapped fields).
 
 FRE-988 (the other gate) is merged and deployed; its bounce paid off twice over — codex, once its dead
 broker was repaired, returned a **block** naming a second real defect (unlocked check-then-act in

@@ -977,8 +977,26 @@ class JoinabilityWalk:
             checks.append(_errored(substrate, "conditional", exc, t0))
             return
         dur = _dur_ms(t0)
-        claim_user_ids = {_as_str(r["user_id"]) for r in rows if r.get("user_id") is not None}
+        claim_user_ids: set[str] = set()
         status: Literal["green", "yellow", "red", "skipped"] = "green"
+        for r in rows:
+            row_user_id = r.get("user_id")
+            if row_user_id is None:
+                # A Claim's Person carrying no user_id at all violates ADR-0052's
+                # anchor-by-user_id invariant harder than a mismatch does — never
+                # silently drop it from comparison (mirrors _walk_neo4j_turns's
+                # treatment of a missing identity field as a red orphan).
+                status = "red"
+                orphans.append(
+                    Orphan(
+                        substrate=substrate,
+                        kind="missing_identity",
+                        detail={"session_id": session_id, "field": "person.user_id"},
+                        severity="red",
+                    )
+                )
+                continue
+            claim_user_ids.add(_as_str(row_user_id))
         mismatched = claim_user_ids - {anchor_user_id}
         if mismatched:
             status = "red"

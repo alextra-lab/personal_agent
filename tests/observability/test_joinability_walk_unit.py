@@ -697,6 +697,27 @@ async def test_user_id_check_red_on_neo4j_claim_mismatch(ctx: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_user_id_check_red_when_claim_person_has_no_user_id(ctx: Any) -> None:
+    # A Claim attached to a Person with no user_id at all violates ADR-0052's
+    # anchor-by-user_id invariant harder than a mismatch does — must never be
+    # silently dropped from comparison (code review finding, FRE-740).
+    walk = _build_walk(
+        pg_pool=_green_pg_with_user_id(),
+        es=_es_with_user_id(es_user_ids=[ANCHOR_USER_ID]),
+        neo4j=_neo4j_with_claim_user_id([None]),
+        ctx=ctx,
+    )
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "red"
+    orphan = next(
+        o
+        for o in doc.orphans
+        if o.substrate == "neo4j.claim_person_user_id" and o.kind == "missing_identity"
+    )
+    assert orphan.severity == "red"
+
+
+@pytest.mark.asyncio
 async def test_user_id_check_green_when_no_claim_exists(ctx: Any) -> None:
     # No Claim for this session (ADR-0107 §6: "where a Claim exists" is conditional
     # — its absence must not red the probe).

@@ -80,7 +80,7 @@ async def _fetch_sessions(since_date: str, limit: int) -> list[dict[str, Any]]:
         limit: Max sessions to return; 0 = no limit.
 
     Returns:
-        List of dicts with keys: session_id, created_at, messages, metadata.
+        List of dicts with keys: session_id, created_at, messages, metadata, user_id.
     """
     import asyncpg
 
@@ -96,7 +96,7 @@ async def _fetch_sessions(since_date: str, limit: int) -> list[dict[str, Any]]:
         limit_clause = f"LIMIT {limit}" if limit > 0 else ""
         rows = await conn.fetch(
             f"""
-            SELECT session_id, created_at, messages, metadata
+            SELECT session_id, created_at, messages, metadata, user_id
             FROM sessions
             WHERE created_at >= $1
               AND jsonb_array_length(messages) > 0
@@ -149,6 +149,33 @@ def _extract_message_pairs(
     return pairs
 
 
+def _resolve_session_user_id(session: dict[str, Any]) -> UUID | None:
+    """Resolve a session's owning user from the authoritative Postgres column.
+
+    FRE-998: this previously read ``metadata['user_id']``/``['owner_id']`` and fell
+    back to ``uuid4()``. Zero of the 1034 replayed sessions carried either metadata
+    key while all of them had the ``sessions.user_id`` column populated, so every
+    replayed turn was stamped with a random UUID that matched no ``:Person`` and
+    silently produced no identity edge. Read the column, and return ``None`` rather
+    than inventing an identifier that resolves to nobody.
+
+    Args:
+        session: Session row from Postgres.
+
+    Returns:
+        The owning user's UUID, or None when the row carries no usable identity.
+    """
+    raw = session.get("user_id")
+    if raw is None:
+        return None
+    if isinstance(raw, UUID):
+        return raw
+    try:
+        return UUID(str(raw))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 async def _replay_session(
     session: dict[str, Any],
     consolidator: Any,
@@ -166,23 +193,25 @@ async def _replay_session(
     Returns:
         Dict with counts: turns_processed, entities_created, relationships_created, errors.
     """
-    import json as _json
-
     from personal_agent.captains_log.capture import TaskCapture
 
     session_id = str(session["session_id"])
-    raw_metadata = session.get("metadata") or {}
-    if isinstance(raw_metadata, str):
-        try:
-            raw_metadata = _json.loads(raw_metadata)
-        except (ValueError, TypeError):
-            raw_metadata = {}
-    metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
-    user_id_raw = metadata.get("user_id") or metadata.get("owner_id")
-    try:
-        user_id = UUID(str(user_id_raw)) if user_id_raw else uuid4()
-    except ValueError:
-        user_id = uuid4()
+    user_id = _resolve_session_user_id(session)
+    if user_id is None:
+        # FRE-998: fail loudly rather than fabricating identity. A replayed turn
+        # attributed to a random UUID is indistinguishable from a real one and
+        # silently unattributable forever.
+        log.error(
+            "replay_session_unattributable",
+            session_id=session_id,
+            reason="sessions.user_id is null or unparseable; refusing to invent one",
+        )
+        return {
+            "turns_processed": 0,
+            "entities_created": 0,
+            "relationships_created": 0,
+            "errors": 1,
+        }
 
     pairs = _extract_message_pairs(session)
     if not pairs:
@@ -199,6 +228,8 @@ async def _replay_session(
         "relationships_created": 0,
         "errors": 0,
     }
+
+    replayed: list[Any] = []
 
     for user_msg, assistant_msg, ts in pairs:
         if dry_run:
@@ -224,6 +255,8 @@ async def _replay_session(
         try:
             result = await consolidator._process_capture(capture)
             counts["turns_processed"] += 1
+            if result.get("turns_created"):
+                replayed.append(capture)
             counts["entities_created"] += result.get("entities_created", 0)
             counts["relationships_created"] += result.get("relationships_created", 0)
         except Exception as exc:
@@ -232,6 +265,23 @@ async def _replay_session(
 
         if sleep_ms > 0:
             await asyncio.sleep(sleep_ms / 1000.0)
+
+    # FRE-998: create the Session node and wire CONTAINS/NEXT, exactly as
+    # SecondBrainConsolidator.consolidate() does after its own capture loop.
+    # Calling _process_capture directly skipped this, so every replayed Turn was
+    # born with no Session node — and because link_session_turns MATCHes one, and
+    # turn_exists short-circuits reprocessing, those turns were orphaned
+    # permanently (1828 of them, across 1039 sessions).
+    if replayed:
+        try:
+            await consolidator._consolidate_sessions(
+                replayed, {session_id}, trace_id=replayed[0].trace_id
+            )
+        except Exception as exc:
+            log.warning(
+                "replay_session_consolidation_failed", session_id=session_id, error=str(exc)
+            )
+            counts["errors"] += 1
 
     return counts
 

@@ -78,6 +78,6 @@
 #     import line inserted above, then FRE-974 the SYSTEM_SESSION_ID import line
 #     + generate_embedding trace_id/session_id kwargs inserted above). ---
 - path: src/personal_agent/memory/service.py
-  line: 2015  # FRE-987: +50 from the retry-pacing docstrings/params above (was 1965)
+  line: 2058  # FRE-998: +43 from the user_id property writes + docstrings above (was 2015 after FRE-987)
   pattern: cypher_merge
   reason: "dynamic on_create_clauses set origination; static analyzer can't see joined props (FP)"

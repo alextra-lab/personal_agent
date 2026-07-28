@@ -23,7 +23,9 @@ search_memory_tool = ToolDefinition(
         "and topics the user has previously discussed. "
         "Use this when you need to recall specific history from earlier sessions "
         "or when the user asks what they have discussed before. "
-        "Returns matching entities, turn summaries, and session context."
+        "Returns matching entities, turn summaries, and session context. "
+        "Also returns durable facts (claims) the user has previously asserted, "
+        "distinct from entities and turns."
     ),
     category="memory",
     parameters=[
@@ -210,6 +212,19 @@ async def search_memory_executor(
                 "recent_turns": broad.get("turns_summary", []),
                 "query_path": "broad_recall",
             }
+
+        # ADR-0126 D4: Claims are pull-only, reachable solely through this tool — never
+        # injected into assembled context. Independent of the entity-match/broad branch
+        # above; query_claims itself fail-closes on blank query_text, missing identity,
+        # or a degraded (zero-vector) embedder, so no extra gating is needed here.
+        output["claims"] = await memory_service.query_claims(
+            query_text,
+            user_id=getattr(ctx, "user_id", None),
+            authenticated=getattr(ctx, "authenticated", False),
+            limit=limit,
+            trace_id=trace_id,
+            session_id=getattr(ctx, "session_id", None),
+        )
 
         total = output.get("total_turns")
         if total is None:

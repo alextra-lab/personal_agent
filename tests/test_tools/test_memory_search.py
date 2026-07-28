@@ -103,6 +103,7 @@ async def test_search_memory_executor_entity_path_returns_matched_turns() -> Non
 
     mock_service = MagicMock()
     mock_service.connected = True
+    mock_service.query_claims = AsyncMock(return_value=[])
     mock_service.query_memory = AsyncMock(return_value=query_result)
 
     with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
@@ -132,6 +133,7 @@ async def test_search_memory_executor_long_user_message_is_marked_not_clipped() 
 
     mock_service = MagicMock()
     mock_service.connected = True
+    mock_service.query_claims = AsyncMock(return_value=[])
     mock_service.query_memory = AsyncMock(return_value=query_result)
 
     with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
@@ -155,6 +157,7 @@ async def test_search_memory_executor_broad_path_returns_entities() -> None:
 
     mock_service = MagicMock()
     mock_service.connected = True
+    mock_service.query_claims = AsyncMock(return_value=[])
     mock_service.query_memory_broad = AsyncMock(return_value=broad_result)
 
     with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
@@ -183,6 +186,7 @@ async def test_search_memory_entity_path_threads_identity() -> None:
     uid = uuid4()
     mock_service = MagicMock()
     mock_service.connected = True
+    mock_service.query_claims = AsyncMock(return_value=[])
     mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
 
     ctx = TraceContext(trace_id="t-673", user_id=uid, authenticated=True)
@@ -207,6 +211,7 @@ async def test_search_memory_entity_path_threads_trace_and_session() -> None:
 
     mock_service = MagicMock()
     mock_service.connected = True
+    mock_service.query_claims = AsyncMock(return_value=[])
     mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
 
     ctx = TraceContext(trace_id="t-698", session_id="s-698")
@@ -229,6 +234,7 @@ async def test_search_memory_broad_path_threads_identity() -> None:
     uid = uuid4()
     mock_service = MagicMock()
     mock_service.connected = True
+    mock_service.query_claims = AsyncMock(return_value=[])
     mock_service.query_memory_broad = AsyncMock(
         return_value={"entities": [], "sessions": [], "turns_summary": []}
     )
@@ -253,6 +259,7 @@ async def test_search_memory_explicit_window_sets_hard_recency() -> None:
     """
     mock_service = MagicMock()
     mock_service.connected = True
+    mock_service.query_claims = AsyncMock(return_value=[])
     mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
 
     with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
@@ -275,6 +282,7 @@ async def test_search_memory_omitted_window_no_hard_recency() -> None:
     """
     mock_service = MagicMock()
     mock_service.connected = True
+    mock_service.query_claims = AsyncMock(return_value=[])
     mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
 
     with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
@@ -295,6 +303,7 @@ async def test_search_memory_zero_window_no_hard_recency() -> None:
     """
     mock_service = MagicMock()
     mock_service.connected = True
+    mock_service.query_claims = AsyncMock(return_value=[])
     mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
 
     with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
@@ -303,3 +312,119 @@ async def test_search_memory_zero_window_no_hard_recency() -> None:
     query = mock_service.query_memory.call_args.args[0]
     assert query.hard_recency_days is None
     assert query.recency_days == 90
+
+
+# ---------------------------------------------------------------------------
+# ADR-0126 D4 (FRE-1016): Claims pull path via search_memory
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_memory_entity_path_includes_claims() -> None:
+    """Claims are attached on the entity-match path, distinguishable from turns."""
+    turn = TurnNode(
+        turn_id="turn-1",
+        timestamp=datetime.now(timezone.utc),
+        user_message="I want to visit Athens",
+        summary="",
+        key_entities=[],
+    )
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult(conversations=[turn]))
+    mock_service.query_claims = AsyncMock(
+        return_value=[
+            {
+                "claim_id": "c1",
+                "content": "The lease ends in June.",
+                "confidence": 0.8,
+                "knowledge_class": "Personal",
+                "observed_at": "2026-01-01T00:00:00+00:00",
+            }
+        ]
+    )
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        result = await search_memory_executor(query_text="Athens", entity_names=["Athens"])
+
+    assert "claims" in result
+    assert result["claims"][0]["content"] == "The lease ends in June."
+    # Distinguishability (AC-4b): claim rows and turn rows carry disjoint keys.
+    claim_keys = set(result["claims"][0].keys())
+    turn_keys = set(result["matched_turns"][0].keys())
+    assert claim_keys.isdisjoint(turn_keys)
+
+
+@pytest.mark.asyncio
+async def test_search_memory_broad_path_includes_claims() -> None:
+    """Claims are attached on the broad-recall path too, distinguishable from entities."""
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory_broad = AsyncMock(
+        return_value={
+            "entities": [{"name": "Athens", "type": "Location", "mentions": 1}],
+            "sessions": [],
+            "turns_summary": [],
+        }
+    )
+    mock_service.query_claims = AsyncMock(
+        return_value=[
+            {
+                "claim_id": "c1",
+                "content": "Prefers window seats.",
+                "confidence": 0.8,
+                "knowledge_class": "Personal",
+                "observed_at": "2026-01-01T00:00:00+00:00",
+            }
+        ]
+    )
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        result = await search_memory_executor(query_text="what have I discussed before?")
+
+    assert "claims" in result
+    assert result["claims"][0]["content"] == "Prefers window seats."
+    claim_keys = set(result["claims"][0].keys())
+    entity_keys = set(result["entities"][0].keys())
+    assert claim_keys.isdisjoint(entity_keys)
+
+
+@pytest.mark.asyncio
+async def test_search_memory_threads_identity_and_limit_into_query_claims() -> None:
+    """query_claims receives the same identity/trace/session/limit as query_memory."""
+    from uuid import uuid4
+
+    from personal_agent.telemetry.trace import TraceContext
+
+    uid = uuid4()
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
+    mock_service.query_claims = AsyncMock(return_value=[])
+
+    ctx = TraceContext(trace_id="t-1016", session_id="s-1016", user_id=uid, authenticated=True)
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        await search_memory_executor(query_text="Athens", entity_names=["Athens"], limit=5, ctx=ctx)
+
+    kwargs = mock_service.query_claims.call_args.kwargs
+    assert mock_service.query_claims.call_args.args[0] == "Athens"
+    assert kwargs.get("user_id") == uid
+    assert kwargs.get("authenticated") is True
+    assert kwargs.get("trace_id") == "t-1016"
+    assert kwargs.get("session_id") == "s-1016"
+    assert kwargs.get("limit") == 5
+
+
+@pytest.mark.asyncio
+async def test_search_memory_claims_key_present_even_when_empty() -> None:
+    """An empty claims result is still an explicit empty list, not a missing key."""
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
+    mock_service.query_claims = AsyncMock(return_value=[])
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        result = await search_memory_executor(query_text="Athens", entity_names=["Athens"])
+
+    assert result["claims"] == []

@@ -698,6 +698,7 @@ class TestToolUsingFlow:
         mock_memory = MagicMock()
         mock_memory.connected = True
         mock_memory.query_memory = AsyncMock(return_value=query_result)
+        mock_memory.query_claims = AsyncMock(return_value=[])
 
         fake_app = MagicMock()
         fake_app.memory_service = mock_memory

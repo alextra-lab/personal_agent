@@ -78,6 +78,6 @@
 #     import line inserted above, then FRE-974 the SYSTEM_SESSION_ID import line
 #     + generate_embedding trace_id/session_id kwargs inserted above). ---
 - path: src/personal_agent/memory/service.py
-  line: 2062  # FRE-1016: +4 from the cosine_similarity import (was 2058 after FRE-998)
+  line: 2092  # FRE-1021: +30 from the _filter_entities_by_hard_recency helper inserted above (was 2062 after FRE-1016)
   pattern: cypher_merge
   reason: "dynamic on_create_clauses set origination; static analyzer can't see joined props (FP)"

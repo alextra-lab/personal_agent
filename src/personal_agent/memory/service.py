@@ -562,6 +562,36 @@ def _filter_turns_by_hard_recency(
     return kept
 
 
+def _filter_entities_by_hard_recency(
+    entities: Sequence[EntityNode], hard_recency_days: int | None
+) -> list[EntityNode]:
+    """Drop entities last seen before an explicit hard recency window (FRE-1021).
+
+    Mirrors :func:`_filter_turns_by_hard_recency` for the entity-kind fused
+    items introduced by FRE-1021's resolution fix, keyed on ``last_seen`` rather
+    than a turn's ``timestamp``. Same no-op contract: a falsy ``hard_recency_days``
+    (the automatic context-assembly path never sets it) returns every entity.
+
+    Args:
+        entities: Resolved entities from the fused recall set.
+        hard_recency_days: Explicit hard window in days, or None/0 for no window.
+
+    Returns:
+        The entities within the window, in input order (all when no window).
+    """
+    if not hard_recency_days:
+        return list(entities)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=hard_recency_days)
+    kept: list[EntityNode] = []
+    for entity in entities:
+        ts = entity.last_seen
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts >= cutoff:
+            kept.append(entity)
+    return kept
+
+
 def _build_memory_recall_event(
     returned: Sequence[TurnNode],
     candidate_set_size: int,
@@ -4908,11 +4938,16 @@ class MemoryService:
         """Entity-name path convergence onto the multi-path core (FRE-724).
 
         Runs the shared fused+reranked core (path="entity") and resolves its
-        ordered items into the ``MemoryQueryResult`` turn set: turn items map
-        straight to their TurnNode, entity items expand to their most-recent turns
-        (bounded by ``recall_per_entity_turn_cap``). Relevance scores are the fused
-        rank normalised to (0, 1] so downstream consumers keep a monotonic ordering
-        signal. Turns are deduped by turn_id and sliced to ``query.limit``.
+        ordered items into the ``MemoryQueryResult`` turn/entity sets: turn items
+        resolve to their TurnNode, entity items resolve to their own EntityNode
+        (FRE-1021 -- entity items previously expanded into their most-recent turns
+        instead, so ``entities`` was always empty regardless of fusion rank).
+        Both kinds share one rank-ordered ``query.limit`` budget, walked in fused
+        order, so which kind fills a given slot follows the fused rank rather than
+        being pre-allocated to turns. Relevance scores are the fused rank
+        normalised to (0, 1], keyed by turn_id only (unchanged contract). A
+        duplicate or unresolved item (visibility-filtered, or a stale fused id)
+        does not consume a budget slot -- resolution keeps scanning to backfill.
 
         Args:
             query: The original memory query (for the result limit + access event).
@@ -4924,8 +4959,8 @@ class MemoryService:
             authenticated: Whether the request carries a verified identity.
 
         Returns:
-            MemoryQueryResult with fused+reranked conversations and rank-derived
-            relevance scores.
+            MemoryQueryResult with fused+reranked conversations, entities, and
+            rank-derived relevance scores.
         """
         recall = await self._multipath_fused_recall(
             query_text,
@@ -4936,48 +4971,55 @@ class MemoryService:
             authenticated=authenticated,
         )
         conversations: list[TurnNode] = []
+        entities: list[EntityNode] = []
         relevance_scores: dict[str, float] = {}
         if recall.items and self.driver:
-            turns_by_entity, turns_by_id = await self._resolve_fused_turns(
+            turns_by_id, entities_by_id = await self._resolve_fused_turns(
                 recall.items,
-                per_entity_cap=get_settings().recall_per_entity_turn_cap,
                 user_id=user_id,
                 authenticated=authenticated,
                 trace_id=trace_id,
             )
-            seen: set[str] = set()
+            seen_turns: set[str] = set()
+            seen_entities: set[str] = set()
             total = len(recall.items)
             for position, item in enumerate(recall.items):
-                resolved = (
-                    [turns_by_id[item.item_id]]
-                    if item.kind == "turn" and item.item_id in turns_by_id
-                    else turns_by_entity.get(item.item_id, [])
-                )
-                # FRE-658: the fused arms take no recency predicate, so an explicit
-                # caller-supplied hard window is enforced here as a post-recall
-                # filter (dropped before the limit fill, so in-window turns are not
-                # crowded out). No-op when hard_recency_days is None (AC-1a).
-                resolved = _filter_turns_by_hard_recency(resolved, query.hard_recency_days)
-                for turn in resolved:
-                    if turn.turn_id in seen:
+                if item.kind == "turn":
+                    turn = turns_by_id.get(item.item_id)
+                    # FRE-658: the fused arms take no recency predicate, so an
+                    # explicit caller-supplied hard window is enforced here as a
+                    # post-recall filter. No-op when hard_recency_days is None
+                    # (AC-1a).
+                    if turn and not _filter_turns_by_hard_recency([turn], query.hard_recency_days):
                         continue
-                    seen.add(turn.turn_id)
+                    if not turn or turn.turn_id in seen_turns:
+                        continue
+                    seen_turns.add(turn.turn_id)
                     conversations.append(turn)
                     relevance_scores[turn.turn_id] = (total - position) / total
-                    if len(conversations) >= query.limit:
-                        break
-                if len(conversations) >= query.limit:
+                elif item.kind == "entity":
+                    entity = entities_by_id.get(item.item_id)
+                    if entity and not _filter_entities_by_hard_recency(
+                        [entity], query.hard_recency_days
+                    ):
+                        continue
+                    if not entity or entity.entity_id in seen_entities:
+                        continue
+                    seen_entities.add(entity.entity_id)
+                    entities.append(entity)
+                if len(conversations) + len(entities) >= query.limit:
                     break
 
         accessed_entity_ids = list(query.entity_names or [])
         for conversation in conversations:
             accessed_entity_ids.extend(conversation.key_entities or [])
+        accessed_entity_ids.extend(entity.entity_id for entity in entities)
         accessed_entity_ids = list(dict.fromkeys(accessed_entity_ids))
 
         log.info(
             "memory_query_completed",
             query_params=["multipath"],
-            result_count=len(conversations),
+            result_count=len(conversations) + len(entities),
             trace_id=trace_id,
             session_id=session_id,
         )
@@ -5003,6 +5045,7 @@ class MemoryService:
                 )
         return MemoryQueryResult(
             conversations=conversations,
+            entities=entities,
             relevance_scores=relevance_scores,
         )
 
@@ -5010,30 +5053,34 @@ class MemoryService:
         self,
         items: Sequence[FusedResult],
         *,
-        per_entity_cap: int,
         user_id: UUID | None,
         authenticated: bool,
         trace_id: str | None,
-    ) -> tuple[dict[str, list[TurnNode]], dict[str, TurnNode]]:
-        """Resolve a fused set into TurnNodes for the entity-name path.
+    ) -> tuple[dict[str, TurnNode], dict[str, EntityNode]]:
+        """Resolve a fused set into TurnNodes and EntityNodes for the entity-name path.
+
+        FRE-1021: an entity-kind fused item resolves to the Entity node itself
+        (name/entity_type/description/mention_count), not to its own recent turns
+        -- the prior behaviour silently discarded the entity's identity and made
+        ``MemoryQueryResult.entities`` structurally unreachable via this path.
 
         Args:
             items: The capped fused set.
-            per_entity_cap: Max most-recent turns to expand per entity item.
             user_id: Authenticated user UUID for visibility scoping (FRE-229).
             authenticated: Whether the request carries a verified identity.
             trace_id: Request trace id for event correlation.
 
         Returns:
-            Tuple of (entity elementId -> its expanded TurnNodes, turn_id -> TurnNode).
+            Tuple of (turn_id -> TurnNode, entity elementId -> EntityNode).
         """
-        by_entity: dict[str, list[TurnNode]] = {}
         by_turn: dict[str, TurnNode] = {}
+        by_entity: dict[str, EntityNode] = {}
         if not self.driver or not items:
-            return by_entity, by_turn
+            return by_turn, by_entity
         entity_ids = [it.item_id for it in items if it.kind == "entity"]
         turn_ids = [it.item_id for it in items if it.kind == "turn"]
-        vis_t, vis_params = _build_visibility_filter("t", user_id, authenticated)
+        vis_t, vis_params_t = _build_visibility_filter("t", user_id, authenticated)
+        vis_e, vis_params_e = _build_visibility_filter("e", user_id, authenticated)
         try:
             async with self.driver.session() as session:
                 if turn_ids:
@@ -5044,7 +5091,7 @@ class MemoryService:
                         RETURN t
                         """,
                         ids=turn_ids,
-                        **vis_params,
+                        **vis_params_t,
                     )
                     for row in await r.values():
                         if row and row[0]:
@@ -5054,30 +5101,23 @@ class MemoryService:
                     r = await session.run(
                         f"""
                         UNWIND $ids AS eid
-                        MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
-                        WHERE elementId(e) = eid AND {vis_t}
-                        WITH eid, t ORDER BY t.timestamp DESC
-                        WITH eid, collect(t)[0..$cap] AS turns
-                        UNWIND turns AS t
-                        RETURN eid AS eid, t
+                        MATCH (e:Entity) WHERE elementId(e) = eid AND {vis_e}
+                        RETURN eid AS eid, e
                         """,
                         ids=entity_ids,
-                        cap=per_entity_cap,
-                        **vis_params,
+                        **vis_params_e,
                     )
                     for row in await r.values():
                         eid, node_raw = row[0], row[1]
                         if node_raw:
-                            by_entity.setdefault(eid, []).append(
-                                self._turn_node_from_node(node_raw)
-                            )
+                            by_entity[eid] = _entity_node_from_record(node_raw)
         except Exception as exc:
             log.warning(
                 "multipath_resolve_turns_failed",
                 error=str(exc),
                 trace_id=trace_id,
             )
-        return by_entity, by_turn
+        return by_turn, by_entity
 
     async def multi_query_recall_arm(
         self,

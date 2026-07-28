@@ -16,12 +16,14 @@ implementation pass.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+import structlog.testing
 
 from personal_agent.brainstem import scheduler as sched
 from personal_agent.brainstem.scheduler import BrainstemScheduler, _parse_graph_timestamp
@@ -42,6 +44,19 @@ _IDLE = 900.0  # 15 minutes
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _only_info_event(cap: list[dict[str, Any]]) -> dict[str, Any]:
+    """Assert a sweep tick produced exactly one INFO-level record and return it.
+
+    FRE-1025's AC is "exactly one info-level record" per tick — asserting only that
+    the expected event is *present* would miss the double-log and zero-log edge
+    cases codex review found (an expired pause and an unconditional completion log
+    firing together; an exception path emitting nothing at all).
+    """
+    info_events = [e for e in cap if e.get("log_level") == "info"]
+    assert len(info_events) == 1, f"expected exactly one info event, got {info_events}"
+    return info_events[0]
 
 
 def _capture(session_id: str, at: datetime, *, text: str = "hello") -> TaskCapture:
@@ -554,9 +569,13 @@ async def test_sweep_defers_to_an_in_flight_consolidation(
     scheduler._consolidation_in_progress = True
     calls = _patch_producer(monkeypatch)
 
-    await scheduler.run_session_summary_sweep(trace_id="t-1")
+    with structlog.testing.capture_logs() as cap:
+        await scheduler.run_session_summary_sweep(trace_id="t-1")
 
     assert calls == []
+    event = _only_info_event(cap)
+    assert event["event"] == "session_summary_sweep_returned_early"
+    assert event["reason"] == "deferred_to_consolidation"
 
 
 @pytest.mark.asyncio
@@ -568,9 +587,55 @@ async def test_sweep_is_single_flight(
     scheduler._summary_sweep_in_progress = True
     calls = _patch_producer(monkeypatch)
 
-    await scheduler.run_session_summary_sweep(trace_id="t-1")
+    with structlog.testing.capture_logs() as cap:
+        await scheduler.run_session_summary_sweep(trace_id="t-1")
 
     assert calls == []
+    event = _only_info_event(cap)
+    assert event["event"] == "session_summary_sweep_returned_early"
+    assert event["reason"] == "already_in_progress"
+
+
+@pytest.mark.asyncio
+async def test_a_second_sweep_started_while_the_first_is_running_returns_early(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The single-flight guard under genuine concurrent overlap, not a hand-set flag."""
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+    _patch_producer(monkeypatch)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_find = memory.find_dirty_idle_sessions
+
+    async def blocking_find(*args: Any, **kwargs: Any) -> Any:
+        started.set()
+        await release.wait()
+        return await original_find(*args, **kwargs)
+
+    monkeypatch.setattr(memory, "find_dirty_idle_sessions", blocking_find)
+
+    first = asyncio.create_task(scheduler.run_session_summary_sweep(trace_id="t-1"))
+    await started.wait()
+
+    with structlog.testing.capture_logs() as cap:
+        second_result = await scheduler.run_session_summary_sweep(trace_id="t-2")
+
+    release.set()
+    await first
+
+    assert second_result == {
+        "considered": 0,
+        "generated": 0,
+        "skipped": 0,
+        "evidence_unavailable": 0,
+        "failed": 0,
+        "refused": 0,
+    }
+    event = _only_info_event(cap)
+    assert event["event"] == "session_summary_sweep_returned_early"
+    assert event["reason"] == "already_in_progress"
+    assert scheduler._summary_sweep_in_progress is False
 
 
 @pytest.mark.asyncio
@@ -582,7 +647,17 @@ async def test_disabled_sweep_does_nothing(
     scheduler.memory_service = memory  # type: ignore[assignment]
     calls = _patch_producer(monkeypatch)
 
-    await scheduler.run_session_summary_sweep(trace_id="t-1")
+    with structlog.testing.capture_logs() as cap1:
+        await scheduler.run_session_summary_sweep(trace_id="t-1")
+    event1 = _only_info_event(cap1)
+    assert event1["event"] == "session_summary_sweep_returned_early"
+    assert event1["reason"] == "disabled"
+
+    # Every tick, not transition-only: a second consecutive disabled tick still logs.
+    with structlog.testing.capture_logs() as cap2:
+        await scheduler.run_session_summary_sweep(trace_id="t-2")
+    event2 = _only_info_event(cap2)
+    assert event2["reason"] == "disabled"
 
     assert calls == []
 
@@ -593,7 +668,10 @@ async def test_sweep_without_a_memory_service_is_a_no_op(
 ) -> None:
     scheduler.memory_service = None
 
-    assert await scheduler.run_session_summary_sweep(trace_id="t-1") == {
+    with structlog.testing.capture_logs() as cap:
+        result = await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert result == {
         "considered": 0,
         "generated": 0,
         "skipped": 0,
@@ -601,6 +679,66 @@ async def test_sweep_without_a_memory_service_is_a_no_op(
         "failed": 0,
         "refused": 0,
     }
+    event = _only_info_event(cap)
+    assert event["event"] == "session_summary_sweep_returned_early"
+    assert event["reason"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_paused_sweep_logs_the_reason_at_info(
+    scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The early-return branch — the pause has not yet expired this tick."""
+    memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30)})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+    resumes_at = _now() + timedelta(hours=1)
+    scheduler._summary_sweep_paused_until = resumes_at
+    calls = _patch_producer(monkeypatch)
+
+    with structlog.testing.capture_logs() as cap:
+        await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert calls == []
+    event = _only_info_event(cap)
+    assert event["event"] == "session_summary_sweep_returned_early"
+    assert event["reason"] == "paused"
+    assert event["resumes_at"] == resumes_at.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_an_expired_pause_does_not_double_log(
+    scheduler: BrainstemScheduler,
+) -> None:
+    """Clearing a pause and completing the tick must still be exactly one record."""
+    memory = _FakeMemory({})
+    scheduler.memory_service = memory  # type: ignore[assignment]
+    paused_until = _now() - timedelta(seconds=1)
+    scheduler._summary_sweep_paused_until = paused_until
+
+    with structlog.testing.capture_logs() as cap:
+        result = await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert result["considered"] == 0
+    assert scheduler._summary_sweep_paused_until is None
+    event = _only_info_event(cap)
+    assert event["event"] == "session_summary_sweep_completed"
+    assert event["resumed_from_pause"] == paused_until.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_with_no_dirty_sessions_still_logs_completion(
+    scheduler: BrainstemScheduler,
+) -> None:
+    """Zero dirty-idle sessions is 'ran and found nothing', not silence."""
+    scheduler.memory_service = _FakeMemory({})  # type: ignore[assignment]
+
+    with structlog.testing.capture_logs() as cap:
+        result = await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    assert result["considered"] == 0
+    event = _only_info_event(cap)
+    assert event["event"] == "session_summary_sweep_completed"
+    assert event["considered"] == 0
 
 
 @pytest.mark.asyncio
@@ -912,12 +1050,23 @@ async def test_first_sweep_does_not_zero_turn_count_across_the_legacy_corpus(
 async def test_single_flight_flag_is_released_on_error(
     scheduler: BrainstemScheduler, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A stuck flag would silently disable the sweep for the process's lifetime."""
+    """A stuck flag would silently disable the sweep for the process's lifetime.
+
+    Also covers FRE-1025: a tick that dies mid-sweep must not be silent from this
+    function's own perspective — it logs exactly one info record naming the reason
+    before the exception propagates.
+    """
     failing = AsyncMock(side_effect=RuntimeError("neo4j down"))
     scheduler.memory_service = type("M", (), {"find_dirty_idle_sessions": failing})()  # type: ignore[assignment]
 
-    with pytest.raises(RuntimeError):
-        await scheduler.run_session_summary_sweep(trace_id="t-1")
+    with structlog.testing.capture_logs() as cap:
+        with pytest.raises(RuntimeError):
+            await scheduler.run_session_summary_sweep(trace_id="t-1")
+
+    event = _only_info_event(cap)
+    assert event["event"] == "session_summary_sweep_returned_early"
+    assert event["reason"] == "exception"
+    assert "neo4j down" in event["error"]
 
     assert scheduler._summary_sweep_in_progress is False
 

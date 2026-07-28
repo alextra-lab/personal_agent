@@ -454,7 +454,7 @@ class SecondBrainConsolidator:
                 # closed. Passing None preserves whatever is already stored
                 # (create_session COALESCEs), because a non-null value always wins
                 # and an arbitrary pick would silently overwrite correct identity.
-                session_user_ids = {c.user_id for c in ordered if c.user_id is not None}
+                session_user_ids = {c.user_id for c in ordered}
                 if len(session_user_ids) > 1:
                     log.error(
                         "session_captures_mixed_user_id",

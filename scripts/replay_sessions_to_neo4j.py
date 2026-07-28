@@ -229,7 +229,7 @@ async def _replay_session(
         "errors": 0,
     }
 
-    replayed: list[Any] = []
+    replayed: list[TaskCapture] = []
 
     for user_msg, assistant_msg, ts in pairs:
         if dry_run:
@@ -279,7 +279,10 @@ async def _replay_session(
             )
         except Exception as exc:
             log.warning(
-                "replay_session_consolidation_failed", session_id=session_id, error=str(exc)
+                "replay_session_consolidation_failed",
+                session_id=session_id,
+                trace_id=replayed[0].trace_id,
+                error=str(exc),
             )
             counts["errors"] += 1
 

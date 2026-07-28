@@ -51,12 +51,26 @@ amendment.
 
 ## 2. Cost, Process and Monitoring Audit
 
-Background LLM streams stay **disabled** and the summary sweep stays **off** until both gates are met;
-**no budget cap is to be raised.**
+Background LLM streams stay **disabled**; **no budget cap is to be raised.**
 
-**FRE-987 is the only gate left** before the sweep returns — bound the *transient* retry path. Three
-tickets in §4 cannot be verified until it lands. When the sweep returns, gate on the **empty-digest rate**,
-not the parse rate.
+**BOTH SWEEP GATES ARE NOW MET** — FRE-988 merged+deployed, FRE-987 merged (PR #719, ADR-0124
+**Amendment D**: D5 per-failure retry stamp, D6 global stand-down, D7 shared-resource failures don't
+spend the session's retry budget). The standing "sweep stays off" condition is therefore **satisfied**,
+but re-enabling is still **two owner actions, not one**:
+
+1. **Gateway rebuild** (ask-first) — carries FRE-987 *and* FRE-1003.
+2. **Flip `AGENT_SESSION_SUMMARY_ENABLED` back to true + restart.** A rebuild alone changes nothing
+   observable: the sweep is disabled in host env and the nine stuck sessions were marked non-eligible
+   on 2026-07-26.
+
+**When the sweep returns, gate on the empty-digest rate, not the parse rate.** Watch the first three
+sweep intervals: a failing session should log once and stay quiet through its backoff, and an exhausted
+cap should produce **one stand-down**, not a denial per session. At +24h, divide captains_log daily
+spend by session-summary-generated events — that is the **cost per digest** nobody has yet, and it is
+FRE-987's remaining unproven criterion along with Phase-1 population growth.
+
+**Known and stated:** this bounds a *failing session* (~8 attempts/day, was 288). It does **not** bound
+aggregate spend — new sessions stay unrestricted and the ceiling remains the cost gate.
 
 **FRE-987 fixes unbounded *retry*. Unbounded *input* is a separate, unowned problem** — and the
 resolution has now been reached **independently twice** without ever landing in an ADR, so it is named

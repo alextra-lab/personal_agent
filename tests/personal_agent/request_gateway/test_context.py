@@ -303,6 +303,66 @@ class TestAssembleContext:
         mock_adapter.suggest_relevant.assert_not_called()
 
 
+class TestReflectionRecallRemoved:
+    """ADR-0125 D2/AC-2 (FRE-1003): the reflection-recall path is removed, not
+    merely defaulted off. A dimension-1 producer's output must never be able
+    to reach user-facing context under any configuration.
+
+    A red-phase characterization test (seeding a sentinel doc through a faked
+    ``query_relevant_reflections`` with ``reflection_recall_enabled=True``)
+    was run against the pre-fix code to confirm the marker really did leak
+    through ``assemble_context()`` — see the FRE-1003 PR/ticket for that
+    evidence. That test is not preserved here: once the call site and module
+    are gone there is nothing left to characterize, and a live-path assertion
+    would be vacuous. What remains provable, and is asserted below, is the
+    literal AC-2 wording — no call site or import remains, the module itself
+    is gone, and the settings are gone rather than defaulted.
+    """
+
+    def test_reflection_recall_module_is_removed(self) -> None:
+        import importlib
+
+        with pytest.raises(ModuleNotFoundError) as exc_info:
+            importlib.import_module("personal_agent.captains_log.recall")
+        assert exc_info.value.name == "personal_agent.captains_log.recall"
+
+    def test_context_assembly_has_no_reflection_recall_reference(self) -> None:
+        import inspect
+
+        source = inspect.getsource(ctx_module)
+        for needle in (
+            "captains_log.recall",
+            "query_relevant_reflections",
+            "format_reflections_section",
+            "reflection_recall",
+        ):
+            assert needle not in source, f"stale reflection-recall reference found: {needle!r}"
+
+    def test_reflection_recall_settings_are_gone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for field in (
+            "reflection_recall_enabled",
+            "reflection_recall_recency_days",
+            "reflection_recall_max_results",
+            "reflection_recall_min_seen_count",
+        ):
+            assert not hasattr(ctx_module.settings, field), f"stale settings field: {field!r}"
+
+        # A stale prod .env line setting these legacy keys must not break startup —
+        # extra="ignore" silently drops them rather than re-creating the attribute.
+        monkeypatch.setenv("AGENT_REFLECTION_RECALL_ENABLED", "true")
+        monkeypatch.setenv("AGENT_REFLECTION_RECALL_RECENCY_DAYS", "365")
+        monkeypatch.setenv("AGENT_REFLECTION_RECALL_MAX_RESULTS", "10")
+        monkeypatch.setenv("AGENT_REFLECTION_RECALL_MIN_SEEN_COUNT", "1")
+
+        from personal_agent.config.settings import AppConfig
+
+        config = AppConfig()
+        assert not hasattr(config, "reflection_recall_enabled")
+        assert not hasattr(config, "reflection_recall_recency_days")
+        assert not hasattr(config, "reflection_recall_max_results")
+        assert not hasattr(config, "reflection_recall_min_seen_count")
+
+
 class TestSessionTopicHint:
     """Tests for _session_topic_hint() (ADR-0101 §2 content-widening, FRE-726)."""
 

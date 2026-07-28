@@ -91,7 +91,6 @@ try:
 
         # Input fields
         user_message: str = dspy.InputField(desc="The user's original message")
-        trace_id: str = dspy.InputField(desc="Trace ID for the task execution")
         steps_count: int = dspy.InputField(desc="Number of orchestrator steps executed")
         final_state: str = dspy.InputField(desc="Final task state (e.g., COMPLETED, FAILED)")
         reply_length: int = dspy.InputField(desc="Length of agent's reply in characters")
@@ -433,7 +432,6 @@ def generate_reflection_dspy(
             # Metrics are pre-formatted (deterministic), LLM only generates insights
             result = reflection_generator(
                 user_message=mark_truncated(user_message, 400),
-                trace_id=trace_id,
                 steps_count=steps_count,
                 final_state=final_state,
                 reply_length=reply_length,

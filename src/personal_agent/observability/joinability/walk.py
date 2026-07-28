@@ -151,6 +151,9 @@ class JoinabilityWalk:
                 orphans=orphans,
             )
 
+        raw_user_id = anchor.get("user_id")
+        anchor_user_id = _as_str(raw_user_id) if raw_user_id is not None else None
+
         # 2. Postgres walks.
         await self._walk_api_costs(session_id, trace_ids, checks, orphans)
         await self._walk_metrics(trace_ids, checks, orphans)
@@ -162,12 +165,14 @@ class JoinabilityWalk:
 
         # 3. Elasticsearch walks.
         await self._walk_es_agent_logs(session_id, trace_ids, checks, orphans)
+        await self._walk_es_user_identity(session_id, anchor_user_id, checks, orphans)
         await self._walk_es_captures(trace_ids, checks, orphans)
         await self._walk_es_reflections(trace_ids, checks)
 
         # 4. Neo4j walks.
         await self._walk_neo4j_turns(session_id, trace_ids, checks, orphans)
         await self._walk_neo4j_entities(session_id, checks)
+        await self._walk_neo4j_claim_user_identity(session_id, anchor_user_id, checks, orphans)
 
         # 5. Redis (best-effort).
         await self._walk_redis_streams(trace_ids, checks)
@@ -238,7 +243,7 @@ class JoinabilityWalk:
                 row = await conn.fetchrow(
                     """
                     SELECT session_id, primary_model_at_creation,
-                           model_config_path, messages
+                           model_config_path, messages, user_id
                     FROM sessions WHERE session_id = $1
                     """,
                     _to_uuid(session_id),
@@ -686,6 +691,83 @@ class JoinabilityWalk:
             )
         )
 
+    async def _walk_es_user_identity(
+        self,
+        session_id: str,
+        anchor_user_id: str | None,
+        checks: list[SubstrateCheck],
+        orphans: list[Orphan],
+    ) -> None:
+        """Compare the anchor session's Postgres user_id against ES log docs (ADR-0107 §6).
+
+        Absent before this ADR (verified: no reference to ``user_id`` anywhere in
+        this walk). A wrong ``user_id`` on any log doc for this session is red — a
+        regression of the claim-resolution/logging-propagation work this check
+        exists to catch (AC-5). Log docs that carry no ``user_id`` at all are
+        recorded as an informational orphan only: the coverage/volume bar for
+        *missing* (as opposed to *wrong*) user_id is ADR-0107 AC-3a's concern
+        (a different ticket), not this joinability check's.
+        """
+        substrate = "elasticsearch.agent_logs_user_id"
+        if anchor_user_id is None:
+            checks.append(_skipped(substrate, "conditional", reason="no_anchor_user_id"))
+            return
+        if self.es is None:
+            checks.append(_skipped(substrate, "conditional", reason="no_es_client"))
+            return
+        t0 = time.perf_counter()
+        index = f"{self.logs_prefix}-*"
+        try:
+            response = await self.es.search(
+                index=index,
+                size=0,
+                query={"term": {"session_id": session_id}},
+                aggs={"by_user": {"terms": {"field": "user_id", "size": 10}}},
+                ignore_unavailable=True,
+                allow_no_indices=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            checks.append(_errored(substrate, "conditional", exc, t0))
+            return
+        dur = _dur_ms(t0)
+        hits = int(response.get("hits", {}).get("total", {}).get("value", 0))
+        buckets = response.get("aggregations", {}).get("by_user", {}).get("buckets", [])
+        es_user_ids = {b["key"] for b in buckets if b.get("key")}
+        status: Literal["green", "yellow", "red", "skipped"] = "green"
+        mismatched = es_user_ids - {anchor_user_id}
+        if mismatched:
+            status = "red"
+            orphans.append(
+                Orphan(
+                    substrate=substrate,
+                    kind="es_pg_mismatch",
+                    detail={
+                        "session_id": session_id,
+                        "postgres_user_id": anchor_user_id,
+                        "mismatched_es_user_ids": sorted(mismatched),
+                    },
+                    severity="red",
+                )
+            )
+        elif hits > 0 and not es_user_ids:
+            orphans.append(
+                Orphan(
+                    substrate=substrate,
+                    kind="missing_identity",
+                    detail={"session_id": session_id, "docs_without_user_id": hits},
+                    severity="yellow",
+                )
+            )
+        checks.append(
+            SubstrateCheck(
+                substrate=substrate,
+                expected="conditional",
+                observed_count=len(es_user_ids),
+                status=status,
+                duration_ms=dur,
+            )
+        )
+
     async def _walk_es_captures(
         self,
         trace_ids: set[str],
@@ -857,6 +939,68 @@ class JoinabilityWalk:
                 observed_count=count,
                 status="green",
                 duration_ms=_dur_ms(t0),
+            )
+        )
+
+    async def _walk_neo4j_claim_user_identity(
+        self,
+        session_id: str,
+        anchor_user_id: str | None,
+        checks: list[SubstrateCheck],
+        orphans: list[Orphan],
+    ) -> None:
+        """Compare Postgres user_id against the Person a session's Claim attaches to (ADR-0107 §6).
+
+        Conditional on a Claim existing for this session at all — its absence is
+        expected and not an orphan (assert_claim, per ADR-0107 §2, only fires on a
+        Personal claim being extracted; most sessions produce none).
+        """
+        substrate = "neo4j.claim_person_user_id"
+        if anchor_user_id is None:
+            checks.append(_skipped(substrate, "conditional", reason="no_anchor_user_id"))
+            return
+        if self.neo4j_driver is None:
+            checks.append(_skipped(substrate, "conditional", reason="no_neo4j_driver"))
+            return
+        t0 = time.perf_counter()
+        try:
+            async with self.neo4j_driver.session() as nsession:
+                result = await nsession.run(
+                    """
+                    MATCH (p:Person)-[:HAS_FACT]->(c:Claim {session_id: $sid})
+                    RETURN DISTINCT p.user_id AS user_id
+                    """,
+                    sid=session_id,
+                )
+                rows = [record.data() async for record in result]
+        except Exception as exc:  # noqa: BLE001
+            checks.append(_errored(substrate, "conditional", exc, t0))
+            return
+        dur = _dur_ms(t0)
+        claim_user_ids = {_as_str(r["user_id"]) for r in rows if r.get("user_id") is not None}
+        status: Literal["green", "yellow", "red", "skipped"] = "green"
+        mismatched = claim_user_ids - {anchor_user_id}
+        if mismatched:
+            status = "red"
+            orphans.append(
+                Orphan(
+                    substrate=substrate,
+                    kind="neo4j_pg_mismatch",
+                    detail={
+                        "session_id": session_id,
+                        "postgres_user_id": anchor_user_id,
+                        "mismatched_claim_person_user_ids": sorted(mismatched),
+                    },
+                    severity="red",
+                )
+            )
+        checks.append(
+            SubstrateCheck(
+                substrate=substrate,
+                expected="conditional",
+                observed_count=len(rows),
+                status=status,
+                duration_ms=dur,
             )
         )
 

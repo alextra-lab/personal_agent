@@ -52,6 +52,28 @@ Background LLM streams stay **disabled** and the summary sweep stays **off** unt
 tickets in §4 cannot be verified until it lands. When the sweep returns, gate on the **empty-digest rate**,
 not the parse rate.
 
+**FRE-987 fixes unbounded *retry*. Unbounded *input* is a separate, unowned problem** — and the
+resolution has now been reached **independently twice** without ever landing in an ADR, so it is named
+here to stop it being rediscovered a third time.
+
+ADR-0124 triggers wholesale regeneration on an **idle clock**. Both the 2026-07-26 explore note
+(`docs/research/2026-07-26-session-analyzer-pillar.md` §2) and the session-summarizer brainstorm brief
+(§4A, which credits the explore note) conclude the opposite: rebuild should fire **on accumulated delta,
+not a clock**, as a **hybrid** — cheap incremental deltas plus periodic full rebuild (keyframes,
+event-sourcing snapshots, log compaction).
+
+The explore note's *correction of record* is the part to keep: the cost incident was **a bug, not an
+indictment of wholesale regeneration**. Wholesale is correct for sessions that end. It breaks under
+never-ending sessions for a *different* reason — `f(all captures)` grows monotonically, so turn 500
+costs 500 turns of tokens on every rebuild. Neither FRE-987 nor ADR-0124 addresses that, and neither
+should: ADR-0124 was scoped to sessions that end, and that assumption is what is failing.
+
+**Vehicle: FRE-991** (Urgent, Needs Approval since 2026-07-26, unlabelled) — the explore session's own
+output. Nothing moves here until it is approved. Related but distinct prior art: the March
+`CONTEXT_INTELLIGENCE_SPEC.md` and its cited survey `docs/research/context_management_research.md`
+cover *within-session* context construction and are cited by **neither** ADR-0124 nor ADR-0125; whoever
+takes FRE-991 should reconcile the two layers rather than start a third.
+
 FRE-988 (the other gate) is merged and deployed; its bounce paid off twice over — codex, once its dead
 broker was repaired, returned a **block** naming a second real defect (unlocked check-then-act in
 `connect()`, so racing coroutines could each build a pool and a loser could null a winner's). Fixed with

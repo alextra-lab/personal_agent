@@ -75,6 +75,20 @@ Linear MCP: Team `FrenchForest` · `save_issue` to create · `get_issue` to veri
 
 **Naming**: modules `snake_case` · classes `PascalCase` · functions `snake_case` · constants `UPPER_SNAKE_CASE` · private `_single_underscore`.
 
+### 3b. Investigating code — reach for `ast-grep`, not `grep`
+
+**Trigger, stated as the reflex rather than the technique:** you are about to `grep` for a *call site*, a *signature*, a *usage*, or "every place that does X". Those are **shape** questions; `grep` only answers *text* questions. `ast-grep` is installed — `ast-grep run -p '<pattern>' -l py <path>` (add `--json=compact` to count/parse).
+
+Worked patterns for queries this project actually runs (all three verified against `src/`):
+
+- every caller of a function — `ast-grep run -p 'record_vendor_cost($$$)' -l py src/`
+- every call passing a given kwarg — `ast-grep run -p '$F($$$, authenticated=$V, $$$)' -l py src/`
+- a banned construct with no ruff rule — `ast-grep run -p 'os.getenv($$$)' -l py src/`
+
+**The trap, and it is worse than grep's.** A pattern that matches the wrong *node kind* returns a short, precise, authoritative-looking list while silently answering a different question. `user_id: UUID` matches a class-level annotation; `user_id: UUID,` — trailing comma — is a function parameter and does **not** match it. Cross-check any new pattern against a known result before trusting its count. Grep's imprecision is visible; a wrong AST pattern's is not.
+
+For codemods, duplication hunting, or rule files, invoke the `ast-grep` skill rather than improvising.
+
 ### 4. Testing Standards
 
 - Unit tests for business logic (mocked external deps)

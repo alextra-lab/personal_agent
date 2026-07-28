@@ -21,6 +21,8 @@ from personal_agent.telemetry.trace import SystemTraceContext
 SESSION_ID = "11111111-1111-1111-1111-111111111111"
 TRACE_A = "22222222-2222-2222-2222-222222222222"
 TRACE_B = "33333333-3333-3333-3333-333333333333"
+ANCHOR_USER_ID = "55555555-5555-5555-5555-555555555555"
+OTHER_USER_ID = "66666666-6666-6666-6666-666666666666"
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +206,111 @@ class _MockRecord:
 
     def data(self) -> dict[str, Any]:
         return dict(self._data)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures — user_id consistency check (ADR-0107 §6, AC-5, FRE-740)
+# ---------------------------------------------------------------------------
+
+
+def _green_pg_with_user_id(user_id: str = ANCHOR_USER_ID) -> FakePgPool:
+    """Same as _green_pg() but the anchor session row carries a user_id."""
+    cost_rows = [_row(id=1, trace_id=uuid.UUID(TRACE_A), session_id=uuid.UUID(SESSION_ID))]
+    return FakePgPool(
+        FakePgConn(
+            {
+                "sessions": _row(
+                    session_id=uuid.UUID(SESSION_ID),
+                    primary_model_at_creation="qwen3-8b-mlx",
+                    model_config_path="config/models/qwen3-8b.yaml",
+                    messages=[],
+                    user_id=uuid.UUID(user_id),
+                ),
+                "api_costs": cost_rows,
+                "metrics": [],
+                "captains_log_captures": [],
+                "captains_log_reflections": [],
+                "consolidation_attempts": [],
+                "budget_reservations": [],
+                "artifacts": [],
+            }
+        )
+    )
+
+
+def _es_with_user_id(
+    *,
+    es_user_ids: list[str] | None = None,
+    hits: int = 8,
+) -> Any:
+    """ES stub whose response depends on which aggregation is requested.
+
+    ``by_user`` (this ticket's new check) gets ``es_user_ids``; any other
+    call (agent_logs trace check, captures, reflections) gets the same
+    green trace-shaped response the rest of the suite already relies on.
+    """
+
+    async def _search(*_a: Any, **kw: Any) -> Any:
+        aggs = kw.get("aggs") or {}
+        if "by_user" in aggs:
+            buckets = [{"key": uid} for uid in (es_user_ids or [])]
+            return {
+                "hits": {"total": {"value": hits}},
+                "aggregations": {"by_user": {"buckets": buckets}},
+            }
+        return {
+            "hits": {"total": {"value": 8}},
+            "aggregations": {
+                "by_trace": {"buckets": [{"key": TRACE_A}]},
+                "no_trace_id": {"doc_count": 0},
+            },
+        }
+
+    es = MagicMock()
+    es.search = AsyncMock(side_effect=_search)
+    return es
+
+
+def _neo4j_with_claim_user_id(claim_user_ids: list[str] | None) -> Any:
+    """Neo4j stub whose response depends on whether the Cypher targets Claim.
+
+    A ``Claim``-matching query (this ticket's new check) yields
+    ``claim_user_ids``; any other query (Turn walk, Entity count) gets its
+    usual green shape.
+    """
+
+    async def _aiter_claims() -> Any:
+        for uid in claim_user_ids or []:
+            yield _MockRecord({"user_id": uid})
+
+    async def _aiter_turns() -> Any:
+        yield _MockRecord({"turn_id": "t-1", "otrace": TRACE_A, "osid": SESSION_ID})
+
+    class _RunResult:
+        def __init__(self, is_claim_query: bool) -> None:
+            self._is_claim_query = is_claim_query
+
+        def __aiter__(self) -> Any:
+            return _aiter_claims() if self._is_claim_query else _aiter_turns()
+
+        async def single(self) -> Any:
+            return _MockRecord({"c": 0})
+
+    class _NeoSession:
+        async def run(self, query: str, **_kw: Any) -> Any:
+            return _RunResult("Claim" in query)
+
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *_a: Any) -> None:
+            pass
+
+    class _Driver:
+        def session(self) -> Any:
+            return _NeoSession()
+
+    return _Driver()
 
 
 # ---------------------------------------------------------------------------
@@ -522,3 +629,189 @@ async def test_es_query_excludes_transport_logger(ctx: Any) -> None:
         "Walk ES query does not exclude agui.ws_endpoint from the no_trace_id count — "
         "WS lifecycle events will falsely red the joinability gate on every session."
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests — user_id consistency check (ADR-0107 §6, AC-5, FRE-740)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_user_id_check_green_when_es_and_neo4j_match(ctx: Any) -> None:
+    walk = _build_walk(
+        pg_pool=_green_pg_with_user_id(),
+        es=_es_with_user_id(es_user_ids=[ANCHOR_USER_ID]),
+        neo4j=_neo4j_with_claim_user_id([ANCHOR_USER_ID]),
+        ctx=ctx,
+    )
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "green", doc.orphans
+    es_check = next(
+        c for c in doc.substrate_checks if c.substrate == "elasticsearch.agent_logs_user_id"
+    )
+    neo4j_check = next(
+        c for c in doc.substrate_checks if c.substrate == "neo4j.claim_person_user_id"
+    )
+    assert es_check.status == "green"
+    assert neo4j_check.status == "green"
+
+
+@pytest.mark.asyncio
+async def test_user_id_check_red_on_es_mismatch(ctx: Any) -> None:
+    walk = _build_walk(
+        pg_pool=_green_pg_with_user_id(),
+        es=_es_with_user_id(es_user_ids=[OTHER_USER_ID]),
+        neo4j=_neo4j_with_claim_user_id(None),
+        ctx=ctx,
+    )
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "red"
+    orphan = next(
+        o
+        for o in doc.orphans
+        if o.substrate == "elasticsearch.agent_logs_user_id" and o.kind == "es_pg_mismatch"
+    )
+    assert orphan.severity == "red"
+    assert orphan.detail["postgres_user_id"] == ANCHOR_USER_ID
+    assert OTHER_USER_ID in orphan.detail["mismatched_es_user_ids"]
+
+
+@pytest.mark.asyncio
+async def test_user_id_check_red_on_neo4j_claim_mismatch(ctx: Any) -> None:
+    walk = _build_walk(
+        pg_pool=_green_pg_with_user_id(),
+        es=_es_with_user_id(es_user_ids=[ANCHOR_USER_ID]),
+        neo4j=_neo4j_with_claim_user_id([OTHER_USER_ID]),
+        ctx=ctx,
+    )
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "red"
+    orphan = next(
+        o
+        for o in doc.orphans
+        if o.substrate == "neo4j.claim_person_user_id" and o.kind == "neo4j_pg_mismatch"
+    )
+    assert orphan.severity == "red"
+    assert orphan.detail["postgres_user_id"] == ANCHOR_USER_ID
+    assert OTHER_USER_ID in orphan.detail["mismatched_claim_person_user_ids"]
+
+
+@pytest.mark.asyncio
+async def test_user_id_check_red_when_claim_person_has_no_user_id(ctx: Any) -> None:
+    # A Claim attached to a Person with no user_id at all violates ADR-0052's
+    # anchor-by-user_id invariant harder than a mismatch does — must never be
+    # silently dropped from comparison (code review finding, FRE-740).
+    walk = _build_walk(
+        pg_pool=_green_pg_with_user_id(),
+        es=_es_with_user_id(es_user_ids=[ANCHOR_USER_ID]),
+        neo4j=_neo4j_with_claim_user_id([None]),
+        ctx=ctx,
+    )
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "red"
+    orphan = next(
+        o
+        for o in doc.orphans
+        if o.substrate == "neo4j.claim_person_user_id" and o.kind == "missing_identity"
+    )
+    assert orphan.severity == "red"
+
+
+@pytest.mark.asyncio
+async def test_user_id_check_green_when_no_claim_exists(ctx: Any) -> None:
+    # No Claim for this session (ADR-0107 §6: "where a Claim exists" is conditional
+    # — its absence must not red the probe).
+    walk = _build_walk(
+        pg_pool=_green_pg_with_user_id(),
+        es=_es_with_user_id(es_user_ids=[ANCHOR_USER_ID]),
+        neo4j=_neo4j_with_claim_user_id(None),
+        ctx=ctx,
+    )
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "green", doc.orphans
+    neo4j_check = next(
+        c for c in doc.substrate_checks if c.substrate == "neo4j.claim_person_user_id"
+    )
+    assert neo4j_check.status == "green"
+    assert neo4j_check.observed_count == 0
+
+
+@pytest.mark.asyncio
+async def test_user_id_check_skipped_when_anchor_has_no_user_id(ctx: Any) -> None:
+    # Existing fixture, unmodified — proves no regression for sessions rows that
+    # predate this ticket (or a legacy test fixture) carrying no user_id at all.
+    walk = _build_walk(pg_pool=_green_pg(), es=_green_es(), neo4j=_green_neo4j(), ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "green", doc.orphans
+    es_check = next(
+        c for c in doc.substrate_checks if c.substrate == "elasticsearch.agent_logs_user_id"
+    )
+    neo4j_check = next(
+        c for c in doc.substrate_checks if c.substrate == "neo4j.claim_person_user_id"
+    )
+    assert es_check.status == "skipped"
+    assert neo4j_check.status == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_user_id_check_informational_orphan_when_es_docs_lack_user_id(ctx: Any) -> None:
+    # Session has ES log docs but none carry user_id at all (propagation not yet
+    # deployed, or a regression). This must surface for diagnostics but must NOT
+    # red/yellow the outcome by itself — that volume/coverage bar belongs to
+    # ADR-0107 AC-3a, a different ticket's acceptance criterion, not this probe.
+    walk = _build_walk(
+        pg_pool=_green_pg_with_user_id(),
+        es=_es_with_user_id(es_user_ids=[], hits=5),
+        neo4j=_neo4j_with_claim_user_id(None),
+        ctx=ctx,
+    )
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "green", doc.orphans
+    es_check = next(
+        c for c in doc.substrate_checks if c.substrate == "elasticsearch.agent_logs_user_id"
+    )
+    assert es_check.status == "green"
+    orphan = next(
+        o
+        for o in doc.orphans
+        if o.substrate == "elasticsearch.agent_logs_user_id" and o.kind == "missing_identity"
+    )
+    assert orphan.severity == "yellow"
+
+
+@pytest.mark.asyncio
+async def test_user_id_check_yellow_when_es_raises(ctx: Any) -> None:
+    es = MagicMock()
+    es.search = AsyncMock(side_effect=RuntimeError("es unreachable"))
+    walk = _build_walk(
+        pg_pool=_green_pg_with_user_id(),
+        es=es,
+        neo4j=_neo4j_with_claim_user_id([ANCHOR_USER_ID]),
+        ctx=ctx,
+    )
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "yellow"
+    es_check = next(
+        c for c in doc.substrate_checks if c.substrate == "elasticsearch.agent_logs_user_id"
+    )
+    assert es_check.status == "yellow"
+
+
+@pytest.mark.asyncio
+async def test_user_id_check_yellow_when_neo4j_raises(ctx: Any) -> None:
+    class _DriverFailing:
+        def session(self) -> Any:
+            raise RuntimeError("neo4j unreachable")
+
+    walk = _build_walk(
+        pg_pool=_green_pg_with_user_id(),
+        es=_es_with_user_id(es_user_ids=[ANCHOR_USER_ID]),
+        neo4j=_DriverFailing(),
+        ctx=ctx,
+    )
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "yellow"
+    neo4j_check = next(
+        c for c in doc.substrate_checks if c.substrate == "neo4j.claim_person_user_id"
+    )
+    assert neo4j_check.status == "yellow"

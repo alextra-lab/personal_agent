@@ -30,8 +30,8 @@ class Orphan(BaseModel):
     Attributes:
         substrate: Substrate identifier, e.g. ``"postgres.api_costs"``.
         kind: Coarse failure class — ``"missing_identity"``,
-            ``"dangling_fk"``, ``"es_pg_mismatch"``, ``"three_way_mismatch"``,
-            or ``"unjoinable_payload"``.
+            ``"dangling_fk"``, ``"es_pg_mismatch"``, ``"neo4j_pg_mismatch"``,
+            ``"three_way_mismatch"``, or ``"unjoinable_payload"``.
         detail: Row-shaped evidence; bounded to identifying keys only, never
             user-facing PII.
         severity: ``"red"`` for hard violations, ``"yellow"`` for soft

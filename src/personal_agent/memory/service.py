@@ -995,14 +995,25 @@ class MemoryService:
 
         Args:
             conversation: Turn node to create (accepts TurnNode or legacy ConversationNode).
-            user_id: UUID of the connected user. When provided, MERGEs a
-                (:Person {user_id})-[:PARTICIPATED_IN]->(:Turn) edge per FRE-343.
-                MATCH (not MERGE) on :Person — chosen to avoid silently creating
-                a name-less :Person on every Turn. If the :Person is missing,
-                the MERGE writes no edge (Turn itself is still created); that is
-                a logic bug worth investigating. The production consolidator
-                path always provides user_id (TaskCapture invariant); other
-                callers (store_episode) pass it from their own context.
+            user_id: UUID of the connected user. Written two ways, with different
+                guarantees (FRE-998, ADR-0107):
+
+                1. As the ``user_id`` **property** on the Turn — the authoritative
+                   identity record. It has no dependency on any other node, so it
+                   is written whether or not a matching :Person exists.
+                2. As a (:Person {user_id})-[:PARTICIPATED_IN]->(:Turn) edge per
+                   FRE-343 — a best-effort traversal affordance. MATCH (not MERGE)
+                   on :Person, chosen to avoid silently creating a name-less
+                   :Person on every Turn; when the :Person is missing the MERGE
+                   writes no edge and ``participated_in_person_missing`` is logged.
+
+                The edge alone was not enough: it fails open, and a 2026-05-30
+                replay run that stamped random UUIDs left 1828 turns with neither
+                an edge nor any other record of who they belonged to. The property
+                closes that. The production consolidator path always provides
+                user_id (TaskCapture invariant); other callers (store_episode)
+                pass it from their own context, and passing ``None`` preserves any
+                existing value rather than erasing it.
             visibility: Visibility scope for the Turn node (FRE-229). Defaults
                 to "public" for backward compatibility; callers should pass
                 "group" for authenticated sessions.
@@ -1033,7 +1044,8 @@ class MemoryService:
                 await session.run(
                     """
                     MERGE (t:Turn {turn_id: $turn_id})
-                    SET t.trace_id = $trace_id,
+                    SET t.user_id = COALESCE($user_id_str, t.user_id),
+                        t.trace_id = $trace_id,
                         t.session_id = $session_id,
                         t.sequence_number = $sequence_number,
                         t.timestamp = $timestamp,
@@ -1047,6 +1059,7 @@ class MemoryService:
                         t.originating_session_id = $originating_session_id
                     """,
                     turn_id=turn_id,
+                    user_id_str=str(user_id) if user_id is not None else None,
                     trace_id=conversation.trace_id,
                     session_id=conversation.session_id,
                     sequence_number=getattr(conversation, "sequence_number", 0),
@@ -1065,24 +1078,39 @@ class MemoryService:
                 # MATCH (not MERGE) on :Person — the node must exist
                 # (get_or_provision_user_person bootstraps it on first auth request).
                 if user_id is not None:
-                    await session.run(
+                    edge_result = await session.run(
                         """
                         MATCH (p:Person {user_id: $user_id})
                         MATCH (t:Turn {turn_id: $turn_id})
                         MERGE (p)-[r:PARTICIPATED_IN]->(t)
                         ON CREATE SET r.created_at = $timestamp
+                        RETURN 1 AS ok
                         """,
                         user_id=str(user_id),
                         turn_id=turn_id,
                         timestamp=conversation.timestamp.isoformat(),
                     )
-                    log.info(
-                        "participated_in_edge_written",
-                        turn_id=turn_id,
-                        user_id=str(user_id),
-                        trace_id=conversation.trace_id,
-                        was_backfilled=False,
-                    )
+                    # FRE-998: report what actually happened. A returned row covers
+                    # both "created" and "already existed" — the correct success
+                    # condition for a MERGE. No row means the :Person was absent, so
+                    # no edge was written; logging success there produced a false
+                    # identity signal that hid 1828 unattributed historical turns.
+                    if await edge_result.single() is None:
+                        log.warning(
+                            "participated_in_person_missing",
+                            turn_id=turn_id,
+                            user_id=str(user_id),
+                            trace_id=conversation.trace_id,
+                            reason="no :Person node carries this user_id; no edge written",
+                        )
+                    else:
+                        log.info(
+                            "participated_in_edge_written",
+                            turn_id=turn_id,
+                            user_id=str(user_id),
+                            trace_id=conversation.trace_id,
+                            was_backfilled=False,
+                        )
 
                 # Create Turn→Entity DISCUSSES edges.
                 # entity_types_map lets us set entity_type on the node when we know it;
@@ -1135,7 +1163,13 @@ class MemoryService:
             )
             return False
 
-    async def create_session(self, session_node: SessionNode, trace_id: str | None = None) -> bool:
+    async def create_session(
+        self,
+        session_node: SessionNode,
+        trace_id: str | None = None,
+        *,
+        user_id: UUID | None = None,
+    ) -> bool:
         """Create or update a Session node in the graph.
 
         Owns only the properties derived from the turn stream itself: timestamps,
@@ -1161,6 +1195,13 @@ class MemoryService:
             trace_id: Optional request trace identifier for log correlation
                 (ADR-0074 §I3). Callers should pass the consolidation/request
                 trace_id when available; ``None`` is acceptable for batch flows.
+            user_id: UUID of the user this session belongs to (FRE-998, ADR-0107).
+                Written as the authoritative ``user_id`` property — the graph could
+                not previously answer whose session a session was. Written through
+                ``COALESCE``, so passing ``None`` preserves any existing value
+                rather than erasing it: this node is re-MERGEd on every
+                consolidation that brings new turns, and a bare assignment would
+                wipe a previously-attributed session on the next turn it received.
 
         Returns:
             True if successful, False otherwise.
@@ -1178,7 +1219,8 @@ class MemoryService:
                 await db_session.run(
                     """
                     MERGE (s:Session {session_id: $session_id})
-                    SET s.started_at = $started_at,
+                    SET s.user_id = COALESCE($user_id, s.user_id),
+                        s.started_at = $started_at,
                         s.ended_at = $ended_at,
                         s.turn_count = $turn_count,
                         s.dominant_entities = $dominant_entities,
@@ -1186,6 +1228,7 @@ class MemoryService:
                         s.summary_retry_after = null
                     """,
                     session_id=session_node.session_id,
+                    user_id=str(user_id) if user_id is not None else None,
                     started_at=session_node.started_at.isoformat(),
                     ended_at=session_node.ended_at.isoformat(),
                     turn_count=session_node.turn_count,

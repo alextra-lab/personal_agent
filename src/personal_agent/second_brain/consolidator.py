@@ -447,7 +447,28 @@ class SecondBrainConsolidator:
                     turn_count=len(ordered),
                     dominant_entities=[],  # Populated by link_session_turns via graph query
                 )
-                created = await self.memory_service.create_session(session_node, trace_id=trace_id)
+                # FRE-998 / ADR-0107: carry the session's owning user onto the
+                # Session node. Every capture in this group belongs to the same
+                # session and TaskCapture.user_id is non-optional, so disagreement
+                # is an invariant violation rather than routine ambiguity — fail
+                # closed. Passing None preserves whatever is already stored
+                # (create_session COALESCEs), because a non-null value always wins
+                # and an arbitrary pick would silently overwrite correct identity.
+                session_user_ids = {c.user_id for c in ordered}
+                if len(session_user_ids) > 1:
+                    log.error(
+                        "session_captures_mixed_user_id",
+                        session_id=session_id,
+                        user_id_count=len(session_user_ids),
+                        trace_id=trace_id,
+                    )
+                    session_user_id = None
+                else:
+                    session_user_id = next(iter(session_user_ids), None)
+
+                created = await self.memory_service.create_session(
+                    session_node, trace_id=trace_id, user_id=session_user_id
+                )
                 if created:
                     linked = await self.memory_service.link_session_turns(
                         session_id, trace_id=trace_id

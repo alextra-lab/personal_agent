@@ -469,6 +469,19 @@ class BrainstemScheduler:
         published through an atomic conditional write, so a sweep can never overwrite
         a session that received a turn while the model was thinking.
 
+        Logging contract (FRE-1025): every call emits **exactly one** INFO-level
+        record naming the outcome. A call that returns early logs
+        ``session_summary_sweep_returned_early`` with a structured ``reason`` field
+        (``disabled``, ``already_in_progress``, ``paused``, ``deferred_to_consolidation``
+        or ``exception``); a call that runs to completion — including finding zero
+        dirty-idle sessions — logs ``session_summary_sweep_completed`` unconditionally.
+        A tick that clears an expired FRE-987 stand-down carries that transition as a
+        ``resumed_from_pause`` field on whichever of those two records terminates the
+        tick, rather than as a separate log line, so the one-record-per-call guarantee
+        holds. Before this, three of the four early-return paths logged at ``debug``
+        (invisible in production) and one logged nothing at all — a deferred sweep, a
+        stood-down sweep and a dead sweep loop were indistinguishable from outside.
+
         Args:
             trace_id: Trace identifier of this sweep (ADR-0074 §I3), threaded into
                 generation, the write, and every structured log below.
@@ -497,11 +510,26 @@ class BrainstemScheduler:
             "refused": 0,
         }
 
+        # FRE-1025: every early-return below logs exactly one INFO record naming the
+        # reason it did no work — a deferred sweep, a stood-down sweep, and a dead
+        # sweep loop used to be identical from outside (silence at the production log
+        # level), which cost an operator ~20 minutes and three false hypotheses
+        # verifying a healthy FRE-987 deploy. The reason is a structured field
+        # (`reason=`) rather than baked into the message, so it is queryable.
         if not settings.session_summary_enabled or self.memory_service is None:
+            log.info(
+                "session_summary_sweep_returned_early",
+                reason="disabled",
+                trace_id=trace_id,
+            )
             return result
 
         if self._summary_sweep_in_progress:
-            log.debug("session_summary_sweep_already_in_progress", trace_id=trace_id)
+            log.info(
+                "session_summary_sweep_returned_early",
+                reason="already_in_progress",
+                trace_id=trace_id,
+            )
             return result
 
         # Stood down on a condition that belongs to the CAP or the STORE rather than to
@@ -510,26 +538,33 @@ class BrainstemScheduler:
         # this the sweep walks the backlog one session per tick, each attempt inflating
         # counters and — when the failure came after a successful model call — paying
         # for a digest nothing records.
+        #
+        # `resumed_from_pause` carries a just-cleared pause forward onto whichever
+        # record actually terminates this tick, instead of its own separate log line —
+        # two INFO records for one tick would break the "exactly one" guarantee above.
+        resumed_from_pause: str | None = None
         now = datetime.now(timezone.utc)
         if self._summary_sweep_paused_until is not None:
             if now < self._summary_sweep_paused_until:
-                log.debug(
-                    "session_summary_sweep_paused",
+                log.info(
+                    "session_summary_sweep_returned_early",
+                    reason="paused",
                     trace_id=trace_id,
                     resumes_at=self._summary_sweep_paused_until.isoformat(),
                 )
                 return result
-            log.info(
-                "session_summary_sweep_resumed",
-                trace_id=trace_id,
-                paused_until=self._summary_sweep_paused_until.isoformat(),
-            )
+            resumed_from_pause = self._summary_sweep_paused_until.isoformat()
             self._summary_sweep_paused_until = None
 
         # A consolidation pass is itself advancing `ended_at`, so sweeping across one
         # would just generate writes the conditional predicate then refuses.
         if self._consolidation_in_progress:
-            log.debug("session_summary_sweep_deferred_to_consolidation", trace_id=trace_id)
+            log.info(
+                "session_summary_sweep_returned_early",
+                reason="deferred_to_consolidation",
+                trace_id=trace_id,
+                resumed_from_pause=resumed_from_pause,
+            )
             return result
 
         self._summary_sweep_in_progress = True
@@ -557,11 +592,28 @@ class BrainstemScheduler:
                         + result["refused"],
                     )
                     break
+        except Exception as e:
+            # A tick that dies here used to be silent from this function's own
+            # perspective — the loop's ERROR log (scheduler.py `_session_summary_sweep_loop`)
+            # catches it too, but at a fresh trace_id disconnected from this tick, and
+            # only when reached via the loop rather than a direct call.
+            log.info(
+                "session_summary_sweep_returned_early",
+                reason="exception",
+                error=str(e),
+                trace_id=trace_id,
+                resumed_from_pause=resumed_from_pause,
+            )
+            raise
         finally:
             self._summary_sweep_in_progress = False
 
-        if result["considered"]:
-            log.info("session_summary_sweep_completed", **result, trace_id=trace_id)
+        log.info(
+            "session_summary_sweep_completed",
+            **result,
+            trace_id=trace_id,
+            resumed_from_pause=resumed_from_pause,
+        )
         return result
 
     async def _sweep_one_session(

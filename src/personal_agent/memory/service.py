@@ -2707,6 +2707,217 @@ class MemoryService:
         )
         return [item for _, item in scored[:limit]]
 
+    async def query_stance_history(
+        self,
+        target: str,
+        *,
+        authenticated: bool,
+        trace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Full Stance supersession chain for one target, current + superseded (ADR-0126 D5).
+
+        Pull-only: the chain is reachable on demand through ``search_memory``, never pushed
+        (D5's pull half). A Stance is the harness owner's worldview toward World knowledge
+        (ADR-0098 D2/D3, ADR-0107 §3) — a single ``is_owner`` sentinel, not per-user, so no
+        ``user_id`` scoping applies (mirrors :meth:`assert_stance`). Still gated on
+        ``authenticated`` as a fail-closed default for personal-preference data (a deliberate
+        choice, not inherited from ``assert_stance``, which takes no such parameter).
+
+        Stance carries no stored "reason" for a supersession (unlike Claims) — the link between
+        entries is structural: both share the same ``(owner)-[:HAS_STANCE]->(target)`` pair,
+        ordered by ``valid_from``, with ``is_current`` distinguishing them.
+
+        Args:
+            target: The World Entity name the stance chain is about (e.g. "Sorbet").
+            authenticated: Whether the request carries a verified identity. False returns [].
+            trace_id: Request trace id for log correlation.
+
+        Returns:
+            Every HAS_STANCE edge from the owner to ``target``, oldest first, each a dict with
+            ``target``, ``affect``, ``mastery``, ``observed_at``, ``valid_from``, ``valid_to``,
+            ``invalid_at``, ``is_current``. Empty list if the owner has no stance toward
+            ``target``, or on any guard failure.
+        """
+        if not self.connected or not self.driver:
+            return []
+        if not authenticated:
+            return []
+        if not target or not target.strip():
+            return []
+
+        try:
+            async with self.driver.session() as db_session:
+                result = await db_session.run(
+                    "MATCH (:Person {is_owner: true})-[s:HAS_STANCE]->(:Entity {name: $target})\n"
+                    "RETURN s.affect AS affect, s.mastery AS mastery, s.observed_at AS observed_at,\n"
+                    "       s.valid_from AS valid_from, s.valid_to AS valid_to,\n"
+                    "       s.invalid_at AS invalid_at\n"
+                    "ORDER BY s.valid_from ASC",
+                    target=target,
+                )
+                chain: list[dict[str, Any]] = []
+                async for row in result:
+                    chain.append(
+                        {
+                            "target": target,
+                            "affect": row["affect"] or "",
+                            "mastery": row["mastery"],
+                            "observed_at": row["observed_at"],
+                            "valid_from": row["valid_from"],
+                            "valid_to": row["valid_to"],
+                            "invalid_at": row["invalid_at"],
+                            "is_current": row["valid_to"] is None,
+                        }
+                    )
+        except Exception as e:
+            log.warning(
+                "query_stance_history_failed", target=target, error=str(e), trace_id=trace_id
+            )
+            return []
+
+        log.info(
+            "stance_history_queried", target=target, chain_length=len(chain), trace_id=trace_id
+        )
+        return chain
+
+    async def query_claims_history(
+        self,
+        query_text: str,
+        *,
+        user_id: UUID | None,
+        authenticated: bool,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Full Claim supersession chain for the best-matching fact-slot (ADR-0126 D5).
+
+        Pull-only, on demand: ranks every claim (current AND superseded) by similarity to
+        ``query_text``, walks forward from the best match to its chain's current head (so a
+        query that best matches a superseded ancestor still surfaces the whole chain), then
+        walks backward collecting every ancestor transitively. The backward walk is fan-in
+        aware: ``assert_claim``'s facet-aware matching can supersede several current claims in
+        one write, all pointing at the same new ``superseded_by`` — a single-valued predecessor
+        map would silently drop all but one. Never pushed. Same identity gating as
+        :meth:`query_claims` — Claims are per-user personal facts (ADR-0107 §2), unlike Stance.
+
+        Args:
+            query_text: Free-text query to match against any claim in the chain.
+            user_id: The acting authenticated user's UUID. None returns [].
+            authenticated: Whether the request carries a verified identity. False returns [].
+            trace_id: Request trace id for log correlation and embedding cost attribution.
+            session_id: Session id for embedding cost attribution.
+
+        Returns:
+            The full chain for the best-matching fact-slot, oldest first, each a dict with
+            ``claim_id``, ``content``, ``confidence``, ``observed_at``, ``valid_to``,
+            ``invalid_at``, ``superseded_by``, ``supersession_reason``, ``is_current``. Empty
+            list if nothing matches, or on any guard failure.
+        """
+        if not self.connected or not self.driver:
+            return []
+        if user_id is None or not authenticated:
+            return []
+        if not query_text or not query_text.strip():
+            return []
+
+        query_embedding = await generate_embedding(
+            query_text, mode="query", trace_id=trace_id, session_id=session_id
+        )
+        if not any(x != 0.0 for x in query_embedding):
+            return []
+
+        try:
+            async with self.driver.session() as db_session:
+                result = await db_session.run(
+                    "MATCH (:Person {user_id: $user_id})-[:HAS_FACT]->(cl:Claim)\n"
+                    "RETURN cl.claim_id AS claim_id, cl.content AS content,\n"
+                    "       cl.confidence AS confidence, cl.observed_at AS observed_at,\n"
+                    "       cl.valid_to AS valid_to, cl.invalid_at AS invalid_at,\n"
+                    "       cl.superseded_by AS superseded_by,\n"
+                    "       cl.supersession_reason AS supersession_reason,\n"
+                    "       cl.embedding AS embedding",
+                    user_id=str(user_id),
+                )
+                rows: dict[str, dict[str, Any]] = {}
+                # Rank ALL claims (current + superseded), not just current — the query may
+                # best-match a superseded ancestor whose current descendant has drifted
+                # semantically; scoring only current rows would miss that chain entirely.
+                candidates: list[tuple[float, str]] = []
+                async for row in result:
+                    claim_id = row["claim_id"]
+                    if claim_id is None or row["embedding"] is None:
+                        continue
+                    rows[claim_id] = dict(row)
+                    score = cosine_similarity(query_embedding, list(row["embedding"]))
+                    candidates.append((score, claim_id))
+        except Exception as e:
+            log.warning("query_claims_history_failed", error=str(e), trace_id=trace_id)
+            return []
+
+        if not candidates:
+            return []
+        candidates.sort(key=lambda pair: pair[0], reverse=True)
+        _, best_match_id = candidates[0]
+
+        # Walk FORWARD to the chain's current head, whichever generation matched best. Guards
+        # against a dangling superseded_by pointer (a concurrent write mid-query naming a row
+        # not in this fetch) by requiring the next id to actually be a known row before
+        # following it, rather than dereferencing it and raising KeyError.
+        head_id = best_match_id
+        seen_forward: set[str] = set()
+        while head_id not in seen_forward:
+            seen_forward.add(head_id)
+            next_id = rows[head_id].get("superseded_by")
+            if not next_id or next_id not in rows:
+                break
+            head_id = next_id
+
+        # Fan-in aware: assert_claim can supersede MULTIPLE current claims in one write (all
+        # stamped with the SAME new superseded_by), so a claim can have more than one
+        # predecessor. Collect every ancestor transitively via BFS rather than assuming a
+        # single linear predecessor per step.
+        predecessors_of: dict[str, list[str]] = {}
+        for cid, r in rows.items():
+            sup_by = r.get("superseded_by")
+            if sup_by:
+                predecessors_of.setdefault(sup_by, []).append(cid)
+
+        chain_ids: list[str] = []
+        seen: set[str] = set()
+        frontier = [head_id]
+        while frontier:
+            next_frontier: list[str] = []
+            for cid in frontier:
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                chain_ids.append(cid)
+                next_frontier.extend(predecessors_of.get(cid, []))
+            frontier = next_frontier
+
+        chain = [
+            {
+                "claim_id": cid,
+                "content": rows[cid]["content"] or "",
+                "confidence": float(rows[cid]["confidence"] or 0.0),
+                "observed_at": rows[cid]["observed_at"],
+                "valid_to": rows[cid]["valid_to"],
+                "invalid_at": rows[cid]["invalid_at"],
+                "superseded_by": rows[cid]["superseded_by"],
+                "supersession_reason": rows[cid]["supersession_reason"],
+                "is_current": rows[cid]["valid_to"] is None,
+            }
+            for cid in chain_ids
+        ]
+        chain.sort(key=lambda c: c["observed_at"])  # oldest first; a DAG has no single linear order
+        log.info(
+            "claims_history_queried",
+            head_claim_id=head_id,
+            chain_length=len(chain),
+            trace_id=trace_id,
+        )
+        return chain
+
     async def ensure_vector_index(self) -> bool:
         """Create Neo4j vector index on Entity.embedding, recreating if dimensions changed.
 

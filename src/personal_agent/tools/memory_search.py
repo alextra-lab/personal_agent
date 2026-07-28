@@ -82,6 +82,19 @@ search_memory_tool = ToolDefinition(
             default=None,
             json_schema=None,
         ),
+        ToolParameter(
+            name="include_history",
+            type="boolean",
+            description=(
+                "When true, also return the full supersession history — every superseded "
+                "prior version plus the current one — for matched stances and claims, "
+                "instead of only the current value. Use when the user asks how something "
+                "changed over time (e.g. 'what did I used to think about X')."
+            ),
+            required=False,
+            default=None,
+            json_schema=None,
+        ),
     ],
     risk_level="low",
     allowed_modes=["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"],
@@ -98,6 +111,7 @@ async def search_memory_executor(
     entity_names: list[str] | None = None,
     recency_days: int | None = None,
     limit: int = 10,
+    include_history: bool = False,
     ctx: Any = None,
 ) -> dict[str, Any]:
     """Execute a memory graph query and return structured results.
@@ -111,6 +125,9 @@ async def search_memory_executor(
             survives the ADR-0100 / ADR-0104 recall de-gate (FRE-658); omitting it
             leaves recall invariant to the default window (ADR-0100 AC-1a).
         limit: Maximum number of results (1–50).
+        include_history: When true, also return the full supersession history for
+            matched stances (``stance_history``) and claims (``claims_history``),
+            not just the current value (ADR-0126 D5's pull half — on demand only).
         ctx: Optional trace context for logging.
 
     Returns:
@@ -225,6 +242,33 @@ async def search_memory_executor(
             trace_id=trace_id,
             session_id=getattr(ctx, "session_id", None),
         )
+
+        # ADR-0126 D5: the supersession chain is reachable on demand, never pushed. Additive —
+        # T3's `claims` key above is untouched; these keys appear only when explicitly requested.
+        if include_history:
+            # Reuse the same effective-name resolution the entity-match branch above already
+            # applies: explicit entity_names, or capitalised words extracted from query_text —
+            # an explicit entity_names=["Sorbet"] must not be the only way to reach Sorbet's
+            # history when the caller just asked query_text="Sorbet".
+            effective_entity_names = entity_names or _extract_keywords(query_text)
+            stance_history: dict[str, list[dict[str, Any]]] = {}
+            for name in effective_entity_names:
+                chain = await memory_service.query_stance_history(
+                    name,
+                    authenticated=getattr(ctx, "authenticated", False),
+                    trace_id=trace_id,
+                )
+                if chain:
+                    stance_history[name] = chain
+            output["stance_history"] = stance_history
+
+            output["claims_history"] = await memory_service.query_claims_history(
+                query_text,
+                user_id=getattr(ctx, "user_id", None),
+                authenticated=getattr(ctx, "authenticated", False),
+                trace_id=trace_id,
+                session_id=getattr(ctx, "session_id", None),
+            )
 
         total = output.get("total_turns")
         if total is None:

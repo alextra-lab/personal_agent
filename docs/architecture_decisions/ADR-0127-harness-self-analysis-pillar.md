@@ -94,7 +94,7 @@ source shows the same error in a sharper and more general form:
 |---|---|---|
 | `telemetry/context_quality.py` · `fingerprint_incident` | `noun_phrase`, `dropped_entity`, `component` | facts read off the turn |
 | `insights/fingerprints.py` · `cost_fingerprint` | `anomaly_type`, `observation_date` | deterministic |
-| `insights/fingerprints.py` · `pattern_fingerprint` | `insight_type`, `pattern_kind`, `title` | code-assigned |
+| `insights/fingerprints.py` · `pattern_fingerprint` | `insight_type`, `pattern_kind`, normalised `title` | code-assigned |
 | `captains_log/dedup.py` · `compute_proposal_fingerprint` | `category`, `scope`, `normalized_what` | **all three are model output** |
 
 The three that hash **facts** deduplicate. The one that hashes **judgments** produced 832
@@ -245,8 +245,25 @@ nothing to do costs nothing; a sweep with nothing to do still runs.
 
 Bounds are **terminal conditions, not ceilings**. The idle sweep had a ceiling of 2 and reached
 311 attempts because its exclusion predicate required a terminal reason and classed
-`budget_denied` as transient. **No forward progress is itself a terminal condition**, and a
-bounded analysis that cannot advance emits *"undetermined within budget"* rather than retrying.
+`budget_denied` as transient.
+
+Three bounds are declared, and the first one reached ends the run:
+
+1. **No forward progress — the primary bound.** An investigation step that adds **no new evidence
+   key** to the package terminates the analysis **immediately**, at that step. Not after a
+   retry allowance, and regardless of remaining budget or attempt count.
+2. **A step ceiling** of 8 investigation steps per analysis, as a backstop for a run that keeps
+   producing new keys without converging.
+3. **A declared per-analysis cost budget**, set in configuration.
+
+Bound 1 is the one that matters and is stated first because it is the one the sweep lacked. A
+denial, an error, or an empty result that yields no new evidence key **is** no forward progress,
+whatever its transient-or-terminal classification says — that classification is exactly what let
+`budget_denied` retry 311 times against a ceiling of 2, and this rule makes the classification
+irrelevant to termination.
+
+A run ending on any bound emits *"undetermined within budget"* with the steps taken and the bound
+that fired.
 
 ### D8 — The capture corpus is a named substrate with explicit retention
 
@@ -254,10 +271,18 @@ The reconstructable turn record is promoted from a by-product of a subsystem to 
 substrate with a stated retention policy**, and the policy is written down rather than inherited
 from the absence of a lifecycle rule.
 
-The initial policy is **retain indefinitely, with capture indices excluded from any ILM delete
-phase**, revisable on measured storage cost. The corpus is 1,941 turns and a few megabytes; the
-cost of keeping it is negligible and the cost of losing it is every future analysis, including
-back-testing anything this pillar builds against real history.
+The initial policy is **retain indefinitely**, revisable on measured storage cost. The corpus is
+1,941 turns and a few megabytes; the cost of keeping it is negligible and the cost of losing it
+is every future analysis, including back-testing anything this pillar builds against real
+history.
+
+**The policy must be attached, not merely absent.** Today the capture indices carry *no*
+lifecycle policy at all, so "nothing deletes them" and "we decided to keep them" are
+indistinguishable, and the next person to attach a default policy destroys the corpus without
+overriding any stated decision. This decision is satisfied only by a **named lifecycle policy
+explicitly attached to `agent-captains-captures-*` whose phase set contains no delete phase**. An
+unattached index fails this decision — that is the current state, and it is the thing being
+fixed.
 
 Capture is LLM-free and upstream of every consumer, so the entire analysis layer can be switched
 off — as three quarters of it currently is — without losing the raw material.
@@ -283,8 +308,14 @@ Named so they are not silently assumed decided:
 - **The ADR-0126 implementation chain is not gated by this ADR.** FRE-1015, FRE-1016, FRE-1017
   and FRE-1018 all read the ADR-0098 Claim and Stance layer in Neo4j; none reads a session digest
   or a capture, and none is affected by the unit of analysis. The hold recorded in MASTER_PLAN
-  section 0 should be lifted. The genuine dependency is FRE-1021, it binds FRE-1015 alone through
-  its entity-selection precondition, and it is a measurement ticket that can run in parallel.
+  section 0 should be lifted.
+
+  The genuine dependency is **FRE-1021**, through the entity-selection precondition, and it binds
+  the **topic-scoped** surface only — ADR-0126 D2 states that the always-present behavioural
+  surface does not inherit that failure mode. Per MASTER_PLAN section 0 the precondition has been
+  written into **FRE-1017's AC-3 and FRE-1015's AC-1**, while **FRE-1016, FRE-1018 and FRE-1019
+  were never checked for the same relay gap**; that check is owed regardless of this ADR. FRE-1021
+  is a measurement ticket and can run in parallel rather than in front.
 
 ---
 
@@ -483,21 +514,28 @@ prod substrate without the documented opt-in.
   retained in the key, which is the exact defect that produced 832 fingerprints from 942
   proposals.
 
-- **AC-2** — The Analyzer reproduces master's verdict on ADR criteria it was not told the answer
-  to. · **Check:** select one Accepted ADR criterion independently established as satisfied in
-  production and one independently established as unsatisfied; run the Analyzer against
-  production with both, blind to the expected outcome, and compare its verdicts to the
-  established ones. · *Fails if* it returns green on the unsatisfied criterion, which is the
-  vacuous pass this pillar exists to make impossible, or if it cannot cite the query or record
-  that decided either verdict.
+- **AC-2** — The Analyzer reproduces independently-established verdicts on ADR criteria it was not
+  told the answers to, and never returns a false green. · **Check:** **pre-registration is part of
+  the criterion.** Draw a sample of at least five criteria at random from the Accepted-and-
+  Implemented ADR corpus, including at least one independently established as **unsatisfied** in
+  production; record the sample and every expected outcome in the implementation ticket **before
+  the Analyzer is run against them**. Then run blind and compare. · *Fails if* the Analyzer
+  returns green on any criterion established as unsatisfied — a false green is the vacuous pass
+  this pillar exists to make impossible — or if it cannot cite the query or record that decided a
+  verdict, or if the sample or its expected outcomes were recorded after any run. A false *red* is
+  noise and does not fail this criterion; the asymmetry is deliberate.
 
-- **AC-3** — A verdict that depends on absent evidence is INCONCLUSIVE, and the same verdict on
-  the same input with the evidence present is not. · **Check:** run a criterion whose evaluation
-  requires the cost dimension and assert the verdict is INCONCLUSIVE naming `cost_usd`; then
-  re-run the identical criterion on a fixture where the cost dimension is populated and assert the
-  verdict is green or red. · *Fails if* the first returns a confident verdict — confabulation
-  from absent evidence — or if the second is also INCONCLUSIVE, which would mean INCONCLUSIVE is a
-  blanket default rather than a claim about missing evidence.
+- **AC-3** — For **every** declared evidence dimension, a verdict depending on that dimension is
+  INCONCLUSIVE when the dimension is `not_recorded` and green-or-red when it is present. ·
+  **Check:** iterate the full dimension vocabulary — `user_message`, `assistant_response`,
+  `tool_calls`, `assembled_context`, `recalled_memory`, `model_and_params`, `identifiers`,
+  `reasoning_trace`, and the cost dimension — and for each, evaluate a criterion depending on it
+  twice: once on a fixture where it is `not_recorded`, asserting INCONCLUSIVE **naming that
+  dimension**, and once where it is populated, asserting green or red. · *Fails if* any dimension
+  yields a confident verdict while absent, if any yields INCONCLUSIVE while present, or if the
+  INCONCLUSIVE result names a different dimension than the missing one. Passing on `cost_usd`
+  alone does not satisfy this criterion — dimension-specific branching that handles cost and
+  mishandles the rest is the failure being excluded.
 
 - **AC-4** — An owner disposition is joinable back to the finding and to the evidence that
   produced it. · **Check:** promote one finding, record a `rejected` disposition against it, then
@@ -512,25 +550,38 @@ prod substrate without the documented opt-in.
   without a joined row, which would let the pillar reason about dollars from the unpopulated
   `cost_usd` capture field.
 
-- **AC-6** — An analysis that cannot advance terminates and says so. · **Check:** induce a
-  no-forward-progress condition — a repeated denial classed transient, the same shape as the
-  `budget_denied` loop that reached 311 attempts against a ceiling of 2 — and assert the run stops
-  and emits *"undetermined within budget"*. · *Fails if* it retries past the bound or reports a
-  conclusion, since a ceiling that is not a terminal condition is the defect that halted the
-  harness.
+- **AC-6** — An analysis that stops making progress halts **at the step that made none**. ·
+  **Check:** construct a run whose step *N* adds a new evidence key and whose step *N+1* adds
+  none — the `budget_denied` shape, a denial that returns no new key while classed transient —
+  and assert the run terminates at step *N+1*, emitting *"undetermined within budget"* naming
+  bound 1 and reporting *N+1* steps taken. · *Fails if* step *N+2* is attempted for any reason,
+  including a retry allowance, a transient classification, or remaining budget. Eventual
+  termination does not pass: a run that retries twice and then emits the phrase fails, because
+  the defect being excluded is the 311-attempt loop that also terminated eventually.
 
-- **AC-7** — The capture indices are provably excluded from deletion. · **Check:** query the
-  effective lifecycle policy for `agent-captains-captures-*` and assert no delete phase applies;
-  assert the check fails when a delete phase is attached to a fixture index. · *Fails if* the
-  assertion passes on an index that does carry a delete phase, which would make it a decoration
-  rather than a guard.
+- **AC-7** — The capture indices carry an **explicitly attached** retention policy with no delete
+  phase. · **Check:** resolve the effective lifecycle policy for `agent-captains-captures-*` and
+  assert (a) a **named policy is attached**, and (b) that policy's phase set contains no delete
+  action. Then assert the check **fails** in both directions: against an index with no policy
+  attached, and against an index whose attached policy carries a delete phase. · *Fails if* the
+  check passes on an index with no policy attached — that is the **current** state, where the
+  corpus survives by omission, and a criterion that green-lights zero change verifies nothing.
 
-- **AC-8** — Removing any retained collector turns a *named* Analyzer assertion red from a green
-  baseline. · **Check:** establish a green baseline across AC-1 to AC-7, then disable each of the
-  three retained collectors in turn and assert a specific, pre-named assertion turns red for each.
-  · *Fails if* any collector can be removed with every assertion still green — that collector is
-  then not an input to anything, and D1's claim that the collectors are load-bearing is false.
-  This is ADR-0126's D7 rule applied to this ADR's own producers.
+- **AC-8** — Removing any retained collector turns a *pre-named* assertion red from a green
+  baseline. · **Check:** establish a green baseline across AC-1 to AC-7 **and** the three
+  assertions below, then disable each collector in turn per this matrix and assert the named
+  assertion — and only that one — turns red:
+
+  | Collector disabled | Assertion that must turn red | The assertion |
+  |---|---|---|
+  | `insights/engine.py` | **A-INS** | a verdict about cost or a cross-substrate trend cites at least one `Insight` or `CostAnomaly` evidence key |
+  | `telemetry/context_quality.py` | **A-CQ** | a verdict about context assembly cites at least one `CompactionQualityIncident` fingerprint |
+  | `second_brain/quality_monitor.py` | **A-KG** | a verdict about graph health cites at least one `GraphHealthReport` or `QualityReport` metric |
+
+  · *Fails if* any collector can be disabled with all three assertions still green — that
+  collector is then an input to nothing and D1's claim that the collectors are load-bearing is
+  false — or if the assertion that turns red is chosen after observing the mutation rather than
+  taken from this matrix. This is ADR-0126's D7 rule applied to this ADR's own producers.
 
 **Seam owner:** AC-8 owns the assembled-ADR seam. This ADR does **not** close when its last child
 ticket merges — it closes when the mutation run in AC-8 completes from a green baseline, because

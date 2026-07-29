@@ -15,6 +15,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
+from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -135,6 +137,58 @@ async def test_local_reflection_takes_no_reservation() -> None:
 
     gate.reserve.assert_not_awaited()
     recorder.assert_not_awaited()
+
+
+def test_cost_is_collected_even_when_the_job_raises() -> None:
+    """The sink must be populated on the FAILURE path, not only on success.
+
+    The most likely DSPy failure is a post-call one — the predictor returned and
+    parsing its result failed — which is exactly when the provider has already
+    billed. If ``collect_dspy_cost`` ran only on the success path, the sink would
+    be empty on those paths and the caller would refund spend that really
+    happened, so the cap could never trip on a repeatedly-failing reflection.
+    """
+    import dspy
+
+    from personal_agent.llm_client.dspy_gate import DspyJobCost
+
+    sink = DspyJobCost()
+    lm = SimpleNamespace(
+        model="anthropic/claude-sonnet-4-6",
+        history=[{"cost": 0.07, "usage": {"prompt_tokens": 900, "completion_tokens": 120}}],
+    )
+
+    def _boom(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("predictor exploded after the provider billed")
+
+    from personal_agent.captains_log import reflection_dspy
+
+    with (
+        # Patched at its source module: generate_reflection_dspy imports
+        # configure_dspy_lm inside the function body.
+        patch(
+            "personal_agent.llm_client.dspy_adapter.configure_dspy_lm",
+            return_value=lm,
+        ),
+        patch.object(dspy, "ChainOfThought", _boom),
+        pytest.raises(RuntimeError, match="predictor exploded"),
+    ):
+        reflection_dspy.generate_reflection_dspy(
+            user_message="hi",
+            trace_id="trace-test",
+            steps_count=1,
+            final_state="COMPLETED",
+            reply_length=5,
+            telemetry_summary="",
+            llm_client=None,  # type: ignore[arg-type]
+            captains_log_role="captains_log",
+            cost_sink=sink,
+        )
+
+    assert sink.actual_cost_usd == Decimal("0.07"), (
+        "a job that raised after spending must still report what it spent"
+    )
+    assert sink.input_tokens == 900
 
 
 @pytest.mark.asyncio

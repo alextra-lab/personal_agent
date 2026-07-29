@@ -439,10 +439,27 @@ async def generate_reflection_entry(
                 from personal_agent.cost_gate import budget_role_for
                 from personal_agent.llm_client.dspy_gate import gated_dspy_job
 
+                # Size the reservation from EVERY input DSPy will put in the
+                # prompt, not just the user message — the signature also carries
+                # the telemetry summary, the metrics and any failure excerpt,
+                # which together dwarf it. Sizing on user_message alone
+                # under-counted input tokens by a large factor, and the estimate
+                # is what gets committed whenever the real cost can't be read.
+                _sizing_prompt = "\n".join(
+                    part
+                    for part in (
+                        user_message,
+                        telemetry_summary,
+                        str(metrics_summary or ""),
+                        failure_excerpt_json,
+                        prompt_manifest,
+                    )
+                    if part
+                )
                 async with gated_dspy_job(
                     budget_role=budget_role_for(ModelRole.CAPTAINS_LOG.value),
                     model=f"{_dspy_def.provider}/{_dspy_def.id}",
-                    messages=[{"role": "user", "content": user_message}],
+                    messages=[{"role": "user", "content": _sizing_prompt}],
                     max_tokens=_dspy_def.max_tokens or 4096,
                     trace_ctx=SystemTraceContext.new(
                         "captains_log_reflection", session_id=session_id

@@ -62,7 +62,7 @@ The ticket words AC-2 as "**every** LLM invocation path" and AC-3 as "spend for 
 | Embeddings / rerankers (F5) | **No** | Yes (`purpose=embedding`/`reranker`) | Follow-up ticket — no token estimator for the vendor API shape |
 | `LiteLLMClient` calls with no `session_id` (`litellm_client.py:666-682`) | Yes | **No** | Pre-existing, deliberate ADR-0074 identity contract; named in the audit doc |
 | Intermediate LiteLLM retry attempts (`num_retries`, `litellm_client.py:427-437`) | Once for the job | One row for the final response | Pre-existing; named in the audit doc |
-| Raw `litellm.acompletion` in two eval scripts | No | No | Follow-up ticket; eval-only, hand-run |
+| Raw `litellm.acompletion` in the FRE-630 eval scripts (2 call sites, 3 entry points) | No | No | Follow-up ticket; eval-only, hand-run |
 
 Master's gate should read AC-2/AC-3 as **met for every production serving path, with the four residues above named and three of them ticketed** — not as unqualified totality.
 

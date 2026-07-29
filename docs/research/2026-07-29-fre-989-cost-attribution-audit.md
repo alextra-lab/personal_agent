@@ -31,12 +31,12 @@ you distrust:
 | Path | Reserves against the gate? | Row in `api_costs`? |
 |---|---|---|
 | `LiteLLMClient` (all three acquisition doors) | Yes | Yes |
-| Gateway streaming (`gateway/chat_api.py`) | Yes | **Yes — as of FRE-989** (was: no) |
+| Gateway streaming (`gateway/chat_api.py`) | Yes — but **settled $0** until FRE-989, see F9 | **Yes — as of FRE-989** (was: no) |
 | Cloud DSPy (`get_dspy_lm`, Captain's Log reflection) | **Yes — as of FRE-989** (was: no) | **Yes — as of FRE-989** (was: no) |
 | Embeddings / rerankers (`record_vendor_cost`) | **No** — deliberate, see F5 | Yes |
 | `LiteLLMClient` calls with no `session_id` | Yes | **No** — ADR-0074 identity contract |
 | Intermediate LiteLLM retry attempts | Once, for the job | One row, for the final response |
-| Raw `litellm.acompletion` in two eval scripts | No | No |
+| Raw `litellm.acompletion` in three eval entry points | No | No |
 
 **`budget_counters` is a per-window ledger, not a current-state gauge.** It keeps one row per role per
 window and never supersedes prior windows. A read that does not constrain `window_start` to the current
@@ -56,7 +56,9 @@ predating this change carry no role.
 
 ## Findings
 
-Numbering follows the ticket; F6–F8 were found during the audit and are new.
+Numbering follows the ticket; **F6–F9 were found during the audit and are new** — F9 during the
+adversarial self-review of the fixes for F1–F8, which is worth noting on its own: the audit's own
+output needed auditing.
 
 ### F1 — Role resolution was partial, and `study` fell through it · **fixed**
 
@@ -148,6 +150,27 @@ authoritative. It also proceeded **ungated** when the gate singleton was absent,
 ledger failure cannot break the user's stream. The ungated-proceed case is now `log.error` — a paid call
 running with no gate is an operational fault, not a note.
 
+### F9 — Every gateway streaming turn committed **$0** · **fixed** (found in self-review)
+
+`_commit_reservation_safe` priced the turn with
+`litellm.model_cost.get(f"anthropic/{_CLOUD_MODEL}", {})`. Verified against the installed litellm:
+**there are zero `anthropic/`-prefixed keys in that table** — Anthropic models are indexed by the bare
+id (`claude-sonnet-5`), with the prefixed spellings being bedrock-style (`us.anthropic.…`). So the
+lookup always returned `{}`, both prices were zero, and **every streamed chat turn settled at $0**.
+
+The consequence is not cosmetic: the `main_inference` daily counter never moved for gateway chat, so
+its $10 cap was **unreachable by that path**. The reservation was taken and then fully released on
+commit.
+
+`cost_estimator.py` had already solved exactly this, with a comment saying so — "indexes some models by
+the prefixed form and others by the bare id. Try both rather than silently fall back to $0." The
+gateway did not use it. That lookup is now a shared `lookup_model_pricing` helper, used by every path
+that prices a call, plus a test with **no mock** asserting the shipped model is actually priceable —
+so this cannot regress silently again.
+
+This one is worth dwelling on: it is the same class as F1 (a lookup that misses returns a plausible
+value rather than an error) and it survived in a *money* path for as long as the gateway has existed.
+
 ### F8 — The cloud DSPy channel neither reserved nor recorded · **fixed** (the largest hole)
 
 `get_dspy_lm` builds a raw `dspy.LM` with the provider API key for any cloud-placed role. Every budget
@@ -204,7 +227,10 @@ by accident: no door has a default lane any more.
    more expensive than no answer.
 2. **Decide whether `record_vendor_cost` paths should reserve** (F5) — ADR-0120 decision.
 3. **Retire the dead `promotion` / `freshness` lanes** — declared, zero call sites.
-4. **Raw `litellm.acompletion` in two eval scripts** — outside gate and tracker. Low severity
+4. **Raw `litellm.acompletion` in the FRE-630 eval scripts** — outside gate and tracker. Two call
+   sites, `scripts/eval/fre630_extraction_quality/relabel_v2_types.py:293` and
+   `.../relabel_v2_rels.py:277`, but **three** runnable entry points: `.../adr0109_boundary_probe.py`
+   imports `classify_all` from `relabel_v2_types`, and says so in its own docstring. Low severity
    (eval-only, hand-run), but it is unmetered spend.
 
 ---

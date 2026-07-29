@@ -82,14 +82,33 @@ def test_unknown_role_name_raises() -> None:
         budget_role_for("definitely_not_a_declared_role")
 
 
-def test_unknown_role_error_names_the_remedy() -> None:
-    """The raise must tell the next reader where to fix it, not just that it broke."""
+def test_unknown_role_error_message_leaks_no_internals() -> None:
+    """The remedy goes to the log; the exception says only what went wrong.
+
+    On the orchestrator path a raised error can be rendered straight into the
+    assistant's stream (``chat_api._stream_to_queue`` writes ``[Error: {exc}]``),
+    so internal module paths and symbol names must not ride on the message.
+    """
     with pytest.raises(UnknownBudgetRoleError) as excinfo:
         budget_role_for("definitely_not_a_declared_role")
+
     message = str(excinfo.value)
     assert "definitely_not_a_declared_role" in message
-    assert "BUDGET_ROLE_BY_FACTORY_NAME" in message
-    assert "NON_GATED_ROLES" in message
+    assert "role_map.py" not in message
+    assert "BUDGET_ROLE_BY_FACTORY_NAME" not in message
+
+
+def test_unknown_role_logs_the_remedy() -> None:
+    """The next reader still gets told exactly where to fix it — via the log."""
+    from structlog.testing import capture_logs
+
+    with capture_logs() as logs, pytest.raises(UnknownBudgetRoleError):
+        budget_role_for("definitely_not_a_declared_role")
+
+    entries = [entry for entry in logs if entry.get("event") == "budget_role_unmapped"]
+    assert entries, "an unmapped role must be logged, not only raised"
+    assert entries[0]["factory_role_name"] == "definitely_not_a_declared_role"
+    assert "NON_GATED_ROLES" in entries[0]["remediation"]
 
 
 @pytest.mark.parametrize(

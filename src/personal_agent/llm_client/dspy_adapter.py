@@ -34,7 +34,7 @@ from typing import Any
 
 from personal_agent.config import settings
 from personal_agent.config.model_loader import ModelConfigError, load_model_config
-from personal_agent.llm_client.models import Placement
+from personal_agent.llm_client.models import ModelDefinition, Placement
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.telemetry import get_logger
 
@@ -46,7 +46,7 @@ except ImportError:
     dspy = None  # type: ignore[assignment,unused-ignore]
 
 
-def resolve_dspy_target(role: ModelRole | str) -> tuple[str, Any, bool]:
+def resolve_dspy_target(role: ModelRole | str) -> tuple[str, ModelDefinition, bool]:
     """Resolve a DSPy role to its deployment, definition and cloud-ness.
 
     Extracted from :func:`configure_dspy_lm` so the cost gate can ask "is this
@@ -126,13 +126,15 @@ def configure_dspy_lm(
             "dspy package is required for structured outputs. Install with: uv add dspy>=3.1.0"
         )
 
-    # Accept both ModelRole enum and plain string role names
+    # Accept both ModelRole enum and plain string role names (logging only —
+    # resolve_dspy_target does its own normalisation).
     role_key = role.value if hasattr(role, "value") else role
 
-    # Dispatch on PLACEMENT, not on whether `provider` is set. Under ADR-0121
-    # every deployment names a provider — including local ones (slm_local) — so
-    # `provider is not None` no longer means "cloud", and local deployments would
-    # be routed through LiteLLM as "slm_local/<id>" with no api_base.
+    # `is_cloud` is derived from PLACEMENT, not from whether `provider` is set:
+    # under ADR-0121 every deployment names a provider — including local ones
+    # (slm_local) — so `provider is not None` no longer means "cloud", and local
+    # deployments would be routed through LiteLLM as "slm_local/<id>" with no
+    # api_base. See resolve_dspy_target for the check itself.
     _deployment_key, model_def, is_cloud = resolve_dspy_target(role)
 
     model_id = model_def.id

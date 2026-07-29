@@ -17,6 +17,7 @@ from uuid import uuid4
 import pytest
 
 from personal_agent.gateway.chat_api import (
+    _commit_reservation_safe,
     _CLOUD_MODEL,
     _record_gateway_cost_safe,
     gateway_stream_usage,
@@ -61,6 +62,37 @@ class TestGatewayStreamUsage:
             cost, _inp, _out = gateway_stream_usage(_final_message(1000, 1000))
         # 1000 * 3e-6 + 1000 * 1.5e-5 = 0.018
         assert cost == Decimal("0.018000")
+
+    def test_prices_from_the_BARE_model_id(self) -> None:
+        """The real-world case: litellm carries no anthropic/-prefixed keys at all.
+
+        Looking up only ``anthropic/<model>`` priced every gateway turn at
+        exactly $0 — so the main_inference counter never moved for streamed
+        chat and its cap was unreachable by this path (FRE-989).
+        """
+        bare_pricing = {
+            _CLOUD_MODEL: {
+                "input_cost_per_token": 0.000003,
+                "output_cost_per_token": 0.000015,
+            }
+        }
+        with patch("litellm.model_cost", bare_pricing):
+            cost, _inp, _out = gateway_stream_usage(_final_message(1000, 1000))
+
+        assert cost == Decimal("0.018000"), (
+            "pricing must resolve via the bare id, not only the prefixed form"
+        )
+
+    def test_the_shipped_model_is_actually_priceable(self) -> None:
+        """Guard against the model id drifting out of litellm's real table.
+
+        No mock: if this fails, the deployed gateway is silently billing $0.
+        """
+        cost, _inp, _out = gateway_stream_usage(_final_message(1000, 1000))
+        assert cost > Decimal("0"), (
+            f"litellm has no pricing for {_CLOUD_MODEL!r} under either spelling; "
+            "gateway turns would settle at $0 and the cap could never deny"
+        )
 
 
 class TestRecordGatewayCost:
@@ -121,6 +153,49 @@ class TestRecordGatewayCost:
 
         tracker.record_api_call.assert_awaited_once()
         assert tracker.record_api_call.await_args.kwargs["cost_usd"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_commit_falls_back_to_the_estimate_when_unpriceable(self) -> None:
+        """Tokens burned but unpriceable must settle the estimate, not $0.
+
+        Settling zero hands the headroom straight back for spend that did occur
+        — the failure this ticket exists to remove.
+        """
+        gate = AsyncMock()
+        with (
+            patch("personal_agent.cost_gate.get_default_gate_or_none", return_value=gate),
+            patch("litellm.model_cost", {}),
+        ):
+            await _commit_reservation_safe(
+                reservation_id=uuid4(),
+                trace_id=str(uuid4()),
+                final_message=_final_message(1000, 500),
+                estimate=Decimal("0.42"),
+            )
+
+        assert gate.commit.await_args.args[1] == Decimal("0.42")
+
+    @pytest.mark.asyncio
+    async def test_commit_without_an_estimate_is_safe(self) -> None:
+        """The no-gate startup path passes estimate=None; that must not blow up.
+
+        Guards the shape of the bug where ``reservation_amount`` was bound only
+        inside the gate branch while the task launch read it unconditionally —
+        an UnboundLocalError on every /chat in standalone gateway mode.
+        """
+        gate = AsyncMock()
+        with (
+            patch("personal_agent.cost_gate.get_default_gate_or_none", return_value=gate),
+            patch("litellm.model_cost", {}),
+        ):
+            await _commit_reservation_safe(
+                reservation_id=uuid4(),
+                trace_id=str(uuid4()),
+                final_message=_final_message(1000, 500),
+                estimate=None,
+            )
+
+        assert gate.commit.await_args.args[1] == Decimal("0")
 
     @pytest.mark.asyncio
     async def test_a_ledger_failure_never_breaks_the_stream(self) -> None:

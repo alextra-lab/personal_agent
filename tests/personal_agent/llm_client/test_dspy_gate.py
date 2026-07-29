@@ -56,7 +56,7 @@ class TestCollectDspyCost:
         assert sink.call_count == 3
 
     def test_fully_cached_job_settles_at_zero(self) -> None:
-        """A cache hit has cost=None and no tokens — it genuinely cost nothing."""
+        """A usage block reporting no work done is positively free."""
         sink = DspyJobCost()
         collect_dspy_cost(_lm([_entry(None, 0, 0)]), sink, model=_MODEL)
 
@@ -64,9 +64,38 @@ class TestCollectDspyCost:
         assert sink.cost_source == COST_SOURCE_DSPY_HISTORY
         assert sink.observed is True
 
+    def test_missing_usage_block_is_unavailable_not_free(self) -> None:
+        """ "We could not tell" must not collapse into "it cost nothing".
+
+        An entry with no usage block at all is indistinguishable from a cache
+        hit only if you squint. Treating it as free releases the full
+        reservation for a call that may well have been billed.
+        """
+        sink = DspyJobCost()
+        with patch("litellm.model_cost", {}):
+            collect_dspy_cost(_lm([{"cost": None}]), sink, model=_MODEL)
+
+        assert sink.cost_source == COST_SOURCE_UNAVAILABLE
+        assert sink.observed is False
+
     def test_unpriced_but_used_falls_back_to_local_pricing(self) -> None:
         """Tokens with no reported cost are priced locally, not assumed free."""
         pricing = {_MODEL: {"input_cost_per_token": 0.000003, "output_cost_per_token": 0.000015}}
+        sink = DspyJobCost()
+        with patch("litellm.model_cost", pricing):
+            collect_dspy_cost(_lm([_entry(None, 1000, 1000)]), sink, model=_MODEL)
+
+        assert sink.cost_source == COST_SOURCE_PRICING_FALLBACK
+        assert sink.actual_cost_usd == Decimal("0.018000")
+
+    def test_local_pricing_finds_the_bare_model_id(self) -> None:
+        """Litellm keys Anthropic models by the BARE id — there are no anthropic/ keys.
+
+        A single-key lookup on the prefixed form returns nothing, which made
+        this whole fallback dead code for its only caller.
+        """
+        bare = _MODEL.split("/", 1)[-1]
+        pricing = {bare: {"input_cost_per_token": 0.000003, "output_cost_per_token": 0.000015}}
         sink = DspyJobCost()
         with patch("litellm.model_cost", pricing):
             collect_dspy_cost(_lm([_entry(None, 1000, 1000)]), sink, model=_MODEL)
@@ -83,7 +112,38 @@ class TestCollectDspyCost:
         assert sink.cost_source == COST_SOURCE_UNAVAILABLE
         assert sink.observed is False
 
-    def test_empty_history_leaves_sink_untouched(self) -> None:
+    def test_mixed_priced_and_unpriced_keeps_both_contributions(self) -> None:
+        """A partially-priced job must not silently drop the unpriced call.
+
+        Summing only the priced entries while still counting every entry's
+        tokens loses real spend: the job reads as $0.03 while 5,900 tokens
+        vanish from the total.
+        """
+        sink = DspyJobCost()
+        with patch("litellm.model_cost", {}):
+            collect_dspy_cost(
+                _lm([_entry(0.03, 1000, 100), _entry(None, 5000, 900)]), sink, model=_MODEL
+            )
+
+        assert sink.actual_cost_usd == Decimal("0.03")  # the floor, not the answer
+        assert sink.input_tokens == 6000
+        assert sink.output_tokens == 1000
+        assert sink.cost_source == COST_SOURCE_UNAVAILABLE, (
+            "a partially-priced job must not claim to be fully observed"
+        )
+
+    def test_collect_is_idempotent(self) -> None:
+        """It reads as a setter, so calling it twice must not double the job."""
+        sink = DspyJobCost()
+        lm = _lm([_entry(0.01, 100, 50)])
+        collect_dspy_cost(lm, sink, model=_MODEL)
+        collect_dspy_cost(lm, sink, model=_MODEL)
+
+        assert sink.call_count == 1
+        assert sink.input_tokens == 100
+        assert sink.actual_cost_usd == Decimal("0.01")
+
+    def test_empty_history_leaves_sink_unobserved(self) -> None:
         sink = DspyJobCost()
         collect_dspy_cost(_lm([]), sink, model=_MODEL)
         assert sink.call_count == 0
@@ -143,10 +203,10 @@ class TestGatedDspyJob:
         assert kwargs["output_tokens"] == 300
 
     @pytest.mark.asyncio
-    async def test_an_exception_refunds_and_reraises(
+    async def test_failure_before_any_spend_refunds_and_reraises(
         self, gate: AsyncMock, trace_ctx: SimpleNamespace
     ) -> None:
-        """A failed job returns its headroom now, not when the reaper sweeps."""
+        """A job that failed without spending returns its headroom immediately."""
         recorder = AsyncMock()
         with (
             patch("personal_agent.cost_gate.get_default_gate", return_value=gate),
@@ -167,7 +227,67 @@ class TestGatedDspyJob:
         recorder.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_unobserved_cost_commits_the_estimate_not_zero(
+    async def test_failure_AFTER_spend_commits_rather_than_refunds(
+        self, gate: AsyncMock, trace_ctx: SimpleNamespace
+    ) -> None:
+        """Real money already spent must not be refunded off the counter.
+
+        The most likely DSPy failure is a POST-call one — the predictor returned
+        and parsing its result failed, which is exactly why the manual fallback
+        exists. The provider has already billed. Refunding here would erase real
+        spend from the counter, and the fallback would then spend again.
+        """
+        recorder = AsyncMock()
+        with (
+            patch("personal_agent.cost_gate.get_default_gate", return_value=gate),
+            patch("personal_agent.llm_client.cost_tracker.record_vendor_cost", recorder),
+            pytest.raises(ValueError, match="parse failed"),
+        ):
+            async with gated_dspy_job(
+                budget_role="captains_log",
+                model=_MODEL,
+                messages=[{"role": "user", "content": "x"}],
+                max_tokens=512,
+                trace_ctx=trace_ctx,
+            ) as sink:
+                sink.actual_cost_usd = Decimal("0.12")
+                sink.cost_source = COST_SOURCE_DSPY_HISTORY
+                raise ValueError("parse failed")
+
+        gate.refund.assert_not_awaited()
+        gate.commit.assert_awaited_once()
+        assert gate.commit.await_args.args[1] == Decimal("0.12")
+        recorder.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_commit_failure_never_propagates(
+        self, gate: AsyncMock, trace_ctx: SimpleNamespace
+    ) -> None:
+        """A ledger hiccup must not become a duplicated LLM charge.
+
+        If settlement raised, the caller's error handling would read it as "the
+        reflection failed" and run its fallback — a second paid call for a turn
+        the provider already billed.
+        """
+        gate.commit = AsyncMock(side_effect=RuntimeError("postgres blip"))
+        recorder = AsyncMock()
+        with (
+            patch("personal_agent.cost_gate.get_default_gate", return_value=gate),
+            patch("personal_agent.llm_client.cost_tracker.record_vendor_cost", recorder),
+        ):
+            async with gated_dspy_job(
+                budget_role="captains_log",
+                model=_MODEL,
+                messages=[{"role": "user", "content": "x"}],
+                max_tokens=512,
+                trace_ctx=trace_ctx,
+            ) as sink:
+                sink.actual_cost_usd = Decimal("0.05")
+                sink.cost_source = COST_SOURCE_DSPY_HISTORY
+            # must not raise
+
+    @pytest.mark.asyncio
+    async def test_unobserved_cost_commits_at_least_the_estimate(
         self, gate: AsyncMock, trace_ctx: SimpleNamespace
     ) -> None:
         """Settling an unpriced job at zero would hand back headroom for real spend."""
@@ -187,6 +307,55 @@ class TestGatedDspyJob:
 
         settled = gate.commit.await_args.args[1]
         assert settled > Decimal("0"), "an unpriced job must not settle at zero"
+
+    @pytest.mark.asyncio
+    async def test_partially_priced_job_settles_at_least_its_floor(
+        self, gate: AsyncMock, trace_ctx: SimpleNamespace
+    ) -> None:
+        """max(floor, estimate) — a known-partial cost must never under-count."""
+        recorder = AsyncMock()
+        with (
+            patch("personal_agent.cost_gate.get_default_gate", return_value=gate),
+            patch("personal_agent.llm_client.cost_tracker.record_vendor_cost", recorder),
+        ):
+            async with gated_dspy_job(
+                budget_role="captains_log",
+                model=_MODEL,
+                messages=[{"role": "user", "content": "x"}],
+                max_tokens=512,
+                trace_ctx=trace_ctx,
+            ) as sink:
+                sink.actual_cost_usd = Decimal("9.99")  # priced floor, but incomplete
+                sink.cost_source = COST_SOURCE_UNAVAILABLE
+
+        assert gate.commit.await_args.args[1] == Decimal("9.99")
+
+    @pytest.mark.asyncio
+    async def test_ledger_row_names_the_canonical_prefixed_model(
+        self, gate: AsyncMock, trace_ctx: SimpleNamespace
+    ) -> None:
+        """api_costs.model must match model_call_completed (ADR-0121 T4/AC-8).
+
+        Migration 0021 exists because a bare id splits one model's spend across
+        two keys in get_cost_by_model().
+        """
+        recorder = AsyncMock()
+        with (
+            patch("personal_agent.cost_gate.get_default_gate", return_value=gate),
+            patch("personal_agent.llm_client.cost_tracker.record_vendor_cost", recorder),
+        ):
+            async with gated_dspy_job(
+                budget_role="captains_log",
+                model=_MODEL,
+                messages=[{"role": "user", "content": "x"}],
+                max_tokens=512,
+                trace_ctx=trace_ctx,
+            ) as sink:
+                sink.actual_cost_usd = Decimal("0.01")
+                sink.cost_source = COST_SOURCE_DSPY_HISTORY
+
+        assert recorder.await_args.kwargs["model"] == _MODEL
+        assert recorder.await_args.kwargs["provider"] == "anthropic"
 
     @pytest.mark.asyncio
     async def test_budget_denied_propagates_and_nothing_is_recorded(

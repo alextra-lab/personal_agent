@@ -7,11 +7,16 @@ at every downstream layer — the counters, the ledger and the telemetry all
 record the *wrong* lane with full confidence, so the mis-billing is invisible
 precisely where you would look for it.
 
-That fallback is what let ``study`` bill against the user-facing budget instead
-of its own $5 isolation lane (FRE-839), defeating an isolation that existed so a
-one-time corpus run could never contend with live extraction. FRE-1037 widened
-``ModelRole`` from four members to fourteen, tripling the fallback's blast
-radius, which is why totality is enforced here rather than left to review.
+``study`` is the worked example, and its precise shape matters: the role is
+capped in ``budget.yaml`` with its own $5 isolation lane (FRE-839, so a one-time
+corpus run can never contend with live extraction) yet had **no entry here**, so
+the role-name door resolved it to ``main_inference``. No spend actually moved —
+every live ``study`` call site names its lane explicitly — so this was a
+reachable-but-unused door, not an incident. It is named because it shows the
+failure is silent by construction: nothing distinguishes "resolved correctly"
+from "fell through" at any layer. FRE-1037 widened ``ModelRole`` from four
+members to fourteen, tripling the fallback's blast radius, which is why totality
+is enforced here rather than left to review.
 
 Three mechanisms keep the map, ``ModelRole`` and ``config/governance/budget.yaml``
 in agreement, so this module's raise is unreachable for any *declared* role:
@@ -27,11 +32,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import structlog
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from collections.abc import Set as AbstractSet
 
     from personal_agent.cost_gate.types import BudgetConfig
+
+
+log = structlog.get_logger(__name__)
 
 
 class UnknownBudgetRoleError(ValueError):
@@ -116,11 +126,20 @@ def budget_role_for(factory_role_name: str) -> str:
     try:
         return BUDGET_ROLE_BY_FACTORY_NAME[factory_role_name]
     except KeyError:
+        # The remediation detail goes to the log, not the exception message: on
+        # the orchestrator path a raised error can be rendered straight into the
+        # assistant's stream, and internal module paths do not belong there.
+        log.error(
+            "budget_role_unmapped",
+            factory_role_name=factory_role_name,
+            remediation=(
+                "add an entry to BUDGET_ROLE_BY_FACTORY_NAME in "
+                "cost_gate/role_map.py, or — if the role never acquires a gated "
+                "LLM client — to NON_GATED_ROLES in the same module"
+            ),
+        )
         raise UnknownBudgetRoleError(
-            f"No budget lane declared for factory role {factory_role_name!r}. "
-            f"Add it to BUDGET_ROLE_BY_FACTORY_NAME in "
-            f"src/personal_agent/cost_gate/role_map.py, or — if it never acquires "
-            f"a gated LLM client — to NON_GATED_ROLES in the same module."
+            f"No budget lane declared for factory role {factory_role_name!r}."
         ) from None
 
 

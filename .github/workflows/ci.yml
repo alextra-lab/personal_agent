@@ -259,6 +259,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Vitest does not typecheck and eslint here is not type-aware, so nothing
+      # in CI caught type errors before `next build` ran at deploy time (FRE-1040
+      # shipped a closed-union mismatch past both). This is the backend's
+      # `mypy` gate's counterpart.
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Run Vitest
         run: npx vitest run
 

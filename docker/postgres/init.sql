@@ -29,7 +29,15 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- cleared back to NULL if the session is resumed (SessionRepository
     -- append_message / update). Mirrors
     -- docker/postgres/migrations/0019_sessions_purged_at.sql.
-    purged_at TIMESTAMPTZ NULL
+    purged_at TIMESTAMPTZ NULL,
+    -- Per-session AG-UI transport event counter (FRE-1040 / ADR-0075). The
+    -- allocator for session_events.seq: the client dispatches only a contiguous
+    -- run per session, so the numbers must be per-session, not global. Stored
+    -- rather than derived from MAX(seq) because session_events is swept on a 24h
+    -- TTL and a derived counter would reset and re-issue seqs the client has
+    -- already acknowledged. Mirrors
+    -- docker/postgres/migrations/0023_session_events_per_session_seq.sql.
+    last_event_seq INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX idx_sessions_last_active ON sessions(last_active_at DESC);
@@ -397,9 +405,15 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_session
 -- ===========================================================================
 -- WebSocket session event buffer (ADR-0075 / FRE-388)
 --
--- Durable, Postgres-sequenced buffer for AG-UI transport events.
+-- Durable buffer for AG-UI transport events.
 -- On reconnect the client sends last_seq; server replays seq > last_seq.
 -- A background cleanup task deletes rows older than 24 hours.
+--
+-- seq is allocated PER SESSION from sessions.last_event_seq (FRE-1040), because
+-- the client dispatches only a contiguous run for the session it is attached to.
+-- The legacy global sequence below is retained only so that rolling the gateway
+-- back to a build which does not supply seq explicitly still writes; the running
+-- application never relies on the DEFAULT.
 -- ===========================================================================
 
 CREATE SEQUENCE IF NOT EXISTS session_events_seq;

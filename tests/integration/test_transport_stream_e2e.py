@@ -21,15 +21,33 @@ Starlette's TestClient (anyio background-thread loop).
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from uuid import UUID, uuid4
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
 
-from personal_agent.service.database import AsyncSessionLocal
+from personal_agent.exceptions import UnknownSessionError
+from personal_agent.service.database import AsyncSessionLocal, engine
 from personal_agent.transport.agui.event_buffer import SessionEventBuffer
 
 pytestmark = pytest.mark.integration
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _dispose_engine_between_tests() -> AsyncGenerator[None, None]:
+    """Drop pooled connections after each test so the next event loop gets fresh ones.
+
+    ``AsyncSessionLocal`` is module-level, so its pool holds connections bound to
+    whichever event loop first opened them. pytest-asyncio gives each test a new
+    loop, so from the second test onward every checkout raised — and because
+    ``_postgres_available`` swallows that into a skip, the suite reported green
+    while silently running only its first test. Disposing between tests is what
+    makes the rest of this file actually execute.
+    """
+    yield
+    await engine.dispose()
 
 
 async def _postgres_available() -> bool:
@@ -163,7 +181,10 @@ class TestSessionEventBuffer:
             buf = SessionEventBuffer(db)
             oldest = await buf.oldest_available_seq(session_id)
             # This is the condition the _sender uses to decide to send REPLAY_GAP.
-            is_gap = oldest is not None and stale_last_seq < oldest
+            # ``+ 1`` because the client's *next* expected seq is what must still
+            # be retained; ``oldest == last_seq + 1`` means nothing is missing
+            # (FRE-1040 off-by-one).
+            is_gap = oldest is not None and stale_last_seq + 1 < oldest
 
         assert is_gap, f"Expected gap: oldest={oldest}, stale_last_seq={stale_last_seq}"
 
@@ -174,3 +195,96 @@ class TestSessionEventBuffer:
 
         assert len(replayed) >= 1
         assert replayed[0]["seq"] == seq10
+
+
+class TestPerSessionSequence:
+    """``seq`` is allocated per session, not from a global sequence (FRE-1040).
+
+    The client dispatches only a *contiguous* run from its stored ``ackSeq``
+    (``seshat-pwa/src/lib/agui-client.ts``). A global sequence lets a second live
+    conversation consume numbers inside this session's series, and the resulting
+    hole is never fillable on this session's socket — the response is buffered
+    forever and only a full reload recovers it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_interleaved_sessions_each_get_a_contiguous_series(self) -> None:
+        """Appending alternately to two sessions leaves neither series with a hole."""
+        if not await _postgres_available():
+            pytest.skip("Test Postgres (port 5433) not reachable — run make test-infra-up")
+
+        session_a = uuid4()
+        session_b = uuid4()
+        await _create_session(session_a)
+        await _create_session(session_b)
+
+        seqs_a: list[int] = []
+        seqs_b: list[int] = []
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            for i in range(4):
+                seqs_a.append(await buf.append(session_a, "TEXT_DELTA", {"data": f"a{i}"}))
+                seqs_b.append(await buf.append(session_b, "TEXT_DELTA", {"data": f"b{i}"}))
+
+        assert seqs_a == list(range(seqs_a[0], seqs_a[0] + 4)), (
+            f"session A's series has a hole: {seqs_a}"
+        )
+        assert seqs_b == list(range(seqs_b[0], seqs_b[0] + 4)), (
+            f"session B's series has a hole: {seqs_b}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_seq_continues_from_the_stored_counter(self) -> None:
+        """The next seq is ``sessions.last_event_seq + 1``, and the counter advances.
+
+        This is the property the migration's backfill relies on: seeding every
+        existing session's counter at the old global high-water mark guarantees no
+        new seq can land at or below a client's already-stored ``ackSeq`` and be
+        discarded as a duplicate.
+        """
+        if not await _postgres_available():
+            pytest.skip("Test Postgres (port 5433) not reachable — run make test-infra-up")
+
+        session_id = uuid4()
+        await _create_session(session_id)
+
+        high_water = 9000
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                text("UPDATE sessions SET last_event_seq = :hw WHERE session_id = :sid"),
+                {"hw": high_water, "sid": session_id},
+            )
+            await db.commit()
+
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            first = await buf.append(session_id, "TEXT_DELTA", {"data": "after-backfill"})
+            second = await buf.append(session_id, "TEXT_DELTA", {"data": "next"})
+
+        assert first == high_water + 1
+        assert second == high_water + 2
+
+        async with AsyncSessionLocal() as db:
+            stored = (
+                await db.execute(
+                    text("SELECT last_event_seq FROM sessions WHERE session_id = :sid"),
+                    {"sid": session_id},
+                )
+            ).scalar_one()
+        assert stored == high_water + 2
+
+    @pytest.mark.asyncio
+    async def test_append_to_unknown_session_raises_and_burns_no_seq(self) -> None:
+        """An append for a session that does not exist fails loudly, not silently.
+
+        Rolling the whole allocation back is what stops a failed write from
+        consuming a number and leaving a permanent hole in the series — the one
+        failure mode the old ``nextval`` default could not avoid.
+        """
+        if not await _postgres_available():
+            pytest.skip("Test Postgres (port 5433) not reachable — run make test-infra-up")
+
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            with pytest.raises(UnknownSessionError):
+                await buf.append(uuid4(), "TEXT_DELTA", {"data": "orphan"})

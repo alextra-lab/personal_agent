@@ -31,6 +31,18 @@ class InvalidMessageError(ValueError):
     """
 
 
+class UnknownSessionError(ValueError):
+    """Raised when a transport event is appended for a session that does not exist.
+
+    The AG-UI event buffer allocates ``seq`` from the session's own counter
+    (``sessions.last_event_seq``, FRE-1040), so a missing session row means no
+    sequence number can be issued. Raised rather than skipped because the client
+    renders strictly in sequence order: dropping the write silently would leave
+    the response persisted but never delivered, which is the exact failure this
+    numbering scheme exists to prevent.
+    """
+
+
 class AttachmentUnsupportedError(ValueError):
     """Raised when a turn's attachment cannot be delivered to the model.
 

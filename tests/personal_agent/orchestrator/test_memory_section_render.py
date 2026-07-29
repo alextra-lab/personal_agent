@@ -129,6 +129,10 @@ def _entity(name: str, description: str = "a described thing", **extra: Any) -> 
     return item
 
 
+def _stance(target: str, affect: str) -> dict[str, Any]:
+    return {"type": "stance", "target": target, "affect": affect}
+
+
 # ---------------------------------------------------------------------------
 # Acceptance criteria — asserted at the executor seam
 # ---------------------------------------------------------------------------
@@ -304,6 +308,47 @@ class TestRendererDispatchesPerItemKind:
         text, _ = self._render([_entity("Sorbet", "icy", mention_count=0)])
         assert "0" in text
 
+    def test_stance_with_affect_renders(self) -> None:
+        """ADR-0126 T1 (FRE-1015): a current, non-empty stance reaches the section."""
+        text, ids = self._render([_stance("Python", "prefers over Java")])
+        assert "Python" in text
+        assert "prefers over Java" in text
+        assert ids == ("stance:Python",)
+
+    def test_stance_with_empty_affect_contributes_no_line_and_no_id(self) -> None:
+        """D6: an empty-affect stance is filtered before render, never rendered blank."""
+        text, ids = self._render([_stance("BarrageRepublicain", "")])
+        assert "BarrageRepublicain" not in text
+        assert ids == ()
+
+    def test_stance_with_whitespace_only_affect_is_filtered(self) -> None:
+        text, ids = self._render([_stance("BarrageRepublicain", "   ")])
+        assert "BarrageRepublicain" not in text
+        assert ids == ()
+
+    def test_entity_and_its_own_stance_both_render_with_distinct_ids(self) -> None:
+        """The BLOCKER this namespacing fixes: an entity and a same-target stance must
+        not consume each other's rendered-id slot -- both render, each with its own
+        correctly kind-namespaced identity.
+        """
+        text, ids = self._render(
+            [_entity("Python", "a programming language"), _stance("Python", "prefers over Java")]
+        )
+        assert "a programming language" in text
+        assert "prefers over Java" in text
+        assert set(ids) == {"Python", "stance:Python"}
+
+    def test_stance_section_header_present_when_populated(self) -> None:
+        text, _ = self._render([_stance("Python", "prefers over Java")])
+        assert "## What The User Thinks About Related Topics" in text
+
+    def test_stance_section_absent_when_only_item_is_filtered(self) -> None:
+        """AC-6: an empty-affect stance produces no stance section at all -- not an
+        empty header, not an orphaned label.
+        """
+        text, _ = self._render([_stance("BarrageRepublicain", "")])
+        assert "What The User Thinks" not in text
+
 
 class TestRendererIsBoundedByStatedConstants:
     """The volatile tail is outside the prompt cache, so its size is a per-turn cost."""
@@ -372,3 +417,31 @@ class TestRendererIsBoundedByStatedConstants:
 
         assert item["user_message"] in text
         assert ids == ("t1",)
+
+    def test_stance_rank_cap_equals_entity_cap(self) -> None:
+        """ADR-0126 T1: deliberately the *same* constant as _MAX_RENDERED_ENTITIES, not
+        an independent value -- a stance is only ever fetched for an entity the recall
+        path already selected, so its rendered prefix must never exceed what the entity
+        prefix already bounds (an independent cap could select a misaligned subset,
+        which would make this an unstated second relevance decision).
+        """
+        from personal_agent.orchestrator.executor import (
+            _MAX_RENDERED_ENTITIES,
+            _MAX_RENDERED_STANCES,
+        )
+
+        assert _MAX_RENDERED_STANCES == _MAX_RENDERED_ENTITIES
+
+        items = [_stance(f"S{i}", f"affect {i}") for i in range(_MAX_RENDERED_ENTITIES + 3)]
+        _, ids = self._render(items)
+        assert len(ids) == _MAX_RENDERED_ENTITIES
+
+    def test_stance_cap_is_an_order_preserving_prefix(self) -> None:
+        """The cap takes the first N in input order -- not a re-sort -- so it reflects
+        the same relevance order recall already established upstream.
+        """
+        from personal_agent.orchestrator.executor import _MAX_RENDERED_ENTITIES
+
+        items = [_stance(f"S{i}", f"affect {i}") for i in range(_MAX_RENDERED_ENTITIES + 3)]
+        _, ids = self._render(items)
+        assert ids == tuple(f"stance:S{i}" for i in range(_MAX_RENDERED_ENTITIES))

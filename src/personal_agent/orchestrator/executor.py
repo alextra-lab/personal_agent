@@ -2240,6 +2240,17 @@ on any current path; it exists so a future producer cannot quietly unbound the
 volatile tail on the legacy path, which has no token budget.
 """
 
+_MAX_RENDERED_STANCES = _MAX_RENDERED_ENTITIES
+"""Rank cap on rendered stances (ADR-0126 T1).
+
+Deliberately the *same* constant as _MAX_RENDERED_ENTITIES, not an independent value: a
+stance is only ever fetched for an entity the recall path already selected, so its
+rendered prefix must never exceed what the entity prefix already bounds — an independent
+cap value could select a stance subset misaligned with which entities actually render,
+which would make this an unstated second relevance decision (the one thing ADR-0126
+forbids).
+"""
+
 _MAX_ITEM_CHARS = 1000
 """Per-item character bound on rendered memory content (FRE-1010).
 
@@ -2292,6 +2303,18 @@ def _episode_text(item: dict[str, Any]) -> str:
     return mark_truncated(raw, _MAX_ITEM_CHARS)
 
 
+def _stance_line(item: dict[str, Any]) -> str:
+    """Render one current stance (ADR-0126 T1).
+
+    Mastery is not rendered: D1 decides affect alone is sufficient, and mastery is
+    correctly null on every live topic-scoped stance (a pure preference/intention, not a
+    stated skill level).
+    """
+    target = item.get("target", "")
+    affect = mark_truncated((item.get("affect") or "").strip(), _MAX_ITEM_CHARS)
+    return f"- {target}: {affect}"
+
+
 def _render_memory_section_with_ids(
     items: list[dict[str, Any]],
 ) -> tuple[str, tuple[str, ...]]:
@@ -2323,12 +2346,15 @@ def _render_memory_section_with_ids(
     """
     entities: list[dict[str, Any]] = []
     episodes: list[dict[str, Any]] = []
+    stance_items: list[dict[str, Any]] = []
     for item in items:
         kind, _ = memory_item_identity(item)
         if kind is MemoryItemKind.ENTITY:
             entities.append(item)
         elif kind is MemoryItemKind.EPISODE:
             episodes.append(item)
+        elif kind is MemoryItemKind.STANCE:
+            stance_items.append(item)
 
     # Filter for content BEFORE applying the bound, so the bound caps what is actually
     # rendered rather than what was merely considered. Cap-then-filter would let blank
@@ -2340,6 +2366,10 @@ def _render_memory_section_with_ids(
         :_MAX_RENDERED_ENTITIES
     ]
     recalled = [m for m in episodes if _episode_text(m)][:_MAX_RENDERED_EPISODES]
+    # D6 (ADR-0126): an empty or whitespace-only affect is filtered before render, never
+    # rendered blank — this is the same filter-then-cap shape as `described`/`recalled`
+    # above, so a blank stance can never burn a rendered slot ahead of a real one.
+    stances = [m for m in stance_items if (m.get("affect") or "").strip()][:_MAX_RENDERED_STANCES]
 
     sections: list[str] = []
     rendered_ids: list[str] = []
@@ -2365,6 +2395,12 @@ def _render_memory_section_with_ids(
         section += (
             "\nYou can reference these past conversations to provide more context-aware responses."
         )
+        sections.append(section)
+
+    if stances:
+        rendered_ids.extend(memory_item_identity(m)[1] for m in stances)
+        section = "\n\n## What The User Thinks About Related Topics\n"
+        section += "\n".join(_stance_line(m) for m in stances)
         sections.append(section)
 
     return "".join(sections), tuple(rendered_ids)
@@ -3446,7 +3482,10 @@ async def step_init(
                 {
                     "type": str(item.get("type", "episode")),
                     "summary": str(
-                        item.get("summary") or item.get("description") or item.get("name", "")
+                        item.get("summary")
+                        or item.get("description")
+                        or item.get("affect")
+                        or item.get("name", "")
                     ),
                 }
                 for item in mem_items[:5]
@@ -3660,6 +3699,34 @@ async def step_init(
                             authenticated=ctx.authenticated,
                         )
                         ctx.memory_context = _format_broad_recall(broad)
+                        # ADR-0126 T1 (FRE-1015): a second, independent entity producer
+                        # outside request_gateway/context.py -- push each recalled
+                        # entity's current stance in before the candidate record below
+                        # is built, so it reflects the enriched list. Fail-closed: a
+                        # stance-layer fault omits enrichment, never fails the turn.
+                        if ctx.memory_context and ctx.authenticated:
+                            from personal_agent.request_gateway.context import (
+                                _entity_names_from_memory_context,
+                                _stance_context_items,
+                            )
+
+                            entity_names = _entity_names_from_memory_context(ctx.memory_context)
+                            if entity_names:
+                                try:
+                                    stances = await memory_service.query_current_stances(
+                                        entity_names,
+                                        authenticated=ctx.authenticated,
+                                        trace_id=ctx.trace_id,
+                                    )
+                                    ctx.memory_context.extend(
+                                        _stance_context_items(entity_names, stances)
+                                    )
+                                except Exception as stance_err:
+                                    log.warning(
+                                        "stance_enrichment_failed",
+                                        trace_id=ctx.trace_id,
+                                        error=str(stance_err),
+                                    )
                         # FRE-1004: legacy path — no gateway candidates to inherit,
                         # so the recalled set is its own candidate set.
                         ctx.recall_candidates = build_recall_candidates(ctx.memory_context, {})

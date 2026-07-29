@@ -108,6 +108,28 @@ class TestMemoryItemIdentity:
     def test_non_mapping_is_unknown(self) -> None:
         assert memory_item_identity("not a dict") == (MemoryItemKind.UNKNOWN, "")
 
+    def test_stance_identity_is_namespaced_by_target(self) -> None:
+        """ADR-0126 T1 (FRE-1015): a stance's identity is 'stance:{target}', not the bare
+        target name. A stance and its own target entity intentionally describe the same
+        World concept, so a bare-name identity would collide in the admission record's
+        rendered-budget counter (turn_evidence.py's _resolve_admission keys by identity
+        string alone) -- one item's render could then satisfy the other's admission check.
+        """
+        item = {"type": "stance", "target": "Python", "affect": "prefers over Java"}
+        assert memory_item_identity(item) == (MemoryItemKind.STANCE, "stance:Python")
+
+    def test_stance_and_entity_sharing_a_target_have_distinct_identities(self) -> None:
+        entity_kind, entity_id = memory_item_identity(_entity("Python"))
+        stance_kind, stance_id = memory_item_identity(
+            {"type": "stance", "target": "Python", "affect": "prefers over Java"}
+        )
+        assert (entity_kind, entity_id) != (stance_kind, stance_id)
+        assert entity_id != stance_id
+
+    def test_stance_with_blank_target_is_unguessed_empty_identity(self) -> None:
+        item = {"type": "stance", "target": "   ", "affect": "prefers over Java"}
+        assert memory_item_identity(item) == (MemoryItemKind.STANCE, "")
+
 
 # ── 2-5. AC-3: admitted vs dropped ────────────────────────────────────────────
 

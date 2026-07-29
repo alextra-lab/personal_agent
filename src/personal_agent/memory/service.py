@@ -2924,6 +2924,77 @@ class MemoryService:
         )
         return chain
 
+    async def query_current_stances(
+        self,
+        targets: list[str],
+        *,
+        authenticated: bool,
+        trace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Current-only, batched Stance retrieval for topic-scoped push enrichment (ADR-0126 D1/D2/D5/D6).
+
+        Push surface: called once per turn for every entity the recall path already selected
+        (``request_gateway/context.py``, and the pre-gateway fallback in
+        ``orchestrator/executor.py``). Current stances only (``valid_to IS NULL AND
+        invalid_at IS NULL``, D5) -- a superseded original is never returned here; the chain is
+        :meth:`query_stance_history`'s job (pull-only, ADR-0126 T4). No emptiness filtering:
+        D6 requires filtering to happen at render, not fetch, so an empty-affect row (e.g.
+        ``Barrage républicain``) is returned like any other and the renderer is what proves it
+        never reaches the model.
+
+        Stance is the harness owner's worldview toward World knowledge -- a single ``is_owner``
+        sentinel edge, not per-user (mirrors :meth:`query_stance_history`; no ``user_id``
+        parameter, unlike Claim's ``HAS_FACT`` scoping).
+
+        Args:
+            targets: Entity names already selected by the recall path this turn. Empty
+                returns [] without a query.
+            authenticated: Whether the request carries a verified identity. False returns [].
+            trace_id: Request trace id for log correlation.
+
+        Returns:
+            One dict per target with a current stance, each with ``target``, ``affect``,
+            ``mastery``. Targets with no current stance are simply absent -- never a
+            placeholder row. Order is not guaranteed to match ``targets``' order (callers
+            that need order-preservation must re-key by ``target`` themselves).
+        """
+        if not self.connected or not self.driver:
+            return []
+        if not authenticated:
+            return []
+        if not targets:
+            return []
+
+        try:
+            async with self.driver.session() as db_session:
+                result = await db_session.run(
+                    "UNWIND $targets AS target\n"
+                    "MATCH (:Person {is_owner: true})-[s:HAS_STANCE]->(:Entity {name: target})\n"
+                    "WHERE s.valid_to IS NULL AND s.invalid_at IS NULL\n"
+                    "RETURN target, s.affect AS affect, s.mastery AS mastery",
+                    targets=targets,
+                )
+                stances: list[dict[str, Any]] = []
+                async for row in result:
+                    stances.append(
+                        {
+                            "target": row["target"],
+                            "affect": row["affect"] or "",
+                            "mastery": row["mastery"],
+                        }
+                    )
+        except Exception as e:
+            log.warning("query_current_stances_failed", error=str(e), trace_id=trace_id)
+            return []
+
+        log.info(
+            "current_stances_queried",
+            trace_id=trace_id,
+            target_count=len(targets),
+            result_count=len(stances),
+        )
+        return stances
+
     async def query_claims_history(
         self,
         query_text: str,

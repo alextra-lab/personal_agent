@@ -175,6 +175,86 @@ def _format_broad_recall_context(
     return context
 
 
+def _entity_names_from_memory_context(memory_context: list[dict[str, Any]]) -> list[str]:
+    """Order-preserving, deduplicated entity names from a memory-context list (ADR-0126 T1).
+
+    Order matters: stance rendering must follow the same relevance order recall already
+    established, not an independent re-sort -- enrichment must never become a second,
+    unstated ranking decision (the one thing ADR-0126 forbids).
+    """
+    seen: dict[str, None] = {}
+    for item in memory_context:
+        if item.get("type") == "entity":
+            name = item.get("name")
+            if name:
+                seen.setdefault(name, None)
+    return list(seen)
+
+
+def _stance_context_items(
+    entity_names: list[str], stances: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Build ``{"type": "stance", ...}`` items in ``entity_names`` order (ADR-0126 T1).
+
+    ``stances`` (from ``get_current_stances``) has no guaranteed order -- re-keyed by
+    target and walked in ``entity_names``'s order so a stance never renders in an order
+    recall did not establish.
+
+    Args:
+        entity_names: The recalled entity names, in recall order.
+        stances: Current-stance rows from ``MemoryProtocol.get_current_stances``.
+
+    Returns:
+        One ``{"type": "stance", "target": ..., "affect": ...}`` dict per entity that has
+        a current stance, in ``entity_names`` order. An entity with no stance contributes
+        nothing.
+    """
+    by_target = {s.get("target", ""): s for s in stances}
+    return [
+        {"type": "stance", "target": name, "affect": by_target[name].get("affect", "")}
+        for name in entity_names
+        if name in by_target
+    ]
+
+
+async def _enrich_with_stances(
+    memory_context: list[dict[str, Any]],
+    memory_adapter: MemoryProtocol,
+    trace_id: str,
+    authenticated: bool,
+) -> None:
+    """Push each recalled entity's current stance into ``memory_context`` (ADR-0126 T1).
+
+    Enrichment on a selection recall has already made -- not a new relevance decision.
+    Mutates ``memory_context`` in place. Fails closed: a stance-layer fault omits
+    enrichment for this turn rather than failing it -- ``MemoryProtocol`` is an interface,
+    so a swapped implementation is not guaranteed to fail closed internally the way
+    ``MemoryService`` does.
+
+    Args:
+        memory_context: The turn's assembled memory items, mutated in place.
+        memory_adapter: Seshat protocol adapter.
+        trace_id: Request trace identifier.
+        authenticated: Whether the request carries a verified identity. Stance is
+            personal-preference data with no visibility gate of its own (mirrors
+            ``MemoryService.query_stance_history``'s fail-closed default), so an
+            unauthenticated request never fetches it.
+    """
+    if not memory_context or not authenticated:
+        return
+    entity_names = _entity_names_from_memory_context(memory_context)
+    if not entity_names:
+        return
+    try:
+        stances = await memory_adapter.get_current_stances(
+            entity_names, trace_id=trace_id, authenticated=authenticated
+        )
+        memory_context.extend(_stance_context_items(entity_names, stances))
+    except Exception:
+        logger.exception("stance_enrichment_failed", trace_id=trace_id)
+        return
+
+
 def _session_fact_candidates(
     recall_context: RecallResult | None,
 ) -> tuple[RecallCandidateRecord, ...]:
@@ -459,6 +539,8 @@ async def assemble_context(
             user_id=user_id,
             authenticated=authenticated,
         )
+        if memory_context is not None:
+            await _enrich_with_stances(memory_context, memory_adapter, trace_id, authenticated)
 
     # Inject session fact candidates from recall controller (as system message
     # in the main message list, not memory_context, to avoid schema mismatch

@@ -53,12 +53,6 @@ def _session_topic_hint(session_messages: Sequence[dict[str, Any]]) -> str | Non
     return " ".join(parts[-3:])[:800]
 
 
-def _capitalized_entity_hints(user_message: str) -> list[str]:
-    """Slice-2 heuristic entity names (supplementary to graph session entities)."""
-    words = user_message.split()
-    return [w.strip('",.:;!?') for w in words if len(w) > 3 and w[0].isupper()][:10]
-
-
 def _freshness_score_modifier(last_accessed_at: datetime | None) -> float:
     """Compute a freshness multiplier for relevance scoring (D4, ADR-0047).
 
@@ -220,10 +214,23 @@ async def _query_memory_for_intent(
             )
             return _format_broad_recall_context(broad), {}
 
+        # FRE-1041: both consumers below share one graph-anchored resolution. The
+        # capitalisation heuristic this replaces could not see a lowercase subject, so
+        # the entity path was never entered for most of what the owner actually
+        # discusses; and it emitted sentence-initial stopwords ("What", "Only") as
+        # entity names. Asking the graph which of its entities the message names fixes
+        # both directions at once, and cannot invent a name the graph does not hold.
+        entity_names = await memory_adapter.resolve_message_entities(
+            user_message,
+            trace_id=trace_id,
+            user_id=user_id,
+            authenticated=authenticated,
+        )
+
         if settings.proactive_memory_enabled:
             suggestions = await memory_adapter.suggest_relevant(
                 user_message=user_message,
-                session_entity_names=_capitalized_entity_hints(user_message),
+                session_entity_names=list(entity_names),
                 session_topic_hint=_session_topic_hint(session_messages),
                 current_session_id=session_id,
                 trace_id=trace_id,
@@ -241,9 +248,9 @@ async def _query_memory_for_intent(
                 }
                 return [c.payload for c in suggestions.candidates], scores
 
-        # Entity-name matching for analysis and other task types (Slice 2).
-        # Extract capitalised words > 3 chars as potential entity names.
-        entity_names = _capitalized_entity_hints(user_message)
+        # Entity-name matching for analysis and other task types (Slice 2). Reached
+        # whenever proactive is disabled or returned no candidates, where the resolved
+        # names are the sole gate on entity recall.
         if not entity_names:
             return None, {}
 

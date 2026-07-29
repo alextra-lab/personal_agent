@@ -239,6 +239,37 @@ class MemoryServiceAdapter:
         """
         return self._service.driver is not None
 
+    async def resolve_message_entities(
+        self,
+        message: str,
+        trace_id: str,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[str]:
+        """Return graph entity names the message literally mentions (FRE-1041).
+
+        Args:
+            message: The verbatim user message.
+            trace_id: Request trace identifier for log correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity (FRE-229).
+
+        Returns:
+            Mentioned entity names, best-first. Empty when the graph read fails — the
+            entity hint is an enrichment, so a failure degrades recall rather than
+            failing the turn.
+        """
+        try:
+            return await self._service.resolve_message_entity_names(
+                message,
+                trace_id=trace_id,
+                user_id=user_id,
+                authenticated=authenticated,
+            )
+        except Exception:
+            log.exception("resolve_message_entities_failed", trace_id=trace_id)
+            return []
+
     async def suggest_relevant(
         self,
         user_message: str,

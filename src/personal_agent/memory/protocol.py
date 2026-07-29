@@ -268,3 +268,29 @@ class MemoryProtocol(Protocol):
             Scored, budget-trimmed candidates. On failure, implementations return empty.
         """
         ...
+
+    async def resolve_message_entities(
+        self,
+        message: str,
+        trace_id: str,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[str]:
+        """Return known entity names the message literally mentions (FRE-1041).
+
+        The entity-hint source for recall. Implementations ask the backend which of the
+        entities it already holds are named in the message, rather than guessing which
+        words look like entity names — so lowercase subjects are visible, and a name the
+        backend does not hold can never be emitted as an entity hint.
+
+        Args:
+            message: The verbatim user message.
+            trace_id: Trace identifier for observability.
+            user_id: Optional user UUID for scoped recall.
+            authenticated: Whether the caller is authenticated.
+
+        Returns:
+            Mentioned entity names, best-first, in the backend's own casing. On failure
+            implementations return empty rather than raising.
+        """
+        ...

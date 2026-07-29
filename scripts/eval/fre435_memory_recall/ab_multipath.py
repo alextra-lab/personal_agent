@@ -110,9 +110,24 @@ from personal_agent.memory.models import MemoryQuery  # noqa: E402
 from personal_agent.memory.protocol import MemoryRecallQuery  # noqa: E402
 from personal_agent.memory.protocol_adapter import MemoryServiceAdapter  # noqa: E402
 from personal_agent.memory.service import MemoryService  # noqa: E402
-from personal_agent.request_gateway.context import _capitalized_entity_hints  # noqa: E402
 
 log = structlog.get_logger(__name__)
+
+
+def _capitalized_entity_hints(text: str) -> list[str]:
+    """The pre-FRE-1041 entity-hint heuristic, frozen for this A/B harness.
+
+    Formerly imported from ``request_gateway/context.py``, where FRE-1041 replaced it
+    with a graph-anchored resolver. Frozen here — exactly as
+    ``scripts/study/baseline_harness.py`` already freezes it — because this harness
+    reproduces historical A/B baselines: silently changing how its queries derive entity
+    hints would change what the recorded comparisons mean.
+    """
+    if not text:
+        return []
+    words = text.split()
+    return [w.strip('",.:;!?') for w in words if len(w) > 3 and w[0].isupper()][:10]
+
 
 GATE_SETS = {
     "lexical": "scripts/eval/fre435_memory_recall/bespoke_probe.yaml",

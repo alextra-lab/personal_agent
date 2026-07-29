@@ -386,10 +386,16 @@ class TestGraphAnchoredEntityHints:
     async def test_stopword_only_message_reaches_no_entity_recall(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC-3: a sentence-initial stopword never reaches recall as an entity name.
+        """An empty hint set gates entity recall off entirely.
 
-        Structural rather than a stopword list — the resolver can only return names the
-        graph holds, and it holds no entity called ``What``.
+        Scope, stated precisely: this proves the *wiring* — that ``context.py`` honours
+        an empty resolution rather than querying anyway. It does not prove the resolver
+        rejects stopwords, because the resolver is mocked here; that guard is proven at
+        its own altitude in
+        ``test_service_entity_resolution.py::test_never_invents_a_name_the_graph_does_not_hold``.
+
+        It is still a real regression guard: the removed heuristic returned ``["What"]``
+        for this message, so reverting the wiring makes recall fire and this test fail.
         """
         monkeypatch.setattr(ctx_module.settings, "proactive_memory_enabled", False)
         intent = IntentResult(

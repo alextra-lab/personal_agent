@@ -109,13 +109,45 @@ class TestResolveMessageEntityNames:
         assert names == ["Melon"]
 
     @pytest.mark.asyncio
-    async def test_cannot_emit_a_sentence_initial_stopword(self) -> None:
-        """The guard is structural: only names the graph holds can be returned."""
-        service = _service([])
+    async def test_never_invents_a_name_the_graph_does_not_hold(self) -> None:
+        """AC-3: the stopword guard is structural, not a list.
+
+        The index is deliberately seeded with real candidates here. An empty index
+        would prove nothing — "empty in, empty out" holds under any implementation,
+        including one with containment entirely broken. Seeding it means the only way
+        to return nothing is to correctly reject both candidates as unmentioned.
+
+        The output is drawn from the graph's names, never from the message's own words,
+        so ``What`` cannot be emitted no matter how the message is capitalised. The
+        heuristic this replaces returned exactly ``["What"]`` for this message — see
+        :meth:`test_the_removed_heuristic_would_have_emitted_the_stopword`.
+        """
+        service = _service([{"name": "Melon"}, {"name": "Cooking"}])
         names = await service.resolve_message_entity_names(
             "What should I cook tonight?", trace_id="t-1"
         )
         assert names == []
+        assert "What" not in names
+
+    @pytest.mark.asyncio
+    async def test_emits_only_the_mentioned_subset_of_real_candidates(self) -> None:
+        """The guard discriminates: a mentioned candidate survives beside a rejected one."""
+        service = _service([{"name": "Melon"}, {"name": "Cooking"}])
+        names = await service.resolve_message_entity_names(
+            "What melon should I buy tonight?", trace_id="t-1"
+        )
+        assert names == ["Melon"]
+
+    def test_the_removed_heuristic_would_have_emitted_the_stopword(self) -> None:
+        """The before-state this guard replaces, pinned so the delta is legible.
+
+        The capitalisation heuristic kept capitalised words longer than three
+        characters, so a sentence-initial ``What`` reached recall as an entity name on
+        32.2 % of real turns (FRE-1041 census, N=90).
+        """
+        message = "What should I cook tonight?"
+        heuristic = [w.strip('",.:;!?') for w in message.split() if len(w) > 3 and w[0].isupper()]
+        assert heuristic == ["What"]
 
     @pytest.mark.asyncio
     async def test_preserves_graph_casing_for_case_sensitive_overlap(self) -> None:

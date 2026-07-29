@@ -26,13 +26,15 @@ export type AGUIEventType =
   | 'RUN_ERROR'
   | 'DONE'
   | 'PONG'
-  | 'REPLAY_GAP';
+  | 'REPLAY_GAP'
+  /** Terminates a reconnect's replay — "that is everything above your watermark" (FRE-1040). */
+  | 'REPLAY_COMPLETE';
 
 export interface AGUIEvent {
   type: AGUIEventType;
   data: Record<string, unknown>;
   session_id: string;
-  /** Postgres-assigned sequence number for reconnect replay. Null for PONG/REPLAY_GAP. */
+  /** Per-session sequence number for reconnect replay. Null for PONG/REPLAY_GAP/REPLAY_COMPLETE. */
   seq: number | null;
   /** Present on REPLAY_GAP events — the oldest seq still available. */
   oldest_available_seq?: number;

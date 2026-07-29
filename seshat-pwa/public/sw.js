@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v38-phase-state';
+const CACHE_NAME = 'seshat-v39-per-session-seq';
 
 const PRECACHE_URLS = [
   '/',

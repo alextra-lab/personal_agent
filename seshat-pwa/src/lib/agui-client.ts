@@ -298,6 +298,16 @@ export type ErrorHandler = (error: Event) => void;
 /** Code 4001 = "Superseded by new connection" — do not reconnect. */
 const WS_CLOSE_SUPERSEDED = 4001;
 
+/**
+ * How long a non-contiguous pending buffer may sit before we act on it (FRE-1040).
+ *
+ * Acting means *recovering* — one forced reconnect, which replays from the
+ * unchanged watermark — never flushing. Flushing on a timer would advance the
+ * watermark past an event reconnect could still deliver, which is precisely the
+ * regression FRE-590 removed.
+ */
+const STALL_RECOVERY_MS = 3000;
+
 export interface StreamConnection {
   close: () => void;
   send: (msg: ClientMessage) => void;
@@ -366,6 +376,99 @@ export function connectWebSocket(
   // seq=1 to be permanently dropped (and replayed from wrong watermark).
   const pendingBuf = new Map<number, AGUIEvent>();
 
+  // ── Stalled-buffer recovery (FRE-1040) ───────────────────────────────────
+  // A hole in the seq series stalls the contiguous drain. Left alone that is
+  // permanent: the response is received but never rendered, and only a full
+  // session reload recovers it. Resolution is ordered so the watermark is never
+  // advanced over an event that is still recoverable:
+  //   1. stall  → force ONE reconnect; replay runs from the unchanged ackSeq.
+  //   2. REPLAY_COMPLETE with the hole still open → the server has proven it
+  //      cannot fill it → flush.
+  //   3. a second stall on the same hole → flush anyway. Covers a gateway that
+  //      predates REPLAY_COMPLETE, and makes a reconnect loop impossible.
+  let stallTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The hole (ackSeq+1) we have already spent a reconnect on. */
+  let recoveryAttemptedForSeq: number | null = null;
+
+  function clearStallTimer(): void {
+    if (stallTimer !== null) {
+      clearTimeout(stallTimer);
+      stallTimer = null;
+    }
+  }
+
+  /** Arm or disarm the stall timer to match the current buffer state. */
+  function syncStallTimer(): void {
+    if (pendingBuf.size === 0) {
+      clearStallTimer();
+      return;
+    }
+    if (stallTimer !== null) return;
+    stallTimer = setTimeout(onStall, STALL_RECOVERY_MS);
+  }
+
+  /** Dispatch every buffered event in seq order, advancing ackSeq past the hole. */
+  function flushPending(): void {
+    clearStallTimer();
+    if (pendingBuf.size === 0) return;
+    for (const seq of [...pendingBuf.keys()].sort((a, b) => a - b)) {
+      const evt = pendingBuf.get(seq)!;
+      pendingBuf.delete(seq);
+      onEvent(evt);
+      setAckSeq(seq);
+    }
+  }
+
+  function onStall(): void {
+    stallTimer = null;
+    if (closed || pendingBuf.size === 0) return; // drained while we waited
+
+    const ackSeq = getAckSeq();
+    if (ackSeq === 0) {
+      // Not a hole — the absence of a watermark. An existing session's numbering
+      // continues from wherever it left off, so seq 1 never arrives and the
+      // contiguous drain can never start. Reconnecting here is purely
+      // destructive: the server gates replay on last_seq > 0, so a CONNECT
+      // carrying 0 replays nothing and sends no REPLAY_COMPLETE, while the
+      // reconnect has already cleared the buffer holding the response. Flushing
+      // is safe because with no watermark "everything above 0" is everything we
+      // hold. (The DONE fallback below does the same, only later.)
+      flushPending();
+      return;
+    }
+
+    const hole = ackSeq + 1;
+    if (recoveryAttemptedForSeq === hole) {
+      flushPending();
+      return;
+    }
+    // A connect already in flight, or a socket that is not open, means recovery
+    // is under way — re-arm rather than interfere. Bumping connectGeneration
+    // under an in-flight connect() would strand the `connecting` flag.
+    if (connecting || ws?.readyState !== WebSocket.OPEN) {
+      syncStallTimer();
+      return;
+    }
+    recoveryAttemptedForSeq = hole;
+    forceReconnect();
+  }
+
+  /** Drop the current socket and reconnect immediately, leaving ackSeq alone. */
+  function forceReconnect(): void {
+    clearStallTimer();
+    cleanup();
+    const stale = ws;
+    ws = null;
+    if (stale) {
+      stale.onclose = null;
+      stale.onmessage = null;
+      stale.onerror = null;
+      stale.close();
+    }
+    backoffMs = 1000;
+    void connect();
+  }
+
   function persistSeqOnHide(): void {
     // last_seq is already persisted on each event; this is a safety net
     // for iOS PWA suspension where the event loop may not run.
@@ -388,6 +491,7 @@ export function connectWebSocket(
     connecting = true;
     const generation = ++connectGeneration;
     pendingBuf.clear();
+    clearStallTimer();
 
     try {
       const ticket = await getWSTicket(sessionId);
@@ -442,20 +546,26 @@ export function connectWebSocket(
               setAckSeq(next);
               next = getAckSeq() + 1;
             }
+            // Whatever is left is behind a hole — start (or stand down) the
+            // recovery clock to match (FRE-1040).
+            syncStallTimer();
             return;
           }
-          // seq == null: DONE, PONG, REPLAY_GAP
+          // seq == null: DONE, PONG, REPLAY_GAP, REPLAY_COMPLETE
+          if (parsed.type === 'REPLAY_COMPLETE') {
+            // The server has delivered everything it holds above our watermark.
+            // Anything still buffered sits behind a hole it cannot fill, so the
+            // watermark can now be advanced without losing a recoverable event.
+            flushPending();
+            return;
+          }
           if (parsed.type === 'DONE' && getAckSeq() === 0 && pendingBuf.size > 0) {
-            // Cold-start fallback only (ackSeq===0): global Postgres seq may not
-            // start at ackSeq+1 (e.g. fresh client with ackSeq=0 but first event
-            // has seq=5000). For ackSeq>0, leave the buffer so reconnect replay
-            // can fill the genuine gap — do NOT advance ackSeq past the hole.
-            const sortedKeys = [...pendingBuf.keys()].sort((a, b) => a - b);
-            for (const k of sortedKeys) {
-              onEvent(pendingBuf.get(k)!);
-              setAckSeq(k);
-            }
-            pendingBuf.clear();
+            // Cold-start fallback only (ackSeq===0): a client with no stored
+            // watermark cannot expect seq to start at 1 — an existing session's
+            // numbering continues from wherever it left off. For ackSeq>0 the
+            // buffer is left alone so reconnect replay can fill a genuine gap;
+            // the stall timer (FRE-1040) bounds how long that is waited for.
+            flushPending();
           }
           onEvent(parsed);
         } catch {
@@ -531,6 +641,7 @@ export function connectWebSocket(
       connecting = false;
       connectGeneration += 1;
       cleanup();
+      clearStallTimer();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       reconnectTimeout = null;
       if (typeof document !== 'undefined') {

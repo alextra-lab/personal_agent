@@ -717,16 +717,25 @@ async def _sender(conn: _ConnectionState, last_seq: int) -> None:
     session_id = conn.session_id
     max_sent_seq = last_seq
 
-    # Replay from Postgres only on reconnect (last_seq > 0).
-    # Fresh connections (last_seq == 0) skip replay — events arrive via the
-    # live queue. This avoids duplicates caused by fire-and-forget Postgres
-    # writes that complete before the replay query runs.
+    # Replay from Postgres only on reconnect (last_seq > 0). Fresh connections
+    # (last_seq == 0) skip replay — a client with no watermark has nothing to
+    # resume from, and its events arrive via the live queue.
+    #
+    # Persistence is not fire-and-forget: ``_persist_and_enqueue`` awaits the
+    # commit *before* enqueuing, inside the per-session emit lock, so commit
+    # order equals enqueue order (FRE-518). That is what makes REPLAY_COMPLETE
+    # below authoritative — anything the client has already seen above a hole
+    # was enqueued after the hole's own row committed, so replay will find it.
     if last_seq > 0:
         async with AsyncSessionLocal() as db:
             buf = SessionEventBuffer(db)
 
             oldest = await buf.oldest_available_seq(UUID(session_id))
-            if oldest is not None and last_seq < oldest:
+            # The client's *next* expected event is last_seq + 1; a gap exists
+            # only when even that has already been swept. ``oldest == last_seq + 1``
+            # means nothing is missing — reporting a gap there makes the client
+            # discard live state and refetch the whole session history (FRE-1040).
+            if oldest is not None and last_seq + 1 < oldest:
                 gap_msg = json.dumps(
                     {
                         "type": "REPLAY_GAP",
@@ -753,6 +762,17 @@ async def _sender(conn: _ConnectionState, last_seq: int) -> None:
             except RuntimeError:
                 return
             max_sent_seq = seq
+
+        # Terminate the replay with an explicit marker: "that is everything I
+        # hold above your watermark" (FRE-1040). The client dispatches only a
+        # contiguous run, so a hole stalls it; this is the only sound signal
+        # that the hole cannot be filled and the buffer may be flushed past it.
+        # Without it the client can only guess on a timer, and advancing the
+        # watermark on a guess is exactly what FRE-590 removed.
+        try:
+            await ws.send_text(json.dumps({"type": "REPLAY_COMPLETE", "seq": None}))
+        except RuntimeError:
+            return
 
     # Live drain loop
     while True:

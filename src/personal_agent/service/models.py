@@ -230,6 +230,10 @@ class SessionModel(Base):
     # purged; set by the scheduled retention sweep, cleared on resume (any
     # write to messages via append_message/update).
     purged_at = Column(DateTime(timezone=True), nullable=True)
+    # FRE-1040 / ADR-0075 — per-session allocator for session_events.seq. The
+    # transport client dispatches only a contiguous run per session, so the
+    # numbers cannot come from a sequence shared across sessions.
+    last_event_seq = Column(Integer, nullable=False, default=0, server_default="0")
 
 
 class MetricModel(Base):

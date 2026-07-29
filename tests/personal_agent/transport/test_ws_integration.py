@@ -25,8 +25,8 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from tests.personal_agent.transport.ws_harness import (
-    FakeSessionEventBuffer,
     WS_CLOSE_SUPERSEDED,
+    FakeSessionEventBuffer,
     build_ws_test_app,
     ws_connect,
 )
@@ -415,6 +415,86 @@ class TestReconnect:
             # The event at seq=10 is still replayed after the gap
             replayed = ws.receive_json()
             assert replayed["seq"] == 10
+
+    def test_no_replay_gap_when_oldest_is_the_next_expected_seq(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """``oldest == last_seq + 1`` means nothing is missing — no REPLAY_GAP (FRE-1040).
+
+        The old predicate (``last_seq < oldest``) fired here, and a spurious
+        REPLAY_GAP makes the client discard live state and refetch the whole
+        session history — the very "only a reload recovers it" behaviour this
+        ticket exists to remove.
+        """
+        client, fake_buf = harness
+        session_id = str(uuid4())
+
+        fake_buf._store[session_id] = [
+            {
+                "seq": 6,
+                "event_type": "TEXT_DELTA",
+                "payload": {
+                    "type": "TEXT_DELTA",
+                    "data": {"text": "x"},
+                    "session_id": session_id,
+                    "seq": None,
+                },
+            },
+        ]
+        fake_buf._counter = 6
+
+        # Client holds through seq 5; the oldest retained event is exactly its next.
+        with ws_connect(client, session_id, last_seq=5) as ws:
+            first = ws.receive_json()
+            assert first["type"] == "TEXT_DELTA", f"expected the event, got {first}"
+            assert first["seq"] == 6
+
+    def test_replay_complete_marks_the_end_of_replay(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """A reconnect's replay is terminated by REPLAY_COMPLETE (FRE-1040).
+
+        The marker is the client's authoritative "that is everything I hold above
+        your watermark" signal — the only sound trigger for flushing a stalled
+        pending buffer past a hole the server has proven it cannot fill.
+        """
+        client, fake_buf = harness
+        session_id = str(uuid4())
+
+        fake_buf._store[session_id] = [
+            {
+                "seq": n,
+                "event_type": "TEXT_DELTA",
+                "payload": {
+                    "type": "TEXT_DELTA",
+                    "data": {"text": str(n)},
+                    "session_id": session_id,
+                    "seq": None,
+                },
+            }
+            for n in (1, 2)
+        ]
+        fake_buf._counter = 2
+
+        with ws_connect(client, session_id, last_seq=1) as ws:
+            replayed = ws.receive_json()
+            assert replayed["seq"] == 2
+            marker = ws.receive_json()
+            assert marker["type"] == "REPLAY_COMPLETE"
+            assert marker["seq"] is None
+
+    def test_fresh_connection_sends_no_replay_complete(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """``last_seq == 0`` skips replay entirely, so no marker is emitted (FRE-1040)."""
+        client, fake_buf = harness
+        session_id = str(uuid4())
+
+        with ws_connect(client, session_id, last_seq=0) as ws:
+            client.post("/__test/text_delta", params={"session_id": session_id, "text": "live"})
+            first = ws.receive_json()
+            assert first["type"] == "TEXT_DELTA"
+            assert first["data"]["text"] == "live"
 
 
 # ── Hardening ─────────────────────────────────────────────────────────────────

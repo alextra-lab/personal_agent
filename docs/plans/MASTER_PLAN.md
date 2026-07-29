@@ -25,11 +25,25 @@ joinability probe green, both changes verified inside the running image. **The F
 guard is unexercised** — zero LLM calls since deploy, so the `TypeError` on a non-`ModelRole` role has
 not yet run in production. First real turn is the test.
 
-## 1. Elasticsearch structure — approved, deliberately held
+## 1. Elasticsearch structure — hold LIFTED 2026-07-29
 
-**FRE-1036** *(480 indices / 627 MB; monthly + ILM; shard ceiling ~34 days out)* is Approved but **must
-not start before FRE-1038 settles the naming convention.** It rewrites every index template and is the
-cheapest moment to normalise names; running it first bakes the inconsistency in for another cycle.
+**ADR-0128** *(one telemetry naming convention, enforced at emit)* merged **Proposed**, so the convention
+that gated **FRE-1036** is settled. The remaining coupling is narrow: only **FRE-1043** *(rename table)*
+must land first — deliberately standalone, days-scale. Late table ⇒ a second reindex; expensive in
+machine time, cheap in risk on 635 MB.
+
+**FRE-1036 has an unrecorded scope boundary.** `slm_server` formats its own dated index names
+client-side, so rollover-behind-a-write-alias cannot reach it. Verified: **39 `slm-requests` indices,
+newest today, 6.6% of 594 primary shards** — the #2 consumer, growing 1/day. FRE-1049 carries the
+one-line fix. **Do not block FRE-1036 on it** (approved + deadline behind unapproved); instead state
+slm-requests as excluded so the post-completion shard metric isn't misread as underdelivery.
+
+Correction to this plan's own record: it said **four** timestamp spellings. It is **six** — `ts`
+(slm-requests) and `rated_at` (user-turn-ratings) are declared `date` fields invisible to a name-based
+scan. That undercount is the exact failure ADR-0128 exists to eliminate.
+
+**ADR-0128's chain — FRE-1043–1050, all Needs Approval**, sequenced: 1043 head → 1044/1045/1049/1050
+→ 1046 → 1047/1048. Seam stays with the adr session; the ADR does not close when its last child merges.
 
 **FRE-1035** *(ES field-resolution technique)* — resolve every field against the mappings API before
 querying; treat zero matches as a hard error. Needs approval. The recipe fix is the smaller half.

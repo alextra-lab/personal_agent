@@ -64,7 +64,7 @@ inflates via nested sub-documents (up to 4.5x on this cluster).
 
 | Family pattern | date field | documents |
 |---|---|---|
-| `agent-logs-*` | `@timestamp` | 3,206,830 |
+| `agent-logs-*` | `@timestamp` | 3,207,303 |
 | `agent-topology-*` | `@timestamp` | 278 |
 | `agent-monitors-projector-health-*` | `@timestamp` | 223 |
 | `agent-captains-funnel-events-*` | `@timestamp` | 0 |
@@ -76,40 +76,48 @@ inflates via nested sub-documents (up to 4.5x on this cluster).
 | `agent-insights-*` | `timestamp` | 3,705 |
 | `agent-monitors-joinability-2*` | `started_at` | 1,736 |
 | `agent-monitors-joinability-substrate-*` | `started_at` | 9,442 |
-| `agent-monitors-slm-health-*` | `probed_at` | 15,894 |
+| `agent-monitors-slm-health-*` | `probed_at` | 15,896 |
 | `user-turn-ratings-*` | `rated_at` | 1,959 |
 
-- **total corpus: 3,245,472 documents**
-- **on a non-`@timestamp` spelling: 38,141 (1.18%)**
+- **total corpus: 3,245,947 documents**
+- **on a non-`@timestamp` spelling: 38,143 (1.18%)**
 - **`agent-logs` share of corpus: 98.81%**
 
 ## 4. Identity-field presence on the highest-volume family
 
-Method: `exists` query per field over all `agent-logs-*`. Total: **3,206,830** (all-time).
+Two grains, because ADR-0128 needs both: the all-time share states the scale of the
+problem, and the **7-complete-day window** is AC-3's actual comparison baseline.
 
-| Field | present | share |
-|---|---|---|
-| `@timestamp` | 3,206,830 | 100.0% |
-| `event_type` | 3,206,830 | 100.0% |
-| `trace_id` | 365,157 | 11.4% |
-| `session_id` | 67,562 | 2.1% |
-| `user_id` | 36,179 | 1.1% |
-| `span_id` | 33,180 | 1.0% |
+All-time `agent-logs-*`: **3,207,303** documents. Trailing 7 complete days: **449,567**.
+
+| Field | present (all-time) | share | present (7d) | share (7d) |
+|---|---|---|---|---|
+| `@timestamp` | 3,207,303 | 100.00% | 449,567 | 100.00% |
+| `event_type` | 3,207,303 | 100.00% | 449,567 | 100.00% |
+| `trace_id` | 365,186 | 11.39% | 57,799 | 12.86% |
+| `session_id` | 67,562 | 2.11% | 27,302 | 6.07% |
+| `user_id` | 36,179 | 1.13% | 21,559 | 4.80% |
+| `span_id` | 33,180 | 1.03% | 2,836 | 0.63% |
+
+**AC-3 baseline — real-identity absolute count, 7 complete days.** AC-3 compares
+against the *count*, not a rounded percentage: a percentage floor such as "not below
+11.4%" is failed by a correct implementation whose true rate is 11.39%.
+
+- **real `trace_id` documents in the window: 57,799** — AC-3's floor.
 
 ## 5. Pre-change daily volume baseline (ADR-0128 AC-3)
 
 | day | documents |
 |---|---|
-| 2026-07-22 | 48,722 |
+| 2026-07-22 | 69,055 |
 | 2026-07-23 | 70,272 |
 | 2026-07-24 | 70,094 |
 | 2026-07-25 | 72,665 |
 | 2026-07-26 | 29,053 |
 | 2026-07-27 | 66,730 |
 | 2026-07-28 | 71,698 |
-| 2026-07-29 | 20,876 |
 
-- **trailing 7-day daily mean: 56,264 documents/day** — this, not the
+- **trailing 7-day daily mean: 64,224 documents/day** — this, not the
   all-time total, is AC-3's volume baseline.
 
 ## 6. Cluster shape

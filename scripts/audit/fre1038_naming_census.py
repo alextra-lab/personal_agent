@@ -133,19 +133,39 @@ def section_corpus(live: bool) -> None:
     print(f"- **`agent-logs` share of corpus: {logs / total * 100:.2f}%**\n")
 
 
+WINDOW = {"range": {"@timestamp": {"gte": "now-7d/d", "lt": "now/d"}}}
+"""The evaluation window: seven *complete* days. ``now-7d`` without ``/d`` yields
+eight partial calendar buckets, which is not a seven-day mean."""
+
+
 def section_identity(live: bool) -> None:
     print("## 4. Identity-field presence on the highest-volume family\n")
     if not live:
         print(f"**SKIPPED — Elasticsearch unreachable at `{ES_URL}`.** Not zero; unmeasured.\n")
         return
-    total = es("/agent-logs-*/_count")["count"]
-    print(f"Method: `exists` query per field over all `agent-logs-*`. Total: **{total:,}** (all-time).\n")
-    print("| Field | present | share |")
-    print("|---|---|---|")
+    total_all = es("/agent-logs-*/_count")["count"]
+    total_win = es("/agent-logs-*/_count", {"query": WINDOW})["count"]
+    print("Two grains, because ADR-0128 needs both: the all-time share states the scale of the")
+    print("problem, and the **7-complete-day window** is AC-3's actual comparison baseline.\n")
+    print(f"All-time `agent-logs-*`: **{total_all:,}** documents. "
+          f"Trailing 7 complete days: **{total_win:,}**.\n")
+    print("| Field | present (all-time) | share | present (7d) | share (7d) |")
+    print("|---|---|---|---|---|")
     for field in IDENTITY_FIELDS:
-        n = es("/agent-logs-*/_count", {"query": {"exists": {"field": field}}})["count"]
-        print(f"| `{field}` | {n:,} | {n / total * 100:.1f}% |")
+        n_all = es("/agent-logs-*/_count", {"query": {"exists": {"field": field}}})["count"]
+        n_win = es("/agent-logs-*/_count",
+                   {"query": {"bool": {"filter": [WINDOW, {"exists": {"field": field}}]}}})["count"]
+        print(f"| `{field}` | {n_all:,} | {n_all / total_all * 100:.2f}% | "
+              f"{n_win:,} | {n_win / total_win * 100:.2f}% |" if total_win else
+              f"| `{field}` | {n_all:,} | {n_all / total_all * 100:.2f}% | {n_win:,} | n/a |")
     print()
+    print("**AC-3 baseline — real-identity absolute count, 7 complete days.** AC-3 compares")
+    print("against the *count*, not a rounded percentage: a percentage floor such as \"not below")
+    print("11.4%\" is failed by a correct implementation whose true rate is 11.39%.\n")
+    real = es("/agent-logs-*/_count", {"query": {"bool": {
+        "filter": [WINDOW, {"exists": {"field": "trace_id"}}],
+        "must_not": [{"prefix": {"trace_id": "system:"}}, {"term": {"trace_id": ""}}]}}})["count"]
+    print(f"- **real `trace_id` documents in the window: {real:,}** — AC-3's floor.\n")
 
 
 def section_daily_baseline(live: bool) -> None:
@@ -160,7 +180,7 @@ def section_daily_baseline(live: bool) -> None:
         return
     body = {
         "size": 0,
-        "query": {"range": {"@timestamp": {"gte": "now-7d"}}},
+        "query": WINDOW,
         "aggs": {"per_day": {"date_histogram": {"field": "@timestamp", "calendar_interval": "day"}}},
     }
     buckets = es("/agent-logs-*/_search", body)["aggregations"]["per_day"]["buckets"]

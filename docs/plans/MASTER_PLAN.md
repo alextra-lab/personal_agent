@@ -4,18 +4,26 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-28
+> **Last updated**: 2026-07-29
 
 ## 0. In flight
 
-- **build1** — **FRE-1037** *LLM role assignment*: 93% of calls report `role=primary` because the call
-  path exposes 4 roles while config defines 15. Widen the enum **from config**, thread the real role,
-  **then** fail closed. **FRE-989** *cost attribution* is blocked behind it — attribution cannot be fixed
-  while the role is untrue.
-- **build2** — **FRE-1021** *entity-candidate displacement* (measure the rate; n=4 is a mechanism, not a
-  number) → **FRE-1015** *topic-scoped stance enrichment* → **FRE-937** *collapsed per-turn summary*.
+- **build1** — **FRE-989** *cost attribution audit*: capped roles billing to the wrong budget, uncapped
+  roles spending unmeasured, three conflicting defaults for an unset budget role. Dispatched once
+  FRE-1037 merged. Its Finding One shrank — `session_summary` and `skill_routing` are now mapped, but
+  **`study` is still unmapped** while FRE-1037 newly threads `ModelRole.STUDY`, so the study lane's
+  $5.00 isolation cap remains unapplied on the role-name path.
+- **build2** — **idle by design.** **FRE-1015** *topic-scoped stance enrichment* stays blocked behind
+  FRE-1021 **until FRE-1021 is measured**, not merely merged: FRE-1015's AC-1/AC-5/AC-6 need the
+  entity-selection precondition to hold on live turns, so dispatching at merge would bake in the
+  vacuous pass ADR-0126 D7 exists to prevent. Then → **FRE-937** *collapsed per-turn summary*.
 - **adrs** — **FRE-1038** *one telemetry naming and structure convention across every substrate, enforced
   at emit*.
+
+**Deployed 2026-07-29 04:41Z at `002e2de7`** (owner-authorised): FRE-1021 + FRE-1037. Health green,
+joinability probe green, both changes verified inside the running image. **The FRE-1037 fail-closed
+guard is unexercised** — zero LLM calls since deploy, so the `TypeError` on a non-`ModelRole` role has
+not yet run in production. First real turn is the test.
 
 ## 1. Elasticsearch structure — approved, deliberately held
 
@@ -42,7 +50,7 @@ querying; treat zero matches as a hard error. Needs approval. The recipe fix is 
 
 ## 3. Master's verification backlog — standing debt
 
-**Nine in Awaiting Deploy, all of them deployed.** The column name misleads: what they await is master's
+**Eleven in Awaiting Deploy, all of them deployed.** The column name misleads: what they await is master's
 acceptance verification, not a deploy. None closes on "deployed and healthy" — each needs its own
 criterion proven, and **UNVERIFIABLE is a first-class verdict**.
 
@@ -52,6 +60,8 @@ already in ES — five spend-query turns straddling the deploy gave a same-model
 
 | ticket | subject | what it awaits |
 |---|---|---|
+| **FRE-1021** | entity-kind fused items resolve to entities, not their turns | the after-rate vs the measured **20%** baseline (`scripts/audit/fre1021_entity_participation_census.py`), plus a path-isolated re-ask. **Gates build2.** |
+| **FRE-1037** | widen the LLM role enum, thread the real role, fail closed | **~7 days of post-deploy traffic** before the role distribution is comparable to the 93%-primary baseline. Slowest item in this column |
 | **FRE-1016** | ADR-0126 T3 — claims reachable via the memory search tool | live AC proof against the graph |
 | **FRE-1018** | ADR-0126 T4 — supersession chain on pull | live AC proof; AC-5 chain half |
 | **FRE-739** | ADR-0107 T2 — user_id into structured logs | **cannot close.** AC-3a passes 154/154; **AC-3b UNVERIFIABLE** — see below |

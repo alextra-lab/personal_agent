@@ -303,6 +303,124 @@ class TestAssembleContext:
         mock_adapter.suggest_relevant.assert_not_called()
 
 
+class TestGraphAnchoredEntityHints:
+    """FRE-1041: entity hints come from the graph, not a capitalisation heuristic.
+
+    The heuristic returned every capitalised word longer than three characters, so it
+    was blind to every lowercase subject (74.4 % of real turns yielded no usable name)
+    and passed sentence-initial stopwords downstream as entity names (32.2 % of turns).
+    Both consumers now ask the graph which of its entities the message actually names.
+    """
+
+    def test_capitalisation_heuristic_is_gone(self) -> None:
+        """The replaced heuristic must not survive anywhere in the module."""
+        assert not hasattr(ctx_module, "_capitalized_entity_hints")
+
+    @pytest.mark.asyncio
+    async def test_proactive_path_passes_resolved_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The resolver's output is what feeds the overlap subscore."""
+        monkeypatch.setattr(ctx_module.settings, "proactive_memory_enabled", True)
+        intent = IntentResult(
+            task_type=TaskType.CONVERSATIONAL,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=[],
+        )
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.resolve_message_entities = AsyncMock(return_value=["Melon", "Ice cream"])
+        mock_adapter.suggest_relevant = AsyncMock(
+            return_value=ProactiveMemorySuggestions(candidates=[])
+        )
+        mock_adapter.recall = AsyncMock(return_value=MagicMock(entities=[], episodes=[]))
+
+        await assemble_context(
+            user_message="I would like to make a melon/canteloupe ice cream",
+            session_messages=[],
+            intent=intent,
+            memory_adapter=mock_adapter,
+            trace_id="t-resolve",
+            session_id="sess-1",
+        )
+
+        kwargs = mock_adapter.suggest_relevant.await_args.kwargs
+        assert kwargs["session_entity_names"] == ["Melon", "Ice cream"]
+
+    @pytest.mark.asyncio
+    async def test_lowercase_subject_reaches_the_entity_recall_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The decisive case: a lowercase subject now enters entity recall.
+
+        Under the capitalisation heuristic this message produced zero hints — the only
+        capitalised token is a single-character ``I`` — so the fallback path returned
+        without ever querying for entities.
+        """
+        monkeypatch.setattr(ctx_module.settings, "proactive_memory_enabled", False)
+        intent = IntentResult(
+            task_type=TaskType.CONVERSATIONAL,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=[],
+        )
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.resolve_message_entities = AsyncMock(return_value=["Melon"])
+        mock_adapter.recall = AsyncMock(return_value=MagicMock(entities=[], episodes=[]))
+
+        await assemble_context(
+            user_message="I would like to make a melon/canteloupe ice cream",
+            session_messages=[],
+            intent=intent,
+            memory_adapter=mock_adapter,
+            trace_id="t-melon",
+            session_id="sess-1",
+        )
+
+        mock_adapter.recall.assert_awaited_once()
+        assert mock_adapter.recall.await_args.args[0].entity_names == ["Melon"]
+
+    @pytest.mark.asyncio
+    async def test_stopword_only_message_reaches_no_entity_recall(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty hint set gates entity recall off entirely.
+
+        Scope, stated precisely: this proves the *wiring* — that ``context.py`` honours
+        an empty resolution rather than querying anyway. It does not prove the resolver
+        rejects stopwords, because the resolver is mocked here; that guard is proven at
+        its own altitude in
+        ``test_service_entity_resolution.py::test_never_invents_a_name_the_graph_does_not_hold``.
+
+        It is still a real regression guard: the removed heuristic returned ``["What"]``
+        for this message, so reverting the wiring makes recall fire and this test fail.
+        """
+        monkeypatch.setattr(ctx_module.settings, "proactive_memory_enabled", False)
+        intent = IntentResult(
+            task_type=TaskType.CONVERSATIONAL,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=[],
+        )
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.resolve_message_entities = AsyncMock(return_value=[])
+
+        result = await assemble_context(
+            user_message="What should I cook tonight?",
+            session_messages=[],
+            intent=intent,
+            memory_adapter=mock_adapter,
+            trace_id="t-stopword",
+            session_id="sess-1",
+        )
+
+        assert result.memory_context is None
+        mock_adapter.recall.assert_not_called()
+
+
 class TestReflectionRecallRemoved:
     """ADR-0125 D2/AC-2 (FRE-1003): the reflection-recall path is removed, not
     merely defaulted off. A dimension-1 producer's output must never be able

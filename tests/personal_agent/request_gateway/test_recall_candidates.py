@@ -42,6 +42,9 @@ def _intent(task_type: TaskType = TaskType.CONVERSATIONAL) -> IntentResult:
 def _proactive_adapter(candidates: list[ProactiveMemoryCandidate]) -> MagicMock:
     adapter = MagicMock()
     adapter.is_connected = AsyncMock(return_value=True)
+    # FRE-1041: the graph-anchored entity hint replaced the capitalisation heuristic,
+    # so the adapter is asked which entities the message names.
+    adapter.resolve_message_entities = AsyncMock(return_value=["Paris"])
     adapter.suggest_relevant = AsyncMock(
         return_value=ProactiveMemorySuggestions(candidates=candidates)
     )
@@ -212,6 +215,9 @@ class TestDefaultEntityMatchPath:
 
         adapter = MagicMock()
         adapter.is_connected = AsyncMock(return_value=True)
+        # FRE-1041: this path is now gated on graph-anchored entity resolution rather
+        # than the capitalisation heuristic, so the hint must be supplied here.
+        adapter.resolve_message_entities = AsyncMock(return_value=["Paris"])
         adapter.recall = AsyncMock(
             return_value=MemoryRecallResult(
                 episodes=[

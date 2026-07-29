@@ -30,6 +30,7 @@ from personal_agent.memory.embeddings import (
     generate_embedding,
     generate_embeddings_batch,
 )
+from personal_agent.memory.entity_mentions import verify_mentions
 from personal_agent.memory.fact import PromotionCandidate
 from personal_agent.memory.freshness_aggregate import (
     GraphStalenessSummary,
@@ -178,6 +179,10 @@ def _build_visibility_filter(
     params: dict[str, Any] = {"vis_authenticated": authenticated, "vis_user_id": user_id_str}
     return fragment, params
 
+
+# FRE-1041: bound on the entity-hint set handed to recall, preserving the ten-name cap
+# the capitalisation heuristic it replaces applied.
+MESSAGE_ENTITY_HINT_LIMIT = 10
 
 _LUCENE_SPECIAL_CHARS = re.compile(r'([+\-!(){}\[\]^"~*?:\\/&|])')
 
@@ -804,6 +809,78 @@ class MemoryService:
                 trace_id=trace_id,
             )
             return []
+
+    async def resolve_message_entity_names(
+        self,
+        message: str,
+        *,
+        trace_id: str,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+        limit: int = MESSAGE_ENTITY_HINT_LIMIT,
+    ) -> list[str]:
+        """Return graph entity names the message literally mentions (FRE-1041).
+
+        Replaces the capitalisation heuristic that decided which entity names reached
+        recall. That heuristic was a naive proper-noun detector: it could not see any
+        lowercase subject (measured over 90 real turns, 74.4 % yielded no usable name),
+        and it passed sentence-initial stopwords downstream as entity names (32.2 % of
+        turns). This inverts the question — instead of guessing which words look like
+        entities, ask the graph which of *its* entities the message names.
+
+        Two stages. The existing ``turn_entity_fulltext`` index (ADR-0104) supplies
+        recall; :func:`~personal_agent.memory.entity_mentions.verify_mentions` supplies
+        precision by keeping only literal, contiguous token-run mentions. The stopword
+        guard is therefore structural rather than a list: only names the graph already
+        holds can be returned.
+
+        Args:
+            message: The verbatim user message.
+            trace_id: Request trace identifier for log correlation (ADR-0074 §I3).
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity (FRE-229).
+            limit: Maximum names to return, best-first.
+
+        Returns:
+            Mentioned entity names in full-text rank order, in the graph's own casing —
+            ``memory.proactive._overlap_subscore`` intersects case-sensitively, so a
+            re-cased name would silently contribute nothing. Empty when the service is
+            disconnected, the message is blank, or the index read fails.
+        """
+        if not message.strip() or not self.connected or not self.driver:
+            return []
+
+        vis_frag, vis_params = _build_visibility_filter("node", user_id, authenticated)
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    f"""
+                    CALL db.index.fulltext.queryNodes('turn_entity_fulltext', $query_text)
+                    YIELD node, score
+                    WITH node, score
+                    WHERE node:Entity AND {vis_frag}
+                    RETURN node.name AS name
+                    ORDER BY score DESC
+                    LIMIT $top_k
+                    """,
+                    query_text=_escape_lucene_query(message),
+                    top_k=get_settings().multipath_arm_top_k,
+                    **vis_params,
+                )
+                rows = await result.data()
+        except Exception as e:
+            # Degrades to the pre-FRE-1041 behaviour of no hints rather than failing the
+            # turn, matching the fail-open posture of every read on this path. Logged so
+            # the degradation is observable instead of silent.
+            log.warning(
+                "entity_mention_resolve_failed",
+                error=str(e),
+                trace_id=trace_id,
+            )
+            return []
+
+        candidates = [str(row["name"]) for row in rows if row.get("name")]
+        return verify_mentions(message, candidates)[:limit]
 
     async def suggest_proactive_raw(
         self,

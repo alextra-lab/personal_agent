@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 
@@ -248,6 +249,13 @@ class TestProtocolIsRuntimeCheckable:
             ) -> ProactiveMemorySuggestions:
                 return ProactiveMemorySuggestions(candidates=[])
 
+            async def resolve_message_entities(
+                self,
+                message: str,
+                trace_id: str,
+            ) -> list[str]:
+                return []
+
         assert isinstance(FakeMemory(), MemoryProtocol)
 
 
@@ -415,3 +423,35 @@ class TestMemoryServiceAdapterSlice2:
             trace_id="t",
         )
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_resolve_message_entities_delegates_to_service(self) -> None:
+        """FRE-1041: the adapter forwards the message and identity to the resolver."""
+        mock_service = MagicMock()
+        mock_service.resolve_message_entity_names = AsyncMock(return_value=["Melon"])
+
+        adapter = MemoryServiceAdapter(service=mock_service)
+        user_id = uuid4()
+        result = await adapter.resolve_message_entities(
+            "I would like to make a melon/canteloupe ice cream",
+            trace_id="t",
+            user_id=user_id,
+            authenticated=True,
+        )
+
+        assert result == ["Melon"]
+        mock_service.resolve_message_entity_names.assert_awaited_once_with(
+            "I would like to make a melon/canteloupe ice cream",
+            trace_id="t",
+            user_id=user_id,
+            authenticated=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_resolve_message_entities_fails_to_empty(self) -> None:
+        """A resolver failure degrades to no hints rather than failing the turn."""
+        mock_service = MagicMock()
+        mock_service.resolve_message_entity_names = AsyncMock(side_effect=RuntimeError("down"))
+
+        adapter = MemoryServiceAdapter(service=mock_service)
+        assert await adapter.resolve_message_entities("a melon", trace_id="t") == []

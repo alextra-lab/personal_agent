@@ -19,7 +19,10 @@ Public surface:
   populated by the FastAPI lifespan hook at startup.
 - :func:`budget_role_for` — map factory ``role_name`` strings (e.g. ``"primary"``,
   ``"sub_agent"``, ``"entity_extraction_role"``) to the budget role keys
-  used in ``budget.yaml``.
+  used in ``budget.yaml``. **Total and fail-closed** since FRE-989: an unknown
+  name raises :class:`UnknownBudgetRoleError` rather than defaulting.
+- :func:`validate_role_totality` — startup assertion that the role map,
+  ``ModelRole`` and ``budget.yaml`` agree; call it from the lifespan hook.
 
 The ``DenialReason`` enum is shared with the FRE-307 telemetry layer.
 """
@@ -29,6 +32,14 @@ from __future__ import annotations
 from personal_agent.cost_gate.gate import RESERVATION_TTL_SECONDS, CostGate
 from personal_agent.cost_gate.policy import BudgetConfigError, load_budget_config
 from personal_agent.cost_gate.reaper import DEFAULT_REAPER_INTERVAL_SECONDS, run_reaper
+from personal_agent.cost_gate.role_map import (
+    BUDGET_ROLE_BY_FACTORY_NAME,
+    NON_GATED_ROLES,
+    UnknownBudgetRoleError,
+    budget_role_for,
+    role_totality_findings,
+    validate_role_totality,
+)
 from personal_agent.cost_gate.snapshotter import (
     DEFAULT_SNAPSHOT_INTERVAL_SECONDS,
     run_counter_snapshotter,
@@ -83,71 +94,11 @@ def get_default_gate() -> CostGate:
     return _default_gate
 
 
-# ---------------------------------------------------------------------------
-# Factory role_name → budget role mapping
-# ---------------------------------------------------------------------------
-
-# Maps the factory's ``role_name`` argument (used by callers of
-# ``get_llm_client``) to the budget role keys declared in budget.yaml. New
-# call sites should prefer to use a budget-role name directly; this mapping
-# exists to give existing call sites a sensible default without a sweeping
-# rename.
-_BUDGET_ROLE_BY_FACTORY_NAME: dict[str, str] = {
-    # Executor / orchestrator roles → main_inference (user-facing flow)
-    "primary": "main_inference",
-    "sub_agent": "main_inference",
-    "compressor": "main_inference",
-    "router": "main_inference",
-    "reasoning": "main_inference",
-    "standard": "main_inference",
-    "main_inference": "main_inference",
-    # Background consumers
-    "captains_log_role": "captains_log",
-    "captains_log": "captains_log",
-    "insights_role": "insights",
-    "insights": "insights",
-    "entity_extraction_role": "entity_extraction",
-    "entity_extraction": "entity_extraction",
-    "promotion_role": "promotion",
-    "promotion": "promotion",
-    "freshness_role": "freshness",
-    "freshness": "freshness",
-    # Artifact builder — own lane, not main_inference (ADR-0118 T1, FRE-879).
-    "artifact_builder": "artifact_builder",
-    # FRE-1037: explicit entries for the newly-threaded ModelRole members, so
-    # none of them silently fall through to the main_inference default below.
-    # session_summary shares captains_log's lane — ADR-0124 D2's existing,
-    # explicit deferral of a dedicated budget class, now declared rather than
-    # coincidental.
-    "session_summary": "captains_log",
-    # vision escalations are part of a user-facing turn and no dedicated
-    # budget.yaml lane exists for them; main_inference is correct, now explicit.
-    "vision": "main_inference",
-    # Already correct via get_llm_client_for_key's own default budget_role
-    # param; declared here too so it doesn't depend on that default.
-    "skill_routing": "skill_routing",
-}
-
-
-def budget_role_for(factory_role_name: str) -> str:
-    """Resolve a factory ``role_name`` to its budget role key.
-
-    Unknown names default to ``"main_inference"`` so a new role flag doesn't
-    silently bypass the gate. The default still triggers the user-facing cap
-    rather than a more permissive background cap.
-
-    Args:
-        factory_role_name: The ``role_name`` argument to ``get_llm_client``.
-
-    Returns:
-        Budget role key (declared in ``budget.yaml``).
-    """
-    return _BUDGET_ROLE_BY_FACTORY_NAME.get(factory_role_name, "main_inference")
-
-
 __all__ = [
+    "BUDGET_ROLE_BY_FACTORY_NAME",
     "DEFAULT_REAPER_INTERVAL_SECONDS",
     "DEFAULT_SNAPSHOT_INTERVAL_SECONDS",
+    "NON_GATED_ROLES",
     "RESERVATION_TTL_SECONDS",
     "BudgetConfig",
     "BudgetConfigError",
@@ -160,11 +111,14 @@ __all__ = [
     "ReservationStatus",
     "RoleConfig",
     "TimeWindow",
+    "UnknownBudgetRoleError",
     "budget_role_for",
     "get_default_gate",
     "get_default_gate_or_none",
     "load_budget_config",
+    "role_totality_findings",
     "run_counter_snapshotter",
     "run_reaper",
     "set_default_gate",
+    "validate_role_totality",
 ]

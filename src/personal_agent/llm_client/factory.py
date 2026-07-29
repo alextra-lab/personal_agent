@@ -155,7 +155,7 @@ def get_llm_client(role_name: str = "primary", *, selection_key: str | None = No
     return _build_client(resolved_key, model_def, budget_role_for(role_name), config)
 
 
-def get_llm_client_for_key(model_key: str, budget_role: str = "skill_routing") -> Any:
+def get_llm_client_for_key(model_key: str, *, budget_role: str) -> Any:
     """Return an LLM client for a specific model key from **trusted config**.
 
     This is the trusted-config door, not a user-selection door. Every call site
@@ -183,9 +183,14 @@ def get_llm_client_for_key(model_key: str, budget_role: str = "skill_routing") -
     Args:
         model_key: Key in ``models.yaml`` (e.g. ``"claude_haiku"``,
             ``"qwen3.5-35b-a3b"``).
-        budget_role: Cost-gate budget role for this client (default
-            ``"skill_routing"``). Distinct budget category isolates routing
-            spend from primary inference.
+        budget_role: Cost-gate budget lane for this client. **Required and
+            keyword-only** — it used to default to ``"skill_routing"``, a lane
+            with a $0.10 daily cap, so any caller that forgot it billed against
+            a near-zero budget while ``LiteLLMClient``'s own default billed the
+            $10 user-facing one. FRE-989 finding three reconciled the three
+            disagreeing defaults to none at all: the lane is always named at the
+            door, and omitting it is a ``TypeError`` rather than an arbitrary
+            bucket.
 
     Returns:
         LiteLLMClient for cloud provider models; LocalLLMClient for local.

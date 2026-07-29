@@ -4000,7 +4000,9 @@ async def step_llm_call(
                 )
                 from personal_agent.orchestrator.skills import route_skills  # noqa: PLC0415
 
-                _routing_client = get_llm_client_for_key(settings.skill_routing_model_key)
+                _routing_client = get_llm_client_for_key(
+                    settings.skill_routing_model_key, budget_role="skill_routing"
+                )
                 _routing_start = time.time()
                 _relevant = await route_skills(
                     user_message=_user_message,

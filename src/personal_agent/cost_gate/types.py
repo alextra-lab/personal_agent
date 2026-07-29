@@ -165,6 +165,18 @@ class BudgetConfig(BaseModel):
     version: int = Field(default=1, ge=1)
     roles: dict[str, RoleConfig]
     caps: list[CapEntry]
+    uncapped_roles: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Roles deliberately run without a per-role dollar cap (FRE-989 "
+            "finding two). Listing a role here is what distinguishes a DECISION "
+            "not to cap it from having FORGOTTEN the cap — the two were "
+            "previously indistinguishable, with no signal either way. "
+            "validate_role_totality rejects a declared role that is neither "
+            "capped nor listed here. 'Uncapped' means no per-role ceiling; every "
+            "role remains bounded by the synthetic weekly `_total` cap."
+        ),
+    )
 
     def role(self, name: str) -> RoleConfig:
         """Look up role config; raises ``KeyError`` if undeclared.

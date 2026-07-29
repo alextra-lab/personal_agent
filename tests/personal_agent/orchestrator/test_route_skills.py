@@ -155,8 +155,13 @@ class TestSkillRoutingSettings:
         assert settings.skill_routing_model_key == "claude_haiku"
 
     def test_factory_for_key_rejects_unknown(self) -> None:
-        """get_llm_client_for_key raises ValueError for unknown keys."""
+        """get_llm_client_for_key raises ValueError for unknown keys.
+
+        ``budget_role`` is passed explicitly because it no longer has a default
+        (FRE-989 finding three) — without it the call would raise ``TypeError``
+        before ever reaching the unknown-key check this test is about.
+        """
         from personal_agent.llm_client.factory import get_llm_client_for_key
 
         with pytest.raises(ValueError, match="Unknown model key"):
-            get_llm_client_for_key("nonexistent_xyz_model")
+            get_llm_client_for_key("nonexistent_xyz_model", budget_role="skill_routing")

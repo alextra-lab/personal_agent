@@ -604,9 +604,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             run_counter_snapshotter,
             run_reaper,
             set_default_gate,
+            validate_role_totality,
         )
 
         budget_config = load_budget_config()
+        # FRE-989: refuse to serve on a config whose roles, caps and resolver
+        # map disagree. budget.yaml is a RUNTIME file baked into the image, so
+        # the CI guard validates the tree, not the container that ships — a
+        # drifted deploy would otherwise mis-bill silently for the life of the
+        # process, which is exactly how `study` billed main_inference unnoticed.
+        validate_role_totality(budget_config)
         cost_gate = CostGate(config=budget_config, db_url=settings.database_url)
         await cost_gate.connect()
         set_default_gate(cost_gate)

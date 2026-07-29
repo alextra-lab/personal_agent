@@ -44,6 +44,7 @@ from personal_agent.captains_log.models import (
 )
 from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client.dspy_gate import DspyJobCost
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -303,8 +304,17 @@ def generate_reflection_dspy(
     iteration_count: int = 0,
     max_iterations: int = 0,
     prompt_manifest: str = "",
+    cost_sink: DspyJobCost | None = None,
 ) -> tuple[CaptainLogEntry, list[str]]:
     """Generate reflection using DSPy ChainOfThought with deterministic metrics extraction.
+
+    Args:
+        cost_sink: Optional :class:`DspyJobCost` this function fills in with the
+            job's observed cost and token usage, read out of ``dspy.LM``'s own
+            history. Runs in a worker thread and so cannot settle the
+            reservation itself; the async caller does that (FRE-989 finding
+            eight). ``None`` — the default — skips collection, which is correct
+            for a local (free) role and keeps existing call sites unchanged.
 
     Returns:
         A tuple of ``(entry, missing_skill_names)``.  The names list is
@@ -452,6 +462,16 @@ def generate_reflection_dspy(
                 trace_id=trace_id,
                 component="reflection_dspy",
             )
+
+        # FRE-989 finding eight: read this job's real cost out of dspy.LM's own
+        # history before the LM goes out of scope. configure_dspy_lm builds a
+        # fresh LM per reflection, so the history is exactly this job's calls.
+        # The async caller settles the reservation against it — this thread
+        # cannot await the gate.
+        if cost_sink is not None:
+            from personal_agent.llm_client.dspy_gate import collect_dspy_cost
+
+            collect_dspy_cost(lm, cost_sink, model=getattr(lm, "model", None))
 
         # Convert DSPy result to CaptainLogEntry (outside context manager)
         # Coerce to str in case DSPy/async LM left coroutines in result fields.

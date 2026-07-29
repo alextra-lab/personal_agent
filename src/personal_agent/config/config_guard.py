@@ -22,6 +22,11 @@ per-profile model-definition YAMLs and the documented environment template
 * **Secret field plaintext default** (policy) — a secret-marked field whose
   Python default is a real (non-empty, unexempted) value, or a field carrying
   the exemption key without the ``secret`` marker itself (metadata misuse).
+* **Budget-role coverage** (safety, FRE-989) — ``ModelRole``, the cost-gate
+  factory-name → budget-lane map and ``config/governance/budget.yaml`` must
+  agree pairwise, and every declared role must be either capped or explicitly
+  declared uncapped. A role present on one side only bills to the wrong budget
+  with no signal at any layer.
 
 Severity classes follow the ADR-0099 D4 table: safety findings hard-fail both
 CI and (via the startup hook) process boot; policy findings hard-fail CI/
@@ -831,6 +836,54 @@ def check_deployment_manifest_matches_compose(root: Path, manifest: JSONDict) ->
     return findings
 
 
+def check_budget_role_coverage(root: Path) -> list[Finding]:
+    """Check that ModelRole, the cost-gate role map and budget.yaml agree.
+
+    A **safety** check: a role declared on one side and not the others is not a
+    style issue, it is spend billed to the wrong budget with no signal at any
+    layer (FRE-989). ``study`` sat capped in ``budget.yaml`` with its own $5
+    isolation lane while the resolver map had no entry for it, so the role-name
+    door billed it to ``main_inference`` — for months, silently. This check is
+    the CI half of that invariant; ``cost_gate.validate_role_totality`` is the
+    startup half, and both delegate to the same ``role_totality_findings`` so
+    the two can never disagree about what "consistent" means.
+
+    Args:
+        root: Repository root; ``config/governance/budget.yaml`` is read from it.
+
+    Returns:
+        One safety finding per inconsistency; empty when the three agree.
+    """
+    from personal_agent.cost_gate.policy import load_budget_config
+    from personal_agent.cost_gate.role_map import role_totality_findings
+
+    budget_path = root / "config" / "governance" / "budget.yaml"
+    if not budget_path.exists():
+        return [
+            Finding(
+                check="budget_role_coverage",
+                severity="safety",
+                message=f"{budget_path} is missing — cost-gate roles cannot be verified.",
+            )
+        ]
+
+    try:
+        config = load_budget_config(budget_path)
+    except Exception as exc:  # noqa: BLE001 — any load failure is a guard finding
+        return [
+            Finding(
+                check="budget_role_coverage",
+                severity="safety",
+                message=f"could not load {budget_path}: {exc}",
+            )
+        ]
+
+    return [
+        Finding(check="budget_role_coverage", severity="safety", message=message)
+        for message in role_totality_findings(config)
+    ]
+
+
 def run_all_checks(root: Path) -> list[Finding]:
     """Run every check against *root* and return all findings."""
     matrix = load_matrix(root)
@@ -848,4 +901,5 @@ def run_all_checks(root: Path) -> list[Finding]:
     findings.extend(check_substrate_manifest(root))
     findings.extend(check_dev_test_profile_isolation(root))
     findings.extend(check_embedding_fallback_identity())
+    findings.extend(check_budget_role_coverage(root))
     return findings

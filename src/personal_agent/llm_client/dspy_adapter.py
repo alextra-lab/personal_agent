@@ -34,7 +34,7 @@ from typing import Any
 
 from personal_agent.config import settings
 from personal_agent.config.model_loader import ModelConfigError, load_model_config
-from personal_agent.llm_client.models import Placement
+from personal_agent.llm_client.models import ModelDefinition, Placement
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.telemetry import get_logger
 
@@ -44,6 +44,51 @@ try:
     import dspy  # type: ignore[import-untyped]
 except ImportError:
     dspy = None  # type: ignore[assignment,unused-ignore]
+
+
+def resolve_dspy_target(role: ModelRole | str) -> tuple[str, ModelDefinition, bool]:
+    """Resolve a DSPy role to its deployment, definition and cloud-ness.
+
+    Extracted from :func:`configure_dspy_lm` so the cost gate can ask "is this
+    role's DSPy call paid?" without re-deriving the answer. A second copy of
+    this resolution is precisely the drift FRE-989 exists to remove: the gate
+    and the client must agree on which deployment a role runs, or the gate
+    reserves for one model while the call bills another.
+
+    Args:
+        role: Model role — a :class:`ModelRole` or a raw role/deployment name.
+
+    Returns:
+        ``(deployment_key, model_definition, is_cloud)``. ``is_cloud`` is
+        ``True`` when the deployment's placement is anything but ``LOCAL`` —
+        i.e. when the call costs money and must be gated.
+
+    Raises:
+        ModelConfigError: If the role resolves to no deployment definition.
+    """
+    try:
+        model_configs = load_model_config()
+    except ModelConfigError as e:
+        log.error("model_config_load_failed", error=str(e), component="dspy_adapter")
+        raise
+
+    role_key = role.value if hasattr(role, "value") else role
+
+    # Resolve through the Layer-3 binding: `role_key` may be a ROLE name, and
+    # since ADR-0121 the catalog is keyed by model, so a direct lookup misses.
+    # resolve_role_target falls back to a key lookup for names with no binding,
+    # so both a role and a deployment alias work here.
+    from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
+
+    deployment_key, model_def = resolve_role_target(role_key, config=model_configs)
+    if not model_def:
+        raise ModelConfigError(
+            f"No model configured for role '{role_key}'. "
+            f"Available roles: {list(model_configs.models.keys())}"
+        )
+
+    is_cloud = model_configs.placement_of(deployment_key) is not Placement.LOCAL
+    return deployment_key, model_def, is_cloud
 
 
 def configure_dspy_lm(
@@ -81,37 +126,21 @@ def configure_dspy_lm(
             "dspy package is required for structured outputs. Install with: uv add dspy>=3.1.0"
         )
 
-    # Load model configuration
-    try:
-        model_configs = load_model_config()
-    except ModelConfigError as e:
-        log.error("model_config_load_failed", error=str(e), component="dspy_adapter")
-        raise
-
-    # Accept both ModelRole enum and plain string role names
+    # Accept both ModelRole enum and plain string role names (logging only —
+    # resolve_dspy_target does its own normalisation).
     role_key = role.value if hasattr(role, "value") else role
 
-    # Resolve through the Layer-3 binding: `role_key` may be a ROLE name, and
-    # since ADR-0121 the catalog is keyed by model, so a direct lookup misses.
-    # resolve_role_target falls back to a key lookup for names with no binding,
-    # so both a role and a deployment alias work here.
-    from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
-
-    deployment_key, model_def = resolve_role_target(role_key, config=model_configs)
-    if not model_def:
-        raise ModelConfigError(
-            f"No model configured for role '{role_key}'. "
-            f"Available roles: {list(model_configs.models.keys())}"
-        )
+    # `is_cloud` is derived from PLACEMENT, not from whether `provider` is set:
+    # under ADR-0121 every deployment names a provider — including local ones
+    # (slm_local) — so `provider is not None` no longer means "cloud", and local
+    # deployments would be routed through LiteLLM as "slm_local/<id>" with no
+    # api_base. See resolve_dspy_target for the check itself.
+    _deployment_key, model_def, is_cloud = resolve_dspy_target(role)
 
     model_id = model_def.id
     effective_timeout = timeout_s or settings.llm_timeout_seconds
 
-    # Dispatch on PLACEMENT, not on whether `provider` is set. Under ADR-0121
-    # every deployment names a provider — including local ones (slm_local) — so
-    # `provider is not None` no longer means "cloud", and local deployments would
-    # be routed through LiteLLM as "slm_local/<id>" with no api_base.
-    if model_configs.placement_of(deployment_key) is not Placement.LOCAL:
+    if is_cloud:
         # ── Cloud model path ─────────────────────────────────────────────────
         # LiteLLM routing uses "{provider}/{model_id}" strings natively.
         litellm_model = f"{model_def.provider}/{model_id}"

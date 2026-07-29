@@ -48,6 +48,28 @@ roles:
     safety_factor: 1.2
     on_denial: raise        # user-facing build path (ADR-0118 T1, FRE-879) — mirrors main_inference
 
+# Roles deliberately run WITHOUT a per-role dollar cap (FRE-989 finding two).
+#
+# Listing a role here is a DECISION. It is what distinguishes "we chose not to
+# cap this" from "we forgot" — before FRE-989 those two were indistinguishable
+# and there was no signal either way. The startup validator and the CI config
+# guard both reject a declared role that is neither capped nor listed here.
+#
+# "Uncapped" means no PER-ROLE ceiling, not unlimited: caps_for() always folds
+# in the synthetic weekly `_total` cap below, so these three are still bounded
+# collectively. What they lack is a per-role counter row, which is why per-role
+# counter queries and the FRE-547 cap-utilisation panel show nothing for them.
+#
+# Why no number rather than a number: ADR-0120 (Proposed) supersedes ADR-0065
+# and its decision 1 is to remove hard, process-breaking dollar caps outright.
+# Inventing cap values now is work that ADR would delete. Per-role spend IS
+# measurable in api_costs.purpose, so a number can be set from observation
+# whenever ADR-0120 resolves.
+uncapped_roles:
+  - insights     # live — captains_log/feedback.py
+  - promotion    # declared, but NO live call site as of 2026-07-29 (FRE-989)
+  - freshness    # declared, but NO live call site as of 2026-07-29 (FRE-989)
+
 caps:
   - {time_window: daily,  role: entity_extraction, cap_usd: 5.00}   # reset 2026-07-04: FRE-771 powered A/B complete (was TEMP BUMP to $25.00)
   - {time_window: daily,  role: captains_log,      cap_usd: 5.00}   # raised 2026-07-24 (was $2.50, breaching — observed daily peak $2.76); ~2x peak, owner-approved

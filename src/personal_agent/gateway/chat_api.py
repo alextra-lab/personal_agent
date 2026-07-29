@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -56,6 +57,7 @@ async def _stream_to_queue(
     anthropic_messages: list[Any],
     api_key: str,
     reservation_id: UUID | None = None,
+    reservation_estimate: Decimal | None = None,
 ) -> None:
     """Stream an Anthropic response into the AG-UI per-session event queue.
 
@@ -78,6 +80,9 @@ async def _stream_to_queue(
         reservation_id: Cost-gate reservation token from ``chat()``; the
             stream's success path commits it with the actual cost, the
             failure path refunds it.
+        reservation_estimate: The amount ``chat()`` reserved. Committed instead
+            of ``$0`` when the turn burned tokens that could not be priced, so
+            an unpriceable turn does not hand its headroom back (FRE-989).
     """
     session_id_str = str(session_uuid)
     start_time = time.time()
@@ -190,14 +195,25 @@ async def _stream_to_queue(
                 reservation_id=reservation_id,
                 trace_id=trace_id,
                 final_message=final_message,
+                estimate=reservation_estimate,
             )
         # ADR-0078 D4 / FRE-405: close the gateway telemetry dark path. This
         # call previously bypassed canonical telemetry entirely; emit the
         # canonical model_call_completed so cost/cache/quality are attributable.
+        _latency_ms = int((time.time() - start_time) * 1000)
         _emit_gateway_model_call_completed(
             trace_id=trace_id,
             session_id=session_id_str,
-            latency_ms=int((time.time() - start_time) * 1000),
+            latency_ms=_latency_ms,
+            final_message=final_message,
+        )
+        # FRE-989 finding seven: telemetry alone is not the ledger. Write the
+        # api_costs row so this paid turn is attributable in the authoritative
+        # store, not only in the counter it moved.
+        await _record_gateway_cost_safe(
+            trace_id=trace_id,
+            session_uuid=session_uuid,
+            latency_ms=_latency_ms,
             final_message=final_message,
         )
     finally:
@@ -227,40 +243,124 @@ async def _refund_reservation_safe(reservation_id: UUID, trace_id: str) -> None:
         )
 
 
+def gateway_stream_usage(final_message: Any) -> tuple[Decimal, int, int]:
+    """Price a finished Anthropic stream from its usage block.
+
+    Pricing goes through :func:`lookup_model_pricing`, which tries the prefixed
+    **and** the bare model id. This used to look up only
+    ``anthropic/<model>`` — and litellm carries **no** ``anthropic/``-prefixed
+    keys at all, so every gateway turn priced at exactly $0: the
+    ``main_inference`` counter never moved for streamed chat, and its cap was
+    unreachable by this path (FRE-989).
+
+    Returns zeros only when the usage block is genuinely absent. Callers treat
+    that case as "unknown", not as "free".
+
+    Args:
+        final_message: The Anthropic SDK's final streamed message, or ``None``.
+
+    Returns:
+        ``(cost_usd, input_tokens, output_tokens)``.
+    """
+    from personal_agent.llm_client.cost_estimator import lookup_model_pricing  # noqa: PLC0415
+
+    if final_message is None or getattr(final_message, "usage", None) is None:
+        return Decimal("0"), 0, 0
+
+    usage = final_message.usage
+    pricing = lookup_model_pricing(f"anthropic/{_CLOUD_MODEL}")
+    input_price = Decimal(str(pricing.get("input_cost_per_token", "0")))
+    output_price = Decimal(str(pricing.get("output_cost_per_token", "0")))
+    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    cost = (Decimal(input_tokens) * input_price + Decimal(output_tokens) * output_price).quantize(
+        Decimal("0.000001")
+    )
+    if cost == 0 and (input_tokens or output_tokens):
+        log.error(
+            "chat.pricing_unknown",
+            model=f"anthropic/{_CLOUD_MODEL}",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            note="streamed turn priced at $0; the main_inference cap cannot see this spend",
+        )
+    return cost, input_tokens, output_tokens
+
+
+async def _record_gateway_cost_safe(
+    *,
+    trace_id: str,
+    session_uuid: UUID,
+    latency_ms: int,
+    final_message: Any,
+) -> None:
+    """Write the ``api_costs`` row for a streamed gateway turn (FRE-989 finding seven).
+
+    This path talks to the Anthropic SDK directly rather than through
+    ``LiteLLMClient``, so it reserved and committed against the cost gate but
+    wrote **no ledger row** — a paid turn that moved the ``main_inference``
+    counter while remaining invisible in the one store that is supposed to be
+    the authoritative, role-attributed record of spend.
+
+    Best-effort and never raises: a ledger failure must not break the user's
+    stream. Mirrors ``LiteLLMClient``'s own recording contract.
+    """
+    try:
+        from personal_agent.llm_client.cost_tracker import get_cost_tracker_service
+
+        cost, input_tokens, output_tokens = gateway_stream_usage(final_message)
+        tracker = get_cost_tracker_service()
+        await tracker.connect()
+        await tracker.record_api_call(
+            provider="anthropic",
+            model=f"anthropic/{_CLOUD_MODEL}",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=float(cost),
+            trace_id=UUID(trace_id),
+            session_id=session_uuid,
+            # The same lane chat() reserved against — the ledger and the
+            # counter must name one budget, or they cannot be reconciled.
+            purpose="main_inference",
+            latency_ms=latency_ms,
+        )
+    except Exception as exc:  # noqa: BLE001 — never break the stream over a ledger write
+        log.error(
+            "chat.cost_record_failed",
+            trace_id=trace_id,
+            session_id=str(session_uuid),
+            error=str(exc),
+        )
+
+
 async def _commit_reservation_safe(
-    *, reservation_id: UUID, trace_id: str, final_message: Any
+    *,
+    reservation_id: UUID,
+    trace_id: str,
+    final_message: Any,
+    estimate: Decimal | None = None,
 ) -> None:
     """Commit the reservation against the actual cost from the streamed response.
 
-    Pricing comes from ``litellm.model_cost`` keyed on
-    ``anthropic/<model>``. If usage data is missing or pricing isn't
-    available, fall back to committing the original estimate (no settle) —
-    the reaper would otherwise sweep the reservation and refund it
-    incorrectly.
+    If usage data is missing or pricing isn't available, fall back to committing
+    the original ``estimate`` — the reaper would otherwise sweep the reservation
+    and refund it incorrectly. That fallback was documented here but **not
+    implemented**: the estimate was never passed in, so an unpriceable turn
+    committed $0 and silently handed back headroom for spend that did occur
+    (FRE-989). Matches the DSPy channel's rule, which settles the same way.
     """
-    from decimal import Decimal as _Decimal
-
     try:
-        import litellm  # noqa: PLC0415
-
         from personal_agent.cost_gate import get_default_gate_or_none
 
         gate = get_default_gate_or_none()
         if gate is None:
             return
 
-        actual_cost = _Decimal("0")
-        if final_message is not None and getattr(final_message, "usage", None) is not None:
-            usage = final_message.usage
-            pricing = getattr(litellm, "model_cost", {}).get(f"anthropic/{_CLOUD_MODEL}", {})
-            input_price = _Decimal(str(pricing.get("input_cost_per_token", "0")))
-            output_price = _Decimal(str(pricing.get("output_cost_per_token", "0")))
-            input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-            output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-            actual_cost = (
-                _Decimal(input_tokens) * input_price + _Decimal(output_tokens) * output_price
-            ).quantize(_Decimal("0.000001"))
-
+        actual_cost, input_tokens, output_tokens = gateway_stream_usage(final_message)
+        if actual_cost == 0 and estimate is not None and (input_tokens or output_tokens):
+            # Tokens were burned but could not be priced — settle the estimate
+            # rather than zero, so the counter reflects that spend happened.
+            actual_cost = estimate
         await gate.commit(reservation_id, actual_cost, trace_id=trace_id)
     except Exception as exc:
         log.error(
@@ -468,6 +568,11 @@ async def chat(
     # PWA's "budget denied" card) instead of an empty assistant turn —
     # which was the regression that motivated this whole ADR.
     reservation_id: UUID | None = None
+    # Bound before the branch: the no-gate path below deliberately CONTINUES,
+    # and the task launch reads this unconditionally. Leaving it unbound there
+    # would make every /chat request in standalone gateway mode — whose lifespan
+    # registers no gate — raise UnboundLocalError outside this try, i.e. a 500.
+    reservation_amount: Decimal | None = None
     try:
         from decimal import Decimal as _Decimal
 
@@ -490,7 +595,10 @@ async def chat(
                 trace_id=UUID(trace_id),
             )
         else:
-            log.warning(
+            # FRE-989: error, not warning. A paid streaming call proceeding
+            # with no gate is unmetered spend against no cap — an operational
+            # fault, not an informational note.
+            log.error(
                 "chat.cost_gate_not_initialized",
                 trace_id=trace_id,
                 note="streaming call proceeding without gate; check lifespan startup",
@@ -507,6 +615,7 @@ async def chat(
             anthropic_messages=anthropic_messages,
             api_key=api_key,
             reservation_id=reservation_id,
+            reservation_estimate=reservation_amount,
         )
     )
 

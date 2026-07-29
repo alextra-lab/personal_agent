@@ -37,6 +37,7 @@ from personal_agent.captains_log.prompt_manifest import (
 from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import settings
 from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client.dspy_adapter import resolve_dspy_target
 from personal_agent.llm_client.factory import get_llm_client_for_key
 from personal_agent.sysgraph import SysgraphRepository, get_default_sysgraph_repo
 from personal_agent.sysgraph.dedup import ReadBeforeEmitDecision, check_before_emit
@@ -401,25 +402,76 @@ async def generate_reflection_entry(
                 failure_path_enabled=settings.failure_path_reflection_enabled,
                 component="reflection",
             )
-            entry, missing_skill_names = await asyncio.to_thread(
-                generate_reflection_dspy,
-                user_message=user_message,
-                trace_id=trace_id,
-                steps_count=steps_count,
-                final_state=effective_final_state,
-                reply_length=reply_length,
-                telemetry_summary=telemetry_summary,
-                llm_client=llm_client,
-                metrics_summary=metrics_summary,  # ADR-0014: Deterministic extraction
-                captains_log_role=_captains_log_role,
-                failure_excerpt_json=failure_excerpt_json,
-                had_errors=had_errors,
-                hit_iteration_limit=hit_iteration_limit,
-                task_type=task_type,
-                iteration_count=iteration_count,
-                max_iterations=max_iterations,
-                prompt_manifest=prompt_manifest,
-            )
+            _dspy_kwargs: dict[str, Any] = {
+                "user_message": user_message,
+                "trace_id": trace_id,
+                "steps_count": steps_count,
+                "final_state": effective_final_state,
+                "reply_length": reply_length,
+                "telemetry_summary": telemetry_summary,
+                "llm_client": llm_client,
+                "metrics_summary": metrics_summary,  # ADR-0014: Deterministic extraction
+                "captains_log_role": _captains_log_role,
+                "failure_excerpt_json": failure_excerpt_json,
+                "had_errors": had_errors,
+                "hit_iteration_limit": hit_iteration_limit,
+                "task_type": task_type,
+                "iteration_count": iteration_count,
+                "max_iterations": max_iterations,
+                "prompt_manifest": prompt_manifest,
+            }
+
+            # FRE-989 finding eight: DSPy calls its provider directly, so this
+            # channel reserved nothing and wrote no api_costs row — reflection
+            # on `captains_log` (bound to claude_sonnet, cloud) was spending
+            # invisibly, on the very role behind the FRE-987 incident.
+            #
+            # Only the CLOUD placement is gated: a local DSPy call is free and
+            # must not consume a paid lane's headroom (mirrors the
+            # LocalLLMClient / LiteLLMClient split). Reservation failure lands
+            # inside this try, so a denial degrades exactly like any other DSPy
+            # failure — through to the manual client below, which is itself
+            # gated and will deny again, honouring captains_log's `nack`.
+            _dspy_role = _captains_log_role or ModelRole.CAPTAINS_LOG.value
+            _, _dspy_def, _dspy_is_cloud = resolve_dspy_target(_dspy_role)
+
+            if _dspy_is_cloud:
+                from personal_agent.cost_gate import budget_role_for
+                from personal_agent.llm_client.dspy_gate import gated_dspy_job
+
+                # Size the reservation from EVERY input DSPy will put in the
+                # prompt, not just the user message — the signature also carries
+                # the telemetry summary, the metrics and any failure excerpt,
+                # which together dwarf it. Sizing on user_message alone
+                # under-counted input tokens by a large factor, and the estimate
+                # is what gets committed whenever the real cost can't be read.
+                _sizing_prompt = "\n".join(
+                    part
+                    for part in (
+                        user_message,
+                        telemetry_summary,
+                        str(metrics_summary or ""),
+                        failure_excerpt_json,
+                        prompt_manifest,
+                    )
+                    if part
+                )
+                async with gated_dspy_job(
+                    budget_role=budget_role_for(ModelRole.CAPTAINS_LOG.value),
+                    model=f"{_dspy_def.provider}/{_dspy_def.id}",
+                    messages=[{"role": "user", "content": _sizing_prompt}],
+                    max_tokens=_dspy_def.max_tokens or 4096,
+                    trace_ctx=SystemTraceContext.new(
+                        "captains_log_reflection", session_id=session_id
+                    ),
+                ) as _cost_sink:
+                    entry, missing_skill_names = await asyncio.to_thread(
+                        generate_reflection_dspy, cost_sink=_cost_sink, **_dspy_kwargs
+                    )
+            else:
+                entry, missing_skill_names = await asyncio.to_thread(
+                    generate_reflection_dspy, **_dspy_kwargs
+                )
             log.info(
                 "dspy_reflection_succeeded",
                 trace_id=trace_id,

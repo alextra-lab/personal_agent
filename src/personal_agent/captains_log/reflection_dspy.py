@@ -44,6 +44,7 @@ from personal_agent.captains_log.models import (
 )
 from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client.dspy_gate import DspyJobCost
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -303,8 +304,20 @@ def generate_reflection_dspy(
     iteration_count: int = 0,
     max_iterations: int = 0,
     prompt_manifest: str = "",
+    cost_sink: DspyJobCost | None = None,
 ) -> tuple[CaptainLogEntry, list[str]]:
     """Generate reflection using DSPy ChainOfThought with deterministic metrics extraction.
+
+    Args:
+        cost_sink: Optional :class:`DspyJobCost` this function fills in with the
+            job's observed cost and token usage, read out of ``dspy.LM``'s own
+            history. Populated in a ``finally``, so a job that raised *after*
+            the provider billed still reports what it spent. This runs in a
+            worker thread and cannot settle the reservation itself; the async
+            caller does that (FRE-989 finding eight). ``None`` — the default —
+            skips collection, which is correct for a local (free) role and
+            leaves existing call sites unchanged. The remaining parameters are
+            the pre-existing reflection inputs, described inline below.
 
     Returns:
         A tuple of ``(entry, missing_skill_names)``.  The names list is
@@ -423,35 +436,51 @@ def generate_reflection_dspy(
             component="reflection_dspy",
         )
 
-        # Use context manager to avoid "can only be called from same async task" error
-        with dspy.context(lm=lm):
-            # Create ChainOfThought predictor
-            reflection_generator = dspy.ChainOfThought(GenerateReflection)
+        # FRE-989 finding eight: read this job's real cost out of dspy.LM's own
+        # history. configure_dspy_lm builds a fresh LM per reflection, so the
+        # history is exactly this job's calls. The async caller settles the
+        # reservation against it — this thread cannot await the gate.
+        #
+        # In a `finally`, deliberately: the most likely DSPy failure is a
+        # POST-call one (the predictor returned and parsing its result failed),
+        # which is precisely when the provider has already billed. Collecting
+        # only on success would leave the sink empty on exactly those paths, and
+        # the caller would then refund spend that really happened.
+        try:
+            # Use context manager to avoid "can only be called from same async task" error
+            with dspy.context(lm=lm):
+                # Create ChainOfThought predictor
+                reflection_generator = dspy.ChainOfThought(GenerateReflection)
 
-            # Generate reflection
-            # Metrics are pre-formatted (deterministic), LLM only generates insights
-            result = reflection_generator(
-                user_message=mark_truncated(user_message, 400),
-                steps_count=steps_count,
-                final_state=final_state,
-                reply_length=reply_length,
-                telemetry_summary=telemetry_summary,
-                metrics_summary=metrics_string,  # Pre-formatted, deterministic
-                failure_excerpt=failure_excerpt_json,
-                had_errors=had_errors,
-                prompt_manifest=prompt_manifest,
-            )
+                # Generate reflection
+                # Metrics are pre-formatted (deterministic), LLM only generates insights
+                result = reflection_generator(
+                    user_message=mark_truncated(user_message, 400),
+                    steps_count=steps_count,
+                    final_state=final_state,
+                    reply_length=reply_length,
+                    telemetry_summary=telemetry_summary,
+                    metrics_summary=metrics_string,  # Pre-formatted, deterministic
+                    failure_excerpt=failure_excerpt_json,
+                    had_errors=had_errors,
+                    prompt_manifest=prompt_manifest,
+                )
 
-            log.info(
-                "dspy_reflection_generated",
-                has_rationale=bool(_ensure_str(getattr(result, "rationale", ""))),
-                has_proposed_change=bool(
-                    _ensure_str(getattr(result, "proposed_change_what", "")).strip()
-                ),
-                metrics_count=len(string_metrics),
-                trace_id=trace_id,
-                component="reflection_dspy",
-            )
+                log.info(
+                    "dspy_reflection_generated",
+                    has_rationale=bool(_ensure_str(getattr(result, "rationale", ""))),
+                    has_proposed_change=bool(
+                        _ensure_str(getattr(result, "proposed_change_what", "")).strip()
+                    ),
+                    metrics_count=len(string_metrics),
+                    trace_id=trace_id,
+                    component="reflection_dspy",
+                )
+        finally:
+            if cost_sink is not None:
+                from personal_agent.llm_client.dspy_gate import collect_dspy_cost
+
+                collect_dspy_cost(lm, cost_sink, model=getattr(lm, "model", None))
 
         # Convert DSPy result to CaptainLogEntry (outside context manager)
         # Coerce to str in case DSPy/async LM left coroutines in result fields.

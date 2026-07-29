@@ -42,6 +42,34 @@ from personal_agent.cost_gate import BudgetConfig, RoleConfig
 log = structlog.get_logger(__name__)
 
 
+def lookup_model_pricing(model: str) -> Mapping[str, Any]:
+    """Return litellm's per-token pricing for ``model``, or an empty mapping.
+
+    ``litellm.model_cost`` indexes some models by the prefixed form
+    (``anthropic/claude-…``) and others by the bare id (``gpt-5.4-nano``) — and
+    for Anthropic it is in fact **only** the bare id, with zero ``anthropic/``
+    keys in the table. A single-key lookup therefore returns ``{}`` and prices
+    the call at $0 with no error, which is indistinguishable from a genuinely
+    free call at every layer downstream.
+
+    Every caller that prices a call must go through here (FRE-989): the same
+    single-key mistake was independently present in the gateway's commit path,
+    so this is a shared helper rather than a third copy.
+
+    Args:
+        model: LiteLLM model string, prefixed or bare.
+
+    Returns:
+        The pricing mapping, or ``{}`` when the model is unknown under either
+        spelling.
+    """
+    import litellm  # noqa: PLC0415
+
+    table: dict[str, Any] = getattr(litellm, "model_cost", {})
+    pricing: dict[str, Any] = table.get(model) or table.get(model.rsplit("/", 1)[-1], {})
+    return pricing
+
+
 def estimate_reservation(
     *,
     role: str,

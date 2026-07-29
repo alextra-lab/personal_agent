@@ -15,6 +15,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+def _stub_gate() -> AsyncMock:
+    """A cost gate that approves everything, for tests not about billing."""
+    from uuid import uuid4
+
+    gate = AsyncMock()
+    gate.reserve = AsyncMock(return_value=uuid4())
+    return gate
+
+
 class TestGenerateReflectionSignatureField:
     """prompt_manifest must be declared on GenerateReflection."""
 
@@ -121,6 +130,18 @@ class TestGenerateReflectionEntryBuildsManifest:
             patch(
                 "personal_agent.captains_log.reflection.load_mean_rating_lookup",
                 new=AsyncMock(return_value={}),
+            ),
+            # FRE-989: the cloud DSPy path is now cost-gated, so reflection
+            # needs a registered gate. This test is about manifest wiring, not
+            # billing — a stub gate keeps it on the DSPy path instead of
+            # silently falling through to the manual client.
+            patch(
+                "personal_agent.cost_gate.get_default_gate",
+                return_value=_stub_gate(),
+            ),
+            patch(
+                "personal_agent.llm_client.cost_tracker.record_vendor_cost",
+                new=AsyncMock(),
             ),
         ):
             from personal_agent.captains_log.reflection import generate_reflection_entry

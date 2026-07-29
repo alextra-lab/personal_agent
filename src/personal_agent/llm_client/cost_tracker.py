@@ -235,10 +235,19 @@ class CostTrackerService:
                     latency_ms,
                 )
 
-                log.debug(
+                # FRE-989: ``purpose`` (the budget role) and ``info`` level are
+                # both load-bearing. Without the field, Elasticsearch recorded
+                # what a call cost but not which role spent it, so a role-level
+                # cost question was unanswerable from ES by construction — the
+                # attribution existed only in the Postgres column. At ``debug``
+                # a ledger record also ships unevenly, which is not a property a
+                # ledger may have. Postgres ``api_costs`` remains the
+                # authoritative store; this makes the ES mirror usable.
+                log.info(
                     "api_cost_recorded",
                     provider=provider,
                     model=model,
+                    purpose=purpose,
                     cost_usd=cost_usd,
                     latency_ms=latency_ms,
                     record_id=record_id,
@@ -460,31 +469,41 @@ async def record_vendor_cost(
     session_id: str | None,
     purpose: str,
     latency_ms: int | None = None,
+    output_tokens: int = 0,
 ) -> None:
-    """Best-effort record a non-chat vendor call's cost (FRE-974).
+    """Best-effort record a paid call made outside ``LiteLLMClient`` (FRE-974).
 
-    For the OVH-embedding / Voyage-reranker cost paths, which have more varied
-    identity availability than the LLM path (:meth:`CostTrackerService.record_api_call`
-    raises :class:`MissingIdentityError` on a missing ``trace_id``/``session_id``).
+    Originally for the OVH-embedding / Voyage-reranker cost paths; FRE-989
+    widened it to every non-``LiteLLMClient`` paid path, which now also covers
+    the cloud DSPy channel (background reflection). What they share is more
+    varied identity availability than the chat path
+    (:meth:`CostTrackerService.record_api_call` raises
+    :class:`MissingIdentityError` on a missing ``trace_id``/``session_id``).
     Genuinely session-less background work should pass :data:`SYSTEM_SESSION_ID`
     explicitly rather than rely on this function to paper over a dropped identity —
     the gate here is a fail-safe for unexpected/malformed input, not the normal path
     for known session-less work.
 
-    Never raises: a cost-recording failure must never break the embedding or
-    rerank call it is attached to.
+    Never raises: a cost-recording failure must never break the call it is
+    attached to.
 
     Args:
-        provider: ADR-0121 catalog provider key (``"ovh"``, ``"voyage"``).
+        provider: ADR-0121 catalog provider key (``"ovh"``, ``"voyage"``,
+            ``"anthropic"``).
         model: Vendor model id (e.g. ``"Qwen3-Embedding-8B"``, ``"rerank-2.5"``).
-        tokens: Tokens billed for this call, per the vendor's own accounting.
+        tokens: Input/prompt tokens billed for this call, per the vendor's own
+            accounting. Recorded as ``input_tokens``.
         cost_usd: Cost of this call in USD.
         trace_id: Request/consolidation trace id. Skips recording if ``None``
             or not a valid UUID.
         session_id: Session id, or :data:`SYSTEM_SESSION_ID` for background
             work. Skips recording if ``None`` or not a valid UUID.
-        purpose: Role/purpose tag (``"embedding"``, ``"reranker"``).
+        purpose: Budget role / purpose tag (``"embedding"``, ``"reranker"``,
+            ``"captains_log"``) — the column that makes spend attributable
+            per role (FRE-989).
         latency_ms: Wall-clock latency of the vendor call in milliseconds.
+        output_tokens: Completion tokens, for generative paths. Zero for
+            embedding and rerank calls, which produce no completion.
     """
     if not trace_id or not session_id:
         log.debug(
@@ -518,7 +537,7 @@ async def record_vendor_cost(
             provider=provider,
             model=model,
             input_tokens=tokens,
-            output_tokens=0,
+            output_tokens=output_tokens,
             cost_usd=cost_usd,
             trace_id=trace_uuid,
             session_id=session_uuid,

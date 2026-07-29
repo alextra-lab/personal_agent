@@ -282,7 +282,8 @@ class LiteLLMClient:
         model_id: str,
         provider: str = "anthropic",
         max_tokens: int = 8192,
-        budget_role: str = "main_inference",
+        *,
+        budget_role: str,
     ) -> None:
         """Initialize LiteLLMClient with model and provider configuration.
 
@@ -291,10 +292,17 @@ class LiteLLMClient:
             provider: Provider name for LiteLLM dispatch.
             max_tokens: Default maximum output tokens.
             budget_role: Cost-gate role this client reserves against
-                (``main_inference``, ``entity_extraction``, etc.). Set by
-                ``get_llm_client`` from the factory's ``role_name`` via
-                ``budget_role_for``; defaults to ``main_inference`` so
-                direct instantiation hits the user-facing cap.
+                (``main_inference``, ``entity_extraction``, etc.). **Required
+                and keyword-only** — it has no default by design (FRE-989
+                finding three). Three entry points each carried their own
+                default and they disagreed: this constructor said
+                ``main_inference`` ($10 daily), ``get_llm_client_for_key`` said
+                ``skill_routing`` ($0.10 daily), and ``budget_role_for`` fell
+                back to ``main_inference``. A call that omitted the lane
+                therefore landed in a different budget depending on which door
+                it came through. Reconciling the three to *zero* defaults makes
+                the omission a ``TypeError`` at construction instead of a
+                plausible wrong answer at billing time.
         """
         self.model_id = model_id
         self.provider = provider
@@ -744,6 +752,11 @@ class LiteLLMClient:
                 "cost_usd": _cost_usd,
                 "tool_calls": len(tool_calls),
                 "cache_creation_input_tokens": _cache_creation,
+                # FRE-989: parity with model_call_started, which has carried the
+                # budget lane since the gate landed. A completed event that
+                # reports cost_usd without naming the lane it was billed to
+                # cannot answer a per-role cost question on its own.
+                "budget_role": self.budget_role,
             },
         )
 

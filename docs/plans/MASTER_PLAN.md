@@ -15,20 +15,13 @@
 - **adrs** — idle. **FRE-1043–1050 all Needs Approval**; nothing dispatchable until they're approved.
 - **explore** — delivered the convergence study (§9); free.
 
-**MERGED, UNDEPLOYED: FRE-1041** *(graph-anchored entity hints)*. Gateway rebuild, ask-first, no
-migration. This is the only undeployed runtime change.
-
-**Deployed 2026-07-29 09:31–09:39Z** (owner-authorised, in mandated order): migration 0023 → gateway →
-PWA v39. Carried **FRE-1040** (Done, verified live) and **FRE-989**. Health green, joinability probe
-green, migration idempotency guard proved by re-run.
-
-**FRE-989 is deployed but only partly verified.** Its startup validator passed and the ES cost event now
-carries `purpose`. **F9 — the $0-commit bug — is UNVERIFIED**: every post-deploy primary call ran on
-local qwen at zero cost, so there was nothing priced to record. Needs **one turn on a cloud primary**.
-Its headline before/after role distribution needs ~7 days regardless.
-
-**Now live for the first time:** `main_inference`'s caps are reachable by streamed chat. That lane denies
-with `raise` → user-facing 503. If a denial appears, ask whether the spend is real — do not raise a cap.
+**Pending actions:**
+- **Deploy FRE-1041** — merged, ask-first gateway rebuild, no migration. The only undeployed runtime
+  change. Runbook on the ticket.
+- **FRE-989 F9 needs one turn on a *cloud* primary** to verify; local-qwen turns prove nothing (zero
+  cost ⇒ nothing priced to record). Its role-distribution criterion needs ~7 days.
+- **Watch `main_inference`'s caps** — reachable by streamed chat for the first time, and that lane denies
+  with `raise` → user-facing 503. If one fires, ask whether the spend is real; do not raise the cap.
 
 ## 0b. Recall: four mechanisms, one race — RESOLVED
 

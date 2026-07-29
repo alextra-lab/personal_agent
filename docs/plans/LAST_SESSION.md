@@ -1,81 +1,86 @@
-# Last session — 2026-07-28 evening (two outages, three hard-threshold cliffs, twelve tickets closed)
+# Last session — 2026-07-29 (an all-nighter: the PWA was unusable, and it took three wrong theories to find out why)
 
-## READ THIS FIRST — environment is UP and healthier than this morning
+## READ THIS FIRST
 
-- **Deployed 17:30:31Z at `8df85524`**, owner-authorised. Health green on all five components. Four
-  tickets shipped together: FRE-740, FRE-1016, FRE-1018, FRE-1034. Zero undeployed source commits.
-- **Gateway memory limit is 2 GiB**, raised from 768 MiB during a live outage. Committed to compose
-  *and* applied to the running container, so a recreate is safe either way.
-- **`cloud-sim-embeddings` re-stopped after the rebuild** — standing rule, it revives every time.
-- **The summary sweep is ON** (re-enabled this morning, owner-authorised). It is working: 8 digests in
-  24h at **≈$0.040 each**, against $2+/day during the regression.
-- **`seshat-neo4j-study` and `build2-postgres-test-1` are STOPPED**, reclaiming 1.19 GB. Study data is
-  safe in the named volume `seshat_neo4j_study`; `docker start` restores it untouched.
+- **Environment is UP and healthy.** Gateway image built **09:35Z**, PWA **09:38Z** serving cache
+  `seshat-v39-per-session-seq`. Health green, joinability probe green.
+- **One undeployed runtime change: FRE-1041.** Ask-first gateway rebuild, authorisation requested at
+  10:36Z and **not given**. Full runbook is on the ticket.
+- **`cloud-sim-embeddings` is stopped** — it revived on all three rebuilds today. Standing rule.
+- **Postgres migration 0023 applied** (per-session event sequence). Idempotency guard was *proved* by
+  re-running it at the only safe moment, not assumed.
+- **Treat every `agent-logs` count as provisional** until FRE-1051 closes — see below.
 
 ## Doing / discussing (≤5 sentences)
 
-Two production outages. The gateway was OOM-killed four times because Captain's Log reflection parsed the
-entire 83 MB / 262k-line log corpus on **every turn** — root-caused by memory-triggered live stack sampling
-(not inference), fixed, deployed, verified: the transient fell from ~578 MB to ~53 MB. Separately a qwen
-call hung **75 minutes past its own 600 s timeout** and, because qwen is `max_concurrency: 1`, wedged the
-model entirely while `/health` stayed green — the owner manages the SLM server and asked that it **not** be
-filed. The through-line was **wrong field names returning empty results instead of errors** — five
-occurrences in one session across master and the agent — which escalated into an approved ADR on telemetry
-naming. Twelve tickets closed with live evidence; the Cost/Audit project's Awaiting-Deploy column is empty.
+The PWA had been silently unusable since 26 June: responses arrived, persisted, and never rendered, and
+only switching conversations recovered them. It took **three wrong theories from master** — a version
+skew, a connection leak, and "nothing verifies the state" — before the real cause landed: the transport
+numbered events from **one global Postgres sequence** while the client dispatches only a *contiguous*
+run per session, so two live conversations holed each other by construction. That is fixed, deployed and
+verified. Along the way the owner's challenges cracked open two deeper things: a proper-noun detector
+gating entity recall, and **Elasticsearch silently losing up to 83% of an event type on some days**.
 
 ## Commits — the story behind the last 10
 
-- **#729 → FRE-740** (probe user_id check). **Bounced for a missing self-review summary**, and the bounce
-  paid: the review it forced found a real defect master's own diff-read had missed — the Neo4j check
-  silently dropped Claim rows whose Person had no `user_id`, blinding the probe to the exact corruption it
-  exists to catch.
-- **#730 → FRE-1018** (supersession chain on pull). Codex found two design gaps pre-implementation; TDD
-  caught a third. **The included plan doc describes the pre-hardening design and misleads a naive grep** —
-  verify against `service.py`, not the plan. Master nearly bounced this on that basis.
-- **#731 → FRE-1034** (reflection stops parsing the corpus). **Bounced once, correctly**: the build chose
-  the fallback over the ES route on a "four callers" argument that did not survive checking — only one
-  caller is a hot path, the rest are CLI/offline. The second attempt exceeded the brief, *empirically
-  reproducing* the ES refresh-window bug (0/6 docs visible at 1.5 s, 6/6 at 5.51 s) rather than asserting
-  the wait sufficed, and adding a guard test that reads the real `refresh_interval` from the template.
+- **#742 → FRE-1040** (per-session seq). **Codex overruled master's recommended fix** — the bounded
+  flush would have re-introduced exactly what FRE-590 removed. The shipped design forces one reconnect
+  with the watermark *untouched* and releases the buffer only on a new `REPLAY_COMPLETE` marker. The
+  build also caught a self-inflicted regression: at `ackSeq===0` its own timer would have destroyed the
+  buffered response, **breaking the one path that still worked.**
+- **#743 → FRE-1041** (graph-anchored entity hints). Codex **overturned the root cause master wrote in
+  the ticket**: the entity path *was* entered on the melon turn; `Melon` scored 0.563 and lost the fifth
+  slot **by 0.002**. It is a rank race, not candidacy. This *unifies* FRE-1021 and FRE-1041.
+- **#739 → FRE-989** (cost attribution). Nine findings, four found by the audit itself and one by the
+  adversarial review *of the fixes*. F9: **every gateway streaming turn committed $0** — litellm carries
+  zero `anthropic/`-prefixed pricing keys, verified independently by master.
+- **#744** — explore's convergence study. **Merged; read it.** It is the most useful document produced
+  here in weeks.
+- **#740 → ADR-0128** merged **Proposed** (telemetry naming). Do *not* flip to Accepted without the
+  owner.
 
 ## Worktrees — anything special
 
-- **build (build1)** — **FRE-1037** dispatched 20:28Z (LLM role assignment), with **FRE-989** blocked
-  behind it as a genuine dependency.
-- **build2** — on **FRE-1021**, which it **self-escalated to**: it refused to build FRE-1015 blind,
-  correctly arguing that a stance surface riding an entity selection that returns zero entities would bake
-  in the exact fade the ADR chose that consumer to avoid. It renamed its branch and moved itself to Opus.
-  Then **FRE-1015 → FRE-937**.
-- **adrs** — **FRE-1038** dispatched 20:45Z (telemetry naming ADR).
-- **`master-914`** — still stale on the closed `fre-909-seat-rename`. Untouched again.
+- **build (build1)** — **FRE-1051** *(ES event loss)*, dispatched 09:53Z. Urgent.
+- **build2** — **FRE-927** *(seat-keyed failure counter)*, started 10:44Z.
+- **adrs** — **idle**, and will stay idle: FRE-1043–1050 are all Needs Approval.
+- **explore** — free; delivered the study, then was cleared and re-tasked.
+- **`master-914`** — still stale on the closed `fre-909-seat-rename`. Untouched, harmless.
+- **PR #738 (FRE-1015) is deliberately a DRAFT.** The implementation is sound; it was bounced because its
+  AC tests monkeypatched `query_memory` to return the target entity and then "checked the precondition"
+  by looking for that entity — **validating the stub three lines above.** Do not un-draft it until
+  FRE-1041 is deployed and its effect measured.
 
 ## Plan position + drift
 
-MASTER_PLAN carried two errors, both now fixed: it claimed FRE-937's design was "reversed to fade" (the
-owner confirmed **collapse stands** — the ticket was right, the plan was wrong), and its header was a day
-stale. Twelve closures are now reflected.
-
-**Deliberate deviation, and it is right:** **FRE-1036** (ES consolidation) is approved but **held, not
-dispatched**, because FRE-1038's naming ADR must settle the convention first. FRE-1036 rewrites every index
-template and is the cheapest moment to normalise names; running it first bakes today's inconsistency in.
+MASTER_PLAN was consolidated in #745 and is accurate. One deliberate deviation worth not re-litigating:
+**FRE-1015 is parked by removing its stream label, not by a `blockedBy` relation.** Master tried the
+relation first and it did nothing — workers are explicitly instructed to treat a relation to a terminal
+blocker as cleared. **A `blockedBy` does not hold a ticket. Removing the stream label does.**
 
 ## Answers for the fresh start
 
-- **Three hard-threshold cliffs surfaced today and none had a monitor.** The 83 MB log corpus (fixed), the
-  768 MiB container limit (raised), and the **ES shard ceiling — 586/1000 on a single node, ~34 days out**
-  (FRE-1036, approved, held). Assume more exist: nothing in this system watches a threshold approaching.
-- **The 2 GiB limit is no longer load-bearing.** A real turn now peaks at 654 MiB, inside the original 768.
-  Leave it for a few days of traffic, then revert deliberately with sampler evidence rather than by guess.
-- **FRE-1013's premise is measurably false.** It claims entity class is never emitted; the live graph holds
-  **425 Personal** and **708 model-emitted** classes against 6,620 backfilled. Do not approve as written —
-  the real question is whether the model's classification is any *good*, a measurement not a fix.
-- **`request.completed` has been dead since 2026-06-13** (FRE-1033). Consequence: FRE-739's AC-3b is
-  UNVERIFIABLE and **ADR-0107 cannot close**, even though FRE-740 is now Done.
-- **Ten tickets remain in Awaiting Deploy**, all deployed, all awaiting master's acceptance verification.
-  That column is a verification backlog, not a deploy queue. It is master's standing debt.
-- **Owner priority, stated plainly: bugs first; configs and checks are second layer.** The shard-headroom
-  monitor was stripped out of FRE-1036 on that basis.
-- **The owner manages the SLM server.** The hung-model defect was deliberately not filed, at their direction.
-- **Cite tickets by subject, never a bare FRE-XXX.** The owner corrected this twice in one session.
-- **Awaiting owner approval:** FRE-1035 (ES field-resolution technique), FRE-1039 (Grafana/Kibana ADR),
-  FRE-1033, FRE-1014, FRE-1009, FRE-1013, and the seven ADR-0127 tickets (FRE-1026–1032).
+- **Master was wrong three times last night, and every correction came from outside.** The owner supplied
+  the decisive observation on the render bug ("new conversation works once, existing ones always fail")
+  and caught the entity-hint heuristic; codex overturned two root causes. When a theory feels complete
+  at 5am, it is probably a snapshot answering a different question than the one asked.
+- **The specific trap, twice: a snapshot cannot answer a "what changed" question.** Master grepped
+  current source, saw `AsyncElasticsearch` everywhere, reported "all async, nothing to see" — and walked
+  past FRE-1034, which had made that call async *the previous day*. The evidence was in the diff.
+- **Two of three stream stalls last night were master's own doing.** A PR *title* containing `FRE-986`
+  dragged that ticket backwards and blocked build2; parking FRE-1015 left the daemon holding its slot.
+  Both are now filed as the class (FRE-1011 rescope, FRE-1054) rather than the instance.
+- **The fre-token rule in memory is INCOMPLETE.** PR #416 proves a bare prose cross-reference in a PR
+  **body** pulled a *Done* ticket backwards 3.4s after opening. Branch and title were never sufficient.
+  The owner switched the Linear automation off on 2026-07-29 — confirm which levers if it matters.
+- **Elasticsearch loses events.** 82.6% on 07-23, 47.8% on 07-26, 52.4% on 07-27, zero on three other
+  days. Episodic. **A clean zero from ES now has three indistinguishable causes** — no data, wrong field
+  name, or emitted-and-lost. Prefer Postgres, journald and git as evidence sources (FRE-1051).
+- **FRE-989's F9 is UNVERIFIED, not passed.** Every post-deploy primary ran on local qwen at zero cost,
+  so there was nothing priced to record. It needs **one turn on a cloud primary**. Its headline criterion
+  needs ~7 days regardless.
+- **`main_inference`'s caps are reachable by streamed chat for the first time**, and that lane denies
+  with `raise` → user-facing 503. If a denial appears, ask whether the spend is real. **Do not raise a
+  cap to make it stop.**
+- **Awaiting owner approval:** FRE-1043–1050 (the ADR-0128 chain, blocks the adrs seat entirely) ·
+  FRE-1051 · FRE-1053 · FRE-1054 · the FRE-1011 rescope · and the FRE-1041 deploy.

@@ -968,6 +968,7 @@ class MemoryService:
                     RETURN node.name AS name,
                            node.entity_type AS entity_type,
                            node.description AS description,
+                           node.mention_count AS mention_count,
                            score AS vector_score,
                            t.turn_id AS turn_id,
                            t.session_id AS session_id,
@@ -1013,7 +1014,11 @@ class MemoryService:
                     "user_message": row.get("user_message"),
                     "summary": row.get("summary"),
                     "key_entities": list(row.get("key_entities") or []),
-                    "mention_count": 0,
+                    # FRE-1061: the graph's real count (create_entity maintains it), or
+                    # None when the node lacks the property. The previous hardcoded 0 was
+                    # invisible while entities never rendered; now that they do, the
+                    # renderer omits an absent count but would print a fabricated one.
+                    "mention_count": row.get("mention_count"),
                 }
             )
 
@@ -1089,6 +1094,7 @@ class MemoryService:
                     WITH e, collect(t)[0] AS t
                     RETURN e.name AS name, e.entity_type AS entity_type,
                            e.description AS description,
+                           e.mention_count AS mention_count,
                            t.turn_id AS turn_id, t.session_id AS session_id,
                            t.timestamp AS timestamp, t.user_message AS user_message,
                            t.summary AS summary, t.key_entities AS key_entities
@@ -1121,7 +1127,8 @@ class MemoryService:
                     "user_message": row.get("user_message"),
                     "summary": row.get("summary"),
                     "key_entities": list(row.get("key_entities") or []),
-                    "mention_count": 0,
+                    # FRE-1061: real count or None — see the dense-arm assembly above.
+                    "mention_count": row.get("mention_count"),
                 }
             )
         return rows

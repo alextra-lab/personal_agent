@@ -10,7 +10,7 @@ import pytest
 
 import personal_agent.memory.proactive as proactive_mod
 from personal_agent.memory.proactive import (
-    _build_payload_for_row,
+    _split_row_payloads,
     build_proactive_suggestions,
     estimate_tokens_from_text,
 )
@@ -71,7 +71,8 @@ def test_episode_payload_marks_long_user_message_fallback_summary() -> None:
     row["summary"] = None
     row["user_message"] = long_message
 
-    kind, payload = _build_payload_for_row(row)
+    # FRE-1061: the row now also yields its entity candidate; the episode is second.
+    kind, payload = _split_row_payloads(row)[1]
 
     assert kind == "episode"
     assert len(payload["summary"]) < len(long_message)
@@ -135,7 +136,8 @@ def test_score_combination_non_empty(loose_proactive_settings: None) -> None:
         "trace",
         12.5,
     )
-    assert len(out.candidates) == 1
+    # FRE-1061: the (entity, best-turn) pair row yields both candidates.
+    assert [c.kind for c in out.candidates] == ["entity", "episode"]
     assert out.candidates[0].relevance_score > 0.5
     assert out.query_embedding_ms == 12.5
 
@@ -202,7 +204,12 @@ def test_diminishing_score_gap(monkeypatch: pytest.MonkeyPatch) -> None:
         _row(name="H2", vector_score=0.7, turn_id="x2"),
     ]
     out = build_proactive_suggestions(raw, set(), None, "tr", None)
-    assert len(out.candidates) == 1
+    # FRE-1061: H1's pair shares one score (gap 0 between siblings), so both admit;
+    # the 0.2 drop to H2 still terminates on the gap gate and cuts H2's pair.
+    assert [c.payload.get("name") or c.payload.get("conversation_id") for c in out.candidates] == [
+        "H1",
+        "x1",
+    ]
 
 
 def test_dedupe_same_turn(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -216,4 +223,12 @@ def test_dedupe_same_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     r1 = _row(name="A", vector_score=0.9, turn_id="same")
     r2 = _row(name="B", vector_score=0.85, turn_id="same")
     out = build_proactive_suggestions([r1, r2], set(), None, "tr", None)
-    assert len(out.candidates) == 1
+    # FRE-1061: only the shared episode collapses; both entities survive. The old
+    # row-level dedupe erased entity B entirely — the erasure this ticket removes.
+    assert sorted(
+        (c.kind, c.payload.get("name") or c.payload.get("conversation_id")) for c in out.candidates
+    ) == [
+        ("entity", "A"),
+        ("entity", "B"),
+        ("episode", "same"),
+    ]

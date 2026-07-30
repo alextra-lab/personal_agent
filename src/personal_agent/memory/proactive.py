@@ -6,7 +6,7 @@ import json
 import math
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 
@@ -102,93 +102,102 @@ def _combine_scores(
     return max(0.0, min(1.0, total))
 
 
-def _dedupe_raw_by_turn_id(
-    raw_rows: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Keep first row per turn_id (vector order is best-first).
+_CandidateKind = Literal["entity", "episode"]
+
+
+def _split_row_payloads(row: dict[str, Any]) -> list[tuple[_CandidateKind, dict[str, Any]]]:
+    """Return every (kind, payload) candidate a raw graph row carries (FRE-1061).
+
+    A raw row from :meth:`~personal_agent.memory.service.MemoryService.suggest_proactive_raw`
+    is an *(entity, best cross-session turn)* **pair** — the Cypher is entity-anchored and
+    attaches the turn as context. The predecessor (``_build_payload_for_row``) forced a
+    binary choice and always chose the episode when a turn with text existed, which made
+    an entity unreachable as an entity once it had been discussed in any other session —
+    measured live 2026-07-30, that was 7,442 of 7,446 production entities
+    (``telemetry/entity_recall_findings_explore_2026-07-30.md``). Emitting both keeps the
+    distilled semantic memory (name / type / description) alongside the episodic excerpt.
+
+    Order is load-bearing: the entity payload comes **first**, so after the stable
+    score sort the entity precedes its equal-scored sibling episode. This is a tie-break,
+    not an admission guarantee — later gates (caps, budget, renderer description filter)
+    still apply per candidate.
 
     Args:
-        raw_rows: Rows as retrieved, best-first.
+        row: One raw graph row, carrying entity fields and/or best-turn fields.
 
     Returns:
-        Tuple of (kept, dropped). The dropped rows are returned rather than discarded
-        silently so the evidence record can name them (FRE-1060) — this is the earliest
-        gate on the path and the only one that fires before a score exists.
+        One or two ``(kind, payload)`` tuples: an entity payload when the row names an
+        entity, an episode payload when it carries a turn with text. A row with neither
+        falls back to the legacy ``name="unknown"`` entity payload so it stays visible in
+        the candidate accounting rather than vanishing.
     """
-    seen: set[str] = set()
-    out: list[dict[str, Any]] = []
-    dropped: list[dict[str, Any]] = []
-    for row in raw_rows:
-        tid = row.get("turn_id")
-        if tid:
-            s = str(tid)
-            if s in seen:
-                dropped.append(row)
-                continue
-            seen.add(s)
-        out.append(row)
-    return out, dropped
-
-
-def _build_payload_for_row(row: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """Return (kind, payload) for a raw graph row."""
-    name = row.get("name") or "unknown"
-    entity_type = row.get("entity_type")
-    description = row.get("description")
+    name = row.get("name")
     turn_id = row.get("turn_id")
     user_message = row.get("user_message")
     summary = row.get("summary")
-    key_entities = row.get("key_entities") or []
 
-    if turn_id and (user_message is not None or summary):
-        return (
-            "episode",
-            {
-                "type": "episode",
-                # FRE-1004: carry the episode's durable identity so the turn evidence
-                # record can name which episode was admitted. Without it every proactive
-                # episode is anonymous and two in one turn are indistinguishable.
-                "conversation_id": turn_id,
-                "user_message": user_message,
-                "summary": summary or mark_truncated(user_message or "", 400),
-                "key_entities": key_entities,
-            },
+    payloads: list[tuple[_CandidateKind, dict[str, Any]]] = []
+    if name:
+        payloads.append(
+            (
+                "entity",
+                {
+                    "type": "entity",
+                    "name": name,
+                    "entity_type": row.get("entity_type"),
+                    "description": row.get("description"),
+                    # None when the row carries no real count — the renderer omits an
+                    # absent count, where a defaulted 0 would print "(mentioned 0x)"
+                    # on every entity line (FRE-1061 review finding).
+                    "mention_count": row.get("mention_count"),
+                },
+            )
         )
-    return (
-        "entity",
-        {
-            "type": "entity",
-            "name": name,
-            "entity_type": entity_type,
-            "description": description,
-            "mention_count": row.get("mention_count", 0),
-        },
-    )
+    if turn_id and (user_message is not None or summary):
+        payloads.append(
+            (
+                "episode",
+                {
+                    "type": "episode",
+                    # FRE-1004: carry the episode's durable identity so the turn evidence
+                    # record can name which episode was admitted. Without it every proactive
+                    # episode is anonymous and two in one turn are indistinguishable.
+                    "conversation_id": turn_id,
+                    "user_message": user_message,
+                    "summary": summary or mark_truncated(user_message or "", 400),
+                    "key_entities": row.get("key_entities") or [],
+                },
+            )
+        )
+    if not payloads:
+        payloads.append(
+            (
+                "entity",
+                {
+                    "type": "entity",
+                    "name": "unknown",
+                    "entity_type": row.get("entity_type"),
+                    "description": row.get("description"),
+                    "mention_count": row.get("mention_count"),
+                },
+            )
+        )
+    return payloads
 
 
-def _discard_row(
-    row: dict[str, Any], score: float | None, reason: DropReason
-) -> ProactiveMemoryDiscard:
-    """Record a raw graph row a pre-selection gate removed (FRE-1060).
+def _candidate_identity(kind: _CandidateKind, payload: dict[str, Any]) -> tuple[str, str]:
+    """Kind-qualified identity for dedupe (FRE-1061).
 
-    For the two gates that fire before a candidate is built — the turn-id dedupe and the
-    relevance threshold — so the payload is derived here purely to make the drop nameable.
-
-    Args:
-        row: The raw graph row.
-        score: The final score, or None where the gate fired before one was computed.
-        reason: The gate that removed it.
-
-    Returns:
-        The discard record.
+    Entity identity is its ``name``; episode identity is its ``conversation_id`` —
+    matching :func:`personal_agent.captains_log.turn_evidence.memory_item_identity`.
+    The kind qualifier keeps an entity and an episode with the same identity string
+    apart *here*; downstream evidence identity remains unqualified, so an entity
+    literally named like a turn id would still collide there (documented residual
+    risk, codex plan-review 2026-07-30).
     """
-    kind, payload = _build_payload_for_row(row)
-    return ProactiveMemoryDiscard(
-        kind=kind,  # type: ignore[arg-type]
-        payload=payload,
-        relevance_score=score,
-        drop_reason=reason,
-    )
+    if kind == "entity":
+        return (kind, str(payload.get("name") or ""))
+    return (kind, str(payload.get("conversation_id") or ""))
 
 
 def _discard_candidate(
@@ -233,26 +242,42 @@ def build_proactive_suggestions(
     Returns:
         ProactiveMemorySuggestions with trimmed, ranked candidates **and** every
         candidate a gate discarded, each naming the gate (FRE-1060). Emitted plus
-        discarded accounts for every **deduplicated** row: nothing that could have
-        reached the model is silently lost.
+        discarded accounts for every **deduplicated candidate** (FRE-1061: one raw row
+        splits into up to two candidates): nothing that could have reached the model is
+        silently lost.
     """
     cfg = settings
     retrieved_count = len(raw_rows)
-    raw_rows, duplicate_rows = _dedupe_raw_by_turn_id(raw_rows)
-    deduped_count = len(raw_rows)
-    # A duplicate is deliberately NOT recorded as a discard (owner call, 2026-07-30, on
-    # a confirmed code-review finding). It shares its ``turn_id`` — hence its identity —
-    # with the row that was kept, so recording it as a drop would put one identity in the
-    # record twice, once admitted and once dropped, asserting that a memory was lost when
-    # that very memory reached the model. `candidate_count` would double-count it and the
-    # FRE-1021 census would over-report recall loss, biasing the exact figure this ticket
-    # exists to make trustworthy. A dedupe collapse is not a loss: the information is
-    # wholly preserved in the kept row. The delta stays visible as the
-    # retrieved_row_count/deduped_row_count pair on the event below.
+    # FRE-1061: split every (entity, best-turn) pair row into its candidates, then
+    # collapse shared identities per kind — episodes on conversation_id, entities on
+    # name. The old row-level turn-id dedupe silently erased a *distinct entity* whose
+    # best turn collided with a higher-ranked entity's (29→13 on the melon turn); at
+    # candidate level only the genuinely shared episode collapses.
+    split_items: list[tuple[_CandidateKind, dict[str, Any], dict[str, Any]]] = [
+        (kind, payload, row) for row in raw_rows for kind, payload in _split_row_payloads(row)
+    ]
+    split_count = len(split_items)
+    # A dedupe collapse is deliberately NOT recorded as a discard (owner call,
+    # 2026-07-30, on a confirmed code-review finding — the rationale survives the
+    # FRE-1061 restatement from rows to candidates). The collapsed candidate shares its
+    # kind-qualified identity with the one that was kept, so recording it as a drop
+    # would put one identity in the record twice, once admitted and once dropped,
+    # asserting that a memory was lost when that very memory reached the model, and the
+    # FRE-1021 census would over-report recall loss. The delta stays visible as the
+    # split_candidate_count/deduped_candidate_count pair on the event below.
+    seen: set[tuple[str, str]] = set()
+    items: list[tuple[_CandidateKind, dict[str, Any], dict[str, Any]]] = []
+    for kind, payload, row in split_items:
+        key = _candidate_identity(kind, payload)
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append((kind, payload, row))
+    deduped_count = len(items)
     discarded: list[ProactiveMemoryDiscard] = []
     scored: list[ProactiveMemoryCandidate] = []
 
-    for row in raw_rows:
+    for kind, payload, row in items:
         vector_score = _normalize_vector_score(float(row.get("vector_score", 0.0)))
         name = str(row.get("name") or "")
         key_entities = list(row.get("key_entities") or [])
@@ -266,14 +291,22 @@ def build_proactive_suggestions(
         )
         topic = _topic_subscore(session_topic_hint, name, key_entities)
         final = _combine_scores(vector_score, overlap, recency, topic)
+        # The pair shares its row's subscores by construction, so the sibling candidates
+        # carry one score and the stable sort below keeps the entity (emitted first)
+        # ahead of its episode.
 
         if final < cfg.proactive_memory_min_score:
-            # Recorded, not skipped (FRE-1060). The payload is built here purely so the
-            # drop is nameable; the row is not otherwise used.
-            discarded.append(_discard_row(row, final, DropReason.RECALL_SCORE_THRESHOLD))
+            # Recorded, not skipped (FRE-1060).
+            discarded.append(
+                ProactiveMemoryDiscard(
+                    kind=kind,
+                    payload=payload,
+                    relevance_score=final,
+                    drop_reason=DropReason.RECALL_SCORE_THRESHOLD,
+                )
+            )
             continue
 
-        kind, payload = _build_payload_for_row(row)
         components = ProactiveScoreComponents(
             embedding=vector_score,
             entity_overlap=overlap,
@@ -282,7 +315,7 @@ def build_proactive_suggestions(
         )
         scored.append(
             ProactiveMemoryCandidate(
-                kind=kind,  # type: ignore[arg-type]
+                kind=kind,
                 payload=payload,
                 relevance_score=final,
                 score_components=components,
@@ -357,14 +390,17 @@ def build_proactive_suggestions(
             # This event named a budget when any of six gates could have decided, and on
             # the melon turn the ranked cap and the token budget were both consistent with
             # its numbers. `stop_reason` ends that ambiguity — it is the single terminal
-            # gate that ended selection, and at most one can fire. The two row counts
-            # separate retrieval from dedupe losses, which no single figure distinguished.
-            # (`scored_count` was dropped: it was `after_threshold`, i.e. `before_count`
-            # under another name, so it disambiguated nothing.)
+            # gate that ended selection, and at most one can fire.
+            # FRE-1061: `deduped_row_count` is gone, not renamed — its unit changed
+            # (rows → candidates) and a field that silently changes unit corrupts every
+            # series built on it. `retrieved_row_count` keeps its meaning; the two new
+            # counts bracket the split-then-dedupe step so retrieval, pair-splitting and
+            # collapse losses stay separately readable.
             stop_reason=stop_reason.value if stop_reason is not None else None,
             discarded_by_gate=dict(Counter(d.drop_reason.value for d in discarded)),
             retrieved_row_count=retrieved_count,
-            deduped_row_count=deduped_count,
+            split_candidate_count=split_count,
+            deduped_candidate_count=deduped_count,
         )
 
     return ProactiveMemorySuggestions(

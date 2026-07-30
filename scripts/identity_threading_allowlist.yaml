@@ -78,6 +78,6 @@
 #     import line inserted above, then FRE-974 the SYSTEM_SESSION_ID import line
 #     + generate_embedding trace_id/session_id kwargs inserted above). ---
 - path: src/personal_agent/memory/service.py
-  line: 2199  # FRE-1060: +30 from the entity_mentions_resolved logs (was 2169 after FRE-1041, 2092 after FRE-1021)
+  line: 2206  # FRE-1061: +7 from mention_count in the proactive queries (was 2199 after FRE-1060, 2169 after FRE-1041, 2092 after FRE-1021)
   pattern: cypher_merge
   reason: "dynamic on_create_clauses set origination; static analyzer can't see joined props (FP)"

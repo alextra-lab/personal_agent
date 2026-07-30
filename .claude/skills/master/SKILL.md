@@ -23,10 +23,18 @@ constraints, prior-deploy evidence) that the PR body often does NOT restate. Sur
 the comments that bears on correctness / scope / acceptance / how to deploy before merging.
 
 **A permission-stall nudge** (`Seat <session> is BLOCKED on a permission-confirmation prompt...`,
-FRE-867) is not a PR gate — relay the named seat and pending command **to the owner** as a
-decision; never approve or deny it yourself, and never guess which numbered option means what
-(the menu varies per prompt). Re-capture the seat's live pane before acting if the nudge arrived
-late. Once the owner decides, answer in the seat's own pane per the recipe the nudge carries.
+FRE-867) is not a PR gate. **Read the pending command, then split by what it does.** A provably
+**read-only** command (a SELECT, a read query, an inspection) is master's to answer directly —
+that is the whole point of the ticket, which exists to turn an 18-hour silent hang into a
+minutes-to-review flag, and routing every prompt to the owner just converts it into an
+owner-latency hang. **Anything that mutates, deletes, deploys, or that you cannot classify with
+confidence goes to the owner as a decision** — naming the seat and the exact command. Never
+auto-approve a class; decide one command at a time.
+
+**Never guess which numbered option means what** — the menu's options and order vary per prompt,
+and at least one real prompt has option 2 meaning "Yes, and don't ask again" rather than "No".
+Re-capture the seat's live pane before acting if the nudge arrived late, and read the live
+options rather than the ones the nudge quoted.
 
 ## 2 — Analyze the diff
 - **The code-review + security-review run in the BUILD session before the PR, not here** (shift-left;

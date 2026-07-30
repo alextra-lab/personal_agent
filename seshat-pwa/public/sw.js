@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v39-per-session-seq';
+const CACHE_NAME = 'seshat-v40-turn-summary';
 
 const PRECACHE_URLS = [
   '/',

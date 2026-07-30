@@ -1599,15 +1599,18 @@ def _run_seat(  # type: ignore[no-untyped-def]
         )
 
     for index, behaviour in enumerate(behaviours):
+        current = f"FRE-{900 + index}" if churn else "FRE-923"
+        following = f"FRE-{901 + index}" if churn else "FRE-923"
         runner.behaviour = behaviour
-        _tick(f"FRE-{900 + index}" if churn else "FRE-923")
+        _tick(current)
         record = state.get("build1")
         attempts_seen.append(record.attempts if record is not None else 0)
         last = index == len(behaviours) - 1
         if churn and not last and record is not None:
-            # The churn tick: the stream's NEXT is now the *following* attempt's
-            # ticket, so the record just written is cleared and the stream frees.
-            _tick(f"FRE-{901 + index}")
+            # The churn tick: the stream's NEXT becomes the FOLLOWING attempt's
+            # ticket, which is what makes the record just written stale — so it is
+            # cleared and the stream frees for the next attempt.
+            _tick(following)
 
     return state, delivery_failures, notifier, logger, attempts_seen, runner
 
@@ -1636,7 +1639,10 @@ def test_a_seat_failing_across_changing_tickets_surfaces_as_unhealthy() -> None:
     assert pings[0]["consecutive_failures"] == 3
     assert "ticket" not in pings[0], "the alert names the seat, never a single ticket"
     assert failures["build1"] == 3
-    assert _seat_warnings(logger), "and leaves a distinct, greppable warning"
+    warnings = _seat_warnings(logger)
+    assert len(warnings) == 1, "and leaves exactly one distinct, greppable warning"
+    assert warnings[0]["stream"] == "build1"
+    assert warnings[0]["consecutive_failures"] == 3
 
 
 def test_ticket_churn_never_resets_the_seat_counter() -> None:
@@ -1757,6 +1763,56 @@ def test_churn_and_owner_action_are_distinguishable_in_the_log() -> None:
 
     assert churned.kind == "clear" and churned.reason == "board-churn"
     assert acted.kind == "clear" and acted.reason == "owner-acted"
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ("Approved", "board-churn"),  # still eligible — it was merely outranked
+        ("In Progress", "owner-acted"),
+        ("In Review", "owner-acted"),
+        ("Done", "owner-acted"),
+        ("Canceled", "owner-acted"),
+        (None, "owner-acted"),  # gone from the board entirely
+    ],
+)
+def test_clear_reason_discriminates_on_approved_not_on_one_state(
+    state: str | None, expected: str
+) -> None:
+    """Self-review finding: two cases could not pin the discriminator.
+
+    The original pair ("Approved" → board-churn, "In Progress" → owner-acted) is
+    also satisfied by ``!= "in progress"``, which would mislabel every other
+    state — including a ticket absent from the board — as churn. Only ``Approved``
+    means "still eligible, just outranked"; everything else, absence included,
+    means the ticket is no longer this stream's business.
+    """
+    board = [_issue("FRE-901", state, _OPUS)] if state is not None else []
+    # A second, higher-priority Approved ticket makes FRE-901 not-NEXT either way,
+    # so the clear fires for both causes and only the reason differs.
+    board.append(_issue("FRE-902", "Approved", _OPUS, priority=1))
+
+    for record in (
+        _delivering_record("FRE-901", attempts=1),
+        _launched_record(ticket="FRE-901", phase="surfaced"),
+    ):
+        d = decide("build1", board, record, now=0.0, stall_timeout_s=60, tracked_pr_open=False)
+        assert d.kind == "clear"
+        assert d.reason == expected, f"{record.phase} record, board state {state!r}"
+
+
+def test_a_threshold_below_one_still_pings_master() -> None:
+    """Self-review finding: an equality crossing test loses the ping entirely.
+
+    ``count`` starts at 1 and only climbs, so ``count == threshold`` is never true
+    for a threshold of 0 or less: the seat would warn on every tick while master
+    was never paged even once — precisely the lost one-shot alert FRE-922 exists
+    to prevent. A sub-1 threshold is clamped to 1, so the first failure pages.
+    """
+    _, failures, notifier, _, _, _ = _run_seat(["fail", "fail"], threshold=0)
+
+    assert len(_seat_pings(notifier)) == 1, "the first failure pages master exactly once"
+    assert failures["build1"] == 2
 
 
 def test_fre923_budget_semantics_are_untouched_by_seat_health() -> None:

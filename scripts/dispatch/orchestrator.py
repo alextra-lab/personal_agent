@@ -171,6 +171,14 @@ MAX_DELIVERY_ATTEMPTS: int = 3
 # which the seat is surfaced, so the default 3 reads like ``MAX_DELIVERY_ATTEMPTS``
 # — "the third consecutive dropped delivery surfaces the seat".
 #
+# Counting rather than ageing, which is the opposite of FRE-924's choice above
+# ("age is the honest, cadence-independent signal") and deliberately so: age needs
+# a durable per-SEAT timestamp to measure from, and no such store exists. The only
+# durable state is ``DispatchRecord``, which is ticket-keyed and cleared on the
+# very churn this counter exists to survive. Consecutive failures is the honest
+# signal for the thing actually being measured — the seat's delivery record —
+# and it needs no anchor.
+#
 # IN-MEMORY across ticks, reset on restart — the FRE-922 lesson applies here and
 # not FRE-923's: this is an advisory alert, not a safety budget, and its master
 # ping is one-shot. A persisted count first observed *above* the crossing (a
@@ -183,7 +191,12 @@ MAX_DELIVERY_ATTEMPTS: int = 3
 DEFAULT_SEAT_FAILURE_THRESHOLD: int = 3
 
 # Outcomes that PROVE the seat accepted a dispatch — the only reset for the
-# counter above. Identical to the set ``_record_for_result`` maps to ``launched``.
+# counter above. This is THE set ``_record_for_result`` maps to ``launched``, and
+# is shared with it rather than restated: if a fifth launched outcome were added
+# there and missed here, a genuinely successful delivery would stop resetting the
+# counter, so a healthy seat would climb to the threshold and page master falsely
+# — worse than the silence FRE-927 fixes, because a false alert trains the owner
+# to ignore the real one.
 _DELIVERY_SUCCESS_OUTCOMES: frozenset[str] = frozenset(
     {"launch", "prepare", "reuse", "registration-unverified"}
 )
@@ -682,7 +695,7 @@ def _record_for_result(
     Returns:
         The record to store, or ``None`` to leave the stream untracked.
     """
-    if outcome in {"launch", "prepare", "reuse", "registration-unverified"}:
+    if outcome in _DELIVERY_SUCCESS_OUTCOMES:
         return DispatchRecord(stream, ticket, "launched", now, session_id=None, attempts=0)
     if outcome == "delivery-failed" and attempts < MAX_DELIVERY_ATTEMPTS:
         return DispatchRecord(stream, ticket, "delivering", now, session_id=None, attempts=attempts)
@@ -1235,14 +1248,26 @@ def _note_delivery_failure(
     halted, and no process is terminated; master decides whether to intervene
     (the FRE-922/FRE-924 posture).
 
+    The threshold is clamped to a minimum of 1, and the equality crossing test
+    below depends on that clamp. Without it a threshold of 0 or less silently
+    loses the ping forever: the count starts at 1 and only climbs, so it never
+    equals a non-positive threshold, and the seat would warn every tick while
+    never once paging master — the exact lost-one-shot-ping failure FRE-922 was
+    built to avoid. A sub-1 threshold is meaningless (a failure count cannot be
+    under one) but is a plausible operator shorthand for "page me on the first
+    one", so it is honoured rather than rejected: refusing to start is a worse
+    failure mode for a dispatch daemon than doing the obvious thing.
+
     Args:
         stream: The stream whose seat dropped the delivery.
         delivery_failures: Per-stream counts, mutated in place.
         threshold: Consecutive dropped deliveries at which the seat is surfaced.
+            Clamped to a minimum of 1.
         trace_id: The tick's trace id.
         notifier: The master-notification sink (pinged once, on crossing).
         logger: Structured logger (warns every tick at or past the threshold).
     """
+    threshold = max(1, threshold)
     count = delivery_failures.get(stream, 0) + 1
     delivery_failures[stream] = count
     if count < threshold:
@@ -1256,7 +1281,7 @@ def _note_delivery_failure(
         "tickets — the SEAT is failing, not the ticket; the per-ticket retry "
         "budget and hold age both reset on board churn and cannot see this",
     )
-    if count == threshold:  # crossing: ping master exactly once per episode.
+    if count == threshold:  # crossing (safe: the clamp above rules out count > 0 == threshold).
         notifier(
             "dispatch_seat_delivery_failing",
             trace_id=trace_id,
@@ -1454,7 +1479,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--seat-failure-threshold",
         type=int,
         default=DEFAULT_SEAT_FAILURE_THRESHOLD,
-        help="Consecutive dropped deliveries at which the SEAT is surfaced as unhealthy.",
+        help="Consecutive dropped deliveries at which the SEAT is surfaced as unhealthy "
+        "(minimum 1; lower values are clamped).",
     )
     parser.add_argument(
         "--preflight",

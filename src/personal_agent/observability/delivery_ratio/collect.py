@@ -22,6 +22,7 @@ from personal_agent.observability.delivery_ratio.probe import (
     DEFAULT_MIN_RATIO,
     DeliveryReport,
     FamilyDelivery,
+    classify_zero,
     compute_report,
 )
 from personal_agent.telemetry import get_logger
@@ -30,6 +31,13 @@ if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
 
 log = get_logger(__name__)
+
+DISCRIMINATOR_FIELD: str = "event_type"
+"""The field every family query filters on.
+
+If this is absent from the mapping every count is zero regardless of delivery, so it is
+what separates ``FIELD_ABSENT`` from ``EMITTED_AND_LOST``.
+"""
 
 
 @dataclass(frozen=True)
@@ -184,6 +192,15 @@ async def collect_report(
         es, logs_prefix=logs_prefix, family="api_cost_recorded", since=since, until=until
     )
 
+    # Resolved once and only when it can matter. A zero must be attributed before it is
+    # reported: without this the probe would blame the pipeline for a renamed field and
+    # print "0% delivered", which is the very conflation it exists to end.
+    field_present = True
+    if es_count == 0:
+        field_present = await field_is_mapped(
+            es, logs_prefix=logs_prefix, field_name=DISCRIMINATOR_FIELD
+        )
+
     families = [
         FamilyDelivery(
             family="api_cost_recorded",
@@ -191,22 +208,26 @@ async def collect_report(
             oracle_count=oracle_count,
             es_count=es_count,
             min_ratio=min_ratio,
+            zero_cause=classify_zero(
+                oracle_count=oracle_count, es_count=es_count, field_present=field_present
+            ),
         )
     ]
 
     for unwired in UNWIRED_FAMILIES:
+        unwired_count = await _count_es_family(
+            es,
+            logs_prefix=logs_prefix,
+            family=unwired.family,
+            since=since,
+            until=until,
+        )
         families.append(
             FamilyDelivery(
                 family=unwired.family,
                 oracle=None,
                 oracle_count=None,
-                es_count=await _count_es_family(
-                    es,
-                    logs_prefix=logs_prefix,
-                    family=unwired.family,
-                    since=since,
-                    until=until,
-                ),
+                es_count=unwired_count,
                 min_ratio=min_ratio,
             )
         )
@@ -214,6 +235,7 @@ async def collect_report(
             "delivery_ratio_family_unwired",
             family=unwired.family,
             reason=unwired.reason,
+            es_count=unwired_count,
             component="delivery_ratio",
         )
 

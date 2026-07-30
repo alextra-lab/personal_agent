@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+
 from personal_agent.observability.delivery_ratio.probe import (
     DEFAULT_MIN_RATIO,
     DeliveryReport,
@@ -212,13 +213,21 @@ class TestRenderReport:
         assert "api_cost_recorded" in out
 
     def test_unverifiable_is_named_not_shown_as_zero_percent(self) -> None:
+        """Asserts the family's own ROW, not the whole report.
+
+        The previous version checked ``"UNVERIFIABLE" in out.upper()``, which passed
+        even with the cell rendered as ``0.0%`` — the header line reads
+        ``Overall: UNVERIFIABLE`` and satisfied the substring on its own. A mutation
+        replacing the cell text survived it.
+        """
         report = compute_report(
             since=date(2026, 7, 23),
             until=date(2026, 7, 24),
             families=[_family("phase_completed", None, 10)],
         )
-        out = render_report(report)
-        assert "UNVERIFIABLE" in out.upper()
+        row = next(line for line in render_report(report).splitlines() if "phase_completed" in line)
+        assert "UNVERIFIABLE" in row
+        assert "0.0%" not in row
 
     def test_json_payload_round_trips(self) -> None:
         report = compute_report(
@@ -229,6 +238,144 @@ class TestRenderReport:
         payload = report.to_dict()
         assert payload["status"] == "breach"
         assert payload["families"][0]["lost"] == 119
+
+
+class TestMutationGaps:
+    """Cases added because a mutation of the implementation survived without them.
+
+    Each names the mutation it pins. Without these the property is asserted nowhere and
+    the implementation could regress silently.
+    """
+
+    def test_over_delivery_alone_still_breaches_the_window(self) -> None:
+        """Pins: dropping ``over_delivery`` from the report-level breach condition.
+
+        A window whose only anomaly is a double emit must not report ``pass``.
+        """
+        report = compute_report(
+            since=date(2026, 7, 23),
+            until=date(2026, 7, 24),
+            families=[_family("good", 100, 100), _family("doubled", 100, 137)],
+        )
+        assert report.status == "breach"
+        assert report.exit_code != 0
+
+    def test_over_delivery_reports_zero_lost_never_negative(self) -> None:
+        """Pins: removing the ``max(0, ...)`` floor on ``lost``.
+
+        Without the floor an over-delivering family renders a negative loss.
+        """
+        f = _family("doubled", 100, 137)
+        assert f.lost == 0
+
+    def test_over_delivery_outranks_a_passing_family(self) -> None:
+        """Pins: ranking on the raw ratio ascending.
+
+        Ratio 1.37 sorted *after* ratio 1.00, so the anomaly the probe promises to
+        surface appeared below a clean family in the table a human reads.
+        """
+        report = compute_report(
+            since=date(2026, 7, 23),
+            until=date(2026, 7, 24),
+            families=[_family("clean", 100, 100), _family("doubled", 100, 137)],
+        )
+        assert [f.family for f in report.ranked_families][0] == "doubled"
+
+    def test_unverifiable_sorts_below_even_a_total_loss(self) -> None:
+        """Pins: dropping the unverifiable term from the ranking key."""
+        report = compute_report(
+            since=date(2026, 7, 23),
+            until=date(2026, 7, 24),
+            families=[_family("nooracle", None, 5), _family("total_loss", 100, 0)],
+        )
+        assert [f.family for f in report.ranked_families] == ["total_loss", "nooracle"]
+
+    def test_ratio_exactly_at_the_floor_passes(self) -> None:
+        """Pins: flipping ``>=`` to ``>`` on the floor comparison."""
+        f = FamilyDelivery(
+            family="api_cost_recorded",
+            oracle="postgres:api_costs",
+            oracle_count=100,
+            es_count=99,
+            min_ratio=0.99,
+        )
+        assert f.ratio == pytest.approx(0.99)
+        assert f.status == "pass"
+
+    def test_absent_field_wins_over_no_data_when_both_hold(self) -> None:
+        """Pins: the precedence between FIELD_ABSENT and NO_DATA.
+
+        With no oracle rows AND no mapping, the field is the actionable fact: the query
+        is broken, so the empty oracle tells you nothing.
+        """
+        assert (
+            classify_zero(oracle_count=0, es_count=0, field_present=False) is ZeroCause.FIELD_ABSENT
+        )
+
+
+class TestFieldAbsentIsNotReportedAsLoss:
+    """A zero from a missing field must not be dressed up as a delivery failure.
+
+    This is the probe's own thesis turned on itself: the classification existed and was
+    unit-tested but was not wired into the collector, so a renamed field would have been
+    reported as "0% delivered, 404 lost" — blaming the pipeline for a broken query.
+    """
+
+    def _absent(self) -> FamilyDelivery:
+        return FamilyDelivery(
+            family="api_cost_recorded",
+            oracle="postgres:api_costs",
+            oracle_count=144,
+            es_count=0,
+            zero_cause=ZeroCause.FIELD_ABSENT,
+        )
+
+    def test_status_is_field_absent_not_breach(self) -> None:
+        assert self._absent().status == "field_absent"
+
+    def test_window_still_alarms(self) -> None:
+        report = compute_report(
+            since=date(2026, 7, 23), until=date(2026, 7, 24), families=[self._absent()]
+        )
+        assert report.status == "breach"
+        assert report.exit_code != 0
+
+    def test_render_names_the_cause_instead_of_a_percentage(self) -> None:
+        report = compute_report(
+            since=date(2026, 7, 23), until=date(2026, 7, 24), families=[self._absent()]
+        )
+        row = next(
+            line
+            for line in render_report(report).splitlines()
+            if line.startswith("api_cost_recorded")
+        )
+        assert "FIELD-ABSENT" in row
+        assert "0.0%" not in row
+
+    def test_field_absent_leads_the_ranking(self) -> None:
+        report = compute_report(
+            since=date(2026, 7, 23),
+            until=date(2026, 7, 24),
+            families=[_family("breached", 100, 10), self._absent()],
+        )
+        assert [f.family for f in report.ranked_families][0] == "api_cost_recorded"
+
+    def test_zero_cause_is_carried_into_the_json(self) -> None:
+        report = compute_report(
+            since=date(2026, 7, 23), until=date(2026, 7, 24), families=[self._absent()]
+        )
+        assert report.to_dict()["families"][0]["zero_cause"] == "field_absent"
+
+    def test_emitted_and_lost_is_still_a_plain_breach(self) -> None:
+        """The other attributed zero keeps blaming delivery, which is correct."""
+        f = FamilyDelivery(
+            family="api_cost_recorded",
+            oracle="postgres:api_costs",
+            oracle_count=144,
+            es_count=0,
+            zero_cause=ZeroCause.EMITTED_AND_LOST,
+        )
+        assert f.status == "breach"
 
 
 class TestDeliveryReportWindow:

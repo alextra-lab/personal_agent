@@ -46,8 +46,18 @@ indexed just after ``until``. It is deliberately tight — the losses this probe
 to catch were 48–83%, nowhere near a boundary effect.
 """
 
-FamilyStatus = Literal["pass", "breach", "unverifiable", "over_delivery"]
+FamilyStatus = Literal["pass", "breach", "unverifiable", "over_delivery", "field_absent"]
 ReportStatus = Literal["pass", "breach", "unverifiable"]
+
+_STATUS_RANK: dict[str, int] = {
+    # A meaningless number outranks a bad one: if the queried field is absent the
+    # ratio describes the query, not delivery, so it must be read first.
+    "field_absent": 0,
+    "breach": 1,
+    "over_delivery": 1,
+    "pass": 2,
+    "unverifiable": 3,
+}
 
 
 class ZeroCause(enum.Enum):
@@ -101,6 +111,9 @@ class FamilyDelivery:
         oracle_count: Rows the oracle holds, or ``None`` when there is no oracle.
         es_count: Documents ``agent-logs-*`` holds.
         min_ratio: Delivery floor below which this family is a breach.
+        zero_cause: Attribution for a zero-document result, set by the collector via
+            :func:`classify_zero`. ``None`` when ``es_count`` is non-zero or the
+            attribution was not computed.
     """
 
     family: str
@@ -108,6 +121,7 @@ class FamilyDelivery:
     oracle_count: int | None
     es_count: int
     min_ratio: float = DEFAULT_MIN_RATIO
+    zero_cause: ZeroCause | None = None
 
     @property
     def ratio(self) -> float | None:
@@ -136,11 +150,19 @@ class FamilyDelivery:
     def status(self) -> FamilyStatus:
         """Verdict for this family.
 
+        ``field_absent`` is checked first and independently of the ratio: when the
+        queried field is not in the mapping, every count is zero for a reason that has
+        nothing to do with delivery, so reporting that as a 100% loss would blame the
+        pipeline for a broken query. It still alarms — it just alarms differently.
+
         Returns:
+            ``"field_absent"`` when the zero is attributed to a missing field,
             ``"unverifiable"`` with no oracle or an empty oracle, ``"over_delivery"``
             when ES holds more than the oracle, ``"pass"`` at or above ``min_ratio``,
             else ``"breach"``.
         """
+        if self.zero_cause is ZeroCause.FIELD_ABSENT:
+            return "field_absent"
         ratio = self.ratio
         if ratio is None:
             return "unverifiable"
@@ -163,6 +185,7 @@ class FamilyDelivery:
             "lost": self.lost,
             "status": self.status,
             "min_ratio": self.min_ratio,
+            "zero_cause": self.zero_cause.value if self.zero_cause else None,
         }
 
 
@@ -182,27 +205,36 @@ class DeliveryReport:
 
     @property
     def ranked_families(self) -> list[FamilyDelivery]:
-        """Families worst-first, so the biggest loss leads the output.
+        """Families most-alarming first, so the anomaly leads the output.
+
+        Ranking is by status severity, then by deviation from perfect delivery. Sorting
+        on the raw ratio ascending would put an over-delivering family (ratio above 1.0
+        — a double emit or a bad join) *below* a cleanly passing one, burying the very
+        anomaly this probe promises to surface rather than clamp.
 
         Returns:
-            Families sorted by ascending delivery ratio; unverifiable families sort
-            last because they carry no ratio to compare.
+            Families ordered ``field_absent`` → ``breach``/``over_delivery`` (largest
+            deviation from 1.0 first) → ``pass`` → ``unverifiable``.
         """
-        return sorted(
-            self.families,
-            key=lambda f: (f.ratio is None, f.ratio if f.ratio is not None else 0.0),
-        )
+
+        def key(f: FamilyDelivery) -> tuple[int, float]:
+            ratio = f.ratio
+            deviation = 0.0 if ratio is None else abs(1.0 - ratio)
+            return (_STATUS_RANK[f.status], -deviation)
+
+        return sorted(self.families, key=key)
 
     @property
     def status(self) -> ReportStatus:
         """Window-level verdict.
 
         Returns:
-            ``"breach"`` if any family breached or over-delivered; otherwise
-            ``"unverifiable"`` if no family was verifiable at all; else ``"pass"``.
+            ``"breach"`` if any family breached, over-delivered, or had its field
+            absent; otherwise ``"unverifiable"`` if no family was verifiable at all;
+            else ``"pass"``.
         """
         statuses = {f.status for f in self.families}
-        if "breach" in statuses or "over_delivery" in statuses:
+        if statuses & {"breach", "over_delivery", "field_absent"}:
             return "breach"
         if "pass" not in statuses:
             return "unverifiable"
@@ -262,7 +294,20 @@ def compute_report(
 
 
 def _format_ratio(f: FamilyDelivery) -> str:
-    """Format one family's ratio cell, naming unverifiable rather than showing 0%."""
+    """Format one family's delivery cell.
+
+    Names the reason instead of printing a percentage whenever the percentage would be
+    meaningless: ``0.0%`` against an absent field reads as total loss, and against no
+    oracle reads as a measurement that was never taken.
+
+    Args:
+        f: Family to format.
+
+    Returns:
+        A percentage, or ``FIELD-ABSENT`` / ``UNVERIFIABLE``.
+    """
+    if f.zero_cause is ZeroCause.FIELD_ABSENT:
+        return "FIELD-ABSENT"
     if f.ratio is None:
         return "UNVERIFIABLE"
     return f"{f.ratio * 100:.1f}%"

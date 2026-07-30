@@ -14,10 +14,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from personal_agent.observability.delivery_ratio.collect import (
+    DISCRIMINATOR_FIELD,
     UNWIRED_FAMILIES,
     collect_report,
     field_is_mapped,
 )
+from personal_agent.observability.delivery_ratio.probe import ZeroCause
 
 
 class _FakePool:
@@ -139,6 +141,88 @@ class TestCollectReport:
         rng = es.count.await_args_list[0].kwargs["query"]["bool"]["must"][1]["range"]["@timestamp"]
         assert rng["gte"] == "2026-07-23"
         assert rng["lt"] == "2026-07-24"
+
+
+class TestZeroAttributionIsWiredIn:
+    """The collector must attribute a zero, not just be capable of attributing one.
+
+    ``classify_zero``/``field_is_mapped`` existed, were unit-tested, and were never
+    called by ``collect_report`` — so a renamed field reported "0% delivered, 144 lost"
+    and blamed the pipeline for a broken query. These tests fail if that regresses.
+    """
+
+    @pytest.mark.asyncio
+    async def test_absent_field_is_reported_as_field_absent_not_a_breach(self) -> None:
+        es = _es_mock(counts={"api_cost_recorded": 0})
+        es.field_caps = AsyncMock(return_value={"fields": {}})
+        report = await collect_report(
+            es,
+            _FakePool(144),
+            logs_prefix="agent-logs",
+            since=date(2026, 7, 23),
+            until=date(2026, 7, 23),
+        )
+        cost = next(f for f in report.families if f.family == "api_cost_recorded")
+        assert cost.status == "field_absent"
+        assert report.status == "breach"
+
+    @pytest.mark.asyncio
+    async def test_mapped_field_with_ledger_rows_is_emitted_and_lost(self) -> None:
+        es = _es_mock(counts={"api_cost_recorded": 0})
+        es.field_caps = AsyncMock(return_value={"fields": {"event_type": {"keyword": {}}}})
+        report = await collect_report(
+            es,
+            _FakePool(144),
+            logs_prefix="agent-logs",
+            since=date(2026, 7, 23),
+            until=date(2026, 7, 23),
+        )
+        cost = next(f for f in report.families if f.family == "api_cost_recorded")
+        assert cost.zero_cause is ZeroCause.EMITTED_AND_LOST
+        assert cost.status == "breach"
+        assert cost.lost == 144
+
+    @pytest.mark.asyncio
+    async def test_empty_oracle_and_mapped_field_is_no_data(self) -> None:
+        es = _es_mock(counts={"api_cost_recorded": 0})
+        es.field_caps = AsyncMock(return_value={"fields": {"event_type": {"keyword": {}}}})
+        report = await collect_report(
+            es,
+            _FakePool(0),
+            logs_prefix="agent-logs",
+            since=date(2026, 7, 23),
+            until=date(2026, 7, 23),
+        )
+        cost = next(f for f in report.families if f.family == "api_cost_recorded")
+        assert cost.zero_cause is ZeroCause.NO_DATA
+        assert cost.status == "unverifiable"
+
+    @pytest.mark.asyncio
+    async def test_mapping_is_not_queried_when_documents_were_found(self) -> None:
+        """A mapping lookup on the happy path is a wasted round trip every run."""
+        es = _es_mock(counts={"api_cost_recorded": 103})
+        es.field_caps = AsyncMock(return_value={"fields": {"event_type": {"keyword": {}}}})
+        await collect_report(
+            es,
+            _FakePool(103),
+            logs_prefix="agent-logs",
+            since=date(2026, 7, 24),
+            until=date(2026, 7, 24),
+        )
+        es.field_caps.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mapping_check_uses_the_field_the_query_filters_on(self) -> None:
+        es = _es_mock(counts={"api_cost_recorded": 0})
+        es.field_caps = AsyncMock(return_value={"fields": {}})
+        await collect_report(
+            es,
+            _FakePool(1),
+            logs_prefix="agent-logs",
+            since=date(2026, 7, 23),
+            until=date(2026, 7, 23),
+        )
+        assert es.field_caps.await_args.kwargs["fields"] == DISCRIMINATOR_FIELD
 
 
 class TestFieldIsMapped:

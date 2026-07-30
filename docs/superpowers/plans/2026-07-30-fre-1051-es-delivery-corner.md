@@ -178,7 +178,66 @@ while those indices are retained — it is evidence for the ticket, not a CI pro
 
 ---
 
-## 7. Risks
+## 7. Self-review outcome — six real defects, all fixed on-branch
+
+The `code-review` skill is `disable-model-invocation` and could not be run from this
+seat (the owner's own invocation died to an upstream 529, and the authorization does not
+persist across turns). Per master's direction the review was done with adversarial
+agents instead: one correctness reviewer told to break the code, one mutation-testing
+pass on the tests, plus `security-review`. **They found six genuine defects, including
+one that undercut this ticket's own thesis.** Every one is fixed here.
+
+1. **The zero-attribution machinery was dead code.** `classify_zero`, `ZeroCause` and
+   `field_is_mapped` were written, unit-tested, and never called by `collect_report`. So
+   a renamed `event_type` field would have reported "0% delivered, 144 lost" — the exact
+   `FIELD_ABSENT`-as-`EMITTED_AND_LOST` conflation the module docstring forbids,
+   reproduced inside the probe built to end it. Now wired in, with `field_absent` as a
+   distinct status that alarms without blaming delivery, and the mapping lookup is
+   skipped on the happy path.
+2. **`--json --help` exited 0 with an empty stdout.** Argparse ran inside the
+   descriptor redirect, so usage went to stderr. A wrapper capturing stdout and gating
+   on the exit code would score that as a silent success — the failure class this probe
+   exists to eliminate. Parsing now happens outside the redirect.
+3. **Over-delivery was buried in the ranking.** Sorting on the raw ratio ascending put a
+   ratio of 1.37 *below* a clean 1.00, so the anomaly the docstring promises to "surface,
+   not clamp" appeared under passing families. Ranking is now by status severity then
+   deviation from perfect.
+4. **A substrate failure was indistinguishable from a breach** — both exited 1. An
+   unreachable Postgres now exits 70, so "the probe is broken" and "delivery is broken"
+   route to different triage. The documented `64` for bad arguments was also wrong:
+   argparse exits 2.
+5. **A tautological test.** `test_unverifiable_is_named_not_shown_as_zero_percent`
+   asserted `"UNVERIFIABLE" in out.upper()` against the whole report, which the header
+   line `Overall: UNVERIFIABLE` satisfied on its own — so a mutation rendering the cell
+   as `0.0%` stayed green. Now asserts the family's own row.
+6. **An order-dependent test.** The JSON-payload test parsed the entire captured buffer,
+   so it passed only when an earlier test had already triggered the config import; run
+   alone it failed on conftest's setup logging. Now scoped to `_emit`'s own writes.
+
+Five surviving mutations were closed with tests (over-delivery in the window verdict, the
+`lost` floor, the ranking tie-break, `classify_zero` precedence, the floor comparison at
+exactly `min_ratio`), and the CLI went from **zero** coverage to 14 tests.
+
+**Two findings I did not act on, deliberately.** A family where the oracle is empty but
+ES holds documents collapses to `unverifiable`; that is the conservative direction (it
+never claims health) and inventing a status for it now would be speculative. And the
+`finally` in `_measure` can mask an original exception with a cleanup error — ordinary
+Python semantics, no observed impact, and worth its own change if it ever bites.
+
+**What the reviewers confirmed rather than broke**, which matters because these were my
+two stated worries: no combination of families can report `pass` without a genuinely
+verified one, and the ES/Postgres windows cover identical instants — checked against a
+live Elasticsearch, where a bare `YYYY-MM-DD` on `gte`/`lt` yields exact UTC midnight and
+`lt` does not round up. The three days of exact parity (103/103, 211/211, 283/283) are
+the empirical corroboration.
+
+**One process note worth carrying.** The first version of the `--help` test used
+`capsys`, then `capfd`; both passed with the defect deliberately reinstated, because
+neither observes an `os.dup2` swap. Only a real subprocess distinguishes them. The test
+is a subprocess for that reason, and I verified it fails with the bug restored — a test
+whose failure mode I had not confirmed would have been the seventh defect.
+
+## 8. Risks
 
 - **The probe reads prod Postgres and prod ES.** Read-only, but it must use configured
   settings, never hardcoded URIs (FRE-375 pre-commit guard).

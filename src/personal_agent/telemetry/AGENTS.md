@@ -124,8 +124,15 @@ uv run python -m scripts.monitors.delivery_ratio_monitor --since 2026-07-23 --un
 uv run python -m scripts.monitors.delivery_ratio_monitor --json   # machine-readable
 ```
 
-Exit 0 only when delivery passed. An all-`UNVERIFIABLE` window exits non-zero: it proved
-nothing, and silence must not read as green.
+Exit codes are deliberately distinct, because "the probe is broken" and "delivery is
+broken" need different triage: `0` passed · `1` breach **or** nothing verifiable · `2`
+argparse rejected the arguments · `64` precondition failed · `70` could not measure
+(substrate unreachable). An all-`UNVERIFIABLE` window exits non-zero — it proved nothing,
+and silence must not read as green.
+
+The probe attributes a zero rather than assuming it means loss. A family whose queried
+field is missing from the mapping reports `FIELD-ABSENT`, not `0.0% delivered`: the query
+is broken, so blaming the pipeline would send you to the wrong system. It still alarms.
 
 **Two further hazards in `es_handler.emit()`, real but not the cause of the above:**
 

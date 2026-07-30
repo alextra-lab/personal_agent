@@ -5,8 +5,15 @@ Compares an event family in the log indices against an independent oracle (Postg
 floor — so a future regression in delivery is visible rather than rediscovered by
 accident.
 
-Exit codes: ``0`` delivery passed · ``1`` breach **or** nothing verifiable ·
-``64`` bad arguments or the elasticsearch package is unavailable.
+Exit codes, which a standing monitor must be able to tell apart:
+
+- ``0`` delivery passed.
+- ``1`` a real verdict of breach, or nothing verifiable. The telemetry is at fault.
+- ``2`` argparse rejected the arguments (argparse's own code, not ours).
+- ``64`` a precondition failed — window inverted, or elasticsearch not installed.
+- ``70`` the probe could not measure: Postgres or Elasticsearch was unreachable or
+  errored. Deliberately distinct from ``1`` — "the probe is broken" and "delivery is
+  broken" need different triage, and collapsing them onto one code loses that.
 
 Usage::
 
@@ -34,6 +41,12 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from personal_agent.observability.delivery_ratio.probe import DeliveryReport
+
+_EX_USAGE: int = 64
+"""A precondition failed (inverted window, missing elasticsearch package)."""
+
+_EX_PROBE_FAILED: int = 70
+"""The probe could not measure — substrate unreachable. Not a delivery verdict."""
 
 
 def _parse_day(raw: str) -> date:
@@ -105,7 +118,7 @@ async def _measure(args: argparse.Namespace) -> DeliveryReport | int:
         from elasticsearch import AsyncElasticsearch as ESClient
     except ModuleNotFoundError:
         sys.stderr.write("elasticsearch package is required\n")
-        return 64
+        return _EX_USAGE
 
     import asyncpg  # type: ignore[import-untyped]
 
@@ -171,6 +184,17 @@ def _emit(outcome: Any, *, as_json: bool) -> int:
     return int(outcome.exit_code)
 
 
+def _warm_config_imports() -> None:
+    """Import the config package so its startup logging happens under a redirect.
+
+    Importing ``personal_agent.config`` emits startup diagnostics on stdout exactly
+    once. Forcing that here, inside the caller's redirect, lets argparse and ``--help``
+    run afterwards against a real stdout with nothing left to pollute it.
+    """
+    import personal_agent.config.settings  # noqa: F401
+    import personal_agent.observability.delivery_ratio.probe  # noqa: F401
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point.
 
@@ -183,20 +207,30 @@ def main(argv: list[str] | None = None) -> int:
     raw = sys.argv[1:] if argv is None else argv
     as_json = "--json" in raw
 
-    if not as_json:
-        args = _parse_args(raw)
-        if args.until < args.since:
-            sys.stderr.write("--until must not precede --since\n")
-            return 64
-        return _emit(asyncio.run(_measure(args)), as_json=False)
+    # Argument parsing stays OUTSIDE the redirect so `--help` reaches the real stdout.
+    # Parsing inside it sent the help text to stderr and exited 0 with empty stdout —
+    # which a wrapper reading stdout and gating on the exit code would score as a
+    # silent green, the failure mode this probe exists to eliminate.
+    if as_json:
+        with _stdout_to_stderr():
+            _warm_config_imports()
 
-    with _stdout_to_stderr():
-        args = _parse_args(raw)
-        if args.until < args.since:
-            sys.stderr.write("--until must not precede --since\n")
-            return 64
-        outcome = asyncio.run(_measure(args))
-    return _emit(outcome, as_json=True)
+    args = _parse_args(raw)
+    if args.until < args.since:
+        sys.stderr.write("--until must not precede --since\n")
+        return _EX_USAGE
+
+    try:
+        if as_json:
+            with _stdout_to_stderr():
+                outcome = asyncio.run(_measure(args))
+        else:
+            outcome = asyncio.run(_measure(args))
+    except Exception as exc:  # noqa: BLE001 - reported, not swallowed; see _EX_PROBE_FAILED
+        sys.stderr.write(f"delivery-ratio probe failed to measure: {exc!r}\n")
+        return _EX_PROBE_FAILED
+
+    return _emit(outcome, as_json=as_json)
 
 
 if __name__ == "__main__":

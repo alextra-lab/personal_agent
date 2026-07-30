@@ -169,6 +169,37 @@ Combine signals into a **single ranking score** per candidate. Weights are **con
 - **Fields:** `trace_id`, `candidate_count`, `injected_count`, `latency_ms`, `embedding_latency_ms`, `threshold`, `token_estimate`, `task_type` (intent).
 - **Never** log raw user message content at INFO in production if policy forbids; prefer hashes or lengths unless redaction is guaranteed.
 
+### Which gate discarded a candidate (FRE-1060)
+
+`build_proactive_suggestions` applies **eight** successive gates, and its
+`proactive_memory_budget_trimmed` event named none of them — its `before_count`/`after_count`
+pair was consistent with several, so which gate decided a turn was unknowable. On the melon
+turn (trace `2868c9ac`, 2026-07-30) `after_count=5` equalled `max_injected_items` while the
+470-token estimate sat 30 under the 500 threshold: the ranked cap and the token budget were
+equally consistent with the record.
+
+Two surfaces now answer it:
+
+- **Per candidate, durably** — every discarded candidate is returned on
+  `ProactiveMemorySuggestions.discarded` with a `DropReason.RECALL_*` naming its gate, and
+  reaches the turn's `recall_admission` record (`agent-captains-captures-*`) as an item with
+  `admitted=false` and that `drop_reason`. Gates, in application order: `recall_duplicate`,
+  `recall_score_threshold`, `recall_candidate_cap`, `recall_item_cap`, `recall_score_floor`,
+  `recall_score_gap`, `recall_item_oversized`, `recall_token_budget`.
+- **Per turn, on the log** — `stop_reason` names the single terminal gate that ended
+  selection, `discarded_by_gate` gives per-gate counts, and `retrieved_row_count` /
+  `deduped_row_count` / `scored_count` separate retrieval, dedupe and threshold losses that
+  a single `before_count` used to conflate.
+
+Only **one** terminal gate can fire per invocation (the selection loop breaks on the first),
+so `recall_item_cap` and `recall_token_budget` never co-occur in one record. Any number of
+`recall_candidate_cap`, `recall_score_threshold`, `recall_duplicate` and
+`recall_item_oversized` drops may accompany it.
+
+`recall_admission.candidate_population` states whether a record names the whole offered
+population (`offered`) or only the survivors (`post_selection`, the pre-FRE-1060 reading).
+**Do not aggregate candidate counts across that boundary without filtering on it.**
+
 ---
 
 ## A/B Testing Methodology

@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import json
 import math
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
 import structlog
 
-from personal_agent.captains_log.turn_evidence import mark_truncated
+from personal_agent.captains_log.turn_evidence import DropReason, mark_truncated
 from personal_agent.config import settings
 from personal_agent.memory.proactive_types import (
     ProactiveMemoryCandidate,
+    ProactiveMemoryDiscard,
     ProactiveMemorySuggestions,
     ProactiveScoreComponents,
 )
@@ -100,19 +102,32 @@ def _combine_scores(
     return max(0.0, min(1.0, total))
 
 
-def _dedupe_raw_by_turn_id(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep first row per turn_id (vector order is best-first)."""
+def _dedupe_raw_by_turn_id(
+    raw_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Keep first row per turn_id (vector order is best-first).
+
+    Args:
+        raw_rows: Rows as retrieved, best-first.
+
+    Returns:
+        Tuple of (kept, dropped). The dropped rows are returned rather than discarded
+        silently so the evidence record can name them (FRE-1060) — this is the earliest
+        gate on the path and the only one that fires before a score exists.
+    """
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
     for row in raw_rows:
         tid = row.get("turn_id")
         if tid:
             s = str(tid)
             if s in seen:
+                dropped.append(row)
                 continue
             seen.add(s)
         out.append(row)
-    return out
+    return out, dropped
 
 
 def _build_payload_for_row(row: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -151,6 +166,54 @@ def _build_payload_for_row(row: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     )
 
 
+def _discard_row(
+    row: dict[str, Any], score: float | None, reason: DropReason
+) -> ProactiveMemoryDiscard:
+    """Record a raw graph row a pre-selection gate removed (FRE-1060).
+
+    For the two gates that fire before a candidate is built — the turn-id dedupe and the
+    relevance threshold — so the payload is derived here purely to make the drop nameable.
+
+    Args:
+        row: The raw graph row.
+        score: The final score, or None where the gate fired before one was computed.
+        reason: The gate that removed it.
+
+    Returns:
+        The discard record.
+    """
+    kind, payload = _build_payload_for_row(row)
+    return ProactiveMemoryDiscard(
+        kind=kind,  # type: ignore[arg-type]
+        payload=payload,
+        relevance_score=score,
+        drop_reason=reason,
+    )
+
+
+def _discard_candidate(
+    candidate: ProactiveMemoryCandidate, reason: DropReason
+) -> ProactiveMemoryDiscard:
+    """Record a scored candidate a selection gate removed (FRE-1060).
+
+    For the six gates that fire once the candidate exists, so its kind, payload and score
+    are carried through unchanged rather than re-derived.
+
+    Args:
+        candidate: The scored candidate.
+        reason: The gate that removed it.
+
+    Returns:
+        The discard record.
+    """
+    return ProactiveMemoryDiscard(
+        kind=candidate.kind,
+        payload=candidate.payload,
+        relevance_score=candidate.relevance_score,
+        drop_reason=reason,
+    )
+
+
 def build_proactive_suggestions(
     raw_rows: list[dict[str, Any]],
     session_entity_names: set[str],
@@ -168,10 +231,17 @@ def build_proactive_suggestions(
         query_embedding_ms: Optional timing for observability.
 
     Returns:
-        ProactiveMemorySuggestions with trimmed, ranked candidates.
+        ProactiveMemorySuggestions with trimmed, ranked candidates **and** every
+        candidate a gate discarded, each naming the gate (FRE-1060). Emitted plus
+        discarded accounts for every row in ``raw_rows``: nothing is silently lost.
     """
     cfg = settings
-    raw_rows = _dedupe_raw_by_turn_id(raw_rows)
+    retrieved_count = len(raw_rows)
+    raw_rows, duplicate_rows = _dedupe_raw_by_turn_id(raw_rows)
+    deduped_count = len(raw_rows)
+    discarded: list[ProactiveMemoryDiscard] = [
+        _discard_row(row, None, DropReason.RECALL_DUPLICATE) for row in duplicate_rows
+    ]
     scored: list[ProactiveMemoryCandidate] = []
 
     for row in raw_rows:
@@ -190,6 +260,9 @@ def build_proactive_suggestions(
         final = _combine_scores(vector_score, overlap, recency, topic)
 
         if final < cfg.proactive_memory_min_score:
+            # Recorded, not skipped (FRE-1060). The payload is built here purely so the
+            # drop is nameable; the row is not otherwise used.
+            discarded.append(_discard_row(row, final, DropReason.RECALL_SCORE_THRESHOLD))
             continue
 
         kind, payload = _build_payload_for_row(row)
@@ -211,29 +284,56 @@ def build_proactive_suggestions(
     scored.sort(key=lambda c: c.relevance_score, reverse=True)
     after_threshold = len(scored)
     capped = scored[: cfg.proactive_memory_max_candidates]
+    discarded.extend(
+        _discard_candidate(c, DropReason.RECALL_CANDIDATE_CAP)
+        for c in scored[cfg.proactive_memory_max_candidates :]
+    )
 
     selected: list[ProactiveMemoryCandidate] = []
     token_budget = 0
     prev_score: float | None = None
+    oversized: list[ProactiveMemoryCandidate] = []
+    stop_index: int | None = None
+    stop_reason: DropReason | None = None
 
-    for cand in capped:
+    # Selection is unchanged — the branch order, the comparisons and the break/continue
+    # semantics are all as before. The only addition is recording *which* branch ended it,
+    # because the deciding gate was previously indistinguishable from the others and this
+    # ticket forbids widening a gate before it can be measured.
+    for index, cand in enumerate(capped):
         if len(selected) >= cfg.proactive_memory_max_injected_items:
+            stop_index, stop_reason = index, DropReason.RECALL_ITEM_CAP
             break
         if cand.relevance_score < cfg.proactive_memory_diminishing_score_floor:
+            stop_index, stop_reason = index, DropReason.RECALL_SCORE_FLOOR
             break
         if prev_score is not None:
             if prev_score - cand.relevance_score > cfg.proactive_memory_diminishing_score_gap:
+                stop_index, stop_reason = index, DropReason.RECALL_SCORE_GAP
                 break
         est = _estimate_payload_tokens(cand.payload)
         if est > cfg.proactive_memory_max_tokens:
+            oversized.append(cand)
             continue
         if token_budget + est > cfg.proactive_memory_max_tokens:
+            stop_index, stop_reason = index, DropReason.RECALL_TOKEN_BUDGET
             break
         selected.append(cand)
         token_budget += est
         prev_score = cand.relevance_score
 
-    if len(selected) < after_threshold:
+    # An oversized candidate is stepped over, so its index is always below any later
+    # ``stop_index`` and it can never also appear in the terminated tail below.
+    discarded.extend(_discard_candidate(c, DropReason.RECALL_ITEM_OVERSIZED) for c in oversized)
+    if stop_reason is not None and stop_index is not None:
+        discarded.extend(_discard_candidate(c, stop_reason) for c in capped[stop_index:])
+
+    # FRE-1060: fires on *any* discard. The old guard was `len(selected) <
+    # after_threshold`, which is blind to the two gates upstream of scoring — a turn whose
+    # only losses were duplicates or sub-threshold rows emitted no event at all, leaving an
+    # observability hole in exactly the mechanism this ticket exists to close. Every case
+    # that logged before still logs: the old condition implies this one.
+    if discarded:
         log.info(
             "proactive_memory_budget_trimmed",
             trace_id=trace_id,
@@ -241,9 +341,21 @@ def build_proactive_suggestions(
             after_count=len(selected),
             token_estimate=token_budget,
             threshold=cfg.proactive_memory_max_tokens,
+            # This event named a budget when any of six gates could have decided, and on
+            # the melon turn the ranked cap and the token budget were both consistent with
+            # its numbers. These fields end that ambiguity: `stop_reason` is the single
+            # terminal gate that ended selection (at most one can fire), and the three
+            # counts separate retrieval, dedupe and threshold losses that `before_count`
+            # alone conflated.
+            stop_reason=stop_reason.value if stop_reason is not None else None,
+            discarded_by_gate=dict(Counter(d.drop_reason.value for d in discarded)),
+            retrieved_row_count=retrieved_count,
+            deduped_row_count=deduped_count,
+            scored_count=after_threshold,
         )
 
     return ProactiveMemorySuggestions(
         candidates=selected,
+        discarded=discarded,
         query_embedding_ms=query_embedding_ms,
     )

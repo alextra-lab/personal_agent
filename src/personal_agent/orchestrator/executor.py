@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from personal_agent.captains_log.turn_evidence import (
+    CandidatePopulation,
     InlineOutcome,
     MemoryItemKind,
     build_recall_candidates,
@@ -1275,6 +1276,15 @@ def _record_turn_evidence(
             user_message=ctx.user_message,
             skill_bodies=skill_body_names,
             call_index=0,
+            # FRE-1060: read from the assembler, never assumed here. The gateway path
+            # reports its producers' discards, so its records name the population; the
+            # legacy in-executor recall paths below do not, and their records must keep
+            # saying so rather than inheriting a claim they cannot support.
+            candidate_population=(
+                gw_context.candidate_population
+                if gw_context is not None
+                else CandidatePopulation.POST_SELECTION
+            ),
         )
     except Exception:
         log.exception(

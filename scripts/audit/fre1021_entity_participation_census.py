@@ -14,6 +14,21 @@ It reports, per turn with at least one recall candidate:
   * whether ANY candidate of kind ``entity`` was offered at all (participation), and
   * whether an ``entity``-kind candidate was ever *admitted* (reached the model).
 
+**FRE-1060 changed what "offered" means, mid-corpus.** Before that deploy the record held
+only the candidates that survived the proactive path's own caps and budgets, so this
+script's participation rate was a rate over *post-selection survivors* presented as one
+over recall. Records written after it name the whole offered population and declare
+``recall_admission.candidate_population == "offered"``; earlier records omit the field and
+are ``post_selection``. **Figures either side of that boundary are not comparable** — a
+post-deploy participation rate will be legitimately higher without anything about recall
+having changed. Filter on ``candidate_population`` before comparing across it. This script
+deliberately does not filter: it reports whatever the window holds, and the caveat is the
+reader's to apply.
+
+Candidate order within a record is *rank order per group* — admitted items first, then the
+discarded ones — not one globally ranked list. Every item carries its ``score``, so true
+global rank is recovered by sorting. Nothing below depends on order.
+
 This is a plain read-only ``_search`` scroll — nothing is written, no LLM is invoked,
 no live gateway turn is fired.
 
@@ -47,7 +62,9 @@ class TurnRecallRecord:
     Attributes:
         trace_id: The turn's trace id.
         timestamp: ISO-8601 capture time.
-        candidate_kinds: ``kind`` of every offered candidate, in rank order.
+        candidate_kinds: ``kind`` of every offered candidate. Admitted items first, then
+            the discarded ones, each group in rank order (FRE-1060) — not one globally
+            ranked list. Order is not relied on here.
         admitted_kinds: ``kind`` of every *admitted* candidate (reached the model).
     """
 

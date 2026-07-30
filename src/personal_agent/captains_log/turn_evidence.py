@@ -95,11 +95,34 @@ class CandidateSource(StrEnum):
 
 
 class DropReason(StrEnum):
-    """Why a recalled candidate did not reach the final serialized model input."""
+    """Why a recalled candidate did not reach the final serialized model input.
+
+    The three original members describe losses *after* context assembly. The
+    ``RECALL_*`` members (FRE-1060) describe losses *inside* the proactive recall path,
+    which discards candidates before context assembly ever sees them — so before this
+    they were not drops with a reason but absences from the population, and the record
+    reported post-selection survivors as though they were everything recall offered.
+
+    Each ``RECALL_*`` member maps 1:1 to one branch of
+    ``memory.proactive.build_proactive_suggestions``. They are deliberately not folded
+    together: which gate fired decides which remedy applies, and the melon turn was
+    misdiagnosed precisely because one log line named a token budget when the ranked cap
+    was the plausible cause and neither could be distinguished.
+    """
 
     BUDGET_TRIMMED = "budget_trimmed"
     NOT_RENDERED = "not_rendered"
     ABSENT_FROM_FINAL_INPUT = "absent_from_final_input"
+
+    # Proactive recall path gates (FRE-1060), in the order the path applies them.
+    RECALL_DUPLICATE = "recall_duplicate"
+    RECALL_SCORE_THRESHOLD = "recall_score_threshold"
+    RECALL_CANDIDATE_CAP = "recall_candidate_cap"
+    RECALL_ITEM_CAP = "recall_item_cap"
+    RECALL_SCORE_FLOOR = "recall_score_floor"
+    RECALL_SCORE_GAP = "recall_score_gap"
+    RECALL_ITEM_OVERSIZED = "recall_item_oversized"
+    RECALL_TOKEN_BUDGET = "recall_token_budget"
 
 
 class InlineOutcome(StrEnum):
@@ -212,6 +235,10 @@ class RecallCandidateRecord(BaseModel):
         identity: Durable identifier, empty when the producer supplied none.
         score: Relevance score where the producing path computes one, else None.
         source: Which producer offered it — decides how admission resolves.
+        pre_drop_reason: Set when the producer itself discarded the candidate before
+            context assembly (FRE-1060), naming the gate that removed it. Admission is
+            then already decided and :func:`_resolve_admission` resolves it directly
+            rather than testing it against the renderer — it never reached the renderer.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -220,6 +247,7 @@ class RecallCandidateRecord(BaseModel):
     identity: str
     score: float | None = None
     source: CandidateSource = CandidateSource.MEMORY_CONTEXT
+    pre_drop_reason: DropReason | None = None
 
 
 class RecalledMemoryRecord(BaseModel):
@@ -242,14 +270,43 @@ class RecalledMemoryRecord(BaseModel):
     drop_reason: DropReason | None = None
 
 
+class CandidatePopulation(StrEnum):
+    """Whether a record's ``items`` name the population or only the survivors.
+
+    The distinction the field exists to make (FRE-1060): a record holding five items,
+    five admitted, is either a turn where recall genuinely offered five — or a turn where
+    it offered twelve and seven were discarded before the record was built. Those are
+    different facts and were indistinguishable, which made every conclusion drawn from an
+    admission record a conclusion about survivors presented as one about recall.
+
+    ``POST_SELECTION`` is the default so records written before FRE-1060 read back as
+    what they truthfully are, rather than over-claiming completeness they never had.
+    """
+
+    OFFERED = "offered"
+    POST_SELECTION = "post_selection"
+
+
 class RecallAdmissionRecord(BaseModel):
     """D3 item 5 — what the turn actually relied on, and what it dropped.
 
+    ``items`` holds admitted candidates in the order recall offered them, followed by the
+    candidates the producing path discarded, in their own rank order — *not* one globally
+    rank-ordered list. Every item carries its ``score`` and the producing path ranks by
+    score descending, so a reader needing true global rank recovers it by sorting.
+
     Attributes:
         state: PRESENT when candidates existed, EMPTY when recall ran and found none.
-        candidate_count: Items recall offered.
-        admitted_count: Items that reached the final serialized model input.
+        candidate_count: Items recall offered — the population when
+            ``candidate_population`` is OFFERED, the survivors when POST_SELECTION.
+        admitted_count: Items that reached the final serialized model input. The
+            discarded count is ``candidate_count - admitted_count``.
         items: Every candidate, admitted or dropped. Never filtered.
+        candidate_population: Whether ``items`` names every candidate the producing paths
+            considered, or only those that survived their internal selection. OFFERED
+            covers every *discard* those paths perform; it does not extend to a retrieval
+            bound (a graph query's own ``top_k``), because a row never fetched cannot be
+            named by a per-turn record at all.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -258,6 +315,7 @@ class RecallAdmissionRecord(BaseModel):
     candidate_count: int
     admitted_count: int
     items: list[RecalledMemoryRecord] = Field(default_factory=list)
+    candidate_population: CandidatePopulation = CandidatePopulation.POST_SELECTION
 
 
 class ContextMessageRecord(BaseModel):
@@ -404,6 +462,43 @@ def build_recall_candidates(
     return tuple(records)
 
 
+def build_discarded_candidates(
+    discards: Sequence[tuple[object, float | None, DropReason]],
+) -> tuple[RecallCandidateRecord, ...]:
+    """Build candidate records for items a producing path discarded (FRE-1060).
+
+    The counterpart to :func:`build_recall_candidates`, for the candidates that never
+    became memory context because the producer's own caps, budgets and thresholds removed
+    them. Recording them is what turns a silent absence into a drop with a named gate.
+
+    Takes plain triples rather than a producer's own model so this module stays free of
+    ``personal_agent`` imports (see the module docstring) — the request gateway adapts its
+    producer's shape at the call site.
+
+    Args:
+        discards: One ``(payload, score, reason)`` triple per discarded item. ``score`` is
+            None where the gate fired before a score was computed, which is truthful
+            rather than a fabricated zero.
+
+    Returns:
+        One record per discard, each carrying its ``pre_drop_reason`` so admission
+        resolves directly. Empty when nothing was discarded.
+    """
+    records: list[RecallCandidateRecord] = []
+    for payload, score, reason in discards:
+        kind, identity = memory_item_identity(payload)
+        records.append(
+            RecallCandidateRecord(
+                kind=kind,
+                identity=identity,
+                score=score,
+                source=CandidateSource.MEMORY_CONTEXT,
+                pre_drop_reason=reason,
+            )
+        )
+    return tuple(records)
+
+
 def _wire_carries_volatile_fence(wire_messages: Sequence[object], user_message: str) -> bool:
     """Whether *this turn's* volatile fence survived into the final serialized input.
 
@@ -469,6 +564,20 @@ def _resolve_admission(
     admitted: bool
     reason: DropReason | None
 
+    if candidate.pre_drop_reason is not None:
+        # Discarded by its own producer before context assembly (FRE-1060). Resolved
+        # here without touching ``rendered_budget``: this candidate never reached the
+        # renderer, so consuming a rendered slot for it would steal that slot from a
+        # surviving candidate sharing the identity — and the empty identity, which every
+        # producer that supplied none yields, is shared by construction.
+        return RecalledMemoryRecord(
+            kind=candidate.kind,
+            identity=candidate.identity,
+            score=candidate.score,
+            admitted=False,
+            drop_reason=candidate.pre_drop_reason,
+        )
+
     if candidate.source is CandidateSource.SESSION_FACT_SECTION:
         admitted = session_facts_injected
         reason = None if admitted else DropReason.NOT_RENDERED
@@ -505,6 +614,7 @@ def build_turn_evidence(
     skill_bodies: Sequence[str],
     call_index: int,
     primary_call_count: int = 1,
+    candidate_population: CandidatePopulation = CandidatePopulation.POST_SELECTION,
 ) -> TurnEvidence:
     """Build both D3 records for one turn from its final serialized model input.
 
@@ -522,6 +632,10 @@ def build_turn_evidence(
         skill_bodies: Names of the skill bodies loaded.
         call_index: Which primary call of the turn this describes.
         primary_call_count: Primary calls the turn made, when known.
+        candidate_population: Whether ``candidates`` is the whole population the
+            producing paths considered, or only their survivors. The caller knows this
+            and the record must state it (FRE-1060); the default is the conservative
+            claim, so a caller that does not pass it cannot over-claim completeness.
 
     Returns:
         A :class:`TurnEvidence` whose two halves describe the same model call.
@@ -548,6 +662,7 @@ def build_turn_evidence(
         candidate_count=len(items),
         admitted_count=len(admitted_identities),
         items=items,
+        candidate_population=candidate_population,
     )
 
     slice_records = [

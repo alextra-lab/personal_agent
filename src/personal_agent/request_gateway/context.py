@@ -19,9 +19,12 @@ from uuid import UUID
 import structlog
 
 from personal_agent.captains_log.turn_evidence import (
+    CandidatePopulation,
     CandidateSource,
+    DropReason,
     MemoryItemKind,
     RecallCandidateRecord,
+    build_discarded_candidates,
     build_recall_candidates,
     mark_truncated,
     memory_item_identity,
@@ -38,6 +41,15 @@ from personal_agent.request_gateway.types import (
 )
 
 logger = structlog.get_logger(__name__)
+
+ProactiveDiscards = tuple[tuple[dict[str, Any], float | None, DropReason], ...]
+"""Candidates a producing path's own gates removed: (payload, score, gate) per item.
+
+Plain triples rather than ``ProactiveMemoryDiscard`` because
+``captains_log.turn_evidence`` is deliberately free of ``personal_agent`` imports, so the
+adaptation from the producer's model happens here (FRE-1060). The score is None where the
+gate fired before one was computed.
+"""
 
 
 def _session_topic_hint(session_messages: Sequence[dict[str, Any]]) -> str | None:
@@ -178,7 +190,7 @@ async def _query_memory_for_intent(
     session_messages: Sequence[dict[str, Any]],
     user_id: UUID | None = None,
     authenticated: bool = False,
-) -> tuple[list[dict[str, Any]] | None, dict[str, float]]:
+) -> tuple[list[dict[str, Any]] | None, dict[str, float], ProactiveDiscards]:
     """Query memory based on intent type.
 
     Args:
@@ -193,14 +205,20 @@ async def _query_memory_for_intent(
 
     Returns:
         Tuple of (memory context list or None, relevance scores keyed by item
-        identity). The proactive and entity-match paths both supply real scores; the
-        broad-recall path computes none and returns an empty mapping rather than a
-        fabricated one (ADR-0125 D3 item 5, FRE-1004).
+        identity, proactive discards). The proactive and entity-match paths both supply
+        real scores; the broad-recall path computes none and returns an empty mapping
+        rather than a fabricated one (ADR-0125 D3 item 5, FRE-1004).
+
+        The third element carries the candidates the proactive path's own gates removed
+        (FRE-1060). It is populated whenever that path ran, **including when it emitted
+        nothing** — see the fall-through below — so the evidence record can name the
+        discards rather than reporting an absence. Paths that perform no internal
+        selection return an empty tuple.
     """
     try:
         if not await memory_adapter.is_connected():
             logger.warning("memory_unavailable", trace_id=trace_id)
-            return None, {}
+            return None, {}, ()
 
         if intent.task_type == TaskType.MEMORY_RECALL:
             broad = await memory_adapter.recall_broad(
@@ -212,7 +230,7 @@ async def _query_memory_for_intent(
                 authenticated=authenticated,
                 query_text=user_message,
             )
-            return _format_broad_recall_context(broad), {}
+            return _format_broad_recall_context(broad), {}, ()
 
         # FRE-1041: both consumers below share one graph-anchored resolution. The
         # capitalisation heuristic this replaces could not see a lowercase subject, so
@@ -227,6 +245,13 @@ async def _query_memory_for_intent(
             authenticated=authenticated,
         )
 
+        # FRE-1060: bound outside the proactive block, and populated *before* the
+        # emptiness test below, so the discards survive the fall-through. A turn where
+        # every proactive candidate was discarded is exactly the turn whose record most
+        # needs to name them, and binding this inside the `if suggestions.candidates`
+        # arm would lose them precisely there.
+        discards: ProactiveDiscards = ()
+
         if settings.proactive_memory_enabled:
             suggestions = await memory_adapter.suggest_relevant(
                 user_message=user_message,
@@ -237,6 +262,9 @@ async def _query_memory_for_intent(
                 user_id=user_id,
                 authenticated=authenticated,
             )
+            discards = tuple(
+                (d.payload, d.relevance_score, d.drop_reason) for d in suggestions.discarded
+            )
             if suggestions.candidates:
                 # FRE-1004: the payload is returned unchanged — the score rides a
                 # sibling map rather than the item, so nothing the model sees or the
@@ -246,13 +274,15 @@ async def _query_memory_for_intent(
                     for c in suggestions.candidates
                     if (identity := memory_item_identity(c.payload)[1])
                 }
-                return [c.payload for c in suggestions.candidates], scores
+                return [c.payload for c in suggestions.candidates], scores, discards
 
         # Entity-name matching for analysis and other task types (Slice 2). Reached
         # whenever proactive is disabled or returned no candidates, where the resolved
-        # names are the sole gate on entity recall.
+        # names are the sole gate on entity recall. The control flow here is unchanged —
+        # only `discards` rides along, so a fully-discarded proactive result still falls
+        # through to this path exactly as before.
         if not entity_names:
-            return None, {}
+            return None, {}, discards
 
         query = MemoryRecallQuery(
             entity_names=entity_names[:5],
@@ -313,11 +343,11 @@ async def _query_memory_for_intent(
         # FRE-1004: relevance_scores is keyed by turn_id (memory/service.py sorts
         # conversations by ``relevance_scores.get(c.turn_id)``), which is exactly the
         # episode identity above, so the scores land on the right items.
-        return (context if context else None), dict(result.relevance_scores)
+        return (context if context else None), dict(result.relevance_scores), discards
 
     except Exception:
         logger.exception("memory_query_failed", trace_id=trace_id)
-        return None, {}
+        return None, {}, ()
 
 
 async def assemble_context(
@@ -354,6 +384,7 @@ async def assemble_context(
     messages: list[dict[str, Any]] = []
     memory_context: list[dict[str, Any]] | None = None
     memory_scores: dict[str, float] = {}
+    memory_discards: ProactiveDiscards = ()
 
     # Include session history
     messages.extend(session_messages)
@@ -365,7 +396,7 @@ async def assemble_context(
 
     # Query memory if adapter is available
     if memory_adapter is not None:
-        memory_context, memory_scores = await _query_memory_for_intent(
+        memory_context, memory_scores, memory_discards = await _query_memory_for_intent(
             intent=intent,
             user_message=user_message,
             memory_adapter=memory_adapter,
@@ -411,8 +442,13 @@ async def assemble_context(
     # drop it. Session-fact candidates are carried here too — they ride a system
     # message rather than memory_context, so without them the record would omit a
     # live, model-visible recalled-fact producer.
+    # FRE-1060: the candidates recall's own gates discarded ride here too. Without them
+    # the record named only the survivors and reported them as the population — on the
+    # melon turn, five of twelve. Ordering is survivors then discards, each in rank
+    # order; every item carries its score, so global rank stays recoverable by sorting.
     recall_candidates = (
         *build_recall_candidates(memory_context, memory_scores),
+        *build_discarded_candidates(memory_discards),
         *_session_fact_candidates(recall_context),
     )
 
@@ -424,4 +460,5 @@ async def assemble_context(
         trimmed=False,  # Slice 1: no budget trimming
         recall_candidates=recall_candidates,
         session_facts_injected=session_facts_injected,
+        candidate_population=CandidatePopulation.OFFERED,
     )

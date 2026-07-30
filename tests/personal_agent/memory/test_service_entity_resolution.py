@@ -206,3 +206,57 @@ class TestResolveMessageEntityNames:
         service = _service([{"name": f"Entity{n}"} for n in range(40)])
         message = " ".join(f"entity{n}" for n in range(40))
         assert len(await service.resolve_message_entity_names(message, trace_id="t-1")) <= 10
+
+
+class TestResolutionIsObservable:
+    """FRE-1060 AC-4 — the resolver leaves a success-path record.
+
+    It had none. During the melon-turn investigation its silence was not evidence in
+    either direction, and the only way to establish whether it had run was to call it
+    directly against the live graph — unavailable to anyone reading logs after the fact.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_resolution_logs_the_names_and_the_trace(self, caplog) -> None:
+        """The names and the trace id, so the record joins to the turn."""
+        service = _service([{"name": "Melon"}, {"name": "Cantaloupe ice cream"}])
+
+        with caplog.at_level("INFO"):
+            await service.resolve_message_entity_names(
+                "I would like to make a melon/canteloupe ice cream", trace_id="t-obs"
+            )
+
+        events = [r for r in caplog.records if "entity_mentions_resolved" in r.getMessage()]
+        assert len(events) == 1
+        message = events[0].getMessage()
+        assert "Melon" in message
+        assert "t-obs" in message
+
+    @pytest.mark.asyncio
+    async def test_an_empty_resolution_is_logged_too(self, caplog) -> None:
+        """ "Resolved nothing" must be distinguishable from "never ran".
+
+        Logging only non-empty results would preserve exactly the ambiguity AC-4 exists to
+        remove: a reader seeing no event could not tell a resolver that found nothing from
+        one that was never reached.
+        """
+        service = _service([{"name": "Bicycle"}])
+
+        with caplog.at_level("INFO"):
+            names = await service.resolve_message_entity_names("a melon", trace_id="t-empty")
+
+        assert names == []
+        events = [r for r in caplog.records if "entity_mentions_resolved" in r.getMessage()]
+        assert len(events) == 1, "an empty resolution is still a resolution"
+
+    @pytest.mark.asyncio
+    async def test_a_failed_index_read_does_not_claim_a_resolution(self, caplog) -> None:
+        """The degraded path keeps its own warning and must not also log success."""
+        service = MemoryService()  # fre-375-allow: no substrate touched; driver is a fake
+        service.connected = True
+        service.driver = _ExplodingDriver()  # type: ignore[assignment]
+
+        with caplog.at_level("INFO"):
+            assert await service.resolve_message_entity_names("a melon", trace_id="t-fail") == []
+
+        assert not [r for r in caplog.records if "entity_mentions_resolved" in r.getMessage()]

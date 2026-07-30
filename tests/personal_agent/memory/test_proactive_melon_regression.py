@@ -34,6 +34,7 @@ from typing import Any
 
 import pytest
 
+from personal_agent.captains_log.turn_evidence import DropReason
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.proactive import build_proactive_suggestions
 
@@ -131,6 +132,27 @@ class TestMelonTurnEntityAdmission:
         assert "Melon" not in _names(suggestions.candidates)
         assert len(suggestions.candidates) == 5
         assert all(c.kind == "episode" for c in suggestions.candidates)
+
+    def test_the_gate_that_cuts_the_melon_entity_is_now_named(self, live_scoring: None) -> None:
+        """FRE-1060 AC-3, at the unit altitude: *which* gate discards it.
+
+        The turn above shows the entity missing. Until this ticket, nothing could say
+        whether the ranked cap or the token budget removed it — and on the live turn both
+        were consistent with the one log line, whose ``after_count`` of 5 equalled
+        ``max_injected_items`` while its 470-token estimate sat 30 under the 500 threshold.
+        Here the budget is deliberately slack (``max_tokens=5000``), so the answer must be
+        the ranked cap, and the record now says so instead of leaving an absence.
+
+        This is the prediction the live re-run checks against: if a live record instead
+        names ``recall_token_budget``, the deployed configuration differs from the one
+        pinned in ``live_scoring`` and *that* is the finding.
+        """
+        suggestions = build_proactive_suggestions(_rows(), set(), MELON_MESSAGE, "t-gate", None)
+
+        melon = [d for d in suggestions.discarded if d.payload.get("name") == "Melon"]
+        assert len(melon) == 1, "the entity must be a named drop, not an absence"
+        assert melon[0].drop_reason is DropReason.RECALL_ITEM_CAP
+        assert melon[0].relevance_score is not None, "a scored candidate that lost a race"
 
     def test_with_the_resolved_entity_hint_the_melon_entity_is_emitted(
         self, live_scoring: None

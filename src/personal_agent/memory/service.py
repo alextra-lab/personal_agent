@@ -880,7 +880,22 @@ class MemoryService:
             return []
 
         candidates = [str(row["name"]) for row in rows if row.get("name")]
-        return verify_mentions(message, candidates)[:limit]
+        resolved = verify_mentions(message, candidates)[:limit]
+        # FRE-1060: emitted unconditionally, including the empty result. The resolver had
+        # no success-path log at all, so during the melon-turn investigation its silence
+        # was not evidence in either direction and the only way to establish whether it
+        # had run was to call it directly against the graph — unavailable to anyone
+        # reading logs after the fact. Logging only non-empty results would preserve that
+        # ambiguity exactly where it hurts: "resolved nothing" must be distinguishable
+        # from "never ran".
+        log.info(
+            "entity_mentions_resolved",
+            trace_id=trace_id,
+            resolved_names=resolved,
+            resolved_count=len(resolved),
+            fulltext_candidate_count=len(candidates),
+        )
+        return resolved
 
     async def suggest_proactive_raw(
         self,

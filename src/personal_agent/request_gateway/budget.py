@@ -352,4 +352,8 @@ def apply_budget(
         # item must stay nameable at the admission point, not vanish with the context.
         recall_candidates=context.recall_candidates,
         session_facts_injected=context.session_facts_injected,
+        # FRE-1060: carried, not re-defaulted. Dropping it here would silently downgrade
+        # every live turn's record to the conservative "survivors only" claim, hiding the
+        # completeness the assembler had actually established.
+        candidate_population=context.candidate_population,
     )

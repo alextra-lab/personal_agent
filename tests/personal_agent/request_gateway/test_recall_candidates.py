@@ -12,9 +12,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from personal_agent.captains_log.turn_evidence import CandidateSource, MemoryItemKind
+from personal_agent.captains_log.turn_evidence import (
+    CandidatePopulation,
+    CandidateSource,
+    DropReason,
+    MemoryItemKind,
+)
 from personal_agent.memory.proactive_types import (
     ProactiveMemoryCandidate,
+    ProactiveMemoryDiscard,
     ProactiveMemorySuggestions,
     ProactiveScoreComponents,
 )
@@ -295,3 +301,189 @@ class TestDefaultEntityMatchPath:
         assert result.memory_context is not None
         from_dicts = [memory_item_identity(m)[1] for m in result.memory_context]
         assert from_dicts == [c.identity for c in result.recall_candidates]
+
+
+def _discard(name: str, score: float | None, reason: DropReason) -> ProactiveMemoryDiscard:
+    return ProactiveMemoryDiscard(
+        kind="entity",
+        payload={"type": "entity", "name": name, "entity_type": "PERSON"},
+        relevance_score=score,
+        drop_reason=reason,
+    )
+
+
+class TestProactiveDiscardsReachTheRecord:
+    """FRE-1060 — the candidates proactive's own gates removed are named, not absent.
+
+    Before this, ``build_proactive_suggestions`` returned only survivors, so the record
+    reported post-selection survivors as the population — five of twelve on the live melon
+    turn, with seven discards no durable artifact named.
+    """
+
+    def _adapter(
+        self,
+        candidates: list[ProactiveMemoryCandidate],
+        discarded: list[ProactiveMemoryDiscard],
+    ) -> MagicMock:
+        adapter = MagicMock()
+        adapter.is_connected = AsyncMock(return_value=True)
+        adapter.resolve_message_entities = AsyncMock(return_value=["Paris"])
+        adapter.suggest_relevant = AsyncMock(
+            return_value=ProactiveMemorySuggestions(candidates=candidates, discarded=discarded)
+        )
+        return adapter
+
+    @pytest.mark.asyncio
+    async def test_discards_are_recorded_with_their_gate(self, monkeypatch) -> None:
+        """AC-1 and AC-2: each discard names the gate, and the two gates differ."""
+        monkeypatch.setattr(
+            "personal_agent.request_gateway.context.settings.proactive_memory_enabled",
+            True,
+            raising=False,
+        )
+        adapter = self._adapter(
+            [_candidate("Paris", 0.82)],
+            [
+                _discard("Berlin", 0.61, DropReason.RECALL_ITEM_CAP),
+                _discard("Lisbon", 0.55, DropReason.RECALL_CANDIDATE_CAP),
+            ],
+        )
+
+        result = await assemble_context(
+            user_message="tell me about Paris",
+            session_messages=[],
+            intent=_intent(),
+            memory_adapter=adapter,
+            trace_id="t",
+        )
+
+        by_id = {c.identity: c for c in result.recall_candidates}
+        assert set(by_id) == {"Paris", "Berlin", "Lisbon"}
+        assert by_id["Paris"].pre_drop_reason is None
+        assert by_id["Berlin"].pre_drop_reason is DropReason.RECALL_ITEM_CAP
+        assert by_id["Lisbon"].pre_drop_reason is DropReason.RECALL_CANDIDATE_CAP
+        assert by_id["Berlin"].score == pytest.approx(0.61)
+
+    @pytest.mark.asyncio
+    async def test_discards_do_not_enter_memory_context(self, monkeypatch) -> None:
+        """The record grows; what the model sees does not.
+
+        A discarded candidate must never reach ``memory_context`` — that would make this
+        ticket a recall change rather than a visibility change.
+        """
+        monkeypatch.setattr(
+            "personal_agent.request_gateway.context.settings.proactive_memory_enabled",
+            True,
+            raising=False,
+        )
+        adapter = self._adapter(
+            [_candidate("Paris", 0.82)],
+            [_discard("Berlin", 0.61, DropReason.RECALL_ITEM_CAP)],
+        )
+
+        result = await assemble_context(
+            user_message="tell me about Paris",
+            session_messages=[],
+            intent=_intent(),
+            memory_adapter=adapter,
+            trace_id="t",
+        )
+
+        assert result.memory_context is not None
+        assert [m["name"] for m in result.memory_context] == ["Paris"]
+
+    @pytest.mark.asyncio
+    async def test_an_all_discarded_result_still_records_and_still_falls_through(
+        self, monkeypatch
+    ) -> None:
+        """The seam codex caught: emitting nothing is when the discards matter most.
+
+        ``context.py`` uses the proactive result only when it is non-empty and otherwise
+        falls through to entity-match recall. Binding the discards inside that arm would
+        lose them on exactly the turn whose record most needs them. Both properties are
+        asserted together, because fixing one by breaking the other would turn a
+        visibility change into a recall change.
+        """
+        from personal_agent.memory.protocol import MemoryRecallResult
+
+        monkeypatch.setattr(
+            "personal_agent.request_gateway.context.settings.proactive_memory_enabled",
+            True,
+            raising=False,
+        )
+        adapter = self._adapter(
+            [],
+            [
+                _discard("Berlin", 0.29, DropReason.RECALL_SCORE_THRESHOLD),
+                _discard("Lisbon", None, DropReason.RECALL_DUPLICATE),
+            ],
+        )
+        adapter.recall = AsyncMock(
+            return_value=MemoryRecallResult(
+                episodes=[{"turn_id": "turn-7", "summary": "we discussed Paris"}],
+                entities=[],
+                relevance_scores={"turn-7": 0.91},
+            )
+        )
+
+        result = await assemble_context(
+            user_message="tell me about Paris",
+            session_messages=[],
+            intent=_intent(),
+            memory_adapter=adapter,
+            trace_id="t",
+        )
+
+        by_id = {c.identity: c for c in result.recall_candidates}
+        # The discards survived the fall-through...
+        assert by_id["Berlin"].pre_drop_reason is DropReason.RECALL_SCORE_THRESHOLD
+        assert by_id["Lisbon"].pre_drop_reason is DropReason.RECALL_DUPLICATE
+        assert by_id["Lisbon"].score is None, "no score was computed; None is the truth"
+        # ...and the fallback recall still ran, unchanged.
+        adapter.recall.assert_awaited_once()
+        assert by_id["turn-7"].pre_drop_reason is None
+        assert result.memory_context is not None
+        assert [m["conversation_id"] for m in result.memory_context] == ["turn-7"]
+
+    @pytest.mark.asyncio
+    async def test_the_gateway_claims_a_complete_population(self, monkeypatch) -> None:
+        """The record says which of the two things it is (FRE-1060 §2.5b)."""
+        monkeypatch.setattr(
+            "personal_agent.request_gateway.context.settings.proactive_memory_enabled",
+            True,
+            raising=False,
+        )
+        adapter = self._adapter([_candidate("Paris", 0.82)], [])
+
+        result = await assemble_context(
+            user_message="tell me about Paris",
+            session_messages=[],
+            intent=_intent(),
+            memory_adapter=adapter,
+            trace_id="t",
+        )
+
+        assert result.candidate_population is CandidatePopulation.OFFERED
+
+    @pytest.mark.asyncio
+    async def test_apply_budget_preserves_the_population_claim(self, monkeypatch) -> None:
+        """Stage 7 rebuilds the context; the claim must not silently reset to the default.
+
+        Losing it here would downgrade every live turn's record to "survivors only" while
+        the completeness had in fact been established.
+        """
+        ctx = AssembledContext(
+            messages=[{"role": "user", "content": "hi"}],
+            memory_context=[{"type": "entity", "name": "Paris"}],
+            tool_definitions=None,
+            candidate_population=CandidatePopulation.OFFERED,
+        )
+
+        roomy = apply_budget(ctx, max_tokens=10_000, trace_id="t")
+        # A tight budget makes Stage 7 actually trim, which is when the reconstruction
+        # runs down its most lossy path — the claim has to survive that too.
+        trimmed = apply_budget(ctx, max_tokens=1, trace_id="t")
+
+        assert roomy.candidate_population is CandidatePopulation.OFFERED
+        assert trimmed.candidate_population is CandidatePopulation.OFFERED
+        assert trimmed.memory_context is None, "the tight case must really have trimmed"

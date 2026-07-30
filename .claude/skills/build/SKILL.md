@@ -35,10 +35,16 @@ automates only the PR transitions (PR opened → `In Review`, PR merged → `Awa
 transition at the gate.
 
 ## 1.5 — Done = master-ready (responding to a poke)
-**Never arm a `/loop` monitor** — polling re-reads the session context past the prompt-cache TTL every
-tick (an uncached-cost blowup, removed 2026-07-06). You do the work and open the PR, then go idle — but
-**you are not done at the PR; you are done when the PR is master-ready: CI green AND any bounce resolved.**
-You don't *wait* for CI (that's the loop) — you go idle, and something re-engages this warm seat:
+**Never poll CI — by any mechanism.** Not a `/loop`, not a background shell loop, not a Monitor, not a
+`gh pr checks` retry: the prohibition is on the *behaviour*, not on one tool. Polling re-reads the session
+context past the prompt-cache TTL every tick (an uncached-cost blowup, removed 2026-07-06) and buys
+nothing, because the watcher already covers **both** directions and is verified live: it triggered master
+four times on 2026-07-30 alone (`gating_send command='/master <PR>' reason=master-ready`). A seat that
+spawns its own CI watch is duplicating a working sensor at its own cost.
+
+You do the work and open the PR, then go idle — but **you are not done at the PR; you are done when the PR
+is master-ready: CI green AND any bounce resolved.** You do not *wait* for CI. You go idle, and something
+re-engages this warm seat:
 - **CI goes red** → the **watcher** pokes this seat with a plain message.
 - **master bounces** → **master** tells this seat directly.
 

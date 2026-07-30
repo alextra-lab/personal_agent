@@ -55,7 +55,14 @@ def test_prime_worker_retired() -> None:
 def test_build_skill_no_polling_loop_and_self_completes() -> None:
     text = _norm(_read("build/SKILL.md"))
     assert "/loop 20m /prime-worker" not in text  # no polling cron armed
-    assert "never arm a" in text and "/loop" in text  # loop explicitly forbidden
+    # FRE-867-adjacent (2026-07-30): this assertion used to pin the literal phrase
+    # "never arm a", which is the same instance-vs-behaviour defect the rule itself
+    # had — a seat that spawned a background shell or a Monitor read "never arm a
+    # /loop monitor" literally and polled anyway (observed live on build2). Assert
+    # the PROHIBITION instead: it must be stated as a ban on polling, and it must
+    # name more mechanisms than /loop alone so the wording cannot narrow back to one.
+    assert "never poll ci" in text  # the behaviour is banned, not one tool
+    assert "/loop" in text and "monitor" in text  # multiple mechanisms named
     assert "master-ready" in text  # done extends past the PR (CI-green + bounces)
 
 

@@ -203,9 +203,19 @@ times and the pipeline still stalled. FRE-927 is the proof: two observers compos
   command is provably read-only, rather than a per-container rule that would also authorize DROP
   against production. It is the *shape* that is allowlisted, not the container. **Now dispatched to
   build2 is the robust half** — the watcher detecting a parked seat and surfacing it to master.
-  Note it took two security-review rounds to get the hook right: `SELECT ... INTO` creates a table
-  while reading as a projection, and psql's `-o`/`-L`/`-v` write files or expand a variable into the
-  statement *after* validation. A denylist could not have covered either; the flag set is an allowlist.
+  **Three bypasses were found before it was right, and all three are the same mistake — a denylist of
+  the bad thing where an allowlist of the good was needed.** `SELECT ... INTO` creates a table while
+  reading as a projection (missing from a keyword denylist); psql's `-o`/`-L`/`-v` write files or
+  expand a variable into the statement *after* validation (missing from a flag denylist); and a
+  **newline** separates commands while `shlex` treats it as whitespace, so a second line landed inside
+  an already-approved segment and bypassed the `rm` ask-rule (missing from a separator denylist). The
+  first two came from automated review; **the third came from master re-attacking its own merged work
+  at the gate**, which is the only reason it was caught. The flag set is now an allowlist and multi-line
+  commands are refused outright. **The keyword list is still a denylist** — the remaining soft spot,
+  and the one place a full allowlist is impractical short of parsing SQL.
+- **Master-authored changes to `src/` or a security boundary have no independent gate.** The hook
+  shipped with a live bypass because master was both author and reviewer. Route them through a build
+  seat. Open question, not ticketed.
 - **Four mutually inconsistent readiness oracles** exist in `scripts/dispatch/`, two documenting their own
   unreliability in their own headers. The wedge alarm is *defined* as a disagreement between two of them,
   which is why it logs 14 warnings and escalates nothing. **Finishing the ADR-0116 channel migration** —

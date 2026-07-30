@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from personal_agent.captains_log.turn_evidence import RecallCandidateRecord
+from personal_agent.captains_log.turn_evidence import CandidatePopulation, RecallCandidateRecord
 from personal_agent.governance.models import Mode
 
 
@@ -124,6 +124,12 @@ class AssembledContext:
         session_facts_injected: Whether the recall controller's session-fact section
             was written into ``messages``. Decided here so the admission point does not
             re-derive the condition and the two definitions cannot drift.
+        candidate_population: Whether ``recall_candidates`` is the whole population the
+            producing paths considered, or only the survivors of their internal selection
+            (FRE-1060). Threaded to the admission point rather than assumed there,
+            because only the assembler knows whether its producers reported their
+            discards. Defaults to the conservative claim so a construction site that does
+            not set it cannot over-claim completeness.
     """
 
     messages: list[dict[str, Any]]
@@ -136,6 +142,7 @@ class AssembledContext:
     overflow_action: str | None = None
     recall_candidates: tuple[RecallCandidateRecord, ...] = ()
     session_facts_injected: bool = False
+    candidate_population: CandidatePopulation = CandidatePopulation.POST_SELECTION
 
 
 @dataclass(frozen=True)

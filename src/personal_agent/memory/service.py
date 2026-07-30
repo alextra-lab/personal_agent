@@ -848,6 +848,20 @@ class MemoryService:
             disconnected, the message is blank, or the index read fails.
         """
         if not message.strip() or not self.connected or not self.driver:
+            # FRE-1060: this early return logs too, or the "emitted unconditionally"
+            # contract below would be false on exactly the paths where the cause is an
+            # infrastructure fault rather than a scoring one — a dropped Neo4j connection
+            # would leave no event, and a later investigation would read that silence as
+            # "the resolver was never reached" and go hunting upstream. ``skipped_reason``
+            # names which guard fired so the two causes stay distinguishable.
+            log.info(
+                "entity_mentions_resolved",
+                trace_id=trace_id,
+                resolved_names=[],
+                resolved_count=0,
+                fulltext_candidate_count=0,
+                skipped_reason="blank_message" if not message.strip() else "not_connected",
+            )
             return []
 
         vis_frag, vis_params = _build_visibility_filter("node", user_id, authenticated)
@@ -880,7 +894,23 @@ class MemoryService:
             return []
 
         candidates = [str(row["name"]) for row in rows if row.get("name")]
-        return verify_mentions(message, candidates)[:limit]
+        resolved = verify_mentions(message, candidates)[:limit]
+        # FRE-1060: emitted unconditionally, including the empty result. The resolver had
+        # no success-path log at all, so during the melon-turn investigation its silence
+        # was not evidence in either direction and the only way to establish whether it
+        # had run was to call it directly against the graph — unavailable to anyone
+        # reading logs after the fact. Logging only non-empty results would preserve that
+        # ambiguity exactly where it hurts: "resolved nothing" must be distinguishable
+        # from "never ran".
+        log.info(
+            "entity_mentions_resolved",
+            trace_id=trace_id,
+            resolved_names=resolved,
+            resolved_count=len(resolved),
+            fulltext_candidate_count=len(candidates),
+            skipped_reason=None,
+        )
+        return resolved
 
     async def suggest_proactive_raw(
         self,

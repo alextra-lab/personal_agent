@@ -169,6 +169,53 @@ Combine signals into a **single ranking score** per candidate. Weights are **con
 - **Fields:** `trace_id`, `candidate_count`, `injected_count`, `latency_ms`, `embedding_latency_ms`, `threshold`, `token_estimate`, `task_type` (intent).
 - **Never** log raw user message content at INFO in production if policy forbids; prefer hashes or lengths unless redaction is guaranteed.
 
+### Which gate discarded a candidate (FRE-1060)
+
+`build_proactive_suggestions` applies **eight** successive gates, and its
+`proactive_memory_budget_trimmed` event named none of them — its `before_count`/`after_count`
+pair was consistent with several, so which gate decided a turn was unknowable. On the melon
+turn (trace `2868c9ac`, 2026-07-30) `after_count=5` equalled `max_injected_items` while the
+470-token estimate sat 30 under the 500 threshold: the ranked cap and the token budget were
+equally consistent with the record.
+
+Two surfaces now answer it:
+
+- **Per candidate, durably** — every discarded candidate is returned on
+  `ProactiveMemorySuggestions.discarded` with a `DropReason.RECALL_*` naming its gate, and
+  reaches the turn's `recall_admission` record (`agent-captains-captures-*`) as an item with
+  `admitted=false` and that `drop_reason`. Gates, in application order:
+  `recall_score_threshold`, `recall_candidate_cap`, `recall_item_cap`, `recall_score_floor`,
+  `recall_score_gap`, `recall_item_oversized`, `recall_token_budget`.
+- **Per turn, on the log** — `stop_reason` names the single terminal gate that ended
+  selection, `discarded_by_gate` gives per-gate counts, and `retrieved_row_count` /
+  `deduped_row_count` separate retrieval from dedupe losses that a single `before_count`
+  used to conflate. The event still fires **only when selection itself trimmed**, so the
+  series it has always carried stays comparable across the deploy; the per-candidate record
+  is the complete surface for the gates upstream of selection.
+
+Only **one** terminal gate can fire per invocation (the selection loop breaks on the first),
+so `recall_item_cap` and `recall_token_budget` never co-occur in one record. Any number of
+`recall_candidate_cap`, `recall_score_threshold` and `recall_item_oversized` drops may
+accompany it.
+
+**The turn-id dedupe is deliberately not a gate here.** A duplicate row shares the kept
+row's `turn_id`, hence its identity, so recording it as a drop would place one identity in
+the record twice — once admitted, once dropped — asserting a memory was lost when that
+memory reached the model, and inflating `candidate_count`. A dedupe collapse is not a loss;
+the retrieval-to-dedupe delta is visible as the two row counts on the event.
+
+`recall_admission.candidate_population` states whether a record names the whole offered
+population (`offered`) or only the survivors (`post_selection`, the pre-FRE-1060 reading).
+**Do not aggregate candidate counts across that boundary without filtering on it.** It reads
+`offered` **only** on the proactive-success path: broad recall, entity match and the failure
+path all truncate without reporting what they cut, so their records stay `post_selection`
+even when they carry named proactive drops.
+
+`recall_admission.state` (and the `evidence_presence.recalled_memory` key derived from it)
+is keyed on the candidates that reached context assembly, **not** on `items` — so `empty`
+still means "recall delivered nothing to the model" on a turn whose every candidate was
+gated away, and remains comparable with pre-FRE-1060 records.
+
 ---
 
 ## A/B Testing Methodology

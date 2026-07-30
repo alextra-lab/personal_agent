@@ -12,11 +12,13 @@ import pytest
 
 from personal_agent.captains_log.turn_evidence import (
     EVIDENCE_RECORD_KEYS,
+    CandidatePopulation,
     CandidateSource,
     DropReason,
     EvidenceState,
     InlineOutcome,
     MemoryItemKind,
+    RecallAdmissionRecord,
     RecallCandidateRecord,
     build_recall_candidates,
     build_turn_evidence,
@@ -51,6 +53,7 @@ def _evidence(
     session_facts_injected: bool = False,
     wire: list[dict] | None = None,
     skill_bodies: tuple[str, ...] = (),
+    candidate_population: CandidatePopulation = CandidatePopulation.POST_SELECTION,
 ):
     return build_turn_evidence(
         candidates=candidates,
@@ -64,11 +67,17 @@ def _evidence(
         skill_bodies=skill_bodies,
         call_index=0,
         primary_call_count=1,
+        candidate_population=candidate_population,
     )
 
 
 def _entity(name: str, description: str = "d") -> dict:
     return {"type": "entity", "name": name, "entity_type": "PERSON", "description": description}
+
+
+def _entity_candidate(name: str, score: float | None = None) -> RecallCandidateRecord:
+    """A plain surviving entity candidate — no producer-side drop."""
+    return RecallCandidateRecord(kind=MemoryItemKind.ENTITY, identity=name, score=score)
 
 
 # ── 1. identity ────────────────────────────────────────────────────────────────
@@ -590,3 +599,214 @@ class TestSkillBodiesAreGatedOnTheBlockLanding:
             skill_bodies=("bash", "query-elasticsearch"),
         )
         assert ev.assembled_context.skill_bodies == ["bash", "query-elasticsearch"]
+
+
+class TestPreDroppedCandidates:
+    """FRE-1060 — a candidate its own producer discarded before context assembly.
+
+    The proactive recall path applies eight gates of its own and used to return only
+    their survivors, so those losses were absences rather than drops with a reason. A
+    pre-dropped candidate arrives already resolved, and the one thing that must not
+    happen is for it to consume a rendered slot it never occupied.
+    """
+
+    def test_the_pre_drop_reason_is_reported_verbatim(self) -> None:
+        """The gate the producer named is the gate the record states."""
+        candidates = (
+            _entity_candidate("Paris"),
+            RecallCandidateRecord(
+                kind=MemoryItemKind.ENTITY,
+                identity="Melon",
+                score=0.563,
+                pre_drop_reason=DropReason.RECALL_ITEM_CAP,
+            ),
+        )
+
+        ev = _evidence(candidates, rendered=("Paris",))
+
+        assert [i.admitted for i in ev.recall.items] == [True, False]
+        assert ev.recall.items[1].drop_reason is DropReason.RECALL_ITEM_CAP
+        assert ev.recall.items[1].score == pytest.approx(0.563)
+
+    def test_a_pre_drop_does_not_consume_a_rendered_slot(self) -> None:
+        """The multiset hazard: a pre-drop must not steal a survivor's render slot.
+
+        Two candidates share the identity ``Paris`` and the renderer emitted it once. If
+        the pre-dropped one decremented the count, the surviving one would resolve to
+        NOT_RENDERED — the record would claim the renderer dropped an item it actually
+        emitted, inverting the very fact it exists to establish.
+        """
+        candidates = (
+            RecallCandidateRecord(
+                kind=MemoryItemKind.ENTITY,
+                identity="Paris",
+                score=0.4,
+                pre_drop_reason=DropReason.RECALL_TOKEN_BUDGET,
+            ),
+            _entity_candidate("Paris"),
+        )
+
+        ev = _evidence(candidates, rendered=("Paris",))
+
+        assert ev.recall.items[0].admitted is False
+        assert ev.recall.items[0].drop_reason is DropReason.RECALL_TOKEN_BUDGET
+        assert ev.recall.items[1].admitted is True, "the survivor keeps its rendered slot"
+        assert ev.recall.admitted_count == 1
+
+    def test_the_empty_identity_case(self) -> None:
+        """The same hazard at its worst: every producer supplying no identity yields "".
+
+        A membership test would admit all of them at once; a shared counter would let a
+        pre-drop consume the single slot the renderer emitted.
+        """
+        candidates = (
+            RecallCandidateRecord(
+                kind=MemoryItemKind.UNKNOWN,
+                identity="",
+                pre_drop_reason=DropReason.RECALL_SCORE_THRESHOLD,
+            ),
+            RecallCandidateRecord(kind=MemoryItemKind.UNKNOWN, identity=""),
+        )
+
+        ev = _evidence(candidates, rendered=("",))
+
+        assert ev.recall.items[0].drop_reason is DropReason.RECALL_SCORE_THRESHOLD
+        assert ev.recall.items[1].admitted is True
+
+    def test_a_pre_drop_stays_dropped_even_when_the_block_never_landed(self) -> None:
+        """Its own gate removed it; a later failure cannot re-attribute the reason."""
+        candidates = (
+            RecallCandidateRecord(
+                kind=MemoryItemKind.ENTITY,
+                identity="Melon",
+                pre_drop_reason=DropReason.RECALL_SCORE_THRESHOLD,
+            ),
+        )
+
+        ev = _evidence(
+            candidates,
+            memory_context_present=False,
+            inline_outcome=InlineOutcome.NO_TARGET,
+        )
+
+        assert ev.recall.items[0].drop_reason is DropReason.RECALL_SCORE_THRESHOLD
+
+    def test_pre_dropped_identities_are_not_listed_as_admitted_context(self) -> None:
+        """Item 6 must not claim the model was given something that never reached it."""
+        candidates = (
+            _entity_candidate("Paris"),
+            RecallCandidateRecord(
+                kind=MemoryItemKind.ENTITY,
+                identity="Melon",
+                pre_drop_reason=DropReason.RECALL_ITEM_CAP,
+            ),
+        )
+
+        ev = _evidence(candidates, rendered=("Paris",))
+
+        assert ev.assembled_context.memory_identities == ["Paris"]
+
+
+class TestCandidatePopulationClaim:
+    """FRE-1060 §2.5b — the record says whether it names the population or the survivors."""
+
+    def test_the_conservative_claim_is_the_default(self) -> None:
+        """A caller that does not state completeness must not have it assumed.
+
+        This is also what makes historical documents read back correctly: the field is
+        absent from every capture written before FRE-1060, and those records genuinely
+        hold survivors only.
+        """
+        ev = _evidence((_entity_candidate("Paris"),), rendered=("Paris",))
+
+        assert ev.recall.candidate_population is CandidatePopulation.POST_SELECTION
+
+    def test_a_complete_population_can_be_declared(self) -> None:
+        ev = _evidence(
+            (_entity_candidate("Paris"),),
+            rendered=("Paris",),
+            candidate_population=CandidatePopulation.OFFERED,
+        )
+
+        assert ev.recall.candidate_population is CandidatePopulation.OFFERED
+
+    def test_a_legacy_record_deserialises_to_the_conservative_claim(self) -> None:
+        """A stored document with no such field is survivors-only, and says so."""
+        legacy = RecallAdmissionRecord.model_validate(
+            {"state": "present", "candidate_count": 5, "admitted_count": 5, "items": []}
+        )
+
+        assert legacy.candidate_population is CandidatePopulation.POST_SELECTION
+
+
+class TestStateIsNotCollapsedByDiscards:
+    """FRE-1060 — adding discards to `items` must not destroy the EMPTY signal.
+
+    `evidence_presence.recalled_memory` inherits `recall.state`, and consumers filter it on
+    EMPTY to enumerate turns where recall delivered nothing to the model — the melon-class
+    failure. Keying `state` on `items` (which now holds producer discards) made EMPTY
+    effectively unreachable: a turn that retrieved twelve rows and discarded all twelve read
+    PRESENT. Confirmed by code review; `state` is keyed on the delivered candidates instead.
+    """
+
+    def test_all_discarded_still_reads_empty(self) -> None:
+        """Twelve retrieved, twelve gated away, nothing delivered: EMPTY."""
+        candidates = tuple(
+            RecallCandidateRecord(
+                kind=MemoryItemKind.EPISODE,
+                identity=f"turn-{i}",
+                score=0.2,
+                pre_drop_reason=DropReason.RECALL_SCORE_THRESHOLD,
+            )
+            for i in range(12)
+        )
+
+        ev = _evidence(candidates, memory_context_present=False)
+
+        assert ev.recall.state is EvidenceState.EMPTY
+        assert ev.recall.candidate_count == 12, "the discards are still named"
+        assert ev.recall.admitted_count == 0
+
+    def test_the_derived_presence_key_follows(self) -> None:
+        """The field consumers actually query is the one that must not lie."""
+        candidates = (
+            RecallCandidateRecord(
+                kind=MemoryItemKind.ENTITY,
+                identity="Melon",
+                pre_drop_reason=DropReason.RECALL_ITEM_CAP,
+            ),
+        )
+        ev = _evidence(candidates, memory_context_present=False)
+
+        presence = derive_evidence_presence(
+            user_message="hello",
+            assistant_response="hi",
+            tool_results=[],
+            llm_call_count=1,
+            turn_evidence=ev,
+            trace_id="t",
+            session_id="s",
+            user_id=object(),
+        )
+
+        assert presence["recalled_memory"] is EvidenceState.EMPTY
+
+    def test_one_delivered_candidate_is_present(self) -> None:
+        """The other side of the boundary: something reached assembly, so PRESENT."""
+        candidates = (
+            _entity_candidate("Paris"),
+            RecallCandidateRecord(
+                kind=MemoryItemKind.ENTITY,
+                identity="Melon",
+                pre_drop_reason=DropReason.RECALL_ITEM_CAP,
+            ),
+        )
+
+        ev = _evidence(candidates, rendered=("Paris",))
+
+        assert ev.recall.state is EvidenceState.PRESENT
+        assert ev.recall.admitted_count == 1
+
+    def test_no_candidates_at_all_is_still_empty(self) -> None:
+        """The pre-existing meaning is unchanged when there are no discards either."""
+        assert _evidence(()).recall.state is EvidenceState.EMPTY

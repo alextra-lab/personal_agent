@@ -61,6 +61,11 @@ PSQL_BOOLEAN_FLAGS = {
     "--no-readline", "--no-psqlrc", "--csv", "--html", "--echo-queries", "--single-step",
     "--single-line",
 }
+# Single-character short forms only (excludes the "--foo" long spellings, which getopt never
+# bundles) -- eligible for GNU-style bundling, e.g. `-tAc` == `-t -A -c` (FRE-867, 2026-07-30
+# comment: a real stall bundled exactly these three and the parser declined it because it only
+# recognized them written separately).
+PSQL_BUNDLABLE_BOOLEAN_FLAGS = {f for f in PSQL_BOOLEAN_FLAGS if len(f) == 2}
 
 STATEMENT_START = re.compile(r"^\s*(select|with|show|explain|table|values)\b", re.IGNORECASE)
 
@@ -109,6 +114,30 @@ def sql_is_read_only(sql: str) -> bool:
     if not STATEMENT_START.match(body):
         return False
     return not WRITE_KEYWORDS.search(body)
+
+
+def expand_bundled_flags(arg: str) -> list[str] | None:
+    """Split a GNU-style bundled short-flag argument (e.g. `-tAc`) into its parts.
+
+    Returns the expanded flag list (e.g. `["-t", "-A", "-c"]`) when `arg` is a pure run of
+    known bundlable boolean flags, optionally ending in `c` for the statement flag. Returns
+    `None` for anything else (an unknown character anywhere, or `c` appearing before the end --
+    it only takes a value, so it can only be the last flag in a bundle). Only ever called on an
+    arg that starts with a single `-` and has more than one character after it -- the exact
+    shapes `-t`, `-c`, `--tuples-only`, `-cSELECT...` etc. are handled by their own branches
+    before this is ever reached.
+    """
+    body = arg[1:]
+    flags: list[str] = []
+    for index, char in enumerate(body):
+        if f"-{char}" in PSQL_BUNDLABLE_BOOLEAN_FLAGS:
+            flags.append(f"-{char}")
+            continue
+        if char == "c" and index == len(body) - 1:
+            flags.append("-c")
+            continue
+        return None
+    return flags
 
 
 def psql_segment_is_read_only(tokens: list[str]) -> bool:
@@ -164,6 +193,17 @@ def psql_segment_is_read_only(tokens: list[str]) -> bool:
         if arg.startswith("--") and "=" in arg and arg.split("=", 1)[0] in PSQL_CONNECTION_FLAGS:
             index += 1
             continue
+
+        if not arg.startswith("--") and len(arg) > 2:
+            expanded = expand_bundled_flags(arg)
+            if expanded is not None:
+                if expanded[-1] == "-c":
+                    if sql is not None or index + 1 >= len(args):
+                        return False  # a second statement, or -c with nothing after it
+                    sql, index = args[index + 1], index + 2
+                else:
+                    index += 1
+                continue
 
         return False  # unlisted flag — fall through to a prompt
 

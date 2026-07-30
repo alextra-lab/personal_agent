@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["session_is_idle"]
+__all__ = ["session_is_idle", "permission_prompt_snippet"]
 
 # Idle/busy heuristic over ``capture-pane -p`` (best-effort, fail-safe = busy).
 # Idle requires the literal input-prompt line — a bare ``❯`` caret alone on its
@@ -73,6 +73,22 @@ def _active_region(pane_text: str) -> str:
     return "\n".join(lines[-_ACTIVE_REGION_LINES:])
 
 
+# The one substring a permission-confirmation dialog always renders that no
+# other busy state does (spinner/"esc to interrupt"/"Running…"/"Compacting"
+# never say this) -- LAST_SESSION.md 2026-07-30 confirms every real captured
+# stall ends "Do you want to proceed?". Checked standalone rather than folded
+# into _BUSY_MARKERS, which answers a different question (should this pane be
+# interrupted right now) and must not gain a distinct-alerting responsibility.
+_PERMISSION_PROMPT_MARKER = "Do you want"
+# A genuine dialog always renders a numbered menu (``❯ 1. Yes``, ``  2. No``);
+# ordinary response prose asking a rhetorical "do you want...?" essentially
+# never does. Requiring both closes a false-positive gap a bare substring
+# match leaves open for permission_prompt_snippet's use case (an
+# unconditional master wake, not merely "should this pane be interrupted") --
+# FRE-867 codex review.
+_PERMISSION_OPTION_RE: re.Pattern[str] = re.compile(r"^\s*(?:❯\s*)?\d\.\s", re.MULTILINE)
+
+
 def session_is_idle(pane_text: str) -> bool:
     """Return whether a captured tmux pane looks idle at a Claude input prompt.
 
@@ -95,3 +111,31 @@ def session_is_idle(pane_text: str) -> bool:
     if _BUSY_SPINNER_RE.search(pane_text):
         return False
     return bool(_IDLE_PROMPT_RE.search(pane_text))
+
+
+def permission_prompt_snippet(pane_text: str) -> str | None:
+    """Return the pending-command context when a pane is parked on a permission prompt.
+
+    Distinct from ``session_is_idle``'s generic busy-ness (FRE-867): only a
+    permission-confirmation dialog means a human decision is required, not
+    that a turn is merely in flight. Requires both the "Do you want" marker
+    AND a numbered-option line within the same trailing active region
+    (FRE-845 scoping) -- a bare marker match alone is too permissive to
+    unconditionally wake master on (FRE-867 codex review: a recent, short
+    completed reply ending in a rhetorical question would otherwise
+    false-positive).
+
+    Args:
+        pane_text: The ``tmux capture-pane -p`` output.
+
+    Returns:
+        The pane's trailing active-region text (verbatim, for a human to
+        read before deciding) if a permission prompt is present, else
+        ``None``.
+    """
+    region = _active_region(pane_text)
+    if _PERMISSION_PROMPT_MARKER not in region:
+        return None
+    if not _PERMISSION_OPTION_RE.search(region):
+        return None
+    return region

@@ -22,6 +22,12 @@ carry the live decision trail (owner steers, scope changes, post-deploy runbooks
 constraints, prior-deploy evidence) that the PR body often does NOT restate. Surface anything in
 the comments that bears on correctness / scope / acceptance / how to deploy before merging.
 
+**A permission-stall nudge** (`Seat <session> is BLOCKED on a permission-confirmation prompt...`,
+FRE-867) is not a PR gate — relay the named seat and pending command **to the owner** as a
+decision; never approve or deny it yourself, and never guess which numbered option means what
+(the menu varies per prompt). Re-capture the seat's live pane before acting if the nudge arrived
+late. Once the owner decides, answer in the seat's own pane per the recipe the nudge carries.
+
 ## 2 — Analyze the diff
 - **The code-review + security-review run in the BUILD session before the PR, not here** (shift-left;
   build fixes its own findings on-branch — see build skill Step 8). Build hands you a **self-review

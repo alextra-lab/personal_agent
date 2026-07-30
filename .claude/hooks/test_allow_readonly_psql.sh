@@ -43,6 +43,24 @@ assert_allow "attached -c form" \
   "$PROD -c\"SELECT 1;\""
 assert_allow "docker exec -i" \
   "docker exec -i cloud-sim-postgres psql -U agent -d personal_agent -c \"SELECT 1;\""
+# FRE-867 (2026-07-30 06:03 comment): a real 06:01 UTC stall bundled these as one
+# GNU-style short-flag argument; the parser only recognized them written separately.
+assert_allow "bundled boolean flags + command flag (-tAc)" \
+  "$PROD -tAc \"SELECT count(*) FROM api_costs;\""
+assert_allow "bundled boolean flags only, no command bundled (-tA)" \
+  "$PROD -tA -c \"SELECT 1;\""
+
+# --- declined: bundled-flag parser's own documented decline paths ---------------------------
+# FRE-867 correctness review: expand_bundled_flags's docstring calls out these two decline
+# shapes explicitly; pin them so a future refactor can't silently turn either into a false allow.
+assert_decline "c not last in the bundle" \
+  "$PROD -ct \"SELECT 1;\""
+assert_decline "c not last, buried mid-bundle" \
+  "$PROD -tcA \"SELECT 1;\""
+assert_decline "unbundlable write-risk flag (-o) mixed into a bundle" \
+  "$PROD -to /tmp/out.txt -c \"SELECT 1;\""
+assert_decline "unbundlable variable-expansion flag (-v) mixed into a bundle" \
+  "$PROD -tv x=1 -c \"SELECT 1;\""
 
 # --- declined: writes and side effects ------------------------------------------------------
 assert_decline "DROP"       "$PROD -c \"DROP TABLE api_costs;\""

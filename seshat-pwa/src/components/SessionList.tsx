@@ -102,7 +102,7 @@ export function SessionList({ currentSessionId, onSelect }: SessionListProps) {
                 {formatRelativeTime(s.last_active_at)} · {s.turn_count ?? 0} {(s.turn_count ?? 0) === 1 ? 'turn' : 'turns'}
               </p>
               {s.session_digest && (
-                <p className="text-xs text-slate-500 mt-1 whitespace-pre-line line-clamp-3">
+                <p className="text-xs text-slate-500 mt-1 line-clamp-3">
                   {s.session_digest}
                 </p>
               )}

@@ -151,6 +151,56 @@ DEFAULT_HELD_ESCALATION_S: float = 1800.0
 # loop would re-attempt forever with a perpetually fresh budget.
 MAX_DELIVERY_ATTEMPTS: int = 3
 
+# Consecutive dropped deliveries on one SEAT before the stream is surfaced as
+# unhealthy (FRE-927). Both reconcilers above are keyed to a TICKET: FRE-923's
+# budget resets whenever the dispatched ticket changes, and FRE-924's age clock
+# restarts because a churned NEXT clears the surfaced record and writes a fresh
+# one. So a seat that drops the final command of every dispatch, against a stream
+# whose NEXT keeps changing, accumulates neither — it fails silently and
+# indefinitely. Probed against main before this change: 18 keystroke deliveries
+# genuinely attempted across 3 tickets, every one dropped, ``attempts`` never
+# above 1, zero notifications.
+#
+# This counter is keyed to the STREAM and is reset by a genuine delivery success
+# and by nothing else — in particular NOT by the ticket changing, which is the
+# whole point. It measures the seat, so it survives exactly the churn that
+# discards the ticket-keyed record.
+#
+# Threshold semantics differ deliberately from ``DEFAULT_WEDGE_TICKS`` (which
+# counts ticks *tolerated*, surfacing past it): this is the failure count AT
+# which the seat is surfaced, so the default 3 reads like ``MAX_DELIVERY_ATTEMPTS``
+# — "the third consecutive dropped delivery surfaces the seat".
+#
+# Counting rather than ageing, which is the opposite of FRE-924's choice above
+# ("age is the honest, cadence-independent signal") and deliberately so: age needs
+# a durable per-SEAT timestamp to measure from, and no such store exists. The only
+# durable state is ``DispatchRecord``, which is ticket-keyed and cleared on the
+# very churn this counter exists to survive. Consecutive failures is the honest
+# signal for the thing actually being measured — the seat's delivery record —
+# and it needs no anchor.
+#
+# IN-MEMORY across ticks, reset on restart — the FRE-922 lesson applies here and
+# not FRE-923's: this is an advisory alert, not a safety budget, and its master
+# ping is one-shot. A persisted count first observed *above* the crossing (a
+# restart, a changed threshold, a crash between persist and notify) would skip
+# the crossing test and lose the alert forever. In memory the count only ever
+# climbs by 1 from 0, so the crossing is hit exactly once. The cost is detection
+# latency after a restart (~15 min at the 300 s cadence), and repeated restarts
+# arriving before the third failure could defer the ping indefinitely — the same
+# tradeoff FRE-922 already accepts, and the per-tick warning still lands.
+DEFAULT_SEAT_FAILURE_THRESHOLD: int = 3
+
+# Outcomes that PROVE the seat accepted a dispatch — the only reset for the
+# counter above. This is THE set ``_record_for_result`` maps to ``launched``, and
+# is shared with it rather than restated: if a fifth launched outcome were added
+# there and missed here, a genuinely successful delivery would stop resetting the
+# counter, so a healthy seat would climb to the threshold and page master falsely
+# — worse than the silence FRE-927 fixes, because a false alert trains the owner
+# to ignore the real one.
+_DELIVERY_SUCCESS_OUTCOMES: frozenset[str] = frozenset(
+    {"launch", "prepare", "reuse", "registration-unverified"}
+)
+
 # The only endpoint host at which Remote Control is enabled — it is disabled
 # when ``ANTHROPIC_BASE_URL`` points anywhere else (an LLM gateway/proxy),
 # per the RC docs (v2.1.196+).
@@ -510,7 +560,9 @@ def _decide_delivering(
     # a ticket that has already moved on is not this stream's business, and
     # surfacing a card for it would put a stale item in front of the owner.
     if not still_next:
-        return StreamDecision(stream, "clear", ticket=record.ticket, reason="owner-acted")
+        return StreamDecision(
+            stream, "clear", ticket=record.ticket, reason=_clear_reason(normalized)
+        )
     if record.attempts >= MAX_DELIVERY_ATTEMPTS:
         return StreamDecision(
             stream, "surface", ticket=record.ticket, reason="delivery-attempts-exhausted"
@@ -537,8 +589,37 @@ def _decide_surfaced(
     nxt = resolve_next(issues, stream)
     still_next = normalized == "approved" and nxt is not None and nxt.identifier == record.ticket
     if not still_next:
-        return StreamDecision(stream, "clear", ticket=record.ticket, reason="owner-acted")
+        return StreamDecision(
+            stream, "clear", ticket=record.ticket, reason=_clear_reason(normalized)
+        )
     return StreamDecision(stream, "hold", ticket=record.ticket, reason="card-already-surfaced")
+
+
+def _clear_reason(normalized_state: str | None) -> str:
+    """Say WHY a tracked record is being cleared (FRE-927).
+
+    The two causes were previously indistinguishable in the log, and that
+    ambiguity is the root of both ticket-keyed resets:
+
+    - ``owner-acted`` — the ticket itself left ``Approved`` (the owner moved it),
+      so it is genuinely no longer this stream's business.
+    - ``board-churn`` — the ticket is still ``Approved`` but a higher-priority
+      one now outranks it, so the stream's NEXT simply changed underneath us.
+
+    The decision is ``clear`` either way and deliberately so: the stream must
+    advance to the newly-outranking NEXT, and holding the stale record would
+    block it (any existing record bypasses ``_decide_no_record`` entirely). This
+    only makes the churn *visible*; what makes it survivable is the stream-keyed
+    seat counter, which is not stored in the record being cleared.
+
+    Args:
+        normalized_state: The tracked ticket's lower-cased board state, or
+            ``None`` when the board does not carry it.
+
+    Returns:
+        ``"board-churn"`` or ``"owner-acted"``.
+    """
+    return "board-churn" if normalized_state == "approved" else "owner-acted"
 
 
 def _open_pr_exists(ticket: str, runner: CommandRunner) -> bool:
@@ -614,7 +695,7 @@ def _record_for_result(
     Returns:
         The record to store, or ``None`` to leave the stream untracked.
     """
-    if outcome in {"launch", "prepare", "reuse", "registration-unverified"}:
+    if outcome in _DELIVERY_SUCCESS_OUTCOMES:
         return DispatchRecord(stream, ticket, "launched", now, session_id=None, attempts=0)
     if outcome == "delivery-failed" and attempts < MAX_DELIVERY_ATTEMPTS:
         return DispatchRecord(stream, ticket, "delivering", now, session_id=None, attempts=attempts)
@@ -647,6 +728,8 @@ def run_once(
     wedge_ticks: int = DEFAULT_WEDGE_TICKS,
     held_escalated: dict[str, str] | None = None,
     held_escalation_s: float = DEFAULT_HELD_ESCALATION_S,
+    delivery_failures: dict[str, int] | None = None,
+    seat_failure_threshold: int = DEFAULT_SEAT_FAILURE_THRESHOLD,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, DispatchRecord]:
     """Run one orchestration tick across ``streams``, mutating and returning state.
@@ -686,6 +769,12 @@ def run_once(
             ticks (in-memory, reset on restart); defaults to a throwaway map.
         held_escalation_s: Age (seconds since first-surface) past which a still-held
             surfaced card is escalated once.
+        delivery_failures: Per-stream consecutive dropped-delivery counts (FRE-927),
+            mutated in place across ticks within a daemon run (in-memory, reset on
+            restart); defaults to a throwaway map when unused. Keyed to the STREAM,
+            so unlike the two ticket-keyed clocks it survives board churn.
+        seat_failure_threshold: Consecutive dropped deliveries at which the seat
+            itself is surfaced as unhealthy.
         sleeper: The sleep seam used by the launcher's bounded delivery polls.
             Injected so a tick is fully unit-testable without wall-clocking —
             the delivery path polls for up to ten seconds per command.
@@ -699,6 +788,8 @@ def run_once(
         wedge_counts = {}
     if held_escalated is None:
         held_escalated = {}
+    if delivery_failures is None:
+        delivery_failures = {}
     # De-dup while preserving order: a repeated ``--streams`` value must not
     # double-process a stream — and, since FRE-922, must not double-increment its
     # wedge counter and trip the threshold a tick early.
@@ -759,6 +850,8 @@ def run_once(
             wedge_ticks=wedge_ticks,
             held_escalated=held_escalated,
             held_escalation_s=held_escalation_s,
+            delivery_failures=delivery_failures,
+            seat_failure_threshold=seat_failure_threshold,
             sleeper=sleeper,
         )
     return state
@@ -781,6 +874,8 @@ def _apply(
     wedge_ticks: int,
     held_escalated: dict[str, str],
     held_escalation_s: float,
+    delivery_failures: dict[str, int],
+    seat_failure_threshold: int,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> None:
     """Apply one decision's side effects (launch / notify / record mutation)."""
@@ -946,6 +1041,37 @@ def _apply(
                 )
             else:
                 _reset_wedge(stream, wedge_counts)
+            # FRE-927: seat-scoped delivery health. A dropped delivery counts
+            # against the SEAT, and only a delivery that genuinely landed clears
+            # it. Every other outcome deliberately leaves the count ALONE:
+            #
+            # - ``seat-busy``/``worktree-dirty``/``launch-failed`` typed nothing
+            #   into the seat, so they are evidence of neither failure nor health
+            #   (the same reasoning by which FRE-923 refunds their retry budget).
+            # - ``manual-model-required``/``manual-continuation`` attempted no
+            #   delivery at all.
+            # - ``seat-unhealthy`` is a broken-seat signal, so it must never
+            #   *reset* the count; it already surfaces immediately per-ticket, so
+            #   it does not need to increment either — this stays precisely about
+            #   dropped deliveries.
+            #
+            # Crucially the count is untouched by ticket churn, by ``clear``, and
+            # by every non-``launch`` decision. That is the fix: contrast the
+            # wedge counter above, which resets on any non-wedge decision —
+            # correct there, because a wedge is a *current* condition, and wrong
+            # here, because seat health must outlive exactly the churn that
+            # discards the ticket-keyed record.
+            if result.outcome == "delivery-failed":
+                _note_delivery_failure(
+                    stream,
+                    delivery_failures,
+                    threshold=seat_failure_threshold,
+                    trace_id=trace_id,
+                    notifier=notifier,
+                    logger=logger,
+                )
+            elif result.outcome in _DELIVERY_SUCCESS_OUTCOMES:
+                delivery_failures.pop(stream, None)
         case "run_complete":
             record = state.get(stream)
             if record is not None:
@@ -1086,6 +1212,81 @@ def _note_wedge(
             stream=stream,
             ticket=ticket,
             consecutive_ticks=count,
+        )
+
+
+def _note_delivery_failure(
+    stream: str,
+    delivery_failures: dict[str, int],
+    *,
+    threshold: int,
+    trace_id: str,
+    notifier: Notifier,
+    logger: Logger,
+) -> None:
+    """Count a dropped delivery and surface the SEAT past the threshold (FRE-927).
+
+    Increments the stream's consecutive dropped-delivery count (in-memory; see
+    ``DEFAULT_SEAT_FAILURE_THRESHOLD``). Every tick at or past ``threshold``
+    emits a distinct, greppable ``dispatch_seat_delivery_failing`` warning, so a
+    persistently broken seat leaves a durable trail rather than vanishing into
+    per-tick ``delivery-failed`` noise. The **crossing** count — the first to
+    reach the threshold — additionally pings master **once** (mirroring the wedge
+    and stall throttles: actionable, not spammy). Because the count climbs by
+    exactly 1 from 0 per consecutive failure, the crossing is hit exactly once
+    per episode; an episode ends only at a genuine delivery success, which is the
+    sole reset.
+
+    The alert deliberately names the **stream/seat and never a ticket**: the
+    whole point is that no single ticket is at fault, and a ticket-keyed alert is
+    exactly what the two existing reconcilers already emit (and what board churn
+    defeats). The event name likewise avoids ``seat-unhealthy``, which is already
+    a launcher *outcome* meaning "the pane is not running claude" — a different
+    condition needing a different remedy.
+
+    Detection and surfacing ONLY — no record is written, the stream is not
+    halted, and no process is terminated; master decides whether to intervene
+    (the FRE-922/FRE-924 posture).
+
+    The threshold is clamped to a minimum of 1, and the equality crossing test
+    below depends on that clamp. Without it a threshold of 0 or less silently
+    loses the ping forever: the count starts at 1 and only climbs, so it never
+    equals a non-positive threshold, and the seat would warn every tick while
+    never once paging master — the exact lost-one-shot-ping failure FRE-922 was
+    built to avoid. A sub-1 threshold is meaningless (a failure count cannot be
+    under one) but is a plausible operator shorthand for "page me on the first
+    one", so it is honoured rather than rejected: refusing to start is a worse
+    failure mode for a dispatch daemon than doing the obvious thing.
+
+    Args:
+        stream: The stream whose seat dropped the delivery.
+        delivery_failures: Per-stream counts, mutated in place.
+        threshold: Consecutive dropped deliveries at which the seat is surfaced.
+            Clamped to a minimum of 1.
+        trace_id: The tick's trace id.
+        notifier: The master-notification sink (pinged once, on crossing).
+        logger: Structured logger (warns every tick at or past the threshold).
+    """
+    threshold = max(1, threshold)
+    count = delivery_failures.get(stream, 0) + 1
+    delivery_failures[stream] = count
+    if count < threshold:
+        return
+    logger.warning(
+        "dispatch_seat_delivery_failing",
+        trace_id=trace_id,
+        stream=stream,
+        consecutive_failures=count,
+        detail="this seat has dropped consecutive dispatch deliveries across any "
+        "tickets — the SEAT is failing, not the ticket; the per-ticket retry "
+        "budget and hold age both reset on board churn and cannot see this",
+    )
+    if count == threshold:  # crossing (safe: the clamp above rules out count > 0 == threshold).
+        notifier(
+            "dispatch_seat_delivery_failing",
+            trace_id=trace_id,
+            stream=stream,
+            consecutive_failures=count,
         )
 
 
@@ -1275,6 +1476,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Seconds a surfaced manual card may be held before escalating it once.",
     )
     parser.add_argument(
+        "--seat-failure-threshold",
+        type=int,
+        default=DEFAULT_SEAT_FAILURE_THRESHOLD,
+        help="Consecutive dropped deliveries at which the SEAT is surfaced as unhealthy "
+        "(minimum 1; lower values are clamped).",
+    )
+    parser.add_argument(
         "--preflight",
         action="store_true",
         help="Check preconditions + RC liveness, report, and exit (for ExecStartPre).",
@@ -1301,6 +1509,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # never persisted, so a stale value can never mislead the one-shot ping.
     wedge_counts: dict[str, int] = {}
     held_escalated: dict[str, str] = {}
+    delivery_failures: dict[str, int] = {}
 
     def tick() -> None:
         state = load_state(state_path)
@@ -1321,6 +1530,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             wedge_ticks=args.wedge_ticks,
             held_escalated=held_escalated,
             held_escalation_s=args.held_escalation_timeout,
+            delivery_failures=delivery_failures,
+            seat_failure_threshold=args.seat_failure_threshold,
         )
 
     if args.loop:

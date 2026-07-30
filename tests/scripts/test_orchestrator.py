@@ -26,6 +26,7 @@ from collections.abc import Sequence
 import pytest
 from scripts.dispatch.next_resolver import IssueSnapshot
 from scripts.dispatch.orchestrator import (
+    DEFAULT_SEAT_FAILURE_THRESHOLD,
     DEFAULT_STALL_TIMEOUT_S,
     MAX_DELIVERY_ATTEMPTS,
     DispatchRecord,
@@ -1480,3 +1481,352 @@ def test_transient_errors_still_leave_the_stream_eligible() -> None:
     """A dirty worktree or a failed tmux call is retryable — no record."""
     assert _record_for_result("build1", "FRE-913", "worktree-dirty", now=100.0, attempts=0) is None
     assert _record_for_result("build1", "FRE-913", "launch-failed", now=100.0, attempts=0) is None
+
+
+# --- FRE-927: seat-scoped delivery health ----------------------------------
+#
+# FRE-923's retry budget and FRE-924's age clock are BOTH keyed to a ticket, so a
+# seat that drops every dispatch while the board churns resets both on every tick
+# and fails silently forever. Probed against merged main before this change: 18
+# keystroke deliveries genuinely attempted across 3 different tickets, every one
+# dropped, ``attempts`` never above 1, zero notifications, zero warnings.
+
+
+class _DeliveryRunner(_RecordingRunner):
+    """A live build1 seat whose per-tick delivery behaviour the test controls.
+
+    ``deliver_to_seat`` reads Remote Control's status twice, for two different
+    purposes: once *before* typing (busy → refuse to type at all, so a build in
+    progress is never interrupted) and again while confirming each command
+    (busy → the seat accepted it and is working). The behaviours model that:
+
+    - ``fail`` — a live, idle seat that accepts keystrokes but never goes busy,
+      so the final ``/build`` is never confirmed as submitted →
+      ``delivery-failed``. This is the FRE-920/FRE-927 incident shape.
+    - ``ok`` — the seat reports busy once typed into → every command is
+      confirmed → ``reuse``, a genuine delivery success.
+    - ``busy`` — the seat is mid-turn at the pre-check → ``seat-busy``, the one
+      genuinely transient outcome. Its pane shows a live spinner, so this is a
+      *genuinely* busy seat and never the FRE-922 wedge signature.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.behaviour = "fail"
+        self._typed = False
+
+    def __call__(self, argv: Sequence[str]) -> _FakeRunResult:
+        args = list(argv)
+        self.calls.append(tuple(args))
+        if args[:2] == ["tmux", "has-session"]:
+            # Probed once per tick before anything is typed — the natural reset
+            # point for "has this seat been typed into during THIS delivery".
+            self._typed = False
+            return _FakeRunResult(returncode=0)
+        if args[:2] == ["tmux", "list-panes"]:
+            return _FakeRunResult(stdout=f"claude\t{_BUILD_WORKTREE}\n")
+        if args[:2] == ["tmux", "capture-pane"]:
+            return _FakeRunResult(
+                stdout=_WEDGE_BUSY_PANE if self.behaviour == "busy" else _WEDGE_IDLE_PANE
+            )
+        if args[:2] == ["tmux", "send-keys"]:
+            self._typed = True
+            return _FakeRunResult()
+        if args[:2] == ["claude", "agents"]:
+            busy = self.behaviour == "busy" or (self.behaviour == "ok" and self._typed)
+            agent = {
+                "name": "cc-1build",
+                "sessionId": "s",
+                "cwd": _BUILD_WORKTREE,
+                "status": "busy" if busy else "idle",
+            }
+            return _FakeRunResult(stdout=json.dumps([agent]))
+        if "status" in args:  # git status --porcelain → clean worktree
+            return _FakeRunResult(stdout="")
+        return _FakeRunResult()
+
+
+def _run_seat(  # type: ignore[no-untyped-def]
+    behaviours: Sequence[str],
+    *,
+    churn: bool = True,
+    threshold: int = DEFAULT_SEAT_FAILURE_THRESHOLD,
+    execute: bool = True,
+):
+    """Run one DELIVERY ATTEMPT per entry in ``behaviours``.
+
+    One attempt is not one tick. Under board churn a dispatch occupies **two**
+    ticks: the dispatch itself, then a tick spent clearing the record when the
+    stream's NEXT changes underneath it (``_decide_delivering`` →  ``clear``, or
+    a terminal reconcile for a ``launched`` record). Running that second tick
+    inside the helper keeps one entry == one attempt, which is exactly what the
+    seat counter counts. It is run only *between* entries, so the final attempt's
+    record is left intact for inspection. An attempt that wrote no record (a
+    transient ``seat-busy``) needs no clear tick and gets none.
+
+    ``churn=True`` gives every attempt a DIFFERENT ticket — the board churn that
+    discards the ticket-keyed record and resets both existing clocks. ``False``
+    keeps one unchanging ticket, which is the FRE-923 path.
+    """
+    runner = _DeliveryRunner()
+    delivery_failures: dict[str, int] = {}
+    state: dict[str, DispatchRecord] = {}
+    notifier = _Notifier()
+    logger = _CapturingLogger()
+    attempts_seen: list[int] = []
+    tick = 0
+
+    def _tick(ticket: str) -> None:
+        nonlocal tick
+        tick += 1
+        board = [_issue(ticket, "Approved", _OPUS)]
+        run_once(
+            ["build1"],
+            state,
+            now=tick * 300.0,
+            stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+            board_fetcher=lambda _s, b=board: b,
+            reconcile=lambda _t: "Done",
+            runner=runner,
+            notifier=notifier,
+            persist=lambda _st: None,
+            logger=logger,
+            execute=execute,
+            rc_alive=lambda: True,
+            delivery_failures=delivery_failures,
+            seat_failure_threshold=threshold,
+            sleeper=_no_wait,
+        )
+
+    for index, behaviour in enumerate(behaviours):
+        current = f"FRE-{900 + index}" if churn else "FRE-923"
+        following = f"FRE-{901 + index}" if churn else "FRE-923"
+        runner.behaviour = behaviour
+        _tick(current)
+        record = state.get("build1")
+        attempts_seen.append(record.attempts if record is not None else 0)
+        last = index == len(behaviours) - 1
+        if churn and not last and record is not None:
+            # The churn tick: the stream's NEXT becomes the FOLLOWING attempt's
+            # ticket, which is what makes the record just written stale — so it is
+            # cleared and the stream frees for the next attempt.
+            _tick(following)
+
+    return state, delivery_failures, notifier, logger, attempts_seen, runner
+
+
+def _seat_pings(notifier: _Notifier) -> list[dict[str, object]]:
+    return [f for e, f in notifier.events if e == "dispatch_seat_delivery_failing"]
+
+
+def _seat_warnings(logger: _CapturingLogger) -> list[dict[str, object]]:
+    return [f for e, f in logger.warnings if e == "dispatch_seat_delivery_failing"]
+
+
+def test_a_seat_failing_across_changing_tickets_surfaces_as_unhealthy() -> None:
+    """AC-1: three dropped deliveries across three DIFFERENT tickets surface the seat.
+
+    The exact hole FRE-927 exists to close, and the reason the ticket identity
+    varies between attempts: on merged main the FRE-923 budget resets on every
+    churn and the FRE-924 age clock restarts with each fresh record, so nothing
+    ever escalates. The alert names the STREAM, never a single ticket.
+    """
+    _, failures, notifier, logger, _, _ = _run_seat(["fail", "fail", "fail"])
+
+    pings = _seat_pings(notifier)
+    assert len(pings) == 1, "master is pinged exactly once, on the crossing failure"
+    assert pings[0]["stream"] == "build1"
+    assert pings[0]["consecutive_failures"] == 3
+    assert "ticket" not in pings[0], "the alert names the seat, never a single ticket"
+    assert failures["build1"] == 3
+    warnings = _seat_warnings(logger)
+    assert len(warnings) == 1, "and leaves exactly one distinct, greppable warning"
+    assert warnings[0]["stream"] == "build1"
+    assert warnings[0]["consecutive_failures"] == 3
+
+
+def test_ticket_churn_never_resets_the_seat_counter() -> None:
+    """AC-1: the seat counter survives exactly the churn that resets the budget.
+
+    Both halves of the mechanism in one assertion pair: the ticket-keyed
+    ``attempts`` provably never accumulates past a single attempt — which is why
+    ``MAX_DELIVERY_ATTEMPTS`` is unreachable and merged main stays silent — while
+    the stream-keyed counter climbs right through the same churn.
+    """
+    _, failures, _, _, attempts_seen, _ = _run_seat(["fail"] * 6)
+
+    assert max(attempts_seen) == 1, "the ticket-keyed budget resets on every churn"
+    assert failures["build1"] == 6, "…while the seat-keyed counter does not"
+
+
+def test_a_genuine_success_clears_the_seat_counter() -> None:
+    """AC-2: a delivery that lands heals the seat, so a later failure is harmless.
+
+    Two failures, a confirmed delivery, then two more failures: counting restarts
+    at the success, so it reaches 2 — never the threshold — and nothing surfaces.
+    """
+    _, failures, notifier, _, _, _ = _run_seat(["fail", "fail", "ok", "fail", "fail"])
+
+    assert _seat_pings(notifier) == [], "a healed seat must never escalate"
+    assert failures["build1"] == 2, "counting restarted at the success, not at zero-ever"
+
+
+def test_a_transient_outcome_neither_counts_nor_clears_seat_health() -> None:
+    """AC-2: a tick that typed nothing is evidence of neither failure nor health.
+
+    ``seat-busy`` is the one genuinely transient outcome — the seat is mid-turn
+    and no keystroke is sent. Counting it would surface a healthy-but-busy seat;
+    clearing on it would let a broken seat launder its history by being busy every
+    other attempt. So the third *failure* still crosses, one attempt later.
+    """
+    _, failures, notifier, _, _, _ = _run_seat(["fail", "busy", "fail", "fail"])
+
+    assert failures["build1"] == 3, "the busy attempt neither counted nor healed"
+    assert len(_seat_pings(notifier)) == 1
+
+
+def test_a_busy_seat_alone_leaves_seat_health_untouched() -> None:
+    """The transient outcome in isolation: nothing typed, nothing recorded."""
+    _, failures, notifier, _, _, runner = _run_seat(["busy"] * 4)
+
+    assert failures == {}, "a mid-turn seat says nothing about delivery health"
+    assert _seat_pings(notifier) == []
+    assert not [c for c in runner.calls if "send-keys" in c]
+
+
+def test_the_seat_ping_fires_once_per_episode_and_re_fires_after_a_success() -> None:
+    """AC-1/AC-2: the episode boundary is a genuine success and nothing else.
+
+    Five consecutive failures ping once, not five times, while the greppable
+    warning keeps firing so the anomaly stays durable in the log. A success ends
+    the episode; three further failures are a NEW episode and ping again.
+    """
+    _, _, notifier, logger, _, _ = _run_seat(["fail"] * 5 + ["ok"] + ["fail"] * 3)
+
+    assert len(_seat_pings(notifier)) == 2, "one ping per episode, re-armed by the success"
+    # Episode 1 warns at counts 3, 4, 5; episode 2 warns at 3.
+    assert len(_seat_warnings(logger)) == 4, "warns every post-threshold attempt"
+
+
+def test_seat_health_surfaces_only_and_never_kills_or_records() -> None:
+    """Detection and surfacing only — master decides, exactly as FRE-922/FRE-924.
+
+    The seat-health path writes no record of its own (a ``surfaced`` record is
+    ticket-keyed and would be cleared by the very churn this closes), does not
+    halt the stream, and never terminates a process.
+    """
+    state, _, _, _, _, runner = _run_seat(["fail", "fail", "fail"])
+
+    assert _no_termination_argv(runner)
+    # The only record present is FRE-923's own per-ticket delivering record.
+    assert state["build1"].phase == "delivering"
+    assert state["build1"].attempts == 1
+
+
+def test_seat_health_is_gated_on_execute() -> None:
+    """A dry-run tick stays side-effect-free — no ping, no counter mutation."""
+    _, failures, notifier, _, _, runner = _run_seat(["fail"] * 4, execute=False)
+
+    assert failures == {}
+    assert notifier.events == []
+    assert not [c for c in runner.calls if "send-keys" in c]
+
+
+def test_churn_and_owner_action_are_distinguishable_in_the_log() -> None:
+    """The ambiguity FRE-927 names: a cleared record now says WHY it cleared.
+
+    Both still decide ``clear`` — the stream must advance to the newly-outranking
+    NEXT either way — but an operator can no longer mistake board churn for the
+    owner having acted. Naming it is not the fix (the seat counter is); it is what
+    makes the churn visible at all.
+    """
+    churned = decide(
+        "build1",
+        # The tracked ticket is STILL Approved — it was merely outranked.
+        [
+            _issue("FRE-901", "Approved", _OPUS),
+            _issue("FRE-902", "Approved", _OPUS, priority=1),
+        ],
+        _delivering_record("FRE-901", attempts=1),
+        now=0.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+    )
+    acted = decide(
+        "build1",
+        [_issue("FRE-901", "In Progress", _OPUS)],  # the ticket itself left Approved
+        _delivering_record("FRE-901", attempts=1),
+        now=0.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+    )
+
+    assert churned.kind == "clear" and churned.reason == "board-churn"
+    assert acted.kind == "clear" and acted.reason == "owner-acted"
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ("Approved", "board-churn"),  # still eligible — it was merely outranked
+        ("In Progress", "owner-acted"),
+        ("In Review", "owner-acted"),
+        ("Done", "owner-acted"),
+        ("Canceled", "owner-acted"),
+        (None, "owner-acted"),  # gone from the board entirely
+    ],
+)
+def test_clear_reason_discriminates_on_approved_not_on_one_state(
+    state: str | None, expected: str
+) -> None:
+    """Self-review finding: two cases could not pin the discriminator.
+
+    The original pair ("Approved" → board-churn, "In Progress" → owner-acted) is
+    also satisfied by ``!= "in progress"``, which would mislabel every other
+    state — including a ticket absent from the board — as churn. Only ``Approved``
+    means "still eligible, just outranked"; everything else, absence included,
+    means the ticket is no longer this stream's business.
+    """
+    board = [_issue("FRE-901", state, _OPUS)] if state is not None else []
+    # A second, higher-priority Approved ticket makes FRE-901 not-NEXT either way,
+    # so the clear fires for both causes and only the reason differs.
+    board.append(_issue("FRE-902", "Approved", _OPUS, priority=1))
+
+    for record in (
+        _delivering_record("FRE-901", attempts=1),
+        _launched_record(ticket="FRE-901", phase="surfaced"),
+    ):
+        d = decide("build1", board, record, now=0.0, stall_timeout_s=60, tracked_pr_open=False)
+        assert d.kind == "clear"
+        assert d.reason == expected, f"{record.phase} record, board state {state!r}"
+
+
+def test_a_threshold_below_one_still_pings_master() -> None:
+    """Self-review finding: an equality crossing test loses the ping entirely.
+
+    ``count`` starts at 1 and only climbs, so ``count == threshold`` is never true
+    for a threshold of 0 or less: the seat would warn on every tick while master
+    was never paged even once — precisely the lost one-shot alert FRE-922 exists
+    to prevent. A sub-1 threshold is clamped to 1, so the first failure pages.
+    """
+    _, failures, notifier, _, _, _ = _run_seat(["fail", "fail"], threshold=0)
+
+    assert len(_seat_pings(notifier)) == 1, "the first failure pages master exactly once"
+    assert failures["build1"] == 2
+
+
+def test_fre923_budget_semantics_are_untouched_by_seat_health() -> None:
+    """AC-3: the per-ticket budget still governs the per-ticket card.
+
+    Against an UNCHANGING ticket the FRE-923 path is unaltered: the budget
+    accumulates to ``MAX_DELIVERY_ATTEMPTS`` and hands that ticket to the owner
+    with its own distinct event, exactly once. The seat alert fires alongside it
+    and says a different thing — this seat is broken, not just this dispatch.
+    """
+    state, _, notifier, _, attempts_seen, _ = _run_seat(["fail"] * 4, churn=False)
+
+    assert attempts_seen[:3] == [1, 2, 3], "the budget accumulates on an unchanging ticket"
+    assert state["build1"].phase == "surfaced", "FRE-923 still surfaces the exhausted card"
+    exhausted = [e for e, _ in notifier.events if e == "dispatch_delivery_exhausted"]
+    assert exhausted == ["dispatch_delivery_exhausted"], "announced exactly once, as before"
+    assert len(_seat_pings(notifier)) == 1, "and the seat is independently reported broken"

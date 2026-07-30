@@ -138,6 +138,20 @@ systemctl status seshat-dispatch-orchestrator
   per-tick `card-already-surfaced` decision log remains the continuous trail.
   Escalation surfaces only: it never clears the record or kills a process. The
   in-memory latch resets on daemon restart, so a still-held card re-escalates once.
+- **`dispatch_seat_delivery_failing`** (FRE-927) → this **seat** has dropped N
+  consecutive dispatch deliveries (default 3; `--seat-failure-threshold`) across
+  *any* tickets. The two alerts above are keyed to a ticket, so a seat that drops
+  every dispatch while the board's NEXT keeps changing resets both clocks on
+  every tick and would otherwise fail silently and indefinitely — this one is
+  keyed to the **stream**, so board churn cannot reset it. Only a delivery that
+  genuinely lands clears the count. The named stream is not landing work: attach
+  to the seat (`tmux attach -t cc-<stream>`) and check whether the pane is a
+  usable, idle `claude` in the right worktree. Master pings **once** per episode
+  (an episode ends only at a successful delivery); the greppable warning repeats
+  every tick past the threshold. Surfacing only — the stream is **not** halted and
+  dispatch keeps being attempted, so expect the per-ticket
+  `dispatch_delivery_exhausted` card alongside it when the same ticket is retried.
+  The counter is in-memory and re-counts after a daemon restart.
 - **Emergency stop:** `touch telemetry/dispatch.disabled` (halts dispatch), or
   `sudo systemctl stop seshat-dispatch-orchestrator` (stops the daemon).
 

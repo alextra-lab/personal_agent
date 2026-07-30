@@ -100,6 +100,41 @@ rg -n "^[A-Z_]+ = \"" src/personal_agent/telemetry/events.py
 - **Never log PII/secrets** - redact before logging
 - Use constants for events, not magic strings
 
+## Delivery is not guaranteed — check it, don't assume it (FRE-1051)
+
+ADR-0090's three corners (emit · mapping · dashboard) all presuppose that the event
+*arrived*. None checks delivery, so **a zero from an Elasticsearch query has three
+indistinguishable causes**: there is no such data, the field name is wrong, or the event
+was emitted and lost. The third was not previously on that list.
+
+**Measured, 2026-07-23..28:** the Postgres `api_costs` ledger held 1,303 rows while
+`agent-logs-*` held 899 `api_cost_recorded` documents — 404 missing, with three of six
+days losing 48–83% and three losing nothing.
+
+**Why:** `add_elasticsearch_handler` is called from exactly one place —
+`service/app.py`, inside the FastAPI lifespan, and only if `connect()` succeeds. So
+**a process that does not attach the handler ships nothing to Elasticsearch**, silently.
+That accounted for all 404 (a study harness and a captains-log backfill). The standalone
+`gateway/app.py` builds a handler but never attaches it, so it has the same gap.
+
+Before drawing a conclusion from an `agent-logs-*` count, run the delivery probe:
+
+```bash
+uv run python -m scripts.monitors.delivery_ratio_monitor --since 2026-07-23 --until 2026-07-28
+uv run python -m scripts.monitors.delivery_ratio_monitor --json   # machine-readable
+```
+
+Exit 0 only when delivery passed. An all-`UNVERIFIABLE` window exits non-zero: it proved
+nothing, and silence must not read as green.
+
+**Two further hazards in `es_handler.emit()`, real but not the cause of the above:**
+
+- **Off-loop emission is dropped.** `emit()` only ships when `loop.is_running()` in the
+  *calling thread*, so anything under `asyncio.to_thread` is silently skipped. Emit such
+  events from the main loop (see `reflection_dspy.emit_missing_skill_warnings`).
+- **No drain on shutdown.** `disconnect()` closes the client without awaiting in-flight
+  writes, and `create_task` results are discarded, so a task may be collected mid-flight.
+
 ## Elasticsearch Analytics (Phase 2.3)
 
 `TelemetryQueries` provides async ES queries for adaptive threshold tuning:

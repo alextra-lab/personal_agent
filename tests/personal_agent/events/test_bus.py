@@ -1,5 +1,7 @@
 """Tests for EventBus protocol, NoOpBus, and singleton (ADR-0041)."""
 
+from unittest.mock import patch
+
 import pytest
 
 from personal_agent.events.bus import (
@@ -9,6 +11,8 @@ from personal_agent.events.bus import (
     set_global_event_bus,
 )
 from personal_agent.events.models import RequestCapturedEvent
+
+from .conftest import _capturing_log
 
 
 class TestNoOpBus:
@@ -20,6 +24,20 @@ class TestNoOpBus:
         event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
         # Should not raise
         await bus.publish("stream:test", event)
+
+    @pytest.mark.asyncio
+    async def test_publish_log_does_not_collide_with_es_event_type(self) -> None:
+        """FRE-1066: event_type= must not be passed directly (see bus.py::NoOpBus.publish)."""
+        bus = NoOpBus()
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
+        mock_log, calls = _capturing_log()
+        with patch("personal_agent.events.bus.log", mock_log):
+            await bus.publish("stream:request.captured", event)
+        discarded = [kw for name, kw in calls if name == "event_discarded_noop_bus"]
+        assert discarded, "expected an event_discarded_noop_bus log call"
+        assert "event_type" not in discarded[0]
+        assert discarded[0]["payload_event_type"] == "request.captured"
+        assert discarded[0]["stream"] == "stream:request.captured"
 
     @pytest.mark.asyncio
     async def test_subscribe_is_silent(self) -> None:

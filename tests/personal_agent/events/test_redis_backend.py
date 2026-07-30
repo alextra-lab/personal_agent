@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import redis.asyncio as aioredis
 
 from personal_agent.events.models import RequestCapturedEvent
 from personal_agent.events.redis_backend import RedisStreamBus
+
+from .conftest import _capturing_log
 
 
 @pytest.fixture
@@ -57,6 +59,21 @@ class TestPublish:
         assert parsed["trace_id"] == "abc"
         assert parsed["session_id"] == "def"
         assert parsed["event_type"] == "request.captured"
+
+    @pytest.mark.asyncio
+    async def test_publish_log_does_not_collide_with_es_event_type(
+        self, bus: RedisStreamBus
+    ) -> None:
+        """FRE-1066: the log call must not pass event_type= (see redis_backend.py::publish)."""
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
+        mock_log, calls = _capturing_log()
+        with patch("personal_agent.events.redis_backend.log", mock_log):
+            await bus.publish("stream:request.captured", event)
+        published = [kw for name, kw in calls if name == "event_published"]
+        assert published, "expected an event_published log call"
+        assert "event_type" not in published[0]
+        assert published[0]["payload_event_type"] == "request.captured"
+        assert published[0]["stream"] == "stream:request.captured"
 
 
 class TestSubscribe:
@@ -155,6 +172,26 @@ class TestDeadLetter:
         assert payload["error"] == "boom"
         assert payload["attempts"] == "3"
 
+    @pytest.mark.asyncio
+    async def test_dead_letter_log_does_not_collide_with_es_event_type(
+        self, bus: RedisStreamBus
+    ) -> None:
+        """FRE-1066: same collision as publish() (see redis_backend.py::dead_letter)."""
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
+        mock_log, calls = _capturing_log()
+        with patch("personal_agent.events.redis_backend.log", mock_log):
+            await bus.dead_letter(
+                event=event,
+                source_stream="stream:test",
+                group="cg:test",
+                error="boom",
+                attempts=3,
+            )
+        dead_lettered = [kw for name, kw in calls if name == "event_dead_lettered"]
+        assert dead_lettered, "expected an event_dead_lettered log call"
+        assert "event_type" not in dead_lettered[0]
+        assert dead_lettered[0]["payload_event_type"] == "request.captured"
+
 
 class TestClose:
     """RedisStreamBus.close() tests."""
@@ -174,7 +211,9 @@ class TestConnect:
         mock_client = AsyncMock(spec=aioredis.Redis)
         mock_client.ping = AsyncMock(return_value=True)
 
-        with patch("personal_agent.events.redis_backend.aioredis.from_url", return_value=mock_client):
+        with patch(
+            "personal_agent.events.redis_backend.aioredis.from_url", return_value=mock_client
+        ):
             bus = await RedisStreamBus.connect("redis://localhost:6379/0")
             mock_client.ping.assert_called_once()
             assert bus.client is mock_client

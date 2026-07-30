@@ -84,10 +84,11 @@ class NoOpBus:
 
     async def publish(self, stream: str, event: EventBase, maxlen: int | None = None) -> None:
         """Discard the event."""
+        # payload_event_type, not event_type — see redis_backend.py::publish (FRE-1066).
         log.debug(
             "event_discarded_noop_bus",
             stream=stream,
-            event_type=event.event_type,
+            payload_event_type=event.event_type,
             trace_id=event.trace_id,
         )
 

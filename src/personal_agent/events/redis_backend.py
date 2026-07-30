@@ -115,10 +115,15 @@ class RedisStreamBus:
             message_id = await self._client.xadd(stream, data, maxlen=maxlen, approximate=True)  # type: ignore[arg-type]
         else:
             message_id = await self._client.xadd(stream, data)  # type: ignore[arg-type]
+        # payload_event_type, not event_type: es_handler.py derives the ES
+        # event_type from this log's own message name ("event_published"); an
+        # event_type= kwarg here would silently overwrite that value with the
+        # domain event's type, which for single-purpose streams equals the
+        # stream name minus its prefix (FRE-1066).
         log.debug(
             "event_published",
             stream=stream,
-            event_type=event.event_type,
+            payload_event_type=event.event_type,
             event_id=event.event_id,
             message_id=message_id,
             trace_id=event.trace_id,
@@ -215,9 +220,10 @@ class RedisStreamBus:
             settings.event_bus_dead_letter_stream,
             payload,  # type: ignore[arg-type]
         )
+        # payload_event_type, not event_type — see publish() (FRE-1066).
         log.warning(
             "event_dead_lettered",
-            event_type=event.event_type,
+            payload_event_type=event.event_type,
             event_id=event.event_id,
             source_stream=source_stream,
             group=group,

@@ -230,6 +230,8 @@ class ConsumerRunner:
             await self._bus.ack(sub.stream, sub.group, message_id)
             return
 
+        # payload_event_type, not event_type on all three log calls below —
+        # see redis_backend.py::publish (FRE-1066).
         for attempt in range(1, max_retries + 1):
             try:
                 await sub.handler(event)
@@ -238,7 +240,7 @@ class ConsumerRunner:
                     "event_processed",
                     stream=sub.stream,
                     group=sub.group,
-                    event_type=event.event_type,
+                    payload_event_type=event.event_type,
                     event_id=event.event_id,
                     message_id=message_id,
                     trace_id=event.trace_id,
@@ -254,7 +256,7 @@ class ConsumerRunner:
                     "consumer_budget_denied",
                     stream=sub.stream,
                     group=sub.group,
-                    event_type=event.event_type,
+                    payload_event_type=event.event_type,
                     event_id=event.event_id,
                     message_id=message_id,
                     role=exc.role,
@@ -271,7 +273,7 @@ class ConsumerRunner:
                     "consumer_handler_error",
                     stream=sub.stream,
                     group=sub.group,
-                    event_type=event.event_type,
+                    payload_event_type=event.event_type,
                     event_id=event.event_id,
                     message_id=message_id,
                     attempt=attempt,

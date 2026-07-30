@@ -22,9 +22,19 @@ The root cause, measured live rather than reasoned from code:
   could not produce "melon" from a lowercase message.
 
 These tests assert through the real :func:`build_proactive_suggestions`, so every gate
-applies — turn-id dedupe, ``min_score``, the candidate cap, ``max_injected_items``, the
+applies — dedupe, ``min_score``, the candidate cap, ``max_injected_items``, the
 diminishing floor and gap, and the token budget. Asserting only that a score crosses a
 threshold would beg the question: crossing ``min_score`` is not the same as being emitted.
+
+**Scope note (FRE-1061).** This fixture reproduces the *telemetry shape* of the 18:32
+record — episode rows without entity fields, one turnless entity row — and the rank race
+it loses. The production mechanism behind "zero entity candidates" turned out to be one
+layer earlier: real dense rows are *(entity, best-turn)* pairs, and the pre-FRE-1061
+payload conversion flattened every discussed entity into its episode before any race ran
+(`telemetry/entity_recall_findings_explore_2026-07-30.md`). The production-shaped pair
+fixtures live in ``test_proactive_entity_split.py``; this module remains the regression
+for the hint/overlap lever (FRE-1041) and the gate naming (FRE-1060) on the recorded
+shape.
 """
 
 from __future__ import annotations
@@ -72,7 +82,11 @@ def _now_iso() -> str:
 
 
 def _episode_row(index: int, vector_score: float) -> dict[str, Any]:
-    """A dense-arm episode row, of the shape that took all five slots at 18:32."""
+    """An episode row as the 18:32 telemetry recorded it.
+
+    Kind-collapsed: a real dense-arm row also carries entity fields (FRE-1061) — the
+    production-shaped pair fixture lives in ``test_proactive_entity_split.py``.
+    """
     return {
         "turn_id": f"turn-{index}",
         "user_message": f"an earlier conversation about topic {index}",

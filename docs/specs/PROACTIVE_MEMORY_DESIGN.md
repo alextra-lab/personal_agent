@@ -187,22 +187,29 @@ Two surfaces now answer it:
   `recall_score_threshold`, `recall_candidate_cap`, `recall_item_cap`, `recall_score_floor`,
   `recall_score_gap`, `recall_item_oversized`, `recall_token_budget`.
 - **Per turn, on the log** — `stop_reason` names the single terminal gate that ended
-  selection, `discarded_by_gate` gives per-gate counts, and `retrieved_row_count` /
-  `deduped_row_count` separate retrieval from dedupe losses that a single `before_count`
-  used to conflate. The event still fires **only when selection itself trimmed**, so the
-  series it has always carried stays comparable across the deploy; the per-candidate record
-  is the complete surface for the gates upstream of selection.
+  selection, `discarded_by_gate` gives per-gate counts, and three counts bracket the
+  pre-scoring steps: `retrieved_row_count` (raw graph rows), `split_candidate_count`
+  (candidates after the FRE-1061 pair split — one *(entity, best-turn)* row yields up to
+  two) and `deduped_candidate_count` (after the kind-appropriate collapse). FRE-1061
+  removed `deduped_row_count` rather than repurposing it: its unit changed from rows to
+  candidates, and a field that silently changes unit corrupts every series built on it.
+  The event still fires **only when selection itself trimmed**, so the series it has
+  always carried stays comparable across the deploy; the per-candidate record is the
+  complete surface for the gates upstream of selection.
 
 Only **one** terminal gate can fire per invocation (the selection loop breaks on the first),
 so `recall_item_cap` and `recall_token_budget` never co-occur in one record. Any number of
 `recall_candidate_cap`, `recall_score_threshold` and `recall_item_oversized` drops may
 accompany it.
 
-**The turn-id dedupe is deliberately not a gate here.** A duplicate row shares the kept
-row's `turn_id`, hence its identity, so recording it as a drop would place one identity in
+**The dedupe is deliberately not a gate here.** Since FRE-1061 it runs at candidate level
+with kind-qualified identity — episodes collapse on `conversation_id`, entities on `name` —
+so a *distinct entity* whose best turn collides with a higher-ranked entity's is no longer
+erased (the pre-FRE-1061 row-level turn-id dedupe did exactly that). A collapsed candidate
+shares the kept candidate's identity, so recording it as a drop would place one identity in
 the record twice — once admitted, once dropped — asserting a memory was lost when that
 memory reached the model, and inflating `candidate_count`. A dedupe collapse is not a loss;
-the retrieval-to-dedupe delta is visible as the two row counts on the event.
+the split-to-dedupe delta is visible as the candidate counts on the event.
 
 `recall_admission.candidate_population` states whether a record names the whole offered
 population (`offered`) or only the survivors (`post_selection`, the pre-FRE-1060 reading).

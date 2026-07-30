@@ -78,3 +78,44 @@ async def test_emit_forwards_session_id_to_es_logger() -> None:
     assert event_type == "perplexity_query_timeout"
     assert trace_id == "trace-1"
     assert data["session_id"] == "sess-552"
+
+
+@pytest.mark.asyncio
+async def test_emit_never_lets_a_payload_field_overwrite_event_type() -> None:
+    """FRE-1066: reproduces the redis_backend.py::publish() log shape end to end.
+
+    Runs it through the real emit()/log_event() pipeline (see that method's
+    comment for why payload_event_type, not event_type, is the fix).
+    """
+    handler = ElasticsearchHandler()
+    handler._connected = True
+    cast_es_logger = cast(Any, handler.es_logger)
+    cast(Any, cast_es_logger).log_event = AsyncMock(return_value="doc-id-1")
+
+    record = logging.LogRecord(
+        name="personal_agent.events.redis_backend",
+        level=logging.DEBUG,
+        pathname=__file__,
+        lineno=1,
+        msg={
+            "event": "event_published",
+            "stream": "stream:metrics.sampled",
+            "payload_event_type": "metrics.sampled",
+            "event_id": "abc123",
+            "trace_id": None,
+        },
+        args=(),
+        exc_info=None,
+    )
+
+    handler.emit(record)
+    await asyncio.sleep(0)
+
+    assert handler.es_logger.log_event.await_count == 1
+    args, _ = handler.es_logger.log_event.call_args
+    event_type, data = args[0], args[1]
+    # The canonical, message-derived event_type — never the stream-equal value.
+    assert event_type == "event_published"
+    # The domain event's own type survives, distinctly named.
+    assert data["payload_event_type"] == "metrics.sampled"
+    assert data["stream"] == "stream:metrics.sampled"

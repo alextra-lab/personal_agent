@@ -19,13 +19,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock
-from uuid import uuid4
 
 import orjson
 import pytest
 
 from personal_agent.cost_gate import BudgetDenied
 from personal_agent.events.consumer import ConsumerRunner
+
+from .conftest import _consolidation_event_payload
 
 
 class _FakeSubscription:
@@ -104,17 +105,3 @@ async def test_handler_raising_other_exception_still_dead_letters() -> None:
     assert handler.call_count == 2
     bus.dead_letter.assert_called_once()
     bus.ack.assert_called_once()
-
-
-def _consolidation_event_payload() -> dict[str, object]:
-    """Build a minimal ``consolidation.completed`` event payload accepted by parse_stream_event."""
-    return {
-        "event_type": "consolidation.completed",
-        "event_id": str(uuid4()),
-        "trace_id": str(uuid4()),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "source_component": "test",
-        "captures_processed": 0,
-        "entities_created": 0,
-        "entities_promoted": 0,
-    }

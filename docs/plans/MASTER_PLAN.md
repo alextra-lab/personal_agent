@@ -8,21 +8,19 @@
 
 ## 0. In flight
 
-- **build1** — **FRE-1051** *ES silently loses up to 83% of emitted events* (Urgent). Then **FRE-1042**
-  *(drawer row height, Haiku)*.
-- **build2** — **FRE-867** *(the watcher surfaces a seat parked on a permission dialog — the robust
-  half, see §8)*. Then **FRE-1060** *(Urgent front-jump, §0c)*. **FRE-937 is not the head**: still
-  blocked by FRE-1015.
+- **build1** — **FRE-1051** *ES silently loses up to 83% of emitted events* (Urgent). Then **FRE-937**
+  — the **ADR-0123 seam** (§0d). Then FRE-1042 *(drawer row height, Haiku)*.
+- **build2** — **FRE-867** *(the watcher surfaces a parked seat — the robust half, §8)*. Then the
+  **ADR-0126 chain**: FRE-1060 → FRE-1015 → FRE-1017 → FRE-1019 (§0d).
 - **adrs** — idle. **FRE-1043–1050 all Needs Approval**; nothing dispatchable until they're approved.
 - **explore** — delivered the convergence study (§9); free.
 
 **Pending actions:**
 - **FRE-1041 is deployed and its verification FAILED — see §0c.** Nothing further to deploy.
-- **Deploy FRE-927** — merged 07-30. Host `systemctl restart` of the dispatch daemons, **no gateway
-  image** (same class as FRE-922/923). Awaiting authorization. The observable signal is the reason
-  split, not the alert: `board-churn` and `owner-acted` now tally separately in the orchestrator
-  journal where both previously logged as `owner-acted`. A quiet alert is the steady state and is
-  **not** proof it works.
+- **FRE-927 is deployed** (07-30 05:38Z, daemons restarted, knob live, journal baseline clean).
+  Verification pending: the observable signal is the **reason split**, not the alert — `board-churn`
+  and `owner-acted` now tally separately where both previously logged as `owner-acted`. Needs a few
+  hours of ticks. **A quiet alert is the steady state and is not proof it works.**
 - **FRE-989 F9 needs one turn on a *cloud* primary** to verify; local-qwen turns prove nothing (zero
   cost ⇒ nothing priced to record). Its role-distribution criterion needs ~7 days.
 - **Watch `main_inference`'s caps** — reachable by streamed chat for the first time, and that lane denies
@@ -57,6 +55,40 @@ fails if the trim is widened before it is made visible.
 
 This also vindicates the **PR #738 bounce**: FRE-1015's precondition would fail on real turns for a
 reason nobody could name, and a tautological precondition would have reported a clean pass through it.
+
+## 0d. Returning to the primary streams — the whole detour, and the way back
+
+**What displaced us, dated.** Session summarisation. The digest cost runaway surfaced 2026-07-25 and the
+"Cost, Process and Monitoring Audit" project was opened at **21:53Z that Saturday**. Everything merged on
+or before 07-25 was the ADR-0123 chain. **Every one of the ~35 merges since is that audit or work it
+spawned** — cost attribution, ADR-0125, ADR-0127, ADR-0128, the memory OOM, and all the dispatch
+machinery. The work was real and mostly necessary. It was not the plan.
+
+**What of the can of worms is actually still open: one thing.** Everything else from the summarisation
+wave shipped. The residue is §6's item — **ADR-0124 regenerates the digest wholesale on an idle clock,
+and unbounded *input* has no owner.** ADR-0127 D9 assigns the fork to ADR-0124's trigger; it is written
+down and nobody holds it. The sweep bound (~8 attempts/day) bounds a failing *session*, not aggregate
+spend. **This is the one item that can pull us back in, and it is an owner decision: own it now, or
+defer it explicitly and let the sweep bound hold.**
+
+**The way back is four tickets and it closes two ADRs.** One parked draft PR was holding both:
+
+> **FRE-1060 → FRE-1015 → FRE-1017 → FRE-1019** closes **ADR-0126**
+> **FRE-937** closes **ADR-0123**
+
+FRE-1015 (draft PR #738, bounced) blocked FRE-1017 and FRE-1019 *and* FRE-937. The FRE-937 relation was
+**undocumented and wrong** — that ticket's own body cites only FRE-936, it is PWA transcript rendering,
+and FRE-1015 is stance enrichment in context assembly. Cleared 07-30; **ADR-0123's seam is dispatchable
+now** and is build1's next after FRE-1051.
+
+FRE-1015's real blocker is **FRE-1060** (§0c): its acceptance criteria turn on asserting the target
+entity is in the recall set, and until the budget trim is visible that assertion cannot be made honestly.
+That is the relation now recorded — and it is why FRE-1060 is a return to the plan rather than another
+detour.
+
+**What we are deliberately NOT doing.** The process/dispatch backlog — FRE-975, FRE-977, FRE-1011,
+FRE-1054, FRE-1059 — stays parked (unlabelled or Needs Approval). It is real work and none of it is on
+the critical path to an ADR closing. Do not dispatch it because it is easy.
 
 ## 0b. Recall: four mechanisms, one race — RESOLVED
 

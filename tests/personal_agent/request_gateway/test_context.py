@@ -347,6 +347,10 @@ class TestGraphAnchoredEntityHints:
 
         kwargs = mock_adapter.suggest_relevant.await_args.kwargs
         assert kwargs["session_entity_names"] == ["Melon", "Ice cream"]
+        # FRE-1062: the same resolver output rides a second, distinct seam — the
+        # admission pin. The overlap copy above gets merged with DB session entities
+        # inside the adapter; this one must arrive verbatim.
+        assert kwargs["mentioned_entity_names"] == ["Melon", "Ice cream"]
 
     @pytest.mark.asyncio
     async def test_lowercase_subject_reaches_the_entity_recall_path(

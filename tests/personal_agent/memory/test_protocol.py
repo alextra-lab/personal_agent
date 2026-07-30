@@ -246,6 +246,7 @@ class TestProtocolIsRuntimeCheckable:
                 session_topic_hint: str | None,
                 current_session_id: str,
                 trace_id: str,
+                mentioned_entity_names: list[str] | None = None,
             ) -> ProactiveMemorySuggestions:
                 return ProactiveMemorySuggestions(candidates=[])
 

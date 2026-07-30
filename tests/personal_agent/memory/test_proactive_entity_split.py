@@ -195,8 +195,17 @@ class TestMelonShapeAdmission:
         offered = _ids(out.candidates) + _ids(out.discarded)
         assert ("episode", "t-melon") in offered, "the episode half is offered, not erased"
 
-    def test_the_top_named_row_puts_its_entity_at_rank_one(self, deployed_scoring: None) -> None:
-        """Stable sort + entity-first emission: the pair shares a score, entity precedes."""
+    def test_the_top_named_row_puts_its_entity_ahead_of_its_sibling(
+        self, deployed_scoring: None
+    ) -> None:
+        """Stable sort + entity-first emission: the pair shares a score, entity precedes.
+
+        FRE-1062 amends this from a rank-1 claim to a relative one: the episode floor
+        now walks the best episode first (admission priority — the renderer partitions
+        by kind, so this is not presentation). The FRE-1061 property that survives is
+        that within the ranked rest, an entity still precedes its equal-scored sibling
+        episode.
+        """
         rows = [
             _pair_row(name="Melon", turn_id="t-melon", vector_score=0.77),
             _pair_row(name="Cantaloupe", turn_id="t-cant", vector_score=0.76),
@@ -204,8 +213,9 @@ class TestMelonShapeAdmission:
 
         out = build_proactive_suggestions(rows, set(), None, "t-rank-one", None)
 
-        assert out.candidates[0].kind == "entity"
-        assert out.candidates[0].payload["name"] == "Melon"
+        admitted = _ids(out.candidates)
+        assert admitted[0] == ("episode", "t-melon"), "the floor episode leads the walk"
+        assert admitted.index(("entity", "Melon")) < admitted.index(("entity", "Cantaloupe"))
 
 
 class TestKindAppropriateDedupe:

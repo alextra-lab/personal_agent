@@ -294,6 +294,10 @@ async def _query_memory_for_intent(
                 trace_id=trace_id,
                 user_id=user_id,
                 authenticated=authenticated,
+                # FRE-1062: the same resolved names, but as *literal mentions* — the
+                # session_entity_names copy above is merged with DB session entities
+                # into the overlap subscore, while this one drives the admission pin.
+                mentioned_entity_names=entity_names,
             )
             discards = tuple(
                 (d.payload, d.relevance_score, d.drop_reason) for d in suggestions.discarded

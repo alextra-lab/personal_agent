@@ -8,6 +8,7 @@ while the underlying service remains unchanged.
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from uuid import UUID
 
 import structlog
@@ -279,8 +280,9 @@ class MemoryServiceAdapter:
         trace_id: str,
         user_id: UUID | None = None,
         authenticated: bool = False,
+        mentioned_entity_names: Sequence[str] | None = None,
     ) -> ProactiveMemorySuggestions:
-        """Proactive ranked memory for context injection (ADR-0039)."""
+        """Proactive ranked memory for context injection (ADR-0039; FRE-1062 pins)."""
         log.info(
             "proactive_memory_suggest_start",
             trace_id=trace_id,
@@ -334,6 +336,7 @@ class MemoryServiceAdapter:
                 session_topic_hint,
                 trace_id,
                 emb_ms,
+                mentioned_entity_names=mentioned_entity_names,
             )
             if not suggestions.candidates:
                 log.info(

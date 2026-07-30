@@ -8,6 +8,7 @@ See: docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md Section 5.4
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -250,6 +251,7 @@ class MemoryProtocol(Protocol):
         trace_id: str,
         user_id: UUID | None = None,
         authenticated: bool = False,
+        mentioned_entity_names: Sequence[str] | None = None,
     ) -> ProactiveMemorySuggestions:
         """Rank cross-session memories for proactive context injection (ADR-0039).
 
@@ -263,6 +265,9 @@ class MemoryProtocol(Protocol):
             authenticated: Whether the caller is authenticated.
             current_session_id: Active session id (exclude same-session turns).
             trace_id: Request trace for logging.
+            mentioned_entity_names: Graph-resolved entity names the message literally
+                mentions (FRE-1041 resolver output). Drives the FRE-1062
+                mentioned-entity admission pin; None or empty pins nothing.
 
         Returns:
             Scored, budget-trimmed candidates. On failure, implementations return empty.

@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-30
+> **Last updated**: 2026-07-30 (ADR-0129 merged Proposed; FRE-1036 state corrected)
 
 ## 0. In flight
 
@@ -13,8 +13,7 @@
   its tests were written against the pre-split candidate stream). FRE-1062's mentioned-entity pin makes
   its entity-selection precondition satisfiable **by construction** on any turn naming the stance target.
   Then FRE-1017 → FRE-1019 closes ADR-0126.
-- **adrs** — head is **FRE-1043** (ADR-0128 chain head, approved 07-30). FRE-1044–1050 still Needs
-  Approval behind it.
+- **adrs** — free. FRE-1043 delivered **ADR-0129** instead of its written scope (below); context CLEAR.
 - **explore** — free.
 
 **Owner actions, blocking:**
@@ -49,10 +48,20 @@ history is on those tickets.
 
 ## 1. Elasticsearch structure — hold LIFTED 2026-07-29
 
-**ADR-0128** *(one telemetry naming convention, enforced at emit)* merged **Proposed**, so the convention
-that gated **FRE-1036** is settled. The remaining coupling is narrow: only **FRE-1043** *(rename table)*
-must land first — deliberately standalone, days-scale. Late table ⇒ a second reindex; expensive in
-machine time, cheap in risk on 635 MB.
+**Pending an owner decision: ADR-0128's mechanisms, or ADR-0129's.** FRE-1043 was scoped to produce
+ADR-0128's rename table; measuring the corpus to write it produced **ADR-0129** *(OpenTelemetry
+instrumentation, trace visibility as the acceptance bar)* instead — merged **Proposed** 2026-07-30
+(`adfb7214`), superseding ADR-0128 D2–D8, retiring Kibana for Grafana + Tempo, and filing a
+ten-ticket chain (FRE-1064–1073 + FRE-1066/1068), all Needs Approval. **ADR-0128 stays Proposed
+until that acceptance decision is taken** — do not flip it to Superseded on the merge alone.
+
+**FRE-1036 is unblocked either way, and its state was a lie until 2026-07-30.** It sat in
+`Awaiting Deploy` from 07-29 because a MASTER_PLAN *docs* PR (#741) mentioning it was matched by the
+GitHub integration; no branch or PR for it has ever existed. Restored to `Approved`. Under ADR-0129
+there is no rename table coming at all (log field names outside the identity spine become
+deliberately ungoverned), so the "late table ⇒ second reindex" coupling is gone. The shard deadline
+is untouched by ADR-0129 — logs stay in Elasticsearch. **602 active shards / 564 indices as of
+07-30**, against the 1,000-shard ceiling.
 
 **FRE-1036 has an unrecorded scope boundary.** `slm_server` formats its own dated index names
 client-side, so rollover-behind-a-write-alias cannot reach it. Verified: **39 `slm-requests` indices,
@@ -64,17 +73,42 @@ Correction to this plan's own record: it said **four** timestamp spellings. It i
 (slm-requests) and `rated_at` (user-turn-ratings) are declared `date` fields invisible to a name-based
 scan. That undercount is the exact failure ADR-0128 exists to eliminate.
 
-**ADR-0128's chain — FRE-1043–1050, all Needs Approval**, sequenced: 1043 head → 1044/1045/1049/1050
-→ 1046 → 1047/1048. Seam stays with the adr session; the ADR does not close when its last child merges.
+**ADR-0128's chain — FRE-1044–1050, all Needs Approval**, sequenced: 1044/1045/1049/1050 → 1046 →
+1047/1048. **Do not approve it before the ADR-0128-vs-0129 decision**: under ADR-0129, FRE-1044/1045
+(the two enforcement tiers) are cancelled, FRE-1049 is superseded by FRE-1071, and only FRE-1050
+(D9 — Neo4j `entity_class`, Redis stream enum) survives untouched. Seam stays with the adr session;
+neither ADR closes when its last child merges.
+
+**ADR-0129's chain, if accepted** — head **FRE-1064** (SDK bootstrap + root span + structlog
+processor), deliberately a **falsification gate**: it is the smallest change that should move the
+`trace_id` share off its 11.36% baseline, and it lands before any container is committed. If the
+number does not move, stop the chain. Then FRE-1065 (Tier-1, the `TraceContext` bridge — the
+highest-risk change, it carries the per-user scoping fields) → FRE-1067 ∥ FRE-1069 → FRE-1070 →
+FRE-1071 ∥ FRE-1072 → **FRE-1073, the seam**. Six of nine criteria hold only once every child lands.
+
+**Two findings from that session are independent of both ADRs and should not wait on either:**
+**FRE-1066** — `event_type` is populated with the Redis *stream name*, producing 1.72M documents,
+51.5% of the telemetry corpus, containing no metrics. Live bug, still emitting, and the single
+largest lever on FRE-1036's shard pressure. **FRE-1068** (Tier-1) — telemetry stores verbatim user
+turns, and the index template auto-indexes `stdout`/`stderr`/`raw_*` by pattern with no declaration.
 
 **FRE-1035** *(ES field-resolution technique)* — resolve every field against the mappings API before
 querying; treat zero matches as a hard error. Needs approval. The recipe fix is the smaller half.
 
 ## 2. Awaiting an owner decision
 
+- **Accept ADR-0129, or hold ADR-0128?** The largest open call — see §1. Accepting it supersedes
+  ADR-0128 D2–D8, cancels FRE-1044/1045, closes FRE-588 and FRE-583 as superseded, retires Kibana,
+  and authorises a ten-ticket instrumentation programme. **FRE-1043's own disposition rides on it**:
+  it is in Awaiting Deploy having delivered an ADR rather than the rename table its criteria name, so
+  it cannot close against those criteria — recommend rewriting its scope to "author ADR-0129" and
+  closing Done, rather than cancelling work that was genuinely done.
+
 - **FRE-1039** — Grafana over Postgres for aggregate cost, and whether it **replaces** Kibana. Amends
   ADR-0090's dashboard corner; inherits the 14 known-broken panels. Prerequisite: no read-only Postgres
-  role exists.
+  role exists. **ADR-0129 D6 pre-empts the Kibana half** (Grafana becomes the single UI, Kibana
+  retired, 551 MiB recovered) — so accepting ADR-0129 decides this, and FRE-1039 narrows to the
+  Postgres-datasource question. Do not decide the two separately.
 - **ADR-0127's seven tickets** (FRE-1026–1032) — the harness-analyser pillar; one batch decision.
 - **FRE-1013** — **premise measurably false.** It claims entity class is never emitted; the graph holds
   425 Personal and 708 model-emitted against 6,620 backfilled. Rescope to "is the classification any
@@ -86,9 +120,16 @@ querying; treat zero matches as a hard error. Needs approval. The recipe fix is 
 
 ## 3. Master's verification backlog — standing debt
 
-**Twelve in Awaiting Deploy, all of them deployed.** The column name misleads: what they await is master's
-acceptance verification, not a deploy. None closes on "deployed and healthy" — each needs its own
-criterion proven, and **UNVERIFIABLE is a first-class verdict**.
+**Eighteen in Awaiting Deploy** (the table below lists the twelve audited on 07-29; 867, 927, 937,
+1051, 1060 and 1043 joined since). What they await is master's acceptance verification, not a deploy.
+None closes on "deployed and healthy" — each needs its own criterion proven, and **UNVERIFIABLE is a
+first-class verdict**.
+
+**Do not read this column as "all of them deployed" — that phrasing hid a live defect.** FRE-1036 sat
+here for two days with no branch, no PR and no implementation, put there by the GitHub integration
+matching a docs PR that merely named it (§1). Verify membership against merged-PR evidence before
+counting a row as shipped; `reconcile_board.py` will not catch this class, because a ticket in a
+started state with no merged PR reads as UNVERIFIABLE rather than FAIL.
 
 **Verify from the substrate before asking for an owner turn.** FRE-970 was closed 2026-07-28 on captures
 already in ES — five spend-query turns straddling the deploy gave a same-model before/after. The

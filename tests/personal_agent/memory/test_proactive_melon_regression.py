@@ -182,8 +182,13 @@ class TestMelonTurnEntityAdmission:
 
         assert "Melon" in _names(suggestions.candidates)
 
-    def test_the_hint_promotes_the_entity_to_first_place(self, live_scoring: None) -> None:
-        """Rank 6 of 6 becomes rank 1 — the overlap subscore is the deciding lever."""
+    def test_the_hint_promotes_the_entity_to_first_entity_rank(self, live_scoring: None) -> None:
+        """Rank 6 of 6 becomes the top entity — the overlap subscore is the deciding lever.
+
+        FRE-1062's episode floor walks the best episode first, so "first place" is now
+        "first among entities"; the lever this regression pins (overlap promotion) is
+        unchanged.
+        """
         suggestions = build_proactive_suggestions(
             _rows(),
             {"Melon"},
@@ -192,7 +197,8 @@ class TestMelonTurnEntityAdmission:
             None,
         )
 
-        assert suggestions.candidates[0].payload.get("name") == "Melon"
+        entity_names = [c.payload.get("name") for c in suggestions.candidates if c.kind == "entity"]
+        assert entity_names and entity_names[0] == "Melon"
 
     def test_the_capitalisation_heuristic_could_never_have_supplied_the_hint(
         self, live_scoring: None

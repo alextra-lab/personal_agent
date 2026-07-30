@@ -202,6 +202,23 @@ so `recall_item_cap` and `recall_token_budget` never co-occur in one record. Any
 `recall_candidate_cap`, `recall_score_threshold` and `recall_item_oversized` drops may
 accompany it.
 
+**Two stated selection rules lead the walk (FRE-1062).** Selection runs over a
+permutation of the ranked candidates — `floor episode → mentioned-entity pins → rest by
+rank`, bounded by one `max_candidates` window — with the same gates and attribution:
+
+1. *Episode floor, first:* the best-ranked episode that clears the existing
+   `diminishing_score_floor` is admitted before pins or ranked candidates can consume
+   its slot or token budget (the first live post-FRE-1061 turn showed the answer's
+   substance riding a single episode that survived by rank luck).
+2. *Mentioned-entity pins, next:* up to two entity candidates whose names the message
+   literally mentions (FRE-1041 resolver output, threaded as `mentioned_entity_names`)
+   are admitted in score order — still subject to `min_score`, the token budget and the
+   oversize skip; they bypass only the rank caps and the diminishing heuristics.
+
+The diminishing floor/gap checks apply only in the rest region; `prev_score` updates on
+every admission so the gap gate keeps its meaning. The trim event carries
+`pinned_mention_count` and `episode_floor_applied` (additive).
+
 **The dedupe is deliberately not a gate here.** Since FRE-1061 it runs at candidate level
 with kind-qualified identity — episodes collapse on `conversation_id`, entities on `name` —
 so a *distinct entity* whose best turn collides with a higher-ranked entity's is no longer

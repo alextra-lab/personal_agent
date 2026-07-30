@@ -136,8 +136,10 @@ def test_score_combination_non_empty(loose_proactive_settings: None) -> None:
         "trace",
         12.5,
     )
-    # FRE-1061: the (entity, best-turn) pair row yields both candidates.
-    assert [c.kind for c in out.candidates] == ["entity", "episode"]
+    # FRE-1061: the (entity, best-turn) pair row yields both candidates. FRE-1062: the
+    # episode floor admits the episode first — walk order is admission priority, not
+    # presentation (the renderer partitions by kind), so assert membership, not rank.
+    assert sorted(c.kind for c in out.candidates) == ["entity", "episode"]
     assert out.candidates[0].relevance_score > 0.5
     assert out.query_embedding_ms == 12.5
 
@@ -206,10 +208,10 @@ def test_diminishing_score_gap(monkeypatch: pytest.MonkeyPatch) -> None:
     out = build_proactive_suggestions(raw, set(), None, "tr", None)
     # FRE-1061: H1's pair shares one score (gap 0 between siblings), so both admit;
     # the 0.2 drop to H2 still terminates on the gap gate and cuts H2's pair.
-    assert [c.payload.get("name") or c.payload.get("conversation_id") for c in out.candidates] == [
-        "H1",
-        "x1",
-    ]
+    # FRE-1062: the episode floor walks x1 first; same admitted set, floor-first order.
+    assert sorted(
+        c.payload.get("name") or c.payload.get("conversation_id") for c in out.candidates
+    ) == ["H1", "x1"]
 
 
 def test_dedupe_same_turn(monkeypatch: pytest.MonkeyPatch) -> None:

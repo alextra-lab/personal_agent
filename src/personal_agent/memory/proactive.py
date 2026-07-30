@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -185,7 +186,7 @@ def _split_row_payloads(row: dict[str, Any]) -> list[tuple[_CandidateKind, dict[
     return payloads
 
 
-def _candidate_identity(kind: _CandidateKind, payload: dict[str, Any]) -> tuple[str, str]:
+def _candidate_identity(kind: str, payload: dict[str, Any]) -> tuple[str, str]:
     """Kind-qualified identity for dedupe (FRE-1061).
 
     Entity identity is its ``name``; episode identity is its ``conversation_id`` —
@@ -223,12 +224,22 @@ def _discard_candidate(
     )
 
 
+_MENTIONED_ENTITY_PIN_LIMIT = 2
+"""Bound on FRE-1062 mentioned-entity pins per turn.
+
+Two, not "all resolved mentions": the resolver can return several names per message
+(``MESSAGE_ENTITY_HINT_LIMIT``), and pinning them all would let one crowded message
+evict every ranked candidate. Two covers the dominant one-or-two-subject message shape
+observed live (melon + ice cream) while leaving most of the injected set to rank."""
+
+
 def build_proactive_suggestions(
     raw_rows: list[dict[str, Any]],
     session_entity_names: set[str],
     session_topic_hint: str | None,
     trace_id: str,
     query_embedding_ms: float | None,
+    mentioned_entity_names: Sequence[str] | None = None,
 ) -> ProactiveMemorySuggestions:
     """Score raw Neo4j rows, apply threshold, candidate cap, budget, diminishing returns.
 
@@ -238,6 +249,10 @@ def build_proactive_suggestions(
         session_topic_hint: Optional short topic proxy (e.g. recent user text).
         trace_id: Correlation id for logs.
         query_embedding_ms: Optional timing for observability.
+        mentioned_entity_names: Graph-resolved entity names the message literally
+            mentions (FRE-1041 resolver output, graph casing). Feeds the FRE-1062
+            mentioned-entity pin — distinct from ``session_entity_names``, which only
+            nudges the overlap subscore. None or empty pins nothing.
 
     Returns:
         ProactiveMemorySuggestions with trimmed, ranked candidates **and** every
@@ -324,11 +339,57 @@ def build_proactive_suggestions(
 
     scored.sort(key=lambda c: c.relevance_score, reverse=True)
     after_threshold = len(scored)
-    capped = scored[: cfg.proactive_memory_max_candidates]
+
+    # FRE-1062: two stated selection rules ahead of the rank walk, as a *permutation* of
+    # the same candidate list — same gates, same DropReasons, same conservation.
+    #
+    # 1. Episode floor, FIRST: the best-ranked episode that clears the existing
+    #    diminishing_score_floor (the system's own quality bar — no new constant) is
+    #    admitted before anything can consume its slot or budget. The first live
+    #    post-FRE-1061 turn showed the answer's substance riding the single admitted
+    #    episode, which survived by rank luck; ordering the floor ahead of the pins is
+    #    what makes the guarantee real (two pins can otherwise exhaust the token budget
+    #    or a small item cap before the episode is visited — codex plan-review).
+    # 2. Mentioned-entity pins, NEXT: up to _MENTIONED_ENTITY_PIN_LIMIT entity
+    #    candidates the message literally names (FRE-1041 resolver, graph casing),
+    #    score order. Still subject to min_score (threshold ran above), the token
+    #    budget, the oversize skip AND max_injected_items — the item cap is the hard
+    #    output bound and nothing exceeds it. What a pin bypasses is rank: the
+    #    max_candidates window ordering and the diminishing floor/gap heuristics.
+    #    The literal mention is the justification.
+    #
+    # Walk order is admission priority, not presentation: the renderer partitions
+    # items by kind, so head-first changes which candidates survive, never how they
+    # read to the model.
+    mentioned = set(mentioned_entity_names or ())
+    floor_cand = next(
+        (
+            c
+            for c in scored
+            if c.kind == "episode"
+            and c.relevance_score >= cfg.proactive_memory_diminishing_score_floor
+        ),
+        None,
+    )
+    pins: list[ProactiveMemoryCandidate] = []
+    if mentioned:
+        for cand in scored:
+            if len(pins) >= _MENTIONED_ENTITY_PIN_LIMIT:
+                break
+            if cand.kind == "entity" and cand.payload.get("name") in mentioned:
+                pins.append(cand)
+    head: list[ProactiveMemoryCandidate] = ([floor_cand] if floor_cand else []) + pins
+    head_ids = {_candidate_identity(c.kind, c.payload) for c in head}
+    rest = [c for c in scored if _candidate_identity(c.kind, c.payload) not in head_ids]
+    # ONE capacity-safe window: head is truncated with everything else by the single
+    # bound, so a legal max_candidates=1 cannot go negative and the total holds.
+    ordered = head + rest
+    walk = ordered[: cfg.proactive_memory_max_candidates]
     discarded.extend(
         _discard_candidate(c, DropReason.RECALL_CANDIDATE_CAP)
-        for c in scored[cfg.proactive_memory_max_candidates :]
+        for c in ordered[cfg.proactive_memory_max_candidates :]
     )
+    head_len = min(len(head), len(walk))
 
     selected: list[ProactiveMemoryCandidate] = []
     token_budget = 0
@@ -337,21 +398,24 @@ def build_proactive_suggestions(
     stop_index: int | None = None
     stop_reason: DropReason | None = None
 
-    # Selection is unchanged — the branch order, the comparisons and the break/continue
-    # semantics are all as before. The only addition is recording *which* branch ended it,
-    # because the deciding gate was previously indistinguishable from the others and this
-    # ticket forbids widening a gate before it can be measured.
-    for index, cand in enumerate(capped):
+    # The gate loop is the FRE-1060 loop over the reordered walk. The diminishing
+    # floor/gap checks apply only in the rest region (head items are pre-qualified:
+    # the floor episode by the floor itself, pins by the stated bypass); prev_score
+    # still updates on EVERY admission so the gap gate keeps its pre-FRE-1062 meaning
+    # of "drop versus the previously admitted item" — with an empty head this loop is
+    # byte-for-byte the previous behaviour.
+    for index, cand in enumerate(walk):
         if len(selected) >= cfg.proactive_memory_max_injected_items:
             stop_index, stop_reason = index, DropReason.RECALL_ITEM_CAP
             break
-        if cand.relevance_score < cfg.proactive_memory_diminishing_score_floor:
-            stop_index, stop_reason = index, DropReason.RECALL_SCORE_FLOOR
-            break
-        if prev_score is not None:
-            if prev_score - cand.relevance_score > cfg.proactive_memory_diminishing_score_gap:
-                stop_index, stop_reason = index, DropReason.RECALL_SCORE_GAP
+        if index >= head_len:
+            if cand.relevance_score < cfg.proactive_memory_diminishing_score_floor:
+                stop_index, stop_reason = index, DropReason.RECALL_SCORE_FLOOR
                 break
+            if prev_score is not None:
+                if prev_score - cand.relevance_score > cfg.proactive_memory_diminishing_score_gap:
+                    stop_index, stop_reason = index, DropReason.RECALL_SCORE_GAP
+                    break
         est = _estimate_payload_tokens(cand.payload)
         if est > cfg.proactive_memory_max_tokens:
             oversized.append(cand)
@@ -367,7 +431,13 @@ def build_proactive_suggestions(
     # ``stop_index`` and it can never also appear in the terminated tail below.
     discarded.extend(_discard_candidate(c, DropReason.RECALL_ITEM_OVERSIZED) for c in oversized)
     if stop_reason is not None and stop_index is not None:
-        discarded.extend(_discard_candidate(c, stop_reason) for c in capped[stop_index:])
+        # Attribution over the explicit walk, never the pre-reorder list — the tail of
+        # the reordered walk is what the terminal gate actually cut (codex plan-review).
+        discarded.extend(_discard_candidate(c, stop_reason) for c in walk[stop_index:])
+
+    selected_object_ids = {id(c) for c in selected}
+    pinned_admitted = sum(1 for c in pins if id(c) in selected_object_ids)
+    floor_admitted = floor_cand is not None and id(floor_cand) in selected_object_ids
 
     # The guard is deliberately UNCHANGED — it fires only when selection itself trimmed.
     # An earlier revision widened it to `if discarded:` on the reasoning that the old
@@ -401,6 +471,10 @@ def build_proactive_suggestions(
             retrieved_row_count=retrieved_count,
             split_candidate_count=split_count,
             deduped_candidate_count=deduped_count,
+            # FRE-1062: how the two stated rules fired on this turn — pins admitted and
+            # whether the reserved episode reached the model. Additive fields only.
+            pinned_mention_count=pinned_admitted,
+            episode_floor_applied=floor_admitted,
         )
 
     return ProactiveMemorySuggestions(

@@ -59,9 +59,22 @@ until that acceptance decision is taken** — do not flip it to Superseded on th
 `Awaiting Deploy` from 07-29 because a MASTER_PLAN *docs* PR (#741) mentioning it was matched by the
 GitHub integration; no branch or PR for it has ever existed. Restored to `Approved`. Under ADR-0129
 there is no rename table coming at all (log field names outside the identity spine become
-deliberately ungoverned), so the "late table ⇒ second reindex" coupling is gone. The shard deadline
-is untouched by ADR-0129 — logs stay in Elasticsearch. **602 active shards / 564 indices as of
-07-30**, against the 1,000-shard ceiling.
+deliberately ungoverned), so the "late table ⇒ second reindex" coupling is gone.
+
+**ADR-0129 relieves the shard deadline only marginally, and only late.** Logs stay in Elasticsearch;
+the one family it removes is `slm-requests` (D8 — it becomes spans in Tempo): **40 shards / 40
+indices + ~1/day halted**, ≈6.6% of the estate, arriving at **FRE-1071**, seventh in the chain.
+Measured 07-30: **602 active shards / 564 indices**, against 586 when FRE-1036 was filed on 07-28 —
+**~8 shards/day, ≈50 days of headroom**, looser than the ticket's stated 34 but on the same order,
+and still unwatched. **FRE-1036 needs its own slot; nothing else will do it.**
+
+**Correction to this plan's own record (07-30):** it said FRE-1066 was "the single largest lever on
+FRE-1036's shard pressure", relayed from the adrs handoff. **It is not a shard lever at all.**
+`metrics.sampled` lives *inside* the daily `agent-logs-*` indices, so removing 1.72M documents
+removes documents, not indices — and `agent-logs` is only **60 of 602 shards**. The count is driven
+by daily rolling across many small families (captains-reflections 93, captains-captures 89,
+joinability 69). FRE-1066 halves agent-logs *volume*, which matters for storage and for rollover
+frequency **after** FRE-1036 lands size-based rollover. Fix it on its own merits.
 
 **FRE-1036 has an unrecorded scope boundary.** `slm_server` formats its own dated index names
 client-side, so rollover-behind-a-write-alias cannot reach it. Verified: **39 `slm-requests` indices,
@@ -88,8 +101,9 @@ FRE-1071 ∥ FRE-1072 → **FRE-1073, the seam**. Six of nine criteria hold only
 
 **Two findings from that session are independent of both ADRs and should not wait on either:**
 **FRE-1066** — `event_type` is populated with the Redis *stream name*, producing 1.72M documents,
-51.5% of the telemetry corpus, containing no metrics. Live bug, still emitting, and the single
-largest lever on FRE-1036's shard pressure. **FRE-1068** (Tier-1) — telemetry stores verbatim user
+51.5% of the telemetry corpus, containing no metrics. Live bug, still emitting. **Approved and
+dispatched to build1 07-30** — on its own merits, *not* as a shard fix (see the correction above).
+**FRE-1068** (Tier-1) — telemetry stores verbatim user
 turns, and the index template auto-indexes `stdout`/`stderr`/`raw_*` by pattern with no declaration.
 
 **FRE-1035** *(ES field-resolution technique)* — resolve every field against the mappings API before

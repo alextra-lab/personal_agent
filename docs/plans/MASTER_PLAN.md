@@ -113,10 +113,8 @@ querying; treat zero matches as a hard error. Needs approval. The recipe fix is 
 
 - **Accept ADR-0129, or hold ADR-0128?** The largest open call — see §1. Accepting it supersedes
   ADR-0128 D2–D8, cancels FRE-1044/1045, closes FRE-588 and FRE-583 as superseded, retires Kibana,
-  and authorises a ten-ticket instrumentation programme. **FRE-1043's own disposition rides on it**:
-  it is in Awaiting Deploy having delivered an ADR rather than the rename table its criteria name, so
-  it cannot close against those criteria — recommend rewriting its scope to "author ADR-0129" and
-  closing Done, rather than cancelling work that was genuinely done.
+  and authorises a ten-ticket instrumentation programme. *(FRE-1043 itself is settled — rescoped to
+  "author ADR-0129" and closed Done 07-30; that did **not** accept the ADR.)*
 
 - **FRE-1039** — Grafana over Postgres for aggregate cost, and whether it **replaces** Kibana. Amends
   ADR-0090's dashboard corner; inherits the 14 known-broken panels. Prerequisite: no read-only Postgres

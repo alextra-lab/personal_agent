@@ -8,10 +8,13 @@
 
 ## 0. In flight
 
-- **build1** — **FRE-1051** *ES silently loses up to 83% of emitted events* (Urgent). Then **FRE-937**
-  — the **ADR-0123 seam** (§0d). Then FRE-1042 *(drawer row height, Haiku)*.
-- **build2** — **FRE-867** *(the watcher surfaces a parked seat — the robust half, §8)*. Then the
-  **ADR-0126 chain**: FRE-1060 → FRE-1015 → FRE-1017 → FRE-1019 (§0d).
+- **build1** — free. ADR-0123's four children are all merged and deployed; **AC-7 is master's live
+  gate** and needs three owner turns (artifact build, the same cancelled mid-build, a short no-tool
+  question). That is the only thing between us and ADR-0123 closing.
+- **build2** — free. Head is **FRE-1015**, now genuinely unblocked: FRE-1062's mentioned-entity pin
+  makes its entity-selection precondition satisfiable **by construction** on any turn naming the stance
+  target. PR #738 needs re-baselining, not merging (46 commits behind, tests written against the
+  pre-split candidate stream). Then FRE-1017 → FRE-1019 closes ADR-0126.
 - **adrs** — idle. **FRE-1043–1050 all Needs Approval**; nothing dispatchable until they're approved.
 - **explore** — delivered the convergence study (§9); free.
 
@@ -26,69 +29,37 @@
 - **Watch `main_inference`'s caps** — reachable by streamed chat for the first time, and that lane denies
   with `raise` → user-facing 503. If one fires, ask whether the spend is real; do not raise the cap.
 
-## 0c. FRE-1041 is Verify Failed — and the gate is not where §0b says
+## 0c. Entity recall — RESOLVED 2026-07-30, and every earlier explanation here was wrong
 
-Deployed 07-30 05:37Z; the owner fired the melon turn at 05:43Z. **Split result.**
+**A discussed entity now reaches the model.** Proven live on trace `0e592a12` at 15:28Z: `Melon`
+admitted and present in `assembled_context`, and the answer still named the owner's ice-cream maker
+and the Actimel approach. First time in the investigation's history.
 
-**The resolver works.** Probed live against the graph with that turn's own identity, the message
-resolves to `Ice cream, ice cream, Melon, Ice` — **`Melon` recovered from a lowercase mention**, the
-exact class the replaced heuristic could not see. Unauthenticated control returns empty, so visibility
-scoping holds. The fix is **not inert**, which was the runbook's own discriminator.
+**The actual mechanism, measured not reasoned.** The proactive path retrieves an *(entity, best
+cross-session turn)* pair per row, and the payload builder forced a binary choice — always taking the
+episode when the turn carried text, **discarding the entity's name, type and description**. Live
+measurement: **7,442 of 7,446 production entities** carry such a turn. So an entity became unreachable
+*as an entity* the moment it was discussed anywhere, and the behaviour **tightened with use**. A second
+defect compounded it: row-level dedupe erased distinct entities sharing a best turn (29→13).
+Fixed by **FRE-1061** (emit both) and **FRE-1062** (episode floor + mentioned-entity pins).
 
-**AC-2 still fails.** The turn's admission record holds five candidates, all `episode`, zero `entity` —
-byte-identical to the pre-change behaviour. **Not rolled back:** reverting restores a heuristic blind to
-lowercase and does nothing about the gate that discards the signal.
+**Five explanations preceded it and all five were wrong**, including two master stated as fact on
+2026-07-30: that the deciding gate was the token-budget trim (it was `recall_item_cap`), and that the
+entity was "not in the race" (it was, once flattening stopped). FRE-1021's premise — *a topic's own
+recent turns displace its entities* — is **false**: the turn *replaced* the entity in the same row;
+they never competed. Treat §0b's numbers as describing episodes competing with episodes.
 
-**The deciding gate was the token-budget trim, not the top-5 rank race.** 28 raw rows → 12 candidates →
-**trimmed to 5** at a 500-token threshold. §0b, FRE-1021, FRE-1041 and FRE-1053 have all been reasoning
-about a five-slot competition and a 0.002 margin. On this turn the cap never got to decide.
+**The two lessons, which are worth more than the fix.**
 
-**And the admission record is written *after* the trim**, so it reports five survivors as though they
-were the population. Seven candidates were discarded and no artifact names one of them. **Every
-conclusion this project has drawn from an admission record about recall is a conclusion about post-trim
-survivors** — treat the §0b numbers accordingly until FRE-1060 lands.
+1. **Every explanation that failed was inferred from telemetry; the one that worked came from reading
+   the retrieval path and counting the graph.** Four rounds of instrument-then-theorise produced better
+   records and no answer.
+2. **Every acceptance criterion in this area asserts against the recall record; none asserts against
+   the answer.** On 2026-07-30 05:43 master read only the record and reported a *correct, personalised*
+   turn as a failure. Ask what the user got, not what the pipeline selected.
 
-**FRE-1060** *(Approved, Urgent, stream:build2)* owns it: record the pre-trim population with per-item
-drop reasons, distinguish cap-loss from budget-loss, and give the resolver a success-path log — it has
-none, so its silence proved nothing and master had to call it against the graph directly. The ticket
-fails if the trim is widened before it is made visible.
-
-This also vindicates the **PR #738 bounce**: FRE-1015's precondition would fail on real turns for a
-reason nobody could name, and a tautological precondition would have reported a clean pass through it.
-
-## 0d. Returning to the primary streams — the whole detour, and the way back
-
-**What displaced us, dated.** Session summarisation. The digest cost runaway surfaced 2026-07-25 and the
-"Cost, Process and Monitoring Audit" project was opened at **21:53Z that Saturday**. Everything merged on
-or before 07-25 was the ADR-0123 chain. **Every one of the ~35 merges since is that audit or work it
-spawned** — cost attribution, ADR-0125, ADR-0127, ADR-0128, the memory OOM, and all the dispatch
-machinery. The work was real and mostly necessary. It was not the plan.
-
-**What of the can of worms is actually still open: one thing.** Everything else from the summarisation
-wave shipped. The residue is §6's item — **ADR-0124 regenerates the digest wholesale on an idle clock,
-and unbounded *input* has no owner.** ADR-0127 D9 assigns the fork to ADR-0124's trigger; it is written
-down and nobody holds it. The sweep bound (~8 attempts/day) bounds a failing *session*, not aggregate
-spend. **This is the one item that can pull us back in, and it is an owner decision: own it now, or
-defer it explicitly and let the sweep bound hold.**
-
-**The way back is four tickets and it closes two ADRs.** One parked draft PR was holding both:
-
-> **FRE-1060 → FRE-1015 → FRE-1017 → FRE-1019** closes **ADR-0126**
-> **FRE-937** closes **ADR-0123**
-
-FRE-1015 (draft PR #738, bounced) blocked FRE-1017 and FRE-1019 *and* FRE-937. The FRE-937 relation was
-**undocumented and wrong** — that ticket's own body cites only FRE-936, it is PWA transcript rendering,
-and FRE-1015 is stance enrichment in context assembly. Cleared 07-30; **ADR-0123's seam is dispatchable
-now** and is build1's next after FRE-1051.
-
-FRE-1015's real blocker is **FRE-1060** (§0c): its acceptance criteria turn on asserting the target
-entity is in the recall set, and until the budget trim is visible that assertion cannot be made honestly.
-That is the relation now recorded — and it is why FRE-1060 is a return to the plan rather than another
-detour.
-
-**What we are deliberately NOT doing.** The process/dispatch backlog — FRE-975, FRE-977, FRE-1011,
-FRE-1054, FRE-1059 — stays parked (unlabelled or Needs Approval). It is real work and none of it is on
-the critical path to an ADR closing. Do not dispatch it because it is easy.
+**Method that did work, worth repeating:** FRE-1061 and FRE-1062 each stated a falsifiable live
+prediction *before* deploy. Both were confirmed exactly.
 
 ## 0b. Recall: four mechanisms, one race — RESOLVED
 

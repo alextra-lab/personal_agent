@@ -92,6 +92,19 @@ assert_decline "command substitution" \
   "$PROD -c \"SELECT 1;\" \$(rm -rf /tmp/x)"
 assert_decline "piped into a writer" \
   "$PROD -c \"SELECT 1;\" | tee /tmp/out.txt"
+# Found by master re-attacking the hook at the gate, after two automated review rounds missed it.
+# shlex treats a newline as whitespace, so the second command used to land inside the `echo`
+# segment and only that segment's first token was checked. `rm` is in the project's ask-list, so
+# this bypassed a real guard, not a theoretical one.
+assert_decline "newline-separated second command" \
+  "$PROD -c \"SELECT 1;\"; echo hi
+rm -rf /tmp/x"
+assert_decline "newline before the query" \
+  "rm -rf /tmp/x
+$PROD -c \"SELECT 1;\""
+assert_decline "multi-line SQL (falls through to a prompt, as before)" \
+  "$PROD -c \"SELECT 1,
+2;\""
 assert_decline "second docker exec that is not read-only" \
   "$PROD -c \"SELECT 1;\"; docker exec cloud-sim-postgres psql -U agent -c \"DROP TABLE t;\""
 

@@ -175,6 +175,13 @@ if "psql" not in command or "docker" not in command:
     decline()
 if "`" in command or "$(" in command or "${" in command:
     decline()
+# A newline separates commands in the shell, but shlex treats it as ordinary whitespace, so a
+# second command on its own line lands INSIDE the preceding segment and only that segment's first
+# token is ever checked — "psql -c 'SELECT 1;'; echo hi\nrm -rf x" would be allowed, bypassing the
+# `rm` ask-rule. Rather than teach the tokenizer about line structure, refuse multi-line commands
+# outright: a multi-line query then prompts, which is exactly today's behaviour, so nothing regresses.
+if "\n" in command or "\r" in command:
+    decline()
 
 tokens = tokenize(command)
 if any(token in FORBIDDEN_TOKENS for token in tokens):

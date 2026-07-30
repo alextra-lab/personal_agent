@@ -4,7 +4,7 @@
 > the git log.** No history, no state narrative, no post-mortems. What shipped → `git log`; why a
 > decision was made → the Linear ticket; this session's decisions → [`LAST_SESSION.md`](LAST_SESSION.md);
 > per-ticket state → [Linear](https://linear.app/frenchforest).
-> **Last updated**: 2026-07-29
+> **Last updated**: 2026-07-30
 
 ## 0. In flight
 
@@ -181,6 +181,12 @@ times and the pipeline still stalled. FRE-927 is the proof: two observers compos
   whose trigger was a **prose cross-reference in the body** — so "no token in branch or title" was never
   a sufficient rule.
 - **FRE-975** (gate master on review-complete) · **FRE-977** (explore first-class dispatch).
+- **FRE-867 — a seat blocked on a dialog is invisible, and it just cost 16.5h × 2 seats.** On 2026-07-30
+  both build seats had sat since ~11:30 the previous day: build1 on a permission prompt for a
+  **read-only** `docker exec … psql … SELECT` (`Bash(docker exec:*)` is not allowlisted), build2 at a
+  plan gate. The daemon logged `await reason=in-flight` throughout with **zero warnings** — the same
+  branch-not-state defect as FRE-1054. FRE-911's `acceptEdits` covers file edits only. **Cheapest fix:
+  allowlist the read-only psql shape**; the seats hit it constantly on substrate work.
 - **Four mutually inconsistent readiness oracles** exist in `scripts/dispatch/`, two documenting their own
   unreliability in their own headers. The wedge alarm is *defined* as a disagreement between two of them,
   which is why it logs 14 warnings and escalates nothing. **Finishing the ADR-0116 channel migration** —

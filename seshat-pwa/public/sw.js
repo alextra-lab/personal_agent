@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v41-digest-clamp';
+const CACHE_NAME = 'seshat-v42-digest-row-height';
 
 const PRECACHE_URLS = [
   '/',

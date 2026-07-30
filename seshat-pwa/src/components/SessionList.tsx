@@ -86,7 +86,7 @@ export function SessionList({ currentSessionId, onSelect }: SessionListProps) {
             <button
               onClick={() => handleSelect(s.session_id)}
               className={[
-                'w-full text-left px-4 py-3 border-b border-slate-800 hover:bg-slate-800/50 transition-colors',
+                'block w-full text-left px-4 py-3 border-b border-slate-800 hover:bg-slate-800/50 transition-colors',
                 isActive ? 'bg-slate-800/70' : '',
               ].join(' ')}
             >

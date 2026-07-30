@@ -8,69 +8,44 @@
 
 ## 0. In flight
 
-- **build1** — free. ADR-0123's four children are all merged and deployed; **AC-7 is master's live
-  gate** and needs three owner turns (artifact build, the same cancelled mid-build, a short no-tool
-  question). That is the only thing between us and ADR-0123 closing.
-- **build2** — free. Head is **FRE-1015**, now genuinely unblocked: FRE-1062's mentioned-entity pin
-  makes its entity-selection precondition satisfiable **by construction** on any turn naming the stance
-  target. PR #738 needs re-baselining, not merging (46 commits behind, tests written against the
-  pre-split candidate stream). Then FRE-1017 → FRE-1019 closes ADR-0126.
-- **adrs** — idle. **FRE-1043–1050 all Needs Approval**; nothing dispatchable until they're approved.
-- **explore** — delivered the convergence study (§9); free.
+- **build1** — free.
+- **build2** — head is **FRE-1015**. PR #738 needs **re-baselining, not merging** (46 commits behind;
+  its tests were written against the pre-split candidate stream). FRE-1062's mentioned-entity pin makes
+  its entity-selection precondition satisfiable **by construction** on any turn naming the stance target.
+  Then FRE-1017 → FRE-1019 closes ADR-0126.
+- **adrs** — head is **FRE-1043** (ADR-0128 chain head, approved 07-30). FRE-1044–1050 still Needs
+  Approval behind it.
+- **explore** — free.
 
-**Pending actions:**
-- **FRE-1041 is deployed and its verification FAILED — see §0c.** Nothing further to deploy.
-- **FRE-927 is deployed** (07-30 05:38Z, daemons restarted, knob live, journal baseline clean).
-  Verification pending: the observable signal is the **reason split**, not the alert — `board-churn`
-  and `owner-acted` now tally separately where both previously logged as `owner-acted`. Needs a few
-  hours of ticks. **A quiet alert is the steady state and is not proof it works.**
-- **FRE-989 F9 needs one turn on a *cloud* primary** to verify; local-qwen turns prove nothing (zero
-  cost ⇒ nothing priced to record). Its role-distribution criterion needs ~7 days.
+**Owner actions, blocking:**
+- **ADR-0123 closes on three owner turns** — a multi-minute artifact build, the same cancelled
+  mid-build, and a short no-tool question. All four children merged and deployed; AC-7 is the only
+  thing left and master cannot fire the turns.
+- **FRE-989 F9 needs one turn on a *cloud* primary**; local-qwen turns prove nothing (zero cost ⇒
+  nothing priced). Its role-distribution criterion needs ~7 days.
+
+**Master's own queue:**
+- **FRE-927 verification** — deployed 07-30 05:38Z. The observable signal is the **reason split**
+  (`board-churn` vs `owner-acted` now tallying separately), not the alert. **A quiet alert is the steady
+  state and is not proof it works.**
 - **Watch `main_inference`'s caps** — reachable by streamed chat for the first time, and that lane denies
   with `raise` → user-facing 503. If one fires, ask whether the spend is real; do not raise the cap.
 
-## 0c. Entity recall — RESOLVED 2026-07-30, and every earlier explanation here was wrong
+## 0b. Recall — the entity path is fixed; what is NOT yet measured
 
-**A discussed entity now reaches the model.** Proven live on trace `0e592a12` at 15:28Z: `Melon`
-admitted and present in `assembled_context`, and the answer still named the owner's ice-cream maker
-and the Actimel approach. First time in the investigation's history.
+Entities now reach the model on a turn that names them (FRE-1041/1060/1061/1062, all Done, verified
+live 2026-07-30). **Do not re-open the mechanism** — five explanations preceded the real one and the
+history is on those tickets.
 
-**The actual mechanism, measured not reasoned.** The proactive path retrieves an *(entity, best
-cross-session turn)* pair per row, and the payload builder forced a binary choice — always taking the
-episode when the turn carried text, **discarding the entity's name, type and description**. Live
-measurement: **7,442 of 7,446 production entities** carry such a turn. So an entity became unreachable
-*as an entity* the moment it was discussed anywhere, and the behaviour **tightened with use**. A second
-defect compounded it: row-level dedupe erased distinct entities sharing a best turn (29→13).
-Fixed by **FRE-1061** (emit both) and **FRE-1062** (episode floor + mentioned-entity pins).
-
-**Five explanations preceded it and all five were wrong**, including two master stated as fact on
-2026-07-30: that the deciding gate was the token-budget trim (it was `recall_item_cap`), and that the
-entity was "not in the race" (it was, once flattening stopped). FRE-1021's premise — *a topic's own
-recent turns displace its entities* — is **false**: the turn *replaced* the entity in the same row;
-they never competed. Treat §0b's numbers as describing episodes competing with episodes.
-
-**The two lessons, which are worth more than the fix.**
-
-1. **Every explanation that failed was inferred from telemetry; the one that worked came from reading
-   the retrieval path and counting the graph.** Four rounds of instrument-then-theorise produced better
-   records and no answer.
-2. **Every acceptance criterion in this area asserts against the recall record; none asserts against
-   the answer.** On 2026-07-30 05:43 master read only the record and reported a *correct, personalised*
-   turn as a failure. Ask what the user got, not what the pipeline selected.
-
-**Method that did work, worth repeating:** FRE-1061 and FRE-1062 each stated a falsifiable live
-prediction *before* deploy. Both were confirmed exactly.
-
-## 0b. Recall: four mechanisms, one race — RESOLVED
-
-FRE-1021 and FRE-1041 were competing explanations. They are not. **The gate is a top-5 rank race**, not
-candidacy and not a threshold: on the melon turn the lexical arm *did* surface `Melon`, which scored
-0.563 and lost the last slot **by 0.002**. FRE-1041 (merged) makes entity overlap able to win that race.
-
-**FRE-1053** *(filed, High, Haiku)* is the sting: `_topic_subscore` filters `key_entities` for emptiness
-but **not `entity_name`**, so an empty name matches the first token. Episode rows have empty names →
-every episode carries **+0.020** on its final score. **The bias is 10× the margin that decided the turn.**
-Do not fold it into the ADR-0126 chain — it moves the ranking those tickets measure against.
+**Open, and genuinely unmeasured:**
+- **Is the entity payload load-bearing?** On the proven turn the answer's substance came from the
+  *episode*; the entity carries only name/type/description. Nobody has tested whether admitting the
+  entity improves an answer. Measure before building further on the assumption that it does.
+- **FRE-1053** — the empty-name topic subscore is a real arithmetic bug, but its "decisive for the melon
+  turn" claim is dead. Approve **re-scoped small**, without the census-re-run obligation.
+- **FRE-1021's census** must be re-run `--since` the 2026-07-30 deploys. Pre/post candidate populations
+  are not comparable (`candidate_count` changed meaning) and a higher participation rate is **not**
+  improved recall — it is the same recall with a fuller record.
 
 ## 1. Elasticsearch structure — hold LIFTED 2026-07-29
 

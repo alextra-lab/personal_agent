@@ -46,15 +46,35 @@ ALLOWED_CONTAINERS = {"cloud-sim-postgres"}
 # `docker exec` flags that cannot change what the statement does.
 SAFE_DOCKER_FLAGS = {"-i", "-t", "-it", "-ti", "--interactive", "--tty"}
 
+# psql flags are ALLOWLISTED, not denylisted. A denylist cannot be complete here: -o and -L write
+# query output and a session log to any path, and -v/--set expands a variable into the statement
+# AFTER this hook has vetted it (`-v x='1; DROP TABLE t' -c 'SELECT :x'`), which defeats the whole
+# check. Anything unlisted falls through to a prompt, which is the safe direction.
+PSQL_CONNECTION_FLAGS = {  # take a value, either attached or as the next token
+    "-U", "-d", "-h", "-p", "-F", "-P", "-R",
+    "--username", "--dbname", "--host", "--port",
+    "--field-separator", "--pset", "--record-separator",
+}
+PSQL_BOOLEAN_FLAGS = {
+    "-t", "-A", "-x", "-q", "-w", "-W", "-n", "-X", "-H", "-E", "-e", "-s", "-S", "-0", "-z",
+    "--tuples-only", "--no-align", "--expanded", "--quiet", "--no-password", "--password",
+    "--no-readline", "--no-psqlrc", "--csv", "--html", "--echo-queries", "--single-step",
+    "--single-line",
+}
+
 STATEMENT_START = re.compile(r"^\s*(select|with|show|explain|table|values)\b", re.IGNORECASE)
 
-# Whole-word write/side-effect keywords. A data-modifying CTE ("WITH x AS (DELETE ...)") reads
-# as a SELECT at the front and is caught here instead.
+# Whole-word write/side-effect keywords. Two shapes make this list, not the opening keyword, the
+# thing that decides: a data-modifying CTE ("WITH x AS (DELETE ...)") reads as a SELECT at the
+# front, and SELECT ... INTO creates a table while looking like an ordinary projection. `into`
+# does not collide with `in` — the word boundary separates them.
 WRITE_KEYWORDS = re.compile(
-    r"\b(insert|update|delete|drop|create|alter|truncate|grant|revoke|copy|vacuum|"
+    r"\b(insert|into|merge|update|delete|drop|create|alter|truncate|grant|revoke|copy|vacuum|"
     r"reindex|cluster|lock|call|do|set|reset|begin|commit|rollback|savepoint|refresh|"
     r"import|prepare|execute|deallocate|listen|notify|unlisten|discard|analyze|"
-    r"pg_read_file|pg_read_binary_file|pg_ls_dir|lo_import|lo_export|dblink)\b",
+    r"nextval|setval|pg_terminate_backend|pg_cancel_backend|pg_advisory_lock|"
+    r"pg_logical_emit_message|pg_read_file|pg_read_binary_file|pg_ls_dir|"
+    r"lo_import|lo_export|dblink)\b",
     re.IGNORECASE,
 )
 
@@ -109,27 +129,43 @@ def psql_segment_is_read_only(tokens: list[str]) -> bool:
     index = 0
     while index < len(args):
         arg = args[index]
+
+        # The statement itself, in each of the three spellings psql accepts.
         if arg in ("-c", "--command"):
             if sql is not None or index + 1 >= len(args):
-                return False  # two statements, or -c with nothing after it
-            sql = args[index + 1]
-            index += 2
-            continue
-        if arg.startswith("-c") and len(arg) > 2:
-            if sql is not None:
-                return False
-            sql = arg[2:]
-            index += 1
+                return False  # a second statement, or -c with nothing after it
+            sql, index = args[index + 1], index + 2
             continue
         if arg.startswith("--command="):
             if sql is not None:
                 return False
-            sql = arg[len("--command="):]
+            sql, index = arg[len("--command="):], index + 1
+            continue
+        if arg.startswith("-c") and len(arg) > 2:
+            if sql is not None:
+                return False
+            sql, index = arg[2:], index + 1
+            continue
+
+        if not arg.startswith("-"):
+            return False  # a bare positional is the dbname; we require it via -d
+
+        if arg in PSQL_BOOLEAN_FLAGS:
             index += 1
             continue
-        if arg in ("-f", "--file", "-l", "--list") or arg.startswith(("-f", "--file=")):
-            return False  # reads a script off disk, or lists and then sits interactive
-        index += 1
+        if arg in PSQL_CONNECTION_FLAGS:
+            if index + 1 >= len(args):
+                return False
+            index += 2  # consumes its value
+            continue
+        if not arg.startswith("--") and arg[:2] in PSQL_CONNECTION_FLAGS and len(arg) > 2:
+            index += 1  # attached short value, e.g. -Uagent or -F'|'
+            continue
+        if arg.startswith("--") and "=" in arg and arg.split("=", 1)[0] in PSQL_CONNECTION_FLAGS:
+            index += 1
+            continue
+
+        return False  # unlisted flag — fall through to a prompt
 
     return sql is not None and sql_is_read_only(sql)
 

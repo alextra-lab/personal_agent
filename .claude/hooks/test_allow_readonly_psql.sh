@@ -61,6 +61,27 @@ assert_decline "server-side file read" \
   "$PROD -c \"SELECT pg_read_file('/etc/passwd');\""
 assert_decline "-f runs a script off disk" "$PROD -f /tmp/whatever.sql"
 assert_decline "no -c at all (would sit interactive)" "$PROD"
+# SELECT ... INTO creates a table while reading as an ordinary projection. Caught live by the
+# push security review after the first version of this hook allowed it.
+assert_decline "SELECT INTO creates a table" \
+  "$PROD -c \"SELECT * INTO evil FROM api_costs;\""
+assert_decline "MERGE inside a CTE" \
+  "$PROD -c \"WITH x AS (MERGE INTO t USING s ON true WHEN MATCHED THEN DO NOTHING RETURNING 1) SELECT 1;\""
+assert_decline "sequence side effect" "$PROD -c \"SELECT nextval('s');\""
+assert_decline "backend termination" "$PROD -c \"SELECT pg_terminate_backend(1);\""
+
+# --- declined: psql flag smuggling ----------------------------------------------------------
+# The flag set is an allowlist because a denylist cannot be complete: -o and -L write files, and
+# -v expands into the statement AFTER this hook has vetted it.
+assert_decline "-o writes query output to a file" \
+  "$PROD -o /tmp/out.txt -c \"SELECT 1;\""
+assert_decline "--output= writes query output to a file" \
+  "$PROD --output=/tmp/out.txt -c \"SELECT 1;\""
+assert_decline "-L writes a session log" \
+  "$PROD -L /tmp/session.log -c \"SELECT 1;\""
+assert_decline "-v expands a variable into the vetted statement" \
+  "$PROD -v x=\"1; DROP TABLE api_costs\" -c \"SELECT :x;\""
+assert_decline "unrecognised long flag" "$PROD --nonesuch -c \"SELECT 1;\""
 
 # --- declined: shell-level escapes ----------------------------------------------------------
 assert_decline "chained destructive command" \

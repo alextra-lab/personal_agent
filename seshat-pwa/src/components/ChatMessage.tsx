@@ -5,6 +5,7 @@ import { useState } from 'react';
 import type { ChatMessage as ChatMessageType, ToolCall } from '@/lib/types';
 import { MarkdownContent } from './MarkdownContent';
 import { TurnRating } from './TurnRating';
+import { TurnSummaryPanel } from './TurnSummaryPanel';
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -113,7 +114,9 @@ export function ChatMessage({ message, sessionId }: ChatMessageProps) {
             initialRating={message.rating}
           />
         )}
-        <CopyButton content={message.content} />
+        {/* A placeholder row (e.g. a turn cancelled before any output) has
+            nothing meaningful to copy (ADR-0123 T4, FRE-937). */}
+        {message.content.length > 0 && <CopyButton content={message.content} />}
       </div>
 
       {/* Content */}
@@ -134,6 +137,9 @@ export function ChatMessage({ message, sessionId }: ChatMessageProps) {
             ))}
           </div>
         )}
+
+        {/* Collapsed per-turn summary (ADR-0123 T4, FRE-937) */}
+        {!isUser && <TurnSummaryPanel summary={message.phaseSummary} />}
       </div>
     </div>
   );

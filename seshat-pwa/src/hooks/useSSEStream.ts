@@ -28,8 +28,10 @@ import type {
   ToolApprovalRequestData,
   ToolCall,
   TurnStatus,
+  TurnSummary,
 } from '@/lib/types';
 import { reconcilePhaseSnapshot } from '@/lib/phase-state';
+import { buildTurnSummary } from '@/lib/phase-summary';
 
 /** Server-authoritative model-selection change, from a `session_selection` STATE_DELTA. */
 export interface ServerSelection {
@@ -179,6 +181,58 @@ export function useSSEStream(): UseSSEStreamReturn {
   // FRE-757: trace_ids whose default "ok" was already persisted on completion,
   // so a repeated DONE never double-posts the resting default.
   const defaultRatedTracesRef = useRef<Set<string>>(new Set());
+  // ADR-0123 T4 (FRE-937): synchronous mirrors of `phases`/`activeTools` so the
+  // terminal-event handlers (CANCELLED/RUN_ERROR/DONE) can build the collapsed
+  // turn summary from a definite value in the same tick they resolve it,
+  // rather than racing setState's async application. The ref is the source of
+  // truth; updatePhases/updateTools keep `phases`/`activeTools` state in step.
+  const phasesRef = useRef<PhaseNode[]>([]);
+  const activeToolsRef = useRef<ToolCall[]>([]);
+
+  const updatePhases = useCallback((fn: (prev: PhaseNode[]) => PhaseNode[]): PhaseNode[] => {
+    const next = fn(phasesRef.current);
+    phasesRef.current = next;
+    setPhases(next);
+    return next;
+  }, []);
+
+  const updateTools = useCallback((fn: (prev: ToolCall[]) => ToolCall[]): ToolCall[] => {
+    const next = fn(activeToolsRef.current);
+    activeToolsRef.current = next;
+    setActiveTools(next);
+    return next;
+  }, []);
+
+  /**
+   * Attach a collapsed turn summary (ADR-0123 §7) to the last assistant
+   * message, or append a placeholder assistant message carrying it if the
+   * turn produced no TEXT_DELTA (e.g. cancelled before any output). Skips
+   * entirely when the turn had zero phases and zero tools — a trivial Q&A
+   * turn must not grow a summary control or a placeholder row.
+   */
+  const attachTurnSummary = useCallback(
+    (resolvedPhases: PhaseNode[], tools: ToolCall[], terminalState: TurnSummary['terminalState']) => {
+      if (resolvedPhases.length === 0 && tools.length === 0) return;
+      const summary = buildTurnSummary(resolvedPhases, tools, terminalState);
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role === 'assistant') {
+          return [...prev.slice(0, -1), { ...last, phaseSummary: summary }];
+        }
+        return [
+          ...prev,
+          {
+            id: generateUUID(),
+            role: 'assistant' as const,
+            content: '',
+            timestamp: new Date(),
+            phaseSummary: summary,
+          },
+        ];
+      });
+    },
+    [],
+  );
 
   // FRE-236: persist the in-progress draft to localStorage on visibility hide so
   // a kill+relaunch can detect that a turn was in-flight and the relaunch hydration
@@ -250,7 +304,7 @@ export function useSSEStream(): UseSSEStreamReturn {
 
       case 'TOOL_CALL_START': {
         const { tool_name } = event.data as { tool_name: string };
-        setActiveTools((prev) => [
+        updateTools((prev) => [
           ...prev,
           { name: tool_name, status: 'running' },
         ]);
@@ -262,7 +316,7 @@ export function useSSEStream(): UseSSEStreamReturn {
           tool_name: string;
           result: string;
         };
-        setActiveTools((prev) =>
+        updateTools((prev) =>
           prev.map((t) =>
             t.name === tool_name
               ? { ...t, status: 'completed', result }
@@ -274,7 +328,7 @@ export function useSSEStream(): UseSSEStreamReturn {
 
       case 'PHASE_START': {
         const data = event.data as unknown as PhaseStartData;
-        setPhases((prev) => [
+        updatePhases((prev) => [
           ...prev,
           {
             phaseId: data.phase_id,
@@ -295,7 +349,7 @@ export function useSSEStream(): UseSSEStreamReturn {
         // never touch this phase (phase_span's `finally` always emits
         // PHASE_END before an outer error handler runs).
         const { phase_id, ok } = event.data as unknown as PhaseEndData;
-        setPhases((prev) =>
+        updatePhases((prev) =>
           prev.map((p) =>
             p.phaseId === phase_id && p.state === 'running'
               ? { ...p, state: ok === false ? 'error' : 'completed', endedAt: Date.now() }
@@ -330,7 +384,7 @@ export function useSSEStream(): UseSSEStreamReturn {
         if (key === 'phase_state' && value !== null && typeof value === 'object') {
           const active = (value as { active?: unknown }).active;
           if (Array.isArray(active)) {
-            setPhases((prev) => reconcilePhaseSnapshot(prev, active as PhaseSnapshotEntry[]));
+            updatePhases((prev) => reconcilePhaseSnapshot(prev, active as PhaseSnapshotEntry[]));
           }
         }
         break;
@@ -389,13 +443,16 @@ export function useSSEStream(): UseSSEStreamReturn {
         // (FRE-986 `snapshotResolved`) — a dropped PHASE_END(ok:false) must not
         // leave a cancelled turn showing a green check. A genuinely
         // PHASE_END-completed node (unmarked) is left alone.
-        setPhases((prev) =>
+        const resolvedPhases = updatePhases((prev) =>
           prev.map((p) =>
             p.state === 'running' || p.snapshotResolved
               ? { ...p, state: 'cancelled', snapshotResolved: false, endedAt: p.endedAt ?? Date.now() }
               : p,
           ),
         );
+        // ADR-0123 §7 / AC-9(a): collapse into the transcript, recording the
+        // cancellation and the phases that had run.
+        attachTurnSummary(resolvedPhases, activeToolsRef.current, 'cancelled');
         break;
       }
 
@@ -410,19 +467,24 @@ export function useSSEStream(): UseSSEStreamReturn {
         });
         isStreamingRef.current = false; // FRE-236: keep ref in sync
         setIsStreaming(false);
-        setActiveTools([]);
+        // Captured before clearing so the collapsed summary still sees the
+        // turn's tools (ADR-0123 §7).
+        const toolsForSummary = activeToolsRef.current;
+        updateTools(() => []);
         // AC-9(b) backstop — see the PHASE_END ok:false handling above for
         // the primary mechanism; this catches a phase that never got its own
         // PHASE_END at all, plus one the phase_state snapshot provisionally
         // completed after a dropped PHASE_END(ok:false) (FRE-986). A genuinely
         // PHASE_END-completed node (unmarked) is not mislabelled as error.
-        setPhases((prev) =>
+        const resolvedPhases = updatePhases((prev) =>
           prev.map((p) =>
             p.state === 'running' || p.snapshotResolved
               ? { ...p, state: 'error', snapshotResolved: false, endedAt: p.endedAt ?? Date.now() }
               : p,
           ),
         );
+        // ADR-0123 §7 / AC-9(b): collapse into the transcript, recording the failure.
+        attachTurnSummary(resolvedPhases, toolsForSummary, 'error');
         break;
       }
 
@@ -494,13 +556,20 @@ export function useSSEStream(): UseSSEStreamReturn {
         if (currentSessionRef.current) {
           localStorage.removeItem(DRAFT_KEY(currentSessionRef.current));
         }
-        setActiveTools([]);
+        // Captured before clearing so the collapsed summary still sees the
+        // turn's tools (ADR-0123 §7).
+        const toolsForSummary = activeToolsRef.current;
+        updateTools(() => []);
         // Safety net: a normal turn end must never leave a phase spinning.
-        setPhases((prev) =>
+        const resolvedPhases = updatePhases((prev) =>
           prev.map((p) =>
             p.state === 'running' ? { ...p, state: 'completed', endedAt: Date.now() } : p,
           ),
         );
+        const turnSummary =
+          resolvedPhases.length > 0 || toolsForSummary.length > 0
+            ? buildTurnSummary(resolvedPhases, toolsForSummary, 'completed')
+            : null;
         // FRE-407: the turn is complete — mark the assistant message complete
         // (unconditionally) and stamp its trace_id so TurnRating can render.
         // trace_id arrives on the turn_status STATE_DELTA (stashed in the ref);
@@ -511,7 +580,28 @@ export function useSSEStream(): UseSSEStreamReturn {
           if (last?.role === 'assistant') {
             return [
               ...prev.slice(0, -1),
-              { ...last, traceId: doneTraceId || last.traceId, complete: true },
+              {
+                ...last,
+                traceId: doneTraceId || last.traceId,
+                complete: true,
+                ...(turnSummary ? { phaseSummary: turnSummary } : {}),
+              },
+            ];
+          }
+          // ADR-0123 §7: a turn that produced no TEXT_DELTA (e.g. an
+          // artifact-only response) still needs somewhere to hold its summary.
+          if (turnSummary) {
+            return [
+              ...prev,
+              {
+                id: generateUUID(),
+                role: 'assistant' as const,
+                content: '',
+                timestamp: new Date(),
+                complete: true,
+                traceId: doneTraceId || undefined,
+                phaseSummary: turnSummary,
+              },
             ];
           }
           return prev;
@@ -557,7 +647,7 @@ export function useSSEStream(): UseSSEStreamReturn {
         break;
       }
     }
-  }, [dropPendingConstraint]);
+  }, [dropPendingConstraint, updatePhases, updateTools, attachTurnSummary]);
 
   // --------------------------------------------------------------------------
   // Public API
@@ -594,8 +684,8 @@ export function useSSEStream(): UseSSEStreamReturn {
       setPendingApproval(null);
       setBudgetDenied(null);
       setClassifiedError(null);
-      setActiveTools([]);
-      setPhases([]);
+      updateTools(() => []);
+      updatePhases(() => []);
       // FRE-928: pending constraints are deliberately NOT cleared here. A card maps to
       // a live server-side waiter that now survives a disconnect and rides its own
       // timeout, and nothing blocks the user from sending while one is open. Clearing
@@ -659,7 +749,7 @@ export function useSSEStream(): UseSSEStreamReturn {
         return;
       }
     },
-    [handleEvent],
+    [handleEvent, updatePhases, updateTools],
   );
 
   const resolveInterrupt = useCallback((choice: string) => {

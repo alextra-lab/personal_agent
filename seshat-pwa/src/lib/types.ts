@@ -245,6 +245,35 @@ export interface PhaseNode {
   snapshotResolved?: boolean;
 }
 
+/**
+ * One phase's record in a collapsed per-turn summary (ADR-0123 T4, FRE-937).
+ * Same identity/detail fields as PhaseNode, but terminal-only (`state` never
+ * `running`) and with `durationMs` computed rather than raw timestamps.
+ */
+export interface PhaseSummaryEntry {
+  phaseId: string;
+  phase: PhaseName;
+  detail: string | null;
+  /** `(endedAt ?? now) - startedAt` — see PhaseNode.endedAt for the client-observed-end caveat. */
+  durationMs: number;
+  state: 'completed' | 'cancelled' | 'error';
+  /** The parent's phaseId when this was a concurrent child (AC-8); null for a top-level phase. */
+  parentId: string | null;
+}
+
+/**
+ * The collapsed, persistent record of a completed/cancelled/failed turn's
+ * phase surface (ADR-0123 §7, T4/FRE-937) — attached to the turn's ChatMessage
+ * once it terminates. Derived entirely from already-persisted, sequenced
+ * events; introduces no new server-side storage.
+ */
+export interface TurnSummary {
+  phases: PhaseSummaryEntry[];
+  /** Deduped tool names used during the turn, first-seen order. */
+  tools: string[];
+  terminalState: 'completed' | 'cancelled' | 'error';
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -252,6 +281,13 @@ export interface ChatMessage {
   timestamp: Date;
   /** Tool calls associated with this assistant turn. */
   toolCalls?: ToolCall[];
+  /**
+   * Collapsed per-turn summary (ADR-0123 T4, FRE-937), attached on DONE/
+   * CANCELLED/RUN_ERROR when the turn had at least one phase or tool call.
+   * Presence of this field is what StreamingChat treats as "this turn has
+   * collapsed" (see `isTurnCollapsed` in lib/phase-summary.ts).
+   */
+  phaseSummary?: TurnSummary;
   /** Trace ID from the backend, populated on DONE event or when hydrating from history. */
   traceId?: string;
   /**

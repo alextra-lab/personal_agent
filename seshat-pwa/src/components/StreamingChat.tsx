@@ -12,6 +12,7 @@ import { useSSEStream } from '@/hooks/useSSEStream';
 import { useSessionConfig } from '@/hooks/useSessionConfig';
 
 import { resolutionLabel } from '@/lib/constraint-options';
+import { isTurnCollapsed } from '@/lib/phase-summary';
 
 import { ApprovalModal } from './ApprovalModal';
 import { BudgetDeniedCard } from './BudgetDeniedCard';
@@ -475,8 +476,16 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             Stays visible after streaming ends (shows the last turn's metrics);
             self-hides only until the first turn produces a turn_status. */}
         <TurnStatusBar status={turnStatus} />
-        <PhaseIndicator phases={phases} />
-        <ToolIndicator tools={activeTools} />
+        {/* ADR-0123 §7 (FRE-937): once the current turn has collapsed into its
+            transcript summary, the live footer surfaces stop rendering — not
+            gated on isStreaming, since INTERRUPT also clears it mid-turn while
+            a human-wait phase must keep showing. */}
+        {!isTurnCollapsed(messages) && (
+          <>
+            <PhaseIndicator phases={phases} />
+            <ToolIndicator tools={activeTools} />
+          </>
+        )}
         <ChatInput
           onSend={handleSend}
           // Block Send only while a decision is pending; streaming shows Stop,

@@ -3,21 +3,13 @@
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { elapsedMs, formatElapsed, ESCALATION_THRESHOLD_MS } from '@/lib/phase-elapsed';
+import { labelFor } from '@/lib/phase-labels';
+import { groupByParent } from '@/lib/phase-summary';
 import type { PhaseNode } from '@/lib/types';
 
 interface PhaseIndicatorProps {
   phases: PhaseNode[];
 }
-
-/** User-facing copy per phase (ADR-0123 §1 table). */
-const PHASE_LABELS: Record<PhaseNode['phase'], string> = {
-  planning: 'Thinking',
-  synthesis: 'Writing the response',
-  artifact_build: 'Building the artifact',
-  expansion: 'Working on multiple tasks',
-  sub_agent: 'Sub-agent',
-  waiting_for_choice: 'Waiting for your choice',
-};
 
 /**
  * A static, honest statement — never an estimate, never a bar or percentage
@@ -25,12 +17,6 @@ const PHASE_LABELS: Record<PhaseNode['phase'], string> = {
  * would be invented).
  */
 const ESCALATION_TEXT = 'Large artifacts can take several minutes.';
-
-function labelFor(node: PhaseNode): string {
-  // A sub-agent's task name is more meaningful than the generic label.
-  if (node.phase === 'sub_agent' && node.detail) return node.detail;
-  return PHASE_LABELS[node.phase];
-}
 
 function PhaseRow({ node, now, children }: { node: PhaseNode; now: number; children?: ReactNode }) {
   // Running: the counter ticks live. Resolved: frozen at the client-observed
@@ -119,21 +105,10 @@ export function PhaseIndicator({ phases }: PhaseIndicatorProps) {
 
   if (phases.length === 0) return null;
 
-  // Group children by parent — falling back to top-level when the parent's
-  // own PHASE_START never arrived (best-effort emission can drop it): an
-  // orphan child must still render rather than silently disappear.
-  const knownIds = new Set(phases.map((p) => p.phaseId));
-  const childrenByParent = new Map<string, PhaseNode[]>();
-  const topLevel: PhaseNode[] = [];
-  for (const p of phases) {
-    if (p.parentId && knownIds.has(p.parentId)) {
-      const siblings = childrenByParent.get(p.parentId) ?? [];
-      siblings.push(p);
-      childrenByParent.set(p.parentId, siblings);
-    } else {
-      topLevel.push(p);
-    }
-  }
+  // groupByParent falls back an orphan child (parent's own PHASE_START never
+  // arrived — best-effort emission can drop it) to top-level rather than
+  // silently dropping it.
+  const { topLevel, childrenByParent } = groupByParent(phases);
 
   return (
     <div className="px-4 py-2 flex flex-col gap-2">

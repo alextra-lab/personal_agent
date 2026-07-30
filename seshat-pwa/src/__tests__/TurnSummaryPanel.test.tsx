@@ -58,6 +58,27 @@ describe('TurnSummaryPanel', () => {
     expect(screen.getByText('perplexity_query')).toBeInTheDocument();
   });
 
+  it('FRE-937 (master PR #758 bounce): repeated synthesis rounds render as distinct rows in the collapsed summary too', () => {
+    render(
+      <TurnSummaryPanel
+        summary={summary({
+          phases: [
+            { phaseId: 's1', phase: 'synthesis', detail: 'round 1', durationMs: 10_000, state: 'completed', parentId: null },
+            { phaseId: 's2', phase: 'synthesis', detail: 'round 2', durationMs: 7_000, state: 'completed', parentId: null },
+          ],
+        })}
+      />,
+    );
+    const details = screen.getByTestId('turn-summary') as HTMLDetailsElement;
+    details.open = true;
+
+    const first = screen.getByTestId('turn-summary-phase-s1').textContent ?? '';
+    const second = screen.getByTestId('turn-summary-phase-s2').textContent ?? '';
+    expect(first).toContain('round 1');
+    expect(second).toContain('round 2');
+    expect(first).not.toBe(second);
+  });
+
   it('shows a completed header distinctly from cancelled', () => {
     const { rerender } = render(<TurnSummaryPanel summary={summary({ terminalState: 'completed' })} />);
     const completedHeader = screen.getByTestId('turn-summary-header').textContent ?? '';

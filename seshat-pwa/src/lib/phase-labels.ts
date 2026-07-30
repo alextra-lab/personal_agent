@@ -20,5 +20,11 @@ export const PHASE_LABELS: Record<PhaseName, string> = {
 /** A sub-agent's task name is more meaningful than the generic label. */
 export function labelFor(node: { phase: PhaseName; detail: string | null }): string {
   if (node.phase === 'sub_agent' && node.detail) return node.detail;
+  // FRE-937 (master PR #758 bounce): a multi-round tool loop re-enters
+  // `synthesis` once per pass — without a distinguisher every pass renders
+  // the identical generic label, which reads as a stutter rather than
+  // progress. The backend threads a round detail (executor.py's
+  // step_llm_call); append it when present so repeated passes are legible.
+  if (node.phase === 'synthesis' && node.detail) return `${PHASE_LABELS.synthesis} — ${node.detail}`;
   return PHASE_LABELS[node.phase];
 }

@@ -10,6 +10,23 @@ an unnecessary, invasive behavior change that would silently break 8 pre-existin
 originally estimated — changed the design. The current plan instead **leaves the hook's live state
 untouched** and gates *rendering* on whether the turn has collapsed. See "Design change" below.
 
+**Addendum (2026-07-30, master PR #758 bounce):** the ticket comment thread (2026-07-26, 2026-07-28)
+carried binding scope not in the ticket body — read only *after* the bounce, which is the process gap
+being corrected here (read comments at Step 2, not after a bounce). The 2026-07-28 owner comment
+requires each phase, in both the live surface and the collapsed summary, to carry a name reflecting
+actual harness activity, "rather than a single repeated generic string" — with live evidence of a
+multi-round tool loop rendering "Writing the response" seven times, indistinguishable. Root cause,
+confirmed against backend source: `executor.py`'s `step_llm_call` re-enters `Phase.SYNTHESIS` once per
+tool-loop round via `phase_span(...)`, and the wire plumbing for a `detail` qualifier already exists
+end-to-end (`PhaseStartEvent.detail`) but was never populated for `synthesis`/`planning`. Fix, scoped
+to the smallest change that satisfies the requirement: `executor.py` now passes
+`detail=f"round {ctx.tool_iteration_count}"` for `Phase.SYNTHESIS` (using a counter already in scope,
+already incremented per round); `labelFor()` in `phase-labels.ts` — shared by both `PhaseIndicator`
+(live) and `TurnSummaryPanel` (collapsed), so one fix addresses both — now appends that detail the same
+way it already does for `sub_agent`. This is a genuine backend touch, breaking the original "PWA-only"
+scoping; it is folded into this same ticket rather than filed separately per master's explicit
+direction ("this blocks rather than becomes a follow-up... this is the seam ticket").
+
 ## Scope
 
 On turn completion (`DONE`), cancellation (`CANCELLED`), or failure (`RUN_ERROR`), collapse the live

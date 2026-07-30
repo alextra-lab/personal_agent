@@ -901,6 +901,85 @@ class TestInferencePhaseEvents:
         # the work (plan, then synthesize after the tool ran).
         assert phases.index(planning_ends[0]) < phases.index(synth_starts[0])
 
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    @pytest.mark.asyncio
+    async def test_synthesis_detail_names_the_round_across_repeated_passes(self, mock_client_class):
+        """FRE-937 (master PR #758 bounce): a multi-round tool loop re-enters
+        Phase.SYNTHESIS once per pass (executor.py:4561). Each pass's PHASE_START
+        must carry a `detail` that distinguishes it from the others — the owner's
+        2026-07-28 live observation was seven identical "Writing the response"
+        rows with no way to tell them apart. `ctx.tool_iteration_count` (already
+        incremented per round at line 4940 before the next step_llm_call runs) is
+        the cheapest available distinguisher.
+        """
+        import personal_agent.transport.agui.transport as transport_mod
+        from personal_agent.transport.events import Phase, PhaseStartEvent
+
+        mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
+        mock_client_class.return_value = mock_client
+        mock_client.respond.side_effect = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "read_file",
+                        "arguments": json.dumps({"path": "/tmp/x"}),
+                    }
+                ],
+                "reasoning_trace": None,
+                "usage": {"total_tokens": 100},
+                "raw": {},
+            },
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_2",
+                        "name": "read_file",
+                        "arguments": json.dumps({"path": "/tmp/y"}),
+                    }
+                ],
+                "reasoning_trace": None,
+                "usage": {"total_tokens": 100},
+                "raw": {},
+            },
+            {
+                "role": "assistant",
+                "content": "Done.",
+                "tool_calls": [],
+                "reasoning_trace": None,
+                "usage": {"total_tokens": 150},
+                "raw": {},
+            },
+        ]
+
+        events: list = []
+
+        async def _capture(event, session_id: str) -> None:
+            events.append(event)
+
+        with patch.object(transport_mod, "_push_event", _capture):
+            await Orchestrator().handle_user_request(
+                session_id="test-session",
+                user_message="Read two files",
+                mode=Mode.NORMAL,
+                channel=Channel.CHAT,
+            )
+
+        synth_starts = [
+            e for e in events if isinstance(e, PhaseStartEvent) and e.phase is Phase.SYNTHESIS
+        ]
+
+        assert len(synth_starts) == 2
+        # Each pass's detail names its round, and the two rounds are distinguishable.
+        assert synth_starts[0].detail == "round 1"
+        assert synth_starts[1].detail == "round 2"
+        assert synth_starts[0].detail != synth_starts[1].detail
+
 
 # ── tool_call ID collision regression tests (Bug 2) ─────────────────────────
 

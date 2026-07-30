@@ -122,6 +122,20 @@ describe('PhaseIndicator', () => {
     expect(screen.getByTestId('phase-c1')).toBeInTheDocument();
   });
 
+  it('FRE-937 (master PR #758 bounce): repeated synthesis phases within one turn render distinct, legible rows, not the same generic label N times', () => {
+    const phases: PhaseNode[] = [
+      node({ phaseId: 's1', phase: 'synthesis', detail: 'round 1', state: 'completed', endedAt: new Date('2026-07-25T10:00:10.000Z').getTime() }),
+      node({ phaseId: 's2', phase: 'synthesis', detail: 'round 2', state: 'running' }),
+    ];
+    render(<PhaseIndicator phases={phases} />);
+
+    const first = screen.getByTestId('phase-s1').textContent ?? '';
+    const second = screen.getByTestId('phase-s2').textContent ?? '';
+    expect(first).toContain('round 1');
+    expect(second).toContain('round 2');
+    expect(first).not.toBe(second);
+  });
+
   it('adds escalating-candour static text once a running phase exceeds the threshold', () => {
     const { rerender } = render(
       <PhaseIndicator phases={[node({ state: 'running', startedAt: '2026-07-25T10:00:00.000Z' })]} />,

@@ -4559,8 +4559,19 @@ async def step_llm_call(
         from personal_agent.transport.events import Phase  # noqa: PLC0415
 
         _inference_phase = Phase.PLANNING if ctx.tool_iteration_count == 0 else Phase.SYNTHESIS
+        # FRE-937 (master PR #758 bounce, ADR-0123 owner comment 2026-07-28): a
+        # multi-round tool loop re-enters SYNTHESIS once per pass, and every pass
+        # was emitted with no `detail` — the client rendered the same generic
+        # label N times with no way to tell them apart. `tool_iteration_count` is
+        # already incremented per round by the time this fires (line ~4940 in the
+        # prior pass), so it is a cheap, always-available round distinguisher.
+        _inference_detail = (
+            f"round {ctx.tool_iteration_count}" if _inference_phase is Phase.SYNTHESIS else None
+        )
         try:
-            async with phase_span(session_id=ctx.session_id, phase=_inference_phase):
+            async with phase_span(
+                session_id=ctx.session_id, phase=_inference_phase, detail=_inference_detail
+            ):
                 response = await asyncio.wait_for(
                     llm_client.respond(
                         role=respond_role,

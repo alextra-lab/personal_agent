@@ -10,14 +10,18 @@
 
 - **build1** — **FRE-1051** *ES silently loses up to 83% of emitted events* (Urgent). Then **FRE-1042**
   *(drawer row height, Haiku)*.
-- **build2** — free. Next: **FRE-927** *(seat-keyed failure counter — the only filed ticket measuring the
-  seat rather than the ticket)*.
+- **build2** — free. Next: **FRE-867** *(the watcher surfaces a seat parked on a permission dialog —
+  approved 07-30; the robust half, see §8)*. **FRE-937 is not the head**: still blocked by FRE-1015.
 - **adrs** — idle. **FRE-1043–1050 all Needs Approval**; nothing dispatchable until they're approved.
 - **explore** — delivered the convergence study (§9); free.
 
 **Pending actions:**
-- **Deploy FRE-1041** — merged, ask-first gateway rebuild, no migration. The only undeployed runtime
-  change. Runbook on the ticket.
+- **Deploy FRE-1041** — merged, ask-first gateway rebuild, no migration. Runbook on the ticket.
+- **Deploy FRE-927** — merged 07-30. Host `systemctl restart` of the dispatch daemons, **no gateway
+  image** (same class as FRE-922/923). Awaiting authorization. The observable signal is the reason
+  split, not the alert: `board-churn` and `owner-acted` now tally separately in the orchestrator
+  journal where both previously logged as `owner-acted`. A quiet alert is the steady state and is
+  **not** proof it works.
 - **FRE-989 F9 needs one turn on a *cloud* primary** to verify; local-qwen turns prove nothing (zero
   cost ⇒ nothing priced to record). Its role-distribution criterion needs ~7 days.
 - **Watch `main_inference`'s caps** — reachable by streamed chat for the first time, and that lane denies
@@ -154,9 +158,8 @@ corpus** — 1,916 of 1,943 ratings are backfilled defaults, leaving **27**. And
 
 ## 7. Reduce the backlog
 
-40+ at Needs Approval, ~80 Approved and mostly parked, including **twelve P0s months old** — FRE-940
-(replayed approval cards), FRE-927 (broken seat escapes both reconcilers), FRE-867 (seats hang on
-non-allowlisted prompts). Method: verify per cluster, cancel the provable with a one-line reason, bring
+40+ at Needs Approval, ~80 Approved and mostly parked, including P0s months old — FRE-940
+(replayed approval cards) chief among them; FRE-927 and FRE-867 have now moved. Method: verify per cluster, cancel the provable with a one-line reason, bring
 judgment calls to the owner. Run `scripts/reconcile_board.py` first.
 
 ## 8. Pipeline hardening — now has a theory, not just a backlog
@@ -174,8 +177,18 @@ times and the pipeline still stalled. FRE-927 is the proof: two observers compos
 - **FRE-1054** *(filed)* — the worked specimen: the daemon determines a fact correctly, discards it, and
   logs its negation. `reason=` names the **branch taken**, not the state observed, so every fix authored
   from a reason string is authored against a fiction.
-- **FRE-927** *(approved, stream:build2)* — seat-keyed rather than ticket-keyed. The only filed ticket
-  that measures the seat.
+- **FRE-927** — **merged, awaiting deploy.** Seat-keyed rather than ticket-keyed; the only filed ticket
+  that measures the seat. Two findings worth carrying forward. **Under churn a dispatch attempt costs
+  two ticks**, not one — the dispatch, then a tick spent clearing when NEXT changes underneath it — so
+  the silent-failure window is slower and harder to notice than the ticket described. And the FRE-922
+  wedge helper still carries the **same equality-crossing defect** the build fixed in its own code
+  (`count == wedge_ticks + 1` never fires for a negative `--wedge-ticks`); left deliberately, since
+  AC-3 required FRE-922 unchanged, and not ticketed because the trigger is operator error.
+- **The three reconcilers now want consolidating.** `run_once` carries six parameters that are one
+  concept (wedge counts/ticks, held latch/age, delivery failures/threshold), and three long constant
+  comments each independently re-derive the same in-memory-vs-persisted rationale. A mutable
+  `SeatHealth` plus a frozen `SeatHealthPolicy` collapses six to two. Unticketed on purpose — this is
+  the shape to adopt when a fourth reconciler is proposed, not a refactor to schedule on its own.
 - **FRE-1011** — **rescope to a warning or close.** Its guard infers a docs branch from a prefix to dodge
   an automation the owner switched off in team settings today. It also could not have caught PR #416,
   whose trigger was a **prose cross-reference in the body** — so "no token in branch or title" was never
@@ -185,8 +198,14 @@ times and the pipeline still stalled. FRE-927 is the proof: two observers compos
   both build seats had sat since ~11:30 the previous day: build1 on a permission prompt for a
   **read-only** `docker exec … psql … SELECT` (`Bash(docker exec:*)` is not allowlisted), build2 at a
   plan gate. The daemon logged `await reason=in-flight` throughout with **zero warnings** — the same
-  branch-not-state defect as FRE-1054. FRE-911's `acceptEdits` covers file edits only. **Cheapest fix:
-  allowlist the read-only psql shape**; the seats hit it constantly on substrate work.
+  branch-not-state defect as FRE-1054. FRE-911's `acceptEdits` covers file edits only.
+  **Allowlist half shipped** (PR #749): a PreToolUse hook allows a psql invocation only when the whole
+  command is provably read-only, rather than a per-container rule that would also authorize DROP
+  against production. It is the *shape* that is allowlisted, not the container. **Now dispatched to
+  build2 is the robust half** — the watcher detecting a parked seat and surfacing it to master.
+  Note it took two security-review rounds to get the hook right: `SELECT ... INTO` creates a table
+  while reading as a projection, and psql's `-o`/`-L`/`-v` write files or expand a variable into the
+  statement *after* validation. A denylist could not have covered either; the flag set is an allowlist.
 - **Four mutually inconsistent readiness oracles** exist in `scripts/dispatch/`, two documenting their own
   unreliability in their own headers. The wedge alarm is *defined* as a disagreement between two of them,
   which is why it logs 14 warnings and escalates nothing. **Finishing the ADR-0116 channel migration** —

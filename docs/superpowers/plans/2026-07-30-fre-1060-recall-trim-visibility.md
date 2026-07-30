@@ -41,7 +41,14 @@ On the melon turn `after=5` equals `max_injected_items=5` **and** `token_estimat
 of `threshold=500`. Either the ranked cap or the token budget could have decided, and the record
 cannot say which. That is exactly AC-2's complaint, reproduced arithmetically.
 
-### Scoping decision — the population is all 28 retrieved rows (owner call, 2026-07-30)
+### Scoping decision — the population is the deduplicated retrieved rows (owner, 2026-07-30)
+
+> **Amended after code review.** The owner first chose *all 28 retrieved rows*, per-item. Review then
+> confirmed that recording the turn-id dedupe as a discard is not merely noisy but **wrong**: a
+> duplicate shares the kept row's identity, so it puts one memory in the record twice, once admitted
+> and once dropped. The owner's second call (same day) removed the dedupe from the recorded gates.
+> The population is therefore every **deduplicated** row — full coverage of every genuine *discard*,
+> which is what the original instruction was reaching for. §7b finding 1 has the detail.
 
 The first draft scoped the population to the 12 rows that cleared `min_score`, matching the ticket's
 "7 of 12" arithmetic. Codex flagged that this recreates the same invisibility one layer down: a reader
@@ -65,7 +72,7 @@ does not extend to the Neo4j query's own retrieval bound (`proactive_memory_vect
 multipath arm limits) — a row never fetched is outside the record's reach, and no per-turn artifact
 can name it. §2.5b's marker docstring says exactly this, so the marker cannot itself over-claim.
 
-The log still reports `retrieved_row_count`, `deduped_row_count` and `scored_count` as three separate
+The log still reports `retrieved_row_count` and `deduped_row_count` as separate
 figures so the counts corroborate the per-item records. `build_proactive_suggestions` currently
 overwrites `raw_rows` with the deduped list, so the pre-dedupe count and rows must be captured before
 line 174.
@@ -76,11 +83,12 @@ line 174.
 
 `captains_log/turn_evidence.py` — extend the existing enum rather than adding a parallel `gate`
 field. `drop_reason` is already the field readers use, already mapped `keyword` in the ES template,
-and already documented as "why it did not reach the final serialized model input". Eight new members,
-one per discard the proactive path performs:
+and already documented as "why it did not reach the final serialized model input". Eight new members
+were planned; **seven shipped** — `RECALL_DUPLICATE` was removed by §7b finding 1. One per discard
+the proactive path performs:
 
 ```
-RECALL_DUPLICATE        # duplicate turn_id, dropped pre-scoring (score is None)
+RECALL_DUPLICATE        # SUPERSEDED — removed in §7b finding 1 (identity collision)
 RECALL_SCORE_THRESHOLD  # below proactive_memory_min_score
 RECALL_CANDIDATE_CAP    # scored[:max_candidates] — never reached selection
 RECALL_ITEM_CAP         # max_injected_items — the ranked cap  ← AC-2 gate A
@@ -124,7 +132,7 @@ no cycle is introduced.
 ```python
 retrieved = raw_rows                      # captured BEFORE the dedupe overwrites it
 deduped = _dedupe_raw_by_turn_id(retrieved)
-discarded = [Discard(row, RECALL_DUPLICATE) for row in <rows dropped by dedupe>]
+# (the RECALL_DUPLICATE line planned here was removed — see §7b finding 1)
 # ... in the scoring loop, replacing the bare `continue`:
 if final < cfg.proactive_memory_min_score:
     discarded.append(Discard(row, RECALL_SCORE_THRESHOLD, score=final))
@@ -179,7 +187,8 @@ check on the bookkeeping, not as the behavioural proof.
 Keep the event name `proactive_memory_budget_trimmed` (ADR-0128 governs the shared spine, not body
 fields; a rename would break `docs/specs/PROACTIVE_MEMORY_DESIGN.md` and the eval README for no
 gain) and add the honest fields: `stop_reason`, `discarded_by_gate` (a per-gate count map),
-`retrieved_row_count`, `deduped_row_count`, `scored_count`. The name stays; the body now says which
+`retrieved_row_count`, `deduped_row_count`. (`scored_count` was planned but dropped by §7b finding 9 —
+it duplicated `before_count`.) **The guard revert in §7b finding 5 supersedes the widening below.**
 gate fired — and the three separate counts stop dedupe losses being read as thresholding losses.
 
 ### 2.5 The discards reach the record
@@ -325,12 +334,14 @@ Six findings, all verified against the code before acceptance.
 
 ## 7. Found during implementation (folded in, per build SKILL §5)
 
-- **The log guard had the same blind spot as the record.** `if len(selected) < after_threshold`
-  cannot see the two gates upstream of scoring, so a turn whose only losses were duplicates or
-  sub-threshold rows emitted **no event at all** — an observability hole in the exact mechanism this
-  ticket closes, and one the owner's scope call (all 28 rows) exposed. Now `if discarded:`. A pure
-  widening: the old condition implies the new one, so no previously-logged turn stops logging.
-  Pinned by `TestTheTrimEventIsEmitted`.
+- ~~**The log guard had the same blind spot as the record.**~~ **Reverted — this was wrong** (see
+  §7b finding 5). I widened the guard to `if discarded:` reasoning that the old condition is blind to
+  the pre-scoring gates, and called it "a pure widening" because no previously-logged turn stops
+  logging. That framing missed the actual harm: the event is *named* `budget_trimmed` and existing
+  consumers read it as the trim signal, so *adding* emissions where nothing was trimmed puts a step
+  change in that series at the deploy boundary with no configuration change behind it. Not losing
+  events is not the same as not corrupting them. The per-candidate record is the complete surface
+  for those gates; the log keeps its original meaning.
 - **`AssembledContext` is rebuilt by `apply_budget`**, which would have silently reset
   `candidate_population` to the conservative default on **every live turn** — the field would have
   shipped permanently dark. Carried explicitly (`budget.py`) and pinned by a test that also asserts
@@ -344,6 +355,29 @@ Six findings, all verified against the code before acceptance.
   `ProactiveMemoryDiscard.relevance_score` is nullable — the reason it is deliberately not a wrapper
   around `ProactiveMemoryCandidate`, whose `relevance_score` is a required `[0, 1]` float. Wrapping
   would have forced a fake 0.0 onto every duplicate.
+
+## 7b. `/code-review high` — 10 confirmed findings, all fixed
+
+The workflow-backed review (30 agents, 5 finder angles → 7 independent verifiers) confirmed **10
+distinct defects**, 6 correctness and 4 cleanup. Three finders independently raised the duplicate-
+identity bug, which is why it is first. My Step-8 self-review had passed this diff; it was not
+adversarial enough, and this gate earned its cost.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | **Dedupe discards reuse the kept row's identity** — one memory recorded as both admitted and dropped, inflating `candidate_count` and biasing the census toward over-reporting loss | `RECALL_DUPLICATE` removed entirely (owner call). A dedupe collapse is not a loss: nothing was discarded, the information survives in the kept row. Conservation is now against **deduplicated** rows; the delta stays visible as `retrieved_row_count`/`deduped_row_count`. New test asserts no identity is ever in both sets. |
+| 2 | **`candidate_population=OFFERED` stamped unconditionally** on broad-recall/entity-match/failure paths that truncate silently — the exact over-claim the field exists to prevent | The claim now travels **with** the discards in a new frozen `RecallDiscardReport`, set by the producing path. `OFFERED` on the proactive-success path only; everything else stays `POST_SELECTION`. The assembler no longer asserts it — only the producer knows. |
+| 3 | **Exception path threw the discards away** while still claiming completeness | `discards` bound above the `try` so the handler returns them; the record no longer says "recall offered nothing" for a turn that gated 12. |
+| 4 | **`state=PRESENT if items else EMPTY` collapsed the EMPTY bucket** — `evidence_presence.recalled_memory:"empty"` became unreachable, and consumers use it for "no memory reached the model" | `state` keyed on the candidates that *reached context assembly* (`any pre_drop_reason is None`), which is bit-for-bit the pre-change set. Verified live: 12-all-discarded gives `state=empty` **and** `candidate_count=12`. |
+| 5 | **My log-guard widening corrupted the trim series** — `budget_trimmed` fired with `before_count == after_count` and null `stop_reason` | Reverted to the original guard. "Not losing events" is not "not corrupting them": the record, not the log, is the complete surface for the pre-selection gates. My §7 reasoning below was wrong and is corrected there. |
+| 6 | Census population-blind in its **output** (caveat was docstring-only) | Prints a `WARNING` naming the mix when a window straddles the deploy; `candidate_populations` + `mixed_populations` added to the JSON. |
+| 7 | Resolver log **not actually unconditional** — 3 early returns bypassed it, so my own docstring's claim was false on the infrastructure-fault path | The guard return logs too, with `skipped_reason` (`blank_message` / `not_connected`) so the two causes stay distinguishable. |
+| 8 | The `items` ordering docstring was **false** — first group is the offered candidates (which may all be non-admitted), and session facts are an unmentioned third group | Docstring rewritten to name all three groups and to say plainly that a reader wanting the admitted set must filter on `admitted`, not take a prefix. |
+| 9 | `before_count` and `scored_count` were the **same expression** logged twice | `scored_count` dropped; the comment corrected. |
+| 10 | `build_discarded_candidates` duplicated `build_recall_candidates` verbatim | Both now go through one `_candidate_for` construction point, so identity resolution cannot drift between the two halves of one record. |
+
+**Not fixed, deliberately:** the PII finding on `resolved_names`. The owner ruled on plaintext names
+(§2.6) with the trade-off stated; reported as `skipped`, not missed.
 
 ## 8. Pre-existing failures on `origin/main` (not introduced here, verified)
 

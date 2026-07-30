@@ -415,7 +415,7 @@ class TestProactiveDiscardsReachTheRecord:
             [],
             [
                 _discard("Berlin", 0.29, DropReason.RECALL_SCORE_THRESHOLD),
-                _discard("Lisbon", None, DropReason.RECALL_DUPLICATE),
+                _discard("Lisbon", 0.11, DropReason.RECALL_SCORE_FLOOR),
             ],
         )
         adapter.recall = AsyncMock(
@@ -437,13 +437,15 @@ class TestProactiveDiscardsReachTheRecord:
         by_id = {c.identity: c for c in result.recall_candidates}
         # The discards survived the fall-through...
         assert by_id["Berlin"].pre_drop_reason is DropReason.RECALL_SCORE_THRESHOLD
-        assert by_id["Lisbon"].pre_drop_reason is DropReason.RECALL_DUPLICATE
-        assert by_id["Lisbon"].score is None, "no score was computed; None is the truth"
+        assert by_id["Lisbon"].pre_drop_reason is DropReason.RECALL_SCORE_FLOOR
         # ...and the fallback recall still ran, unchanged.
         adapter.recall.assert_awaited_once()
         assert by_id["turn-7"].pre_drop_reason is None
         assert result.memory_context is not None
         assert [m["conversation_id"] for m in result.memory_context] == ["turn-7"]
+        # ...but the record must NOT claim completeness: the entity-match path it fell
+        # through to truncates via entity_names[:5] and limit=5 without reporting it.
+        assert result.candidate_population is CandidatePopulation.POST_SELECTION
 
     @pytest.mark.asyncio
     async def test_the_gateway_claims_a_complete_population(self, monkeypatch) -> None:
@@ -487,3 +489,74 @@ class TestProactiveDiscardsReachTheRecord:
         assert roomy.candidate_population is CandidatePopulation.OFFERED
         assert trimmed.candidate_population is CandidatePopulation.OFFERED
         assert trimmed.memory_context is None, "the tight case must really have trimmed"
+
+    @pytest.mark.asyncio
+    async def test_broad_recall_does_not_claim_a_complete_population(self, monkeypatch) -> None:
+        """The over-claim code review confirmed: OFFERED was stamped unconditionally.
+
+        `recall_broad` bounds its own read with `limit` and reports nothing about what that
+        cut, so a record from this path names survivors only. Claiming `offered` for it
+        would make the flag assert exactly the survivors-as-population reading it exists to
+        prevent — and an analyst filtering on `offered`, as this diff's own docs instruct,
+        would trust it.
+        """
+        from personal_agent.memory.protocol import BroadRecallResult
+
+        adapter = MagicMock()
+        adapter.is_connected = AsyncMock(return_value=True)
+        adapter.recall_broad = AsyncMock(
+            return_value=BroadRecallResult(
+                entities_by_type={"LOCATION": [{"name": "Paris", "description": "capital"}]},
+                recent_sessions=[],
+                total_entity_count=1,
+            )
+        )
+
+        result = await assemble_context(
+            user_message="what do you remember about me?",
+            session_messages=[],
+            intent=_intent(TaskType.MEMORY_RECALL),
+            memory_adapter=adapter,
+            trace_id="t",
+        )
+
+        adapter.recall_broad.assert_awaited_once()
+        assert result.candidate_population is CandidatePopulation.POST_SELECTION
+
+    @pytest.mark.asyncio
+    async def test_a_failure_after_the_gates_keeps_the_discards(self, monkeypatch) -> None:
+        """The exception path must not convert named drops into "recall offered nothing".
+
+        Proactive discards 12, then the entity-match fall-through raises — a Neo4j timeout,
+        which the broad `except` exists to absorb. Returning `()` there recorded
+        `state=EMPTY, candidate_count=0` for a turn that retrieved and gated a full
+        population: the absence-vs-drop confusion this ticket closes, on the failure path,
+        firing on exactly the turns most likely to be investigated.
+        """
+        monkeypatch.setattr(
+            "personal_agent.request_gateway.context.settings.proactive_memory_enabled",
+            True,
+            raising=False,
+        )
+        adapter = self._adapter(
+            [],
+            [
+                _discard("Berlin", 0.29, DropReason.RECALL_SCORE_THRESHOLD),
+                _discard("Lisbon", 0.31, DropReason.RECALL_ITEM_CAP),
+            ],
+        )
+        adapter.recall = AsyncMock(side_effect=RuntimeError("neo4j session dropped"))
+
+        result = await assemble_context(
+            user_message="tell me about Paris",
+            session_messages=[],
+            intent=_intent(),
+            memory_adapter=adapter,
+            trace_id="t",
+        )
+
+        by_id = {c.identity: c for c in result.recall_candidates}
+        assert by_id["Berlin"].pre_drop_reason is DropReason.RECALL_SCORE_THRESHOLD
+        assert by_id["Lisbon"].pre_drop_reason is DropReason.RECALL_ITEM_CAP
+        assert result.memory_context is None, "the failure still degrades recall as before"
+        assert result.candidate_population is CandidatePopulation.POST_SELECTION

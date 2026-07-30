@@ -293,12 +293,38 @@ class TestGateAttribution:
         assert [d.drop_reason for d in out.discarded] == [DropReason.RECALL_SCORE_THRESHOLD]
         assert out.discarded[0].relevance_score == pytest.approx(SCORES[0.20])
 
-    def test_duplicate_rows_are_recorded_without_a_score(self, deployed_scoring: None) -> None:
-        """A duplicate is dropped before scoring, so ``None`` is the truthful score."""
+    def test_a_duplicate_row_is_not_recorded_as_a_drop(self, deployed_scoring: None) -> None:
+        """A dedupe collapse is not a loss, so it must not appear as a discard.
+
+        A duplicate shares the kept row's ``turn_id`` and therefore its identity. Recording
+        it as a drop put the same identity in the record twice — once admitted, once
+        dropped — asserting that a memory was lost when that memory reached the model, and
+        inflating ``candidate_count`` so the census over-reported recall loss. Caught by
+        code review; the fix is to record no drop, since nothing was dropped.
+        """
         out = _run([_episode("t0", 0.90), _episode("t0", 0.80)], "t-attr-dupe")
 
-        assert [d.drop_reason for d in out.discarded] == [DropReason.RECALL_DUPLICATE]
-        assert out.discarded[0].relevance_score is None
+        assert _selected(out) == ["t0"]
+        assert out.discarded == [], "the collapsed row is not a discarded candidate"
+
+    def test_no_identity_is_ever_both_admitted_and_dropped(self, deployed_scoring: None) -> None:
+        """The invariant the duplicate bug violated, asserted directly.
+
+        Stated as a property over the whole result rather than as a duplicate-specific
+        case, so any future gate that reuses a surviving row's identity fails here.
+        """
+        rows = [
+            _episode("t0", 0.90),
+            _episode("t0", 0.80),  # duplicate of the kept t0
+            _episode("t1", 0.20),  # sub-threshold
+            _episode("t2", 0.70),
+        ]
+
+        out = _run(rows, "t-attr-no-overlap")
+
+        emitted = {c.payload.get("conversation_id") for c in out.candidates}
+        dropped = {d.payload.get("conversation_id") for d in out.discarded}
+        assert emitted & dropped == set(), f"identity in both sets: {emitted & dropped}"
 
 
 class TestConservation:
@@ -336,7 +362,7 @@ class TestConservation:
             ("none", [_episode("t0", 0.90), _episode("t1", 0.80)], 100_000, 5),
         ],
     )
-    def test_every_retrieved_row_is_selected_or_discarded(
+    def test_every_deduplicated_row_is_selected_or_discarded(
         self,
         deployed_scoring: None,
         monkeypatch: pytest.MonkeyPatch,
@@ -345,15 +371,23 @@ class TestConservation:
         max_tokens: int,
         max_items: int,
     ) -> None:
-        """No retrieved row may vanish: selected + discarded accounts for all of them."""
+        """No row that could have reached the model may vanish unaccounted for.
+
+        The population is the **deduplicated** rows, not the raw retrieval: a collapsed
+        duplicate is the same memory as the row that was kept, so counting it separately
+        would double-count one memory (see
+        :meth:`TestGateAttribution.test_a_duplicate_row_is_not_recorded_as_a_drop`). The
+        retrieval-to-dedupe delta stays visible as counts on the trim event.
+        """
         monkeypatch.setattr(proactive_mod.settings, "proactive_memory_max_tokens", max_tokens)
         monkeypatch.setattr(
             proactive_mod.settings, "proactive_memory_max_injected_items", max_items
         )
+        distinct = len({r["turn_id"] for r in rows})
 
         out = _run(rows, f"t-conserve-{case}")
 
-        assert len(out.candidates) + len(out.discarded) == len(rows)
+        assert len(out.candidates) + len(out.discarded) == distinct
 
 
 class TestTheTrimEventIsEmitted:
@@ -372,24 +406,27 @@ class TestTheTrimEventIsEmitted:
         assert len(events) == 1
         assert "recall_item_cap" in events[0].getMessage()
 
-    def test_a_duplicate_only_turn_still_emits(
+    def test_the_event_does_not_fire_when_selection_trimmed_nothing(
         self, deployed_scoring: None, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """The hole the old guard left: nothing lost the *selection* race, yet a row died.
+        """A turn where selection trimmed nothing must not emit ``budget_trimmed``.
 
-        The previous guard was ``len(selected) < after_threshold``, which cannot see the
-        two gates upstream of scoring. Every scored candidate is emitted here, so the old
-        condition is false — and the duplicate row vanished with no event at all.
+        An earlier revision widened the guard to ``if discarded:`` so pre-selection gates
+        would show up here too. Code review confirmed that corrupts the series: the event
+        is *named* ``budget_trimmed`` and existing consumers read it as the trim signal, so
+        firing it with ``before_count == after_count`` and a null ``stop_reason`` puts a
+        step change in that series at the deploy boundary with no config change behind it.
+        Every scored candidate is emitted here, so nothing was trimmed and nothing is said.
         """
-        rows = [_episode("t0", 0.90), _episode("t0", 0.80)]
+        rows = [_episode("t0", 0.90), _episode("t0", 0.80), _episode("t1", 0.80)]
 
         with caplog.at_level("INFO"):
             out = _run(rows, "t-log-dupe")
 
-        assert len(out.candidates) == 1, "the survivor won nothing; there was one candidate"
-        events = [r for r in caplog.records if "proactive_memory_budget_trimmed" in r.getMessage()]
-        assert len(events) == 1
-        assert "recall_duplicate" in events[0].getMessage()
+        assert len(out.candidates) == 2, "both distinct rows were emitted"
+        assert not [
+            r for r in caplog.records if "proactive_memory_budget_trimmed" in r.getMessage()
+        ], "no trim happened, so no trim event"
 
     def test_no_discards_emits_nothing(
         self, deployed_scoring: None, caplog: pytest.LogCaptureFixture

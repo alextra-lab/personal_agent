@@ -62,16 +62,21 @@ class TurnRecallRecord:
     Attributes:
         trace_id: The turn's trace id.
         timestamp: ISO-8601 capture time.
-        candidate_kinds: ``kind`` of every offered candidate. Admitted items first, then
-            the discarded ones, each group in rank order (FRE-1060) — not one globally
-            ranked list. Order is not relied on here.
+        candidate_kinds: ``kind`` of every offered candidate. Three groups in construction
+            order — offered, producer-discarded, session facts — each internally rank
+            ordered (FRE-1060); not one globally ranked list, and not admitted-first.
+            Order is not relied on here.
         admitted_kinds: ``kind`` of every *admitted* candidate (reached the model).
+        population: ``recall_admission.candidate_population`` — ``"offered"`` when the
+            record names the whole population, ``"post_selection"`` when it names only
+            survivors. Absent on every pre-FRE-1060 capture, which are survivors-only.
     """
 
     trace_id: str
     timestamp: str
     candidate_kinds: list[str] = field(default_factory=list)
     admitted_kinds: list[str] = field(default_factory=list)
+    population: str = "post_selection"
 
     @property
     def entity_offered(self) -> bool:
@@ -174,6 +179,7 @@ def collect_recall_records(
                 timestamp=str(src.get("timestamp") or ""),
                 candidate_kinds=[str(it.get("kind") or "") for it in items],
                 admitted_kinds=[str(it.get("kind") or "") for it in items if it.get("admitted")],
+                population=str(admission.get("candidate_population") or "post_selection"),
             )
         )
     return records
@@ -202,6 +208,22 @@ def report(records: Sequence[TurnRecallRecord], since: str | None) -> dict[str, 
     all_kinds = Counter(k for r in records for k in r.candidate_kinds)
     candidate_counts = [len(r.candidate_kinds) for r in records]
 
+    # FRE-1060: printed, not merely docstring'd. `candidate_count` changed meaning at that
+    # deploy, so a window straddling it mixes two populations and the participation rate
+    # rises for that reason alone. A caveat only a code reader sees is one the operator
+    # pasting this number into a ticket never does.
+    populations = Counter(r.population for r in records)
+    if len(populations) > 1:
+        print(
+            "WARNING: this window mixes two candidate populations "
+            f"({dict(populations)}) — it straddles the FRE-1060 deploy. "
+            "'post_selection' records name survivors only, 'offered' name the whole "
+            "population, so the figures below are NOT comparable across that boundary. "
+            "Re-run with --since after the deploy for a single-population view."
+        )
+    else:
+        print(f"candidate population (uniform): {next(iter(populations))}")
+
     pct = 100.0 / len(records)
     print(f"kind distribution across all offered candidates: {dict(all_kinds)}")
     print(
@@ -229,6 +251,11 @@ def report(records: Sequence[TurnRecallRecord], since: str | None) -> dict[str, 
         "entity_offered_rate": len(offered) / len(records),
         "entity_admitted_turns": len(admitted),
         "entity_admitted_rate": len(admitted) / len(records),
+        # FRE-1060: emitted so a JSON consumer can see the same caveat the printed report
+        # carries. `mixed_populations` true means the rates above span the deploy boundary
+        # and are not a single measurement.
+        "candidate_populations": dict(populations),
+        "mixed_populations": len(populations) > 1,
     }
 
 

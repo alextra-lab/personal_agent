@@ -114,8 +114,10 @@ class DropReason(StrEnum):
     NOT_RENDERED = "not_rendered"
     ABSENT_FROM_FINAL_INPUT = "absent_from_final_input"
 
-    # Proactive recall path gates (FRE-1060), in the order the path applies them.
-    RECALL_DUPLICATE = "recall_duplicate"
+    # Proactive recall path gates (FRE-1060), in the order the path applies them. The
+    # turn-id dedupe is deliberately absent: a duplicate row shares the kept row's
+    # identity, so recording it here would state that a memory was dropped when that same
+    # memory reached the model. A dedupe collapse is not a loss.
     RECALL_SCORE_THRESHOLD = "recall_score_threshold"
     RECALL_CANDIDATE_CAP = "recall_candidate_cap"
     RECALL_ITEM_CAP = "recall_item_cap"
@@ -290,17 +292,30 @@ class CandidatePopulation(StrEnum):
 class RecallAdmissionRecord(BaseModel):
     """D3 item 5 — what the turn actually relied on, and what it dropped.
 
-    ``items`` holds admitted candidates in the order recall offered them, followed by the
-    candidates the producing path discarded, in their own rank order — *not* one globally
-    rank-ordered list. Every item carries its ``score`` and the producing path ranks by
-    score descending, so a reader needing true global rank recovers it by sorting.
+    ``items`` holds **three groups in construction order**, and admission does not
+    determine the grouping — a member of the first group can still be dropped, by the
+    renderer or by the volatile block failing to land:
+
+    1. the candidates that reached context assembly, in the order recall offered them
+       (each may resolve to admitted or dropped);
+    2. the candidates a producing path's own gates discarded, in their rank order;
+    3. the session-fact candidates, which ride a system message rather than the memory
+       block.
+
+    So this is *not* one globally rank-ordered list and *not* admitted-first. Every item
+    carries its ``score`` and the producing paths rank by score descending, so a reader
+    needing true global rank recovers it by sorting; a reader wanting the admitted set must
+    filter on ``admitted`` rather than take a prefix.
 
     Attributes:
-        state: PRESENT when candidates existed, EMPTY when recall ran and found none.
+        state: PRESENT when recall delivered at least one candidate into context assembly,
+            EMPTY when it ran and delivered none. Deliberately **not** keyed on ``items``,
+            which also holds producer discards — see :func:`build_turn_evidence`.
         candidate_count: Items recall offered — the population when
             ``candidate_population`` is OFFERED, the survivors when POST_SELECTION.
-        admitted_count: Items that reached the final serialized model input. The
-            discarded count is ``candidate_count - admitted_count``.
+        admitted_count: Items that reached the final serialized model input. The dropped
+            count is ``candidate_count - admitted_count``; no identity is ever recorded
+            twice, so that arithmetic counts distinct memories.
         items: Every candidate, admitted or dropped. Never filtered.
         candidate_population: Whether ``items`` names every candidate the producing paths
             considered, or only those that survived their internal selection. OFFERED
@@ -429,6 +444,36 @@ def _content_chars(content: object) -> int:
     return len(str(content))
 
 
+def _candidate_for(
+    item: object,
+    score: float | None,
+    *,
+    pre_drop_reason: DropReason | None = None,
+) -> RecallCandidateRecord:
+    """Build one candidate record from a memory-context item or a discarded payload.
+
+    The single construction point for both builders below, so identity resolution and the
+    record's shape cannot drift between the offered and the discarded halves of the same
+    record — a divergence would put two different candidate shapes in one document.
+
+    Args:
+        item: A memory-context item or a producer payload of the same shape.
+        score: Relevance score, or None where the producing path computed none.
+        pre_drop_reason: The gate that already discarded this candidate, when one did.
+
+    Returns:
+        The candidate record.
+    """
+    kind, identity = memory_item_identity(item)
+    return RecallCandidateRecord(
+        kind=kind,
+        identity=identity,
+        score=score,
+        source=CandidateSource.MEMORY_CONTEXT,
+        pre_drop_reason=pre_drop_reason,
+    )
+
+
 def build_recall_candidates(
     memory_context: Sequence[object] | None,
     scores_by_identity: Mapping[str, float],
@@ -448,18 +493,10 @@ def build_recall_candidates(
     """
     if not memory_context:
         return ()
-    records: list[RecallCandidateRecord] = []
-    for item in memory_context:
-        kind, identity = memory_item_identity(item)
-        records.append(
-            RecallCandidateRecord(
-                kind=kind,
-                identity=identity,
-                score=scores_by_identity.get(identity),
-                source=CandidateSource.MEMORY_CONTEXT,
-            )
-        )
-    return tuple(records)
+    return tuple(
+        _candidate_for(item, scores_by_identity.get(memory_item_identity(item)[1]))
+        for item in memory_context
+    )
 
 
 def build_discarded_candidates(
@@ -484,19 +521,10 @@ def build_discarded_candidates(
         One record per discard, each carrying its ``pre_drop_reason`` so admission
         resolves directly. Empty when nothing was discarded.
     """
-    records: list[RecallCandidateRecord] = []
-    for payload, score, reason in discards:
-        kind, identity = memory_item_identity(payload)
-        records.append(
-            RecallCandidateRecord(
-                kind=kind,
-                identity=identity,
-                score=score,
-                source=CandidateSource.MEMORY_CONTEXT,
-                pre_drop_reason=reason,
-            )
-        )
-    return tuple(records)
+    return tuple(
+        _candidate_for(payload, score, pre_drop_reason=reason)
+        for payload, score, reason in discards
+    )
 
 
 def _wire_carries_volatile_fence(wire_messages: Sequence[object], user_message: str) -> bool:
@@ -657,8 +685,19 @@ def build_turn_evidence(
     ]
     admitted_identities = [item.identity for item in items if item.admitted]
 
+    # ``state`` is computed from the candidates that reached context assembly, NOT from
+    # ``items`` (FRE-1060, on a confirmed code-review finding). The two were the same set
+    # until this change added producer discards to ``items``; keying on ``items`` would
+    # then make EMPTY effectively unreachable, because a turn that retrieved twelve rows
+    # and discarded all twelve would read PRESENT. ``evidence_presence.recalled_memory``
+    # inherits this field, and consumers filter it on EMPTY to enumerate turns where
+    # recall delivered nothing to the model — exactly the melon-class failure. Keying on
+    # the pre-drop candidates preserves that signal bit-for-bit while the discards stay
+    # nameable in ``items``.
+    delivered_any = any(c.pre_drop_reason is None for c in candidates)
+
     recall = RecallAdmissionRecord(
-        state=EvidenceState.PRESENT if items else EvidenceState.EMPTY,
+        state=EvidenceState.PRESENT if delivered_any else EvidenceState.EMPTY,
         candidate_count=len(items),
         admitted_count=len(admitted_identities),
         items=items,

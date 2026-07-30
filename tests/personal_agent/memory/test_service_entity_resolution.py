@@ -260,3 +260,37 @@ class TestResolutionIsObservable:
             assert await service.resolve_message_entity_names("a melon", trace_id="t-fail") == []
 
         assert not [r for r in caplog.records if "entity_mentions_resolved" in r.getMessage()]
+
+    @pytest.mark.asyncio
+    async def test_a_disconnected_driver_still_logs_with_a_reason(self, caplog) -> None:
+        """The gap code review confirmed: the guard return logged nothing.
+
+        The docstring promises the event is emitted unconditionally so that "resolved
+        nothing" is distinguishable from "never ran" — but the blank-message and
+        disconnected-driver guard returned [] before ever reaching the log. An operator
+        greping a trace after a dropped Neo4j connection found silence and would conclude
+        the resolver was never reached, which is the same failure the log exists to close,
+        in the one case where the cause is infrastructure rather than scoring.
+        """
+        service = MemoryService()  # fre-375-allow: no substrate touched; driver is a fake
+        service.connected = False
+        service.driver = None
+
+        with caplog.at_level("INFO"):
+            assert await service.resolve_message_entity_names("a melon", trace_id="t-down") == []
+
+        events = [r for r in caplog.records if "entity_mentions_resolved" in r.getMessage()]
+        assert len(events) == 1, "an infrastructure short-circuit is still an outcome"
+        assert "not_connected" in events[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_a_blank_message_is_distinguishable_from_a_dead_driver(self, caplog) -> None:
+        """Two causes, two reasons — the point of naming the guard that fired."""
+        service = _service([{"name": "Melon"}])
+
+        with caplog.at_level("INFO"):
+            assert await service.resolve_message_entity_names("   ", trace_id="t-blank") == []
+
+        events = [r for r in caplog.records if "entity_mentions_resolved" in r.getMessage()]
+        assert len(events) == 1
+        assert "blank_message" in events[0].getMessage()

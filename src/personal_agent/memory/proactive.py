@@ -233,15 +233,23 @@ def build_proactive_suggestions(
     Returns:
         ProactiveMemorySuggestions with trimmed, ranked candidates **and** every
         candidate a gate discarded, each naming the gate (FRE-1060). Emitted plus
-        discarded accounts for every row in ``raw_rows``: nothing is silently lost.
+        discarded accounts for every **deduplicated** row: nothing that could have
+        reached the model is silently lost.
     """
     cfg = settings
     retrieved_count = len(raw_rows)
     raw_rows, duplicate_rows = _dedupe_raw_by_turn_id(raw_rows)
     deduped_count = len(raw_rows)
-    discarded: list[ProactiveMemoryDiscard] = [
-        _discard_row(row, None, DropReason.RECALL_DUPLICATE) for row in duplicate_rows
-    ]
+    # A duplicate is deliberately NOT recorded as a discard (owner call, 2026-07-30, on
+    # a confirmed code-review finding). It shares its ``turn_id`` — hence its identity —
+    # with the row that was kept, so recording it as a drop would put one identity in the
+    # record twice, once admitted and once dropped, asserting that a memory was lost when
+    # that very memory reached the model. `candidate_count` would double-count it and the
+    # FRE-1021 census would over-report recall loss, biasing the exact figure this ticket
+    # exists to make trustworthy. A dedupe collapse is not a loss: the information is
+    # wholly preserved in the kept row. The delta stays visible as the
+    # retrieved_row_count/deduped_row_count pair on the event below.
+    discarded: list[ProactiveMemoryDiscard] = []
     scored: list[ProactiveMemoryCandidate] = []
 
     for row in raw_rows:
@@ -328,12 +336,17 @@ def build_proactive_suggestions(
     if stop_reason is not None and stop_index is not None:
         discarded.extend(_discard_candidate(c, stop_reason) for c in capped[stop_index:])
 
-    # FRE-1060: fires on *any* discard. The old guard was `len(selected) <
-    # after_threshold`, which is blind to the two gates upstream of scoring — a turn whose
-    # only losses were duplicates or sub-threshold rows emitted no event at all, leaving an
-    # observability hole in exactly the mechanism this ticket exists to close. Every case
-    # that logged before still logs: the old condition implies this one.
-    if discarded:
+    # The guard is deliberately UNCHANGED — it fires only when selection itself trimmed.
+    # An earlier revision widened it to `if discarded:` on the reasoning that the old
+    # condition is blind to the gates upstream of scoring. That reasoning was wrong, and a
+    # confirmed code-review finding caught it: this event is named `budget_trimmed` and
+    # existing consumers (the EVAL-proactive-memory README, any panel counting it) read it
+    # as the trim signal. Firing it on a turn where nothing was trimmed — `before_count ==
+    # after_count`, `stop_reason` null — would put a step-change in that series at the
+    # deploy boundary with no configuration change behind it. Not losing events is not the
+    # same as not corrupting them. The per-candidate record, not this event, is the
+    # complete surface for the pre-selection gates.
+    if len(selected) < after_threshold:
         log.info(
             "proactive_memory_budget_trimmed",
             trace_id=trace_id,
@@ -343,15 +356,15 @@ def build_proactive_suggestions(
             threshold=cfg.proactive_memory_max_tokens,
             # This event named a budget when any of six gates could have decided, and on
             # the melon turn the ranked cap and the token budget were both consistent with
-            # its numbers. These fields end that ambiguity: `stop_reason` is the single
-            # terminal gate that ended selection (at most one can fire), and the three
-            # counts separate retrieval, dedupe and threshold losses that `before_count`
-            # alone conflated.
+            # its numbers. `stop_reason` ends that ambiguity — it is the single terminal
+            # gate that ended selection, and at most one can fire. The two row counts
+            # separate retrieval from dedupe losses, which no single figure distinguished.
+            # (`scored_count` was dropped: it was `after_threshold`, i.e. `before_count`
+            # under another name, so it disambiguated nothing.)
             stop_reason=stop_reason.value if stop_reason is not None else None,
             discarded_by_gate=dict(Counter(d.drop_reason.value for d in discarded)),
             retrieved_row_count=retrieved_count,
             deduped_row_count=deduped_count,
-            scored_count=after_threshold,
         )
 
     return ProactiveMemorySuggestions(

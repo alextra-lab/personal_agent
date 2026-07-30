@@ -679,7 +679,7 @@ class TestPreDroppedCandidates:
             RecallCandidateRecord(
                 kind=MemoryItemKind.ENTITY,
                 identity="Melon",
-                pre_drop_reason=DropReason.RECALL_DUPLICATE,
+                pre_drop_reason=DropReason.RECALL_SCORE_THRESHOLD,
             ),
         )
 
@@ -689,7 +689,7 @@ class TestPreDroppedCandidates:
             inline_outcome=InlineOutcome.NO_TARGET,
         )
 
-        assert ev.recall.items[0].drop_reason is DropReason.RECALL_DUPLICATE
+        assert ev.recall.items[0].drop_reason is DropReason.RECALL_SCORE_THRESHOLD
 
     def test_pre_dropped_identities_are_not_listed_as_admitted_context(self) -> None:
         """Item 6 must not claim the model was given something that never reached it."""
@@ -737,3 +737,76 @@ class TestCandidatePopulationClaim:
         )
 
         assert legacy.candidate_population is CandidatePopulation.POST_SELECTION
+
+
+class TestStateIsNotCollapsedByDiscards:
+    """FRE-1060 — adding discards to `items` must not destroy the EMPTY signal.
+
+    `evidence_presence.recalled_memory` inherits `recall.state`, and consumers filter it on
+    EMPTY to enumerate turns where recall delivered nothing to the model — the melon-class
+    failure. Keying `state` on `items` (which now holds producer discards) made EMPTY
+    effectively unreachable: a turn that retrieved twelve rows and discarded all twelve read
+    PRESENT. Confirmed by code review; `state` is keyed on the delivered candidates instead.
+    """
+
+    def test_all_discarded_still_reads_empty(self) -> None:
+        """Twelve retrieved, twelve gated away, nothing delivered: EMPTY."""
+        candidates = tuple(
+            RecallCandidateRecord(
+                kind=MemoryItemKind.EPISODE,
+                identity=f"turn-{i}",
+                score=0.2,
+                pre_drop_reason=DropReason.RECALL_SCORE_THRESHOLD,
+            )
+            for i in range(12)
+        )
+
+        ev = _evidence(candidates, memory_context_present=False)
+
+        assert ev.recall.state is EvidenceState.EMPTY
+        assert ev.recall.candidate_count == 12, "the discards are still named"
+        assert ev.recall.admitted_count == 0
+
+    def test_the_derived_presence_key_follows(self) -> None:
+        """The field consumers actually query is the one that must not lie."""
+        candidates = (
+            RecallCandidateRecord(
+                kind=MemoryItemKind.ENTITY,
+                identity="Melon",
+                pre_drop_reason=DropReason.RECALL_ITEM_CAP,
+            ),
+        )
+        ev = _evidence(candidates, memory_context_present=False)
+
+        presence = derive_evidence_presence(
+            user_message="hello",
+            assistant_response="hi",
+            tool_results=[],
+            llm_call_count=1,
+            turn_evidence=ev,
+            trace_id="t",
+            session_id="s",
+            user_id=object(),
+        )
+
+        assert presence["recalled_memory"] is EvidenceState.EMPTY
+
+    def test_one_delivered_candidate_is_present(self) -> None:
+        """The other side of the boundary: something reached assembly, so PRESENT."""
+        candidates = (
+            _entity_candidate("Paris"),
+            RecallCandidateRecord(
+                kind=MemoryItemKind.ENTITY,
+                identity="Melon",
+                pre_drop_reason=DropReason.RECALL_ITEM_CAP,
+            ),
+        )
+
+        ev = _evidence(candidates, rendered=("Paris",))
+
+        assert ev.recall.state is EvidenceState.PRESENT
+        assert ev.recall.admitted_count == 1
+
+    def test_no_candidates_at_all_is_still_empty(self) -> None:
+        """The pre-existing meaning is unchanged when there are no discards either."""
+        assert _evidence(()).recall.state is EvidenceState.EMPTY

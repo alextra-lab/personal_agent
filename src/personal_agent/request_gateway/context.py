@@ -12,6 +12,7 @@ The budget stage is a pass-through that counts tokens.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -50,6 +51,28 @@ Plain triples rather than ``ProactiveMemoryDiscard`` because
 adaptation from the producer's model happens here (FRE-1060). The score is None where the
 gate fired before one was computed.
 """
+
+
+@dataclass(frozen=True)
+class RecallDiscardReport:
+    """What a producing path discarded, and whether that account is complete (FRE-1060).
+
+    The two travel together because they are only meaningful together: naming discards is
+    worthless if a reader cannot tell whether the naming was exhaustive, and claiming
+    completeness is a lie if the path did not report its drops. An earlier revision
+    stamped the completeness claim unconditionally at the assembler, which asserted it for
+    the broad-recall and entity-match paths that truncate silently — the exact over-claim
+    the claim was introduced to prevent (confirmed code-review finding).
+
+    Attributes:
+        discards: Every candidate a gate removed, or empty when the path reported none.
+        population: OFFERED only when this path accounts for every candidate it
+            discarded. Defaults to POST_SELECTION so a path that says nothing cannot
+            accidentally claim completeness.
+    """
+
+    discards: ProactiveDiscards = ()
+    population: CandidatePopulation = CandidatePopulation.POST_SELECTION
 
 
 def _session_topic_hint(session_messages: Sequence[dict[str, Any]]) -> str | None:
@@ -190,7 +213,7 @@ async def _query_memory_for_intent(
     session_messages: Sequence[dict[str, Any]],
     user_id: UUID | None = None,
     authenticated: bool = False,
-) -> tuple[list[dict[str, Any]] | None, dict[str, float], ProactiveDiscards]:
+) -> tuple[list[dict[str, Any]] | None, dict[str, float], RecallDiscardReport]:
     """Query memory based on intent type.
 
     Args:
@@ -205,20 +228,30 @@ async def _query_memory_for_intent(
 
     Returns:
         Tuple of (memory context list or None, relevance scores keyed by item
-        identity, proactive discards). The proactive and entity-match paths both supply
+        identity, discard report). The proactive and entity-match paths both supply
         real scores; the broad-recall path computes none and returns an empty mapping
         rather than a fabricated one (ADR-0125 D3 item 5, FRE-1004).
 
-        The third element carries the candidates the proactive path's own gates removed
-        (FRE-1060). It is populated whenever that path ran, **including when it emitted
-        nothing** — see the fall-through below — so the evidence record can name the
-        discards rather than reporting an absence. Paths that perform no internal
-        selection return an empty tuple.
+        The third element is a :class:`RecallDiscardReport` (FRE-1060). Its ``discards``
+        are populated whenever the proactive path ran, **including when it emitted
+        nothing** — see the fall-through below — so the evidence record names the drops
+        rather than reporting an absence. Its ``population`` is OFFERED **only** on the
+        proactive-success path: every other path here truncates without reporting what it
+        cut (broad recall via ``limit``, entity match via ``entity_names[:5]`` and
+        ``limit=5``, and ``recall`` again internally), so claiming completeness for them
+        would make the flag assert exactly the survivors-as-population reading it exists
+        to prevent.
     """
+    # Bound before the try so the exception handler below can still return whatever the
+    # proactive path had already discarded (FRE-1060, confirmed code-review finding): a
+    # downstream failure must not silently convert twelve named drops into "recall offered
+    # nothing", which is the absence-vs-drop confusion this ticket closes and would fire on
+    # exactly the turns most likely to be investigated.
+    discards: ProactiveDiscards = ()
     try:
         if not await memory_adapter.is_connected():
             logger.warning("memory_unavailable", trace_id=trace_id)
-            return None, {}, ()
+            return None, {}, RecallDiscardReport()
 
         if intent.task_type == TaskType.MEMORY_RECALL:
             broad = await memory_adapter.recall_broad(
@@ -230,7 +263,9 @@ async def _query_memory_for_intent(
                 authenticated=authenticated,
                 query_text=user_message,
             )
-            return _format_broad_recall_context(broad), {}, ()
+            # POST_SELECTION: recall_broad bounds its own read with `limit` and reports
+            # nothing about what that cut.
+            return _format_broad_recall_context(broad), {}, RecallDiscardReport()
 
         # FRE-1041: both consumers below share one graph-anchored resolution. The
         # capitalisation heuristic this replaces could not see a lowercase subject, so
@@ -245,13 +280,11 @@ async def _query_memory_for_intent(
             authenticated=authenticated,
         )
 
-        # FRE-1060: bound outside the proactive block, and populated *before* the
-        # emptiness test below, so the discards survive the fall-through. A turn where
-        # every proactive candidate was discarded is exactly the turn whose record most
-        # needs to name them, and binding this inside the `if suggestions.candidates`
-        # arm would lose them precisely there.
-        discards: ProactiveDiscards = ()
-
+        # FRE-1060: populated *before* the emptiness test below, so the discards survive
+        # the fall-through. A turn where every proactive candidate was discarded is exactly
+        # the turn whose record most needs to name them, and binding this inside the
+        # `if suggestions.candidates` arm would lose them precisely there. (The name is
+        # bound above the `try` so the exception handler can return it too.)
         if settings.proactive_memory_enabled:
             suggestions = await memory_adapter.suggest_relevant(
                 user_message=user_message,
@@ -274,15 +307,24 @@ async def _query_memory_for_intent(
                     for c in suggestions.candidates
                     if (identity := memory_item_identity(c.payload)[1])
                 }
-                return [c.payload for c in suggestions.candidates], scores, discards
+                # The only OFFERED claim in this function: the proactive path is the one
+                # producer that accounts for every candidate its gates removed.
+                return (
+                    [c.payload for c in suggestions.candidates],
+                    scores,
+                    RecallDiscardReport(discards, CandidatePopulation.OFFERED),
+                )
 
         # Entity-name matching for analysis and other task types (Slice 2). Reached
         # whenever proactive is disabled or returned no candidates, where the resolved
         # names are the sole gate on entity recall. The control flow here is unchanged —
-        # only `discards` rides along, so a fully-discarded proactive result still falls
-        # through to this path exactly as before.
+        # only the discard report rides along, so a fully-discarded proactive result still
+        # falls through to this path exactly as before. POST_SELECTION from here down:
+        # `entity_names[:5]` and `limit=5` below both truncate without reporting what they
+        # cut, and `recall` truncates again internally, so the record must not claim its
+        # population is complete even though the proactive drops it carries are named.
         if not entity_names:
-            return None, {}, discards
+            return None, {}, RecallDiscardReport(discards)
 
         query = MemoryRecallQuery(
             entity_names=entity_names[:5],
@@ -343,11 +385,18 @@ async def _query_memory_for_intent(
         # FRE-1004: relevance_scores is keyed by turn_id (memory/service.py sorts
         # conversations by ``relevance_scores.get(c.turn_id)``), which is exactly the
         # episode identity above, so the scores land on the right items.
-        return (context if context else None), dict(result.relevance_scores), discards
+        return (
+            (context if context else None),
+            dict(result.relevance_scores),
+            RecallDiscardReport(discards),
+        )
 
     except Exception:
         logger.exception("memory_query_failed", trace_id=trace_id)
-        return None, {}, ()
+        # `discards` is carried, not dropped: the proactive gates may already have removed
+        # candidates before whatever failed here, and discarding that account would record
+        # "recall offered nothing" for a turn that retrieved and gated a full population.
+        return None, {}, RecallDiscardReport(discards)
 
 
 async def assemble_context(
@@ -384,7 +433,7 @@ async def assemble_context(
     messages: list[dict[str, Any]] = []
     memory_context: list[dict[str, Any]] | None = None
     memory_scores: dict[str, float] = {}
-    memory_discards: ProactiveDiscards = ()
+    discard_report = RecallDiscardReport()
 
     # Include session history
     messages.extend(session_messages)
@@ -396,7 +445,7 @@ async def assemble_context(
 
     # Query memory if adapter is available
     if memory_adapter is not None:
-        memory_context, memory_scores, memory_discards = await _query_memory_for_intent(
+        memory_context, memory_scores, discard_report = await _query_memory_for_intent(
             intent=intent,
             user_message=user_message,
             memory_adapter=memory_adapter,
@@ -444,11 +493,13 @@ async def assemble_context(
     # live, model-visible recalled-fact producer.
     # FRE-1060: the candidates recall's own gates discarded ride here too. Without them
     # the record named only the survivors and reported them as the population — on the
-    # melon turn, five of twelve. Ordering is survivors then discards, each in rank
-    # order; every item carries its score, so global rank stays recoverable by sorting.
+    # melon turn, five of twelve. Three groups in construction order — offered, discarded,
+    # session facts — each internally rank-ordered; every item carries its score, so global
+    # rank stays recoverable by sorting. The completeness claim comes from the producing
+    # path, never asserted here: only that path knows whether it reported its own drops.
     recall_candidates = (
         *build_recall_candidates(memory_context, memory_scores),
-        *build_discarded_candidates(memory_discards),
+        *build_discarded_candidates(discard_report.discards),
         *_session_fact_candidates(recall_context),
     )
 
@@ -460,5 +511,5 @@ async def assemble_context(
         trimmed=False,  # Slice 1: no budget trimming
         recall_candidates=recall_candidates,
         session_facts_injected=session_facts_injected,
-        candidate_population=CandidatePopulation.OFFERED,
+        candidate_population=discard_report.population,
     )

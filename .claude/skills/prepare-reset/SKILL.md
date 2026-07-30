@@ -41,14 +41,26 @@ not this skill — the only hard gate is: no unpushed in-flight work (finish or 
 **Master.** `prime-master` will NOT see this conversation. Write the overlay it would otherwise lose to
 **`docs/plans/LAST_SESSION.md`** — the rolling #2 artifact prime-master reads first. Copy the structure
 from `docs/plans/templates/LAST_SESSION.md` and fill it in; **overwrite** the prior file (it is always
-"the LAST session," a bridge, not an archive). Its sections mirror what prime-master reads:
+"the LAST session," a bridge, not an archive).
+
+**THE DIVISION OF LABOUR, AND IT IS STRICT.** Write **only what no durable source can reconstruct** —
+the *unwritten* context of the session, in the same sense as a Seshat session digest: what was
+established, decided, argued and discarded. **Do NOT narrate the commits.** `prime-master` reads
+`git log` itself and git is ground truth that cannot drift; a prose retelling here is duplicated effort
+at best and a second, staler account at worst. The same rule applies to anything else the live sources
+already answer: ticket states come from Linear, PR states from `gh`, health from the probe.
+
+Sections:
 - **Doing / discussing** (≤5 sentences) — the thread to pick up.
-- **Commits — the story behind the last 10** — the outside factors the commit messages don't carry.
+- **What was decided and why** — the reasoning that produced the commits, not the commits. A decision
+  the diff cannot explain, an approach considered and rejected, a correction someone made to someone
+  else, an assumption now known false. This is the section that earns the file.
 - **Worktrees — anything special** — priority build · preserved WIP · blocked (skip the merely-idle).
 - **Plan position + drift** — where this session sits vs. MASTER_PLAN; did we deviate, and why.
 - **Answers for the fresh start** — the questions the next session will ask, pre-empted.
 
-Keep it LEAN — just enough context, no data dump; the live sources reconstruct everything else.
+Keep it LEAN — just enough context, no data dump; the live sources reconstruct everything else. A good
+test: **if a line could be derived from `git log`, Linear or a health probe, delete it.**
 
 **Also distill STANDING facts to memory (separate from the delta).** A decision that changes *standing*
 behavior outlives one session, so it goes to a **memory** file (`feedback`/`project`/`reference`) + its

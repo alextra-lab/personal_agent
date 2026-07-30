@@ -21,11 +21,14 @@ read; this skill reads it back. (Winding **down** instead? That's `/prepare-rese
 1. **Memory** — `MEMORY.md` is auto-loaded; standing rules + facts apply (this is the accumulated,
    all-sessions layer).
 2. **Session-delta** — read **`docs/plans/LAST_SESSION.md`**: the *last* session's conversational overlay
-   (doing/discussing · the story behind the last 10 commits · anything special per worktree · plan drift ·
-   answers for the fresh start). This is the bridge the durable sources can't reconstruct — read it first
-   of the live sources.
-3. **Git history** — `git -C /opt/seshat log -10 --oneline`: what *literally* just committed. Cross-check
-   it against #2's commit-story — git is the ground truth that can't drift.
+   (doing/discussing · **what was decided and why** · anything special per worktree · plan drift · answers
+   for the fresh start). It carries **only what no durable source can reconstruct** — the reasoning behind
+   the work, not a retelling of it. It does **not** narrate the commits; that is yours, at #3.
+3. **Git history — yours to read, and nobody else's to summarise.** `git -C /opt/seshat log -10 --oneline`:
+   what *literally* just committed. This is the ground truth that cannot drift, so it is derived fresh here
+   rather than inherited as prose. Pair each commit with #2's *decisions* to get why it exists — the delta
+   supplies the reasoning, git supplies the record. If #2 ever narrates commits, that is drift: delete it
+   there rather than reconciling two accounts.
 4. **Git status · worktrees · PRs** — `git status` · `git worktree list` · `gh pr list` (open PRs).
 5. **Trigger ledger** — `python -m scripts.dispatch.trigger_ledger --unconsumed --json`. Any entry is
    in-flight actuation that survived the clear: `pending` = a send resolving on its own (nothing to do);

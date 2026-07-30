@@ -29,10 +29,15 @@ isn't. Copy it to docs/plans/LAST_SESSION.md and fill it in.
 <Exactly what was in flight at the reset — the thread to pick up. No history,
 just "you were here, mid-this." Five sentences or fewer.>
 
-## Commits — the story behind the last 10
-<For the last ~10 commits: not just what git shows, but the OUTSIDE FACTORS from
-the conversation the commit messages don't carry — the reasoning, the thing we
-tried and rejected, the "because X". git has the what; this has the why.>
+## What was decided and why
+<The reasoning, NOT the commits — prime-master reads `git log` itself and must not
+be handed a second, staler account of it. Write only what no durable source can
+reconstruct: a decision the diff cannot explain, an approach considered and
+rejected, a correction one party made to another, an assumption now known false,
+a claim that turned out wrong and what replaced it.
+
+Test each line: if it could be derived from `git log`, Linear or a health probe,
+DELETE IT. Do not list commit subjects here.>
 
 ## Worktrees — anything special
 <One line per seat, ONLY if notable: priority build · preserved WIP · blocked ·

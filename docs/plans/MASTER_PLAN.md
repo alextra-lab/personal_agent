@@ -10,13 +10,14 @@
 
 - **build1** — **FRE-1051** *ES silently loses up to 83% of emitted events* (Urgent). Then **FRE-1042**
   *(drawer row height, Haiku)*.
-- **build2** — free. Next: **FRE-867** *(the watcher surfaces a seat parked on a permission dialog —
-  approved 07-30; the robust half, see §8)*. **FRE-937 is not the head**: still blocked by FRE-1015.
+- **build2** — **FRE-867** *(the watcher surfaces a seat parked on a permission dialog — the robust
+  half, see §8)*. Then **FRE-1060** *(Urgent front-jump, §0c)*. **FRE-937 is not the head**: still
+  blocked by FRE-1015.
 - **adrs** — idle. **FRE-1043–1050 all Needs Approval**; nothing dispatchable until they're approved.
 - **explore** — delivered the convergence study (§9); free.
 
 **Pending actions:**
-- **Deploy FRE-1041** — merged, ask-first gateway rebuild, no migration. Runbook on the ticket.
+- **FRE-1041 is deployed and its verification FAILED — see §0c.** Nothing further to deploy.
 - **Deploy FRE-927** — merged 07-30. Host `systemctl restart` of the dispatch daemons, **no gateway
   image** (same class as FRE-922/923). Awaiting authorization. The observable signal is the reason
   split, not the alert: `board-churn` and `owner-acted` now tally separately in the orchestrator
@@ -26,6 +27,36 @@
   cost ⇒ nothing priced to record). Its role-distribution criterion needs ~7 days.
 - **Watch `main_inference`'s caps** — reachable by streamed chat for the first time, and that lane denies
   with `raise` → user-facing 503. If one fires, ask whether the spend is real; do not raise the cap.
+
+## 0c. FRE-1041 is Verify Failed — and the gate is not where §0b says
+
+Deployed 07-30 05:37Z; the owner fired the melon turn at 05:43Z. **Split result.**
+
+**The resolver works.** Probed live against the graph with that turn's own identity, the message
+resolves to `Ice cream, ice cream, Melon, Ice` — **`Melon` recovered from a lowercase mention**, the
+exact class the replaced heuristic could not see. Unauthenticated control returns empty, so visibility
+scoping holds. The fix is **not inert**, which was the runbook's own discriminator.
+
+**AC-2 still fails.** The turn's admission record holds five candidates, all `episode`, zero `entity` —
+byte-identical to the pre-change behaviour. **Not rolled back:** reverting restores a heuristic blind to
+lowercase and does nothing about the gate that discards the signal.
+
+**The deciding gate was the token-budget trim, not the top-5 rank race.** 28 raw rows → 12 candidates →
+**trimmed to 5** at a 500-token threshold. §0b, FRE-1021, FRE-1041 and FRE-1053 have all been reasoning
+about a five-slot competition and a 0.002 margin. On this turn the cap never got to decide.
+
+**And the admission record is written *after* the trim**, so it reports five survivors as though they
+were the population. Seven candidates were discarded and no artifact names one of them. **Every
+conclusion this project has drawn from an admission record about recall is a conclusion about post-trim
+survivors** — treat the §0b numbers accordingly until FRE-1060 lands.
+
+**FRE-1060** *(Approved, Urgent, stream:build2)* owns it: record the pre-trim population with per-item
+drop reasons, distinguish cap-loss from budget-loss, and give the resolver a success-path log — it has
+none, so its silence proved nothing and master had to call it against the graph directly. The ticket
+fails if the trim is widened before it is made visible.
+
+This also vindicates the **PR #738 bounce**: FRE-1015's precondition would fail on real turns for a
+reason nobody could name, and a tautological precondition would have reported a clean pass through it.
 
 ## 0b. Recall: four mechanisms, one race — RESOLVED
 

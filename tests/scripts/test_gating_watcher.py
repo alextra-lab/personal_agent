@@ -27,17 +27,14 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
-import pytest
 from scripts.dispatch import launcher
 from scripts.dispatch.gating_watcher import (
     DEFAULT_CONTEXT_PRESSURE_THRESHOLD,
-    DEFAULT_PERMISSION_STALL_TTL_S,
     MASTER_SESSION,
     Candidate,
     CheckResult,
     ContextReading,
     PullRequest,
-    _capture_permission_stalls,
     _context_pressure_threshold_default,
     build_channel_payload,
     ci_status,
@@ -48,7 +45,6 @@ from scripts.dispatch.gating_watcher import (
     has_ci_red_ack,
     load_channel_secret,
     parse_ticket_from_branch,
-    permission_prompt_snippet,
     post_channel_event,
     prune_state,
     run_once,
@@ -56,7 +52,7 @@ from scripts.dispatch.gating_watcher import (
     session_for_labels,
     session_is_idle,
 )
-from scripts.dispatch.tmux_target import exact_pane, exact_session
+from scripts.dispatch.tmux_target import exact_pane
 from scripts.dispatch.trigger_ledger import snapshot_unconsumed
 
 _MODULE_PATH = Path("scripts/dispatch/gating_watcher.py")
@@ -257,69 +253,6 @@ def test_session_idle_false_on_tall_permission_prompt_near_bottom() -> None:
     )
     pane = "some earlier transcript line\n" * 10 + prompt
     assert session_is_idle(pane) is False
-
-
-# --- permission_prompt_snippet (FRE-867) ------------------------------------
-
-
-def test_permission_prompt_snippet_none_when_idle() -> None:
-    assert permission_prompt_snippet(_REAL_IDLE_PANE) is None
-
-
-def test_permission_prompt_snippet_none_on_busy_spinner() -> None:
-    assert permission_prompt_snippet(_REAL_BUSY_SPINNER_PANE) is None
-
-
-def test_permission_prompt_snippet_none_on_generic_busy() -> None:
-    assert permission_prompt_snippet(_BUSY_PANE) is None
-
-
-def test_permission_prompt_snippet_present_for_prompt() -> None:
-    pane = (
-        'Bash(docker exec cloud-sim-db psql -c "SELECT 1")\n'
-        "Do you want to proceed?\n"
-        "❯ 1. Yes\n"
-        "  2. No, and tell Claude"
-    )
-    snippet = permission_prompt_snippet(pane)
-    assert snippet is not None
-    assert "Do you want to proceed?" in snippet
-    assert "psql" in snippet
-
-
-def test_permission_prompt_snippet_present_on_tall_prompt_near_bottom() -> None:
-    prompt = (
-        "Do you want to proceed with this multi-file refactor?\n"
-        "❯ 1. Yes\n"
-        "  2. Yes, and don't ask again for file edits\n"
-        "  3. No, and tell Claude what to do differently\n"
-    )
-    pane = "some earlier transcript line\n" * 10 + prompt
-    assert permission_prompt_snippet(pane) is not None
-
-
-def test_permission_prompt_snippet_none_when_marker_only_in_scrollback_prose() -> None:
-    # Mirrors FRE-845's session_is_idle regression guard: the marker must be
-    # scoped to the trailing active region, not the whole scrollback.
-    prose = (
-        "Do you want me to proceed with the migration? Here is the plan:\n"
-        "1. Yes, run the migration script now.\n"
-        "2. No, and tell Claude to hold off until review.\n"
-    )
-    padding = "\n".join(f"filler transcript line {i}" for i in range(40))
-    pane = prose + "\n" + padding + "\n" + _REAL_IDLE_PANE
-    assert permission_prompt_snippet(pane) is None
-
-
-def test_permission_prompt_snippet_none_on_recent_rhetorical_question_without_options() -> None:
-    # FRE-867 codex review: a short completed-turn reply ending in a
-    # rhetorical question, with NO numbered menu, sits well within the same
-    # trailing active region a genuine dialog would -- the option-line
-    # requirement is what keeps this from unconditionally waking master on
-    # ordinary conversational prose.
-    reply = "Sure, I can add that helper.\nDo you want me to also update the tests?\n"
-    pane = reply + _REAL_IDLE_PANE
-    assert permission_prompt_snippet(pane) is None
 
 
 # --- session_for_labels ----------------------------------------------------
@@ -1444,23 +1377,6 @@ def test_prune_state_drops_expired_context_pressure_key() -> None:
     assert kept == {}
 
 
-def test_prune_state_keeps_permission_stall_key_within_ttl() -> None:
-    # FRE-867 correctness review: this 2-part key shape (hash inside ONE
-    # colon-segment, not a third `:` segment) is exactly what protects it
-    # from _pr_of_key's PR-eviction branch -- pin it the same way the sibling
-    # ctxpressure key already is, so a future _pr_of_key change can't break
-    # permission-stall dedup silently.
-    sent = {"permstall:cc-1build-abc123def456": 100.0}
-    kept = prune_state(sent, now=200.0, max_ttl_s=600.0, open_prs=[412])
-    assert kept == {"permstall:cc-1build-abc123def456": 100.0}
-
-
-def test_prune_state_drops_expired_permission_stall_key() -> None:
-    sent = {"permstall:cc-1build-abc123def456": 100.0}
-    kept = prune_state(sent, now=800.0, max_ttl_s=600.0, open_prs=[412])
-    assert kept == {}
-
-
 # --- run_once: context-pressure nudge (AC-2, AC-3) --------------------------
 
 
@@ -1908,15 +1824,19 @@ def _busy_runner(pr_state: str = "OPEN") -> _RecordingRunner:
 
 
 def _queued_entry(
-    *, created_at: float = 100.0, ticket: str = "412", event_id: str = "master:412:abc1234def5678"
+    *,
+    created_at: float = 100.0,
+    ticket: str = "412",
+    event_id: str = "master:412:abc1234def5678",
+    source: str = "master-ready",
 ) -> dict:
-    """A ledger holding one unconfirmed (busy-pane) master trigger."""
+    """A ledger holding one unconfirmed (busy-pane) trigger."""
     from scripts.dispatch.trigger_ledger import mark_queued, mark_send_started, record_pending
 
     ledger, _ = record_pending(
         {},
         event_id=event_id,
-        source="master-ready",
+        source=source,
         target_pane=MASTER_SESSION,
         ticket=ticket,
         command=f"/master {ticket}",
@@ -2199,6 +2119,41 @@ def test_queued_non_pr_ticket_is_never_judged_obsolete() -> None:
     assert not any(c[:3] == ("gh", "pr", "view") for c in runner.calls)
 
 
+def test_queued_permission_stall_entry_retired_not_redelivered() -> None:
+    """FRE-1084: an orphaned permission-stall entry is retired, not redelivered.
+
+    Mirrors the production incident this test guards against: a real entry
+    (``permstall:cc-1build-...``) sat unconsumed in ``telemetry/trigger_ledger.json``
+    with a non-numeric ticket, so the PR-closure obsolescence check never fires
+    for it -- without the dedicated retirement guard it would fall through to
+    ``reoffer`` and redeliver a stale nudge to master on the first tick after
+    this fix deploys.
+    """
+    ledger = _queued_entry(
+        ticket="cc-1build",
+        event_id="permstall:cc-1build-abc123def456",
+        source="permission-stall",
+    )
+
+    # Master's pane reads idle: without the retirement guard, reoffer() would
+    # pass the idle gate and actually send.
+    runner = _idle_runner()
+    run_once(
+        {},
+        now=200.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert ledger["permstall:cc-1build-abc123def456"].consumed_at is not None
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
+
+
 def test_queued_untouched_in_dry_run() -> None:
     ledger = _queued_entry()
     runner = _busy_runner()
@@ -2270,309 +2225,3 @@ def test_queued_entries_for_different_prs_are_not_superseded() -> None:
     )
     assert ledger["master:412:shaA"].consumed_at is None
     assert ledger["master:500:shaC"].consumed_at is None
-
-
-# --- _capture_permission_stalls (FRE-867) -----------------------------------
-
-
-def test_capture_permission_stalls_finds_stalled_seat_skips_absent_and_idle() -> None:
-    stalled_pane = "Do you want to proceed?\n❯ 1. Yes\n  2. No, and tell Claude"
-    runner = _RecordingRunner(
-        {
-            ("tmux", "has-session", "-t", exact_session("cc-adrs")): _FakeRunResult(returncode=1),
-            ("tmux", "has-session", "-t", exact_session("cc-1build")): _FakeRunResult(returncode=0),
-            ("tmux", "has-session", "-t", exact_session("cc-2build")): _FakeRunResult(returncode=0),
-            ("tmux", "capture-pane", "-t", exact_pane("cc-1build")): _FakeRunResult(
-                returncode=0, stdout=stalled_pane
-            ),
-            ("tmux", "capture-pane", "-t", exact_pane("cc-2build")): _FakeRunResult(
-                returncode=0, stdout=_REAL_IDLE_PANE
-            ),
-        }
-    )
-    stalls = _capture_permission_stalls(runner)
-    assert [session for session, _ in stalls] == ["cc-1build"]
-    assert "Do you want" in stalls[0][1]
-    # The absent seat (cc-adrs) must never have its pane captured.
-    assert not any(
-        c[:2] == ("tmux", "capture-pane") and exact_pane("cc-adrs") in c for c in runner.calls
-    )
-
-
-# --- run_once: permission-stall nudge (FRE-867) -----------------------------
-
-_STALLED_SNIPPET = (
-    "Bash(rm -rf /tmp/x)\nDo you want to proceed?\n❯ 1. Yes\n  2. No, and tell Claude"
-)
-_STALLED_SNIPPET_2 = (
-    'Bash(docker exec cloud-sim-db psql -c "DROP TABLE x")\n'
-    "Do you want to proceed?\n❯ 1. Yes\n  2. No, and tell Claude"
-)
-
-
-def test_run_once_permission_stall_logs_regardless_of_execute() -> None:
-    logger = _RecordingLogger()
-    run_once(
-        {},
-        now=100.0,
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=_idle_runner(),
-        persist=lambda _s: None,
-        logger=logger,
-        execute=False,
-        permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET)],
-    )
-    events = [f for e, f in logger.events if e == "permission_stall"]
-    assert events == [{"trace_id": events[0]["trace_id"], "session": "cc-1build"}]
-
-
-def test_run_once_permission_stall_dry_run_sends_nothing() -> None:
-    runner = _idle_runner()
-    run_once(
-        {},
-        now=100.0,
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=runner,
-        persist=lambda _s: None,
-        logger=_NullLogger(),
-        execute=False,
-        permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET)],
-    )
-    assert not any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
-
-
-def test_run_once_permission_stall_sends_nudge_naming_seat_and_command() -> None:
-    runner = _idle_runner()
-    state: dict[str, float] = {}
-    run_once(
-        state,
-        now=100.0,
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=runner,
-        persist=lambda st: state.update(st),
-        logger=_NullLogger(),
-        execute=True,
-        permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET)],
-    )
-    send_calls = [c for c in runner.calls if c[:2] == ("tmux", "send-keys") and len(c) == 6]
-    assert send_calls == [
-        ("tmux", "send-keys", "-t", exact_pane(MASTER_SESSION), "-l", send_calls[0][5])
-    ]
-    payload = send_calls[0][5]
-    assert "cc-1build" in payload
-    # The snippet is flattened to one line before embedding (security review
-    # finding: send-keys -l has no bracketed-paste framing, so a raw embedded
-    # newline risks the target treating it as a premature submit).
-    assert _STALLED_SNIPPET.replace("\n", " | ") in payload
-    # FRE-867 codex review: no hardcoded universal approve/deny digit recipe.
-    assert '"1"' not in payload
-    assert '1"=yes' not in payload
-
-
-def test_run_once_permission_stall_nudge_never_embeds_a_raw_newline() -> None:
-    # Security review finding: every other trigger in this module is a
-    # single-line send-keys -l payload; a raw embedded newline in this one
-    # risks the target's input box treating it as a premature submit,
-    # splitting the safety preamble from the payload. Locks in the flatten
-    # fix regardless of how many lines the underlying snippet carries.
-    runner = _idle_runner()
-    run_once(
-        {},
-        now=100.0,
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=runner,
-        persist=lambda _s: None,
-        logger=_NullLogger(),
-        execute=True,
-        permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET)],
-    )
-    send_calls = [c for c in runner.calls if c[:2] == ("tmux", "send-keys") and len(c) == 6]
-    assert "\n" not in send_calls[0][5]
-
-
-def test_run_once_permission_stall_sent_even_when_master_pane_busy() -> None:
-    # The whole point of require_idle=False: unlike the context-pressure nudge
-    # (which IS idle-gated and skips a busy master), this must still fire.
-    runner = _RecordingRunner(
-        {
-            ("tmux", "has-session"): _FakeRunResult(returncode=0),
-            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_BUSY_PANE),
-        }
-    )
-    ledger: dict[str, object] = {}
-    run_once(
-        {},
-        now=100.0,
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=runner,
-        persist=lambda _s: None,
-        logger=_NullLogger(),
-        execute=True,
-        ledger=ledger,
-        ledger_persist=ledger.update,
-        permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET)],
-    )
-    assert any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
-    unconsumed = snapshot_unconsumed(ledger)
-    assert len(unconsumed) == 1
-    assert unconsumed[0].queued_at is not None
-    assert unconsumed[0].consumed_at is None
-
-
-def test_run_once_permission_stall_dedup_suppresses_same_snippet_second_tick_within_ttl() -> None:
-    state: dict[str, float] = {}
-    run_once(
-        state,
-        now=100.0,
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=_idle_runner(),
-        persist=lambda st: state.update(st),
-        logger=_NullLogger(),
-        execute=True,
-        permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET)],
-    )
-    assert len(state) == 1
-
-    runner2 = _idle_runner()
-    run_once(
-        dict(state),
-        now=150.0,  # well within DEFAULT_PERMISSION_STALL_TTL_S (6h)
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=runner2,
-        persist=lambda _s: None,
-        logger=_NullLogger(),
-        execute=True,
-        permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET)],
-    )
-    assert not any(c[:2] == ("tmux", "send-keys") for c in runner2.calls)
-
-
-def test_run_once_permission_stall_re_arms_after_ttl() -> None:
-    state: dict[str, float] = {}
-    run_once(
-        state,
-        now=100.0,
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=_idle_runner(),
-        persist=lambda st: state.update(st),
-        logger=_NullLogger(),
-        execute=True,
-        permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET)],
-    )
-    runner2 = _idle_runner()
-    run_once(
-        dict(state),
-        now=100.0 + DEFAULT_PERMISSION_STALL_TTL_S + 1.0,
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=runner2,
-        persist=lambda _s: None,
-        logger=_NullLogger(),
-        execute=True,
-        permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET)],
-    )
-    assert any(c[:2] == ("tmux", "send-keys") for c in runner2.calls)
-
-
-def test_run_once_permission_stall_distinct_snippet_notifies_again_within_ttl() -> None:
-    # A DIFFERENT stall episode on the same seat must not be suppressed by an
-    # older, already-notified one's dedup window (FRE-867 codex review).
-    state: dict[str, float] = {}
-    run_once(
-        state,
-        now=100.0,
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=_idle_runner(),
-        persist=lambda st: state.update(st),
-        logger=_NullLogger(),
-        execute=True,
-        permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET)],
-    )
-    assert len(state) == 1
-
-    runner2 = _idle_runner()
-    state2 = dict(state)
-    run_once(
-        state2,
-        now=150.0,  # well within the TTL
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=runner2,
-        persist=lambda st: state2.update(st),
-        logger=_NullLogger(),
-        execute=True,
-        permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET_2)],
-    )
-    assert any(c[:2] == ("tmux", "send-keys") for c in runner2.calls)
-    assert len(state2) == 2
-
-
-def test_run_once_permission_stall_still_sent_when_board_fetcher_fails() -> None:
-    runner = _idle_runner()
-
-    def _failing_board_fetcher() -> list[PullRequest]:
-        raise RuntimeError("gh pr list failed")
-
-    with pytest.raises(RuntimeError):
-        run_once(
-            {},
-            now=100.0,
-            board_fetcher=_failing_board_fetcher,
-            session_resolver=_no_session,
-            runner=runner,
-            persist=lambda _s: None,
-            logger=_NullLogger(),
-            execute=True,
-            permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET)],
-        )
-    assert any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
-
-
-def test_run_once_permission_stall_ledger_records_and_consumes_on_successful_send() -> None:
-    ledger: dict[str, object] = {}
-    run_once(
-        {},
-        now=100.0,
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=_idle_runner(),
-        persist=lambda _s: None,
-        logger=_NullLogger(),
-        execute=True,
-        ledger=ledger,
-        ledger_persist=ledger.update,
-        permission_stall_reader=lambda: [("cc-1build", _STALLED_SNIPPET)],
-    )
-    assert snapshot_unconsumed(ledger) == ()
-    (entry,) = ledger.values()
-    assert entry.sent_at is not None
-    assert entry.consumed_at is not None
-    assert entry.ticket == "cc-1build"
-
-
-def test_run_once_permission_stall_defaults_do_not_affect_pr_only_ticks() -> None:
-    # No permission_stall_reader passed -> default (empty) means zero behavior
-    # change (mirrors the existing context-pressure regression guard).
-    runner = _idle_runner()
-    run_once(
-        {},
-        now=100.0,
-        board_fetcher=lambda: [_pr()],
-        session_resolver=_no_session,
-        runner=runner,
-        persist=lambda _s: None,
-        logger=_NullLogger(),
-        execute=True,
-    )
-    sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
-    assert len(sends) == 2  # exactly the /master trigger's send-keys pair, nothing extra
-    assert ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 412") in sends

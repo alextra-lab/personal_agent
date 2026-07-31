@@ -1,6 +1,6 @@
 # ADR-0128: One Telemetry Naming and Structure Convention Across Every Substrate — Enforced at Emit and at the Substrate Boundary
 
-**Status:** Proposed
+**Status:** Superseded by ADR-0129 — 2026-07-31 (owner, relayed in session)
 **Date:** 2026-07-29
 **Deciders:** Project owner (FRE-1038, owner-directed 2026-07-28)
 **Tags:** telemetry, observability, naming-convention, elasticsearch, opentelemetry, enforcement

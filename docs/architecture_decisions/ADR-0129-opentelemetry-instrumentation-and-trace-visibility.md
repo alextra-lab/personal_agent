@@ -1,6 +1,6 @@
 # ADR-0129: OpenTelemetry Instrumentation, with Trace Visibility as the Acceptance Bar
 
-**Status:** Proposed
+**Status:** Accepted — 2026-07-31 (owner, relayed in session)
 **Date:** 2026-07-30
 **Deciders:** Project owner (FRE-1043, owner-directed 2026-07-30)
 **Tags:** telemetry, observability, opentelemetry, tracing, instrumentation, grafana
@@ -370,6 +370,35 @@ ADR-0128 moves to **Superseded** when this ADR is Accepted.
 ---
 
 ## Status Updates
+
+### 2026-07-31 — Accepted
+**Changed By:** master, transcribing the owner's decision relayed in session.
+**Reason:** The owner accepted this ADR's direction — traces move to OpenTelemetry — and confirmed
+its scope explicitly: **logs stay in Elasticsearch**, per D5 and D6 as written. There is no log
+migration in this decision. ADR-0128 is marked **Superseded by this ADR**, which its own supersession
+table already effects clause by clause.
+
+**Two facts recorded at acceptance, because this ADR's Context is now partly stale and an accepted
+record should not cite figures that have moved.** Measured 2026-07-31 at 15:22Z, after FRE-1036's
+consolidation deployed and its first five families migrated:
+
+- The Context cites **602 active shards for 719 MB** and Elasticsearch at **1.839 GiB of a 2 GiB cap
+  (92%)** as a live operational risk. Both have moved: **363 active shards, 714 MB, 1.716 GiB (85.8%)**.
+  Index count fell 556 → 306. Three families remain unmigrated, so the figure will fall further.
+- **This bears on Option 2's rejection, not on the decision.** Option 2 — an EDOT Collector into the
+  existing Elasticsearch — was rejected "on capacity and direction, not capability… It would be the
+  right answer if Elasticsearch were healthy; it is measurably not." The capacity half of that
+  rationale is materially weaker than when it was written. The direction half — Grafana as the
+  intended UI, Kibana retired — is unchanged and is the owner's, and it is what continues to carry
+  the rejection.
+
+The owner also noted that Elasticsearch supports OpenTelemetry natively, so "traces to OTel" and
+"logs stay in Elasticsearch" are not in tension: the constraint here is which backend stores traces
+and which UI correlates them, not whether the wire format is OTLP.
+
+**Neither fact is recorded as a reopening.** They are recorded so a future reader is not misled by
+the Context's numbers, and so the Option 2 comparison is re-derivable from what was true rather than
+from what was measured on 2026-07-30.
 
 ### 2026-07-30 — Proposed
 **Changed By:** `/adr` session (FRE-1043)

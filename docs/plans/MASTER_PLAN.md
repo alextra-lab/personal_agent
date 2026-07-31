@@ -137,6 +137,12 @@ querying; treat zero matches as a hard error. Needs approval. The recipe fix is 
 None closes on "deployed and healthy" — each needs its own criterion proven, and **UNVERIFIABLE is a
 first-class verdict**.
 
+**Writing this file can corrupt the board — mitigate until the integration is fixed.** Naming a ticket
+id in a docs PR's **title or body** makes the Linear integration attach that PR and march the ticket to
+`Awaiting Deploy`. It has happened twice, both times from master's own plan updates (see §1). Until the
+integration ticket lands, **keep bare `FRE-XXXX` out of docs PR titles, bodies and branch names** — the
+file diff may say whatever it needs to. Verify any ticket you name afterwards.
+
 **Do not read this column as "all of them deployed" — that phrasing hid a live defect.** FRE-1036 sat
 here for two days with no branch, no PR and no implementation, put there by the GitHub integration
 matching a docs PR that merely named it (§1). Verify membership against merged-PR evidence before
@@ -152,6 +158,7 @@ already in ES — five spend-query turns straddling the deploy gave a same-model
 | **FRE-989** | cost attribution audit | **F9 UNVERIFIED** — needs one turn on a *cloud* primary; all post-deploy primaries were local/zero-cost. Role distribution needs ~7 days |
 | **FRE-1021** | entity-kind fused items resolve to entities, not their turns | **re-read against §0b.** Its premise was the rank race, now named. The census re-run is still owed, but no longer gates anything |
 | **FRE-1037** | widen the LLM role enum, thread the real role, fail closed | **~7 days of post-deploy traffic** before the role distribution is comparable to the 93%-primary baseline. Slowest item in this column |
+| **FRE-1066** | `event_type` no longer collides with the Redis stream name | **deployed 07-31 04:03Z, clock runs to 08-07.** Interim evidence is strong: 1,426 defective docs in the hour before, **0** after, against **218** real emissions in the same window — a real zero, not an empty one. Joinability green. Close on the equality check **paired with a population count**, never the bare count |
 | **FRE-1016** | ADR-0126 T3 — claims reachable via the memory search tool | live AC proof against the graph |
 | **FRE-1018** | ADR-0126 T4 — supersession chain on pull | live AC proof; AC-5 chain half |
 | **FRE-739** | ADR-0107 T2 — user_id into structured logs | **cannot close.** AC-3a passes 154/154; **AC-3b UNVERIFIABLE** — see below |

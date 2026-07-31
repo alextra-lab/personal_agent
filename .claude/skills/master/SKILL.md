@@ -188,8 +188,11 @@ For concurrent-session safety, still confirm timing if another session is active
     tickets). The due date is a **marker, not an actuator**: the resolver never reads due dates, so
     this sweep is the only thing that wakes a seam ticket, and activation is bounded by the next merge.
   - **Exactly one intended head, always pinned.** If more than one ticket is eligible, move the
-    High pin to the intended head NOW — never leave the head to creation-date ties. Verify after
-    every mutation: the eligible set contains exactly one Urgent-or-High ticket.
+    High pin to the intended head NOW — never leave the head to creation-date ties. **Verify after
+    every mutation: the eligible set's *top* priority is held by exactly one ticket**, so the head
+    never depends on the creation-date tie-break. That — not a count of Urgent-or-High tickets — is
+    the invariant, because a front-jump deliberately produces one Urgent *above* one High (below),
+    which is two Urgent-or-High and is nonetheless unambiguous and correct.
   - **Sequence is written at dispatch time, not discovered later.** Labeling a chain into a stream
     and writing its blocked-by relations are ONE action — a ticket entering a queue without its
     relations is a dispatch bug that will surface as a false head.

@@ -1,20 +1,22 @@
 {
   "policy": {
     "_meta": {
-      "description": "ILM for agent-monitors-joinability-* (~24 docs/day; cheap retention)."
+      "description": "ILM for agent-monitors-joinability-* and agent-monitors-joinability-substrate-* (monthly index agent-monitors-joinability-YYYY-MM as of FRE-1036, was daily YYYY.MM.DD; ~24 docs/day, cheap retention). min_age-based delete from index creation (no rollover write-alias). Retention: 180d, unchanged. FRE-1036 removed the prior rollover action: it required index.lifecycle.rollover_alias, which no template ever set, so every joinability/substrate index was permanently stuck in hot/check-rollover-ready (confirmed live, failed_step_retry_count 32) and the 180d delete phase never fired. Monthly-by-name (this same ticket's pattern for every other family) replaces it. warm forcemerge fires at 32d, matching the user-turn-ratings-policy precedent so the current monthly index isn't merged while still open.",
+      "retention_days": 180,
+      "managed_by": "scripts/setup-elasticsearch.sh"
     },
     "phases": {
       "hot": {
         "min_age": "0ms",
         "actions": {
-          "rollover": { "max_age": "7d", "max_size": "100mb" }
+          "set_priority": { "priority": 100 }
         }
       },
       "warm": {
-        "min_age": "7d",
+        "min_age": "32d",
         "actions": {
-          "shrink": { "number_of_shards": 1 },
-          "forcemerge": { "max_num_segments": 1 }
+          "forcemerge": { "max_num_segments": 1 },
+          "set_priority": { "priority": 50 }
         }
       },
       "delete": {

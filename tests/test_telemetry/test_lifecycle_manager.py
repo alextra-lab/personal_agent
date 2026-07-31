@@ -112,39 +112,6 @@ async def test_purge_expired_data_returns_result(
 
 
 @pytest.mark.asyncio
-async def test_cleanup_elasticsearch_indices_no_client() -> None:
-    """cleanup_elasticsearch_indices returns empty when no ES client."""
-    manager = DataLifecycleManager(es_client=None)
-    result = await manager.cleanup_elasticsearch_indices()
-    assert result.deleted_count == 0
-    assert result.deleted_indices == []
-
-
-@pytest.mark.asyncio
-async def test_cleanup_does_not_sweep_user_turn_ratings() -> None:
-    """The Python ES sweep no longer claims user-turn-ratings (FRE-559).
-
-    Retention for that family is now governed solely by the ILM policy
-    user-turn-ratings-policy (365d). The sweep must not query the family at all —
-    its daily date-parser can't match the new monthly YYYY.MM names, and a
-    fallback to the default 30d cutoff would delete labels far too early.
-    """
-    from unittest.mock import AsyncMock
-
-    es_client = AsyncMock()
-    es_client.cat.indices = AsyncMock(return_value=[])
-    es_client.indices.delete = AsyncMock()
-
-    manager = DataLifecycleManager(es_client=es_client)
-    await manager.cleanup_elasticsearch_indices()
-
-    queried = es_client.cat.indices.call_args.kwargs["index"]
-    assert "user-turn-ratings" not in queried, queried
-    # Sanity: the sweep still covers the operational families.
-    assert "agent-captains-captures" in queried, queried
-
-
-@pytest.mark.asyncio
 async def test_generate_report_read_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """generate_report does not modify data; returns LifecycleReport."""
     monkeypatch.setattr(

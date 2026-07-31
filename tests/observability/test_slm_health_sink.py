@@ -27,7 +27,7 @@ class TestIndexNameFor:
 
         snap = _make_snapshot()
         name = index_name_for(snap, prefix="agent-monitors-slm-health")
-        assert name == "agent-monitors-slm-health-2026.06"
+        assert name == "agent-monitors-slm-health-2026-06"
 
     def test_different_prefix(self) -> None:
         from personal_agent.observability.slm_health.sink import index_name_for
@@ -50,7 +50,7 @@ class TestWriteResult:
 
         es.index.assert_awaited_once()
         call_kwargs = es.index.call_args.kwargs
-        assert call_kwargs["index"] == "agent-monitors-slm-health-2026.06"
+        assert call_kwargs["index"] == "agent-monitors-slm-health-2026-06"
 
     @pytest.mark.asyncio
     async def test_doc_id_is_a_uuid_string(self) -> None:

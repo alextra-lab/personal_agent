@@ -1,20 +1,15 @@
 {
   "policy": {
+    "_meta": {
+      "description": "ILM for agent-logs-* (monthly index agent-logs-YYYY-MM; ADR-0090 telemetry catch-all). min_age-based delete from origination date (no rollover write-alias — the prior rollover action here was dead: agent-logs-template never set index.lifecycle.name, so no index was ever ILM-managed and agent-logs-000001, its rollover-alias bootstrap index, sat at 0 docs). Retention: 30d, unchanged from the prior policy's delete phase and from the elasticsearch_logs RETENTION_POLICIES entry (telemetry/lifecycle.py) whose client-side sweep this same ticket retires. No warm/forcemerge phase: the 32d min_age used elsewhere (matching the user-turn-ratings-policy precedent, so a still-open monthly index isn't merged) is >= this family's own 30d retention -- ES rejects a policy whose warm min_age exceeds its delete min_age (hot must precede warm must precede delete). At only 30 days total lifetime the forcemerge optimization has little value anyway. Authored in FRE-1036, replacing the dead rollover scaffold.",
+      "retention_days": 30,
+      "managed_by": "scripts/setup-elasticsearch.sh"
+    },
     "phases": {
       "hot": {
         "min_age": "0ms",
         "actions": {
-          "rollover": {
-            "max_age": "7d",
-            "max_size": "1gb"
-          }
-        }
-      },
-      "warm": {
-        "min_age": "7d",
-        "actions": {
-          "shrink": { "number_of_shards": 1 },
-          "forcemerge": { "max_num_segments": 1 }
+          "set_priority": { "priority": 100 }
         }
       },
       "delete": {

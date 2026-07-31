@@ -24,7 +24,7 @@
     }
   },
   "_meta": {
-    "description": "Per-turn user value ratings (FRE-407). Monthly index user-turn-ratings-YYYY.MM (FRE-559). One doc per assistant turn keyed on trace_id — re-rate overwrites within the month's index. prompt_* fields are best-effort write-time denorms from agent-logs-* model_call_completed; nulls are recovered at read time by the Insights consumer. dynamic:false prevents prompt_component_ids from drifting to text. Retention: 365 days (ground-truth labels), enforced by ILM policy user-turn-ratings-policy (FRE-559) — the prose 90d was never enforced. Managed by scripts/setup-elasticsearch.sh.",
+    "description": "Per-turn user value ratings (FRE-407). Monthly index user-turn-ratings-YYYY-MM (FRE-559; separator normalized from YYYY.MM to YYYY-MM in FRE-1036). One doc per assistant turn keyed on trace_id — re-rate overwrites within the month's index. prompt_* fields are best-effort write-time denorms from agent-logs-* model_call_completed; nulls are recovered at read time by the Insights consumer. dynamic:false prevents prompt_component_ids from drifting to text. Retention: 365 days (ground-truth labels), enforced by ILM policy user-turn-ratings-policy (FRE-559) — the prose 90d was never enforced. Managed by scripts/setup-elasticsearch.sh.",
     "managed_by": "scripts/setup-elasticsearch.sh",
     "retention_days": 365
   }

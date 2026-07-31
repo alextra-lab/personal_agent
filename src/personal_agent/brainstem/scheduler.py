@@ -153,7 +153,7 @@ class BrainstemScheduler:
         self._lifecycle_es_client = lifecycle_es_client
 
         # Data lifecycle (Phase 2.3)
-        self.lifecycler = DataLifecycleManager(es_client=lifecycle_es_client)
+        self.lifecycler = DataLifecycleManager()
         self._last_disk_check: datetime | None = None
         self._last_archive_date: date | None = None
         self._last_purge_week: tuple[int, int] | None = None  # (year, week)
@@ -1058,7 +1058,7 @@ class BrainstemScheduler:
                         await run_scheduled_probe(
                             es_client=cast(
                                 "AsyncElasticsearch | None",
-                                self.lifecycler._es_client,
+                                self._lifecycle_es_client,
                             )
                         )
                         self._last_joinability_probe_run = now
@@ -1084,7 +1084,7 @@ class BrainstemScheduler:
                         await run_scheduled_slm_health_probe(
                             es_client=cast(
                                 "AsyncElasticsearch | None",
-                                self.lifecycler._es_client,
+                                self._lifecycle_es_client,
                             )
                         )
                         self._last_slm_health_probe_run = now
@@ -1111,7 +1111,9 @@ class BrainstemScheduler:
                         await self.lifecycler.archive_old_data(data_type)
                     self._last_archive_date = today
 
-                # Weekly Sunday 3 AM UTC: purge expired + ES cleanup
+                # Weekly Sunday 3 AM UTC: purge expired (file-based data types only —
+                # ES retention is ILM-managed for every family as of FRE-1036, no
+                # client-side sweep left to run)
                 year, week, _ = now.isocalendar()
                 if lifecycle_enabled and (
                     now.weekday() == PURGE_WEEKDAY
@@ -1124,7 +1126,6 @@ class BrainstemScheduler:
                         "captains_log_reflections",
                     ):
                         await self.lifecycler.purge_expired_data(data_type)
-                    await self.lifecycler.cleanup_elasticsearch_indices()
                     self._last_purge_week = (year, week)
 
                 # Weekly freshness review (FRE-166 / ADR-0042)

@@ -333,8 +333,8 @@ class CaptainLogManager:
         )
 
         if entry.type in {CaptainLogEntryType.REFLECTION, CaptainLogEntryType.CONFIG_PROPOSAL}:
-            date_str = entry.timestamp.strftime("%Y-%m-%d")
-            index_name = f"{REFLECTIONS_INDEX_PREFIX}-{date_str}"
+            month_str = entry.timestamp.strftime("%Y-%m")
+            index_name = f"{REFLECTIONS_INDEX_PREFIX}-{month_str}"
             doc = _normalize_reflection_doc_for_es(entry.model_dump(mode="json"))
             handler = es_handler or self.es_handler
             schedule_es_index(index_name, doc, es_handler=handler, doc_id=entry.entry_id)
@@ -426,8 +426,8 @@ class CaptainLogManager:
             CaptainLogEntryType.REFLECTION,
             CaptainLogEntryType.CONFIG_PROPOSAL,
         }:
-            date_str = existing_entry.timestamp.strftime("%Y-%m-%d")
-            index_name = f"{REFLECTIONS_INDEX_PREFIX}-{date_str}"
+            month_str = existing_entry.timestamp.strftime("%Y-%m")
+            index_name = f"{REFLECTIONS_INDEX_PREFIX}-{month_str}"
             doc = _normalize_reflection_doc_for_es(existing_entry.model_dump(mode="json"))
             handler = es_handler or self.es_handler
             schedule_es_index(index_name, doc, es_handler=handler, doc_id=existing_entry.entry_id)

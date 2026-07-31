@@ -15,8 +15,9 @@ from personal_agent.captains_log.capture import (
 
 def test_user_id_coercion() -> None:
     """Regression: asyncpg UUID must be coerced to uuid.UUID so orjson can serialize it."""
-    import orjson
     from uuid import UUID as StdUUID
+
+    import orjson
 
     _UUID_STR = "550e8400-e29b-41d4-a716-446655440000"
     _base: dict = dict(
@@ -120,7 +121,11 @@ class TestWriteCapture:
     """Test write_capture and optional ES indexing."""
 
     def test_write_capture_creates_file_and_indexes_to_es(self, tmp_path: pathlib.Path) -> None:
-        """write_capture writes JSON to disk and calls schedule_es_index (Phase 2.3)."""
+        """write_capture writes JSON to disk (daily dir) and calls schedule_es_index
+        with a monthly index (FRE-1036) — the two date formats are deliberately
+        independent variables; read_captures() parses the disk directory strictly
+        as %Y-%m-%d, so a shared/monthly value there would silently break it.
+        """
         capture = TaskCapture(
             trace_id="trace-123",
             session_id="session-456",
@@ -140,11 +145,12 @@ class TestWriteCapture:
             path = write_capture(capture)
             assert path.exists()
             assert path.suffix == ".json"
+            assert path.parent.name == "2026-02-22"  # disk dir stays daily
             mock_schedule.assert_called_once()
             from personal_agent.captains_log.capture import CAPTURES_INDEX_PREFIX  # noqa: PLC0415
 
             call_args = mock_schedule.call_args[0]
-            assert call_args[0] == f"{CAPTURES_INDEX_PREFIX}-2026-02-22"
+            assert call_args[0] == f"{CAPTURES_INDEX_PREFIX}-2026-02"  # ES index is monthly
             assert call_args[1]["trace_id"] == "trace-123"
             assert call_args[1]["outcome"] == "completed"
             assert mock_schedule.call_args[1].get("doc_id") == "trace-123"

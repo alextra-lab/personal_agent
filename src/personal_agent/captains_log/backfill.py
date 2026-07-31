@@ -230,8 +230,8 @@ async def run_backfill(
             if raw.get("user_id") is None:
                 raw["user_id"] = "00000000-0000-0000-0000-000000000000"
             capture = TaskCapture(**raw)
-            date_str = capture.timestamp.strftime("%Y-%m-%d")
-            index_name = f"{CAPTURES_INDEX_PREFIX}-{date_str}"
+            month_str = capture.timestamp.strftime("%Y-%m")
+            index_name = f"{CAPTURES_INDEX_PREFIX}-{month_str}"
             doc = normalize_capture_doc_for_es(capture.model_dump(mode="json"))
             doc_id = capture.trace_id
             rid = await es_logger.index_document(index_name, doc, id=doc_id)
@@ -281,8 +281,8 @@ async def run_backfill(
             }:
                 result.skipped_count += 1
                 continue
-            date_str = entry.timestamp.strftime("%Y-%m-%d")
-            index_name = f"{REFLECTIONS_INDEX_PREFIX}-{date_str}"
+            month_str = entry.timestamp.strftime("%Y-%m")
+            index_name = f"{REFLECTIONS_INDEX_PREFIX}-{month_str}"
             doc = _normalize_reflection_doc_for_es(entry.model_dump(mode="json"))
             doc_id = entry.entry_id
             rid = await es_logger.index_document(index_name, doc, id=doc_id)

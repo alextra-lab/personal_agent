@@ -62,9 +62,9 @@ class ElasticsearchLogger:
             self.client = None
 
     def _get_index_name(self) -> str:
-        """Get index name with date suffix (daily rotation)."""
-        date_str = datetime.utcnow().strftime("%Y.%m.%d")
-        return f"{self.index_prefix}-{date_str}"
+        """Get index name with month suffix (monthly rotation, FRE-1036)."""
+        month_str = datetime.utcnow().strftime("%Y-%m")
+        return f"{self.index_prefix}-{month_str}"
 
     async def index_document(
         self,

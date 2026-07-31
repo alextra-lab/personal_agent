@@ -6,7 +6,8 @@
       "number_of_shards": 1,
       "number_of_replicas": 0,
       "index.codec": "best_compression",
-      "index.refresh_interval": "5s"
+      "index.refresh_interval": "5s",
+      "index.lifecycle.name": "agent-captains-captures-policy"
     },
     "mappings": {
       "dynamic": true,
@@ -133,7 +134,7 @@
     }
   },
   "_meta": {
-    "description": "Captain's Log sub-agent capture docs. Index agent-captains-captures-subagents-YYYY-MM-DD. Carved out in FRE-534/A2 at priority 120 so it out-ranks the agent-captains-captures-* (priority 110) glob it would otherwise inherit (wrong shape: 10 sub-agent fields fell through to dynamic mapping). Pins the sub-agent shape: *_chars (long), context_message_count/max_tokens (integer), memory_in_context/success (boolean), mode/model_role/task_id (keyword).",
+    "description": "Captain's Log sub-agent capture docs. Monthly index agent-captains-captures-subagents-YYYY-MM (FRE-1036; was daily YYYY-MM-DD). Carved out in FRE-534/A2 at priority 120 so it out-ranks the agent-captains-captures-* (priority 110) glob it would otherwise inherit (wrong shape: 10 sub-agent fields fell through to dynamic mapping). Pins the sub-agent shape: *_chars (long), context_message_count/max_tokens (integer), memory_in_context/success (boolean), mode/model_role/task_id (keyword).",
     "managed_by": "scripts/setup-elasticsearch.sh"
   }
 }

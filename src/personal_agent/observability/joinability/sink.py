@@ -1,8 +1,9 @@
 """Persist :class:`ResultDoc` instances to Elasticsearch.
 
-Index name: ``<prefix>-YYYY.MM.DD`` (rolls daily). The :func:`write_result`
-function is a thin wrapper around the async ES client so the walk module
-stays substrate-agnostic and can be unit-tested without an ES dependency.
+Index name: ``<prefix>-YYYY-MM`` (monthly, FRE-1036; was daily ``YYYY.MM.DD``).
+The :func:`write_result` function is a thin wrapper around the async ES
+client so the walk module stays substrate-agnostic and can be unit-tested
+without an ES dependency.
 """
 
 from __future__ import annotations
@@ -23,17 +24,17 @@ log = get_logger(__name__)
 
 
 def index_name_for(doc: ResultDoc, *, prefix: str) -> str:
-    """Compute the daily index name for a result doc.
+    """Compute the monthly index name for a result doc (FRE-1036).
 
     Args:
         doc: Result document.
         prefix: Index prefix (e.g. ``agent-monitors-joinability``).
 
     Returns:
-        Index name suffixed by the UTC date in ``YYYY.MM.DD`` form to align
-        with the project's other ``agent-*`` daily indices.
+        Index name suffixed by the UTC month in ``YYYY-MM`` form to align
+        with the project's other ``agent-*`` monthly indices.
     """
-    return f"{prefix}-{doc.started_at.strftime('%Y.%m.%d')}"
+    return f"{prefix}-{doc.started_at.strftime('%Y-%m')}"
 
 
 async def write_result(
@@ -72,7 +73,7 @@ async def write_result(
 
 
 def substrate_index_name_for(doc: SubstrateResultDoc, *, prefix: str) -> str:
-    """Compute the daily index name for a flat per-substrate doc.
+    """Compute the monthly index name for a flat per-substrate doc (FRE-1036).
 
     Args:
         doc: Flat per-substrate result document.
@@ -81,9 +82,9 @@ def substrate_index_name_for(doc: SubstrateResultDoc, *, prefix: str) -> str:
             substrate-doc indices share a single settings key.
 
     Returns:
-        ``{prefix}-substrate-YYYY.MM.DD`` (UTC date from ``started_at``).
+        ``{prefix}-substrate-YYYY-MM`` (UTC month from ``started_at``).
     """
-    return f"{prefix}-substrate-{doc.started_at.strftime('%Y.%m.%d')}"
+    return f"{prefix}-substrate-{doc.started_at.strftime('%Y-%m')}"
 
 
 async def write_substrate_results(

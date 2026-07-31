@@ -109,7 +109,7 @@ def project_route_trace_to_es(row: RouteTraceRow, *, topology: str) -> None:
     """
     try:
         ts = row.created_at or datetime.now(timezone.utc)
-        index_name = f"{TOPOLOGY_INDEX_PREFIX}-{ts.strftime('%Y-%m-%d')}"
+        index_name = f"{TOPOLOGY_INDEX_PREFIX}-{ts.strftime('%Y-%m')}"
         suffix = str(row.task_id) if row.task_id is not None else "turn"
         doc_id = f"{row.trace_id}:{suffix}"
         schedule_es_index(index_name, build_topology_doc(row, topology=topology), doc_id=doc_id)

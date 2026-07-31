@@ -1,0 +1,28 @@
+{
+  "policy": {
+    "_meta": {
+      "description": "ILM for agent-monitors-projector-health-* (monthly index agent-monitors-projector-health-YYYY-MM; FRE-557 / ADR-0088 D6 live-projector bus-delivery health, one doc per trace at turn completion). min_age-based delete from origination date (no rollover write-alias). Retention: 90d — no prior precedent, owner-approved 2026-07-31 (FRE-1036) as the operational-diagnostics default (matches agent-monitors-slm-health-policy's category — both are periodic health snapshots). warm forcemerge fires at 32d, matching the user-turn-ratings-policy precedent so the current monthly index isn't merged while still open. Authored in FRE-1036; this family previously had no ILM policy at all (indices accreted forever).",
+      "retention_days": 90,
+      "managed_by": "scripts/setup-elasticsearch.sh"
+    },
+    "phases": {
+      "hot": {
+        "min_age": "0ms",
+        "actions": {
+          "set_priority": { "priority": 100 }
+        }
+      },
+      "warm": {
+        "min_age": "32d",
+        "actions": {
+          "forcemerge": { "max_num_segments": 1 },
+          "set_priority": { "priority": 50 }
+        }
+      },
+      "delete": {
+        "min_age": "90d",
+        "actions": { "delete": {} }
+      }
+    }
+  }
+}

@@ -53,7 +53,7 @@
     }
   },
   "_meta": {
-    "description": "SLM health probe snapshots (ADR-0083 / FRE-399). One doc per probe, daily index agent-monitors-slm-health-YYYY.MM.DD. Mapping covers the full 14-field SlmHealthSnapshot model (FRE-534/A2): the live data only ever populated 7 fields because the rest arrive null and never triggered a dynamic mapping. trace_id is keyword (was text under ES-default) so exact-term joins to slm-requests/agent-logs work — the join-key fix that the joinability story depends on.",
+    "description": "SLM health probe snapshots (ADR-0083 / FRE-399). One doc per probe, monthly index agent-monitors-slm-health-YYYY-MM (FRE-543 cutover to monthly; FRE-1036 normalized the separator from YYYY.MM to YYYY-MM). Mapping covers the full 14-field SlmHealthSnapshot model (FRE-534/A2): the live data only ever populated 7 fields because the rest arrive null and never triggered a dynamic mapping. trace_id is keyword (was text under ES-default) so exact-term joins to slm-requests/agent-logs work — the join-key fix that the joinability story depends on.",
     "managed_by": "scripts/setup-elasticsearch.sh"
   }
 }

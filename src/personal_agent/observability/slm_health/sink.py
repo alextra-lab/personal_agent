@@ -1,8 +1,8 @@
 """Persist :class:`SlmHealthSnapshot` instances to Elasticsearch (FRE-399 / ADR-0083).
 
-Index name: ``<prefix>-YYYY.MM.DD`` (rolls daily), matching the project
-convention for other ``agent-monitors-*`` indices. Document id = a fresh UUID
-so multiple probes per day append cleanly.
+Index name: ``<prefix>-YYYY-MM`` (monthly, FRE-543; separator normalized from
+``YYYY.MM`` in FRE-1036). Document id = a fresh UUID so multiple probes per
+day append cleanly.
 
 Mirrors the joinability-probe sink (:mod:`personal_agent.observability.joinability.sink`)
 exactly; the caller is expected to swallow any raised :class:`~elasticsearch.ApiError`.
@@ -35,9 +35,10 @@ def index_name_for(snapshot: SlmHealthSnapshot, *, prefix: str) -> str:
         prefix: Elasticsearch index prefix (e.g. ``"agent-monitors-slm-health"``).
 
     Returns:
-        Index name suffixed by the UTC probe month in ``YYYY.MM`` form.
+        Index name suffixed by the UTC probe month in ``YYYY-MM`` form
+        (separator normalized from ``YYYY.MM`` in FRE-1036).
     """
-    return f"{prefix}-{snapshot.probed_at.strftime('%Y.%m')}"
+    return f"{prefix}-{snapshot.probed_at.strftime('%Y-%m')}"
 
 
 async def write_result(

@@ -2,10 +2,18 @@
 # Setup Elasticsearch index templates and ILM policies.
 #
 # This script is **idempotent** — safe to re-run after every container restart.
-# PUTs for templates and policies replace existing definitions in place; the
-# initial write-alias index is created only when missing. Failures on each
-# step do not bring down the whole script — we surface a clear summary at the
-# end so a missing piece doesn't go silent.
+# PUTs for templates and policies replace existing definitions in place.
+# Failures on each step do not bring down the whole script — we surface a
+# clear summary at the end so a missing piece doesn't go silent.
+#
+# FRE-1036 (2026-07-31): every family here now writes monthly, ILM-managed
+# indices (client picks the YYYY-MM bucket name; ILM does retention-only
+# delete, no rollover action anywhere). This replaced a half-built
+# rollover-alias scaffold for agent-logs (an unused agent-logs-000001
+# bootstrap index behind an alias no writer ever used — removed) and fixed a
+# live-broken rollover policy for agent-monitors-joinability (its ILM policy
+# required index.lifecycle.rollover_alias, which no template set, so every
+# index was permanently stuck in hot and never reached its 180d delete phase).
 #
 # Background (2026-05-10):
 #   The template was missing/wrong for an extended period; daily indices were
@@ -258,6 +266,17 @@ put_and_apply_template "Index template: agent-logs-template" \
 #    The retired template's patterns (captures-* + reflections-*) overlap the
 #    split captures/reflections templates at the SAME priority (110), so it must
 #    be DELETEd first or the PUTs below fail with an equal-priority conflict.
+#    ILM (FRE-1036): monthly agent-captains-captures-YYYY-MM / agent-captains-
+#    reflections-YYYY-MM, delete at 90d/180d (min_age). PUT the policy before the
+#    template so new indices bind on creation. Previously undeleted by any ILM
+#    policy — the client-side lifecycle_manager.py sweep (retired by FRE-1036)
+#    was the only deleter.
+put_resource "ILM policy: agent-captains-captures-policy" \
+  "/_ilm/policy/agent-captains-captures-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/captains-captures-ilm-policy.json"
+put_resource "ILM policy: agent-captains-reflections-policy" \
+  "/_ilm/policy/agent-captains-reflections-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/captains-reflections-ilm-policy.json"
 delete_resource "Retire template: agent-captains-template" \
   "/_index_template/agent-captains-template"
 put_and_apply_template "Index template: agent-captains-captures-template" \
@@ -267,12 +286,17 @@ put_and_apply_template "Index template: agent-captains-reflections-template" \
   "/_index_template/agent-captains-reflections-template" \
   "$PROJECT_ROOT/docker/elasticsearch/captains-reflections-index-template.json"
 # Sub-agent captures: priority 120 so it out-ranks the captures-* glob (110).
+# Shares agent-captains-captures-policy (same retention as the parent family).
 put_and_apply_template "Index template: agent-captains-subagents-template" \
   "/_index_template/agent-captains-subagents-template" \
   "$PROJECT_ROOT/docker/elasticsearch/captains-subagents-index-template.json"
 
-# 3a-ii. Self-improvement funnel events (ADR-0105 D6, FRE-719). Date-partitioned,
-#        no write alias — apply_live_index_mapping skips cleanly via its 404 path.
+# 3a-ii. Self-improvement funnel events (ADR-0105 D6, FRE-719). Monthly index
+#        (FRE-1036), no write alias — apply_live_index_mapping skips cleanly
+#        via its 404 path. ILM (FRE-1036): delete at 90d (min_age).
+put_resource "ILM policy: agent-captains-funnel-events-policy" \
+  "/_ilm/policy/agent-captains-funnel-events-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/captains-funnel-events-ilm-policy.json"
 put_and_apply_template "Index template: agent-captains-funnel-events-template" \
   "/_index_template/agent-captains-funnel-events-template" \
   "$PROJECT_ROOT/docker/elasticsearch/captains-funnel-events-index-template.json"
@@ -341,6 +365,10 @@ put_and_apply_template "Index template: user-turn-ratings-template" \
 #     trace at turn completion; model_calls_received vs COUNT(api_costs) detects
 #     stream:turn.observed delivery loss to the projector (orthogonal to cost_reconciled
 #     accumulator drift). dynamic:false explicit schema — join key keyword, *_usd double.
+#     ILM (FRE-1036): monthly, delete at 90d (min_age) — family had no policy before.
+put_resource "ILM policy: agent-monitors-projector-health-policy" \
+  "/_ilm/policy/agent-monitors-projector-health-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-projector-health-ilm-policy.json"
 put_and_apply_template "Index template: agent-monitors-projector-health-template" \
   "/_index_template/agent-monitors-projector-health-template" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-projector-health-index-template.json"
@@ -350,6 +378,10 @@ put_and_apply_template "Index template: agent-monitors-projector-health-template
 #     dynamic:false — explicit double for l_star/deviation_turns guards the
 #     first-value-0.0-to-long trap; l_star/deviation_turns are null when
 #     optimal_run_length=inf (no hold-cost pressure).
+#     ILM (FRE-1036): monthly, delete at 90d (min_age) — family had no policy before.
+put_resource "ILM policy: agent-monitors-cache-reset-cadence-policy" \
+  "/_ilm/policy/agent-monitors-cache-reset-cadence-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-cache-reset-cadence-ilm-policy.json"
 put_and_apply_template "Index template: agent-monitors-cache-reset-cadence-template" \
   "/_index_template/agent-monitors-cache-reset-cadence-template" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-cache-reset-cadence-index-template.json"
@@ -360,25 +392,13 @@ put_and_apply_template "Index template: agent-monitors-cache-reset-cadence-templ
 #     (trace_id, task_id) as keyword, authoritative_cost_usd as double, and
 #     latency_total_ms as float — the FRE-537 panel constraint. Unblocks the
 #     execution-topology Kibana view deferred from FRE-537.
+#     ILM (FRE-1036): monthly, delete at 90d (min_age) — family had no policy before.
+put_resource "ILM policy: agent-topology-policy" \
+  "/_ilm/policy/agent-topology-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/topology-ilm-policy.json"
 put_and_apply_template "Index template: agent-topology-template" \
   "/_index_template/agent-topology-template" \
   "$PROJECT_ROOT/docker/elasticsearch/topology-index-template.json"
-
-# 7. Initial write-alias index — only create if absent. The HEAD probe uses
-#    `-f` so a 404 is reported as a non-fatal exit; we then PUT.
-echo "Bootstrap write-alias index: agent-logs-000001"
-if curl -fsS -I -o /dev/null "$ES_URL/agent-logs-000001" 2>/dev/null; then
-  echo "  ✓ already exists — skipping"
-else
-  if curl -sS -fX PUT "$ES_URL/agent-logs-000001" \
-      -H 'Content-Type: application/json' \
-      -d '{"aliases":{"agent-logs":{"is_write_index":true}}}' >/dev/null 2>&1; then
-    echo "  ✓ created"
-  else
-    echo "  ✗ create failed"
-    failures=$((failures + 1))
-  fi
-fi
 
 echo ""
 if [[ "$failures" -gt 0 ]]; then

@@ -176,8 +176,8 @@ def write_sub_agent_capture(
         es_handler: Optional Elasticsearch handler; falls back to the default.
     """
     try:
-        date_str = capture.timestamp.strftime("%Y-%m-%d")
-        index_name = f"{SUBAGENT_CAPTURES_INDEX_PREFIX}-{date_str}"
+        month_str = capture.timestamp.strftime("%Y-%m")
+        index_name = f"{SUBAGENT_CAPTURES_INDEX_PREFIX}-{month_str}"
         handler = es_handler or _default_es_handler
         schedule_es_index(
             index_name,
@@ -245,8 +245,12 @@ def write_capture(
     )
 
     # Optional ES indexing (Phase 2.3): non-blocking, best-effort; doc_id for idempotent backfill
+    # Monthly ES index (FRE-1036) — deliberately a separate variable from the disk
+    # date_str above: read_captures() parses the disk directory strictly as
+    # %Y-%m-%d, so reusing a monthly value there would silently break disk reads.
     doc = capture.model_dump(mode="json")
-    index_name = f"{CAPTURES_INDEX_PREFIX}-{date_str}"
+    es_month_str = capture.timestamp.strftime("%Y-%m")
+    index_name = f"{CAPTURES_INDEX_PREFIX}-{es_month_str}"
     handler = es_handler or _default_es_handler
     schedule_es_index(index_name, doc, es_handler=handler, doc_id=capture.trace_id)
 

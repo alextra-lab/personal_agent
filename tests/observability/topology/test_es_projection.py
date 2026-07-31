@@ -148,7 +148,7 @@ def test_project_turn_level_index_and_doc_id(monkeypatch) -> None:  # type: igno
 
     assert len(calls) == 1
     index_name, document, doc_id = calls[0]
-    assert index_name == "agent-topology-2026-06-13"
+    assert index_name == "agent-topology-2026-06"
     assert doc_id == f"{row.trace_id}:turn"  # turn-level uses the ':turn' suffix
     assert document["role"] == "primary"
 

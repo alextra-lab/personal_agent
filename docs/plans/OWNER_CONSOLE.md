@@ -32,8 +32,6 @@ longer *grant* authority. Levels: `ask-first` → `do-and-report` → `standing-
 ## Standing directives
 
 - [2026-07-31 · relayed 2026-07-31 (FRE-1085 migration)] Then, in order: telemetry residuals (FRE-983, ES lifecycle, parked mid-phase) · Configuration Management · Linear async feedback · Seshat Inference. · Retires: all four reach Done in Linear
-- [2026-07-31 · relayed 2026-07-31 (FRE-1085 migration)] Accept ADR-0129, or hold ADR-0128 — the largest open call. · Retires: the ADR-0128-vs-0129 decision is recorded on either ADR
-- [2026-07-31 · relayed 2026-07-31 (FRE-1085 migration)] FRE-1039 (Grafana over Postgres) is decided together with ADR-0129, never separately. · Retires: ADR-0129 is accepted or rejected
 - [2026-07-31 · relayed 2026-07-31 (FRE-1085 migration)] Backlog cull — scope and gate are still to be set. · Retires: a Linear ticket recording the cull scope reaches Approved
 - [2026-07-31 · relayed 2026-07-31 (FRE-1085 migration)] Personal data is already committed to the public repo; the owner sets the redaction scope — redaction alone leaves it in git history. · Retires: a Linear ticket recording the redaction scope reaches Approved
 - [2026-07-31 · relayed 2026-07-31 (FRE-1085 migration)] Master-authored changes to `src/` or a security boundary have no independent gate — route them through a build seat. · Retires: a merged PR adds an independent gate for master-authored `src` changes

@@ -292,7 +292,7 @@ Traditional project planning assumes **human-paced development**. AI-assisted co
 
 **New metric**: Tasks are grouped into **coherent implementation batches** (e.g., "Telemetry module complete"). Progress measured by **batch completion**, not hours.
 
-See `docs/plans/MASTER_PLAN.md` for current priorities and tracking.
+See `docs/plans/OWNER_CONSOLE.md` for the owner's standing directives, and Linear for per-ticket tracking.
 
 ---
 
@@ -360,7 +360,7 @@ Read in order:
 
 1. `README.md` — Project overview and current architecture diagram
 2. `docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md` — Current architecture specification
-3. `docs/plans/MASTER_PLAN.md` — Current priorities and status
+3. `docs/plans/OWNER_CONSOLE.md` — the owner's standing directives and the trust ladder
 4. `docs/architecture/` — Living conceptual docs (homeostasis, mapping); v0.1 specs live in `docs/archive/` with `PRE_REDESIGN_SUMMARY.md`
 5. `docs/architecture_decisions/` — Key decisions and rationale
 

@@ -240,7 +240,7 @@ Add research documents when:
 - [Archived research summary](../archive/RESEARCH_ANALYSIS_SUMMARY_2025-12-31.md)
 
 **Implementation:**
-- [Master Plan](../plans/MASTER_PLAN.md)
+- [Owner Console](../plans/OWNER_CONSOLE.md)
 - Model configuration: `<project-root>/config/models.yaml` (see repo; not linked as web URL)
 
 ---

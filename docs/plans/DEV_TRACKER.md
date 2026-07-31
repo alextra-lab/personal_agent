@@ -4,7 +4,7 @@
 > **Last synced:** 2026-03-03
 
 Linear is the single source of truth for work items, priorities, and status.
-See `MASTER_PLAN.md` for current priorities and sequencing.
+See `OWNER_CONSOLE.md` for the owner's standing directives, and the dispatch resolver for the computed queue.
 Specs live in `docs/specs/`, ADRs in `docs/architecture_decisions/`.
 
 ---

@@ -4,7 +4,7 @@
 # <PR#> to cc-master when a PR is master-ready, /prime-worker to cc-<stream> on a
 # master bounce or a red CI. It is the event-driven replacement for the polling
 # /loop crons removed 2026-07-06 (which blew the 5-min prompt-cache TTL, FRE-822).
-# It never merges, deploys, closes tickets, edits MASTER_PLAN, or launches a
+# It never merges, deploys, closes tickets, writes the owner console, or launches a
 # fresh `claude -p`; it only actuates a trigger into an existing, idle session.
 # It shares the orchestrator's kill switch (telemetry/dispatch.disabled).
 Description=Seshat event-driven gating watcher (FRE-823)

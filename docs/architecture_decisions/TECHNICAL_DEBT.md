@@ -40,7 +40,7 @@ LM Studio processes requests **sequentially** - only one request per model at a 
 **References**:
 
 - `docs/architecture_decisions/experiments/E-007a-inference-server-evaluation.md`
-- `docs/plans/MASTER_PLAN.md` — current priorities
+- `docs/plans/OWNER_CONSOLE.md` — the owner's standing directives + trust ladder
 
 ---
 

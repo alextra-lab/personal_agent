@@ -6,9 +6,12 @@ alwaysApply: false
 
 Maintain project plans and create well-structured Linear issues.
 
-## Maintaining MASTER_PLAN.md
+## Maintaining the owner console
 
-`docs/plans/MASTER_PLAN.md` is the living priority document. Update it when:
+`docs/plans/OWNER_CONSOLE.md` holds the owner's standing directives and the trust ladder. It is
+owner-voice only (ADR-0131 D2) — you do not author into it. Historically this section described a
+plan document that has been retired; the notes below survive only as the shape of what used to be
+recorded, and now belong in tickets:
 - Phases complete (move to Completed, FIFO)
 - Priorities shift (reorder Current Focus)
 - New work is approved (move from Backlog to Upcoming)

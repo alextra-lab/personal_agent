@@ -6,7 +6,8 @@ Active project plans, tracking, and session history.
 
 ```
 ./
-├── MASTER_PLAN.md           # Current priorities and sequencing (start here)
+├── OWNER_CONSOLE.md         # Owner's standing directives + trust ladder (start here)
+├── LAST_SESSION.md          # Last session's conversational overlay
 ├── DEV_TRACKER.md           # Linear workspace links
 ├── PHASE_*.md               # Active phase sub-plans
 ├── VELOCITY_TRACKING.md     # Development velocity metrics
@@ -21,7 +22,7 @@ Plans track *what* and *when*; specs and ADRs track *how* and *why*.
 
 ## Workflow
 
-1. Read `MASTER_PLAN.md` for current priorities
+1. Read `OWNER_CONSOLE.md` for the owner's standing directives
 2. Query Linear via MCP for approved issues
 3. Read the linked spec in `docs/specs/` or ADR
 4. Implement, test, validate acceptance criteria
@@ -55,14 +56,15 @@ Plans track *what* and *when*; specs and ADRs track *how* and *why*.
 - Implementation details (those belong in code/specs)
 - Personal information
 
-## Master Plan Updates
+## The owner console
 
-Update `MASTER_PLAN.md` when:
-- Phases complete (move to Completed, FIFO)
-- Priorities shift (reorder Current Focus)
-- New work is approved
+`OWNER_CONSOLE.md` is **owner-voice only** (ADR-0131 D2). Sessions do not write it. Master may
+transcribe a directive the owner gave conversationally — verbatim, attributed, dated — and may retire
+one only when its stated condition is met.
 
-**Never** update for individual task completion (that's in Linear).
+There is **no plan document to update**: derived state lives in Linear, git and the dispatch resolver;
+analysis and findings live in tickets and research documents. A finding with no home is a one-line
+`Backlog` ticket, never a line parked in a file.
 
 ## Critical
 

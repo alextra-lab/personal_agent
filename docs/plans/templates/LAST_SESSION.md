@@ -5,11 +5,16 @@ WHO WRITES IT: /prepare-reset (Step 2), on the way out, before /clear.
 WHO READS IT: /prime-master (step #2), first thing, after /clear.
 
 WHY IT EXISTS: prime-master rebuilds from DURABLE sources (memory, git, Linear,
-MASTER_PLAN) and deliberately ignores prior conversation — so the CONVERSATIONAL
-layer (the why, the was-doing, the drift-and-why) is lost on /clear unless it is
-written down here. This file is exactly that layer, and ONLY that layer: the
-overlay the live sources cannot reconstruct. Everything else prime-master
-re-reads fresh — so keep this LEAN. Set just enough context, no data dump.
+the dispatch resolver, the owner console) and deliberately ignores prior
+conversation — so the CONVERSATIONAL layer (the why, the was-doing, the
+drift-and-why) is lost on /clear unless it is written down here. This file is
+exactly that layer, and ONLY that layer: the overlay the live sources cannot
+reconstruct. Everything else prime-master re-reads fresh — so keep this LEAN.
+
+SIZE BOUND: 90 lines, checked at write time (ADR-0131 D5). This file is bound by
+D1's rule — it may hold only what no durable source can reconstruct — because
+with no plan document it is the nearest cheap surface for displaced content to
+re-accrete on. Over the bound, CUT; do not spill into a new file.
 
 IT IS THE REVERSE OF prime-master: it writes the overlay for what prime-master
 reads (current state + target); the process (#9) is static and needs no overlay.
@@ -43,9 +48,10 @@ DELETE IT. Do not list commit subjects here.>
 <One line per seat, ONLY if notable: priority build · preserved WIP · blocked ·
 mid-something. Skip a seat that's just idle-and-clean.>
 
-## Plan position + drift
-<Where this session sits against MASTER_PLAN (the target). Did we deviate or
-drift from it? WHY? Honest — drift-with-a-reason is the point, not a confession.>
+## Sequence position + drift
+<Where this session sits against the owner console's standing directives and the
+resolver's queue. Did we deviate or drift? WHY? Honest — drift-with-a-reason is
+the point, not a confession.>
 
 ## Answers for the fresh start
 <The questions the next session will actually ask, answered now. Anticipate the

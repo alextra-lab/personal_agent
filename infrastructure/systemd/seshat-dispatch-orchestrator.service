@@ -2,7 +2,7 @@
 # The dispatch orchestrator daemon (ADR-0110 T4): polls each stream, and when a
 # stream is idle with a NEXT ticket, launches its worker through the launcher.
 # It is dispatch-only — never merges, deploys, closes tickets, or edits
-# MASTER_PLAN (ADR-0110 §5). It refuses to launch when Remote Control is down
+# the board (ADR-0110 §5). It refuses to launch when Remote Control is down
 # (liveness guard) or the kill switch is set (telemetry/dispatch.disabled).
 Description=Seshat dispatch orchestrator loop (ADR-0110 T4)
 Documentation=https://linear.app/frenchforest/issue/FRE-788

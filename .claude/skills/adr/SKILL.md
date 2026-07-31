@@ -184,12 +184,15 @@ does NOT belong in the ADR PR's pre-merge checklist:
 - the **seam ticket** (ADR-0130 D2) — its Linear id, its **due date**, and the **obligation → owner
   mapping** from Step 5, listing every Decision-section obligation against the child or the seam that
   owns it, so master can confirm the partition has no unowned row before dispatching the chain;
-- any **doc-drift** master should reconcile (related ADRs, MASTER_PLAN, CLAUDE.md status);
+- any **doc-drift** master should reconcile (related ADRs, CLAUDE.md, a skill or lifecycle-rules contract);
 - **your context disposition for the next ADR** — kept or cleared (`/clear`), and why.
 Master reads this comment by default at the gate, so it is the handoff channel. **These fields are the
 handoff contract** master trusts without re-deriving (lifecycle-rules § Signal trust boundary).
 
-**STOP. Never edit `src/`, never merge, never deploy, never edit MASTER_PLAN** — that is master's role.
+**STOP. Never edit `src/`, never merge, never deploy, never write the owner console, and never mutate
+Linear control-plane fields beyond moving your own ticket to `In Progress`** — that is master's role.
+Filing tickets and posting comments stay open to you (lifecycle-rules § Coordination stores).
 
 ## Boundary
-Never edit `src/`, never merge, never deploy, never edit MASTER_PLAN.
+Never edit `src/`, never merge, never deploy, never write `docs/plans/OWNER_CONSOLE.md`, never mutate
+Linear control-plane fields (states beyond your own pickup, labels, relations, priorities).

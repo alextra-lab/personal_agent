@@ -13,13 +13,13 @@ Covers FRE-680 acceptance criteria:
   AC2 — the verdict schema is exactly {claim, status, evidence, note}, and an
         absent evidence source yields UNVERIFIABLE, never PASS.
 
-Covers FRE-915 acceptance criteria (supersedes FRE-861's MASTER_PLAN-prose
-parsing, retired because the forward-only MASTER_PLAN rewrite (PR 573)
+Covers FRE-915 acceptance criteria (supersedes FRE-861's plan-prose
+parsing, retired because the forward-only plan rewrite (PR 573)
 carries no status narrative to parse):
-  AC1 — the claim set comes from Linear ticket state, not MASTER_PLAN text.
-        No test in this file reads or asserts on MASTER_PLAN's prose content.
+  AC1 — the claim set comes from Linear ticket state, not plan-document text.
+        No test in this file reads or asserts on any plan document's prose.
   AC2 — (proven live, not by a unit test — see the PR's post-deploy runbook)
-        running the reconciler against the current forward-only MASTER_PLAN
+        running the reconciler against the current board
         succeeds, because the claim set no longer depends on it at all.
   AC3 — the fail-loud-on-zero behaviour is preserved, but scoped to the right
         layer: an empty *claim set* (nothing fetched from Linear at all — no

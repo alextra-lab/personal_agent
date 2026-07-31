@@ -28,6 +28,6 @@ DO NOT put post-merge items in this checklist:
   - telemetry confirmation (ES indices, log fields, dashboards)
   - deploy + restart steps
   - "verify on prod after merge"
-Those go in a Linear comment on the issue, or in MASTER_PLAN.md follow-up.
+Those go in a Linear comment on the issue, or a one-line `Backlog` ticket.
 The PR checklist gates the merge; reviewers cannot tick post-merge items.
 -->

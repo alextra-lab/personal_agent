@@ -10,8 +10,8 @@ exists, or doesn't) — never whether a specific acceptance criterion's
 
 The claim source is **Linear ticket state**, fetched live via GraphQL
 (``AGENT_LINEAR_API_KEY``). Previously (FRE-680/FRE-861) the claim source was
-prose parsed out of ``MASTER_PLAN.md``; that path is retired (FRE-915) because
-MASTER_PLAN is now forward-plans-only and carries no status narrative to
+prose parsed out of the old plan document; that path is retired (FRE-915)
+because the plan went forward-plans-only and carried no status narrative to
 parse — Linear is the sole authoritative source for per-ticket state, and
 always was.
 
@@ -168,7 +168,7 @@ def reconcile_claims_vs_repo(
 
     Args:
         claims: Ticket id -> current Linear state name. This *is* the claim
-            set (FRE-915 AC1) — sourced live from Linear, never MASTER_PLAN.
+            set (FRE-915 AC1) — sourced live from Linear, never a file.
         pr_finder: Callable resolving a ticket id to its merged PRs (or
             ``None`` on lookup failure). Injected so tests never touch
             ``gh`` or the network.

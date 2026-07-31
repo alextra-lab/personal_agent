@@ -1,6 +1,6 @@
 # ADR-0126: Reading the Living-Knowledge Substrate — Stance-First Push, Pull-Only Claims
 
-**Status:** Accepted — 2026-07-27 (owner)
+**Status:** Accepted — 2026-07-27 (owner); seam adjudicated 2026-07-31 (FRE-1019) — three criteria green, five INCONCLUSIVE, none red, so **not** Implemented
 **Date:** 2026-07-27
 **Deciders:** Project owner; adr session (Opus); master session (independent verification)
 **Tags:** memory, recall, knowledge-substrate, context-assembly, boundary, criteria-quality
@@ -673,6 +673,115 @@ because its last child merged; it closes when removing each reader turns its nam
 ---
 
 ## Status Updates
+
+### 2026-07-31 - Seam adjudicated (FRE-1019) — three green, five inconclusive; Status stays Accepted
+
+**Changed By:** adr session (Opus), adjudicating this ADR's seam ticket under ADR-0130 D2
+**Reason:** All four consumers had merged (T1 FRE-1015, T2 FRE-1017, T3 FRE-1016, T4 FRE-1018), making
+AC-8's mutation matrix runnable for the first time. Verdicts below are the seam's commissioned output.
+Per ADR-0130 an ADR never reaches `Implemented` on a red or unadjudicated criterion, so this ADR stays
+`Accepted`.
+
+**Nothing failed, and that is not the same as everything passing.** Every mechanism this ADR decided is
+wired and works: the mutation matrix proves each of the four consumers is load-bearing. What five
+criteria do not have is evidence that discharges them *as they are written* — one because an assertion
+is vacuous, one because a required conjunction is never made, and three because the fixture or
+configuration the criterion names was not the one used. The distinction matters: a red verdict would
+mean the design failed, and it did not. An inconclusive verdict means the suite cannot yet tell the
+difference between a working implementation and a broken one on that criterion — which is the precise
+failure D7 exists to catch, now found inside D7's own ADR.
+
+**Observation point actually used.** Every push assertion is made against `build_wire_messages(...)` —
+the message list handed to the HTTP client layer — reached through the real `assemble_context()` plus
+the real render/inline/wire pipeline. This is **not** `prompt_manifest`, which is the substitution the
+suite's preamble forbids without a fidelity proof. The remaining gap to captured HTTP bytes is argued
+content-preserving by that function's own contract: both clients perform this identical pre-flight
+before serializing, and the only provider-specific decoration downstream is additive metadata that
+never removes content. That argument rests on a docstring rather than an invariant test, which is
+weaker than the suite's preamble would ideally want, but it is not the manifest substitution the
+preamble prohibits. Recorded as a known limitation, not a blocking one.
+
+**Green baseline.** The four ADR-0126 integration files — 14 tests — pass unmutated: `14 passed` in
+17.58s against the test substrate (Neo4j :7688). No unrelated failure, so the baseline is valid and the
+mutation run proceeds. The suite was re-run after the final restore and returned `14 passed` again, so
+every red below is attributable to its mutation rather than to residue from a prior one.
+
+**AC-8 mutation matrix — each consumer removed independently, restored between runs.**
+
+| # | Consumer removed | Required to turn red | Observed | Verdict |
+|---|---|---|---|---|
+| 1 | `_enrich_with_stances` (`request_gateway/context.py`) | AC-1 positive · AC-5 current-present · AC-6 populated-control | exactly those three; 11 others green | GREEN |
+| 2 | `_inject_behavioural_stances` (`request_gateway/context.py`) | AC-2 · AC-7 non-zero-contribution | both AC-2 tests · AC-7; 11 others green | GREEN |
+| 3 | `query_claims` (`tools/memory_search.py`) | AC-4(b) | exactly AC-4(b); 13 others green | GREEN |
+| 4 | `query_stance_history` (`tools/memory_search.py`) | AC-5 chain-on-pull | AC-5 chain-on-pull, plus its `query_text`-resolution sibling exercising the same removed consumer; 12 others green | GREEN |
+
+Two results carry more weight than the pass/fail:
+
+- **Mutation 3 left AC-4(a) green.** Removing the pull path satisfies "the claim is absent from the
+  serialized request" perfectly. That is ADR-0098's AC-4 vacuity reproduced on demand, and AC-4(b)
+  catching it is the pairing rule of D7 working as designed.
+- **Mutations 3 and 4 turned different assertions red.** AC-4(b) survived mutation 4 and AC-5's chain
+  assertion survived mutation 3, confirming these are two distinct consumers. Collapsing them into one
+  row — the error caught in codex round two — would have left D5's pull half unproven.
+
+**Per-criterion verdicts.**
+
+| Criterion | Verdict | Evidence |
+|---|---|---|
+| AC-1 | **INCONCLUSIVE** | Positive half sound: `test_positive_half_affect_present_when_entity_recalled` seeds the entity, enforces the selection precondition by skip-on-miss, and mutation 1 turns it red. **Negative half is vacuous.** `test_negative_half_affect_absent_when_entity_not_recalled` calls `assert_stance(target="Kelvorine")` without seeding a `Kelvorine` entity and discards the return. `assert_stance` matches on an existing target, so no stance is written — verified live, the service logs `assert_stance_skipped_no_owner_or_target target=Kelvorine`. The absence assertion therefore passes whether or not topic-scoping works. AC-1 needs both halves |
+| AC-2 | **INCONCLUSIVE** | The criterion requires a conjunction **on one turn**: the real targets `Artifact` / `Plain text responses` confirmed absent from the recall set, *and* the curated affects nonetheless present. Neither test asserts both with real targets. `test_curated_affects_present_topic_scoped_absent_on_probe_turn` proves the conjunction but monkeypatches the curated set to `FRE1017_StandingOne` / `FRE1017_StandingTwo`. `test_real_curated_targets_reach_the_wire` uses the real shipped set but binds its evidence as `_evidence` and never asserts the real targets were unrecalled — so it cannot distinguish always-present injection from ordinary entity-gated recall |
+| AC-3 | GREEN | topic-scoped affect asserted absent on the same probe turn as its AC-2 pair, as the criterion requires. Its fixture is named "e.g. `Comté`", so the synthetic stand-in is within the criterion's own latitude |
+| AC-4 | **INCONCLUSIVE** | Half (b) is sound and discriminating — `test_ac4b_claim_reachable_via_search_memory_tool` asserts the claim returns with a claim-specific `claim_id`, distinguishable from entity and turn rows. Half (a) requires assembling context "with **every** recall toggle at its most permissive setting"; the test enables `relevance_bounded_recall_enabled`, `multipath_recall_enabled` and `proactive_memory_enabled` but leaves `lexical_arm_enabled` and `multiquery_arm_enabled` at their default `False`. The absence was therefore not demonstrated under the configuration the criterion mandates |
+| AC-5 | **INCONCLUSIVE** | The criterion says "use **the live** superseded pair — `Sorbet`". The push half uses a seeded `Thennoray` pair and the pull half a seeded `FRE1018_Sorbet`. Both run through the real `assert_stance` supersession path, so the *mechanism* is exercised and nothing failed — but the live pair the criterion names was never observed |
+| AC-6 | **INCONCLUSIVE** | The criterion says "run a turn recalling `Barrage républicain` (`affect=""`, `mastery` null)" and contemplates a synthetic only for the *repeat*. Both halves use a seeded `Wexbriar`. The empty-affect filter is name-agnostic so the mechanism is proven, but the live defective row the criterion names was never observed |
+| AC-7 | GREEN | `test_byte_contribution_bounded_and_responsive` — non-zero, within the 1,500-byte and 12-stance ceilings fixed here, measured differentially against the real curated set and responsive to it changing. The criterion says it fails "if the measurement is taken anywhere other than the serialized request", and the measurement is `json.dumps(wire)` rather than the request body; called green because the check is *differential* and the ceiling carries orders of magnitude more headroom than any JSON-escaping difference between the two, but the observation-point note above applies |
+| AC-8 | GREEN, with an inherited caveat | The mutation discrimination is fully proven by the matrix above — four consumers, four independent mutations, each turning its named assertions and only its named assertions red. The caveat is in AC-8's *baseline* clause, which requires AC-1 through AC-7 to pass unmutated: every test passed, but five of those criteria are inconclusive, so the baseline is green as-built rather than green as-worded. This does not weaken the discrimination result, which is what AC-8 exists to establish — and note that mutation 1's named red for AC-1 lands on that criterion's *positive* half, which is the sound one |
+
+**The five inconclusives split into two different causes, and only one is fixable in the tests.**
+
+*Cause one — a defect in the suite (AC-1, AC-2, AC-4).* These are ordinary test bugs and each is
+repairable without touching a decision. AC-1's negative half asserts the absence of a stance that was
+never written; seeding the target entity before the `assert_stance` call, and asserting its `True`
+return, makes the assertion discriminating. AC-2 needs one test that uses the real curated set *and*
+asserts those targets were unrecalled on the same turn — the two existing tests each hold one half.
+AC-4(a) needs the two remaining recall arms enabled to match its own "every recall toggle at its most
+permissive setting". None of these implies the implementation is wrong; each means the suite would not
+currently notice if it were.
+
+*Cause two — criteria that cannot be run as worded (AC-5, AC-6).* Both bind their checks to specific
+live production rows: "use the live superseded pair — `Sorbet`", "run a turn recalling `Barrage
+républicain`". FRE-375 forbids tests reaching production substrate, and the test substrate holds **zero**
+`HAS_STANCE` edges against production's 27, with none of `Sorbet`, `Barrage républicain`, `Comté`,
+`Artifact` or `Plain text responses` present. **No implementation could have discharged AC-5 and AC-6 as
+worded under standing project policy.** The children reconstructed equivalent fixtures through the real
+`assert_stance` supersession path, which is the right call — hence inconclusive rather than red.
+Remediation is a wording change owned by this ADR: accept a real-write-path reconstruction, or specify a
+production-read probe outside the test suite.
+
+**Both causes are the same lesson at different altitudes, and it lands on D7.** D7 asks whether a
+criterion can *fail*. AC-1's negative half can fail in principle but not as fixtured; AC-5 and AC-6 can
+fail in principle but cannot be *run* at all. So the rule as written — "at least one criterion that fails
+if nothing reads its output" — is necessary and was satisfied here by AC-8, which is exactly why AC-8 is
+the criterion that held. What D7 does not yet ask is whether each criterion's *stated check is
+executable against the fixtures it names*. That is the amendment this adjudication earns, and it is
+worth more than the verdicts themselves.
+
+**What this adjudication does and does not establish.** The criteria are asserted by fixtured
+integration tests, so AC-8 proves the **wiring is consumer-dependent** — remove a reader and named
+assertions fail. It does **not** measure how often the push surfaces fire on production data. D2 already
+accepts that topic-scoped stance fades as a topic accumulates episodes, and FRE-1021 is the ticket that
+measures that rate. A green AC-8 must not be read as evidence about the fade; the two questions are
+separate by construction, and D2's revisit trigger remains live.
+
+**A blocker recorded against the seam is withdrawn as mistaken.** A comment on FRE-1019 (2026-07-31,
+10:54) held that the seam could not be adjudicated until multi-path recall and the lexical arm shipped,
+on the premise that the configured recall path leaves entities unpopulated. Both halves fail on
+inspection. `AGENT_MULTIPATH_RECALL_ENABLED`, `AGENT_LEXICAL_ARM_ENABLED` and
+`AGENT_MULTIQUERY_ARM_ENABLED` are all true in the running gateway, the multipath flip having been made
+on 2026-07-07 — three weeks before the comment. Structurally the premise is also wrong: the proactive
+path that feeds stance enrichment is entity-centric by construction, querying the `entity_embedding`
+vector index directly, and multi-path *broadens* that candidate set rather than being what populates it.
+The code-level default (`False`) was read as the deployed state.
 
 ### 2026-07-27 - Proposed
 **Changed By:** adr session (Opus), owner-directed

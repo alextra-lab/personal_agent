@@ -25,9 +25,10 @@ role-scoped Claude Code sessions plus the CI gate stack. **Merge ≠ deploy ≠ 
   deployed, health-verified change, not "merged and runs." Evidence before assertion. A backing ADR's
   own criteria are proven once, by that ADR's **seam ticket**, never per child (ADR-0130); what the
   ADR still gates at each child's merge is design adherence.
-- **Drift catcher** — reconciles three things that lie independently: the code, the MASTER_PLAN,
-  and the Linear board. State is verified against durable evidence (merged SHAs, CI results, live
-  health), never against a label.
+- **Drift catcher** — reconciles the two things that lie independently: the code and the Linear
+  board. State is verified against durable evidence (merged SHAs, CI results, live health), never
+  against a label. (A third — a hand-maintained plan document — was retired by ADR-0131 precisely
+  because a copy of computable state rots by construction.)
 - **Deploy-class gating** — a standing owner-approved allowlist of low-risk, reversible deploys
   (PWA rebuild · additive ES-template · Kibana dashboard import) runs without asking. **Everything
   else** (gateway rebuild, ES type-change/reindex, Postgres schema/migration, cost/budget/governance)
@@ -56,10 +57,11 @@ Three worker sessions run in parallel, each in its **own git worktree** on its *
 
 Rules that keep them safe on a shared tree:
 
-- **They self-dispatch** — each pulls its NEXT ticket from the MASTER_PLAN Stream Board
+- **They self-dispatch** — each resolves its NEXT ticket through the external dispatch resolver
   (`/build 1`, `/build 2`, `/adr`) and drives its own TDD → plan → PR cycle.
-- **They stop at "push branch + open PR."** They never merge, deploy, close tickets, or edit
-  MASTER_PLAN. That is the hard session boundary.
+- **They stop at "push branch + open PR."** They never merge, deploy, close tickets, write the owner
+  console, or mutate Linear control-plane fields beyond moving their own ticket to `In Progress`.
+  That is the hard session boundary.
 - **File-domain partition** (backend vs PWA vs docs) so two streams don't edit the same file on the
   shared tree; genuinely cross-cutting tickets route through `master` to serialize.
 - **One `pytest` at a time** — a pre-tool hook enforces a global test lock (the full suite is ~7 min;
@@ -99,19 +101,23 @@ Control properties:
 
 ---
 
-## 4. Relationship with the MASTER_PLAN — the priority/sequencing control plane
+## 4. The priority/sequencing control plane — computed, plus the owner's overlay
 
-If Linear is *what* the work is, **MASTER_PLAN.md is *when* and *in what order*.** It lives in-repo,
-**committed to `main` only** (never a feature branch), and is the guardian's to keep true.
+If Linear is *what* the work is, **when and in what order is computed, not stored** (ADR-0131 D1).
+There is no plan document; two sources answer the sequencing question:
 
-- The **Stream Board** at its top is the live dispatch surface — a table (inside machine-parsed
-  `<!-- STREAM-BOARD -->` markers) giving each stream its NEXT ticket + a context flag. The `/build`
-  and `/adr` skills parse it; `master` advances it at every merge.
-- It carries the **cross-project priority order** and wave sequencing (foundation-first, L0→L3),
-  plus which work is parked/held and why.
-- It deliberately **does not re-enumerate Linear** — duplicating per-ticket state is how it rots.
-  (It was reduced 96k→11k on 2026-07-04 for exactly this reason; the bloat was stale per-ticket
-  tables duplicating Linear + git history.)
+- **The dispatch resolver** (`scripts/dispatch/next_resolver.py`, FRE-785) is the live dispatch
+  surface. `--eligible --json` per stream lists every `Approved` + `stream:<s>` ticket with no open
+  blocked-by, in priority / oldest-created order. `/build` and `/adr` resolve their NEXT through it;
+  `master` re-derives the eligible set at every merge. It fails loudly rather than silently — a
+  nonzero exit or a printed error stops dispatch instead of guessing.
+- **`docs/plans/OWNER_CONSOLE.md`** carries what the resolver cannot compute: the owner's **standing
+  directives** (cross-project sequence guidance, priority overrides, prohibitions — each with a
+  retirement condition) and the **trust ladder**, the single source of each session's standing
+  authority. It is owner-voice only; master transcribes and retires, never authors.
+- Dispatch state itself lives in Linear — stream labels, priority pins and blocked-by relations,
+  all master's to write (D4). Nothing re-enumerates per-ticket state in a file; duplicating it is
+  how the retired plan rotted.
 - Bugs that put wrong data in front of the owner jump the queue regardless of layer; every
   merge/dispatch is weighed by **blast-radius × reversibility × gate-class.**
 
@@ -150,7 +156,7 @@ secrets are never logged.
 ```
  Owner (approves tickets, authorizes ask-class deploys)
    │
-   │  Linear: Needs Approval → Approved          MASTER_PLAN Stream Board
+   │  Linear: Needs Approval → Approved          resolver + OWNER_CONSOLE
    ▼                    │                                   │ (priorities/sequencing)
  ┌───────────── worker sessions (authors, PR-only) ─────────────┐
  │  build1 (backend)   build2 (config/PWA)   adr (docs)         │

@@ -41,7 +41,7 @@ Linear MCP: Team `FrenchForest` · `save_issue` to create · `get_issue` to veri
 | `/tests/` | Test suite |
 | `/docs/reference/` | Standards, policies, checklists |
 | `/docs/specs/` | Technical specifications |
-| `/docs/plans/` | MASTER_PLAN, DEV_TRACKER (project-level only) |
+| `/docs/plans/` | OWNER_CONSOLE, LAST_SESSION, DEV_TRACKER (project-level only) |
 | `/docs/plans/sessions/` | Session logs |
 | `/docs/architecture_decisions/` | ADRs |
 | `/docs/superpowers/plans/` | Implementation plans (canonical location) |
@@ -102,7 +102,7 @@ For codemods, duplication hunting, or rule files, invoke the `ast-grep` skill ra
 ### 5. Session Orientation
 
 Before starting implementation:
-1. Read `docs/plans/MASTER_PLAN.md`
+1. Read `docs/plans/OWNER_CONSOLE.md` (standing directives + trust ladder)
 2. Check `docs/plans/completed/` for recent context
 3. Review relevant ADRs in `docs/architecture_decisions/`
 
@@ -150,7 +150,7 @@ cd <path-to-primary-repo-clone> && git merge <branch> --no-edit && git push orig
 ### Before Starting Work
 
 1. Check Linear: `list_issues` with `state: "Approved"`
-2. Read `docs/plans/MASTER_PLAN.md`
+2. Read `docs/plans/OWNER_CONSOLE.md` (standing directives + trust ladder)
 3. Check `docs/plans/completed/` for recent context
 4. Review relevant ADRs
 5. Start in Plan Mode
@@ -194,7 +194,7 @@ curl http://localhost:9200/_cluster/health
 | File | Purpose |
 |------|---------|
 | `docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md` | Current architecture (primary reference) |
-| `docs/plans/MASTER_PLAN.md` | Current priorities |
+| `docs/plans/OWNER_CONSOLE.md` | Owner's standing directives + the trust ladder (ADR-0131) |
 | `docs/superpowers/plans/` | Implementation plans |
 | `docs/architecture_decisions/ADR-*.md` | Design decisions |
 | `docs/reference/TOOL_INTEGRATION_GUIDE.md` | Tool tier decision guide |

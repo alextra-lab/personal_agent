@@ -19,7 +19,7 @@ personal_agent/
 │   ├── architecture_decisions/  # ADRs, HYPOTHESIS_LOG, experiments/, captains_log/, …
 │   ├── archive/               # Historical v0.1 + router-era material (not primary reading)
 │   ├── guides/                # How-tos (CONFIGURATION, MCP, Kibana, …)
-│   ├── plans/                 # MASTER_PLAN, sessions/, completed/
+│   ├── plans/                 # OWNER_CONSOLE, LAST_SESSION, sessions/, completed/
 │   ├── reference/             # Standards, directory structure (this file), PATH_PRIVACY
 │   ├── research/              # Eval reports, research notes, context_management_research.md
 │   ├── specs/                 # COGNITIVE_ARCHITECTURE_REDESIGN_v2, CONTEXT_INTELLIGENCE_SPEC, …
@@ -337,7 +337,7 @@ When a new AI assistant or developer joins:
 
 1. **Read this document first** to understand project organization
 2. **Check `docs/VISION_DOC.md`** for high-level goals
-3. **Review `docs/plans/MASTER_PLAN.md`** for current work
+3. **Review `docs/plans/OWNER_CONSOLE.md`** for the owner's standing directives
 4. **Scan `docs/architecture_decisions/`** for key decisions
 5. **Look at recent `docs/plans/sessions/`** to see what's happening now
 

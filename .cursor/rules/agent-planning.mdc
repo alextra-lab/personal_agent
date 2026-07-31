@@ -1,19 +1,24 @@
 ---
-description: Planning agent workflow. Use when maintaining the Master Plan, creating Linear issues from specs, or organizing project work.
+description: Planning agent workflow. Use when creating Linear issues from specs or organizing project work.
 alwaysApply: false
 ---
 # Agent Planning Workflow
 
 Maintain project plans and create well-structured Linear issues.
 
-## Maintaining MASTER_PLAN.md
+## There is no plan document to maintain
 
-`docs/plans/MASTER_PLAN.md` is the living priority document. Update it when:
-- Phases complete (move to Completed, FIFO)
-- Priorities shift (reorder Current Focus)
-- New work is approved (move from Backlog to Upcoming)
+ADR-0131 retired it. What we do next, in order, is **computed** from the dispatch resolver and
+Linear; the owner's overlay lives in `docs/plans/OWNER_CONSOLE.md`.
 
-Keep it under 100 lines. Link to sub-plans and specs, never duplicate their content.
+`OWNER_CONSOLE.md` is **owner-voice only** (ADR-0131 D2) — never author into it. Master alone may
+transcribe a directive the owner gave conversationally (verbatim, attributed, dated) and retire one
+whose stated condition is met. The file states its own size bound in its header; if it is exceeded,
+surface that to the owner rather than compacting it.
+
+Priority and sequencing changes are **board mutations** (stream labels, priority, blocked-by
+relations), and those are master's. Findings and analysis go to a ticket — a one-line `Backlog`
+ticket is the cheap path and costs no approval bandwidth.
 
 ## Creating Linear Issues from Specs
 

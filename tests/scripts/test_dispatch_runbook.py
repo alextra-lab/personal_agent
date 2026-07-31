@@ -20,9 +20,9 @@ def test_runbook_exists() -> None:
 def test_runbook_states_master_unchanged_invariant() -> None:
     # Collapse whitespace so prose line-wrapping does not hide the invariant.
     text = " ".join(_RUNBOOK.read_text().lower().split())
-    # dispatch-only, never merges/deploys/closes/edits MASTER_PLAN
+    # dispatch-only, never merges/deploys/closes/writes the owner console
     assert "dispatch only" in text
-    assert "never merges, deploys, closes tickets, or edits master_plan" in text
+    assert "never merges, deploys, closes tickets, or writes the owner console" in text
     assert "both approval gates" in text
 
 

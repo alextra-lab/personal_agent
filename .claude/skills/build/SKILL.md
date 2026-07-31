@@ -171,4 +171,6 @@ the handoff contract** master trusts without re-deriving (lifecycle-rules § Sig
 fill every one; a real-logic diff whose handoff is missing per-AC evidence or the self-review summary
 is bounced, not reconstructed by master.
 
-**STOP. Do not merge, deploy, close the ticket, or edit MASTER_PLAN** — that is master's role.
+**STOP. Do not merge, deploy, close the ticket, write the owner console, or mutate Linear
+control-plane fields beyond the `In Progress` move you made at pickup** — that is master's role.
+Filing tickets and posting comments stay open to you (lifecycle-rules § Coordination stores).

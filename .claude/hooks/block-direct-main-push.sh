@@ -3,7 +3,7 @@
 #   - build / build2 / adr worktrees: block any git push whose destination is main,
 #     and fail closed on a bare/unresolvable push (you must push your feature branch
 #     explicitly; master merges via PR).
-#   - master (primary tree): allow — this is the docs/MASTER_PLAN direct-to-main path.
+#   - master (primary tree): allow — this is the docs direct-to-main path.
 # Role is determined by the worktree root of the hook's CWD; push-target analysis is
 # done in embedded python3 (argv tokenization, not substring matching).
 # Exit 2 = block and surface the message (matches repo hook contract).

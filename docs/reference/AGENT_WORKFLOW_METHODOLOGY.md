@@ -42,7 +42,7 @@ Additionally: `docs/research/` for exploratory analysis that hasn't become a dec
 ### Why this structure
 
 - **Agents need fast orientation.** When an agent starts a session, it reads
-  `MASTER_PLAN.md` -> Linear issues -> linked spec. Three hops to context. No searching
+  `OWNER_CONSOLE.md` -> Linear issues -> linked spec. Three hops to context. No searching
   through 40+ flat files.
 - **Specs are not plans.** A spec says *how* to build something. A plan says *what* to
   build and *when*. Mixing them makes both worse.
@@ -62,7 +62,7 @@ Additionally: `docs/research/` for exploratory analysis that hasn't become a dec
 
 ---
 
-## 2. Master Plan (Living Priority Document)
+## 2. The priority document (RETIRED 2026-07-31 — see ADR-0131)
 
 ### Problem
 
@@ -72,7 +72,11 @@ the roadmap is the last thing updated.
 
 ### Solution: Short, linked, FIFO
 
-`docs/plans/MASTER_PLAN.md` is a <100 line document with four sections:
+*(Superseded by ADR-0131 — retained as the historical rationale. The plan document described here
+was retired 2026-07-31: its derived half is computed by the dispatch resolver and Linear, and its
+owner-voice half became `docs/plans/OWNER_CONSOLE.md`. What follows is what it used to hold.)*
+
+The plan document was a <100 line file with four sections:
 
 1. **Current Focus** — what's actively being worked on, linked to Linear issues and specs
 2. **Upcoming** — approved work not yet started
@@ -83,14 +87,14 @@ the roadmap is the last thing updated.
 
 - **Agents read this first.** It answers "what matters right now?" in 10 seconds.
 - **Links, never duplicates.** Details live in Linear issues, specs, and ADRs.
-  The master plan is a routing table, not a database.
+  The document was a routing table, not a database.
 - **FIFO keeps it fresh.** Completed items eventually cycle off the bottom.
   The document never grows past ~100 lines.
 
 ### Sub-plans
 
 Phase-level plans (e.g. `PHASE_2.3_PLAN.md`) contain implementation detail for
-a specific body of work. They're referenced from the Master Plan but stand alone.
+a specific body of work. They were referenced from the priority document and stand alone.
 Each sub-plan links to its Linear project and relevant specs.
 
 ---
@@ -184,9 +188,9 @@ role separation.)
 
 | Role | Cursor Rule | Responsibility |
 |------|-------------|----------------|
-| **Implementer** | `session-orientation.mdc`, `linear-implement-gate.mdc` | Read Master Plan -> query Linear for approved issues -> read spec -> implement -> test -> mark Done |
+| **Implementer** | `session-orientation.mdc`, `linear-implement-gate.mdc` | Read `OWNER_CONSOLE.md` -> query Linear for approved issues -> read spec -> implement -> test -> mark Done |
 | **Reviewer** | `agent-review.mdc` | Query Linear for Done issues -> validate against spec + acceptance criteria -> label Review OK or Review Needs Work |
-| **Planner** | `agent-planning.mdc` | Maintain Master Plan -> create issues from specs -> ensure all issues have spec/ADR links |
+| **Planner** | `agent-planning.mdc` | Create issues from specs -> ensure all issues have spec/ADR links (there is no plan document to maintain — ADR-0131) |
 
 ### Why separate roles
 
@@ -308,7 +312,7 @@ this maps to **`.cursor/rules/*.mdc`** files:
 
 1. **Create directory structure**: `docs/reference/`, `docs/guides/`, `docs/specs/`,
    `docs/plans/`, `docs/plans/completed/`, `docs/plans/sessions/`
-2. **Write `docs/plans/MASTER_PLAN.md`**: Current focus, upcoming, backlog, completed
+2. **Write `docs/plans/OWNER_CONSOLE.md`**: the owner's standing directives + the trust ladder
 3. **Copy cursor rules**: `linear-implement-gate.mdc`, `session-orientation.mdc`,
    `file-organization.mdc`, `agent-review.mdc`, `agent-planning.mdc`
 4. **Update the project label** in `linear-implement-gate.mdc` and `agent-planning.mdc`
@@ -324,7 +328,7 @@ this maps to **`.cursor/rules/*.mdc`** files:
 | `linear-implement-gate.mdc` | Project label name, team name |
 | `agent-planning.mdc` | Project label name |
 | `hooks/check-*.sh` | Language (Python -> TypeScript, Go, etc.) |
-| `MASTER_PLAN.md` | Project-specific phases and priorities |
+| `OWNER_CONSOLE.md` | Project-specific standing directives and autonomy grants |
 | `file-organization.mdc` | Source code paths, framework-specific dirs |
 
 ### What stays the same across projects
@@ -333,7 +337,7 @@ this maps to **`.cursor/rules/*.mdc`** files:
 - The three agent roles (implementer, reviewer, planner)
 - The stop hook verification pattern
 - The documentation taxonomy (reference, guides, specs, plans)
-- The Master Plan format (short, linked, FIFO)
+- The priority-document format (short, linked, FIFO) — since retired here by ADR-0131 in favour of a computed queue plus an owner console
 
 ---
 

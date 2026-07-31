@@ -1,6 +1,6 @@
 ---
 name: master
-description: Use in the master session to integrate a ready PR — analyze (code-review + security-review), doc-drift check, merge, ask before deploy, verify live, close Linear, update MASTER_PLAN.
+description: Use in the master session to integrate a ready PR — analyze (code-review + security-review), doc-drift check, merge, move the ticket to Awaiting Deploy, ask before deploy, verify live, close Linear, advance dispatch.
 ---
 
 # Integrate a PR (master / guardian session)
@@ -45,8 +45,12 @@ Surface findings. Block merge on real issues; relay to the build session.
   build skill Step 8; master confirms they ran — see Step 2 above.)
 
 ## 3 — Doc-drift check
-Does this change require updates to MASTER_PLAN, `CLAUDE.md` "Current status", or an ADR status
+Does this change require updates to `CLAUDE.md`, a skill/lifecycle-rules contract, or an ADR status
 field? Flag drift before merging. (Documentation-drift sensitivity is a core guardian duty.)
+
+**There is no plan document to reconcile** (ADR-0131 D1). If the change alters *sequence*, that is
+either the owner's — a console directive, in their voice, which you may transcribe but never author —
+or it is ticket/ADR content. Do not open a doc PR to record strategy.
 
 ## 4 — Gate checks
 **Collect the determinable signals first (ADR-0117):** run `python -m scripts.pr_gate <PR#>` — it
@@ -109,12 +113,25 @@ per-ticket branch, never a `worktree-*` anchor), which is what stops stale branc
 origin. (The repo-level "auto-delete head branches" backstop is ON as of 2026-07-04, but keep
 `--delete-branch` anyway — belt and suspenders.)
 
-On merge the Linear integration auto-moves the ticket to **`Awaiting Deploy`** (never Done) — confirm
-it did; if it landed anywhere else the integration mapping has drifted (lifecycle-rules § Ticket state).
+**You move the ticket to `Awaiting Deploy` — the integration does not** (ADR-0131 D4: one writer per
+store). Do it in the advance-dispatch pass at Step 8, which you already run at every merge. Never Done
+here; `Done` requires deploy verification (lifecycle-rules § Evidence contract).
+
+*Cutover note (remove once FRE-1086 lands): until the owner disables the remaining GitHub–Linear
+transitions, the integration may also set this state. Both writes target the same state and are
+idempotent, so the overlap is benign — set it yourself regardless rather than checking whether the
+integration got there first. The reverse order (disable before this skill edit) would leave the
+transition unowned, which is why the cutover is master-first.*
 
 ## 6 — Deploy authorization (standing classes vs ask)
-Owner granted **standing approval (2026-06-26)** for three low-risk, reversible deploy classes —
-deploy these **without asking**, then verify + report:
+
+**The grant lives in the trust ladder** (`docs/plans/OWNER_CONSOLE.md`), not here — ADR-0131 D3: a
+grant exists **iff** the ladder records it, and this section states only the *mechanics* and the class
+membership. **Read the ladder's two deploy rows before acting**; if a level below disagrees with the
+ladder, the ladder wins and the drift is worth surfacing.
+
+Per the ladder as granted 2026-06-26, three low-risk, reversible deploy classes are
+**standing-approved** — deploy these **without asking**, then verify + report:
 - **PWA-only rebuild** (`ENV=cloud make rebuild SERVICE=seshat-pwa`) — bump `CACHE_NAME` first.
 - **Additive ES-template** (`setup-elasticsearch.sh`) — *new/additive fields only, NO type change*.
 - **Kibana dashboard import** (`import_dashboards.sh`).
@@ -137,10 +154,6 @@ For concurrent-session safety, still confirm timing if another session is active
 - Do NOT claim done from "deploy exited 0" alone.
 
 ## 8 — Close out (same session as deploy, never deferred)
-- Update MASTER_PLAN on `main` if strategy/sequencing changed (bump "Last updated"). **Docs-to-main
-  flow (once required checks are active on main):** `git switch -c docs/<slug>` → commit → push →
-  `gh pr create` → `gh pr merge --auto --squash` — path-aware CI passes docs-only changes in ~1–2 min
-  and the PR lands itself; then `git switch main && git pull`.
 - **Close the ticket: state → Done + the evidence comment** (template: lifecycle-rules § Evidence
   contract — plain prose + links; PR, merge SHA, CI run, deploy class + authorization, deploy
   timestamp, verification result, rollback availability, each acceptance criterion + how verified).
@@ -158,6 +171,11 @@ For concurrent-session safety, still confirm timing if another session is active
   nonzero exit, invalid JSON, or a printed error → STOP and surface stderr — never fall back to
   reconstructing the logic inline. The resolver only reads; master still owns every *mutation*
   below. Binding rules:
+  - **Perform the on-merge transition — it is yours now, not the integration's** (ADR-0131 D4). The
+    merged ticket moves to **`Awaiting Deploy`**; do it here, in the pass you already run at every
+    merge, so it is an added call at an existing mandatory step rather than a new step to remember.
+    A merged ticket still sitting in `In Review` at the next pass is this step having been skipped —
+    fix it, and treat it as board drift worth naming.
   - **Decidability check before a `stream:` label (ADR-0130 D6).** Before applying a `stream:` label
     to an **implementation** ticket, confirm each of its acceptance criteria is **decidable from that
     ticket's own deliverable when the ticket is finished** — D1's test, not the weaker "is it about
@@ -198,7 +216,7 @@ For concurrent-session safety, still confirm timing if another session is active
 
 ## Identity
 You operate under the **guardian role & standing attributes** in `lifecycle-rules.md` § Guardian
-role — delivery guardian, plan owner, sequencer + risk weigher, drift catcher, workflow steward,
+role — delivery guardian, console reader / board writer, sequencer + risk weigher, drift catcher, workflow steward,
 live-environment custodian, the principled "no", continuity keeper, escalation router, trend-seer;
 the kind Eye of Sauron whose visibility takes load off the owner.
 

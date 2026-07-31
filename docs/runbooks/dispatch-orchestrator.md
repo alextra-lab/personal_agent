@@ -9,7 +9,7 @@ permission/decision prompt from any device via Remote Control.
 ## Master's role and both approval gates are unchanged
 
 **The orchestrator handles worker dispatch only. It never merges, deploys,
-closes tickets, or edits MASTER_PLAN.** Both approval gates are exactly as
+closes tickets, or writes the owner console.** Both approval gates are exactly as
 before: the **owner** decides *whether* work proceeds (marks a ticket
 `Approved`), and **master** decides *when/where* (applies the `stream:*` label)
 and gates the merge (review → merge → deploy → verify → close). Worker sessions
@@ -197,7 +197,7 @@ blew the 5-min prompt-cache TTL — an uncached-cost blowup, FRE-822). It runs
 **outside** every CC session and holds **no LLM context**: it polls `gh`/Linear/
 `tmux` only, so a short poll interval is cheap. It only *actuates* the trigger —
 master's gate and both approval gates are unchanged (like the orchestrator, it
-never merges, deploys, closes tickets, or edits MASTER_PLAN).
+never merges, deploys, closes tickets, or writes the owner console).
 
 **Two PR triggers + one context-pressure nudge.** For each open PR (read once via
 `gh pr view` so a tick is internally consistent):
@@ -218,8 +218,11 @@ reads master's own live context% in-process (imports `resolve_jsonl`/
 wrapper). If usage is at/over `--context-pressure-threshold` (env
 `AGENT_CONTEXT_PRESSURE_THRESHOLD`, default **70**) it reuses `send_to_session`
 (same idle/existence gate as the PR triggers) to type a plain-text nudge into
-`cc-master`: *"Context at `<pct>`% — checkpoint MASTER_PLAN + run the
-prime-master pre-reset gate; consider `/clear` at the next clean boundary."*
+`cc-master`: *"Context at `<pct>`% — informational, owner-gated: SURFACE this
+to the owner as a heads-up. Do NOT run prepare-reset / checkpoint / `/clear`
+unless the owner explicitly instructs it — the reset decision is the owner's
+alone, never auto-run on this nudge."* (`_CONTEXT_PRESSURE_NUDGE` in
+`scripts/dispatch/gating_watcher.py` is authoritative.)
 This does not act on master's behalf — it only puts the suggestion in front of
 the human operator supervising that session (Remote Control), who decides
 whether to act. Dedup key is `ctxpressure:cc-master` (session-scoped, no PR/SHA
@@ -406,8 +409,8 @@ Phased checklist:
 - [ ] **Phase C — official (systemd enable).**
   `sudo systemctl enable --now seshat-dispatch-orchestrator`. New default: keep
   Approved+`stream:*` tickets flowing, monitor via RC, answer build-time prompts.
-  Retire the manual "master briefs → owner primes" step and update MASTER_PLAN's
-  Dispatch section.
+  Retire the manual "master briefs → owner primes" step and update
+  lifecycle-rules' Dispatch section.
 
 **Halt at any point:** `touch telemetry/dispatch.disabled` (kill switch) or
 `sudo systemctl stop seshat-dispatch-orchestrator`.

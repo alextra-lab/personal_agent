@@ -8,7 +8,7 @@ alwaysApply: false
 
 Before beginning any implementation work, orient yourself:
 
-1. **Read `docs/plans/MASTER_PLAN.md`** for current priorities and sequencing
+1. **Read `docs/plans/OWNER_CONSOLE.md`** for the owner's standing directives and the trust ladder
 2. **Query Linear** via MCP (`plugin-linear-linear`) — call `list_projects` for stream status, `list_issues` with `state: "Approved"` (or `label: "Approved"`) for implementable work items (see **Linear Implement Gate** rule)
 3. **Read the relevant spec** in `docs/specs/` or phase plan in `docs/plans/PHASE_*.md`
 4. **Check recent session logs** in `docs/plans/sessions/` for context from the last session
@@ -39,7 +39,7 @@ If Linear MCP is unavailable, fall back to `docs/plans/DEV_TRACKER.md` for proje
 
 | Source | Purpose |
 | -------- | --------- |
-| `docs/plans/MASTER_PLAN.md` | Priorities, sequencing, current focus |
+| `docs/plans/OWNER_CONSOLE.md` | The owner's standing directives + trust ladder |
 | **Linear** (via MCP) | What to work on — issues, status, priorities, blocking |
 | `docs/specs/` | How to build it — technical specifications |
 | `docs/plans/PHASE_*.md` | Phase sub-plans with implementation detail |

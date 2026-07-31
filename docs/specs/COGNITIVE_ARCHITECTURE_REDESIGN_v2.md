@@ -1,7 +1,7 @@
 # Cognitive Architecture Redesign v2
 
 **Date**: 2026-03-16
-**Status**: Slices 1–3 Implemented — Slice 3 complete (2026-03-29). Follow-on work (context intelligence, eval baselines) is tracked in `CONTEXT_INTELLIGENCE_SPEC.md` and `docs/plans/MASTER_PLAN.md`.
+**Status**: Slices 1–3 Implemented — Slice 3 complete (2026-03-29). Follow-on work (context intelligence, eval baselines) is tracked in `CONTEXT_INTELLIGENCE_SPEC.md` and in Linear.
 **Phase**: 2.4 — Cognitive Architecture Redesign
 **Supersedes**: ADR-0017 (Three-Tier Multi-Agent Orchestration)
 **Evolves**: ADR-0018 (Seshat Memory Librarian Agent)

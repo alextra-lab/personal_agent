@@ -35,7 +35,7 @@ assert_exit() { # desc, expected_code, actual_code
 ( cd "$BUILD_WT" && payload "git push origin feature-mainline" | bash "$HOOK" ); assert_exit "build worktree allows feature-mainline" 0 $?
 # 7. Bare push from build worktree (unresolvable destination) → BLOCK (2), fail-closed
 ( cd "$BUILD_WT" && payload "git push" | bash "$HOOK" ); assert_exit "build worktree fails closed on bare push" 2 $?
-# 8. Push to main from primary tree → ALLOW (0) — the docs/MASTER_PLAN allow path
+# 8. Push to main from primary tree → ALLOW (0) — the docs allow path
 ( cd "$PRIMARY" && payload "git push origin main" | bash "$HOOK" ); assert_exit "primary allows push to main (docs path)" 0 $?
 # 9. Non-push command in build worktree → ALLOW (0)
 ( cd "$BUILD_WT" && payload "git status" | bash "$HOOK" ); assert_exit "build worktree allows non-push" 0 $?

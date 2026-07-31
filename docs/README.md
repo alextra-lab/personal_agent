@@ -17,7 +17,7 @@ All project documentation, organized by purpose.
 ## Start Here
 
 - **[Vision Document](VISION_DOC.md)** — Project philosophy and goals
-- **[Master Plan](plans/MASTER_PLAN.md)** — Current priorities and sequencing
+- **[Owner Console](plans/OWNER_CONSOLE.md)** — the owner's standing directives and the trust ladder
 - **[Usage Guide](guides/USAGE_GUIDE.md)** — How to use the Personal Agent
 - **[Configuration](guides/CONFIGURATION.md)** — Environment setup
 

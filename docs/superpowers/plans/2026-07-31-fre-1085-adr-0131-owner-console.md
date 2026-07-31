@@ -188,7 +188,7 @@ Per build skill Step 5 these are supporting changes to make this build function,
 | `scripts/reconcile_board.py`, `tests/scripts/test_reconcile_board.py` | docstrings explaining the retired MASTER_PLAN-parsing path → state the file is now deleted | docstring accuracy only |
 | `docs/reference/DELIVERY_PIPELINE.md` | § 4 "Relationship with the MASTER_PLAN" → "Relationship with the dispatch resolver + owner console"; the drift-catcher, self-dispatch, boundary and topology-diagram refs | a live reference doc; its "Stream Board" text is *already* stale (Linear-native dispatch, 2026-07-04) — corrected in passing since the section is being rewritten anyway |
 | `docs/reference/PROJECT_DIRECTORY_STRUCTURE.md` · `docs/reference/AGENT_WORKFLOW_METHODOLOGY.md` · `docs/plans/{README,AGENTS,DEV_TRACKER}.md` · `docs/README.md` · `docs/architecture_decisions/TECHNICAL_DEBT.md` · `docs/VISION_DOC.md` | pointer/index refs re-pointed at the resolver + console | dangling links to a deleted file |
-| `docs/research/README.md:243` | the **live quick-links index** at the file's foot links `[Master Plan](../plans/MASTER_PLAN.md)` → re-pointed | a live index, not a historical research document — the blanket `docs/research/**` exclusion does not reach it |
+| `docs/research/README.md:243` | the **live quick-links index** at the file's foot links the retired plan path → re-pointed at the console | a live index, not a historical research document — the blanket `docs/research/**` exclusion does not reach it |
 | `.cursor/rules/{agent-planning,session-orientation}.mdc` | 4 refs | live editor rules on the same tree |
 
 ### Deliberately NOT touched

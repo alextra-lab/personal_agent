@@ -62,7 +62,7 @@ Additionally: `docs/research/` for exploratory analysis that hasn't become a dec
 
 ---
 
-## 2. Master Plan (Living Priority Document)
+## 2. The priority document (RETIRED 2026-07-31 — see ADR-0131)
 
 ### Problem
 
@@ -87,14 +87,14 @@ The plan document was a <100 line file with four sections:
 
 - **Agents read this first.** It answers "what matters right now?" in 10 seconds.
 - **Links, never duplicates.** Details live in Linear issues, specs, and ADRs.
-  The master plan is a routing table, not a database.
+  The document was a routing table, not a database.
 - **FIFO keeps it fresh.** Completed items eventually cycle off the bottom.
   The document never grows past ~100 lines.
 
 ### Sub-plans
 
 Phase-level plans (e.g. `PHASE_2.3_PLAN.md`) contain implementation detail for
-a specific body of work. They're referenced from the Master Plan but stand alone.
+a specific body of work. They were referenced from the priority document and stand alone.
 Each sub-plan links to its Linear project and relevant specs.
 
 ---
@@ -188,9 +188,9 @@ role separation.)
 
 | Role | Cursor Rule | Responsibility |
 |------|-------------|----------------|
-| **Implementer** | `session-orientation.mdc`, `linear-implement-gate.mdc` | Read Master Plan -> query Linear for approved issues -> read spec -> implement -> test -> mark Done |
+| **Implementer** | `session-orientation.mdc`, `linear-implement-gate.mdc` | Read `OWNER_CONSOLE.md` -> query Linear for approved issues -> read spec -> implement -> test -> mark Done |
 | **Reviewer** | `agent-review.mdc` | Query Linear for Done issues -> validate against spec + acceptance criteria -> label Review OK or Review Needs Work |
-| **Planner** | `agent-planning.mdc` | Maintain Master Plan -> create issues from specs -> ensure all issues have spec/ADR links |
+| **Planner** | `agent-planning.mdc` | Create issues from specs -> ensure all issues have spec/ADR links (there is no plan document to maintain — ADR-0131) |
 
 ### Why separate roles
 
@@ -337,7 +337,7 @@ this maps to **`.cursor/rules/*.mdc`** files:
 - The three agent roles (implementer, reviewer, planner)
 - The stop hook verification pattern
 - The documentation taxonomy (reference, guides, specs, plans)
-- The Master Plan format (short, linked, FIFO)
+- The priority-document format (short, linked, FIFO) — since retired here by ADR-0131 in favour of a computed queue plus an owner console
 
 ---
 

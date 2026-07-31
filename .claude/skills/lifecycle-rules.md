@@ -304,14 +304,21 @@ Dispatch state lives in Linear and is computed by the resolver (process v2, 2026
   oldest-created tie-break — that fallback exists for safety, not as a control.
 
 ## Deploy
-- Deploy is a master-only action. Owner granted **standing approval (2026-06-26)** for three
-  low-risk, reversible classes — master deploys these WITHOUT asking, then verifies + reports:
-  **PWA-only rebuild · additive ES-template (no type change) · Kibana dashboard import** (see
-  `/master` Step 6).
-- For everything else — `seshat-gateway` rebuild, ES type-change/reindex, Postgres schema/migration,
-  cost/budget/governance — **ask first; do NOT deploy on your own initiative.** Approving a PR or a fix
-  does NOT authorize an always-ask-class deploy. Confirm deploy timing explicitly, especially with a
-  concurrent session active.
+
+**This section states mechanics and class membership only. The autonomy level for each class lives in
+the trust ladder** (`docs/plans/OWNER_CONSOLE.md`) — ADR-0131 D3: a grant exists **iff** the console
+records it. Read the ladder before deploying; if anything here disagrees with it, **the ladder wins**
+and the disagreement is drift worth surfacing.
+
+- Deploy is a master-only action; no worker seat deploys.
+- **The reversible classes** — PWA-only rebuild · additive ES-template (no type change) · Kibana
+  dashboard import. Where the ladder records these as standing-approved, master deploys without
+  asking, then verifies + reports which class it ran under (see `/master` Step 6).
+- **Everything else** — `seshat-gateway` rebuild, ES type-change/reindex, Postgres schema/migration,
+  cost/budget/governance. Where the ladder records these as ask-first: **ask, and do NOT deploy on
+  your own initiative.** Approving a PR or a fix does NOT authorize an ask-first deploy. Confirm
+  deploy timing explicitly, especially with a concurrent session active.
+- Anything you cannot confidently place in a class → treat as ask-first.
 
 ## Halt conditions (stop and surface; do not work around)
 - Ticket not `Approved`.

@@ -234,9 +234,11 @@ curl -s 'http://elasticsearch:9200/agent-captains-captures-*/_search' \
   }' | jq '.hits.hits[]._source'
 
 # Success rate over last 24 h (ES|QL on captures)
+# Captures use plain "timestamp", not "@timestamp" (FRE-1035) — filtering on @timestamp
+# here returns empty silently since the field doesn't exist on this index.
 curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
   -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-captains-captures-* | WHERE @timestamp > NOW()-24hours | STATS total=COUNT(*), successes=COUNT_IF(outcome == \"success\"), avg_tokens=AVG(total_tokens), avg_duration=AVG(duration_ms)"}' \
+  -d '{"query": "FROM agent-captains-captures-* | WHERE timestamp > NOW()-24hours | STATS total=COUNT(*), successes=COUNT_IF(outcome == \"success\"), avg_tokens=AVG(total_tokens), avg_duration=AVG(duration_ms)"}' \
   | jq '.values'
 ```
 

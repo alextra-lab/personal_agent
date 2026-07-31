@@ -80,20 +80,83 @@ known_bad_patterns:
 
 **Category:** `system_read` · **Risk:** low · **Approval:** `bash curl` auto-approved (NORMAL); `run_python` auto-approved (NORMAL/ALERT/DEGRADED)
 
-## Actual indices (empirically verified 2026-04-28)
+## Actual indices (families verified 2026-04-28; date shapes verified 2026-07-31)
 
-The cluster has four index families. **Do not guess index names** — use only these patterns:
+The cluster has these index families. **Do not guess index names** — use only these patterns:
 
 | Pattern | Purpose | Example |
 |---------|---------|---------|
-| `agent-logs-YYYY.MM.DD` | All structured log events (primary telemetry) | `agent-logs-2026.04.28` |
-| `agent-captains-captures-YYYY-MM-DD` | Captain's Log per-request captures | `agent-captains-captures-2026-04-28` |
-| `agent-captains-reflections-YYYY-MM-DD` | DSPy self-reflection outputs | `agent-captains-reflections-2026-04-28` |
-| `agent-insights-YYYY-MM-DD` | Cross-session insights and anomalies | `agent-insights-2026-04-28` |
+| `agent-logs-*` | All structured log events (primary telemetry) | `agent-logs-2026.07.31`, `agent-logs-2026-07` |
+| `agent-captains-captures-*` | Captain's Log per-request captures | `agent-captains-captures-2026-07-31` |
+| `agent-captains-reflections-*` | DSPy self-reflection outputs | `agent-captains-reflections-2026-07-31` |
+| `agent-insights-*` | Cross-session insights and anomalies | `agent-insights-2026-07` |
 
-**Wildcard queries:** `agent-logs-*` (all days), `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-insights-*`.
+**Wildcard queries:** `agent-logs-*` (all days/months), `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-insights-*`.
 
 **Non-existent patterns** (404 errors): `agent-events-*`, `agent-traces-*`, `agent-telemetry-*` — these do not exist.
+
+**Do not assume a fixed date shape from the example above.** `docker/elasticsearch/` (FRE-1036)
+is migrating every family from daily indices (`YYYY.MM.DD`/`YYYY-MM-DD`, some with a trailing
+`-v2` suffix) to monthly indices (`YYYY-MM`/`YYYY.MM`) family by family, and this is a live,
+in-progress migration, not a single cutover — verified 2026-07-31 that `agent-logs`,
+`agent-insights`, `agent-monitors-slm-health`, and `agent-captains-captures` each currently have
+**both** daily-shaped and monthly-shaped indices live at once, while `agent-monitors-joinability`
+had its daily indices migrated out from under this very investigation within the same hour. A
+family's shape today is not a reliable predictor of its shape tomorrow, or even later in the same
+session — see "Determining a family's index granularity" below rather than hard-coding a pattern.
+
+## Determining a family's index granularity — don't strip dates in the shell
+
+A previous live turn (FRE-1035) inferred a family's granularity by shell-stripping the trailing
+date off index names — one `sed` substitution for dash-dated names, a second for dot-dated names
+that stripped only the month and day, leaving the year attached. Run against a dot-dated name like
+`agent-logs-2026.07.28`, the second substitution produced `agent-logs-2026` — a string that looks
+like a real yearly index but is a truncation artifact. The agent reported it as real, then
+"confirmed" it by grepping its own output for four-digit-year names and finding the artifact it
+had just manufactured. **Never reconstruct a date pattern by truncating another one** — a partial
+strip that happens to look like a valid shape is not evidence that shape exists.
+
+**Primary recipe — the tested classifier**, never ad hoc `sed`/`cut`:
+
+```bash
+curl -s 'http://elasticsearch:9200/_cat/indices?h=index' \
+  | grep '^agent-monitors-joinability-' \
+  | python3 scripts/es_index_granularity.py agent-monitors-joinability
+```
+
+Reports daily/monthly counts, flags `MIXED` when both shapes are live at once, and lists any name
+it doesn't recognize instead of guessing at it — including a sibling family sharing the same
+prefix (e.g. `agent-captains-captures-subagents-*` under the `agent-captains-captures` prefix,
+which the `grep` above would otherwise sweep in). `scripts/es_index_granularity.py` is unit-tested
+(`tests/scripts/test_es_index_granularity.py`) against every observed shape and the exact artifact
+from the paragraph above — it returns `None`/unrecognized rather than a guess for anything that
+doesn't match a known shape in full.
+
+**Secondary — live document coverage, not granularity classification.** An index's real
+document date-range only tells you what data it actually holds, which is a different question
+from what shape its name is (a monthly bucket a day into the month looks "daily" by span, and an
+empty index has no span at all — don't use this to answer "daily or monthly"). Useful when you
+need to confirm a query actually saw everything it should have:
+
+```bash
+# agent-logs / agent-insights / agent-monitors-* use @timestamp.
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "aggs": {"by_index": {"terms": {"field": "_index", "size": 200},
+      "aggs": {"earliest": {"min": {"field": "@timestamp"}}, "latest": {"max": {"field": "@timestamp"}}}}}
+  }' | jq '.aggregations.by_index.buckets'
+
+# agent-captains-captures-* / agent-captains-reflections-* use plain "timestamp", not "@timestamp".
+curl -s -X POST 'http://elasticsearch:9200/agent-captains-captures-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "aggs": {"by_index": {"terms": {"field": "_index", "size": 200},
+      "aggs": {"earliest": {"min": {"field": "timestamp"}}, "latest": {"max": {"field": "timestamp"}}}}}
+  }' | jq '.aggregations.by_index.buckets'
+```
 
 ## Key fields in `agent-logs-*`
 

@@ -1364,6 +1364,12 @@ class TestExecutorFallbackStanceEnrichment:
 
     @pytest.mark.asyncio
     async def test_broad_recall_entity_gets_stance_enriched(self) -> None:
+        """ADR-0126 T2 (FRE-1017) note: query_current_stances is now awaited *twice*
+        per turn on this authenticated ctx -- once here (T1, entity-gated) and once
+        for the curated behavioural set (T2, unconditional). The mock's fixed
+        return_value never matches a curated target name, so T2 contributes no items;
+        only the assertion needs to look at the specific T1-shaped call.
+        """
         from personal_agent.config import settings
 
         uid = uuid4()
@@ -1393,7 +1399,10 @@ class TestExecutorFallbackStanceEnrichment:
         assert len(stance_items) == 1
         assert stance_items[0]["target"] == "Python"
         assert stance_items[0]["affect"] == "prefers over Java"
-        mock_memory.query_current_stances.assert_awaited_once()
+        topic_scoped_calls = [
+            c for c in mock_memory.query_current_stances.await_args_list if c.args[0] == ["Python"]
+        ]
+        assert len(topic_scoped_calls) == 1
 
         # The recall_candidates record must reflect the *enriched* list -- built after
         # enrichment, not before it.
@@ -1406,7 +1415,13 @@ class TestExecutorFallbackStanceEnrichment:
 
     @pytest.mark.asyncio
     async def test_no_entities_in_broad_recall_skips_stance_fetch(self) -> None:
+        """ADR-0126 T2 (FRE-1017) note: T1's entity-gated hook correctly makes no call
+        (no entities recalled), but the behavioural-profile injector calls
+        query_current_stances unconditionally for the curated set on an authenticated
+        ctx -- so the mock is awaited exactly once, for the curated targets.
+        """
         from personal_agent.config import settings
+        from personal_agent.request_gateway.context import CURATED_BEHAVIOURAL_STANCE_TARGETS
 
         uid = uuid4()
         mock_memory = MagicMock()
@@ -1424,7 +1439,11 @@ class TestExecutorFallbackStanceEnrichment:
         ):
             await step_init(ctx, SessionManager(), trace_ctx)
 
-        mock_memory.query_current_stances.assert_not_called()
+        mock_memory.query_current_stances.assert_awaited_once_with(
+            list(CURATED_BEHAVIOURAL_STANCE_TARGETS),
+            authenticated=True,
+            trace_id="trace-1015",
+        )
 
     @pytest.mark.asyncio
     async def test_stance_fetch_failure_does_not_fail_the_turn(self) -> None:
@@ -1459,6 +1478,167 @@ class TestExecutorFallbackStanceEnrichment:
         assert all(m.get("type") != "stance" for m in ctx.memory_context)
         entity_items = [m for m in ctx.memory_context if m.get("type") == "entity"]
         assert len(entity_items) == 1
+
+
+class TestExecutorFallbackBehaviouralStanceInjection:
+    """ADR-0126 T2 (FRE-1017): the standing behavioural profile also injects on the
+    pre-gateway fallback path, independent of which recall sub-branch (broad-recall /
+    entity-match) fired -- or whether either fired at all.
+    """
+
+    @staticmethod
+    def _make_ctx(message: str, uid, *, authenticated: bool = True) -> ExecutionContext:
+        return ExecutionContext(
+            session_id="sess-1017",
+            trace_id="trace-1017",
+            user_message=message,
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=None,  # forces the inline enrichment / fallback path
+            user_id=uid,
+            authenticated=authenticated,
+        )
+
+    @pytest.mark.asyncio
+    async def test_behavioural_stances_injected_when_entity_match_finds_nothing(self) -> None:
+        """Neither recall sub-branch produces anything (no potential_entities, entity-
+        match path taken since is_memory_recall_query is False) -- ctx.memory_context
+        starts None going into the behavioural hook, and it still injects.
+        """
+        from personal_agent.config import settings
+        from personal_agent.request_gateway.context import CURATED_BEHAVIOURAL_STANCE_TARGETS
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_current_stances = AsyncMock(
+            return_value=[
+                {"target": "Artifact", "affect": "prefers explicit request before creation"}
+            ]
+        )
+
+        # Lowercase message -> no potential_entities -> the entity-match sub-branch's
+        # `if potential_entities:` guard is never entered.
+        ctx = self._make_ctx("hello there", uid)
+        trace_ctx = TraceContext(trace_id="trace-1017", user_id=uid, session_id="sess-1017")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch(
+                "personal_agent.orchestrator.executor.is_memory_recall_query", return_value=False
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        behavioural_items = [
+            m for m in (ctx.memory_context or []) if m.get("type") == "behavioural_stance"
+        ]
+        assert len(behavioural_items) == 1
+        assert behavioural_items[0]["target"] == "Artifact"
+        mock_memory.query_current_stances.assert_awaited_once_with(
+            list(CURATED_BEHAVIOURAL_STANCE_TARGETS),
+            authenticated=True,
+            trace_id="trace-1017",
+        )
+
+        # The recall_candidates record must reflect the enriched list.
+        from personal_agent.captains_log.turn_evidence import MemoryItemKind
+
+        assert any(
+            c.kind is MemoryItemKind.BEHAVIOURAL_STANCE
+            and c.identity == "behavioural_stance:Artifact"
+            for c in ctx.recall_candidates
+        )
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_skips_behavioural_fetch(self) -> None:
+        from personal_agent.config import settings
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_current_stances = AsyncMock(return_value=[])
+
+        ctx = self._make_ctx("hello there", uid, authenticated=False)
+        trace_ctx = TraceContext(trace_id="trace-1017b", user_id=uid, session_id="sess-1017")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch(
+                "personal_agent.orchestrator.executor.is_memory_recall_query", return_value=False
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        mock_memory.query_current_stances.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_behavioural_fetch_failure_does_not_fail_the_turn(self) -> None:
+        from personal_agent.config import settings
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_current_stances = AsyncMock(side_effect=RuntimeError("stance db down"))
+
+        ctx = self._make_ctx("hello there", uid)
+        trace_ctx = TraceContext(trace_id="trace-1017c", user_id=uid, session_id="sess-1017")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch(
+                "personal_agent.orchestrator.executor.is_memory_recall_query", return_value=False
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.memory_context is None
+
+    @pytest.mark.asyncio
+    async def test_behavioural_injection_survives_entity_match_query_failure(self) -> None:
+        """Codex MAJOR finding: the entity-match sub-branch's query_memory can raise;
+        the behavioural layer's 'always-present' guarantee must not depend on that
+        unrelated recall path succeeding.
+        """
+        from personal_agent.config import settings
+        from personal_agent.request_gateway.context import CURATED_BEHAVIOURAL_STANCE_TARGETS
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_memory = AsyncMock(side_effect=RuntimeError("entity-match query down"))
+        mock_memory.query_current_stances = AsyncMock(
+            return_value=[
+                {"target": "Artifact", "affect": "prefers explicit request before creation"}
+            ]
+        )
+
+        # A capitalised word gives potential_entities, so the entity-match
+        # sub-branch's query_memory call actually runs and raises.
+        ctx = self._make_ctx("Tell me about Zanzibar please", uid)
+        trace_ctx = TraceContext(trace_id="trace-1017d", user_id=uid, session_id="sess-1017")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch(
+                "personal_agent.orchestrator.executor.is_memory_recall_query", return_value=False
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        behavioural_items = [
+            m for m in (ctx.memory_context or []) if m.get("type") == "behavioural_stance"
+        ]
+        assert len(behavioural_items) == 1
+        mock_memory.query_current_stances.assert_awaited_once_with(
+            list(CURATED_BEHAVIOURAL_STANCE_TARGETS),
+            authenticated=True,
+            trace_id="trace-1017",
+        )
 
 
 class TestStepInitAttachmentResolution:

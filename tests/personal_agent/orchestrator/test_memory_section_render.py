@@ -133,6 +133,10 @@ def _stance(target: str, affect: str) -> dict[str, Any]:
     return {"type": "stance", "target": target, "affect": affect}
 
 
+def _behavioural_stance(target: str, affect: str) -> dict[str, Any]:
+    return {"type": "behavioural_stance", "target": target, "affect": affect}
+
+
 # ---------------------------------------------------------------------------
 # Acceptance criteria — asserted at the executor seam
 # ---------------------------------------------------------------------------
@@ -349,6 +353,51 @@ class TestRendererDispatchesPerItemKind:
         text, _ = self._render([_stance("BarrageRepublicain", "")])
         assert "What The User Thinks" not in text
 
+    def test_behavioural_stance_with_affect_renders(self) -> None:
+        """ADR-0126 T2 (FRE-1017): a curated behavioural stance reaches the section."""
+        text, ids = self._render(
+            [_behavioural_stance("Artifact", "prefers explicit request before creation")]
+        )
+        assert "Artifact" in text
+        assert "prefers explicit request before creation" in text
+        assert ids == ("behavioural_stance:Artifact",)
+
+    def test_behavioural_stance_with_empty_affect_contributes_no_line_and_no_id(self) -> None:
+        """D6: an empty-affect behavioural stance is filtered before render."""
+        text, ids = self._render([_behavioural_stance("Artifact", "")])
+        assert "Artifact" not in text
+        assert ids == ()
+
+    def test_behavioural_stance_with_whitespace_only_affect_is_filtered(self) -> None:
+        text, ids = self._render([_behavioural_stance("Artifact", "   ")])
+        assert "Artifact" not in text
+        assert ids == ()
+
+    def test_behavioural_stance_and_topic_scoped_stance_sharing_target_both_render(self) -> None:
+        """A curated target that is also topic-scoped-recalled the same turn -- both
+        sections render, each with its own distinct namespaced id (T1's Design
+        decision 2 accepts this as legitimate duplication, not a defect).
+        """
+        text, ids = self._render(
+            [
+                _stance("Artifact", "topic-scoped affect text"),
+                _behavioural_stance("Artifact", "prefers explicit request before creation"),
+            ]
+        )
+        assert "topic-scoped affect text" in text
+        assert "prefers explicit request before creation" in text
+        assert set(ids) == {"stance:Artifact", "behavioural_stance:Artifact"}
+
+    def test_behavioural_stance_section_header_present_when_populated(self) -> None:
+        text, _ = self._render(
+            [_behavioural_stance("Artifact", "prefers explicit request before creation")]
+        )
+        assert "## Standing Behavioural Preferences" in text
+
+    def test_behavioural_stance_section_absent_when_only_item_is_filtered(self) -> None:
+        text, _ = self._render([_behavioural_stance("Artifact", "")])
+        assert "Standing Behavioural Preferences" not in text
+
 
 class TestRendererIsBoundedByStatedConstants:
     """The volatile tail is outside the prompt cache, so its size is a per-turn cost."""
@@ -445,3 +494,21 @@ class TestRendererIsBoundedByStatedConstants:
         items = [_stance(f"S{i}", f"affect {i}") for i in range(_MAX_RENDERED_ENTITIES + 3)]
         _, ids = self._render(items)
         assert ids == tuple(f"stance:S{i}" for i in range(_MAX_RENDERED_ENTITIES))
+
+    def test_behavioural_stance_rank_cap_is_fixed_by_ac7_not_the_entity_cap(self) -> None:
+        """ADR-0126 T2 (AC-7): the behavioural cap is a direct restatement of AC-7's own
+        ceiling (12) -- unlike T1's stance cap, it is NOT derived from
+        _MAX_RENDERED_ENTITIES, because this layer has no recall selection to ride on.
+        """
+        from personal_agent.orchestrator.executor import _MAX_RENDERED_BEHAVIOURAL_STANCES
+
+        assert _MAX_RENDERED_BEHAVIOURAL_STANCES == 12
+
+        items = [_behavioural_stance(f"B{i}", f"affect {i}") for i in range(15)]
+        _, ids = self._render(items)
+        assert len(ids) == 12
+
+    def test_behavioural_stance_cap_is_an_order_preserving_prefix(self) -> None:
+        items = [_behavioural_stance(f"B{i}", f"affect {i}") for i in range(15)]
+        _, ids = self._render(items)
+        assert ids == tuple(f"behavioural_stance:B{i}" for i in range(12))

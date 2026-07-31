@@ -80,7 +80,7 @@ help:
 	@echo ""
 	@echo "  make dev                  Start agent service with hot-reload (local only)"
 	@echo ""
-	@echo "  VPS / cloud (run from Mac or directly on VPS):"
+	@echo "  VPS / cloud (run from the Mac — these SSH to the VPS, they do not run on it):"
 	@echo "  make deploy               SSH → pull + restart (no rebuild)"
 	@echo "  make build                SSH → pull + rebuild seshat-gateway + restart"
 	@echo "  make build-full           SSH → pull + rebuild all images + restart"

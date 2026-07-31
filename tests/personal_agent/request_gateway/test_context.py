@@ -425,6 +425,184 @@ class TestGraphAnchoredEntityHints:
         mock_adapter.recall.assert_not_called()
 
 
+class TestStanceEnrichment:
+    """ADR-0126 T1 (FRE-1015): every recalled entity gets its current stance pushed into
+    memory_context, enrichment on a selection recall already made -- not a new relevance
+    decision.
+    """
+
+    def _intent(self) -> IntentResult:
+        return IntentResult(
+            task_type=TaskType.CONVERSATIONAL,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=[],
+        )
+
+    def _mock_adapter_with_entity(self, name: str = "Python") -> AsyncMock:
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.recall = AsyncMock(
+            return_value=MagicMock(
+                entities=[
+                    {
+                        "name": name,
+                        "entity_type": "Technology",
+                        "description": "a programming language",
+                        "mention_count": 3,
+                    }
+                ],
+                episodes=[],
+                relevance_scores={},
+            )
+        )
+        return mock_adapter
+
+    @pytest.mark.asyncio
+    async def test_stance_item_appended_for_recalled_entity(self) -> None:
+        mock_adapter = self._mock_adapter_with_entity("Python")
+        mock_adapter.get_current_stances = AsyncMock(
+            return_value=[{"target": "Python", "affect": "prefers over Java", "mastery": None}]
+        )
+
+        result = await assemble_context(
+            user_message="Tell me about Python please",
+            session_messages=[],
+            intent=self._intent(),
+            memory_adapter=mock_adapter,
+            trace_id="t-stance",
+            authenticated=True,
+        )
+
+        assert result.memory_context is not None
+        stance_items = [m for m in result.memory_context if m.get("type") == "stance"]
+        assert len(stance_items) == 1
+        assert stance_items[0]["target"] == "Python"
+        assert stance_items[0]["affect"] == "prefers over Java"
+        mock_adapter.get_current_stances.assert_awaited_once()
+        awaited_args, awaited_kwargs = mock_adapter.get_current_stances.await_args
+        assert awaited_args[0] == ["Python"]
+        assert awaited_kwargs["authenticated"] is True
+
+    @pytest.mark.asyncio
+    async def test_no_entities_recalled_skips_stance_fetch(self) -> None:
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.get_current_stances = AsyncMock(return_value=[])
+
+        result = await assemble_context(
+            user_message="hello there",
+            session_messages=[],
+            intent=self._intent(),
+            memory_adapter=mock_adapter,
+            trace_id="t-none",
+            authenticated=True,
+        )
+
+        assert result.memory_context is None
+        mock_adapter.get_current_stances.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_skips_stance_fetch_even_with_entities(self) -> None:
+        mock_adapter = self._mock_adapter_with_entity("Python")
+        mock_adapter.get_current_stances = AsyncMock(return_value=[])
+
+        result = await assemble_context(
+            user_message="Tell me about Python please",
+            session_messages=[],
+            intent=self._intent(),
+            memory_adapter=mock_adapter,
+            trace_id="t-unauth",
+            authenticated=False,
+        )
+
+        assert result.memory_context is not None
+        assert all(m.get("type") != "stance" for m in result.memory_context)
+        mock_adapter.get_current_stances.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stance_fetch_failure_preserves_original_memory_context(self) -> None:
+        """Fail-closed: a stance-layer fault omits enrichment, never fails the turn."""
+        mock_adapter = self._mock_adapter_with_entity("Python")
+        mock_adapter.get_current_stances = AsyncMock(side_effect=RuntimeError("stance db down"))
+
+        result = await assemble_context(
+            user_message="Tell me about Python please",
+            session_messages=[],
+            intent=self._intent(),
+            memory_adapter=mock_adapter,
+            trace_id="t-fail",
+            authenticated=True,
+        )
+
+        assert result.memory_context is not None
+        assert len(result.memory_context) == 1
+        assert result.memory_context[0]["type"] == "entity"
+        assert all(m.get("type") != "stance" for m in result.memory_context)
+
+    @pytest.mark.asyncio
+    async def test_stance_order_follows_entity_order_not_query_return_order(self) -> None:
+        """ADR-0126: enrichment must not become a second, unstated ranking decision --
+        stances render in the same order their entities were recalled in, regardless of
+        the order the batched query happens to return rows.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.recall = AsyncMock(
+            return_value=MagicMock(
+                entities=[
+                    {"name": "Alpha", "entity_type": "Topic", "description": "first"},
+                    {"name": "Beta", "entity_type": "Topic", "description": "second"},
+                ],
+                episodes=[],
+                relevance_scores={},
+            )
+        )
+        # Query returns Beta before Alpha -- out of entity-recall order.
+        mock_adapter.get_current_stances = AsyncMock(
+            return_value=[
+                {"target": "Beta", "affect": "likes it", "mastery": None},
+                {"target": "Alpha", "affect": "dislikes it", "mastery": None},
+            ]
+        )
+
+        result = await assemble_context(
+            user_message="Tell me about Alpha and Beta",
+            session_messages=[],
+            intent=self._intent(),
+            memory_adapter=mock_adapter,
+            trace_id="t-order",
+            authenticated=True,
+        )
+
+        assert result.memory_context is not None
+        stance_targets = [m["target"] for m in result.memory_context if m.get("type") == "stance"]
+        assert stance_targets == ["Alpha", "Beta"]
+
+    @pytest.mark.asyncio
+    async def test_stance_without_matching_entity_is_dropped(self) -> None:
+        """get_current_stances returning a target not in entity_names never happens in
+        practice (targets are exactly what was requested), but the join is by-target so
+        an unmatched row is simply absent rather than fabricating a phantom entity.
+        """
+        mock_adapter = self._mock_adapter_with_entity("Python")
+        mock_adapter.get_current_stances = AsyncMock(
+            return_value=[{"target": "SomethingElse", "affect": "x", "mastery": None}]
+        )
+
+        result = await assemble_context(
+            user_message="Tell me about Python please",
+            session_messages=[],
+            intent=self._intent(),
+            memory_adapter=mock_adapter,
+            trace_id="t-unmatched",
+            authenticated=True,
+        )
+
+        assert result.memory_context is not None
+        assert all(m.get("type") != "stance" for m in result.memory_context)
+
+
 class TestReflectionRecallRemoved:
     """ADR-0125 D2/AC-2 (FRE-1003): the reflection-recall path is removed, not
     merely defaulted off. A dimension-1 producer's output must never be able

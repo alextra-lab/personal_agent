@@ -299,3 +299,21 @@ class MemoryProtocol(Protocol):
             implementations return empty rather than raising.
         """
         ...
+
+    async def get_current_stances(
+        self,
+        targets: list[str],
+        trace_id: str,
+        authenticated: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Current-only Stance retrieval for topic-scoped push enrichment (ADR-0126 T1).
+
+        Args:
+            targets: Entity names already selected by this turn's recall.
+            trace_id: Trace identifier for observability.
+            authenticated: Whether the caller is authenticated.
+
+        Returns:
+            One dict per target carrying a current stance (``target``, ``affect``, ``mastery``).
+        """
+        ...

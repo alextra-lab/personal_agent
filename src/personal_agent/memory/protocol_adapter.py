@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -357,3 +358,23 @@ class MemoryServiceAdapter:
         except Exception:
             log.exception("proactive_memory_suggest_failed", trace_id=trace_id)
             return ProactiveMemorySuggestions(candidates=[], query_embedding_ms=None)
+
+    async def get_current_stances(
+        self,
+        targets: list[str],
+        trace_id: str,
+        authenticated: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Delegate to MemoryService's current-only batched stance query (ADR-0126 T1).
+
+        Args:
+            targets: Entity names already selected by this turn's recall.
+            trace_id: Request trace identifier.
+            authenticated: Whether the caller is authenticated.
+
+        Returns:
+            One dict per target carrying a current stance (`target`, `affect`, `mastery`).
+        """
+        return await self._service.query_current_stances(
+            targets, authenticated=authenticated, trace_id=trace_id
+        )

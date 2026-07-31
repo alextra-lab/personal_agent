@@ -1341,6 +1341,126 @@ class TestExecutorRecallIdentityThreading:
         assert kwargs.get("authenticated") is True
 
 
+class TestExecutorFallbackStanceEnrichment:
+    """ADR-0126 T1 (FRE-1015): the pre-gateway broad-recall fallback (``gateway_output is
+    None``) is a second entity producer outside ``request_gateway/context.py`` and needs
+    its own stance-enrichment hook -- ``_format_broad_recall`` builds ``{"type": "entity",
+    ...}`` items directly into ``ctx.memory_context``, bypassing ``assemble_context()``
+    entirely, so a single hook in ``context.py`` cannot reach this path.
+    """
+
+    @staticmethod
+    def _make_ctx(message: str, uid) -> ExecutionContext:
+        return ExecutionContext(
+            session_id="sess-1015",
+            trace_id="trace-1015",
+            user_message=message,
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=None,  # forces the inline enrichment / fallback path
+            user_id=uid,
+            authenticated=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_broad_recall_entity_gets_stance_enriched(self) -> None:
+        from personal_agent.config import settings
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_memory_broad = AsyncMock(
+            return_value={
+                "entities": [{"name": "Python", "type": "Technology", "description": "a language"}],
+                "sessions": [],
+            }
+        )
+        mock_memory.query_current_stances = AsyncMock(
+            return_value=[{"target": "Python", "affect": "prefers over Java", "mastery": None}]
+        )
+
+        ctx = self._make_ctx("What have we discussed before?", uid)
+        trace_ctx = TraceContext(trace_id="trace-1015", user_id=uid, session_id="sess-1015")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch("personal_agent.orchestrator.executor.is_memory_recall_query", return_value=True),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        stance_items = [m for m in (ctx.memory_context or []) if m.get("type") == "stance"]
+        assert len(stance_items) == 1
+        assert stance_items[0]["target"] == "Python"
+        assert stance_items[0]["affect"] == "prefers over Java"
+        mock_memory.query_current_stances.assert_awaited_once()
+
+        # The recall_candidates record must reflect the *enriched* list -- built after
+        # enrichment, not before it.
+        from personal_agent.captains_log.turn_evidence import MemoryItemKind
+
+        assert any(
+            c.kind is MemoryItemKind.STANCE and c.identity == "stance:Python"
+            for c in ctx.recall_candidates
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_entities_in_broad_recall_skips_stance_fetch(self) -> None:
+        from personal_agent.config import settings
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_memory_broad = AsyncMock(return_value={"entities": [], "sessions": []})
+        mock_memory.query_current_stances = AsyncMock(return_value=[])
+
+        ctx = self._make_ctx("What have we discussed before?", uid)
+        trace_ctx = TraceContext(trace_id="trace-1015b", user_id=uid, session_id="sess-1015")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch("personal_agent.orchestrator.executor.is_memory_recall_query", return_value=True),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        mock_memory.query_current_stances.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stance_fetch_failure_does_not_fail_the_turn(self) -> None:
+        """Fail-closed: mirrors the gateway-path hook's guard (context.py's
+        _enrich_with_stances) -- this fallback path builds its own try/except since it
+        doesn't route through that helper.
+        """
+        from personal_agent.config import settings
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_memory_broad = AsyncMock(
+            return_value={
+                "entities": [{"name": "Python", "type": "Technology", "description": "a language"}],
+                "sessions": [],
+            }
+        )
+        mock_memory.query_current_stances = AsyncMock(side_effect=RuntimeError("stance db down"))
+
+        ctx = self._make_ctx("What have we discussed before?", uid)
+        trace_ctx = TraceContext(trace_id="trace-1015c", user_id=uid, session_id="sess-1015")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch("personal_agent.orchestrator.executor.is_memory_recall_query", return_value=True),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.memory_context is not None
+        assert all(m.get("type") != "stance" for m in ctx.memory_context)
+        entity_items = [m for m in ctx.memory_context if m.get("type") == "entity"]
+        assert len(entity_items) == 1
+
+
 class TestStepInitAttachmentResolution:
     """FRE-666 / ADR-0101 §3, §4 — turn-assembly image-block injection."""
 

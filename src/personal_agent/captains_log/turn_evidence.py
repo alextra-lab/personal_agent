@@ -77,6 +77,7 @@ class MemoryItemKind(StrEnum):
     EPISODE = "episode"
     SESSION = "session"
     SESSION_FACT = "session_fact"
+    STANCE = "stance"
     UNKNOWN = "unknown"
 
 
@@ -214,6 +215,13 @@ def memory_item_identity(item: object) -> tuple[MemoryItemKind, str]:
         return (MemoryItemKind.SESSION, _text(item.get("session_id")))
     if declared == "session_fact":
         return (MemoryItemKind.SESSION_FACT, _text(item.get("source_turn")))
+    if declared == "stance":
+        # Namespaced, not the bare target name (ADR-0126 T1, FRE-1015): a stance and its
+        # own target entity intentionally describe the same World concept, so a bare-name
+        # identity would let one item's render satisfy the other's admission check in
+        # _resolve_admission's identity-keyed rendered_budget counter.
+        target = _text(item.get("target"))
+        return (MemoryItemKind.STANCE, f"stance:{target}" if target else "")
 
     # Undeclared shapes. The executor's entity-name-match recall path emits
     # ``conversation_id`` with no ``type`` key at all.

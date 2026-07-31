@@ -257,6 +257,14 @@ class TestProtocolIsRuntimeCheckable:
             ) -> list[str]:
                 return []
 
+            async def get_current_stances(
+                self,
+                targets: list[str],
+                trace_id: str,
+                authenticated: bool = False,
+            ) -> list[dict[str, object]]:
+                return []
+
         assert isinstance(FakeMemory(), MemoryProtocol)
 
 
@@ -387,6 +395,27 @@ class TestMemoryServiceAdapter:
         result = await adapter.store_episode(episode, trace_id="trace-abc")
         assert result == "trace-abc"
         mock_service.create_conversation.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_current_stances_forwards_args_exactly(self) -> None:
+        """Verify get_current_stances() forwards targets/authenticated/trace_id unchanged
+        (ADR-0126 T1, FRE-1015) -- a thin delegation, not a conversion, so every argument
+        must reach query_current_stances exactly as given.
+        """
+        mock_service = MagicMock()
+        mock_service.query_current_stances = AsyncMock(
+            return_value=[{"target": "Python", "affect": "prefers over Java", "mastery": None}]
+        )
+        adapter = MemoryServiceAdapter(service=mock_service)
+
+        result = await adapter.get_current_stances(
+            ["Python", "Sorbet"], trace_id="trace-xyz", authenticated=True
+        )
+
+        assert result == [{"target": "Python", "affect": "prefers over Java", "mastery": None}]
+        mock_service.query_current_stances.assert_called_once_with(
+            ["Python", "Sorbet"], authenticated=True, trace_id="trace-xyz"
+        )
 
 
 class TestMemoryServiceAdapterSlice2:

@@ -29,9 +29,9 @@ def _doc(substrate: str, run_id: str = "run-1") -> SubstrateResultDoc:
 
 
 def test_substrate_index_name_for() -> None:
-    """Index name is ``{prefix}-substrate-YYYY.MM.DD`` from started_at."""
+    """Index name is ``{prefix}-substrate-YYYY-MM`` from started_at (FRE-1036)."""
     name = substrate_index_name_for(_doc("postgres.sessions"), prefix="agent-monitors-joinability")
-    assert name == "agent-monitors-joinability-substrate-2026.06.20"
+    assert name == "agent-monitors-joinability-substrate-2026-06"
 
 
 @pytest.mark.asyncio
@@ -43,7 +43,7 @@ async def test_write_substrate_results_indexes_each_doc() -> None:
 
     assert es.index.await_count == 2
     first = es.index.await_args_list[0].kwargs
-    assert first["index"] == "agent-monitors-joinability-substrate-2026.06.20"
+    assert first["index"] == "agent-monitors-joinability-substrate-2026-06"
     assert first["id"] == "run-1::postgres.sessions"
     assert first["document"]["substrate"] == "postgres.sessions"
     # model_dump(mode="json") => started_at is an ISO string, not a datetime.

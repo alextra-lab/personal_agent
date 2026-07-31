@@ -721,7 +721,7 @@ class PromotionPipeline:
         if handler is None or not getattr(handler, "_connected", False):
             return
         now = datetime.now(timezone.utc)
-        index_name = f"agent-captains-funnel-events-{now.strftime('%Y-%m-%d')}"
+        index_name = f"agent-captains-funnel-events-{now.strftime('%Y-%m')}"
         try:
             await handler.es_logger.index_document(
                 index_name,

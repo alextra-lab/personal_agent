@@ -6,7 +6,6 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from personal_agent.config.settings import get_settings
 from personal_agent.telemetry import get_logger
@@ -14,7 +13,6 @@ from personal_agent.telemetry.events import (
     LIFECYCLE_ARCHIVE,
     LIFECYCLE_DISK_ALERT,
     LIFECYCLE_DISK_CHECK,
-    LIFECYCLE_ES_CLEANUP,
     LIFECYCLE_PURGE,
     LIFECYCLE_REPORT,
 )
@@ -51,15 +49,6 @@ class PurgeResult:
     data_type: str
     purged_count: int
     freed_bytes: int
-    errors: list[str] = field(default_factory=list)
-
-
-@dataclass
-class ESCleanupResult:
-    """Result of Elasticsearch index cleanup."""
-
-    deleted_indices: list[str]
-    deleted_count: int
     errors: list[str] = field(default_factory=list)
 
 
@@ -165,17 +154,6 @@ def _compress_and_move(src: Path, dest: Path) -> int:
 
 class DataLifecycleManager:
     """Manages data retention, archival, and cleanup with telemetry for all operations."""
-
-    def __init__(
-        self,
-        es_client: Any | None = None,
-    ) -> None:
-        """Initialize the lifecycle manager.
-
-        Args:
-            es_client: Optional AsyncElasticsearch client for index cleanup.
-        """
-        self._es_client = es_client
 
     async def check_disk_usage(self) -> list[DiskUsageReport]:
         """Check disk usage for telemetry and key data paths.
@@ -352,85 +330,6 @@ class DataLifecycleManager:
             freed_bytes=freed_bytes,
             errors=errors,
         )
-
-    async def cleanup_elasticsearch_indices(self) -> ESCleanupResult:
-        """Delete ES indices older than cold_duration for logs and captains indices.
-
-        Uses retention policy elasticsearch_logs for age. Requires ES client.
-
-        Returns:
-            ESCleanupResult. Emits LIFECYCLE_ES_CLEANUP.
-        """
-        policy = RETENTION_POLICIES.get("elasticsearch_logs")
-        if not policy or policy.cold_duration.total_seconds() <= 0:
-            return ESCleanupResult(deleted_indices=[], deleted_count=0)
-
-        if not self._es_client:
-            log.debug("lifecycle_es_cleanup_skipped", reason="no_es_client")
-            return ESCleanupResult(deleted_indices=[], deleted_count=0)
-
-        settings = get_settings()
-        now = datetime.now(timezone.utc)
-        default_cutoff = now - policy.cold_duration
-        # Per-prefix cutoff overrides. user-turn-ratings is intentionally absent:
-        # its retention is now governed solely by the ILM policy
-        # user-turn-ratings-policy (365d, monthly indices) — see FRE-559. This
-        # date-name sweep can't parse the new YYYY.MM names anyway, and falling
-        # back to the default cutoff would delete ground-truth labels far too early.
-        prefix_cutoffs: list[tuple[str, datetime]] = [
-            (settings.elasticsearch_index_prefix, default_cutoff),  # agent-logs
-            ("agent-captains-captures", default_cutoff),
-            ("agent-captains-reflections", default_cutoff),
-        ]
-        all_prefixes = [p for p, _ in prefix_cutoffs]
-        deleted: list[str] = []
-        errors: list[str] = []
-
-        try:
-            cat = await self._es_client.cat.indices(
-                index=",".join(f"{p}*" for p in all_prefixes), format="json"
-            )
-            for idx in cat:
-                index_name = idx.get("index", "")
-                if not index_name:
-                    continue
-                # Parse date from index name: agent-logs-2026.02.22 or agent-captains-captures-2026-02-22
-                parts = index_name.split("-")
-                if len(parts) < 2:
-                    continue
-                date_part = parts[-1]
-                dt = None
-                for fmt in ("%Y.%m.%d", "%Y-%m-%d"):
-                    try:
-                        dt = datetime.strptime(date_part, fmt).replace(tzinfo=timezone.utc)
-                        break
-                    except ValueError:
-                        continue
-                if dt is None:
-                    continue
-                # Resolve the cutoff for this index by matching its prefix.
-                cutoff = default_cutoff
-                for prefix, prefix_cutoff in prefix_cutoffs:
-                    if index_name.startswith(prefix):
-                        cutoff = prefix_cutoff
-                        break
-                if dt >= cutoff:
-                    continue
-                try:
-                    await self._es_client.indices.delete(index=index_name)
-                    deleted.append(index_name)
-                except Exception as e:
-                    errors.append(f"{index_name}: {e}")
-        except Exception as e:
-            errors.append(f"cat_indices: {e}")
-
-        log.info(
-            LIFECYCLE_ES_CLEANUP,
-            deleted_count=len(deleted),
-            deleted_indices=deleted[:20],
-            errors_count=len(errors),
-        )
-        return ESCleanupResult(deleted_indices=deleted, deleted_count=len(deleted), errors=errors)
 
     def _count_would_archive(self, data_type: str) -> int:
         """Return number of files that would be archived for data_type."""

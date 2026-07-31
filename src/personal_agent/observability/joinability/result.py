@@ -1,7 +1,8 @@
 """Result document for one joinability-probe run (ADR-0074 Phase 5).
 
 A single :class:`ResultDoc` is written to Elasticsearch index
-``agent-monitors-joinability-YYYY.MM.DD`` per probe invocation. The doc is
+``agent-monitors-joinability-YYYY-MM`` per probe invocation (monthly, FRE-1036;
+was daily ``YYYY.MM.DD``). The doc is
 the audit trail: the 7-day green gate (:mod:`status`) aggregates over these
 docs to decide when ADR-0074 may flip Proposed → Accepted.
 """
@@ -114,7 +115,8 @@ class ResultDoc(BaseModel):
 class SubstrateResultDoc(BaseModel):
     """Flat per-``(run, substrate)`` projection of one :class:`ResultDoc`.
 
-    Written to ``agent-monitors-joinability-substrate-YYYY.MM.DD`` (one doc per
+    Written to ``agent-monitors-joinability-substrate-YYYY-MM`` (monthly,
+    FRE-1036; was daily ``YYYY.MM.DD``; one doc per
     substrate per probe run) so legacy Kibana aggregation visualizations can
     break joinability detail down by substrate, status, and orphan severity.
     The run doc keeps ``orphans`` / ``substrate_checks`` as ``nested`` arrays,

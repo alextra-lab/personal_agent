@@ -76,7 +76,7 @@ def test_write_schedules_es_with_composite_doc_id(monkeypatch: pytest.MonkeyPatc
 
     assert len(calls) == 1
     index_name, document, doc_id = calls[0]
-    assert index_name == f"{SUBAGENT_CAPTURES_INDEX_PREFIX}-2026-06-07"
+    assert index_name == f"{SUBAGENT_CAPTURES_INDEX_PREFIX}-2026-06"
     assert doc_id == "trace-1:sub-abc123"
     assert document["injected_digest"] == "x" * 500
     assert document["trace_id"] == "trace-1"

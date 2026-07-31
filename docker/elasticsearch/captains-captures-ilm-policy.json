@@ -1,0 +1,28 @@
+{
+  "policy": {
+    "_meta": {
+      "description": "ILM for agent-captains-captures-* and agent-captains-captures-subagents-* (monthly index agent-captains-captures-YYYY-MM; turn/sub-agent capture records). min_age-based delete from origination date (no rollover write-alias — same pattern as agent-insights-*). Retention: 90d, aligned to the file-based captains_log_captures archive policy (telemetry/lifecycle.py) — owner-approved 2026-07-31 (FRE-1036) as a genuine ES storage-duration increase from the prior flat 30d lifecycle_manager.py sweep, not a mechanical fix. warm forcemerge fires at 32d (not 7d) so the current monthly index is closed before merge (matches the user-turn-ratings-policy precedent). Authored in FRE-1036; agent-captains-captures previously had no ILM policy at all (deletion was via the client-side lifecycle_manager.py date-suffix sweep, retired by this same ticket).",
+      "retention_days": 90,
+      "managed_by": "scripts/setup-elasticsearch.sh"
+    },
+    "phases": {
+      "hot": {
+        "min_age": "0ms",
+        "actions": {
+          "set_priority": { "priority": 100 }
+        }
+      },
+      "warm": {
+        "min_age": "32d",
+        "actions": {
+          "forcemerge": { "max_num_segments": 1 },
+          "set_priority": { "priority": 50 }
+        }
+      },
+      "delete": {
+        "min_age": "90d",
+        "actions": { "delete": {} }
+      }
+    }
+  }
+}

@@ -531,7 +531,7 @@ class TurnObservationProjector:
                 ),
                 "observation_complete": observation_complete,
             }
-            index_name = f"{_HEALTH_INDEX_PREFIX}-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+            index_name = f"{_HEALTH_INDEX_PREFIX}-{datetime.now(timezone.utc).strftime('%Y-%m')}"
             schedule_es_index(index_name, doc, doc_id=obs.trace_id)
         except Exception as e:
             log.warning(

@@ -20,7 +20,7 @@ Automated retention, archival, and cleanup for file-based telemetry and Captain'
 | File Logs | 7d | 14d | 30d | Recent logs for debugging; archive then delete to limit size. |
 | Task Captures | 14d | 14d | 90d | Hot for consolidation; keep archives 2 weeks then delete after 90d. |
 | Reflections | 14d | 14d | 180d | Higher value; keep 6 months then delete. |
-| ES Event Logs | 14d | — | 30d | No local archive (data in ES); index cleanup only. |
+| ES indices | — | — | per-family, 30d–365d | Governed entirely by Elasticsearch ILM per family (FRE-1036) — no client-side retention policy or sweep. |
 | Neo4j Graph | 365d | 730d | Never | Knowledge graph is long-term; no automated deletion. |
 
 Defaults are defined in `src/personal_agent/telemetry/lifecycle.py` (`RETENTION_POLICIES`). Configuration is via application settings (e.g. `AGENT_DISK_USAGE_ALERT_PERCENT`, `AGENT_DATA_LIFECYCLE_ENABLED`).
@@ -40,10 +40,13 @@ Defaults are defined in `src/personal_agent/telemetry/lifecycle.py` (`RETENTION_
 ## Purge Process
 
 1. **Trigger**: Weekly, Sunday 3:00 UTC (scheduler).
-2. **Action**:
-   - For each file-based data type with `cold_duration > 0`: delete files (and archived `.gz`) older than `cold_duration`.
-   - Elasticsearch: delete indices (e.g. `agent-logs-*`, `agent-captains-captures-*`, `agent-captains-reflections-*`) older than the ES policy's `cold_duration`.
+2. **Action**: For each file-based data type with `cold_duration > 0`: delete files (and archived `.gz`) older than `cold_duration`.
 3. **Safety**: Only data past the configured cold age is removed. No purge is performed for policies with `cold_duration=0` (e.g. Neo4j).
+
+Elasticsearch indices are **not** part of this file-based purge — see
+[Alignment with Elasticsearch ILM](#alignment-with-elasticsearch-ilm) below. There is no
+client-side ES deletion sweep (FRE-1036 retired the last one); every ES family's
+retention is enforced entirely by its own ILM policy.
 
 ## Disk Usage Monitoring
 
@@ -72,25 +75,29 @@ All lifecycle operations emit structured telemetry events:
 - `lifecycle_disk_alert` – usage above threshold
 - `lifecycle_archive` – archive run per data type (counts, bytes)
 - `lifecycle_purge` – purge run per data type
-- `lifecycle_es_cleanup` – ES index deletion
 - `lifecycle_report` – report generation (would-archive/purge counts)
 
 See `personal_agent.telemetry.events` for event name constants.
 
 ## Alignment with Elasticsearch ILM
 
-Elastic's Index Lifecycle Management (ILM) is used for all agent indices:
+Elasticsearch retention is governed **entirely** by ILM (FRE-1036) — there is no
+client-side retention policy or sweep for any ES family. Every in-scope family (`agent-logs`,
+`agent-captains-captures[-subagents]`, `agent-captains-reflections`, `agent-monitors-*`,
+`agent-topology`, `agent-captains-funnel-events`, `agent-insights`, `user-turn-ratings`) writes a
+monthly, dash-separated index (`<family>-YYYY-MM`) directly — the client picks the bucket name,
+not a rollover alias. Each family has its own ILM policy under `docker/elasticsearch/
+<family>-ilm-policy.json` (`docker/elasticsearch/ilm-policy.json` for `agent-logs` specifically),
+wired to its index template in `scripts/setup-elasticsearch.sh`. Policies are retention-only:
+`warm` (min_age 32d, forcemerge — chosen so a still-open monthly index is never merged; skipped
+for `agent-logs`, whose 30d retention is shorter than that) then `delete` (min_age = the family's
+retention, 30d–365d depending on family). No policy has a `rollover` action.
 
-- **ILM policy**: `docker/elasticsearch/ilm-policy.json` (`agent-logs-policy`) — hot (rollover 7d/1GB), warm 7d, **delete 30d**.
-- **Templates**: `index-template.json` (agent-logs) and `captains-index-template.json` (agent-captains-*) both set `index.lifecycle.name: agent-logs-policy`.
-
-Our internal **elasticsearch_logs** retention policy is aligned:
-
-| Concept   | Our policy (`lifecycle.py`) | Elastic ILM (`ilm-policy.json`) |
-|----------|-----------------------------|----------------------------------|
-| Delete   | cold_duration 30d           | delete phase min_age 30d         |
-
-Application cleanup (`cleanup_elasticsearch_indices()`) also deletes indices older than 30d for the same index patterns. It runs weekly as a backup; ILM remains the primary mechanism for index lifecycle. Captain's Log **files** on disk use longer retention (90d / 180d); only the ES **indices** (search copy) use 30d in both ILM and our cleanup.
+Captain's Log **files** on disk use longer retention (90d / 180d) than they used to be paired
+with in ES — `agent-captains-captures`/`agent-captains-reflections` ES retention was raised to
+match those same values (90d/180d) in FRE-1036, since the two stores are not interchangeable
+copies of the same data (ES is the durable source of truth; the disk copy is not authoritative
+alone).
 
 ## References
 

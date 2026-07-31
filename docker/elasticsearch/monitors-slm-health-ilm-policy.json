@@ -1,7 +1,7 @@
 {
   "policy": {
     "_meta": {
-      "description": "ILM for agent-monitors-slm-health-* (monthly index agent-monitors-slm-health-YYYY.MM; ~288 probe snapshots/day, operational health diagnostics). min_age-based delete from index creation (no rollover write-alias). Retention: 90d (a quarter of capacity/latency trend). Authored in FRE-543; the family had no lifecycle policy before and accreted indices forever.",
+      "description": "ILM for agent-monitors-slm-health-* (monthly index agent-monitors-slm-health-YYYY-MM as of FRE-1036, was YYYY.MM; ~288 probe snapshots/day, operational health diagnostics). min_age-based delete from index creation (no rollover write-alias). Retention: 90d (a quarter of capacity/latency trend). Authored in FRE-543; the family had no lifecycle policy before and accreted indices forever. warm forcemerge min_age raised 7d->32d in FRE-1036 (bug fix, folded in while applying the same pattern elsewhere): a monthly index is still open at 7d, so the original setting forcemerged a still-written index; 32d matches the user-turn-ratings-policy precedent, which got this right at authoring time.",
       "retention_days": 90,
       "managed_by": "scripts/setup-elasticsearch.sh"
     },
@@ -13,7 +13,7 @@
         }
       },
       "warm": {
-        "min_age": "7d",
+        "min_age": "32d",
         "actions": {
           "forcemerge": { "max_num_segments": 1 },
           "set_priority": { "priority": 50 }

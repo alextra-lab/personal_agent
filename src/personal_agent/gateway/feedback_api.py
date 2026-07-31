@@ -284,7 +284,8 @@ async def submit_turn_rating(
     # Monthly partitioning (FRE-559): one low-volume index per month keeps the
     # 365d ILM-retained family from over-sharding, and re-rates within the month
     # overwrite by doc_id=trace_id. ILM (user-turn-ratings-policy) governs deletion.
-    index_name = f"user-turn-ratings-{now.strftime('%Y.%m')}"
+    # Separator normalized YYYY.MM -> YYYY-MM in FRE-1036.
+    index_name = f"user-turn-ratings-{now.strftime('%Y-%m')}"
     es_doc = turn_rating.to_es_doc()
     schedule_es_index(index_name, es_doc, doc_id=trace_id)
     log.info(

@@ -193,8 +193,9 @@ class TestRatingHappyPath:
 
         assert len(captured_calls) == 1
         index_name, doc, *_ = captured_calls[0][0]
-        # Monthly partitioning (FRE-559): user-turn-ratings-YYYY.MM, no day component.
-        assert re.fullmatch(r"user-turn-ratings-\d{4}\.\d{2}", index_name), index_name
+        # Monthly partitioning (FRE-559): user-turn-ratings-YYYY-MM, no day component.
+        # Separator normalized YYYY.MM -> YYYY-MM in FRE-1036.
+        assert re.fullmatch(r"user-turn-ratings-\d{4}-\d{2}", index_name), index_name
         assert doc["trace_id"] == _TRACE_ID
         assert doc["rating"] == 2
         assert doc["prompt_callsite"] == "orchestrator.primary"

@@ -1436,7 +1436,8 @@ def _emit_cadence_monitor_doc(
 ) -> None:
     """Emit a cadence monitor ES doc when a frozen reset fires (ADR-0092 §D7, FRE-572).
 
-    Writes to ``agent-monitors-cache-reset-cadence-<date>`` so Kibana can aggregate
+    Writes to ``agent-monitors-cache-reset-cadence-YYYY-MM`` (monthly, FRE-1036) so
+    Kibana can aggregate
     ``actual_turns`` vs ``l_star`` (the computed ADR-0081 optimum) and validate
     whether the scheduler fires at the right cadence in production.
 
@@ -1461,7 +1462,7 @@ def _emit_cadence_monitor_doc(
     deviation: float | None = (
         round(actual_turns - optimal_run_length, 2) if l_star is not None else None
     )
-    index_name = f"agent-monitors-cache-reset-cadence-{ts.strftime('%Y-%m-%d')}"
+    index_name = f"agent-monitors-cache-reset-cadence-{ts.strftime('%Y-%m')}"
     doc = {
         "@timestamp": ts.isoformat(),
         "trace_id": trace_id,

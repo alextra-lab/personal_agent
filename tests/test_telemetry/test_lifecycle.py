@@ -57,7 +57,6 @@ def test_default_policies_keys() -> None:
         "file_logs",
         "captains_log_captures",
         "captains_log_reflections",
-        "elasticsearch_logs",
         "neo4j_graph",
     }
     assert set(RETENTION_POLICIES.keys()) == expected
@@ -67,10 +66,4 @@ def test_neo4j_never_delete() -> None:
     """Neo4j policy has cold_duration=0 (never delete)."""
     policy = RETENTION_POLICIES["neo4j_graph"]
     assert policy.cold_duration.total_seconds() == 0
-    assert policy.archive_enabled is False
-
-
-def test_elasticsearch_no_archive() -> None:
-    """Elasticsearch policy has archive_enabled=False."""
-    policy = RETENTION_POLICIES["elasticsearch_logs"]
     assert policy.archive_enabled is False

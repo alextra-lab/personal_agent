@@ -278,7 +278,7 @@ class TestCaptainLogManager:
             manager.write_entry(entry)
             mock_schedule.assert_called_once()
             call_args = mock_schedule.call_args[0]
-            assert call_args[0] == f"{REFLECTIONS_INDEX_PREFIX}-2026-02-22"
+            assert call_args[0] == f"{REFLECTIONS_INDEX_PREFIX}-2026-02"
             assert isinstance(call_args[1], dict)
             assert call_args[1]["entry_id"] == "CL-2026-02-22-001"
             assert call_args[1]["type"] == "reflection"
@@ -302,7 +302,7 @@ class TestCaptainLogManager:
             manager.write_entry(entry)
             mock_schedule.assert_called_once()
             call_args = mock_schedule.call_args[0]
-            assert call_args[0] == f"{REFLECTIONS_INDEX_PREFIX}-2026-02-22"
+            assert call_args[0] == f"{REFLECTIONS_INDEX_PREFIX}-2026-02"
             assert isinstance(call_args[1], dict)
             assert call_args[1]["type"] == "config_proposal"
             assert mock_schedule.call_args[1].get("doc_id") == "CL-2026-02-22-001"

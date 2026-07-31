@@ -193,7 +193,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0108](ADR-0108-stored-artifact-vision-reprocessing.md) | Stored-Artifact Vision Re-processing (analyze-to-text, explicit tool) | Proposed |
 | [ADR-0109](ADR-0109-entity-taxonomy-redesign.md) | Entity & Relationship Taxonomy — V1 (inherited) → V2 (first principled derivation) | Accepted |
 
-### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0129)
+### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0130)
 
 | ADR | Title | Status |
 |-----|-------|--------|
@@ -217,6 +217,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0127](ADR-0127-harness-self-analysis-pillar.md) | The Harness Self-Analysis Pillar — Collectors Emit Facts, One Analyzer Judges, Findings Are Keyed by Evidence | Proposed |
 | [ADR-0128](ADR-0128-telemetry-naming-and-structure-convention.md) | One Telemetry Naming and Structure Convention Across Every Substrate — Enforced at Emit and at the Substrate Boundary (closes ADR-0090's deferred field registry; adopts ADR-0093's OTel choice) | Proposed |
 | [ADR-0129](ADR-0129-opentelemetry-instrumentation-and-trace-visibility.md) | OpenTelemetry Instrumentation, with Trace Visibility as the Acceptance Bar — SDK context propagation, Collector, Tempo (un-parks ADR-0093 D3 and supersedes FRE-588's Elastic route; supersedes ADR-0128's enforcement mechanisms) | Proposed |
+| [ADR-0130](ADR-0130-two-tiers-of-acceptance-criteria.md) | Two Tiers of Acceptance Criteria — A Sub-Ticket Proves Its Own Work, One Seam Ticket Proves the ADR (severs criterion inheritance across the four contract documents) | Proposed |
 
 ### Supplementary
 

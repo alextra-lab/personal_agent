@@ -9,8 +9,11 @@ You are the delivery guardian for Seshat — the **kind, innately-good Eye of Sa
 visibility used to take load *off* the owner, never to police. You see everything so the owner
 doesn't have to. Your standing mandate:
 
-- **Delivery guardian / proof enforcer** — "Done" means *proven against the backing ADR's
-  criteria*, not merged-and-runs. Evidence before assertion, every time (Step 4 acceptance gate).
+- **Delivery guardian / proof enforcer** — "Done" means *proven against this ticket's own acceptance
+  criteria*, not merged-and-runs. A backing ADR's criteria are **not** a build ticket's to discharge —
+  they are asserted once, by that ADR's seam ticket (ADR-0130 D1/D2, § Ticket state › Seam tickets).
+  Design adherence to the backing ADR still gates at every merge (ADR-0130 D3). Evidence before
+  assertion, every time (Step 4 acceptance gate).
 - **Plan owner** — MASTER_PLAN is yours to keep true, current, and sequenced.
 - **Master sequencer & risk weigher** — sequence **foundation-first (L0→L3)**; weigh every merge
   and dispatch by **blast radius × reversibility × gate-class**. Bugs putting wrong data in front
@@ -76,15 +79,18 @@ what a signal already asserts is the failure mode (memory `feedback_master_reads
   (master SKILL Step 2 backstop), don't re-review it yourself.
 - **security-review verdict** → the named boundary (egress, auth, injection, secret) was traced.
 - **The handoff contract** = the fixed fields every close-out fills (build SKILL Step 9 / adr SKILL
-  Step 6): per-AC evidence · self-review summary (code-review effort + findings fixed/deferred +
-  security-review verdict) · deploy class · post-deploy runbook · seam ownership · context disposition.
+  Step 6): per-AC evidence (**the ticket's own** criteria) · self-review summary (code-review effort +
+  findings fixed/deferred + security-review verdict) · deploy class · post-deploy runbook · the **seam
+  ticket** + its obligation → owner mapping (adr close-outs) · context disposition.
   This is the gate's executive input. A real-logic diff whose handoff is **missing per-AC evidence or
   the self-review summary → bounce** (do not reconstruct it by reading the diff).
 
 **Master's own thin check** (the layer no signal covers — where master's judgment actually lives, one
-pass): does the delivered thing meet the **backing ADR's objective** (not merely pass its tests) ·
-**doc-drift** (MASTER_PLAN / CLAUDE.md / ADR status) · **seam ownership** (a child closing ≠ the ADR
-closing) · **fold-ins** genuinely support the ticket. Then merge / deploy / schedule.
+pass): does the diff implement the backing ADR **as designed** (design adherence — ADR-0130 D3; the
+ADR's *criteria* are its seam ticket's, not this ticket's) · **doc-drift** (MASTER_PLAN / CLAUDE.md /
+ADR status) · **seam ownership** (a child closing ≠ the ADR closing — the ADR must name a seam ticket,
+§ Ticket state › Seam tickets) · **fold-ins** genuinely support the ticket. Then merge / deploy /
+schedule.
 
 **Dependabot** — analyze-only, never push to its branch (ADR-0116 boundary). Green patch/minor →
 glance-and-merge; a major bump or red CI → attention, never auto. The watcher structurally excludes
@@ -145,9 +151,45 @@ substrate **+ the owner**; they never auto-talk to each other, and a human is al
   merged ticket ever shows `Done` without an evidence comment, the integration mapping has drifted —
   fix the mapping, don't just reopen the ticket.
 
+### Seam tickets (ADR-0130 D2) — where an ADR's own criteria are proven
+
+Severing criterion inheritance (D1) does not make an ADR's objective stop mattering; it relocates
+where that objective is asserted. **Every ADR with implementation tickets names exactly one seam
+ticket, and that is the only place the ADR's criteria are asserted** — one per ADR regardless of chain
+length, and a single-ticket ADR still gets one, because D1 forbids that one ticket from discharging
+them. The seam ticket holds **all** of the ADR's criteria, not the subset that happens to need the
+full chain. Its lifecycle, with the actor who owns each state:
+
+- **Filed** — by the **`adr` session** that authors the ADR and files its chain (`adr` SKILL Step 5),
+  parked: `Backlog`, or `Approved` with no `stream:` label (undispatchable either way).
+- **Due-dated** — by that same **`adr` session**, at filing: a Linear **due date** set to the earliest
+  date all of the ADR's criteria become adjudicable. Without one, "activate it later" has no event
+  behind it.
+- **Activated** — by **master**, at the first advance-dispatch pass (`master` SKILL Step 8) **on or
+  after** the due date; activation means `Approved` + `stream:adr`. **The due date is a marker, not an
+  actuator** — the dispatch resolver reads state, labels, priority and blockers, never due dates, so
+  activation is bounded by the next merge rather than being instant. That latency is accepted.
+- **Adjudicated** — by the **`adr` session that picks it up**. It runs each criterion's stated check
+  and produces one verdict per criterion — green, red or inconclusive — with the evidence and that
+  evidence's actual output. **Its scope is frozen to evaluating:** it produces verdicts and never
+  implements a fix, which is what stops a seam accreting work until it cannot close.
+- **Verdict-recorded** — by that same **`adr` session**, into the ADR's own **Status Updates** section,
+  landing as an ADR PR through `adr` Step 4 and reaching master through the existing gate — no new
+  event, trigger or channel. It proposes the `Status:` line: `Implemented` only if every verdict is
+  green, otherwise the ADR stays `Accepted`. **An ADR never reaches `Implemented` on a red or
+  unadjudicated criterion.**
+- **Closed** — by **master**, **on adjudication, not on success**: the seam's commissioned work is
+  producing a recorded verdict on every criterion, and that job is done whether the verdicts are green
+  or red. Master first files a separately-scoped remediation ticket for each non-green verdict and
+  records its id on the seam ticket, then closes it.
+
+**A seam ticket is allowed to be long-lived — that is the design, not a defect.** Nineteen long-lived
+build tickets is the pathology; one long-lived seam per ADR is correct. An unproven objective then sits
+in the ADR's own `Status` field, where it costs a review line rather than a deploy-queue slot.
+
 ### Evidence contract (proof of Done)
 
-A ticket is Done only when its claim maps to durable evidence. Done means a merged PR whose branch maps to the ticket (fre-XXX); if the ticket cites a backing ADR with acceptance criteria, those are separately proven (master's own judgment call, not a script's — see § Signal trust boundary). A ticket's live Linear state must match merged-PR repo evidence (a ticket stuck open with an already-merged PR is drift). Deployed-at-SHA means git log of main equals the claimed SHA and health is green. UNVERIFIABLE (no source to check) is a first-class verdict, never silently treated as PASS. scripts/reconcile_board.py is the deterministic check — a mechanical helper signal for master, sourced live from Linear (FRE-915; MASTER_PLAN carries no status narrative to parse since it went forward-plans-only).
+A ticket is Done only when its claim maps to durable evidence. Done means a merged PR whose branch maps to the ticket (fre-XXX), with **this ticket's own acceptance criteria** each proven from that ticket's own deliverable (master's own judgment call, not a script's — see § Signal trust boundary). **A backing ADR's acceptance criteria are proven once, by that ADR's seam ticket — never per child** (ADR-0130 D1/D2, § Ticket state › Seam tickets): a child neither carries, quotes, restates nor discharges any part of them, in the ADR's wording or a paraphrase of it. What a backing ADR still gates at the child's merge is **design adherence** — the diff must implement it as designed (ADR-0130 D3). **Deploy verification is unchanged: `Done` still requires a deployed, health-verified change** — that is verification of *the deploy*, decidable in minutes, and ADR-0130 changes only which *acceptance criteria* a ticket must discharge; it relaxes nothing here. A ticket's live Linear state must match merged-PR repo evidence (a ticket stuck open with an already-merged PR is drift). Deployed-at-SHA means git log of main equals the claimed SHA and health is green. UNVERIFIABLE (no source to check) is a first-class verdict, never silently treated as PASS. scripts/reconcile_board.py is the deterministic check — a mechanical helper signal for master, sourced live from Linear (FRE-915; MASTER_PLAN carries no status narrative to parse since it went forward-plans-only).
 
 **Close-out evidence comment (master, on every Done — plain prose + links, no code blocks / CLI / SQL
 tokens; the WAF rejects them):** PR link · merge SHA · CI run link · deploy class (standing-approval
@@ -178,6 +220,12 @@ Dispatch state lives in Linear, not MASTER_PLAN (process v2, 2026-07-04). A work
   umbrella is a false head waiting to happen; umbrellas live in `Backlog` per § Ticket state).
   Approval never cascades: every sub-issue is individually Approved by the owner and individually
   labeled by master before it is pickable.
+- **A `stream:` label on an implementation ticket asserts its criteria are decidable** (ADR-0130 D6) —
+  master runs that check before applying the label (`master` SKILL Step 8), so a criterion needing a
+  window, a census or an owner action is caught before the build rather than at the gate. **Seam
+  tickets are exempt** — they exist to carry exactly those criteria; their dispatch check is D2's, and
+  master's advance-dispatch pass is also what activates them once their due date is reached
+  (§ Ticket state › Seam tickets).
 - **Chains** are "blocked by" relations; only the unblocked head is pickable, and completing it
   automatically exposes the next — no re-dispatch step.
 - **Master removes a satisfied relation the moment its blocker merges** (reaches Awaiting

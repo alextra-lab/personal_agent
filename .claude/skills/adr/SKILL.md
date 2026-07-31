@@ -106,12 +106,18 @@ section is a bulleted list, one ref per line — **never** a run-on `**Related:*
 your own Status line current** — never cite another ADR by a stale status. The template also requires
 **≥2 Alternatives Considered** (with why-rejected) — not a single option presented as a pure win.
 
-**Every ADR MUST carry a Verification / Acceptance-Criteria section** — the upstream half of the
-master acceptance-criteria gate (master SKILL Step 4). Each criterion is a **testable, discriminating
-invariant stated at the outcome altitude** — the observable result that proves the decision delivered,
-NOT a restatement of the mechanism. State *how* each is checked, reusing existing instrumentation
-where it exists (a Neo4j/ES query, the joinability probe, a test assertion, a curl) so it is provable
-without new test infrastructure.
+**Every ADR MUST carry a Verification / Acceptance-Criteria section.** These are the **ADR's own**
+criteria: they state the ADR's objective, they **stay with the ADR**, and they are asserted in exactly
+one place — its **seam ticket** (Step 5; ADR-0130 D1/D2). They are never sliced across implementation
+tickets. Because they are the ADR's, they are *allowed* to be assembled, population-level,
+long-horizon, or to require the owner to do something; the constraint that a criterion be decidable
+from a single ticket's own deliverable applies to **implementation tickets**, not here.
+
+The outcome-altitude bar below is therefore the bar for the **ADR's** criteria. Each is a **testable,
+discriminating invariant stated at the outcome altitude** — the observable result that proves the
+decision delivered, NOT a restatement of the mechanism. State *how* each is checked, reusing existing
+instrumentation where it exists (a Neo4j/ES query, the joinability probe, a test assertion, a curl) so
+it is provable without new test infrastructure.
 - Good (outcome): "owner facts are queryable from the `is_owner:true` node" · "a dormant edge past
   TTL is actually evicted, not just flagged" · "the guard fails CI on a known-bad input".
 - Bad (mechanism, not outcome): "the curation gate is wired in" · "the freshness consumer runs".
@@ -129,9 +135,9 @@ a design smell to surface, not paper over.
 ## 3 — Codex iterative review
 Invoke **codex:rescue** to review the ADR. Revise per findings. Repeat until no blocking findings,
 **max 3 rounds**. Log each round's findings in the PR description. **Codex must explicitly check the
-acceptance criteria are testable and outcome-level** — could a build session prove each, and would a
-bad implementation fail it? Treat any mechanism-restatement or un-checkable criterion as a blocking
-finding.
+acceptance criteria are testable and outcome-level** — could the ADR's **seam ticket** prove each from
+the stated check, and would a bad implementation fail it? Treat any mechanism-restatement or
+un-checkable criterion as a blocking finding.
 
 ## 4 — PR
 **Sync to latest main FIRST** (a sibling PR may have merged during your session): `git fetch origin &&
@@ -140,11 +146,33 @@ open the ADR PR (docs). Pre-merge checklist only.
 
 ## 5 — Implementation tickets
 File the implementation tickets in Linear: Needs Approval, under a Linear project, sequenced with
-dependencies. The owner approves → the build session picks them up. **Each ticket carries the slice of
-the ADR's acceptance criteria it must satisfy + how each is proven** — so criteria flow unbroken
-ADR → ticket → build handoff → master gate, and no child is "done" without its invariant shown.
-**Name who owns the assembled-ADR seam** — the criterion that holds only once all children land — so
-a decomposed ADR does not close just because its last child did.
+dependencies. The owner approves → the build session picks them up.
+
+**Never slice the ADR's acceptance criteria across its children** (ADR-0130 D1). The ADR's criteria
+stay with the ADR. **Each implementation ticket gets acceptance criteria written for its own work** —
+the change that ticket makes, stated as an observable result of that change, **decidable from that
+ticket's own deliverable when the ticket is finished**. Step 2's no-BS bar applies unchanged at that
+smaller scope. A child never carries, quotes, restates or discharges any part of the ADR's criteria,
+in the ADR's wording or a paraphrase of it.
+
+**Severing inheritance must not lose coverage, and the check is yours.** The union of the chain's
+sub-ticket criteria has to cover **every** design obligation the ADR's Decision section places on the
+chain, or the design can be abandoned one child at a time while every child passes. Publish an explicit
+**obligation → owner mapping** on the umbrella — every obligation against the child or the seam that
+owns it. It is a **partition, not a filter**: every obligation lands on exactly one child or on the
+seam, and none is allowed to land nowhere. The distinction is *whose objective the criterion states*,
+not which subjects it may mention — if preserving a field **is** a ticket's own work, that ticket
+carries a criterion about exactly that; what it may not do is cite the ADR's `AC-n` as the thing it
+discharges. **Anything not decidable from a single child's deliverable belongs to the seam by
+definition**, including cross-child integration obligations, which belong to neither child.
+
+**Name the ADR's seam ticket and file it with the chain** (ADR-0130 D2) — exactly one per ADR, even a
+single-ticket one. It holds **all** of the ADR's criteria, is filed **parked** (`Backlog`, or
+`Approved` with no `stream:` label), and carries a Linear **due date** set to the earliest date all of
+those criteria become adjudicable. Master activates it at the first advance-dispatch on or after that
+date, and an `adr` session adjudicates it. Full lifecycle and actors: lifecycle-rules § Ticket state ›
+Seam tickets. If the ADR's objective genuinely cannot be adjudicated at all, say so when authoring it
+rather than filing a seam ticket that can never return a verdict.
 
 ## 6 — Handoff comment for master — then STOP
 **Post a final comment on the ADR's Linear ticket addressed to master** (`save_comment` on the ADR
@@ -153,6 +181,9 @@ does NOT belong in the ADR PR's pre-merge checklist:
 - the **intended ADR status** on merge (Proposed / Accepted / Implemented) and any status-field change
   master should make;
 - the **implementation tickets filed + sequence/dependencies** (so master can track the chain);
+- the **seam ticket** (ADR-0130 D2) — its Linear id, its **due date**, and the **obligation → owner
+  mapping** from Step 5, listing every Decision-section obligation against the child or the seam that
+  owns it, so master can confirm the partition has no unowned row before dispatching the chain;
 - any **doc-drift** master should reconcile (related ADRs, MASTER_PLAN, CLAUDE.md status);
 - **your context disposition for the next ADR** — kept or cleared (`/clear`), and why.
 Master reads this comment by default at the gate, so it is the handoff channel. **These fields are the

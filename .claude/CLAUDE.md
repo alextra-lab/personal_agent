@@ -11,8 +11,6 @@ Project-specific rules, policies, and non-obvious patterns. Architecture and com
 **Personal Agent** — cognitive architecture research project: biologically-inspired agentic AI with persistent memory, knowledge graphs, and local LLM inference.
 
 - **Type**: Research & Learning (not production-ready)
-- **Primary Language**: Python 3.12+
-- **Storage**: PostgreSQL (sessions/metrics) + Elasticsearch (logs/traces) + Neo4j (knowledge graph)
 - **Dev environment**: VPS at `/opt/seshat` (Debian); SLM Server is separate (MLX/Apple Silicon)
 - **Development Model**: Linear issue tracking (FrenchForest team) with approval gates
 
@@ -77,17 +75,11 @@ Linear MCP: Team `FrenchForest` · `save_issue` to create · `get_issue` to veri
 
 ### 3b. Investigating code — reach for `ast-grep`, not `grep`
 
-**Trigger, stated as the reflex rather than the technique:** you are about to `grep` for a *call site*, a *signature*, a *usage*, or "every place that does X". Those are **shape** questions; `grep` only answers *text* questions. `ast-grep` is installed — `ast-grep run -p '<pattern>' -l py <path>` (add `--json=compact` to count/parse).
+**Trigger, stated as the reflex rather than the technique:** you are about to `grep` for a *call site*, a *signature*, a *usage*, or "every place that does X". Those are **shape** questions; `grep` only answers *text* questions. `ast-grep` is installed — `ast-grep run -p '<pattern>' -l py <path>`.
 
-Worked patterns for queries this project actually runs (all three verified against `src/`):
+**The trap, and it is worse than grep's.** A pattern matching the wrong *node kind* returns a short, precise, authoritative-looking list while silently answering a different question — cross-check any new pattern against a known result before trusting its count. Grep's imprecision is visible; a wrong AST pattern's is not.
 
-- every caller of a function — `ast-grep run -p 'record_vendor_cost($$$)' -l py src/`
-- every call passing a given kwarg — `ast-grep run -p '$F($$$, authenticated=$V, $$$)' -l py src/`
-- a banned construct with no ruff rule — `ast-grep run -p 'os.getenv($$$)' -l py src/`
-
-**The trap, and it is worse than grep's.** A pattern that matches the wrong *node kind* returns a short, precise, authoritative-looking list while silently answering a different question. `user_id: UUID` matches a class-level annotation; `user_id: UUID,` — trailing comma — is a function parameter and does **not** match it. Cross-check any new pattern against a known result before trusting its count. Grep's imprecision is visible; a wrong AST pattern's is not.
-
-For codemods, duplication hunting, or rule files, invoke the `ast-grep` skill rather than improvising.
+Invoke the `ast-grep` skill for worked patterns, the node-kind pitfalls, codemods, duplication hunting, and rule files rather than improvising.
 
 ### 4. Testing Standards
 
@@ -111,7 +103,7 @@ Before starting implementation:
 - Plan in ADR format; create Linear issues from validated specs; link specs/ADRs
 - Review: verify against spec, check standards, confirm tests pass
 
-### 7. Model Routing Policy
+### 6. Model Routing Policy
 
 Full policy: `$HOME/.claude/MODEL_ROUTING_POLICY.md` (global) · `.claude/MODEL_ROUTING_POLICY.md` (project copy)
 
@@ -164,28 +156,9 @@ cd <path-to-primary-repo-clone> && git merge <branch> --no-edit && git push orig
 5. **Quality checks**: `make test` · `make mypy` · `make ruff-check` · `make ruff-format`
 6. **PR** — address review feedback rigorously
 
-### Debugging & Troubleshooting
+### Port conflicts
 
-**Service Won't Start:**
-```bash
-make ps
-make logs SERVICE=postgres && make logs SERVICE=elasticsearch
-make down && make up
-```
-
-**Port conflicts**: Personal Agent `:9000` · SLM Server `:8000` · check with `lsof -i :9000`
-
-**Database:**
-```bash
-make shell SERVICE=postgres
-# then: psql -U agent -d personal_agent
-```
-
-**Elasticsearch:**
-```bash
-curl http://localhost:9200/_cluster/health
-./scripts/setup-elasticsearch.sh
-```
+Personal Agent `:9000` · SLM Server `:8000`. Service triage is `make ps` / `make logs SERVICE=<name>`.
 
 ---
 

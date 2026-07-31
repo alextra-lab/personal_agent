@@ -44,9 +44,11 @@ because of it. MASTER_PLAN does neither.
   and **roughly 5 lines are the owner's voice** — the only content with no other home. *(Classification
   by the FRE-1082 exploration session, 2026-07-31, by manual disposition of each line; the migration's
   disposition table — Implementation Notes step 2 — re-derives it line by line as a durable,
-  owner-signed artifact, so the decision does not rest on these approximations.)* Every one of the
-  file's last 40 commits is a session-authored docs PR
-  (`git log -40 --format='%s' -- docs/plans/MASTER_PLAN.md`); none records a direct owner edit.
+  owner-signed artifact, so the decision does not rest on these approximations.)* The file's last 40
+  commits all landed as docs PRs whose subjects record session gate/wind-down activity
+  (`git log -40 --format='%s' -- docs/plans/MASTER_PLAN.md`). Commit metadata cannot prove per-line
+  authorship — which is exactly what the migration's owner-adjudicated disposition table settles,
+  line by line, instead of this ADR asserting it.
 - **The primed session reconciles two accounts.** `prime-master` builds current state from computable
   sources at steps 1–7, then reads this file at step 8 — which restates the same state, stale. At the
   time FRE-1082 was filed, section 0 said the adrs seat was free while an adr session worked in it
@@ -102,6 +104,10 @@ stated once so later decisions can cite it:
 No successor scratch surface is created. Displaced content does not relocate; it goes to its home or
 it goes nowhere. The cheap path for an unticketed finding is a **`Backlog` ticket with a one-line
 body** — Backlog is not a request for owner review, so filing there consumes no approval bandwidth.
+D5 amends lifecycle-rules to make this legal: `Backlog` becomes a filing state for non-actionable
+findings (generalizing the existing seam-ticket exception), while **`Needs Approval` remains the
+filing state for work actually proposed for approval** — the "New == Needs Approval" gate is
+unchanged for actionable work.
 
 ### D2 — The owner console: `docs/plans/OWNER_CONSOLE.md`
 
@@ -159,7 +165,8 @@ the owner disables the integration, removing the corrupting writer; master recon
 that merged across the boundary on its next pass. The reverse order (disable-first) is forbidden —
 it leaves the transition unowned. This closes the board-corruption class (a docs PR naming a ticket
 id can no longer move it) and makes board↔reality reconciliation structural: every control-plane
-change now traces to one actor's actuation record.
+change now traces to a single credential's actuation record — session-level discipline within that
+shared credential remains contractual, enforced by the D5 skill edits (see AC-3's scope note).
 
 ### D5 — Consequences for the contract documents
 
@@ -177,7 +184,9 @@ change now traces to one actor's actuation record.
 - **`master` skill step 8** — "update MASTER_PLAN if strategy changed" is deleted. Strategy changes
   are either the owner's (console, in the owner's voice) or they are ticket/ADR content.
 - **`lifecycle-rules`** — the MASTER_PLAN section is replaced by a Coordination-stores section
-  stating D1/D2/D4; the guardian-role "Plan owner" line becomes "Console reader / board writer."
+  stating D1/D2/D4; § Ticket state gains the `Backlog` filing path for non-actionable findings
+  (New-actionable == `Needs Approval`, unchanged); the guardian-role "Plan owner" line becomes
+  "Console reader / board writer."
   Worker-skill boundary lines ("never edit MASTER_PLAN") become "never write the console; never
   mutate Linear control-plane fields beyond moving your own ticket to In Progress" — filing tickets
   and posting comments stays open per D4.
@@ -341,8 +350,10 @@ and `.claude/skills/build/SKILL.md` (boundary lines) · `CLAUDE.md` (root, sourc
 **Testing strategy:** this is a documentation-**plus-operational** migration, not docs-only. CI's
 docs path validates the repo half; the operational half (the Linear settings change, board writer
 discipline) is validated by the acceptance criteria below — AC-3 replays the known-bad input against
-the live configuration. Rollback: repo half → revert the PR; operational half → re-enable the
-integration transitions in team settings (one switch).
+the live configuration. **Rollback is reverse-order of cutover: re-enable the integration
+transitions in team settings first, then revert the PR.** Revert-first would remove master's
+on-merge writer while the integration is still disabled — recreating the exact unowned-transition
+window D4 forbids.
 
 ---
 
@@ -350,8 +361,10 @@ integration transitions in team settings (one switch).
 
 These are the ADR's own criteria, asserted once by the seam ticket (ADR-0130 D1/D2). **Observation
 window W:** from the migration PR's merge to the **later of +14 days and the third session-reset
-marker** (a commit touching `docs/plans/LAST_SESSION.md`, which every wind-down writes) — so every
-criterion is adjudicable at the window's end by construction.
+marker** (a commit touching `docs/plans/LAST_SESSION.md`, which every wind-down writes), **but no
+later than +28 days** — if fewer than three resets have occurred by then, W closes anyway and AC-2
+is adjudicated on the resets that did occur. Every criterion is therefore adjudicable at a bounded
+date by construction.
 
 - **AC-1 — the console is the closed record of standing authority.** The initial action-class
   manifest is fixed here: **deploy/standing-approved** (PWA-only rebuild · additive ES template ·
@@ -360,12 +373,15 @@ criterion is adjudicable at the window's end by construction.
   on/off + mode) · **on-merge board transition** · **merge-to-main authority** · **console write
   authority**. · **Check:** (a) diff manifest ↔ ladder: every manifest class has exactly one row;
   (b) after a real `/clear` + `/prime-master`, the primed session's step-8 output states its
-  authority per class — diff against the ladder rows, must match 1:1; (c) legacy-grant scan:
-  `grep -nE "standing approval|without asking|deploys? these" .claude/skills/*/SKILL.md
-  .claude/skills/lifecycle-rules.md CLAUDE.md .claude/CLAUDE.md` — every hit either names the
-  console as the grant's home or describes mechanics without granting. · *Fails if* a manifest
-  class has no row, the primed authority table disagrees with the console, or any prose hit still
-  grants authority the console does not record.
+  authority per class — diff against the ladder rows, must match 1:1; (c) per-class closure review:
+  for **each of the six manifest classes**, read the named files (`.claude/skills/*/SKILL.md`,
+  `.claude/skills/lifecycle-rules.md`, `CLAUDE.md`, `.claude/CLAUDE.md`) for statements granting or
+  denying autonomy on that class — seeded by
+  `grep -nE "standing approval|without asking|master-only|master alone|owns every"` but **not
+  limited to its hits** (the review is bounded: six classes × the named files) — every such
+  statement must name the console as the grant's home, or state role/mechanics without setting an
+  autonomy level. · *Fails if* a manifest class has no row, the primed authority table disagrees
+  with the console, or any prose statement still sets an autonomy level the console does not record.
 - **AC-2 — nothing re-grows, with no compaction ritual existing.** · **Check:** at W's end:
   `wc -l docs/plans/OWNER_CONSOLE.md docs/plans/LAST_SESSION.md` within each file's stated bound;
   `git log --since=<T1-merge-date> --diff-filter=A -- docs/plans/` names no new file;
@@ -377,21 +393,25 @@ criterion is adjudicable at the window's end by construction.
 - **AC-3 — the board-corruption class is closed.** · **Check:** (a) replay the known-bad input: open
   a docs PR whose body names a designated test ticket's id; the ticket's state is unchanged 24 hours
   later (the FRE-1036 trigger, replayed against the live configuration); (b) for **every**
-  FrenchForest issue whose `updatedAt` falls in W — not only merged ones — read its history via the
-  Linear API: **zero** state/label/relation/priority mutations were actuated by the
-  GitHub-integration actor. *(Scope note: all sessions share the owner's API credential, so
+  FrenchForest issue whose `updatedAt` at audit time is **on or after W's start** — a mechanically
+  complete superset of everything touched during W, since `updatedAt` only moves forward — read its
+  history via the Linear API and select the entries falling inside W: **zero** of those
+  state/label/relation/priority mutations were actuated by the GitHub-integration actor. *(Scope note: all sessions share the owner's API credential, so
   master-vs-worker attribution is contractual, enforced by the D5 skill edits; the mechanically
   assertable half — and the origin of both live corruptions — is the integration's elimination.)*
   · *Fails if* the test ticket moves, or any integration-actored control-plane mutation exists in W.
 - **AC-4 — every directive and ladder record is owner-attributable and mechanically retirable.**
   Record schemas, fixed here — directive: `- [YYYY-MM-DD · owner | relayed <session-date>] <text> ·
-  Retires: <event>`; ladder row: class · level (`ask-first` / `do-and-report` /
-  `standing-approved`) · dated grant · promotes-when · demotes-when. · **Check:** validate every
-  directive and ladder record in the console against its schema (header/contract lines are out of
-  scope by construction); every `relayed` record names its session of origin; the seam pass
-  presents the full (bounded) list of `relayed` records to the owner in a single confirmation.
-  · *Fails if* any record fails its schema, any relayed record lacks its origin, or the owner
-  rejects one — i.e. master has authored.
+  Retires: <event>`, where `<event>` must be **objectively decidable** — a merge, a calendar date, a
+  deploy, a measured threshold; "when no longer needed" fails schema. Ladder row: class · level
+  (`ask-first` / `do-and-report` / `standing-approved`) · dated grant · promotes-when ·
+  demotes-when — rows are owner-set by definition, and the grant date identifies each change.
+  · **Check:** validate every directive and ladder record in the console against its schema
+  (header/contract lines are out of scope by construction); every `relayed` record names its
+  session of origin; the seam pass presents the full (bounded) list of `relayed` records **and
+  every ladder row whose grant date falls in W** to the owner in a single confirmation. · *Fails
+  if* any record fails its schema (including an undecidable Retires-event), any relayed record
+  lacks its origin, or the owner rejects a presented record — i.e. master has authored.
 - **AC-5 — the primed target matches the computed queue at read time.** · **Check:** during a fresh
   prime, capture the session's stated NEXT per stream (its step-8 output) and, at the same moment,
   run `uv run python -m scripts.dispatch.next_resolver --stream <s> --eligible --json` per stream;
@@ -400,10 +420,11 @@ criterion is adjudicable at the window's end by construction.
 
 **Seam ticket: FRE-1087** (parked in `Backlog` with the chain — FRE-1085 the atomic migration PR →
 FRE-1086 the integration disable), holding all five criteria. **Due date: 2026-08-17**, estimated as
-FRE-1085's expected land date + 14 days; if it lands later, or W's third reset marker falls after
-+14 days, master re-dates the seam at the activation sweep to W's computed end — the due date is a
-marker, not an actuator (lifecycle-rules § Seam tickets). No implementation ticket carries, restates
-or discharges any of these criteria.
+FRE-1085's expected land date + 14 days. If W is incomplete when the seam is activated, the adr
+session that picks it up computes W's actual end, posts it, and re-parks the seam with that due
+date — **due-dating stays with the adr session; master's sweep only activates** (lifecycle-rules
+§ Seam tickets). The due date is a marker, not an actuator. No implementation ticket carries,
+restates or discharges any of these criteria.
 
 ---
 

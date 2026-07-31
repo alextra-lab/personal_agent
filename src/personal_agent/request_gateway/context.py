@@ -217,6 +217,103 @@ def _stance_context_items(
     ]
 
 
+CURATED_BEHAVIOURAL_STANCE_TARGETS: tuple[str, ...] = (
+    "Artifact",
+    "Plain text responses",
+    "production transactions",
+    "Health Issues",
+)
+"""Owner-curated standing-behavioural Stance targets (ADR-0126 D2/D3, T2).
+
+Read-time facet, not a stored field or classifier (ADR-0125 D7): each name is an
+ordinary :Entity node, no different from any topic-scoped stance target. Revising
+this set takes effect on the next turn -- no migration, no write-path change.
+Bounded to at most 12 entries by ADR-0126 AC-7; raising that bound requires amending
+the ADR. Order is the injection order -- this list IS the ranking, there is no recall
+selection to preserve (unlike _entity_names_from_memory_context's order, which must
+match recall's).
+"""
+
+
+def _behavioural_stance_context_items(stances: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build ``{"type": "behavioural_stance", ...}`` items in curated-set order (ADR-0126 T2).
+
+    Unlike ``_stance_context_items`` (T1), order comes from
+    ``CURATED_BEHAVIOURAL_STANCE_TARGETS`` itself, not from any recall order -- this
+    layer has no recall selection to preserve.
+
+    Args:
+        stances: Current-stance rows from ``MemoryProtocol.get_current_stances``,
+            queried against the curated target list.
+
+    Returns:
+        One ``{"type": "behavioural_stance", "target": ..., "affect": ...}`` dict per
+        curated target that has a current stance, in curated-set order. A curated
+        target with no current stance contributes nothing.
+    """
+    by_target = {s.get("target", ""): s for s in stances}
+    return [
+        {
+            "type": "behavioural_stance",
+            "target": target,
+            "affect": by_target[target].get("affect", ""),
+        }
+        for target in CURATED_BEHAVIOURAL_STANCE_TARGETS
+        if target in by_target
+    ]
+
+
+async def _inject_behavioural_stances(
+    memory_context: list[dict[str, Any]] | None,
+    memory_adapter: MemoryProtocol,
+    trace_id: str,
+    authenticated: bool,
+) -> list[dict[str, Any]] | None:
+    """Push the curated standing-behavioural Stance set into context, every turn (ADR-0126 T2, D2).
+
+    Independent of what the recall path selected -- unlike ``_enrich_with_stances``'s
+    topic-scoped enrichment, this never reads ``memory_context`` for its targets and
+    runs even when ``memory_context`` is ``None`` (nothing else was recalled this
+    turn), because a standing behavioural preference must be present before the
+    behaviour it governs occurs, not only when its own topic happens to come up
+    (ADR-0126 D2's motivating case).
+
+    Fails closed: a stance-layer fault omits the layer for this turn rather than
+    failing it.
+
+    Args:
+        memory_context: The turn's memory-context list so far, or None if nothing was
+            recalled. Not mutated in place when None -- a new list is returned
+            instead, so the no-op paths below can return the original object
+            unchanged.
+        memory_adapter: Seshat protocol adapter.
+        trace_id: Request trace identifier.
+        authenticated: Whether the request carries a verified identity. Unauthenticated
+            requests never fetch stance (mirrors ``_enrich_with_stances``).
+
+    Returns:
+        ``memory_context`` with the curated behavioural items appended (a new list if
+        it was ``None`` and at least one was fetched), or unchanged otherwise.
+    """
+    if not authenticated:
+        return memory_context
+    try:
+        stances = await memory_adapter.get_current_stances(
+            list(CURATED_BEHAVIOURAL_STANCE_TARGETS),
+            trace_id=trace_id,
+            authenticated=authenticated,
+        )
+    except Exception:
+        logger.exception("behavioural_stance_injection_failed", trace_id=trace_id)
+        return memory_context
+    items = _behavioural_stance_context_items(stances)
+    if not items:
+        return memory_context
+    result = memory_context if memory_context is not None else []
+    result.extend(items)
+    return result
+
+
 async def _enrich_with_stances(
     memory_context: list[dict[str, Any]],
     memory_adapter: MemoryProtocol,
@@ -541,6 +638,9 @@ async def assemble_context(
         )
         if memory_context is not None:
             await _enrich_with_stances(memory_context, memory_adapter, trace_id, authenticated)
+        memory_context = await _inject_behavioural_stances(
+            memory_context, memory_adapter, trace_id, authenticated
+        )
 
     # Inject session fact candidates from recall controller (as system message
     # in the main message list, not memory_context, to avoid schema mismatch

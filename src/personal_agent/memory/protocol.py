@@ -306,10 +306,17 @@ class MemoryProtocol(Protocol):
         trace_id: str,
         authenticated: bool = False,
     ) -> list[dict[str, Any]]:
-        """Current-only Stance retrieval for topic-scoped push enrichment (ADR-0126 T1).
+        """Current-only, batched Stance retrieval (ADR-0126 T1/T2).
+
+        Two independent callers pass ``targets`` here: topic-scoped push enrichment
+        (T1, entity names the recall path already selected) and the standing
+        behavioural profile (T2, a fixed owner-curated set, unrelated to recall).
+        Neither caller's identity changes this method's contract -- it is a pure
+        batched lookup by target name either way.
 
         Args:
-            targets: Entity names already selected by this turn's recall.
+            targets: Entity names to look up. Either entity names already selected by
+                this turn's recall (T1), or a fixed curated set (T2).
             trace_id: Trace identifier for observability.
             authenticated: Whether the caller is authenticated.
 

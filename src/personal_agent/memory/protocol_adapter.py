@@ -365,10 +365,11 @@ class MemoryServiceAdapter:
         trace_id: str,
         authenticated: bool = False,
     ) -> list[dict[str, Any]]:
-        """Delegate to MemoryService's current-only batched stance query (ADR-0126 T1).
+        """Delegate to MemoryService's current-only batched stance query (ADR-0126 T1/T2).
 
         Args:
-            targets: Entity names already selected by this turn's recall.
+            targets: Entity names to look up -- either entity names already selected by
+                this turn's recall (T1), or a fixed curated set (T2).
             trace_id: Request trace identifier.
             authenticated: Whether the caller is authenticated.
 

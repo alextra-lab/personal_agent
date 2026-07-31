@@ -78,6 +78,7 @@ class MemoryItemKind(StrEnum):
     SESSION = "session"
     SESSION_FACT = "session_fact"
     STANCE = "stance"
+    BEHAVIOURAL_STANCE = "behavioural_stance"
     UNKNOWN = "unknown"
 
 
@@ -222,6 +223,16 @@ def memory_item_identity(item: object) -> tuple[MemoryItemKind, str]:
         # _resolve_admission's identity-keyed rendered_budget counter.
         target = _text(item.get("target"))
         return (MemoryItemKind.STANCE, f"stance:{target}" if target else "")
+    if declared == "behavioural_stance":
+        # Namespaced with its own prefix, distinct from "stance:" (ADR-0126 T2,
+        # FRE-1017): a curated behavioural stance and a topic-scoped stance can
+        # legitimately target the same World concept the same turn, and each must stay
+        # independently admittable in _resolve_admission's identity-keyed Counter.
+        target = _text(item.get("target"))
+        return (
+            MemoryItemKind.BEHAVIOURAL_STANCE,
+            f"behavioural_stance:{target}" if target else "",
+        )
 
     # Undeclared shapes. The executor's entity-name-match recall path emits
     # ``conversation_id`` with no ``type`` key at all.

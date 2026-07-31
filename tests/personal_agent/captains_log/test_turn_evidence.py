@@ -130,6 +130,44 @@ class TestMemoryItemIdentity:
         item = {"type": "stance", "target": "   ", "affect": "prefers over Java"}
         assert memory_item_identity(item) == (MemoryItemKind.STANCE, "")
 
+    def test_behavioural_stance_identity_is_namespaced_by_target(self) -> None:
+        """ADR-0126 T2 (FRE-1017): a behavioural stance's identity is
+        'behavioural_stance:{target}' -- distinct from both the bare target name and
+        the topic-scoped 'stance:{target}' namespace, so the two producers stay
+        independently identifiable (AC-8's SEAM mutation table treats them as separate
+        consumers).
+        """
+        item = {
+            "type": "behavioural_stance",
+            "target": "Artifact",
+            "affect": "prefers explicit request before creation",
+        }
+        assert memory_item_identity(item) == (
+            MemoryItemKind.BEHAVIOURAL_STANCE,
+            "behavioural_stance:Artifact",
+        )
+
+    def test_behavioural_stance_with_blank_target_is_unguessed_empty_identity(self) -> None:
+        item = {"type": "behavioural_stance", "target": "   ", "affect": "x"}
+        assert memory_item_identity(item) == (MemoryItemKind.BEHAVIOURAL_STANCE, "")
+
+    def test_entity_topic_stance_and_behavioural_stance_sharing_a_target_are_distinct(
+        self,
+    ) -> None:
+        """Three items can legitimately describe the same World concept 'Artifact' this
+        turn (the entity itself, a topic-scoped stance, and a curated behavioural
+        stance) -- all three must resolve to pairwise-distinct identities or one's
+        render would satisfy another's admission check in _resolve_admission's
+        identity-keyed Counter.
+        """
+        entity = memory_item_identity(_entity("Artifact"))
+        topic_stance = memory_item_identity({"type": "stance", "target": "Artifact", "affect": "x"})
+        behavioural_stance = memory_item_identity(
+            {"type": "behavioural_stance", "target": "Artifact", "affect": "y"}
+        )
+        identities = {entity, topic_stance, behavioural_stance}
+        assert len(identities) == 3
+
 
 # ── 2-5. AC-3: admitted vs dropped ────────────────────────────────────────────
 

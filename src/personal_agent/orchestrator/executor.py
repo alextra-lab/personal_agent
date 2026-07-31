@@ -2252,6 +2252,16 @@ which would make this an unstated second relevance decision (the one thing ADR-0
 forbids).
 """
 
+_MAX_RENDERED_BEHAVIOURAL_STANCES = 12
+"""Cap fixed by ADR-0126 AC-7 (T2): the curated behavioural set holds at most 12 stances.
+
+Unlike _MAX_RENDERED_STANCES (T1), this is not inherited from another producer's bound
+-- there is no recall selection this layer rides on (D2: always-present, not gated on
+entity recall). It restates AC-7's own ceiling directly, so a curated-set edit that
+quietly grew past 12 stays bounded by construction here even before a test assertion
+catches it. Raising it requires amending ADR-0126.
+"""
+
 _MAX_ITEM_CHARS = 1000
 """Per-item character bound on rendered memory content (FRE-1010).
 
@@ -2305,11 +2315,13 @@ def _episode_text(item: dict[str, Any]) -> str:
 
 
 def _stance_line(item: dict[str, Any]) -> str:
-    """Render one current stance (ADR-0126 T1).
+    """Render one current stance -- topic-scoped (ADR-0126 T1) or curated behavioural (T2).
 
-    Mastery is not rendered: D1 decides affect alone is sufficient, and mastery is
-    correctly null on every live topic-scoped stance (a pure preference/intention, not a
-    stated skill level).
+    Both item shapes carry only ``target``/``affect``, so one renderer serves both
+    producers. Mastery is not rendered: D1 decides affect alone is sufficient, and
+    mastery is correctly null on every live topic-scoped stance (a pure
+    preference/intention, not a stated skill level) -- the curated behavioural set is
+    likewise preference-only.
     """
     target = item.get("target", "")
     affect = mark_truncated((item.get("affect") or "").strip(), _MAX_ITEM_CHARS)
@@ -2348,6 +2360,7 @@ def _render_memory_section_with_ids(
     entities: list[dict[str, Any]] = []
     episodes: list[dict[str, Any]] = []
     stance_items: list[dict[str, Any]] = []
+    behavioural_items: list[dict[str, Any]] = []
     for item in items:
         kind, _ = memory_item_identity(item)
         if kind is MemoryItemKind.ENTITY:
@@ -2356,6 +2369,8 @@ def _render_memory_section_with_ids(
             episodes.append(item)
         elif kind is MemoryItemKind.STANCE:
             stance_items.append(item)
+        elif kind is MemoryItemKind.BEHAVIOURAL_STANCE:
+            behavioural_items.append(item)
 
     # Filter for content BEFORE applying the bound, so the bound caps what is actually
     # rendered rather than what was merely considered. Cap-then-filter would let blank
@@ -2371,9 +2386,19 @@ def _render_memory_section_with_ids(
     # rendered blank — this is the same filter-then-cap shape as `described`/`recalled`
     # above, so a blank stance can never burn a rendered slot ahead of a real one.
     stances = [m for m in stance_items if (m.get("affect") or "").strip()][:_MAX_RENDERED_STANCES]
+    # ADR-0126 T2: same filter-then-cap shape, own bound (AC-7's 12, not the entity cap).
+    behavioural = [m for m in behavioural_items if (m.get("affect") or "").strip()][
+        :_MAX_RENDERED_BEHAVIOURAL_STANCES
+    ]
 
     sections: list[str] = []
     rendered_ids: list[str] = []
+
+    if behavioural:
+        rendered_ids.extend(memory_item_identity(m)[1] for m in behavioural)
+        section = "\n\n## Standing Behavioural Preferences\n"
+        section += "\n".join(_stance_line(m) for m in behavioural)
+        sections.append(section)
 
     if described:
         rendered_ids.extend(memory_item_identity(m)[1] for m in described)
@@ -3487,10 +3512,11 @@ async def step_init(
                         or item.get("description")
                         # A stance item carries no summary/description/name -- only
                         # target and affect -- so the affect alone would be an
-                        # orphaned preference string with no attribution (ADR-0126 T1).
+                        # orphaned preference string with no attribution (ADR-0126 T1,
+                        # T2: behavioural_stance carries the same shape).
                         or (
                             f"{item['target']}: {item['affect']}"
-                            if item.get("type") == "stance"
+                            if item.get("type") in ("stance", "behavioural_stance")
                             else None
                         )
                         or item.get("name", "")
@@ -3765,41 +3791,84 @@ async def step_init(
                         w.strip('",.:;!?') for w in words if len(w) > 3 and w[0].isupper()
                     ]
                     if potential_entities:
-                        query = MemoryQuery(
-                            entity_names=potential_entities[:5],
-                            limit=5,
-                            recency_days=30,
-                        )
-                        result = await memory_service.query_memory(
-                            query,
-                            feedback_key=ctx.session_id,
-                            query_text=ctx.user_message,
-                            # FRE-698: thread trace+session so the reranker fired inside
-                            # query_memory emits join keys for the ADR-0074 probe.
-                            trace_id=ctx.trace_id,
-                            session_id=ctx.session_id,
-                            # FRE-673: thread request identity so 'group'-visibility
-                            # memory is revealed by the chokepoint filter (FRE-229).
-                            user_id=ctx.user_id,
+                        # ADR-0126 T2 (FRE-1017, codex plan-review MAJOR finding): this
+                        # sub-branch previously had no local guard, unlike the
+                        # broad-recall sub-branch above -- an exception here jumped
+                        # straight past the behavioural-injection hook below to the
+                        # outer except at the bottom of this function, which would
+                        # make T2's "always-present" guarantee silently disappear
+                        # whenever entity-match recall failed for an unrelated reason.
+                        try:
+                            query = MemoryQuery(
+                                entity_names=potential_entities[:5],
+                                limit=5,
+                                recency_days=30,
+                            )
+                            result = await memory_service.query_memory(
+                                query,
+                                feedback_key=ctx.session_id,
+                                query_text=ctx.user_message,
+                                # FRE-698: thread trace+session so the reranker fired inside
+                                # query_memory emits join keys for the ADR-0074 probe.
+                                trace_id=ctx.trace_id,
+                                session_id=ctx.session_id,
+                                # FRE-673: thread request identity so 'group'-visibility
+                                # memory is revealed by the chokepoint filter (FRE-229).
+                                user_id=ctx.user_id,
+                                authenticated=ctx.authenticated,
+                            )
+                            ctx.memory_context = [
+                                {
+                                    "conversation_id": conv.turn_id,
+                                    "timestamp": conv.timestamp.isoformat(),
+                                    "user_message": conv.user_message,
+                                    "summary": conv.summary
+                                    or mark_truncated(conv.user_message, 400),
+                                    "key_entities": conv.key_entities,
+                                }
+                                for conv in result.conversations
+                            ]
+                            # FRE-1004: legacy path — see the broad-recall branch above.
+                            ctx.recall_candidates = build_recall_candidates(ctx.memory_context, {})
+                            conversations_found = len(ctx.memory_context)
+                            log.info(
+                                "memory_enrichment_completed",
+                                trace_id=ctx.trace_id,
+                                conversations_found=conversations_found,
+                            )
+                        except Exception as entity_match_err:
+                            log.warning(
+                                "memory_entity_match_query_failed",
+                                trace_id=ctx.trace_id,
+                                error=str(entity_match_err),
+                            )
+
+                # ADR-0126 T2 (FRE-1017): standing behavioural stances, independent of
+                # what either recall sub-branch above selected -- present whenever
+                # memory_service is connected, not gated on entity recall (D2).
+                if ctx.authenticated:
+                    from personal_agent.request_gateway.context import (
+                        CURATED_BEHAVIOURAL_STANCE_TARGETS,
+                        _behavioural_stance_context_items,
+                    )
+
+                    try:
+                        behavioural_stances = await memory_service.query_current_stances(
+                            list(CURATED_BEHAVIOURAL_STANCE_TARGETS),
                             authenticated=ctx.authenticated,
-                        )
-                        ctx.memory_context = [
-                            {
-                                "conversation_id": conv.turn_id,
-                                "timestamp": conv.timestamp.isoformat(),
-                                "user_message": conv.user_message,
-                                "summary": conv.summary or mark_truncated(conv.user_message, 400),
-                                "key_entities": conv.key_entities,
-                            }
-                            for conv in result.conversations
-                        ]
-                        # FRE-1004: legacy path — see the broad-recall branch above.
-                        ctx.recall_candidates = build_recall_candidates(ctx.memory_context, {})
-                        conversations_found = len(ctx.memory_context)
-                        log.info(
-                            "memory_enrichment_completed",
                             trace_id=ctx.trace_id,
-                            conversations_found=conversations_found,
+                        )
+                        behavioural_items = _behavioural_stance_context_items(behavioural_stances)
+                        if behavioural_items:
+                            if ctx.memory_context is None:
+                                ctx.memory_context = []
+                            ctx.memory_context.extend(behavioural_items)
+                            ctx.recall_candidates = build_recall_candidates(ctx.memory_context, {})
+                    except Exception as behavioural_err:
+                        log.warning(
+                            "behavioural_stance_injection_failed",
+                            trace_id=ctx.trace_id,
+                            error=str(behavioural_err),
                         )
 
                 # Populate operator stanza (FRE-213 / ADR-0052) while service is connected.

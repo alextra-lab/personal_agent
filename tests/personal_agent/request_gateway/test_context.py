@@ -460,6 +460,13 @@ class TestStanceEnrichment:
 
     @pytest.mark.asyncio
     async def test_stance_item_appended_for_recalled_entity(self) -> None:
+        """ADR-0126 T2 (FRE-1017) note: with the behavioural-profile injector also live,
+        get_current_stances is awaited *twice* per turn on an authenticated request --
+        once here (T1, entity-gated) and once for the curated behavioural set (T2,
+        unconditional). The mock's fixed return_value never matches a curated target
+        name, so T2 contributes no items here; only the call-count assertion style
+        needs to look at the specific T1-shaped call rather than "the one call".
+        """
         mock_adapter = self._mock_adapter_with_entity("Python")
         mock_adapter.get_current_stances = AsyncMock(
             return_value=[{"target": "Python", "affect": "prefers over Java", "mastery": None}]
@@ -479,13 +486,20 @@ class TestStanceEnrichment:
         assert len(stance_items) == 1
         assert stance_items[0]["target"] == "Python"
         assert stance_items[0]["affect"] == "prefers over Java"
-        mock_adapter.get_current_stances.assert_awaited_once()
-        awaited_args, awaited_kwargs = mock_adapter.get_current_stances.await_args
-        assert awaited_args[0] == ["Python"]
-        assert awaited_kwargs["authenticated"] is True
+        topic_scoped_calls = [
+            c for c in mock_adapter.get_current_stances.await_args_list if c.args[0] == ["Python"]
+        ]
+        assert len(topic_scoped_calls) == 1
+        assert topic_scoped_calls[0].kwargs["authenticated"] is True
 
     @pytest.mark.asyncio
     async def test_no_entities_recalled_skips_stance_fetch(self) -> None:
+        """ADR-0126 T2 (FRE-1017) note: T1's entity-gated hook correctly makes no call
+        (no entities recalled), but the behavioural-profile injector calls
+        get_current_stances unconditionally for the curated set on an authenticated
+        request -- so the mock is awaited exactly once, for the curated targets, not
+        zero times.
+        """
         mock_adapter = AsyncMock()
         mock_adapter.is_connected = AsyncMock(return_value=True)
         mock_adapter.get_current_stances = AsyncMock(return_value=[])
@@ -500,7 +514,11 @@ class TestStanceEnrichment:
         )
 
         assert result.memory_context is None
-        mock_adapter.get_current_stances.assert_not_called()
+        mock_adapter.get_current_stances.assert_awaited_once_with(
+            list(ctx_module.CURATED_BEHAVIOURAL_STANCE_TARGETS),
+            trace_id="t-none",
+            authenticated=True,
+        )
 
     @pytest.mark.asyncio
     async def test_unauthenticated_skips_stance_fetch_even_with_entities(self) -> None:
@@ -601,6 +619,160 @@ class TestStanceEnrichment:
 
         assert result.memory_context is not None
         assert all(m.get("type") != "stance" for m in result.memory_context)
+
+
+class TestBehaviouralStanceInjection:
+    """ADR-0126 T2 (FRE-1017): the curated standing-behavioural Stance set is pushed
+    into context on every authenticated turn, independent of what the recall path
+    selected -- unlike TestStanceEnrichment's topic-scoped push, this never reads
+    memory_context for its targets.
+    """
+
+    def _intent(self) -> IntentResult:
+        return IntentResult(
+            task_type=TaskType.CONVERSATIONAL,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=[],
+        )
+
+    @pytest.mark.asyncio
+    async def test_curated_stances_appended_when_nothing_else_recalled(self) -> None:
+        """The AC-2 scenario at the unit level: memory_context starts as None (no
+        entities recalled at all) and the behavioural layer still injects.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.get_current_stances = AsyncMock(
+            return_value=[
+                {
+                    "target": "Artifact",
+                    "affect": "prefers explicit request before creation",
+                    "mastery": None,
+                },
+                {
+                    "target": "Plain text responses",
+                    "affect": "prefers by default for follow-up data",
+                    "mastery": None,
+                },
+            ]
+        )
+
+        result = await assemble_context(
+            user_message="hello there",
+            session_messages=[],
+            intent=self._intent(),
+            memory_adapter=mock_adapter,
+            trace_id="t-behavioural",
+            authenticated=True,
+        )
+
+        assert result.memory_context is not None
+        behavioural_items = {
+            m["target"]: m["affect"]
+            for m in result.memory_context
+            if m.get("type") == "behavioural_stance"
+        }
+        assert behavioural_items == {
+            "Artifact": "prefers explicit request before creation",
+            "Plain text responses": "prefers by default for follow-up data",
+        }
+        mock_adapter.get_current_stances.assert_awaited_once_with(
+            list(ctx_module.CURATED_BEHAVIOURAL_STANCE_TARGETS),
+            trace_id="t-behavioural",
+            authenticated=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_curated_items_appear_in_curated_order_not_query_return_order(
+        self,
+    ) -> None:
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        # Returned out of the curated tuple's own declared order.
+        mock_adapter.get_current_stances = AsyncMock(
+            return_value=[
+                {"target": "Health Issues", "affect": "wants condition-level recall"},
+                {"target": "Artifact", "affect": "prefers explicit request before creation"},
+            ]
+        )
+
+        result = await assemble_context(
+            user_message="hello there",
+            session_messages=[],
+            intent=self._intent(),
+            memory_adapter=mock_adapter,
+            trace_id="t-order",
+            authenticated=True,
+        )
+
+        assert result.memory_context is not None
+        behavioural_targets = [
+            m["target"] for m in result.memory_context if m.get("type") == "behavioural_stance"
+        ]
+        curated = list(ctx_module.CURATED_BEHAVIOURAL_STANCE_TARGETS)
+        expected = [t for t in curated if t in {"Health Issues", "Artifact"}]
+        assert behavioural_targets == expected
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_skips_behavioural_fetch(self) -> None:
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.get_current_stances = AsyncMock(return_value=[])
+
+        result = await assemble_context(
+            user_message="hello there",
+            session_messages=[],
+            intent=self._intent(),
+            memory_adapter=mock_adapter,
+            trace_id="t-unauth",
+            authenticated=False,
+        )
+
+        assert result.memory_context is None
+        mock_adapter.get_current_stances.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_behavioural_fetch_failure_preserves_memory_context(self) -> None:
+        """Fail-closed: a stance-layer fault omits the layer for this turn, never
+        fails the turn -- memory_context stays exactly what it was before this hook,
+        including staying None.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.get_current_stances = AsyncMock(side_effect=RuntimeError("stance db down"))
+
+        result = await assemble_context(
+            user_message="hello there",
+            session_messages=[],
+            intent=self._intent(),
+            memory_adapter=mock_adapter,
+            trace_id="t-fail",
+            authenticated=True,
+        )
+
+        assert result.memory_context is None
+
+    @pytest.mark.asyncio
+    async def test_curated_target_with_no_stance_is_absent(self) -> None:
+        """get_current_stances returning fewer targets than requested is normal (not
+        every curated target has a current stance) -- the join is by-target, so a
+        missing one is simply absent rather than fabricated.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.get_current_stances = AsyncMock(return_value=[])
+
+        result = await assemble_context(
+            user_message="hello there",
+            session_messages=[],
+            intent=self._intent(),
+            memory_adapter=mock_adapter,
+            trace_id="t-empty",
+            authenticated=True,
+        )
+
+        assert result.memory_context is None
 
 
 class TestReflectionRecallRemoved:

@@ -61,11 +61,11 @@ That is a contract change, which is an architecture decision.
 
 ### The live case
 
-ADR-0129's implementation chain is filed and awaiting approval — ten tickets. Its head, FRE-1064,
+ADR-0129's implementation chain is filed and awaiting approval — eight tickets. Its head, FRE-1064,
 states its proof as *"over a 7-complete-day window after this lands, the share of `agent-logs-*` records
 carrying a non-empty `trace_id` is measured against the recorded pre-change baseline of 11.36%"*, and
 says outright that it *"owns the first half of ADR-0129 AC-3(a)"*. That is the conflation, already
-written down, one approval away from being built ten times over. Master is holding the chain on this
+written down, one approval away from being built eight times over. Master is holding the chain on this
 ADR. ADR-0129's own nine criteria are correctly ADR-grade and are **not** rewritten here.
 
 ### The constraint that bounds the solution space
@@ -218,7 +218,7 @@ committed script.
 
 ### D8 — ADR-0129's chain is re-scoped under this rule; its ADR criteria are untouched
 
-ADR-0129's nine criteria stay exactly as written. Its ten children have their criteria rewritten to
+ADR-0129's nine criteria stay exactly as written. Its eight children have their criteria rewritten to
 their own work, and **FRE-1073 is designated its seam ticket, owning all nine** — not the six its
 current seam declaration assembles. AC-4, AC-7 and AC-9 are decidable earlier than the rest; that
 changes *when* the seam ticket can adjudicate them, not *who* owns them.
@@ -319,7 +319,7 @@ them untouched. Adopted instead as D7 — the destination for seam-ticket verdic
   depending on anything outside the ticket.
 - `Awaiting Deploy` regains a single meaning — merged, not yet deployed — so the queue's length becomes
   a signal again.
-- The ADR's objective is still tested, once, by a named owner, instead of being diffused across ten
+- The ADR's objective is still tested, once, by a named owner, instead of being diffused across eight
   children where no child could prove it and none was accountable.
 - An unproven objective becomes visible in the right place: an ADR sitting at `Accepted` rather than
   `Implemented` states the open question precisely, at zero carrying cost.
@@ -373,7 +373,7 @@ The ADR-0129 *tickets* change; the ADR does not.
 **Dependencies:** none. This ADR is documentation and skill text only, and blocks nothing behind
 infrastructure (Alternatives, Option 3).
 
-**Sequence:** amend the five sentences together in one PR → re-scope the ADR-0129 chain's ten tickets
+**Sequence:** amend the five sentences together in one PR → re-scope the ADR-0129 chain's eight tickets
 under the rule and designate FRE-1073 the seam ticket (releases master's hold) → this ADR's own seam
 ticket, parked until both have landed.
 
@@ -405,15 +405,15 @@ forbids.
   check: the ticket has to *close* on the new basis, not merely be rewritten to claim it could.
 
 - **AC-3 — Every rewritten sub-ticket criterion names an expected value, and is discharged with evidence
-  at its gate.** · **Check:** for each of ADR-0129's ten children, (a) the criterion states what the
+  at its gate.** · **Check:** for each of ADR-0129's eight children, (a) the criterion states what the
   observed thing must *equal or relate to* — this record's `trace_id` equals the enclosing span's; this
   tool span's parent is the step span; this config artifact names the Collector endpoint; (b) the
   ticket's handoff comment records the observed value, not the assertion that it was checked, **and that
   observed value satisfies the stated relation**. · *Fails if* any child's criterion is satisfied by a
   field being present, a component being registered, or a value being any value — **or** if any child
   closed without a recorded observed value, **or** if any recorded observed value does not satisfy its
-  own stated relation (*expected parent A, observed parent B* is a failure, not a record). (b) is why ten
-  well-worded criteria over ten broken implementations cannot pass: the gate's existing handoff contract
+  own stated relation (*expected parent A, observed parent B* is a failure, not a record). (b) is why eight
+  well-worded criteria over eight broken implementations cannot pass: the gate's existing handoff contract
   already carries per-criterion evidence, so this costs nothing new to check.
 
 - **AC-2 — Sub-ticket criteria partition the chain's design obligations, and none is an ADR criterion in
@@ -471,7 +471,7 @@ Status Updates.
 
 - FRE-1078 — the originating ticket: the diagnosis, the nineteen-ticket evidence, and the two-tier distinction, all owner-stated
 - ADR-0127 — The Harness Self-Analysis Pillar (Proposed): decision three and FRE-1030 design the re-check of ADR criteria against the running system; adopted as D7's destination
-- ADR-0129 — OpenTelemetry Instrumentation, with Trace Visibility as the Acceptance Bar (Proposed): the live case; its criteria are untouched, its ten-ticket chain is re-scoped by D8
+- ADR-0129 — OpenTelemetry Instrumentation, with Trace Visibility as the Acceptance Bar (Proposed): the live case; its criteria are untouched, its eight-ticket chain is re-scoped by D8
 - FRE-1064 — ADR-0129 B1: the specimen sub-ticket carrying an ADR-grade criterion
 - FRE-1073 — ADR-0129 B8: designated ADR-0129's seam ticket by D8
 - FRE-1030 — ADR-0127 T5: the normative-spine ticket; its false-green/false-red asymmetry is the model for a seam ticket's verdict

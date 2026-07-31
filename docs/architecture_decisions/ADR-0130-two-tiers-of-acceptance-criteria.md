@@ -340,7 +340,7 @@ them untouched. Adopted instead as D7 — the destination for seam-ticket verdic
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| Seam tickets accumulate unrun, becoming the same graveyard at a slower rate | Medium | One per ADR bounds the population by ADR count; D2 names the activation trigger (master, at the last child's merge) so it is never left waiting for someone to notice; D7 names the automated re-check as the destination |
+| Seam tickets accumulate unrun, becoming the same graveyard at a slower rate | Medium | One per ADR bounds the population by ADR count; D2 names the activation trigger (master, at the first advance-dispatch on or after the due date) so it is never left waiting for someone to notice; D7 names the automated re-check as the destination |
 | The seam ticket absorbs the remediation work its own red verdicts create, and stops being closable | High | D2 freezes its scope to *evaluating*; a red or inconclusive verdict spawns a separately-scoped ticket and the seam still closes |
 | Sub-ticket criteria drift into wiring checks now that the ADR's criteria no longer backstop them | High | D4 keeps the no-BS bar in force at the ticket's own scope; D6 checks decidability at dispatch, before the build |
 | A design obligation falls between children — every child passes and the ADR's design is quietly abandoned | High | D1's coverage clause makes it a partition: every obligation lands on one child or on the seam. AC-2 requires a written obligation → owner mapping and fails on an unowned row |

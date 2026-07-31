@@ -90,19 +90,46 @@ decision to build infrastructure first. This ADR does not take that path — see
   assembled, population-level, long-horizon, or require the owner to do something. They are never
   sliced across children.
 
-Criterion inheritance is severed. A build ticket does not carry, quote, or discharge any part of a
-backing ADR's criteria.
+Criterion inheritance is severed. A build ticket does not carry, quote, restate or discharge any part of
+a backing ADR's criteria — in that ADR's wording or a paraphrase of it.
 
-### D2 — Every decomposed ADR names exactly one seam ticket, and that is the only place its criteria are asserted
+**Severing inheritance must not lose coverage.** The union of a chain's sub-ticket criteria has to cover
+every design obligation the chain implements, or the ADR's design can be silently abandoned one child at
+a time while every child passes. The session filing the chain owns that check (`adr` Step 5). The
+distinction is *whose objective the criterion states*, not *which subjects may be mentioned*: ADR-0129's
+`TraceContext` bridge must preserve `authenticated` and `user_id`, so the bridge ticket carries a
+criterion about exactly that — an authenticated recall request returns `group`-visibility memory and an
+unauthenticated one does not — because preserving those fields **is** that ticket's own work. What it may
+not do is cite ADR-0129 AC-9 as the thing it discharges.
 
-The seam ticket tests the ADR's overall objective. One per ADR. It is filed with the chain and parked
-(Backlog, or Approved-without-a-stream-label) until the chain has landed. Master asserts its verdict
-before the ADR's `Status` moves to `Implemented`.
+### D2 — Every ADR with implementation tickets names exactly one seam ticket, and that is the only place its criteria are asserted
+
+The seam ticket tests the ADR's overall objective, and it holds **all** of the ADR's criteria — not the
+subset that happens to need the full chain. Exactly one per ADR, regardless of how many implementation
+tickets there are; a single-ticket ADR still has a seam ticket, because D1 forbids that one ticket from
+discharging the ADR's criteria.
+
+- **Filed** with the chain, parked (Backlog, or Approved without a `stream:` label — undispatchable).
+- **Activated** by master at the merge of the chain's last child, as part of advance-dispatch: the seam
+  ticket gets `Approved` + `stream:adr`. Without this the parked ticket is invisible to the resolver
+  forever, which is how a seam ticket silently becomes a graveyard.
+- **Scope is frozen to evaluating.** The seam ticket produces verdicts; it never implements fixes. A red
+  or inconclusive verdict spawns a separately-scoped remediation ticket. This is what stops the seam
+  absorbing work and accreting criteria until it cannot close.
+- **Closes on adjudication, not on success** — its job is to produce a recorded verdict on every
+  criterion, and that job is done whether the verdicts are green or red.
+- **The verdict maps to the ADR's `Status`, not to the ticket's:** all green → `Implemented`; any red or
+  inconclusive → the ADR stays `Accepted`, each non-green criterion has a filed remediation ticket, and
+  the seam ticket closes. **An ADR never reaches `Implemented` on a red or unadjudicated criterion.**
 
 **The seam ticket is allowed to be long-lived. That is the design, not a defect.** Nineteen long-lived
 build tickets is the pathology; one long-lived seam ticket per ADR is correct and expected. An ADR whose
-objective is not yet proven holds that open question in its own `Status` field, where it costs nothing —
-not in the deploy queue, where it costs the queue its meaning.
+objective is not yet proven holds that open question in its own `Status` field, where it costs a review
+line rather than a queue slot — not in the deploy queue, where it costs the queue its meaning.
+
+**If an ADR's objective cannot be adjudicated at all**, say so when authoring it rather than filing a
+seam ticket that can never return a verdict. An un-checkable decision is a design smell to surface — the
+`adr` skill already says this, and it is the honest outcome for a decision whose effect is not observable.
 
 ### D3 — Design adherence is retained at every gate; criterion inheritance is not
 
@@ -110,6 +137,11 @@ These two were fused in `master` Step 4 and are separable. Master continues to g
 implements the backing ADR **as designed** — silent divergence from the ADR's design still bounces, and
 a changed design still updates the ADR first. What master stops doing is requiring a child to prove the
 ADR's criteria. Provenance survives; inheritance ends.
+
+**Deploy verification is untouched.** `Done` still requires a deployed, health-verified change
+(lifecycle-rules § Ticket state, § Evidence contract) — that is verification of *the deploy*, and it is
+decidable in minutes. This ADR changes only what *acceptance criteria* a ticket must discharge. The two
+were never the same thing, and nothing here relaxes the first.
 
 ### D4 — The no-BS bar is unchanged, and now applies at the sub-ticket's own scope
 
@@ -119,6 +151,11 @@ by a broken or half-finished implementation is still rejected. The bar simply no
 scope — this ticket's change — instead of an inherited one.
 
 ### D5 — The five sentences are amended together, in one change
+
+Five sentences carry the rule; the full edit surface is larger (a step here, a handoff field there, the
+ADR template's seam line) and is enumerated in Implementation Notes. What matters is that no document is
+left teaching the old rule — a partial amendment is worse than none, because the contradiction is then
+resolved by whichever document a session happens to read first.
 
 | where | becomes |
 |---|---|
@@ -133,11 +170,16 @@ raise and becomes the mechanism D2 names.
 
 ### D6 — A mis-scoped criterion is caught at dispatch, not at the gate
 
-One line in `master` Step 8 (advance dispatch): before applying a `stream:` label, confirm the ticket's
-criteria are about its own work. This is not a new mechanism — master already reads the ticket at that
-moment, and it is the last point *before* the build. A criterion that first bites at the gate has
-already cost the build, and a criterion that is **unmeetable** (the dead-emit-path case) cannot be fixed
-by bouncing at all.
+One line in `master` Step 8 (advance dispatch): before applying a `stream:` label, confirm each of the
+ticket's criteria is **decidable from that ticket's own deliverable when the ticket is finished** — D1's
+test, not the weaker "is it about its own work". The weaker test is what would let FRE-1064 through
+unchanged: a seven-day identity-share census *is* about FRE-1064's own bootstrap work, and is still
+undecidable at close-out. Decidability is the property that was missing, so decidability is what is
+checked.
+
+This is not a new mechanism — master already reads the ticket at that moment, and it is the last point
+*before* the build. A criterion that first bites at the gate has already cost the build, and a criterion
+that is **unmeetable** (the dead-emit-path case) cannot be fixed by bouncing at all.
 
 ### D7 — ADR-0127's Analyzer is the eventual automated re-check; nothing here depends on it
 
@@ -150,9 +192,12 @@ committed script.
 ### D8 — ADR-0129's chain is re-scoped under this rule; its ADR criteria are untouched
 
 ADR-0129's nine criteria stay exactly as written. Its ten children have their criteria rewritten to
-their own work, and **FRE-1073 is designated its seam ticket**. FRE-1064's identity-share measurement
-(11.36% baseline, 7-day window) moves to FRE-1073 — it is not dropped, it changes owner. This is the
-ticket action that releases master's hold on the chain.
+their own work, and **FRE-1073 is designated its seam ticket, owning all nine** — not the six its
+current seam declaration assembles. AC-4, AC-7 and AC-9 are decidable earlier than the rest; that
+changes *when* the seam ticket can adjudicate them, not *who* owns them.
+
+FRE-1064's identity-share measurement (11.36% baseline, 7-day window) moves to FRE-1073 — it is not
+dropped, it changes owner. This is the ticket action that releases master's hold on the chain.
 
 ---
 
@@ -268,8 +313,10 @@ them untouched. Adopted instead as D7 — the destination for seam-ticket verdic
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| Seam tickets accumulate unrun, becoming the same graveyard at a slower rate | Medium | One per ADR bounds the population by ADR count; master asserts the verdict as part of the ADR `Status` transition (D2), and D7 names the automated re-check as the destination |
-| Sub-ticket criteria drift into wiring checks now that the ADR's criteria no longer backstop them | High | D4 keeps the no-BS bar in force at the ticket's own scope; D6 checks it at dispatch, before the build |
+| Seam tickets accumulate unrun, becoming the same graveyard at a slower rate | Medium | One per ADR bounds the population by ADR count; D2 names the activation trigger (master, at the last child's merge) so it is never left waiting for someone to notice; D7 names the automated re-check as the destination |
+| The seam ticket absorbs the remediation work its own red verdicts create, and stops being closable | High | D2 freezes its scope to *evaluating*; a red or inconclusive verdict spawns a separately-scoped ticket and the seam still closes |
+| Sub-ticket criteria drift into wiring checks now that the ADR's criteria no longer backstop them | High | D4 keeps the no-BS bar in force at the ticket's own scope; D6 checks decidability at dispatch, before the build |
+| A design obligation falls between children — every child passes and the ADR's design is quietly abandoned | High | D1's coverage clause: the union of a chain's criteria must cover the chain's obligations, checked by the session filing it; AC-2(a) fails if any obligation appears in no child |
 | The two tiers are conflated again by a future author | Medium | D5 changes all five sentences together, so no document teaches the old rule; `adr` Step 5's slice instruction — the origin — is removed rather than softened |
 | ADR-0129's chain is re-scoped incorrectly, losing the identity-share question entirely | Medium | D8 states the measurement **moves to FRE-1073**, and AC-1 fails if it is dropped rather than relocated |
 | `Accepted`-not-`Implemented` is read as "shipped and working" by a later session | Low | The distinction already exists in the ADR `Status` field and the index; D2 gives it a defined meaning rather than inventing one |
@@ -301,10 +348,14 @@ infrastructure (Alternatives, Option 3).
 under the rule and designate FRE-1073 the seam ticket (releases master's hold) → this ADR's own seam
 ticket, parked until both have landed.
 
-**Testing strategy:** this decision's artifacts are documents, so its criteria are read from the
-documents and from the board. AC-1, AC-2 and AC-3 are decidable when the corresponding change is
-finished; AC-4 and AC-5 are the assembled objective and belong to this ADR's seam ticket — modelling the
-rule the ADR states.
+**Testing strategy:** this decision's artifacts are documents and tickets, so its criteria are read from
+the documents and from the board. **All five criteria belong to this ADR's seam ticket** (D2) — the
+implementing tickets below carry their own criteria about their own edits and discharge none of these.
+AC-1, AC-2 and AC-3 become decidable as soon as the re-scope lands, so the seam ticket can adjudicate
+them immediately on activation; AC-4 needs a thirty-day window and AC-5 needs the first chain to
+complete. Early decidability changes *when* the seam adjudicates, not *who* owns the criterion — the
+first draft of this ADR assigned AC-1 to AC-3 to implementing tickets, which was the very slice D1
+forbids.
 
 ---
 
@@ -312,42 +363,59 @@ rule the ADR states.
 
 **How will we know this decision actually delivered — not just merged?**
 
-- **AC-1 — The live conflation is relocated, not deleted.** FRE-1064's stated proof today is a
-  seven-complete-day identity share against an 11.36% baseline, explicitly owning half of ADR-0129
-  AC-3(a). After the re-scope, FRE-1064's criteria are decidable from its own diff, and the identity-share
-  measurement appears on FRE-1073. · **Check:** read both tickets. · *Fails if* FRE-1064 retains any
-  criterion whose verdict requires production traffic or a time window, **or** if the identity-share
-  measurement appears on neither ticket — dropping the question is a failure equal to leaving it.
+**All five belong to this ADR's seam ticket** (D2). None is discharged by an implementing ticket.
 
-- **AC-2 — No child of a decomposed ADR carries the ADR's criteria.** · **Check:** across ADR-0129's ten
-  children, no ticket cites an ADR-0129 `AC-n` as its own proof obligation, and exactly one — FRE-1073 —
-  is named the seam ticket. · *Fails if* any child quotes an ADR criterion as its own, if no seam ticket
-  is named, or if more than one is.
+- **AC-1 — The live conflation is relocated with its decision procedure, not deleted and not merely
+  mentioned.** · **Check:** FRE-1073 states the identity-share measurement as one of its own criteria,
+  naming the query that decides it (the `agent-logs-*` share carrying a resolvable `trace_id`), the
+  11.36% baseline, and the window; and FRE-1064 states no criterion requiring production traffic, a time
+  window, or an owner action. · *Fails if* the measurement appears on FRE-1073 only as prose with no
+  deciding query, if it appears on neither ticket, or if FRE-1064 retains a time-windowed criterion. A
+  passing mention on the seam ticket is the fake this criterion exists to reject: relocation means the
+  obligation moved, not the sentence.
 
-- **AC-3 — Every sub-ticket criterion names an observable result of that ticket's own change.** ·
-  **Check:** for each of ADR-0129's ten rewritten children, the criterion names something that can be
-  read — a record's field value, a span's parent, a config artifact's content — and not the presence,
-  registration or wiring of a component. · *Fails if* any child's criterion is satisfied by the component
-  merely existing. This is D4's bar applied at the new scope, and it is what stops the fix to Option 1
-  from becoming Option 2.
+- **AC-3 — Every rewritten sub-ticket criterion names an expected value, not a readable field.** ·
+  **Check:** for each of ADR-0129's ten children, the criterion states what the observed thing must
+  *equal or relate to* — this record's `trace_id` equals the enclosing span's; this tool span's parent
+  is the step span; this config artifact names the Collector endpoint — and a wrong or constant value
+  fails it. · *Fails if* any child's criterion is satisfied by a field being present, a component being
+  registered, or a value being any value. This is D4's bar at the new scope, and it is what stops the
+  fix to Option 1 from becoming Option 2.
 
-- **AC-4 — `Awaiting Deploy` holds one population.** Over the first thirty days after the rule is in
-  force, every ticket entering `Awaiting Deploy` leaves it on a deploy, not on a measurement. ·
-  **Check:** the board's state histories over that window, against each ticket's stated criteria. ·
-  *Fails if* any ticket sits in `Awaiting Deploy` on a criterion whose verdict requires future traffic,
-  an observation window, or an owner action. **Seam-held** — this is the objective, and it is
-  population-level by nature.
+- **AC-2 — Sub-ticket criteria cover the chain's design obligations, and none is an ADR criterion in
+  disguise.** · **Check:** across ADR-0129's ten children, (a) every obligation ADR-0129's Decision
+  section places on the chain appears as some child's own criterion — including the five `TraceContext`
+  fields D1 commits to preserving; (b) no child's criterion is decidable only from population-level or
+  future-traffic evidence, whether or not it cites an `AC-n`; (c) exactly one ticket, FRE-1073, is named
+  seam and owns all nine of ADR-0129's criteria. · *Fails if* any design obligation appears in no child,
+  any child's criterion needs a window or a census to decide, or the seam owns fewer than nine. (a) is
+  the coverage half — severing inheritance without it lets the design be abandoned one passing child at
+  a time; (b) catches the paraphrase that drops the label but keeps the form.
 
-- **AC-5 — An ADR's objective is still tested after decomposition.** For the first ADR to complete its
-  chain under this rule, its seam ticket produces a recorded verdict on every one of the ADR's criteria —
-  green, red or inconclusive — with the query or record that decided each. · **Check:** the seam ticket's
-  close-out comment. · *Fails if* the ADR reaches `Implemented` with any criterion unadjudicated, or if
-  the chain completes and no seam ticket verdict exists. **Seam-held.** Without this, D1 would have
-  removed the burden from children and put it nowhere — which is Option 2 with extra steps.
+- **AC-4 — `Awaiting Deploy` holds one population.** Over the thirty days after the rule is in force, no
+  ticket is held in `Awaiting Deploy` by a criterion it cannot discharge. · **Check:** for every ticket
+  resident in `Awaiting Deploy` at any point in the window, read its stated criteria; a ticket still
+  resident at day thirty is judged on the same test, not excused by not having left yet. Record the
+  window's entrant count against the preceding thirty days. · *Fails if* any resident ticket's criteria
+  require future traffic, an observation window, or an owner action to decide — **or** if the window's
+  entrant count has collapsed against the prior period, which makes the run inconclusive rather than
+  green. The non-vacuity guard matters here: a queue that is empty because nothing shipped proves
+  nothing, and is the most available way for this criterion to pass while the process is broken.
 
-**Seam ticket:** filed as a child of FRE-1078 and parked until the skill amendment and the ADR-0129
-re-scope have both landed. It owns **AC-4 and AC-5**; AC-1 through AC-3 are decidable when their
-implementing tickets are finished.
+- **AC-5 — An ADR's objective is still tested after decomposition, and a failed one cannot be declared
+  Implemented.** For the first ADR to complete its chain under this rule: its seam ticket was activated
+  at the last child's merge, and it records a verdict — green, red or inconclusive — on **every** one of
+  that ADR's criteria, each with the query or record that decided it. · **Check:** the seam ticket's
+  close-out comment against the ADR's criteria list, and the ADR's `Status` field. · *Fails if* any
+  criterion is unadjudicated, any verdict cites no deciding evidence, the ADR reached `Implemented` while
+  any verdict is red or inconclusive, or any non-green verdict has no filed remediation ticket. Closing
+  on adjudication is deliberate — the seam's commissioned work is *knowing* — but a red verdict must
+  therefore be visible somewhere, and this criterion is what forces it into the ADR's `Status` and a
+  remediation ticket rather than into silence.
+
+**Seam ticket:** filed as a child of FRE-1078, parked until the skill amendment and the ADR-0129
+re-scope have both landed, then activated by master per D2. AC-1, AC-2 and AC-3 are adjudicable on
+activation; AC-4 and AC-5 follow on their windows.
 
 ---
 

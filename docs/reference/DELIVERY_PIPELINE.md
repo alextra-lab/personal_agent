@@ -21,8 +21,10 @@ role-scoped Claude Code sessions plus the CI gate stack. **Merge ≠ deploy ≠ 
   then merges server-side. Workers never merge.
 - **Deploy authority** — owns the deploy path (VPS gateway rebuild), live health verification,
   and rollback. A perfect plan with prod down is still a failure.
-- **Proof enforcement** — "Done" means *proven against the backing ADR's acceptance criteria*,
-  not "merged and runs." Evidence before assertion.
+- **Proof enforcement** — "Done" means *proven against the ticket's own acceptance criteria* plus a
+  deployed, health-verified change, not "merged and runs." Evidence before assertion. A backing ADR's
+  own criteria are proven once, by that ADR's **seam ticket**, never per child (ADR-0130); what the
+  ADR still gates at each child's merge is design adherence.
 - **Drift catcher** — reconciles three things that lie independently: the code, the MASTER_PLAN,
   and the Linear board. State is verified against durable evidence (merged SHAs, CI results, live
   health), never against a label.

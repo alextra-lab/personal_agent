@@ -61,11 +61,18 @@ context is warm — you built this — so the fix is cheap. *(This is the old `/
 skill is gone.)*
 
 ## 2 — Scope
-Read ticket body + linked ADRs + specs. Summarize scope in 3–5 bullets. **Pull out the acceptance
-criteria this ticket carries from the backing ADR (adr SKILL Step 5) — the testable, outcome-level
-invariants you must prove. They are the definition of done.** If a feature ticket names none and it is
-not a standalone bug, get them from the ADR or flag the gap before coding — master will bounce a PR
-with no provable criteria.
+Read ticket body + linked ADRs + specs. Summarize scope in 3–5 bullets.
+
+**Read the backing ADR for design intent — not for criteria to inherit** (ADR-0130 D1/D3). The diff
+must implement that ADR *as designed*, and silent divergence still bounces at the gate; but the ADR's
+own acceptance criteria are **not yours to carry, quote, restate or discharge** — they are asserted
+once, by that ADR's seam ticket (lifecycle-rules § Ticket state › Seam tickets).
+
+**Pull out the acceptance criteria written on this ticket** — the testable, outcome-level invariants
+about *this ticket's own change*, decidable from your own deliverable once you are finished. They are
+the definition of done. If a feature ticket names none and it is not a standalone bug, **flag the gap
+before coding** — master will bounce a PR with no provable criteria, and criteria lifted from the
+backing ADR are not a substitute; ask master to have criteria written on the ticket instead.
 
 ## 3 — Plan + (risk-tiered) codex review
 Write a plan: atomic steps, exact file paths, exact test commands.
@@ -87,10 +94,10 @@ doesn't show. Master backstops this at the gate — a mis-tiered Standard change
 skipped codex gets bounced. (One phase = one PR — see halt conditions.)
 
 ## 4 — TDD implement
-Failing test first → confirm it fails → implement. **Each acceptance criterion from Step 2 gets a
-test or probe that asserts the *outcome* — the invariant actually holds — not that the component is
-wired; this is the proof master's gate reads.** Standards (`.claude/CLAUDE.md`) + ADR-0074 identity
-threading on every new `log.*` / `bus.publish` / Cypher `MERGE|CREATE`.
+Failing test first → confirm it fails → implement. **Each of this ticket's own acceptance criteria
+from Step 2 gets a test or probe that asserts the *outcome* — the invariant actually holds — not that
+the component is wired; this is the proof master's gate reads.** Standards (`.claude/CLAUDE.md`) +
+ADR-0074 identity threading on every new `log.*` / `bus.publish` / Cypher `MERGE|CREATE`.
 
 ## 5 — Meet the objective — fold in, don't over-ticket
 A ticket is an **objective** — a user story, usually spawned from an ADR but not uniquely — **not a
@@ -138,11 +145,13 @@ checklist ONLY (see lifecycle-rules PR hygiene).
 **Then post a final comment on the Linear ticket addressed to master** (`save_comment` on the
 issue) — this is required, not optional. It carries everything master needs that does NOT belong
 in the PR's pre-merge checklist:
-- **acceptance-criteria proof** (the master gate's input — master SKILL Step 4): the backing ADR + the
-  specific criteria this ticket implements, and for each, the evidence it is delivered end to end
-  (test name + result, probe/query output, or observed behaviour at the criterion's altitude). Without
-  it master bounces the PR. *(Standalone bug: the reproducing test / verification stands in for ADR
-  provenance.)*
+- **acceptance-criteria proof** (the master gate's input — master SKILL Step 4): the backing ADR named
+  for **provenance and design adherence**, then **this ticket's own acceptance criteria** and, for each,
+  the evidence it is delivered end to end (test name + result, probe/query output, or observed behaviour
+  at the criterion's altitude). Record the **observed value**, not the assertion that you checked it.
+  Without it master bounces the PR. The backing ADR's *own* criteria are **not** proven here — they
+  belong to its seam ticket (ADR-0130 D2). *(Standalone bug: the reproducing test / verification stands
+  in for ADR provenance.)*
 - **self-review summary** (the executive input for master's gate — master SKILL Step 2): the
   code-review effort level run **and** the security-review verdict; what they flagged (confirmed
   findings, most-severe first) and what you fixed on-branch; call out anything you deliberately did

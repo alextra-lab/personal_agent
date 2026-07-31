@@ -72,13 +72,15 @@ Ticket is `In Progress`/`In Review` (In Review = PR open, set by the integration
 codex adequacy, handoff completeness, AC proof, drift, seam, and the merge call all stay yours
 (lifecycle-rules § Signal trust boundary).
 
-**Acceptance-criteria gate — the binding bar. "Done" means *provably delivered against the backing
-ADR*, not merged-and-runs.** A feature / ADR-implementation ticket passes ONLY if all three hold:
-- **Provenance + adherence.** The PR or handoff comment names the backing ADR (or spec) and the
-  specific acceptance criteria / invariants this ticket implements, and the diff implements them *as
-  specified* — no silent divergence from the ADR's design. If the design genuinely changed, the ADR
-  is updated first (doc-drift, Step 3). A feature ticket with no backing ADR and no stated criterion
-  → **bounce**: there is nothing to verify against.
+**Acceptance-criteria gate — the binding bar. "Done" means *provably delivered against this ticket's
+own acceptance criteria*, not merged-and-runs** (ADR-0130 D1). A feature / ADR-implementation ticket
+passes ONLY if all four hold:
+- **Provenance + design adherence (D3).** The PR or handoff comment names the backing ADR (or spec),
+  and the diff implements that ADR *as designed* — no silent divergence. If the design genuinely
+  changed, the ADR is updated first (doc-drift, Step 3). **Provenance survives; criterion inheritance
+  does not** — do NOT require this ticket to prove the backing ADR's criteria, and treat a handoff that
+  quotes or restates them as its own as mis-scoped. A feature ticket with no backing ADR and no
+  criteria written on the ticket → **bounce**: there is nothing to verify against.
 - **Folded-in supporting changes are expected — not scope creep, not a missing ticket.** Per build
   skill Step 5, a build folds non-ADR supporting fixes and in-PR review fixes into its PR (noted in the
   handoff) instead of spawning tickets — this is a single-developer project. Validate they genuinely
@@ -86,15 +88,19 @@ ADR*, not merged-and-runs.** A feature / ADR-implementation ticket passes ONLY i
   mode to prevent is over-ticketing, not the extra diff that makes the build correct. **You keep full
   review judgment over a fold-in** — bounce one that's risky, unrelated, or scope creep in disguise;
   you're just not bouncing it *merely* for lacking its own ticket.
-- **Proof, not assertion.** Each named criterion carries evidence it is *delivered end to end*, not
-  merely wired — a test asserting the outcome, a probe/query result, or observed behaviour, at the
-  altitude of the criterion (the graph holds the right fact · the edge actually evicts · the guard
-  actually fails a bad input), NOT "the component runs" or "deploy exited 0". Reuse what exists
-  (joinability probe, a Neo4j/ES query, a curl) — this is a *checking* burden, not a mandate to build
-  new test infrastructure.
-- **Seam ownership.** If this ticket is one child of a decomposed ADR, a child closing does NOT close
-  the ADR. Confirm who asserts the *assembled* ADR intent holds; if no one owns that seam, flag it
-  before merge.
+- **Proof, not assertion.** Each acceptance criterion **written on this ticket** carries evidence it is
+  *delivered end to end*, not merely wired — a test asserting the outcome, a probe/query result, or
+  observed behaviour, at the altitude of the criterion (the graph holds the right fact · the edge
+  actually evicts · the guard actually fails a bad input), NOT "the component runs" or "deploy exited
+  0". Read the **observed value**, not the claim that it was checked. Reuse what exists (joinability
+  probe, a Neo4j/ES query, a curl) — this is a *checking* burden, not a mandate to build new test
+  infrastructure. The backing **ADR's** criteria are not proven here; they are asserted once, at its
+  seam ticket.
+- **Seam ownership (D2) — a mechanism now, not a flag to raise.** A child closing does NOT close the
+  ADR, and nothing in this gate asserts the ADR's objective. Confirm the backing ADR names exactly one
+  **seam ticket** — filed, parked, due-dated, holding all of the ADR's criteria (lifecycle-rules
+  § Ticket state › Seam tickets). A decomposed ADR with no seam ticket is a missing artifact: flag it
+  before merge and have the `adr` session file it.
 
 Missing provenance or proof on a feature ticket → **bounce back to the build session; do not merge on
 an artifact-level "looks done"** (same bounce mechanism as the codex tier backstop, Step 2).
@@ -166,6 +172,21 @@ For concurrent-session safety, still confirm timing if another session is active
   nonzero exit, invalid JSON, or a printed error → STOP and surface stderr — never fall back to
   reconstructing the logic inline. The resolver only reads; master still owns every *mutation*
   below. Binding rules:
+  - **Decidability check before a `stream:` label (ADR-0130 D6).** Before applying a `stream:` label
+    to an **implementation** ticket, confirm each of its acceptance criteria is **decidable from that
+    ticket's own deliverable when the ticket is finished** — D1's test, not the weaker "is it about
+    its own work". **Seam tickets are explicitly exempt**: a seam ticket exists to carry exactly the
+    criteria this test rejects, so applying it there would make every seam ticket permanently
+    unlabellable — its dispatch check is D2's instead (all of the backing ADR's criteria present, each
+    with a stated evidence procedure, and the due date reached). A criterion needing a production
+    window, a census, future traffic or an owner action fails the implementation-ticket test and must
+    be rewritten — or moved to the ADR's seam ticket — before the label goes on. This is the last
+    point *before* the build: a criterion that first bites at the gate has already cost the build, and
+    an **unmeetable** one (the dead-emit-path case) cannot be fixed by bouncing at all.
+  - **Seam-activation sweep.** In the same pass, find every parked seam ticket whose due date is on or
+    before today and activate it — `Approved` + `stream:adr` (lifecycle-rules § Ticket state › Seam
+    tickets). The due date is a **marker, not an actuator**: the resolver never reads due dates, so
+    this sweep is the only thing that wakes a seam ticket, and activation is bounded by the next merge.
   - **Exactly one intended head, always pinned.** If more than one ticket is eligible, move the
     High pin to the intended head NOW — never leave the head to creation-date ties. Verify after
     every mutation: the eligible set contains exactly one Urgent-or-High ticket.

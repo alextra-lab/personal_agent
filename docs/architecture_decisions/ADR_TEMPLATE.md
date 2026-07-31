@@ -93,6 +93,11 @@ State the decision clearly and concisely:
 
 **How will we know this decision actually delivered — not just merged?**
 
+These are the **ADR's own** criteria: they state the ADR's objective, they stay with the ADR,
+and they are asserted in exactly one place — the seam ticket named below. They are **never
+sliced across implementation tickets** (ADR-0130 D1), so they are allowed to be assembled,
+population-level or long-horizon.
+
 Each criterion is a **testable, discriminating, outcome-level invariant** — the observable
 result that proves the decision worked — plus *how* it is checked (reuse existing
 instrumentation where possible: a query, a probe, a test assertion, a CLI call).
@@ -107,8 +112,13 @@ restates the task.
 - **AC-1** — <observable outcome> · **Check:** <query | probe | test | CLI> · *Fails if* <…>
 - **AC-2** — <observable outcome> · **Check:** <…> · *Fails if* <…>
 
-**Seam owner (for a decomposed ADR):** name who asserts the *assembled* intent holds once
-all child tickets land — so the ADR does not close just because its last child merged.
+**Seam ticket (any ADR with implementation tickets):** name the single Linear ticket that
+asserts these criteria — **all** of them — once the chain lands, plus its **due date** (the
+earliest date they all become adjudicable). Exactly one per ADR, even a single-ticket one:
+an implementation ticket carries criteria for its own work only and never discharges the
+ADR's (ADR-0130 D1/D2). File it parked with the chain; master activates it at the first
+advance-dispatch on or after the due date, and an `adr` session adjudicates it. So the ADR
+does not close just because its last child merged.
 
 ---
 

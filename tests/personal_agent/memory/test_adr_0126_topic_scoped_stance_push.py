@@ -61,8 +61,9 @@ the lexical arm's live full-text score decides it.
 
 **Precondition semantics.** Every criterion below that depends on "the target entity was
 recalled" asserts *recall candidacy* — an entity-kind record exists in the turn-evidence
-admission record's ``items`` with no ``pre_drop_reason`` (i.e. not a producer-side gate
-discard from a path that never actually delivered it to ``_enrich_with_stances``) — not
+admission record's ``items`` whose ``drop_reason`` is not one of the seven producer-side
+``RECALL_*`` gate reasons (i.e. not a discard from a path that never actually delivered it
+to ``_enrich_with_stances``) — not
 render *admission* (``.admitted``). An entity with an empty description is still a
 legitimate recall candidate even though it will not render (FRE-1010's empty-description
 filter), which is what AC-6's empty-affect fixture needs: it must be a real candidate

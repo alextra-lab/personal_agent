@@ -3484,7 +3484,14 @@ async def step_init(
                     "summary": str(
                         item.get("summary")
                         or item.get("description")
-                        or item.get("affect")
+                        # A stance item carries no summary/description/name -- only
+                        # target and affect -- so the affect alone would be an
+                        # orphaned preference string with no attribution (ADR-0126 T1).
+                        or (
+                            f"{item['target']}: {item['affect']}"
+                            if item.get("type") == "stance"
+                            else None
+                        )
                         or item.get("name", "")
                     ),
                 }

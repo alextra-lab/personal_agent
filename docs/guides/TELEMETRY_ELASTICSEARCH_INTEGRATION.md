@@ -163,26 +163,35 @@ Elasticsearch integration is enabled by default when the service starts. To disa
 
 ### Index Configuration
 
-Indices use daily rotation: `agent-logs-YYYY.MM.DD`
+Indices are named per family and partitioned by date; see below — **do not assume a single
+fixed partition per family**, this is a live migration in progress (FRE-1036).
 
-ILM policy: `docker/elasticsearch/ilm-policy.json` (30 day retention)
+Index templates and per-family ILM policies: `docker/elasticsearch/`, registered by
+`scripts/setup-elasticsearch.sh`.
 
-Index template: `docker/elasticsearch/index-template.json`
+#### Partition, per family — migration in progress (FRE-1036), verified 2026-07-31
 
-#### ILM policies per family
+FRE-1036 is consolidating every family from daily indices onto monthly indices
+(`<family>-YYYY-MM`, dash), each with a `min_age`-delete ILM policy (32d warm, no rollover). This
+is a family-by-family, in-progress migration, not a single cutover — verified live on
+2026-07-31 that `agent-logs`, `agent-insights`, `agent-monitors-slm-health`, and
+`agent-captains-captures` each currently have **both** daily-shaped and monthly-shaped indices
+live at once, while `agent-monitors-joinability` had already finished migrating within the same
+hour of that check. Do not rely on a table asserting "daily" or "monthly" per family — it will be
+stale again as soon as the next family migrates. Instead, check what's actually live before
+relying on a shape:
 
-Each daily/monthly family that needs retention has its own ILM policy (registered by
-`scripts/setup-elasticsearch.sh`, attached via `index.lifecycle.name` in the family template):
+```bash
+curl -s 'http://elasticsearch:9200/_cat/indices?h=index' \
+  | grep '^<family-prefix>-' \
+  | python3 scripts/es_index_granularity.py <family-prefix>
+```
 
-| Family | Policy file | Partition | Retention |
-|--------|-------------|-----------|-----------|
-| `agent-logs-*` | `ilm-policy.json` | daily (rollover 7d/1gb) | 30d |
-| `agent-monitors-joinability-*` | `monitors-joinability-ilm-policy.json` | daily (rollover) | 180d |
-| `agent-insights-*` | `insights-ilm-policy.json` | monthly (`min_age` delete) | 365d |
-| `agent-monitors-slm-health-*` | `monitors-slm-health-ilm-policy.json` | monthly (`min_age` delete) | 90d |
-
-Low-volume diagnostic families (insights, slm-health) partition **monthly** and delete by
-`min_age` from index creation — no rollover write-alias — to avoid over-sharding (FRE-543).
+See [query-elasticsearch skill](../skills/query-elasticsearch.md#determining-a-familys-index-granularity--dont-strip-dates-in-the-shell)
+for the full recipe (tested classifier, guard against sibling-family name collisions, and the
+live-coverage aggregation as a secondary check) and FRE-1036's own plan
+(`docs/superpowers/plans/2026-07-31-fre-1036-es-ilm-monthly-rollover.md`) for the target design and
+per-family retention windows.
 
 ## Benefits
 

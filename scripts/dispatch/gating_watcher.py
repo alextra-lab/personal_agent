@@ -96,7 +96,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import hashlib
 import json
 import os
 import re
@@ -114,12 +113,11 @@ import structlog
 from scripts.dispatch import context_probe, trigger_ledger
 from scripts.dispatch.launcher import (
     CommandRunner,
-    known_streams,
     stream_for_tmux_session,
     subprocess_runner,
     topology_for,
 )
-from scripts.dispatch.pane_state import permission_prompt_snippet, session_is_idle
+from scripts.dispatch.pane_state import session_is_idle
 from scripts.dispatch.tmux_target import exact_pane, exact_session
 from scripts.reconcile_board import _git_toplevel, load_linear_key
 
@@ -164,35 +162,6 @@ _CONTEXT_PRESSURE_NUDGE = (
     "Context at {pct}% — informational, owner-gated: SURFACE this to the owner as a heads-up. "
     "Do NOT run prepare-reset / checkpoint / /clear unless the owner explicitly instructs it — "
     "the reset decision is the owner's alone, never auto-run on this nudge."
-)
-
-# Permission-stall nudge (FRE-867): a worker seat parked on a Claude Code
-# permission-confirmation prompt is invisible until surfaced -- FRE-860 sat
-# ~18h, 2026-07-30 both build seats sat ~16.5h, one on exactly this class.
-# One nudge per stall EPISODE (the dedup key includes a content hash, not
-# just the session -- see the call site), self-heals after 6h if the same
-# episode is still unresolved. Reuses the master TTL rather than inventing a
-# second magic number, same reasoning as DEFAULT_CONTEXT_PRESSURE_TTL_S.
-DEFAULT_PERMISSION_STALL_TTL_S: float = DEFAULT_MASTER_TTL_S
-# There is no safe universal digit to suggest for "approve"/"deny" -- the
-# menu's option count and order vary per prompt (a real fixture in this file
-# has option 2 mean "Yes, and don't ask again", not "No"). A first draft of
-# this nudge hardcoded "1"=yes/"2"=no and FRE-867's codex plan-review caught
-# it: that recipe could make master broaden a permission instead of denying
-# it. Fixed by deferring entirely to the options actually shown live.
-_PERMISSION_STALL_NUDGE = (
-    "Seat {session} is BLOCKED on a permission-confirmation prompt (FRE-867 -- the "
-    "silent-hang class) -- it is waiting on a human decision, not doing autonomous "
-    "work. SURFACE this to the owner as a decision: name the seat and show them the "
-    "pending command below. Do NOT approve or deny it yourself -- nothing is "
-    "auto-approved beyond the existing settings allowlist, and the menu's option "
-    "count/order varies per prompt, so there is no safe universal digit to suggest. "
-    "This snippet may be stale if delivery was delayed -- re-capture the seat's live "
-    "pane (tmux capture-pane -t {pane} -p) before deciding. Once the owner decides, "
-    "read the options shown live and answer in the seat's own pane: tmux send-keys -t "
-    '{pane} -l "<digit>" then tmux send-keys -t {pane} Enter for a specific option, '
-    "or bare Enter alone to accept the highlighted default. Never answer blind. "
-    "Pending pane content: {snippet}"
 )
 
 # Age past which a still-unconfirmed gating trigger (injected into a busy pane,
@@ -1103,6 +1072,13 @@ def resolve_queued_triggers(
 
     Per entry, in order:
 
+    0. **Orphaned source → retire.** An entry whose ``source`` has no living
+       producer (currently: ``permission-stall``, removed in FRE-1084) is
+       retired unconditionally rather than reaching the checks below — its
+       ticket is typically non-numeric (session-keyed, like context-pressure's),
+       so the PR-closure check in step 1 would never fire for it, and it would
+       otherwise fall through to ``reoffer`` and redeliver a stale, orphaned
+       payload.
     1. **Obsolete → consume.** A PR-ticketed entry whose PR is *authoritatively*
        closed/merged is moot (master acted, or the PR went away). Absence from
        ``open_pr_numbers`` alone is never sufficient — see ``pr_is_closed``. A
@@ -1158,6 +1134,22 @@ def resolve_queued_triggers(
     }
     delivered: list[str] = []
     for event_id, entry in unconfirmed.items():
+        if entry.source == "permission-stall":
+            # The permission-stall producer was removed (FRE-1084) -- any entry
+            # of this source still unconsumed is a pre-existing, now-orphaned
+            # ledger record with no live producer to re-arm it. Retire it rather
+            # than falling through to reoffer(): its ticket is a non-numeric
+            # session id (like context-pressure's), so the PR-closure
+            # obsolescence check below never fires for it, and reoffer() would
+            # otherwise redeliver a stale nudge to master on the first tick
+            # after this fix deploys.
+            ledger = trigger_ledger.mark_consumed(ledger, event_id, now)
+            ledger_persist(ledger)
+            logger.info(
+                "gating_queued_permission_stall_retired", trace_id=trace_id, event_id=event_id
+            )
+            continue
+
         if _is_superseded(entry, unconfirmed):
             # A newer unconfirmed trigger for the same PR and seat exists, so
             # this one is stale. Reached by an ordinary re-push while the target
@@ -1240,8 +1232,6 @@ def run_once(
     channel_secret: str | None = None,
     queued_escalated: set[str] | None = None,
     queued_escalation_s: float = DEFAULT_QUEUED_ESCALATION_S,
-    permission_stall_reader: Callable[[], Sequence[tuple[str, str]]] = lambda: (),
-    permission_stall_ttl_s: float = DEFAULT_PERMISSION_STALL_TTL_S,
 ) -> dict[str, float]:
     """Run one watcher tick, mutating and returning the dedup store.
 
@@ -1283,12 +1273,6 @@ def run_once(
             run, which surfaces at most once by definition.
         queued_escalation_s: Age past which a still-unconfirmed trigger is
             surfaced to the owner.
-        permission_stall_reader: Returns ``(session, snippet)`` pairs for
-            every worker seat currently parked on a permission-confirmation
-            prompt (FRE-867). Defaults to none — a caller that doesn't pass
-            this gets no permission-stall behavior at all.
-        permission_stall_ttl_s: Suppression TTL for the permission-stall
-            nudge (per stall episode — see the dedup key at the call site).
 
     Returns:
         The updated dedup store.
@@ -1315,102 +1299,6 @@ def run_once(
             persist=ledger_persist,
             logger=logger,
         )
-
-    # --- permission-stall nudge (FRE-867) ---------------------------------
-    # Placed BEFORE board_fetcher(): this signal has no dependency on PR/gh
-    # state, and must keep firing even when GitHub is unreachable (a
-    # fetch_open_prs() failure below would otherwise silently suppress this
-    # too -- caught by codex plan-review).
-    for session, snippet in permission_stall_reader():
-        logger.info("permission_stall", trace_id=trace_id, session=session)
-        if not execute:
-            continue
-        content_hash = hashlib.sha256(snippet.encode()).hexdigest()[:12]
-        # Hyphen inside ONE colon-segment, not a third `:` segment --
-        # prune_state's _pr_of_key treats a 3-plus-colon key as
-        # <kind>:<pr>:<sha> and would evict this every tick (the session is
-        # never a PR number in open_prs), spamming master every 60s. Mirrors
-        # context_pressure's 2-part ``ctxpressure:<session>`` key for the
-        # same reason. The hash makes a materially different prompt mint a
-        # fresh key (a new stall episode is never suppressed by an older,
-        # already-notified one), while the SAME still-pending prompt
-        # continues to dedup normally tick-to-tick.
-        key = f"permstall:{session}-{content_hash}"
-        if _suppressed(state, key, now, permission_stall_ttl_s):
-            continue
-        pane_target = exact_pane(session)
-        # send_to_session delivers via `tmux send-keys -l`, which sends any
-        # embedded newline as a literal byte with no bracketed-paste framing.
-        # Every other trigger in this module is a single-line payload; this
-        # is the first to carry a multi-line pane snippet, and an embedded
-        # newline risks the target's input box treating it as a premature
-        # submit -- splitting the safety preamble from the payload it must
-        # travel with (security review finding). Flatten to one line so the
-        # whole nudge is guaranteed to arrive as the single atomic message
-        # every other payload here relies on; no information is lost, only
-        # the original line breaks are made visible instead of literal.
-        flat_snippet = snippet.replace("\n", " | ")
-        command = _PERMISSION_STALL_NUDGE.format(
-            session=session, pane=pane_target, snippet=flat_snippet
-        )
-        tick_ledger, record_outcome = trigger_ledger.record_pending(
-            tick_ledger,
-            event_id=key,
-            source="permission-stall",
-            target_pane=MASTER_SESSION,
-            ticket=session,  # non-numeric -- ages out by TTL, not open-PR closure (mirrors ctxpressure)
-            command=command,
-            preconditions={},
-            now=now,
-            ttl_s=permission_stall_ttl_s,
-        )
-        ledger_persist(tick_ledger)
-        if record_outcome == "duplicate":
-            logger.warning(
-                "permission_stall_skip",
-                trace_id=trace_id,
-                session=session,
-                reason="tick_ledger-duplicate",
-            )
-            continue
-        tick_ledger = trigger_ledger.mark_send_started(tick_ledger, key, now)
-        ledger_persist(tick_ledger)
-
-        def _record_queued_permstall(event_id: str = key) -> None:
-            # Runs BEFORE the keystrokes (see send_to_session's on_queued):
-            # the durable record of an unconfirmed delivery must never trail
-            # the injection it describes.
-            nonlocal tick_ledger
-            tick_ledger = trigger_ledger.mark_queued(tick_ledger, event_id, now)
-            ledger_persist(tick_ledger)
-
-        stall_outcome = send_to_session(
-            MASTER_SESSION, command, runner, require_idle=False, on_queued=_record_queued_permstall
-        )
-        if stall_outcome == "queued":
-            # Master's pane was busy -- delivery issued, receipt unobserved.
-            # The existing, ticket-agnostic resolve_queued_triggers pass
-            # re-offers this once master goes idle; no new code needed there.
-            logger.warning(
-                "permission_stall_unconfirmed",
-                trace_id=trace_id,
-                session=session,
-                reason="master-busy",
-            )
-        elif stall_outcome == "sent":
-            logger.info("permission_stall_send", trace_id=trace_id, session=session)
-            tick_ledger = trigger_ledger.mark_sent(tick_ledger, key, now)
-            ledger_persist(tick_ledger)
-            state[key] = now
-            persist(state)
-            tick_ledger = trigger_ledger.mark_consumed(tick_ledger, key, now)
-            ledger_persist(tick_ledger)
-        else:
-            logger.warning(
-                "permission_stall_skip", trace_id=trace_id, session=session, reason=stall_outcome
-            )
-            tick_ledger = trigger_ledger.mark_consumed(tick_ledger, key, now)
-            ledger_persist(tick_ledger)
 
     prs = board_fetcher()
 
@@ -1623,7 +1511,7 @@ def run_once(
     pruned = prune_state(
         state,
         now=now,
-        max_ttl_s=max(master_ttl_s, worker_ttl_s, context_pressure_ttl_s, permission_stall_ttl_s),
+        max_ttl_s=max(master_ttl_s, worker_ttl_s, context_pressure_ttl_s),
         open_prs=[pr.number for pr in prs],
     )
     if pruned != state:
@@ -1687,32 +1575,6 @@ def _master_context_reader() -> list[ContextReading]:
         return []
     ctx, model = context_probe.read_context(jsonl)
     return [ContextReading(MASTER_SESSION, ctx, model)]
-
-
-def _capture_permission_stalls(runner: CommandRunner) -> list[tuple[str, str]]:
-    """Capture every worker seat's pane and report those parked on a permission prompt (FRE-867).
-
-    Enumerates every known dispatch stream's tmux session -- not gated on any
-    open PR, since a seat can stall on a permission prompt before it has ever
-    opened one (the FRE-860 failure mode). A seat that is not currently
-    launched is silently skipped.
-
-    Args:
-        runner: The command runner seam (shells ``tmux``).
-
-    Returns:
-        ``(session, snippet)`` pairs for every stalled seat found this tick.
-    """
-    stalls: list[tuple[str, str]] = []
-    for stream in known_streams():
-        session = topology_for(stream).tmux_session
-        if runner(["tmux", "has-session", "-t", exact_session(session)]).returncode != 0:
-            continue
-        pane = runner(["tmux", "capture-pane", "-t", exact_pane(session), "-p"])
-        snippet = permission_prompt_snippet(pane.stdout)
-        if snippet is not None:
-            stalls.append((session, snippet))
-    return stalls
 
 
 def _resolver(api_key: str, logger: Logger) -> Callable[[str | None], str | None]:
@@ -1794,12 +1656,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_QUEUED_ESCALATION_S,
         help="Seconds after which a still-unconfirmed gating trigger is surfaced (FRE-939).",
     )
-    parser.add_argument(
-        "--permission-stall-ttl",
-        type=float,
-        default=DEFAULT_PERMISSION_STALL_TTL_S,
-        help="Suppression TTL per permission-stall episode, seconds (FRE-867).",
-    )
     args = parser.parse_args(argv)
 
     api_key = load_linear_key()
@@ -1857,8 +1713,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             channel_secret=channel_secret,
             queued_escalated=queued_escalated,
             queued_escalation_s=args.queued_escalation_timeout,
-            permission_stall_reader=lambda: _capture_permission_stalls(subprocess_runner),
-            permission_stall_ttl_s=args.permission_stall_ttl,
         )
         if not board_fetched:
             return  # kill-switch halted the tick before the board was read

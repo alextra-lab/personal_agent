@@ -384,8 +384,9 @@ date by construction.
   with the console, or any prose statement still sets an autonomy level the console does not record.
 - **AC-2 — nothing re-grows, with no compaction ritual existing.** · **Check:** at W's end:
   `wc -l docs/plans/OWNER_CONSOLE.md docs/plans/LAST_SESSION.md` within each file's stated bound;
-  `git log --since=<T1-merge-date> --diff-filter=A -- docs/plans/` names no new file;
-  `git log --since=<T1-merge-date> -p -- docs/plans/OWNER_CONSOLE.md docs/plans/LAST_SESSION.md`
+  `git log <T1-merge-sha>..HEAD --diff-filter=A --name-only --format= -- docs/plans/` prints
+  nothing (the range starts after T1, so the console's own addition is excluded by construction);
+  `git log <T1-merge-sha>..HEAD -p -- docs/plans/OWNER_CONSOLE.md docs/plans/LAST_SESSION.md`
   contains no **compaction commit**, defined mechanically as a commit whose diff net-removes more
   than 25% of the file's lines while its message cites no specific met retirement condition.
   · *Fails if* either bound is exceeded, a successor coordination file appears under `docs/plans/`,

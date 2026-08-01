@@ -304,7 +304,18 @@ class TestAC2RealProductionCuratedSet:
             assert ok is True
             affects[target] = affect
 
-        wire, _evidence = await _run_turn(owner_service, "Completely unrelated probe about weather")
+        wire, evidence = await _run_turn(owner_service, "Completely unrelated probe about weather")
+
+        # Precondition: none of the real curated targets is itself a recall candidate on
+        # this turn -- proves the affects below reach the wire because of always-present
+        # injection, not because entity recall independently surfaced them (AC-2's own
+        # failure mode, and the exact conjunction the criterion requires). A miss here is
+        # INCONCLUSIVE, not a stance defect.
+        for target in curated:
+            if any(_is_undropped_entity_candidate(item, target) for item in evidence.recall.items):
+                pytest.skip(
+                    f"precondition failed: {target!r} unexpectedly a recall candidate — re-fixture"
+                )
 
         serialized = _serialized(wire)
         for target, affect in affects.items():

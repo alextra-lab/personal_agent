@@ -355,16 +355,30 @@ class TestAC1TopicScopedStanceReachesModelOnlyWhenEntityRecalled:
         missing, not a masked stance-layer defect. The control entity's own candidacy is
         asserted first, so "target absent" is not indistinguishable from "recall found
         nothing at all, including the control" (a gap codex's plan review flagged).
+
+        "Kelvorine" is seeded as a real recall candidate on its *own* turn -- so its
+        stance genuinely exists (``assert_stance`` matches on an existing target and
+        writes nothing otherwise, verified below by the ``True`` return) -- but that
+        turn is never the one probed. The probe turn only discusses "Bragmoss"
+        (token-disjoint from "Kelvorine"), so the assertion below is discriminating: it
+        can only pass because Kelvorine was not *recalled* on this turn, not because it
+        was never written.
         """
-        # "Kelvorine" is stanced but never seeded as a recall candidate on this turn --
-        # only "Bragmoss" (token-disjoint from it) is.
-        await owner_service.assert_stance(
+        await _seed_discussed_entity(
+            owner_service,
+            "Kelvorine",
+            turn_id="fre1015-seed-ac1-negative-kelvorine",
+            user_message="Tell me about Kelvorine please",
+        )
+        ok = await owner_service.assert_stance(
             Stance(target="Kelvorine", affect="prefers it over the alternative", observed_at=_T0)
         )
+        assert ok is True
+
         await _seed_discussed_entity(
             owner_service,
             "Bragmoss",
-            turn_id="fre1015-seed-ac1-negative",
+            turn_id="fre1015-seed-ac1-negative-bragmoss",
             user_message="Tell me about Bragmoss please",
         )
 

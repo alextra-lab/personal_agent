@@ -84,6 +84,11 @@ async def test_ac4a_claim_never_reaches_the_serialized_provider_request(
     # Every recall toggle at its most permissive setting (ADR-0126 AC-4).
     monkeypatch.setattr(settings, "relevance_bounded_recall_enabled", True)
     monkeypatch.setattr(settings, "multipath_recall_enabled", True)
+    monkeypatch.setattr(settings, "lexical_arm_enabled", True)
+    monkeypatch.setattr(settings, "multiquery_arm_enabled", True)
+    monkeypatch.setattr(settings, "structural_arm_enabled", True)
+    monkeypatch.setattr(settings, "structural_type_predicate_enabled", True)
+    monkeypatch.setattr(settings, "structural_class_predicate_enabled", True)
     monkeypatch.setattr(settings, "proactive_memory_enabled", True)
     monkeypatch.setattr(settings, "recall_similarity_floor", 0.0)
 

@@ -306,7 +306,9 @@ async def test_hitting_the_ceiling_raises_even_when_the_stop_reason_lies(
 @pytest.mark.asyncio
 async def test_local_path_passes_session_summary_role(monkeypatch: pytest.MonkeyPatch) -> None:
     """FRE-1037: local path (provider=None) labels its call role=SESSION_SUMMARY, not sub_agent."""
-    fake_client = _FakeClient({"content": _valid_output(), "tool_calls": [], "finish_reason": "stop"})
+    fake_client = _FakeClient(
+        {"content": _valid_output(), "tool_calls": [], "finish_reason": "stop"}
+    )
     fake_client.respond = AsyncMock(wraps=fake_client.respond)
     monkeypatch.setattr(ss, "LocalLLMClient", lambda: fake_client)
 

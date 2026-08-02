@@ -704,11 +704,12 @@ class SecondBrainConsolidator:
         # always produce "group"-visibility nodes (visible to all CF Access users).
         visibility = "group"
 
-        # ADR-0115 D1/D3: partition extracted entities by output_kind *before* the Turn
-        # is constructed. `create_conversation` MERGEs a bare :Entity node for every name
-        # in `key_entities` (memory/service.py), so `key_entities` itself must already
-        # exclude ephemeral/finding names — gating only `create_entity` below would leak
-        # them into Core through that earlier MERGE.
+        # ADR-0115 D1/D3: partition extracted entities by output_kind *before* anything is
+        # written. `create_conversation` MERGEs a bare :Entity node for every name in
+        # `key_entities` (memory/service.py), so ephemeral/finding names must never reach
+        # it. Since FRE-1115 `key_entities` is built from the canonical names `create_entity`
+        # returns, and only `knowledge_entities` are passed to it — so the partition is what
+        # keeps them out of Core, on both the entity write and the Turn's inline MERGE.
         all_entities = extraction_result.get("entities", [])
         knowledge_entities = [
             e
@@ -717,47 +718,27 @@ class SecondBrainConsolidator:
         ]
         ephemeral_entities = [e for e in all_entities if e.get("output_kind") == "ephemeral"]
         finding_entities = [e for e in all_entities if e.get("output_kind") == "finding"]
-        knowledge_entity_names = [e.get("name", "") for e in knowledge_entities if e.get("name")]
 
-        # Create Turn node
-        turn = TurnNode(
-            turn_id=capture.trace_id,
-            trace_id=capture.trace_id,
-            session_id=capture.session_id,
-            timestamp=capture.timestamp,
-            summary=summary,
-            user_message=capture.user_message,
-            assistant_response=capture.assistant_response,
-            key_entities=knowledge_entity_names,
-            properties={
-                "tools_used": capture.tools_used,
-                "duration_ms": capture.duration_ms,
-                "outcome": capture.outcome,
-                # FRE-523: EVAL provenance so eval-derived KG content is identifiable.
-                "eval_mode": capture.eval_mode,
-            },
-        )
-        # Attach full entity data so create_conversation can set entity_type on inline nodes.
-        # This is a transient attribute — not part of the Pydantic model — used only during write.
-        object.__setattr__(turn, "_entity_data", all_entities)
-
-        await self.memory_service.create_conversation(
-            turn, user_id=capture.user_id, visibility=visibility
-        )
-        turns_created = 1
-
-        relationship_element_ids: list[str] = list(
-            await self.memory_service.fetch_turn_discusses_relationship_element_ids(
-                capture.trace_id, trace_id=capture.trace_id
-            )
-        )
-
+        # FRE-1115: entities are written FIRST, so the Turn can be recorded against the
+        # canonical names dedup actually resolved. When `create_conversation` ran first it
+        # bare-MERGEd an :Entity per raw name (memory/service.py); if `create_entity` then
+        # renamed the write, the description landed on the canonical node and the raw-name
+        # node was orphaned with no description forever — the single generator of all
+        # 1,404 empty-description entities on the live graph, still minting at ~9%.
+        #
         # Create entity nodes — knowledge items only (ADR-0115 D3 dispatch).
         entities_created = 0
         entity_ids: list[str] = []
+        # Raw extractor name -> the canonical name the write actually landed on. Every
+        # later reference to an entity (the Turn's key_entities, the inline type map,
+        # relationship endpoints) must go through this map or it will name a node that
+        # does not exist.
+        canonical_by_raw: dict[str, str] = {}
+        unresolved_entity_mentions: list[str] = []
         for entity_data in knowledge_entities:
+            raw_name = entity_data.get("name", "")
             entity = Entity(
-                name=entity_data.get("name", ""),
+                name=raw_name,
                 entity_type=entity_data.get("type", "Unknown"),
                 description=entity_data.get("description"),
                 properties=entity_data.get("properties", {}),
@@ -782,6 +763,76 @@ class SecondBrainConsolidator:
             if entity_id:
                 entities_created += 1
                 entity_ids.append(entity_id)
+                canonical_by_raw[raw_name] = entity_id
+            elif raw_name:
+                # FRE-1115: no raw-name fallback. Naming an unwritten entity on the Turn
+                # would have create_conversation bare-MERGE it — re-minting the exact
+                # orphan this reorder removes. The mention is recorded as a Turn property
+                # instead, so the turn stays joinable (ADR-0074) without a knowledge-free
+                # node entering the graph.
+                unresolved_entity_mentions.append(raw_name)
+                log.warning(
+                    "consolidation_entity_write_unresolved",
+                    trace_id=capture.trace_id,
+                    session_id=capture.session_id,
+                    entity_name=raw_name,
+                    reason="create_entity returned no id; mention recorded without an :Entity",
+                )
+
+        # Canonical names, order-preserving and de-duplicated: several raw spellings can
+        # resolve to one canonical node, and the Turn must discuss it once.
+        canonical_key_entities = list(dict.fromkeys(canonical_by_raw.values()))
+        # The inline type map is keyed by name, so it has to speak canonical too.
+        canonical_entity_data = [
+            {**e, "name": canonical_by_raw.get(e.get("name", ""), e.get("name", ""))}
+            for e in all_entities
+        ]
+
+        turn_properties: dict[str, Any] = {
+            "tools_used": capture.tools_used,
+            "duration_ms": capture.duration_ms,
+            "outcome": capture.outcome,
+            # FRE-523: EVAL provenance so eval-derived KG content is identifiable.
+            "eval_mode": capture.eval_mode,
+        }
+        if unresolved_entity_mentions:
+            turn_properties["unresolved_entity_mentions"] = unresolved_entity_mentions
+
+        # Create Turn node
+        turn = TurnNode(
+            turn_id=capture.trace_id,
+            trace_id=capture.trace_id,
+            session_id=capture.session_id,
+            timestamp=capture.timestamp,
+            summary=summary,
+            user_message=capture.user_message,
+            assistant_response=capture.assistant_response,
+            key_entities=canonical_key_entities,
+            properties=turn_properties,
+        )
+        # Attach full entity data so create_conversation can set entity_type on inline nodes.
+        # This is a transient attribute — not part of the Pydantic model — used only during write.
+        object.__setattr__(turn, "_entity_data", canonical_entity_data)
+
+        # FRE-1115: the result was previously discarded, so a failed Turn write was still
+        # reported as one created turn.
+        turn_written = await self.memory_service.create_conversation(
+            turn, user_id=capture.user_id, visibility=visibility
+        )
+        turns_created = 1 if turn_written else 0
+        if not turn_written:
+            log.warning(
+                "consolidation_turn_write_failed",
+                trace_id=capture.trace_id,
+                session_id=capture.session_id,
+                reason="create_conversation reported failure; entities written without a Turn",
+            )
+
+        relationship_element_ids: list[str] = list(
+            await self.memory_service.fetch_turn_discusses_relationship_element_ids(
+                capture.trace_id, trace_id=capture.trace_id
+            )
+        )
 
         # ephemeral items: no write anywhere -- already durably observed in Elasticsearch
         # via the unconditional write_capture()/schedule_es_index() call at capture time,
@@ -837,6 +888,8 @@ class SecondBrainConsolidator:
         for rel_data in extraction_result.get("relationships", []):
             source_name = rel_data.get("source", "")
             target_name = rel_data.get("target", "")
+            # ADR-0115 D3 gating is decided on the RAW name, before translation, so the
+            # existing skip semantics are unchanged by the canonicalisation.
             if source_name in dispatched_away_names or target_name in dispatched_away_names:
                 relationships_dispatch_skipped += 1
                 log.warning(
@@ -846,9 +899,25 @@ class SecondBrainConsolidator:
                     target=target_name,
                 )
                 continue
+            # FRE-1115: follow the rename. create_relationship MATCHes endpoints by
+            # `entity_id OR name`, so a raw name that dedup renamed now matches nothing —
+            # or, worse, an unrelated pre-existing node that happens to share it. On the
+            # live graph 2,115 edges hang off orphan nodes for exactly this reason.
+            canonical_source = canonical_by_raw.get(source_name)
+            canonical_target = canonical_by_raw.get(target_name)
+            if canonical_source is None or canonical_target is None:
+                relationships_dispatch_skipped += 1
+                log.warning(
+                    "dispatch_relationship_endpoint_unresolved",
+                    trace_id=capture.trace_id,
+                    source=source_name,
+                    target=target_name,
+                    reason="endpoint has no Core entity; edge would attach to a stranger",
+                )
+                continue
             relationship = Relationship(
-                source_id=source_name,
-                target_id=target_name,
+                source_id=canonical_source,
+                target_id=canonical_target,
                 relationship_type=rel_data.get("type", "RELATED_TO"),
                 weight=rel_data.get("weight", 1.0),
                 properties=rel_data.get("properties", {}),

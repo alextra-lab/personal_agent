@@ -78,6 +78,6 @@
 #     import line inserted above, then FRE-974 the SYSTEM_SESSION_ID import line
 #     + generate_embedding trace_id/session_id kwargs inserted above). ---
 - path: src/personal_agent/memory/service.py
-  line: 2238  # FRE-1115: +32 from the self-referential-description pattern + helper inserted above (was 2206 after FRE-1061, 2199 after FRE-1060, 2169 after FRE-1041, 2092 after FRE-1021)
+  line: 2242  # FRE-1115: +36 from the self-referential-description pattern + helper, and the mention_count ownership note (was 2206 after FRE-1061, 2199 after FRE-1060, 2169 after FRE-1041, 2092 after FRE-1021)
   pattern: cypher_merge
   reason: "dynamic on_create_clauses set origination; static analyzer can't see joined props (FP)"

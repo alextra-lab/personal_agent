@@ -1292,6 +1292,11 @@ class MemoryService:
                 # Create Turn→Entity DISCUSSES edges.
                 # entity_types_map lets us set entity_type on the node when we know it;
                 # falls back to preserving any existing type if unknown.
+                # FRE-1115: `mention_count` is owned by create_entity alone. Both writes
+                # used to increment it for the same mention; since the consolidator now
+                # resolves canonical names first, both increments would land on the same
+                # node and double-count. The consolidator calls create_entity for every
+                # name it puts in key_entities, so nothing is lost by dropping it here.
                 entity_types_map: dict[str, str] = {}
                 for entity_data in getattr(conversation, "_entity_data", []):
                     if isinstance(entity_data, dict) and entity_data.get("name"):
@@ -1306,7 +1311,6 @@ class MemoryService:
                                       e.originating_trace_id = $originating_trace_id,
                                       e.originating_session_id = $originating_session_id
                         SET e.last_seen = $timestamp,
-                            e.mention_count = COALESCE(e.mention_count, 0) + 1,
                             e.first_seen = COALESCE(e.first_seen, $timestamp),
                             e.entity_type = CASE WHEN $entity_type <> '' THEN $entity_type
                                                  ELSE COALESCE(e.entity_type, '') END

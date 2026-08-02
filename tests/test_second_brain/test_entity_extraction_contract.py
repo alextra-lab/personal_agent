@@ -973,3 +973,40 @@ class TestModelOverrideAndCallStats:
                     call_stats_sink=sink,
                 )
         assert sink == []  # BudgetDenied re-raised before the generic-except stat append
+
+
+class TestDescriptionFramingContract:
+    """FRE-1115 Step 1 — the prompt must ask for the subject, not the occasion.
+
+    Rule 10 previously read "what makes this entity notable here?", which directs the
+    model to describe the conversation rather than the thing. Measured on the live
+    graph: 721 of 7,543 entity descriptions (9.6%) are phrased as a record that a
+    discussion happened ("discussed as", "mentioned as", "in the memory search
+    context") instead of as knowledge about the subject.
+    """
+
+    def test_prompt_does_not_ask_what_is_notable_here(self) -> None:
+        """The occasion-directed phrasing is gone from the rendered prompt."""
+        material = prompt_material_for_hash().lower()
+        assert "notable here" not in material
+
+    def test_prompt_demands_a_standalone_definition(self) -> None:
+        """The prompt states the description must stand without the conversation."""
+        material = prompt_material_for_hash().lower()
+        assert "standalone" in material or "stands on its own" in material
+
+    def test_prompt_forbids_discussion_framing_by_example(self) -> None:
+        """A BAD example shows the discussion-framing failure concretely."""
+        material = prompt_material_for_hash()
+        assert "discussed as" in material.lower()
+        bad_block = material.split("BAD EXAMPLES")[-1]
+        assert "discussed as" in bad_block.lower(), (
+            "the discussion-framing failure must be demonstrated among the BAD examples"
+        )
+
+    def test_prompt_forbids_naming_the_retrieval_machinery(self) -> None:
+        """The extractor must not describe the retrieval situation it runs in."""
+        material = prompt_material_for_hash().lower()
+        assert "memory search context" in material, (
+            "the machinery-leak phrasing must be named so the model can avoid it"
+        )

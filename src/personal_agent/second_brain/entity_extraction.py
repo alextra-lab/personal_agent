@@ -205,7 +205,14 @@ EXTRACTION RULES (follow strictly):
    telemetry/log review, a harness explainer — is NOT empty: emit its subjects as entities
    with output_kind=finding (see rule 11), do not drop them.
 9. Write summaries as one concrete sentence about what was accomplished or learned
-10. Descriptions should add context beyond the name — what makes this entity notable here?
+10. Describe the ENTITY, never the conversation. A description must be a standalone statement
+    of what the thing IS — true whether or not this exchange ever happened, and useful to someone
+    who never saw it. Write "A French baked dessert of cherries in a custard-like batter", not
+    "A French dessert discussed as a cherry dish". Never write that something "was discussed",
+    "was mentioned", "was reportedly" anything, and NEVER refer to the retrieval situation you
+    are running in (e.g. "in the memory search context") — that is machinery leaking into the
+    user's knowledge. If the exchange gave you no durable fact about the entity beyond its name,
+    write a short definition from what the name denotes; do not describe the occasion instead.
 11. Assign every entity an "output_kind" (knowledge | finding | ephemeral) and, for knowledge
     items, a "class" (World | Personal) per the definitions above. When the turn's SUBJECT is
     the agent's own infra/tooling/telemetry/healthcheck, the entity is output_kind=finding
@@ -244,6 +251,10 @@ BAD EXAMPLES (never produce these):
   ✗ {{"name": "Météo-France", ...}}                               ← use "Météo France" (no hyphen)
   ✗ {{"name": "Test message", "type": "Message", ...}}
   ✗ {{"name": "DomainOrTopic", "type": "DomainOrTopic", ...}}
+  ✗ {{"name": "Clafoutis", ..., "description": "A French baked dessert discussed as a cherry-filled dish in the memory search context"}}
+        ← describes the occasion and leaks the machinery; write what a clafoutis IS
+  ✗ {{"name": "Amlodipine", ..., "description": "A medication discussed as interacting with grapefruit"}}
+        ← "discussed as" framing; write "A calcium channel blocker used to treat high blood pressure"
   ✗ {{"name": "Toyota RAV4 Hybrid", ..., "description": "a car the user loves"}}   ← stance flattened; emit a stance
   ✗ (silently omitting "my lease ends in March")                                   ← emit it as a claim
   ✗ {{"name": "my lease ends in March", "type": "Event", ...}}                     ← situational fact is a claim, not an entity

@@ -228,11 +228,15 @@ ssh -L 5432:localhost:5432 -L 9200:localhost:9200 <your-vps-ssh-alias>
 
 ```
 postgres, neo4j, elasticsearch, redis (no deps)
-  → embeddings, reranker (no deps)
-    → seshat-gateway (depends_on: all above, condition: service_healthy)
-      → seshat-pwa (depends_on: seshat-gateway)
-        → caddy (depends_on: seshat-gateway + seshat-pwa)
-          → cloudflared (depends_on: caddy)
+  → seshat-gateway (depends_on: all above, condition: service_healthy)
+    → seshat-pwa (depends_on: seshat-gateway)
+      → caddy (depends_on: seshat-gateway + seshat-pwa)
+        → cloudflared (depends_on: caddy)
+
+embeddings, reranker: defined but not started automatically (FRE-1123) — the gateway no longer
+depends_on either, since neither role resolves to these local containers under the live
+substrate profile. Start deliberately if ever needed:
+`docker compose -f docker-compose.cloud.yml up embeddings` / `up reranker`.
 ```
 
 Full cold-start: ~5 minutes. Warm restart (no image rebuild): ~90 seconds.

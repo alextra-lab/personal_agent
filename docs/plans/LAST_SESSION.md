@@ -1,84 +1,90 @@
-# Last session — 2026-07-31 (the night the process was diagnosed, and it was not master who did it)
+# Last session — 2026-07-31 → 08-02 (the session that stopped fixing recall and measured it instead)
 
 ## Doing / discussing
 
-Two process ADRs were authored, reviewed and shipped end to end — one severing criterion inheritance,
-one retiring MASTER_PLAN for an owner console — and both chains ran to completion in the same session.
-The session ends mid-delivery with both build seats working: build1 on the shard-ceiling ticket, build2
-on ADR-0126's behavioural profile. The through-line worth inheriting is not what shipped but *who was
-right*: the owner diagnosed the root cause after master had spent a night filing tickets against
-symptoms.
+Began as delivery (ES consolidation, an ADR seam, an ADR acceptance) and became, on the owner's
+report that recall quality had "dropped drastically", an end-to-end investigation of the memory
+process. That investigation — run by Fable in the explore seat, read-only — reframed the whole area
+and produced the remediation programme now in flight across all three seats. **Pick that up: the
+recall/memory programme is the session's focus and the owner asked explicitly that it not be lost.**
 
 ## What was decided and why
 
-**The acceptance-criteria diagnosis was the owner's, and master's four patches were the wrong shape.**
-Master filed four tickets against symptoms — the queue's ambiguity, the watcher's re-trigger, the wedge
-alarm, the integration's corruption — before the owner named the cause: criteria are written in a form
-that cannot be evaluated at the gate. Per the convergence law, ADR-0130 removes the operation that
-could fail; the four patches improve observers. Expect ADR-0130 to hold and at least two of those four
-to recur.
+**Master was wrong three times about which recall layer fails, and every correction came from the
+owner rather than from master's own evidence.** First the item cap, then the substance of retrieved
+items, then the inability to report absence. That track record is *why* FRE-1116's analysis was run
+before any fix shipped, and it is the single most important thing to inherit. A fresh master will
+look at recall, find the item cap of 5 stopping every turn with 60% of the token budget unused, and
+conclude that is the answer. **It is not.** Do not re-derive it.
 
-**"Deployed IS deployed."** Master had widened `Awaiting Deploy` from a deploy queue into a verification
-queue, let it reach twenty-one, then argued for *adding a state* to resolve ambiguity it had created.
-The owner rejected that. Nineteen tickets closed in one sweep; not one had anything wrong with it.
+**The 455→205 token decline was deploy geometry, not decay.** It dates precisely to FRE-1061's
+pair-split on 07-30: each retrieved row now emits two candidates, so the cap of 5 holds half-rows and
+delivered tokens halved arithmetically. Answer quality through that window stayed good. Master
+presented this as six-day degradation twice before Fable dated it. The same stale reasoning was
+written into FRE-1114's body and has been withdrawn in a comment there.
 
-**Two tiers, and only one belongs to a ticket that builds.** The owner's distinction: an ADR ticket is
-done when the ADR's criteria are met; a build ticket when its own micro criteria are. One long-lived
-seam ticket per ADR is correct by design. Nineteen long-lived build tickets is the pathology.
+**The dominant layer is absence/confidence, and it had no ticket until this session.** Three
+mechanisms compose: subscore floors sum to ~0.355 against a 0.3 threshold so irrelevance is admitted
+by construction; the relevance score never reaches the model; and `executor.py:2409` literally
+instructs *"Do NOT say you have no memory."* Master verified that line in source. This is FRE-1118 and
+it is the failure the owner actually experiences — a confident answer assembled from nearest
+neighbours, indistinguishable at the surface from a correct one.
 
-**Branch-specific rules cannot fix the docs-PR corruption — do not re-propose them.** Master
-recommended them off the settings section heading, before seeing the field. They scope by the PR's
-**target** branch; every PR here targets `main`, so they cannot distinguish a docs PR from an
-implementation one. The remaining lever is detection: make `reconcile_board.py` treat a started-state
-ticket with **no merged PR** as **FAIL** rather than UNVERIFIABLE. Never filed — the owner asked for
-analysis only.
+**A corruption loop was caught in the act.** Clafoutis's entity had a *good* description; it was
+overwritten with self-referential text ("…in the memory search context") during the owner's own probe
+turn. Querying a topic can destroy the knowledge stored about it — worst on topics asked about most.
+This makes FRE-1115 a live degradation mechanism, not a static census, and is its first question.
 
-**The owner re-enabled the Linear PR transitions deliberately, to see whether the corruption returns.**
-That is a live experiment, not a settled decision, and it is in direct tension with ADR-0131 D4 and
-FRE-1086. Do not read D4 as agreed. Until FRE-1086 lands, the console directive against bare `FRE-XXXX`
-in docs PR titles, bodies and branch names is load-bearing rather than precautionary.
+**Three tickets needed the same missing signal, so it is designed once.** FRE-1118 (irrelevant vs
+relevant), FRE-1119 (unreachable vs absent), FRE-1120 (embedder-failure vs empty) all need a way to
+say "what I returned is not what you asked for". FRE-1120 was re-sequenced behind FRE-1118, and
+build1 was told **mid-build** not to answer FRE-1119's third question. Its edge-coverage and
+substring-filter halves remain fully its own.
 
-**A build session's claim about production, derived from its test environment, is suspect.** FRE-1015's
-handoff concluded its mechanism was inert in production. It reasoned from the one recall branch its
-test environment could reach — the proactive path dies there for want of an embedder credential.
-Production entities come from that very path. Master accepted the claim and told the owner the deploy
-would be a no-op; it was not. Corrected before the deploy was authorised.
+**FRE-1109 is deliberately held unapproved pending FRE-1113.** The owner's diagnosis — too many event
+types in one index — was verified correct *for agent-logs specifically* (health probes write
+`status: "up"`, the ES tool writes `status: 400`), and wrong for the other three defects found that
+day. FRE-1113's Tier-2 ingest pipeline would dissolve the collision per-producer and generalise to
+the other 16 conflicting fields, so approving FRE-1109 first could commit to the weaker remedy.
 
-**The owner monitors the build seats; master must not.** FRE-867's premise — that master is the owner's
-proxy for seat visibility — was false, and the whole notification path was removed rather than tuned.
-Master keeps `send-keys` for *content*: a bounce, a finding, a decision. Not for watching.
+**ADR-0129 was accepted as traces-only, and that is narrower than the owner understood.** They
+expected everything through the Collector; D5/D6 keep logs on the bespoke `es_logger` path and the
+family that stays is `agent-logs` — 98.8% of the corpus, not the 0.23% of product data they had in
+mind. Owner said "so be it"; master did **not** treat that as approval, held the PR, and merged only
+when the owner re-invoked `/master` on it. The gap is filed as FRE-1113.
 
-**Master approved and dispatched two tickets the owner had not asked for**, on two separate misreadings
-of "all 3" (FRE-1064, FRE-1086). Both reverted. When a terse instruction could mean two sets of
-tickets, ask before mutating nine of them.
+**Master's own instrument errors — four in two days, one shape.** A decorator grep missing a
+module-level marker; `_cat` docs.count (220) read as document count when `_count` said 4, a 55× error
+written into FRE-1107 and since corrected; a `pgrep -f pytest` substring false positive; a guessed
+Neo4j schema returning a confident zero. Every one was *asking a tool a question it answers
+differently than assumed*. Check the instrument before believing a surprising number.
 
 ## Worktrees — anything special
 
-- **build2** holds several merged-but-undeleted branches, which is why `--delete-branch` fails on every
-  merge. Harmless and expected; do not chase it.
-- Two pre-existing stashes remain (`fre-916` WIP, a sandbox-debug one). Neither is master's.
+- **explore** is deliberately **detached at a commit, not on a branch** — it was 59 commits stale and
+  would have analysed undeployed code. Keep it pinned to deployed main for any future analysis.
+- **build2** holds merged-but-undeleted branches, so `--delete-branch` fails on every merge. Known.
 
 ## Sequence position + drift
 
-The console's eight standing directives are now the overlay prime-master reads at #8; they replace
-what the plan file used to carry. ADR-0129's eight children sit at Needs Approval — master's hold is
-*released*, but the owner has not approved them.
-
-We deviated hard into process work for a full night. FRE-1036 — the only ticket with a hard external
-deadline — went unscheduled until 11:03, having spent two days falsely showing as delivered. That was
-the correct diagnosis but it crowded out the one item with a clock.
+We deviated entirely into memory/recall for the session. That was owner-directed and correct — but
+the console's standing sequence (telemetry residuals → Configuration Management → Linear async
+feedback → Seshat Inference) is untouched and unstarted, and none of it has begun.
 
 ## Answers for the fresh start
 
-- **Why is `Awaiting Deploy` nearly empty?** Nineteen closed in one sweep under the corrected standard.
-  If it grows past a handful again, that is the pathology returning, not throughput.
-- **Why does FRE-1036 outrank everything?** Only hard external deadline; measured ~50 days of shard
-  headroom, not the 34 its text states. It is an **ES reindex — always-ask deploy, FRE-599 risk shape**,
-  and its own text warns mappings were wrong on the first pass last time. Ask before it touches prod.
-- **Three ADR-0129 obligations are master's**, not any ticket's — recorded on FRE-1043's mapping. The
-  live one: run the identity-share query once after FRE-1064 deploys and decide whether the chain
-  proceeds. It is the chain's only cheap kill-switch.
-- **FRE-1073's due date (2026-10-01) is provisional** and must be re-dated to fourteen days after its
-  last child deploys.
-- **Untraced, flagged rather than implied:** whether stance items compete in the recall budget trim.
-  If recall quality wobbles on stanced topics, look there first.
+- **Why not just raise the item cap?** Because the cap is not the constraint — see above. Tuning
+  selection to better choose between empty pointers optimises the wrong layer.
+- **Why is FRE-1118 behind FRE-1063 when it is the actual failure?** Its criteria need a probe whose
+  answer is known *not* to exist, which comes from FRE-1063's battery; and its own body argues the
+  prompt line should change **last**, since removing it without a confidence signal trades
+  confabulation for arbitrary hedging.
+- **Why does FRE-1114 look overscoped?** It is. Its population dies when FRE-1115 fixes the single
+  generator behind all 1,399 empty descriptions. Corrected on the ticket; it is now a defensive
+  invariant, not a live remedy.
+- **The clafoutis question is unresolved and should stay that way.** The owner is confident a
+  recipe-adaptation conversation happened. Full-text search across 1,256 sessions / 4,888 messages
+  finds no trace, and capture is *not* lossy (190/198 July turns present). Do not treat either the
+  owner's recollection or its absence as settled.
+- **Why is `Awaiting Deploy` not empty?** FRE-1036's code half is deploy-verified; its own acceptance
+  criteria need the historical migration, which is blocked on FRE-1107 and FRE-1109.

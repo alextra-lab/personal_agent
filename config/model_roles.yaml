@@ -128,9 +128,15 @@ bindings:
       gpt-5.4-mini:         gpt-5.4-mini           # self-pair — no cheaper GPT tier in the catalog
   entity_extraction:  { deployment: gpt-5.4-mini }
   captains_log:       { deployment: claude_sonnet }
-  # ADR-0124 D2 (FRE-947): pinned — no `open: true`. The summariser reads full
-  # tool payloads unconditionally, so this binding IS the egress decision, and it
-  # is the owner's to make once in configuration rather than a user's to flip.
+  # ADR-0124 D2 (FRE-947): pinned — no `open: true`. The summariser reads the whole
+  # conversation — the user's own text and the assistant's responses — so this
+  # binding IS the egress decision, and it is the owner's to make once in
+  # configuration rather than a user's to flip. The premise, not the conclusion,
+  # was corrected: this comment claimed "full tool payloads unconditionally" until
+  # 2026-08-02, which Amendment A (2026-07-23, payloads removed from D2's input)
+  # and Amendment B (2026-07-24, summariser is conversation-ONLY — tool metadata
+  # removed entirely) had already made false. The binding is still the egress
+  # decision because the conversation itself is what egresses.
   session_summary:    { deployment: claude_sonnet }
   insights:           { deployment: claude_sonnet }
   compressor:         { deployment: gpt-5.4-mini }

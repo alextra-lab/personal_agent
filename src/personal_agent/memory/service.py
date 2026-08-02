@@ -3249,6 +3249,30 @@ class MemoryService:
             log.error("entity_class_index_creation_failed", error=str(e), exc_info=True)
             return False
 
+    async def ensure_turn_user_id_index(self) -> bool:
+        """Create the Turn.user_id index (FRE-1119 recall_personal_history reachability).
+
+        Idempotent (IF NOT EXISTS). Mirrors ensure_entity_class_index()'s pattern.
+        Without it, a property-authoritative MATCH (t:Turn {user_id: ...}) forces a
+        full label scan — profiled live at 31,019 DB hits vs. 75 for the equivalent
+        indexed Person-anchored edge traversal.
+
+        Returns:
+            True if the index exists or was created successfully.
+        """
+        if not self.connected or not self.driver:
+            return False
+        try:
+            async with self.driver.session() as session:
+                await session.run(
+                    "CREATE RANGE INDEX turn_user_id_index IF NOT EXISTS FOR (t:Turn) ON (t.user_id)"
+                )
+            log.info("turn_user_id_index_ensured", index_name="turn_user_id_index")
+            return True
+        except Exception as e:
+            log.error("turn_user_id_index_creation_failed", error=str(e), exc_info=True)
+            return False
+
     async def ensure_session_id_index(self) -> bool:
         """Create the Session.session_id index (ADR-0124 Phase 1 read path).
 

@@ -66,6 +66,7 @@ freshness_consumer: "FreshnessConsumer | None" = None  # type: ignore  # noqa: F
 cost_gate: "CostGate | None" = None  # type: ignore  # noqa: F821
 cost_gate_reaper_task: asyncio.Task[None] | None = None
 cost_gate_snapshotter_task: asyncio.Task[None] | None = None
+cost_gate_silence_monitor_task: asyncio.Task[None] | None = None
 
 # Fire-and-forget assistant message appends: session_id -> task (FRE-51).
 # Next request for same session awaits this so history is consistent before hydration.
@@ -560,7 +561,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         freshness_consumer, \
         cost_gate, \
         cost_gate_reaper_task, \
-        cost_gate_snapshotter_task
+        cost_gate_snapshotter_task, \
+        cost_gate_silence_monitor_task
 
     # Startup
     log.info("service_starting")
@@ -683,6 +685,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             asyncio.create_task(run_backfill(es_handler.es_logger))
         except Exception as e:
             log.warning("captains_log_backfill_startup_failed", error=str(e))
+
+    # main_inference silence monitor (FRE-1117): flags a day where a
+    # cloud-selected primary session booked nothing to the lane — see
+    # cost_gate/silence_monitor.py for why that, and only that, is worth a
+    # human's attention. Started here, after the ES handler is wired above
+    # (not inside the cost-gate try/except further up): its first post-restart
+    # check runs almost immediately (unlike the snapshotter's sleep-first — see
+    # snapshotter.py), so starting it before ES is attached risks a finding
+    # landing in file/console only and never reaching the dashboard. A
+    # pricing-registration failure earlier must not skip this monitor either,
+    # hence its own independent try.
+    try:
+        from personal_agent.config.model_loader import load_model_config
+        from personal_agent.cost_gate import run_silence_monitor
+
+        cost_gate_silence_monitor_task = asyncio.create_task(
+            run_silence_monitor(load_model_config())
+        )
+    except Exception as silence_exc:  # noqa: BLE001
+        log.error(
+            "main_inference_silence_monitor_startup_failed",
+            error=str(silence_exc),
+            remedy="Verify config/models.yaml; the monitor stays off until next restart.",
+            exc_info=True,
+        )
 
     # Connect to Neo4j (if enabled) — non-fatal, matches ES graceful-degradation pattern
     if settings.enable_memory_graph:
@@ -1348,6 +1375,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except asyncio.CancelledError:
             pass
         cost_gate_snapshotter_task = None
+    if cost_gate_silence_monitor_task is not None:
+        cost_gate_silence_monitor_task.cancel()
+        try:
+            await cost_gate_silence_monitor_task
+        except asyncio.CancelledError:
+            pass
+        cost_gate_silence_monitor_task = None
     if cost_gate is not None:
         from personal_agent.cost_gate import set_default_gate as _set_default_gate
 

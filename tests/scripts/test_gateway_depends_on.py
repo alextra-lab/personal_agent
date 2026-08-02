@@ -30,9 +30,12 @@ _RENDER_ENV = {
 }
 
 
+_RENDER_OVERRIDE = "tests/scripts/fixtures/gateway_render_override.yml"
+
+
 def _render_compose() -> dict[str, object]:
     result = subprocess.run(
-        ["docker", "compose", "-f", "docker-compose.cloud.yml", "config"],
+        ["docker", "compose", "-f", "docker-compose.cloud.yml", "-f", _RENDER_OVERRIDE, "config"],
         cwd=repo_root(),
         capture_output=True,
         text=True,

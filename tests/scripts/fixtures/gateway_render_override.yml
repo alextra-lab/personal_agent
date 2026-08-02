@@ -1,0 +1,11 @@
+# Render-only override for tests/scripts/test_gateway_depends_on.py.
+#
+# The real gateway service loads secrets from an absolute host path
+# (env_file: /opt/seshat/.env) that exists on the VPS but not on a CI
+# runner or a fresh clone. `docker compose config` refuses to render at
+# all if that file is missing, even though env_file only affects the
+# in-container secret set, not depends_on or any other service definition
+# this test checks. `!reset` clears the field instead of merging into it.
+services:
+  seshat-gateway:
+    env_file: !reset []

@@ -2,11 +2,11 @@
 
 ## Doing / discussing
 
-Began as delivery (ES consolidation, an ADR seam, an ADR acceptance) and became, on the owner's
-report that recall quality had "dropped drastically", an end-to-end investigation of the memory
-process. That investigation — run by Fable in the explore seat, read-only — reframed the whole area
-and produced the remediation programme now in flight across all three seats. **Pick that up: the
-recall/memory programme is the session's focus and the owner asked explicitly that it not be lost.**
+Began as delivery (ES consolidation, an ADR seam, an ADR acceptance) and became, on the owner's report
+that recall quality had "dropped drastically", an end-to-end investigation of the memory process. That
+investigation — Fable in the explore seat, read-only — reframed the area and produced the remediation
+programme now in flight across all three seats. **Pick that up: the owner asked explicitly that this
+focus not be lost.**
 
 ## What was decided and why
 
@@ -47,17 +47,19 @@ types in one index — was verified correct *for agent-logs specifically* (healt
 day. FRE-1113's Tier-2 ingest pipeline would dissolve the collision per-producer and generalise to
 the other 16 conflicting fields, so approving FRE-1109 first could commit to the weaker remedy.
 
-**ADR-0129 was accepted as traces-only, and that is narrower than the owner understood.** They
-expected everything through the Collector; D5/D6 keep logs on the bespoke `es_logger` path and the
-family that stays is `agent-logs` — 98.8% of the corpus, not the 0.23% of product data they had in
-mind. Owner said "so be it"; master did **not** treat that as approval, held the PR, and merged only
-when the owner re-invoked `/master` on it. The gap is filed as FRE-1113.
+**ADR-0129 was accepted as traces-only, narrower than the owner understood.** They expected
+everything through the Collector; D5/D6 keep logs on the bespoke `es_logger` path, and the family that
+stays is `agent-logs` — 98.8% of the corpus, not the 0.23% of product data they meant. Owner said "so
+be it"; master did **not** read that as approval, held the PR, and merged only on their re-invocation.
+Filed as FRE-1113.
 
-**Master's own instrument errors — four in two days, one shape.** A decorator grep missing a
-module-level marker; `_cat` docs.count (220) read as document count when `_count` said 4, a 55× error
-written into FRE-1107 and since corrected; a `pgrep -f pytest` substring false positive; a guessed
-Neo4j schema returning a confident zero. Every one was *asking a tool a question it answers
-differently than assumed*. Check the instrument before believing a surprising number.
+**Five instrument errors in two days, one shape, and the fifth reached the owner.** FRE-1117 was
+filed Urgent claiming primary cost booking broke and the owner's cap directive had gone inert. It had
+not: `budget_reservations`, written *before* any cloud call, is empty for `main_inference` too and
+matches `api_costs` at 4 and 4 — no cloud call was attempted, `primary` is pinned local. Master read
+one side of a zero. The other four (decorator grep vs module-level marker; `_cat` 220 vs `_count` 4;
+`pgrep -f pytest` substring hit; a guessed Neo4j schema) were caught first. **Check the instrument,
+and the other table, before believing a surprising number — especially before escalating it.**
 
 ## Worktrees — anything special
 
@@ -67,24 +69,22 @@ differently than assumed*. Check the instrument before believing a surprising nu
 
 ## Sequence position + drift
 
-We deviated entirely into memory/recall for the session. That was owner-directed and correct — but
-the console's standing sequence (telemetry residuals → Configuration Management → Linear async
-feedback → Seshat Inference) is untouched and unstarted, and none of it has begun.
+We deviated entirely into memory/recall — owner-directed and correct — but the console's standing
+sequence (telemetry residuals → Config Management → Linear async feedback → Seshat Inference) is
+untouched and unstarted.
 
 ## Answers for the fresh start
 
-- **Why not just raise the item cap?** Because the cap is not the constraint — see above. Tuning
-  selection to better choose between empty pointers optimises the wrong layer.
+- **Why not just raise the item cap?** It is not the constraint — see above; tuning selection to choose better between empty pointers optimises the wrong layer.
 - **Why is FRE-1118 behind FRE-1063 when it is the actual failure?** Its criteria need a probe whose
-  answer is known *not* to exist, which comes from FRE-1063's battery; and its own body argues the
-  prompt line should change **last**, since removing it without a confidence signal trades
-  confabulation for arbitrary hedging.
+  answer is known *not* to exist — that comes from FRE-1063's battery; and its own body argues the
+  prompt line changes **last**, since removing it without a confidence signal trades confabulation
+  for hedging.
 - **Why does FRE-1114 look overscoped?** It is. Its population dies when FRE-1115 fixes the single
-  generator behind all 1,399 empty descriptions. Corrected on the ticket; it is now a defensive
-  invariant, not a live remedy.
+  generator behind all 1,399 empties. Corrected on the ticket: a defensive invariant, not a remedy.
 - **The clafoutis question is unresolved and should stay that way.** The owner is confident a
   recipe-adaptation conversation happened. Full-text search across 1,256 sessions / 4,888 messages
   finds no trace, and capture is *not* lossy (190/198 July turns present). Do not treat either the
   owner's recollection or its absence as settled.
-- **Why is `Awaiting Deploy` not empty?** FRE-1036's code half is deploy-verified; its own acceptance
-  criteria need the historical migration, which is blocked on FRE-1107 and FRE-1109.
+- **`Awaiting Deploy` holds two.** FRE-1036's code half is verified; its ACs need the migration,
+  blocked on FRE-1107/1109. FRE-1117 ships a monitor needing an ask-first gateway rebuild.

@@ -14,6 +14,7 @@ See: ADR-0035, Enhancement 2 (fuzzy entity deduplication)
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, cast
@@ -23,6 +24,10 @@ import structlog
 from personal_agent.config import get_settings
 
 logger = structlog.get_logger(__name__)
+
+# FRE-1115: characters that carry no identity — a name differing only in these is the
+# same name. Anything else differing means two different things.
+_NAME_PUNCTUATION = re.compile(r"[\s\-_/.,'’()\[\]]+")
 
 
 class DedupDecision(Enum):
@@ -96,6 +101,24 @@ async def check_entity_duplicate(
         # names but represent distinct concepts (FRE-412).
         if _is_allcaps_identifier(name) != _is_allcaps_identifier(best["name"]):
             return DedupResult(decision=DedupDecision.CREATE_NEW)
+        # FRE-1115: cosine similarity alone cannot authorize a rename. Measured on the
+        # live graph, the 0.92 threshold merged `mathematics` into `computer science`
+        # (0.960) and `Blueberries` into `Apricots` (0.957) — a merge destroys the
+        # losing entity's identity and silently attaches its turns and relationships to
+        # an unrelated node. A different-name merge therefore additionally requires the
+        # two names to *be* the same name (case / diacritic / punctuation variants).
+        # Rejecting is fail-safe: it creates a distinct entity rather than destroying
+        # one. Substantive merges (`Cumin` into `Ground cumin`) are a design decision
+        # that belongs to the dedup-semantics ADR, not to a cosine score.
+        if not _names_are_equivalent(name, best["name"]):
+            logger.info(
+                "entity_dedup_rejected_name_incompatible",
+                proposed_name=name,
+                candidate_name=best["name"],
+                similarity=round(best["similarity"], 3),
+                entity_type=entity_type,
+            )
+            return DedupResult(decision=DedupDecision.CREATE_NEW)
         logger.info(
             "entity_dedup_merge",
             proposed_name=name,
@@ -109,6 +132,40 @@ async def check_entity_duplicate(
         )
 
     return DedupResult(decision=DedupDecision.CREATE_NEW)
+
+
+def _normalize_name(name: str) -> str:
+    """Reduce a name to its identity-bearing form.
+
+    Strips case, diacritics and punctuation/spacing, all of which vary between
+    extractions of the same name without changing what is named.
+
+    Args:
+        name: Entity name to normalize.
+
+    Returns:
+        The normalized form, for equality comparison only — never for storage.
+    """
+    decomposed = unicodedata.normalize("NFKD", name)
+    without_marks = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return _NAME_PUNCTUATION.sub("", without_marks).casefold()
+
+
+def _names_are_equivalent(name: str, candidate: str) -> bool:
+    """Return True when two names denote the same name (FRE-1115).
+
+    Equivalent means differing only in case, diacritics, punctuation or spacing —
+    ``"Pâté à bombe"`` and ``"Pate a bombe"``, ``"Météo-France"`` and ``"Météo France"``.
+    Distinct names are never equivalent however close their embeddings.
+
+    Args:
+        name: Proposed entity name.
+        candidate: Existing entity name dedup wants to merge into.
+
+    Returns:
+        True when the two names may be treated as one entity.
+    """
+    return _normalize_name(name) == _normalize_name(candidate)
 
 
 def _is_allcaps_identifier(name: str) -> bool:

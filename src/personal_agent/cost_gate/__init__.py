@@ -14,6 +14,9 @@ Public surface:
 - :func:`run_counter_snapshotter` — long-running task that snapshots
   ``budget_counters`` to ES on a fixed cadence (FRE-547) for the cap-utilization
   dashboard panel; spawned from the FastAPI lifespan
+- :func:`run_silence_monitor` — long-running task that flags a day where a
+  cloud-selected ``primary`` session booked nothing to ``main_inference``
+  (FRE-1117); spawned from the FastAPI lifespan
 - :func:`set_default_gate` / :func:`get_default_gate_or_none` —
   module-level singleton accessor used by ``LiteLLMClient.respond()``;
   populated by the FastAPI lifespan hook at startup.
@@ -39,6 +42,10 @@ from personal_agent.cost_gate.role_map import (
     budget_role_for,
     role_totality_findings,
     validate_role_totality,
+)
+from personal_agent.cost_gate.silence_monitor import (
+    DEFAULT_SILENCE_MONITOR_INTERVAL_SECONDS,
+    run_silence_monitor,
 )
 from personal_agent.cost_gate.snapshotter import (
     DEFAULT_SNAPSHOT_INTERVAL_SECONDS,
@@ -97,6 +104,7 @@ def get_default_gate() -> CostGate:
 __all__ = [
     "BUDGET_ROLE_BY_FACTORY_NAME",
     "DEFAULT_REAPER_INTERVAL_SECONDS",
+    "DEFAULT_SILENCE_MONITOR_INTERVAL_SECONDS",
     "DEFAULT_SNAPSHOT_INTERVAL_SECONDS",
     "NON_GATED_ROLES",
     "RESERVATION_TTL_SECONDS",
@@ -119,6 +127,7 @@ __all__ = [
     "role_totality_findings",
     "run_counter_snapshotter",
     "run_reaper",
+    "run_silence_monitor",
     "set_default_gate",
     "validate_role_totality",
 ]

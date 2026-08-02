@@ -65,7 +65,7 @@ Retrieve the **connected user's own past turns** within a time window. This is t
 
 <example>
   User: Remind me what I told you about the Athens trip.
-  "Remind me" — personal scope. Topic substring: "Athens". 30 days is a safe default.
+  "Remind me" — personal scope. Topic hint: "Athens". 30 days is a safe default.
   Call: recall_personal_history(days_ago=30, topic="Athens")
 </example>
 
@@ -104,8 +104,10 @@ For specific weekdays ("last Tuesday"), compute the offset from today. The LLM d
       "timestamp": "2026-05-12T18:30:00+00:00",
       "session_id": "sess-xyz",
       "user_message": "Let's plan a trip to Athens...",
+      "assistant_response": "Sure — where in Athens are you thinking?",
       "summary": "discussed Athens itinerary",
-      "entities": ["Athens", "Acropolis"]
+      "entities": ["Athens", "Acropolis"],
+      "topic_matched": true
     }
   ],
   "total": 1,
@@ -114,12 +116,20 @@ For specific weekdays ("last Tuesday"), compute the offset from today. The LLM d
 }
 ```
 
+`topic_matched` is present on each turn only when `topic` was passed. It is a
+per-turn ranking signal, not an inclusion filter — see Notes below.
+
 ---
 
 ## Notes
 
 - The tool fails loudly if `ctx.user_id` is missing — that is a bug after FRE-343, not a fallback condition.
 - For purely topical recall ("what's a good Greek restaurant?"), prefer `search_memory` — it surfaces other users' contributions.
-- The `topic` filter is a case-insensitive substring on `user_message`. It does not yet do semantic search; for fuzzy matches use `search_memory(query_text=..., recency_days=N)`.
+- `topic` is a case-insensitive hint, not an exclusion filter (FRE-1119) — it's checked against
+  `user_message`, `assistant_response`, `summary`, and discussed entity names, and matching turns are
+  ranked first, but non-matching turns in the window are still returned rather than dropped (each
+  turn's `topic_matched` flag says which). It is not semantic search — an unrelated phrasing of the
+  same topic may not rank first, or may not be flagged at all; for fuzzy/semantic matches use
+  `search_memory(query_text=..., recency_days=N)`.
 
 See also: [search_memory tool](../skills/seshat-knowledge.md)

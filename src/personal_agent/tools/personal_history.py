@@ -1,9 +1,13 @@
 """FRE-343 — recall_personal_history tool.
 
-Retrieves the connected user's own past turns within a time window via the
-(:Person)-[:PARTICIPATED_IN]->(:Turn) provenance edge. Use only when the
-user explicitly refers to their personal history; general knowledge
-questions stay on search_memory.
+Retrieves the connected user's own past turns within a time window. Reachability
+(FRE-1119) is property-authoritative with edge-fallback: a turn is the caller's
+if its own `Turn.user_id` property says so; only when that property is absent
+does a (:Person)-[:PARTICIPATED_IN]->(:Turn) edge count. This order matters —
+a stale or conflicting edge can never override an authoritative property, which
+matters because both signals are independently, imperfectly written elsewhere.
+Use only when the user explicitly refers to their personal history; general
+knowledge questions stay on search_memory.
 """
 
 from __future__ import annotations
@@ -43,8 +47,11 @@ recall_personal_history_tool = ToolDefinition(
             name="topic",
             type="string",
             description=(
-                "Optional substring filter applied to user_message (case-insensitive). "
-                "Example: topic='Athens' narrows to turns whose message contains 'athens'."
+                "Optional topic hint (case-insensitive, checked against the message, "
+                "response, summary, and discussed entities). Matching turns are ranked "
+                "first, but non-matching turns in the time window are still returned — "
+                "this is not a semantic search, so an unrelated phrasing of the same "
+                "topic may not rank first."
             ),
             required=False,
             default=None,
@@ -91,10 +98,12 @@ async def recall_personal_history_executor(
 
     Args:
         days_ago: How many days back to look (1..365).
-        topic: Optional case-insensitive substring filter on user_message.
+        topic: Optional case-insensitive topic hint; ranks matching turns
+            first without excluding non-matching ones.
         limit: Max turns to return (1..50, default 10).
-        ctx: Trace context. ``ctx.user_id`` must be present — it identifies
-            the :Person node whose PARTICIPATED_IN edges anchor the query.
+        ctx: Trace context. ``ctx.user_id`` must be present — matched against
+            each Turn's own ``user_id`` property, falling back to the
+            PARTICIPATED_IN edge only when that property is absent (FRE-1119).
 
     Returns:
         Dict with turns, total, window_days, and user_id (for trace correlation).
@@ -133,18 +142,34 @@ async def recall_personal_history_executor(
         raise ToolExecutionError("Memory service unavailable or not connected.")
 
     cypher = """
-        MATCH (p:Person {user_id: $user_id})-[:PARTICIPATED_IN]->(t:Turn)
+        CALL {
+          MATCH (t:Turn {user_id: $user_id})
+          RETURN t
+          UNION ALL
+          MATCH (:Person {user_id: $user_id})-[:PARTICIPATED_IN]->(t:Turn)
+          WHERE t.user_id IS NULL
+          RETURN t
+        }
+        WITH t
         WHERE t.timestamp >= $cutoff
-          AND ($topic IS NULL OR toLower(t.user_message) CONTAINS toLower($topic))
         OPTIONAL MATCH (t)-[:DISCUSSES]->(e:Entity)
         WITH t, collect(DISTINCT e.name) AS entities
-        RETURN t.turn_id      AS turn_id,
-               t.timestamp    AS timestamp,
-               t.session_id   AS session_id,
-               t.user_message AS user_message,
-               t.summary      AS summary,
-               entities       AS entities
-        ORDER BY t.timestamp DESC
+        WITH t, entities,
+             $topic IS NULL
+               OR toLower(t.user_message) CONTAINS toLower($topic)
+               OR toLower(coalesce(t.assistant_response, '')) CONTAINS toLower($topic)
+               OR toLower(coalesce(t.summary, '')) CONTAINS toLower($topic)
+               OR any(name IN entities WHERE toLower(name) CONTAINS toLower($topic))
+             AS topic_matched
+        RETURN t.turn_id            AS turn_id,
+               t.timestamp          AS timestamp,
+               t.session_id         AS session_id,
+               t.user_message       AS user_message,
+               t.assistant_response AS assistant_response,
+               t.summary            AS summary,
+               entities             AS entities,
+               topic_matched        AS topic_matched
+        ORDER BY topic_matched DESC, t.timestamp DESC
         LIMIT $limit
     """
 
@@ -164,8 +189,10 @@ async def recall_personal_history_executor(
             "timestamp": r["timestamp"],
             "session_id": r["session_id"],
             "user_message": mark_truncated(r.get("user_message") or "", 400),
+            "assistant_response": mark_truncated(r.get("assistant_response") or "", 400),
             "summary": r.get("summary") or "",
             "entities": r.get("entities") or [],
+            **({"topic_matched": bool(r.get("topic_matched"))} if topic is not None else {}),
         }
         for r in records
     ]

@@ -756,6 +756,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 log.info("neo4j_turn_session_id_index_ensured")
             except Exception as turn_idx_e:
                 log.warning("neo4j_turn_session_id_index_setup_failed", error=str(turn_idx_e))
+            # Ensure Turn.user_id index (FRE-1119). Idempotent; recall_personal_history's
+            # property-authoritative reachability match is a full label scan without it —
+            # profiled live at 31,019 DB hits vs. 75 for the indexed edge traversal it falls
+            # back to.
+            try:
+                await memory_service.ensure_turn_user_id_index()
+                log.info("neo4j_turn_user_id_index_ensured")
+            except Exception as turn_uid_idx_e:
+                log.warning("neo4j_turn_user_id_index_setup_failed", error=str(turn_uid_idx_e))
             # Bootstrap owner identity (FRE-213 / ADR-0052) — idempotent, no-op when empty
             if settings.owner_name and settings.agent_owner_email:
                 try:

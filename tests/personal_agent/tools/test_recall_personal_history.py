@@ -146,3 +146,54 @@ async def test_topic_none_passes_null(monkeypatch) -> None:
 
     called_kwargs = svc.driver.session().__aenter__.return_value.run.call_args.kwargs  # type: ignore[union-attr]
     assert called_kwargs.get("topic") is None
+
+
+@pytest.mark.asyncio
+async def test_cypher_uses_property_authoritative_edge_fallback(monkeypatch) -> None:
+    """FRE-1119: reachability is no longer edge-only (regression tripwire, not the proof).
+
+    The real proof is the live-Neo4j integration matrix in
+    test_recall_personal_history_integration.py; this just guards against silently
+    reverting to the old edge-only anchor or a naive property-only anchor.
+    """
+    uid = uuid4()
+    svc = _mock_memory_service([])
+    monkeypatch.setattr("personal_agent.tools.personal_history._get_memory_service", lambda: svc)
+
+    await recall_personal_history_executor(days_ago=7, ctx=_ctx(uid))
+
+    cypher = svc.driver.session().__aenter__.return_value.run.call_args.args[0]  # type: ignore[union-attr]
+    assert "CALL {" in cypher
+    assert "UNION" in cypher
+    assert "MATCH (t:Turn {user_id: $user_id})" in cypher
+    assert "MATCH (p:Person {user_id: $user_id})-[:PARTICIPATED_IN]->(t:Turn)" not in cypher
+
+
+@pytest.mark.asyncio
+async def test_topic_matched_included_only_when_topic_set(monkeypatch) -> None:
+    """topic_matched is surfaced when topic is set, and omitted otherwise."""
+    uid = uuid4()
+    now = datetime.now(timezone.utc)
+    records = [
+        {
+            "turn_id": "t1",
+            "timestamp": now.isoformat(),
+            "session_id": "s1",
+            "user_message": "hello",
+            "assistant_response": "world",
+            "summary": "",
+            "entities": [],
+            "topic_matched": True,
+        },
+    ]
+    svc = _mock_memory_service(records)
+    monkeypatch.setattr("personal_agent.tools.personal_history._get_memory_service", lambda: svc)
+
+    out = await recall_personal_history_executor(days_ago=7, topic="hello", ctx=_ctx(uid))
+    assert out["turns"][0]["topic_matched"] is True
+    assert out["turns"][0]["assistant_response"] == "world"
+
+    svc2 = _mock_memory_service(records)
+    monkeypatch.setattr("personal_agent.tools.personal_history._get_memory_service", lambda: svc2)
+    out2 = await recall_personal_history_executor(days_ago=7, ctx=_ctx(uid))
+    assert "topic_matched" not in out2["turns"][0]

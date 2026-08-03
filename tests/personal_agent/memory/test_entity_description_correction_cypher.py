@@ -122,3 +122,59 @@ async def test_off_vocabulary_kind_is_normalized_server_side() -> None:
     await _run(service2, entity, description_update_kind="enrichment")
     merge_params2 = next(p for c, p in captured2 if "HAD_DESCRIPTION" in c)
     assert merge_params2["description_update_kind"] == "enrichment"
+
+
+@pytest.mark.asyncio
+async def test_gate_blocks_self_referential_overwrite_of_clean_description() -> None:
+    """FRE-1115: the emitted gate refuses a framed description over a clean one.
+
+    Measured on the live graph, 17 of 71 archived overwrites replaced a description of
+    the subject with one of the discussion. The FRE-725 equal-confidence enrichment arm
+    admits them because discussion-framing ("X discussed as Y") is *longer* than the
+    definition it replaces, so the defect's own verbosity satisfies the anti-shrink
+    guard. The gate therefore has to test the framing directly.
+    """
+    service, captured = _make_service_with_mock()
+    entity = Entity(
+        name="Clafoutis",
+        entity_type="MethodOrConcept",
+        description="A French baked dessert discussed as a cherry dish in the memory search context",
+    )
+    await _run(service, entity, description_confidence=0.8, description_update_kind="enrichment")
+
+    cypher = " ".join(c for c, _ in captured)
+    params = captured[-1][1]
+    assert "$new_is_self_referential" in cypher, "the new-side predicate must reach the gate"
+    assert "$self_referential_pattern" in cypher, (
+        "the old side must be tested with the same pattern"
+    )
+    assert params["new_is_self_referential"] is True
+    # The guard belongs to _do_correct only — filling an empty description stays open.
+    correct_clause = cypher.split("AS _do_correct")[0]
+    assert "$new_is_self_referential" in correct_clause
+
+
+@pytest.mark.asyncio
+async def test_clean_description_is_not_flagged_self_referential() -> None:
+    """A real definition is not caught by the framing predicate."""
+    service, captured = _make_service_with_mock()
+    entity = Entity(
+        name="Clafoutis",
+        entity_type="MethodOrConcept",
+        description="A French baked dessert of cherries in a custard-like batter",
+    )
+    await _run(service, entity, description_confidence=0.8, description_update_kind="enrichment")
+
+    assert captured[-1][1]["new_is_self_referential"] is False
+
+
+@pytest.mark.asyncio
+async def test_fill_of_empty_description_is_not_blocked_by_the_framing_guard() -> None:
+    """_do_fill stays unguarded — a framed description still beats no description."""
+    service, captured = _make_service_with_mock()
+    entity = Entity(name="Clafoutis", entity_type="MethodOrConcept", description="was discussed")
+    await _run(service, entity, description_confidence=0.8)
+
+    cypher = " ".join(c for c, _ in captured)
+    fill_clause = cypher.split("AS _do_fill")[0].split("_do_correct")[-1]
+    assert "$new_is_self_referential" not in fill_clause

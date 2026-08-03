@@ -90,8 +90,12 @@ def _extraction(
 @pytest.fixture
 def memory_service() -> MagicMock:
     svc = MagicMock()
-    svc.create_conversation = AsyncMock(return_value=None)
-    svc.create_entity = AsyncMock(return_value="entity-id-1")
+    # FRE-1115: these must mirror the real service's return contract —
+    # create_conversation returns bool (the consolidator now acts on it) and
+    # create_entity returns the canonical entity name it wrote (which the Turn's
+    # key_entities is built from), not a fixed synthetic id.
+    svc.create_conversation = AsyncMock(return_value=True)
+    svc.create_entity = AsyncMock(side_effect=lambda entity, **kw: entity.name)
     svc.create_relationship = AsyncMock(return_value="rel-1")
     svc.fetch_turn_discusses_relationship_element_ids = AsyncMock(return_value=[])
     svc.assert_stance = AsyncMock(return_value=True)

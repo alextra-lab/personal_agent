@@ -16,11 +16,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from personal_agent import memory as _pa_memory  # noqa: F401
+from personal_agent.memory import dedup as dedup_module
 from personal_agent.memory.dedup import (
     DedupDecision,
     DedupResult,
     _find_similar_entities,
     _is_allcaps_identifier,
+    _names_are_equivalent,
     check_entity_duplicate,
 )
 
@@ -75,7 +78,34 @@ class TestCheckEntityDuplicate:
 
     @pytest.mark.asyncio
     async def test_high_similarity_merges(self) -> None:
-        """Above threshold similarity → merge with canonical name."""
+        """Above threshold similarity → merge when the names are the same name.
+
+        FRE-1115 changed this case. It previously asserted that "PostgreSQL Database"
+        merges into "Postgres" on similarity alone; a merge destroys the losing
+        entity's identity, and that pair is a *substantive* judgement rather than two
+        spellings of one name. Whether such pairs should merge is the dedup-semantics
+        ADR's question, so the above-threshold merge is now exercised with a genuine
+        name variant.
+        """
+        with patch(
+            "personal_agent.memory.dedup._find_similar_entities",
+            new_callable=AsyncMock,
+            return_value=[
+                {"name": "Postgres", "similarity": 0.92, "entity_type": "TechnicalArtifact"}
+            ],
+        ):
+            result = await check_entity_duplicate(
+                name="postgres",
+                entity_type="TechnicalArtifact",
+                embedding=[0.1] * 1536,
+                neo4j_session=AsyncMock(),
+            )
+        assert result.decision == DedupDecision.MERGE_EXISTING
+        assert result.canonical_name == "Postgres"
+
+    @pytest.mark.asyncio
+    async def test_high_similarity_alone_does_not_merge_distinct_names(self) -> None:
+        """Similarity above threshold is not sufficient to rename (FRE-1115)."""
         with patch(
             "personal_agent.memory.dedup._find_similar_entities",
             new_callable=AsyncMock,
@@ -89,8 +119,7 @@ class TestCheckEntityDuplicate:
                 embedding=[0.1] * 1536,
                 neo4j_session=AsyncMock(),
             )
-        assert result.decision == DedupDecision.MERGE_EXISTING
-        assert result.canonical_name == "Postgres"
+        assert result.decision == DedupDecision.CREATE_NEW
 
     @pytest.mark.asyncio
     async def test_low_similarity_creates_new(self) -> None:
@@ -187,7 +216,33 @@ class TestAllcapsGuard:
 
     @pytest.mark.asyncio
     async def test_allcaps_merges_with_allcaps(self) -> None:
-        """Two ALL_CAPS names may still merge when similarity is high enough."""
+        """Two ALL_CAPS names pass the FRE-412 guard and merge when name-equivalent.
+
+        FRE-1115 changed this case. It previously used HTTPS/HTTP at 0.95 — two
+        different protocols, so asserting they merge encoded the conflation defect
+        this ticket fixes. The FRE-412 behaviour under test is that a matched *shape*
+        does not itself block the merge, which an underscore variant exercises without
+        asserting that two distinct protocols are one entity.
+        """
+        with patch(
+            "personal_agent.memory.dedup._find_similar_entities",
+            new_callable=AsyncMock,
+            return_value=[
+                {"name": "LLM_CALL", "similarity": 0.95, "entity_type": "MethodOrConcept"}
+            ],
+        ):
+            result = await check_entity_duplicate(
+                name="LLMCALL",
+                entity_type="MethodOrConcept",
+                embedding=[0.1] * 1536,
+                neo4j_session=AsyncMock(),
+            )
+        assert result.decision == DedupDecision.MERGE_EXISTING
+        assert result.canonical_name == "LLM_CALL"
+
+    @pytest.mark.asyncio
+    async def test_allcaps_distinct_protocols_do_not_merge(self) -> None:
+        """HTTPS must not be absorbed into HTTP however close the embeddings."""
         with patch(
             "personal_agent.memory.dedup._find_similar_entities",
             new_callable=AsyncMock,
@@ -199,8 +254,7 @@ class TestAllcapsGuard:
                 embedding=[0.1] * 1536,
                 neo4j_session=AsyncMock(),
             )
-        assert result.decision == DedupDecision.MERGE_EXISTING
-        assert result.canonical_name == "HTTP"
+        assert result.decision == DedupDecision.CREATE_NEW
 
     @pytest.mark.asyncio
     async def test_snakecase_does_not_merge_with_allcaps(self) -> None:
@@ -270,3 +324,231 @@ class TestDedupResult:
             similarity_score=0.95,
         )
         assert result.canonical_name == "PostgreSQL"
+
+
+class TestNameCompatibilityGuard:
+    """FRE-1115 Step 0 — a different-name merge requires name equivalence.
+
+    The 0.92 cosine threshold conflates distinct entities under the OVH 8B embedder
+    (measured on the live graph 2026-08-02: ``mathematics`` -> ``computer science`` at
+    0.960, ``Blueberries`` -> ``Apricots`` at 0.957). Merging destroys the losing
+    entity's identity, so an above-threshold match may only rename when the two names
+    are equivalent under casefold + accent-fold + punctuation normalization. Rejecting
+    is fail-open: it creates a distinct entity rather than destroying one.
+
+    Pairs below are the real ``entity_deduplicated`` events that motivated the guard.
+    """
+
+    # (proposed, canonical, observed similarity) — all above the 0.92 threshold.
+    CONFLATING_PAIRS = [
+        ("mathematics", "computer science", 0.960),
+        ("neuroscience", "computer science", 0.923),
+        ("Blueberries", "Apricots", 0.957),
+        ("Arts faculty", "Cornell University", 0.935),
+        ("Walkaway", "Little Brother", 0.936),
+        ("Azure", "Bedrock", 0.952),
+        ("Vertex", "Bedrock", 0.939),
+        ("WebAuthn", "Passkey authentication", 0.978),
+        ("Cantaloupe", "Melon", 0.966),
+        ("Cumin", "Ground cumin", 0.952),
+    ]
+
+    # Name-equivalent pairs that must keep merging — these are the legitimate value
+    # dedup provides (diacritic and punctuation variants of one name).
+    EQUIVALENT_PAIRS = [
+        ("Pâté à bombe", "Pâte à bombe", 0.928),
+        ("Météo-France", "Météo France", 0.945),
+        ("LM  Studio", "LM Studio", 0.999),
+        ("neo4j", "Neo4j", 0.999),
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("proposed,canonical,similarity", CONFLATING_PAIRS)
+    async def test_distinct_names_do_not_merge(
+        self, proposed: str, canonical: str, similarity: float
+    ) -> None:
+        """An above-threshold match between non-equivalent names must not merge."""
+        with patch(
+            "personal_agent.memory.dedup._find_similar_entities",
+            new_callable=AsyncMock,
+            return_value=[
+                {"name": canonical, "similarity": similarity, "entity_type": "DomainOrTopic"}
+            ],
+        ):
+            result = await check_entity_duplicate(
+                name=proposed,
+                entity_type="DomainOrTopic",
+                embedding=[0.1] * 1536,
+                neo4j_session=AsyncMock(),
+            )
+        assert result.decision == DedupDecision.CREATE_NEW, (
+            f"{proposed!r} must stay distinct from {canonical!r} (sim={similarity})"
+        )
+        assert result.canonical_name is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("proposed,canonical,similarity", EQUIVALENT_PAIRS)
+    async def test_name_equivalent_variants_still_merge(
+        self, proposed: str, canonical: str, similarity: float
+    ) -> None:
+        """Diacritic / punctuation / case variants of one name still merge."""
+        with patch(
+            "personal_agent.memory.dedup._find_similar_entities",
+            new_callable=AsyncMock,
+            return_value=[
+                {"name": canonical, "similarity": similarity, "entity_type": "MethodOrConcept"}
+            ],
+        ):
+            result = await check_entity_duplicate(
+                name=proposed,
+                entity_type="MethodOrConcept",
+                embedding=[0.1] * 1536,
+                neo4j_session=AsyncMock(),
+            )
+        assert result.decision == DedupDecision.MERGE_EXISTING, (
+            f"{proposed!r} and {canonical!r} name the same thing and must merge"
+        )
+        assert result.canonical_name == canonical
+
+    @pytest.mark.asyncio
+    async def test_rejected_merge_is_logged_for_audit(self) -> None:
+        """A rejected merge emits the audit event the FRE-1115 Step 7 ticket needs."""
+        with (
+            patch(
+                "personal_agent.memory.dedup._find_similar_entities",
+                new_callable=AsyncMock,
+                return_value=[
+                    {
+                        "name": "computer science",
+                        "similarity": 0.96,
+                        "entity_type": "DomainOrTopic",
+                    }
+                ],
+            ),
+            patch.object(dedup_module.logger, "info") as mock_log,
+        ):
+            await check_entity_duplicate(
+                name="mathematics",
+                entity_type="DomainOrTopic",
+                embedding=[0.1] * 1536,
+                neo4j_session=AsyncMock(),
+            )
+        events = [c.args[0] for c in mock_log.call_args_list if c.args]
+        assert "entity_dedup_rejected_name_incompatible" in events
+        kwargs = next(
+            c.kwargs
+            for c in mock_log.call_args_list
+            if c.args and c.args[0] == "entity_dedup_rejected_name_incompatible"
+        )
+        assert kwargs["proposed_name"] == "mathematics"
+        assert kwargs["candidate_name"] == "computer science"
+        assert kwargs["similarity"] == pytest.approx(0.96)
+
+
+class TestNamesAreEquivalent:
+    """Unit tests for the normalization predicate itself."""
+
+    @pytest.mark.parametrize(
+        "a,b",
+        [
+            ("Predictive Processing", "predictive processing"),
+            ("Pâté à bombe", "Pate a bombe"),
+            ("Météo-France", "Météo France"),
+            ("LM  Studio", "lm studio"),
+            ("claude-code", "Claude Code"),
+        ],
+    )
+    def test_equivalent(self, a: str, b: str) -> None:
+        """Case, diacritic, punctuation and spacing variants are equivalent."""
+        assert _names_are_equivalent(a, b)
+
+    @pytest.mark.parametrize(
+        "a,b",
+        [
+            ("mathematics", "computer science"),
+            ("Blueberries", "Apricots"),
+            ("Cumin", "Ground cumin"),
+            ("Azure", "Bedrock"),
+            ("Walkaway", "Little Brother"),
+        ],
+    )
+    def test_not_equivalent(self, a: str, b: str) -> None:
+        """Distinct names are not equivalent however similar their embeddings."""
+        assert not _names_are_equivalent(a, b)
+
+
+class TestCandidateScanning:
+    """FRE-1115 code-review finding: the guards must not blind dedup to rank 2-5.
+
+    The first cut applied the name guard to ``similar[0]`` only, so a topically-close
+    neighbour outranking the true case-variant twin caused a duplicate node — exactly the
+    ordering the guards exist to distrust.
+    """
+
+    @pytest.mark.asyncio
+    async def test_name_equivalent_twin_below_rank_one_is_still_merged(self) -> None:
+        """Rank 1 is name-incompatible; the real twin sits at rank 2."""
+        with patch(
+            "personal_agent.memory.dedup._find_similar_entities",
+            new_callable=AsyncMock,
+            return_value=[
+                {"name": "computer science", "similarity": 0.96, "entity_type": "DomainOrTopic"},
+                {"name": "Mathematics", "similarity": 0.94, "entity_type": "DomainOrTopic"},
+            ],
+        ):
+            result = await check_entity_duplicate(
+                name="mathematics",
+                entity_type="DomainOrTopic",
+                embedding=[0.1] * 1536,
+                neo4j_session=AsyncMock(),
+            )
+        assert result.decision == DedupDecision.MERGE_EXISTING
+        assert result.canonical_name == "Mathematics"
+
+    @pytest.mark.asyncio
+    async def test_exact_match_below_rank_one_still_wins(self) -> None:
+        """An exact (case-insensitive) name match anywhere in the candidates merges."""
+        with patch(
+            "personal_agent.memory.dedup._find_similar_entities",
+            new_callable=AsyncMock,
+            return_value=[
+                {"name": "Apricots", "similarity": 0.97, "entity_type": "DomainOrTopic"},
+                {"name": "Blueberries", "similarity": 0.93, "entity_type": "DomainOrTopic"},
+            ],
+        ):
+            result = await check_entity_duplicate(
+                name="blueberries",
+                entity_type="DomainOrTopic",
+                embedding=[0.1] * 1536,
+                neo4j_session=AsyncMock(),
+            )
+        assert result.decision == DedupDecision.MERGE_EXISTING
+        assert result.canonical_name == "Blueberries"
+
+    @pytest.mark.asyncio
+    async def test_no_compatible_candidate_still_creates_new_and_audits(self) -> None:
+        """When nothing above threshold is the same name, the top one is the audit row."""
+        with (
+            patch(
+                "personal_agent.memory.dedup._find_similar_entities",
+                new_callable=AsyncMock,
+                return_value=[
+                    {"name": "Apricots", "similarity": 0.96, "entity_type": "DomainOrTopic"},
+                    {"name": "Melon", "similarity": 0.94, "entity_type": "DomainOrTopic"},
+                ],
+            ),
+            patch.object(dedup_module.logger, "info") as mock_log,
+        ):
+            result = await check_entity_duplicate(
+                name="Blueberries",
+                entity_type="DomainOrTopic",
+                embedding=[0.1] * 1536,
+                neo4j_session=AsyncMock(),
+            )
+        assert result.decision == DedupDecision.CREATE_NEW
+        kwargs = next(
+            c.kwargs
+            for c in mock_log.call_args_list
+            if c.args and c.args[0] == "entity_dedup_rejected_name_incompatible"
+        )
+        assert kwargs["candidate_name"] == "Apricots"

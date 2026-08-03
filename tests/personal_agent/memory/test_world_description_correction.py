@@ -41,6 +41,7 @@ async def svc():
         await s.run("MATCH (v:EntityDescriptionVersion) DETACH DELETE v")
         await s.run(
             "MATCH (e:Entity) WHERE e.name STARTS WITH 'FRE711_' OR e.name STARTS WITH 'FRE725_' "
+            "OR e.name STARTS WITH 'FRE1115_' "
             "DETACH DELETE e"
         )
     yield service
@@ -48,6 +49,7 @@ async def svc():
         await s.run("MATCH (v:EntityDescriptionVersion) DETACH DELETE v")
         await s.run(
             "MATCH (e:Entity) WHERE e.name STARTS WITH 'FRE711_' OR e.name STARTS WITH 'FRE725_' "
+            "OR e.name STARTS WITH 'FRE1115_' "
             "DETACH DELETE e"
         )
     await service.disconnect()
@@ -299,3 +301,62 @@ async def test_ac725_6_new_entity_no_archive(svc: MemoryService) -> None:
 
     assert await _desc(svc, "FRE725_Fresh") == "A first description"
     assert await _versions(svc, "FRE725_Fresh") == []
+
+
+@pytest.mark.asyncio
+async def test_fre1115_self_referential_description_cannot_overwrite_a_clean_one(
+    svc: MemoryService,
+) -> None:
+    """AC-4: querying a topic must not destroy the knowledge stored about it.
+
+    The live-graph case this reproduces: "Clafoutis" held a real definition and was
+    overwritten with "…discussed as a cherry-filled custard-like dish in the memory
+    search context" during a recall turn. The enrichment arm admitted it because the
+    framed text is longer than the definition it replaced.
+    """
+    clean = "A French baked dessert of cherries in a custard-like batter"
+    framed = (
+        "A French baked dessert discussed as a cherry-filled custard-like dish "
+        "in the memory search context"
+    )
+    assert len(framed) > len(clean), "the anti-shrink guard alone would admit this write"
+
+    with _ZERO_EMBED:
+        await svc.create_entity(_entity("FRE1115_Clafoutis", clean), description_confidence=0.8)
+        await svc.create_entity(
+            _entity("FRE1115_Clafoutis", framed),
+            description_confidence=0.8,
+            description_update_kind="enrichment",
+        )
+
+    assert await _desc(svc, "FRE1115_Clafoutis") == clean, "the definition must survive"
+    assert await _versions(svc, "FRE1115_Clafoutis") == [], "a refused write archives nothing"
+
+
+@pytest.mark.asyncio
+async def test_fre1115_repair_toward_a_clean_description_still_lands(svc: MemoryService) -> None:
+    """The guard is directional — replacing framed text with a definition is allowed."""
+    framed = "A medication discussed as interacting with grapefruit"
+    clean = "A calcium channel blocker used to treat high blood pressure"
+
+    with _ZERO_EMBED:
+        await svc.create_entity(_entity("FRE1115_Amlodipine", framed), description_confidence=0.8)
+        await svc.create_entity(
+            _entity("FRE1115_Amlodipine", clean),
+            description_confidence=0.8,
+            description_update_kind="enrichment",
+        )
+
+    assert await _desc(svc, "FRE1115_Amlodipine") == clean
+    assert [v["text"] for v in await _versions(svc, "FRE1115_Amlodipine")] == [framed]
+
+
+@pytest.mark.asyncio
+async def test_fre1115_framed_description_still_fills_an_empty_one(svc: MemoryService) -> None:
+    """_do_fill stays unguarded — a framed description beats no description at all."""
+    framed = "A blog mentioned as having a dedicated trans-rights tag"
+    with _ZERO_EMBED:
+        await svc.create_entity(_entity("FRE1115_Pluralistic", ""), description_confidence=0.8)
+        await svc.create_entity(_entity("FRE1115_Pluralistic", framed), description_confidence=0.8)
+
+    assert await _desc(svc, "FRE1115_Pluralistic") == framed

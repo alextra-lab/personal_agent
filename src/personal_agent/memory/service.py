@@ -101,6 +101,35 @@ _VALID_DESCRIPTION_UPDATE_KINDS = frozenset(
     {_DEFAULT_DESCRIPTION_UPDATE_KIND, *_EXPLICIT_DESCRIPTION_UPDATE_KINDS}
 )
 
+# FRE-1115: a description that records that a discussion happened rather than what the
+# subject is ("A French dessert discussed as a cherry dish in the memory search context").
+# The FRE-725 equal-confidence enrichment arm admits these over good descriptions because
+# discussion-framing is *longer* than the definition it replaces, so the defect's own
+# verbosity satisfies the anti-shrink guard — measured as 17 of 71 archived overwrites on
+# the live graph. Declared once and used on BOTH sides of the gate (evaluated in Python for
+# the incoming description, passed to Cypher for the stored one) so the two cannot drift.
+# Leading/trailing '.*' because Cypher's '=~' is a full match, unlike Python's re.search.
+_SELF_REFERENTIAL_DESCRIPTION_PATTERN = (
+    r"(?is).*\b(?:was discussed|discussed as|discussed here|"
+    r"was mentioned|mentioned as|mentioned here|reportedly|"
+    r"in the memory search context)\b.*"
+)
+
+
+def _is_self_referential_description(description: str | None) -> bool:
+    """Return True when a description describes the occasion, not the subject.
+
+    Args:
+        description: The candidate description, possibly empty or ``None``.
+
+    Returns:
+        True when the text records that a discussion happened rather than stating
+        what the entity is.
+    """
+    if not description:
+        return False
+    return re.fullmatch(_SELF_REFERENTIAL_DESCRIPTION_PATTERN, description) is not None
+
 
 def _as_utc(value: datetime) -> datetime:
     """Attach UTC to a naive datetime, leaving aware ones untouched (FRE-1020).
@@ -1276,9 +1305,9 @@ class MemoryService:
                         ON CREATE SET e.visibility = $visibility,
                                       e.originating_trace_id = $originating_trace_id,
                                       e.originating_session_id = $originating_session_id
-                        SET e.last_seen = $timestamp,
+                        SET e.last_seen = datetime($timestamp),
                             e.mention_count = COALESCE(e.mention_count, 0) + 1,
-                            e.first_seen = COALESCE(e.first_seen, $timestamp),
+                            e.first_seen = COALESCE(e.first_seen, datetime($timestamp)),
                             e.entity_type = CASE WHEN $entity_type <> '' THEN $entity_type
                                                  ELSE COALESCE(e.entity_type, '') END
                         WITH e
@@ -2141,6 +2170,9 @@ class MemoryService:
                         else _DEFAULT_DESCRIPTION_UPDATE_KIND
                     ),
                     "explicit_description_update_kinds": list(_EXPLICIT_DESCRIPTION_UPDATE_KINDS),
+                    # FRE-1115 anti-framing guard inputs (see the pattern's declaration).
+                    "new_is_self_referential": _is_self_referential_description(entity.description),
+                    "self_referential_pattern": _SELF_REFERENTIAL_DESCRIPTION_PATTERN,
                 }
 
                 # FRE-659: never persist a zero-vector embedding. When the embedder is
@@ -2212,6 +2244,12 @@ class MemoryService:
                     "     ($description <> '' AND _old_desc IS NOT NULL AND _old_desc <> ''\n"
                     "      AND $description <> _old_desc\n"
                     "      AND NOT ($eval_mode AND coalesce(_old_eval, false) = false)\n"
+                    # FRE-1115: never let a description of the discussion replace a
+                    # description of the subject. Framed-over-framed and any repair
+                    # toward a clean description stay allowed; only the degrading
+                    # direction is refused.
+                    "      AND NOT ($new_is_self_referential\n"
+                    "               AND NOT coalesce(_old_desc =~ $self_referential_pattern, false))\n"
                     # FRE-711 strict-'>' arm OR FRE-725 equal-confidence signal arm. The
                     # signal arm needs an explicit enrichment/correction kind at >= confidence
                     # (never a downgrade); an 'enrichment' must additionally not shrink the

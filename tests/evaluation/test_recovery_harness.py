@@ -59,10 +59,12 @@ class TestWaitForTraceComplete:
         # First poll: no events; second poll: terminal event
         mock_client.search.side_effect = [
             _make_response([_make_hit("request_received")]),
-            _make_response([
-                _make_hit("request_received"),
-                _make_hit("reply_ready"),
-            ]),
+            _make_response(
+                [
+                    _make_hit("request_received"),
+                    _make_hit("reply_ready"),
+                ]
+            ),
         ]
         queries = _make_mock_queries(mock_client)
         started_at = datetime.now(timezone.utc)
@@ -83,8 +85,11 @@ class TestWaitForTraceComplete:
         queries = _make_mock_queries(mock_client)
 
         await _wait_for_trace_complete(
-            queries, "t-123", datetime.now(timezone.utc),
-            poll_interval=0.0, hard_timeout=10.0,
+            queries,
+            "t-123",
+            datetime.now(timezone.utc),
+            poll_interval=0.0,
+            hard_timeout=10.0,
         )
 
         assert mock_client.search.call_count == 1
@@ -95,7 +100,7 @@ class TestWaitForTraceComplete:
         mock_client = AsyncMock()
         # Count grows on poll 1, then stabilises at 3 on polls 2 and 3.
         mock_client.search.side_effect = [
-            _make_response([_make_hit("some_event")]),          # count=1
+            _make_response([_make_hit("some_event")]),  # count=1
             _make_response([_make_hit("a"), _make_hit("b"), _make_hit("c")]),  # count=3
             _make_response([_make_hit("a"), _make_hit("b"), _make_hit("c")]),  # count=3 stable #1
             _make_response([_make_hit("a"), _make_hit("b"), _make_hit("c")]),  # count=3 stable #2
@@ -103,8 +108,11 @@ class TestWaitForTraceComplete:
         queries = _make_mock_queries(mock_client)
 
         await _wait_for_trace_complete(
-            queries, "t-123", datetime.now(timezone.utc),
-            poll_interval=0.0, hard_timeout=10.0,
+            queries,
+            "t-123",
+            datetime.now(timezone.utc),
+            poll_interval=0.0,
+            hard_timeout=10.0,
         )
 
         # Should stop after the 4th call (two consecutive stable polls at count=3).
@@ -120,8 +128,11 @@ class TestWaitForTraceComplete:
 
         with patch("scripts.eval.recovery_harness.log") as mock_log:
             await _wait_for_trace_complete(
-                queries, "t-123", datetime.now(timezone.utc),
-                poll_interval=0.0, hard_timeout=0.0,  # immediate timeout
+                queries,
+                "t-123",
+                datetime.now(timezone.utc),
+                poll_interval=0.0,
+                hard_timeout=0.0,  # immediate timeout
             )
             mock_log.warning.assert_called_once()
             event_name = mock_log.warning.call_args[0][0]
@@ -140,8 +151,11 @@ class TestWaitForTraceComplete:
         queries = _make_mock_queries(mock_client)
 
         await _wait_for_trace_complete(
-            queries, "t-123", datetime.now(timezone.utc),
-            poll_interval=0.0, hard_timeout=10.0,
+            queries,
+            "t-123",
+            datetime.now(timezone.utc),
+            poll_interval=0.0,
+            hard_timeout=10.0,
         )
 
         # Stability at count=0 must not fire; terminal event on poll 3 stops it.
@@ -183,8 +197,8 @@ class TestFetchTraceLogs:
 
         # page_size=500 default: pages of 500, 500, 200
         mock_client.search.side_effect = [
-            _make_page(500, start_idx=0),     # full page → pagination continues
-            _make_page(500, start_idx=500),   # full page → pagination continues
+            _make_page(500, start_idx=0),  # full page → pagination continues
+            _make_page(500, start_idx=500),  # full page → pagination continues
             _make_page(200, start_idx=1000),  # partial page → stop
         ]
         queries = _make_mock_queries(mock_client)
@@ -240,9 +254,7 @@ class TestFetchTraceLogs:
             patch("scripts.eval.recovery_harness.log") as mock_log,
         ):
             mock_settings.return_value.elasticsearch_index_prefix = "agent-logs"
-            result = await fetch_trace_logs(
-                queries, "t-456", since, until, page_size=3, hard_cap=5
-            )
+            result = await fetch_trace_logs(queries, "t-456", since, until, page_size=3, hard_cap=5)
 
         assert len(result) == 6  # all fetched docs returned before stopping
         mock_log.warning.assert_called_once()
@@ -258,7 +270,8 @@ class TestFetchTraceLogs:
         with patch("scripts.eval.recovery_harness.get_settings") as mock_settings:
             mock_settings.return_value.elasticsearch_index_prefix = "agent-logs"
             result = await fetch_trace_logs(
-                queries, "t-456",
+                queries,
+                "t-456",
                 datetime(2026, 1, 1, tzinfo=timezone.utc),
                 datetime(2026, 1, 2, tzinfo=timezone.utc),
             )
@@ -276,7 +289,8 @@ class TestFetchTraceLogs:
         with patch("scripts.eval.recovery_harness.get_settings") as mock_settings:
             mock_settings.return_value.elasticsearch_index_prefix = "agent-logs"
             result = await fetch_trace_logs(
-                queries, "t-456",
+                queries,
+                "t-456",
                 datetime(2026, 1, 1, tzinfo=timezone.utc),
                 datetime(2026, 1, 2, tzinfo=timezone.utc),
                 page_size=500,

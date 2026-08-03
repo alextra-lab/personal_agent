@@ -896,9 +896,7 @@ CP_19_V2 = ConversationPath(
         ConversationTurn(
             user_message="We need to pick a primary database for the project. Let's go with PostgreSQL.",
             expected_behavior="Acknowledges PostgreSQL choice",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message="Now let's discuss the API framework. We should use FastAPI.",
@@ -930,9 +928,7 @@ CP_19_V3 = ConversationPath(
         ConversationTurn(
             user_message="We decided to use Redis for our caching layer.",
             expected_behavior="Acknowledges Redis choice",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message="Let's move on to discussing monitoring.",
@@ -963,9 +959,7 @@ CP_19_V4 = ConversationPath(
         ConversationTurn(
             user_message="For the message queue, let's use RabbitMQ.",
             expected_behavior="Acknowledges RabbitMQ choice",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message="Actually, let's also consider the deployment strategy.",
@@ -975,9 +969,7 @@ CP_19_V4 = ConversationPath(
         ConversationTurn(
             user_message="Remind me what we decided on the message queue?",
             expected_behavior="Recalls RabbitMQ from session",
-            assertions=(
-                fld("intent_classified", "task_type", "memory_recall"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "memory_recall"),),
         ),
     ),
     quality_criteria=(
@@ -995,9 +987,7 @@ CP_19_V5 = ConversationPath(
         ConversationTurn(
             user_message="For the CI/CD pipeline, we should go with GitHub Actions.",
             expected_behavior="Acknowledges GitHub Actions choice",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message="Let me also think about the testing strategy.",
@@ -1007,9 +997,7 @@ CP_19_V5 = ConversationPath(
         ConversationTurn(
             user_message="What did we decide on the CI/CD pipeline?",
             expected_behavior="Recalls GitHub Actions from session",
-            assertions=(
-                fld("intent_classified", "task_type", "memory_recall"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "memory_recall"),),
         ),
     ),
     quality_criteria=(
@@ -1027,9 +1015,7 @@ CP_19_V6 = ConversationPath(
         ConversationTurn(
             user_message="Our main programming language will be Python 3.12.",
             expected_behavior="Acknowledges Python choice",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message="We also need a frontend framework. Let's use React.",
@@ -1060,9 +1046,7 @@ CP_19_V7 = ConversationPath(
         ConversationTurn(
             user_message="We should use Terraform for infrastructure as code.",
             expected_behavior="Acknowledges Terraform choice",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message="Let's also set up monitoring with Grafana.",
@@ -1643,9 +1627,7 @@ CP_30 = ConversationPath(
                         "It's a distributed framework similar to Apache Flink."
                     ),
                     expected_behavior="Agent acknowledges DataForge and Flink.",
-                    assertions=(
-                        present("intent_classified"),
-                    ),
+                    assertions=(present("intent_classified"),),
                 ),
                 ConversationTurn(
                     user_message=(
@@ -1653,9 +1635,7 @@ CP_30 = ConversationPath(
                         "She recommends DataForge for our ClickHouse integration."
                     ),
                     expected_behavior="Agent acknowledges entities (Priya, ClickHouse).",
-                    assertions=(
-                        present("intent_classified"),
-                    ),
+                    assertions=(present("intent_classified"),),
                 ),
                 ConversationTurn(
                     user_message=(
@@ -1663,9 +1643,7 @@ CP_30 = ConversationPath(
                         "requirements and Priya can lead the integration."
                     ),
                     expected_behavior="Agent confirms the decision.",
-                    assertions=(
-                        present("intent_classified"),
-                    ),
+                    assertions=(present("intent_classified"),),
                 ),
             ),
             post_session_delay_s=15.0,
@@ -1674,9 +1652,7 @@ CP_30 = ConversationPath(
             turns=(
                 ConversationTurn(
                     user_message="What was that data processing tool we discussed?",
-                    expected_behavior=(
-                        "Agent recalls DataForge from previous session via memory."
-                    ),
+                    expected_behavior=("Agent recalls DataForge from previous session via memory."),
                     assertions=(
                         fld("intent_classified", "task_type", "memory_recall"),
                         present("recall_cue_detected"),
@@ -1714,9 +1690,7 @@ CP_31 = ConversationPath(
                         "Options are PostgreSQL, MySQL, or CockroachDB."
                     ),
                     expected_behavior="Agent discusses database options.",
-                    assertions=(
-                        present("intent_classified"),
-                    ),
+                    assertions=(present("intent_classified"),),
                 ),
                 ConversationTurn(
                     user_message=(
@@ -1724,9 +1698,7 @@ CP_31 = ConversationPath(
                         "It has the best JSONB support and our team knows it well."
                     ),
                     expected_behavior="Agent acknowledges PostgreSQL decision.",
-                    assertions=(
-                        present("intent_classified"),
-                    ),
+                    assertions=(present("intent_classified"),),
                 ),
             ),
             post_session_delay_s=15.0,
@@ -1735,9 +1707,7 @@ CP_31 = ConversationPath(
             turns=(
                 ConversationTurn(
                     user_message="What database did we decide on?",
-                    expected_behavior=(
-                        "Agent recalls PostgreSQL decision from previous session."
-                    ),
+                    expected_behavior=("Agent recalls PostgreSQL decision from previous session."),
                     assertions=(
                         fld("intent_classified", "task_type", "memory_recall"),
                         present("recall_cue_detected"),
@@ -1746,9 +1716,7 @@ CP_31 = ConversationPath(
             ),
         ),
     ),
-    post_path_assertions=(
-        neo4j_entity("PostgreSQL"),
-    ),
+    post_path_assertions=(neo4j_entity("PostgreSQL"),),
     post_path_delay_s=10.0,
     setup_notes=(
         "Cross-session path: Session 1 establishes a decision, 15s consolidation, "

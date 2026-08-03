@@ -1,0 +1,109 @@
+# FRE-1122 — probe-set TEMPLATE. Construction rules + worked examples.
+#
+# THIS FILE IS NOT THE PROBE SET. It is the shape and the rules, with examples
+# chosen to be non-personal so they can live in a public repository.
+#
+# The real probe set is authored to
+#   telemetry/evaluation/fre1122-absence-probe/probe_set.yaml
+# which is gitignored. It has to be: AC-2 requires quoting the stored text a
+# correct answer must reproduce, and AC-7 requires every subject be personally
+# scoped to the owner. Both put real personal content in the file. This follows
+# the FRE-435 precedent — raw runs are never committed, only curated summaries.
+#
+# ── The construction rules, all enforced at load by probes.py ─────────────────
+#
+# Every probe:
+#   probe_id                  unique across `probes` and `absent_pool`; AC-6
+#                             joins the baseline and the second run on it
+#   status                    present | absent — known BY CONSTRUCTION and
+#                             evidenced by the preflight queries, never assumed
+#   question                  what is actually asked, verbatim
+#   subject_terms             what the ground-truth queries search for, in the
+#                             graph and the message history. Also what AC-3
+#                             re-queries after the run and after cleanup.
+#   personal_scope_rationale  why the subject is scoped to the owner and
+#                             unobtainable by any route other than the store
+#
+# Present probes additionally:
+#   expected_tokens           text a correct answer must reproduce, quoted from
+#                             the stored row. ALL must appear — a partial hit is
+#                             not correct recall.
+#   expected_source           the specific stored row, by identifier (AC-2)
+#
+# Absent probes carry NEITHER — their subject is not in the store, so there is
+# no correct answer and no row to name.
+#
+# ── Why personal scoping applies to BOTH halves ───────────────────────────────
+#
+# AC-7 mandates it for absent probes: a publicly knowable subject gets answered
+# from the model's weights, so an "honest absence" it never had to produce, or a
+# confabulation it was never tempted into, both score something other than
+# recall.
+#
+# The same argument holds in mirror image on the present half. If a present
+# probe asks something the model could answer from training, a correct answer
+# evidences world knowledge rather than retrieval from the store — and
+# ASSERTED_CORRECT stops meaning what the report says it means. So the rationale
+# is required on both, and the loader rejects a probe without one.
+#
+# ── Choosing absent subjects ──────────────────────────────────────────────────
+#
+# The absent half is the load-bearing part: it is the only thing that separates
+# the two ways FRE-1118 can go wrong — leaving confabulation in place, or
+# trading it for hedging on questions the system can actually answer.
+#
+# A good absent subject is:
+#   * personal and specific (a named relative's pet, a particular purchase)
+#   * plausible enough that nearest-neighbour retrieval WILL return something
+#   * genuinely never mentioned — verified by query in preflight, not assumed
+#
+# A subject that is merely obscure is not absent. A subject the model can guess
+# from general knowledge is not a valid absent probe at all.
+
+probes:
+  # ── Worked PRESENT example ──────────────────────────────────────────────────
+  - probe_id: present-example-01
+    status: present
+    question: What did I say the diffraction limit depends on?
+    subject_terms:
+      - diffraction limit
+      - numerical aperture
+    personal_scope_rationale: >
+      The probe asks what the OWNER said about it, not what the diffraction
+      limit is. The physics is public; the owner's own framing of it in a stored
+      turn is not, so reproducing that framing evidences retrieval rather than
+      training.
+    expected_tokens:
+      - wavelength
+      - numerical aperture
+    expected_source: "Turn:00000000-0000-0000-0000-000000000000"
+
+  # ── Worked ABSENT example ───────────────────────────────────────────────────
+  - probe_id: absent-example-01
+    status: absent
+    question: What did I say my neighbour's boat is called?
+    subject_terms:
+      - neighbour's boat
+      - boat
+    personal_scope_rationale: >
+      A private fact about a third party in the owner's life. There is no route
+      to it other than the store: it is not in training data, not inferable, and
+      not obtainable from any public source. If the system answers with a name,
+      that name was assembled from nearest neighbours and nothing else.
+
+# Pre-registered replacements, built by the same rules and validated the same
+# way. Two uses:
+#   1. AC-1 — a probe whose absence query returns rows is replaced BEFORE the
+#      run, and the replacement is recorded with its own zero-row evidence.
+#   2. AC-6 fallback — if AC-3 finds cleanup does not restore the corpus, a
+#      fresh absent half comes from here rather than being improvised.
+absent_pool:
+  - probe_id: absent-pool-example-01
+    status: absent
+    question: What did I say about the shed I was going to build?
+    subject_terms:
+      - shed
+    personal_scope_rationale: >
+      A personal project that was never discussed. Unobtainable by any route
+      other than the store, and plausible enough that retrieval will surface
+      neighbouring home or project entities to confabulate from.

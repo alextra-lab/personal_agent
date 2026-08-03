@@ -186,7 +186,9 @@ def parse_args() -> argparse.Namespace:
         log.error("conflicting_filters", detail="Use only one of --category or --categories")
         sys.exit(1)
     if args.paths and (args.category or args.categories):
-        log.error("conflicting_filters", detail="Do not combine --paths with --category/--categories")
+        log.error(
+            "conflicting_filters", detail="Do not combine --paths with --category/--categories"
+        )
         sys.exit(1)
     return args
 
@@ -243,9 +245,7 @@ def select_paths(args: argparse.Namespace) -> list[ConversationPath]:
     return _apply_skip_setup(paths, args.skip_setup)
 
 
-def _apply_skip_setup(
-    paths: list[ConversationPath], skip_setup: bool
-) -> list[ConversationPath]:
+def _apply_skip_setup(paths: list[ConversationPath], skip_setup: bool) -> list[ConversationPath]:
     """Optionally drop paths that need manual setup."""
     if skip_setup:
         return [p for p in paths if p.setup_notes is None]

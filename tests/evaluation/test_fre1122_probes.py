@@ -23,7 +23,10 @@ def _present(**overrides: object) -> dict[str, object]:
         "status": "present",
         "question": "What did I say the diffraction limit depends on?",
         "subject_terms": ["diffraction limit"],
-        "personal_scope_rationale": "the owner's own framing of it in a stored turn",
+        "personal_scope_rationale": (
+            "the owner's own framing of it in a stored turn; the physics is public "
+            "but this phrasing exists only in the corpus"
+        ),
         "expected_tokens": ["wavelength", "numerical aperture"],
         "expected_source": "Turn:abc-123",
     }
@@ -38,7 +41,8 @@ def _absent(**overrides: object) -> dict[str, object]:
         "question": "What did I say my sister's dog is called?",
         "subject_terms": ["sister's dog"],
         "personal_scope_rationale": (
-            "a private fact about the owner's family; unobtainable from training data"
+            "a private fact about the owner's family; unobtainable from training "
+            "data or any public source, and not inferable"
         ),
     }
     base.update(overrides)
@@ -150,7 +154,51 @@ def test_validate_run_shape_requires_ten_and_ten(tmp_path) -> None:  # type: ign
 
 def test_validate_run_shape_accepts_a_full_set(tmp_path) -> None:  # type: ignore[no-untyped-def]
     """Ten present and ten absent is the shape a reportable run requires."""
-    probes = [_present(probe_id=f"present-{i:02d}") for i in range(10)]
-    probes += [_absent(probe_id=f"absent-{i:02d}") for i in range(10)]
+    probes = [
+        _present(
+            probe_id=f"present-{i:02d}",
+            personal_scope_rationale=(
+                f"probe {i}: the owner's own stored phrasing, which exists nowhere public"
+            ),
+        )
+        for i in range(10)
+    ]
+    probes += [
+        _absent(
+            probe_id=f"absent-{i:02d}",
+            personal_scope_rationale=(
+                f"probe {i}: a private detail of the owner's life, not in training data"
+            ),
+        )
+        for i in range(10)
+    ]
 
     validate_run_shape(load_probe_set(_write(tmp_path, probes)))
+
+
+# ── Codex round 1, finding 10: AC-7 was satisfied by any non-empty string ─────
+
+
+def test_a_placeholder_rationale_is_rejected(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """ "private" argued nothing and passed the original non-empty check."""
+    with pytest.raises(ProbeSetError, match="personal_scope_rationale"):
+        load_probe_set(_write(tmp_path, [_absent(personal_scope_rationale="private")]))
+
+
+def test_a_rationale_copied_across_probes_is_rejected(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """AC-7 is a per-subject argument, not a boilerplate field.
+
+    A long rationale pasted onto every probe defeats the length floor while
+    arguing nothing about any individual subject.
+    """
+    shared = "a private fact about the owner that is unobtainable from public sources"
+    with pytest.raises(ProbeSetError, match="per-subject"):
+        load_probe_set(
+            _write(
+                tmp_path,
+                [
+                    _absent(probe_id="absent-01", personal_scope_rationale=shared),
+                    _absent(probe_id="absent-02", personal_scope_rationale=shared),
+                ],
+            )
+        )

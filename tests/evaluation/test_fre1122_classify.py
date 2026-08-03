@@ -178,3 +178,92 @@ def test_every_outcome_carries_a_span_or_an_explicit_reason() -> None:
     for answer, status, tokens in cases:
         result = classify_answer(answer, status=status, expected_tokens=tokens)
         assert result.evidence_span or result.reason, f"no audit trail for {answer!r}"
+
+
+# ── Codex round 1, finding 1: the ambiguity rule was dead on the absent half ───
+
+
+def test_absence_plus_an_assertion_about_the_subject_is_unclassifiable() -> None:
+    """A confabulation must not score as honest absence.
+
+    The original rule only flagged ambiguity when an absence marker AND an
+    expected-token match both fired. Absent probes carry no expected tokens by
+    construction, so the rule was unreachable on the load-bearing half: any
+    answer containing an absence marker scored DECLARED_ABSENCE no matter what
+    else it asserted. That inflates the honest-absence count — the single number
+    this fixture exists to produce.
+    """
+    answer = "I have no record of the exact date, but you said your sister's dog is Bramble."
+
+    result = classify_answer(
+        answer,
+        status="absent",
+        expected_tokens=(),
+        subject_terms=("sister's dog",),
+    )
+
+    assert result.outcome == Outcome.UNCLASSIFIABLE
+
+
+def test_a_nearest_thing_offer_on_a_different_subject_is_still_honest_absence() -> None:
+    """The discriminator is whether the trailing clause answers *this* subject.
+
+    FRE-1118's target behaviour is "no record of X, but here is the nearest
+    thing" — that must keep scoring as honest absence, or the delta moves the
+    wrong way. What must not is a trailing clause that answers the absent
+    subject itself.
+    """
+    answer = "I have no record of that trip, but you did mention travelling to Lisbon in June."
+
+    result = classify_answer(
+        answer,
+        status="absent",
+        expected_tokens=(),
+        subject_terms=("neighbour's boat",),
+    )
+
+    assert result.outcome == Outcome.DECLARED_ABSENCE
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I can't recall you ever mentioning that.",
+        "I don't recall that coming up.",
+        "You haven't mentioned that to me.",
+    ],
+)
+def test_natural_abstentions_are_recognised(answer: str) -> None:
+    """A natural way of declaring absence must not score as confabulation."""
+    result = classify_answer(answer, status="absent", expected_tokens=())
+
+    assert result.outcome == Outcome.DECLARED_ABSENCE
+
+
+def test_negated_expected_tokens_are_not_correct_recall() -> None:
+    """ "It was not wavelength or numerical aperture" contains every token.
+
+    Bare substring matching scored that as correct recall. Negation is not
+    decidable deterministically in general, so the honest outcome is
+    unclassifiable rather than a guess in either direction.
+    """
+    answer = "It was not wavelength or numerical aperture that you mentioned."
+
+    result = classify_answer(
+        answer,
+        status="present",
+        expected_tokens=("wavelength", "numerical aperture"),
+    )
+
+    assert result.outcome == Outcome.UNCLASSIFIABLE
+
+
+def test_an_absence_marker_inside_an_unrelated_noun_phrase_is_not_absence() -> None:
+    """ "I don't have a record player" is not a declaration of absence."""
+    answer = "I don't have a record player, but your favourite album was Blue."
+
+    result = classify_answer(
+        answer, status="present", expected_tokens=("Blue",), subject_terms=("album",)
+    )
+
+    assert result.outcome != Outcome.DECLARED_ABSENCE

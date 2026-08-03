@@ -31,6 +31,17 @@ __all__ = ["Probe", "ProbeSet", "ProbeSetError", "load_probe_set", "validate_run
 
 _REQUIRED_HALF_SIZE = 10
 
+# AC-7's mechanical floor. A rationale must actually argue why the subject is
+# unobtainable by any route other than the store; "private" or "x" passed the
+# original non-empty check and argued nothing (Codex round 1, finding 10).
+#
+# This is a floor, NOT proof. No length or uniqueness rule can establish that a
+# question is unanswerable from a model's weights — that judgement is the
+# author's, and the rationale is recorded in the manifest and the report so it
+# can be reviewed. What the floor buys is that an unreviewable placeholder
+# cannot reach a run.
+_MIN_RATIONALE_CHARS = 40
+
 
 class ProbeSetError(ValueError):
     """A probe set violates a construction rule an acceptance criterion depends on."""
@@ -146,10 +157,12 @@ def _parse_probe(raw: object, *, where: str) -> Probe:
 
     rationale = str(raw.get("personal_scope_rationale", "")).strip()
     _require(
-        bool(rationale),
-        f"{probe_id}: personal_scope_rationale must be non-empty (AC-7) — a "
-        "publicly knowable subject is answered from the model's weights, so the "
-        "outcome would score knowledge rather than recall",
+        len(rationale) >= _MIN_RATIONALE_CHARS,
+        f"{probe_id}: personal_scope_rationale must argue why this subject is "
+        f"unobtainable by any route other than the store, in at least "
+        f"{_MIN_RATIONALE_CHARS} characters (AC-7); got {rationale!r}. A publicly "
+        "knowable subject is answered from the model's weights, so the outcome "
+        "would score knowledge rather than recall.",
     )
 
     expected_tokens = tuple(
@@ -219,6 +232,7 @@ def load_probe_set(path: pathlib.Path) -> ProbeSet:
     )
 
     seen: set[str] = set()
+    seen_rationales: dict[str, str] = {}
     for probe in (*probes, *pool):
         _require(
             probe.probe_id not in seen,
@@ -226,6 +240,16 @@ def load_probe_set(path: pathlib.Path) -> ProbeSet:
             "and the second run on these, so they must be unique",
         )
         seen.add(probe.probe_id)
+
+        # A rationale copy-pasted across probes is a placeholder wearing prose.
+        key = " ".join(probe.personal_scope_rationale.split()).lower()
+        _require(
+            key not in seen_rationales,
+            f"{probe.probe_id}: personal_scope_rationale is identical to "
+            f"{seen_rationales.get(key)!r}'s — AC-7 is a per-subject argument, "
+            "not a boilerplate field",
+        )
+        seen_rationales[key] = probe.probe_id
 
     return ProbeSet(probes=probes, absent_pool=pool)
 

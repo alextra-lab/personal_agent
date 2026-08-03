@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime as dt
 import json
 import pathlib
 import sys
@@ -47,6 +48,12 @@ from scripts.eval.fre1122_absence_probe.ground_truth import (
     cleanup_probe_session,
     connect_graph,
     gather_evidence,
+)
+from scripts.eval.fre1122_absence_probe.manifest import (
+    Manifest,
+    ManifestError,
+    load_manifest,
+    write_manifest,
 )
 from scripts.eval.fre1122_absence_probe.probes import (
     Probe,
@@ -186,6 +193,7 @@ async def _phase_preflight(args: argparse.Namespace, probe_set: ProbeSet) -> int
     pg_conn = await _open_pg()
     evidence: list[dict[str, object]] = []
     replacements: list[dict[str, str]] = []
+    effective: list[Probe] = []
     pool = list(probe_set.absent_pool)
     failures = 0
 
@@ -214,6 +222,7 @@ async def _phase_preflight(args: argparse.Namespace, probe_set: ProbeSet) -> int
                 bundle = await gather_evidence(driver, pg_conn, current, user_id=args.user_id)
 
             evidence.append(asdict(bundle))
+            effective.append(current)
             if not bundle.holds:
                 failures += 1
                 log.error(
@@ -234,27 +243,68 @@ async def _phase_preflight(args: argparse.Namespace, probe_set: ProbeSet) -> int
             default=str,
         )
     )
-    log.info("fre1122_preflight_written", path=str(path), failures=failures)
+
+    # The effective probe list — after replacement — is what every later phase
+    # binds to. Without it, run/postcheck/report each re-read the original YAML
+    # and a replaced probe silently comes back (Codex round 1, finding 2).
+    manifest = write_manifest(
+        args.artifact_root,
+        probes=tuple(effective),
+        user_id=args.user_id,
+        probe_set_path=args.probe_set,
+        ground_truth_holds=failures == 0,
+        replacements=tuple(replacements),
+        created_at=dt.datetime.now(dt.UTC).isoformat(),
+    )
+    log.info(
+        "fre1122_preflight_written",
+        path=str(path),
+        failures=failures,
+        manifest_digest=manifest.digest[:12],
+    )
     return 1 if failures else 0
 
 
 async def _phase_run(args: argparse.Namespace, probe_set: ProbeSet) -> int:
     """Fire the twenty turns and classify each answer.
 
+    Fires the **manifest's** probes, not the YAML's. Preflight may have replaced
+    an absent probe whose subject turned out to be present; re-reading the source
+    file here would fire the original and label a present subject absent.
+
     Args:
         args: Parsed CLI arguments, including the required authorization.
-        probe_set: The loaded probe set.
+        probe_set: The loaded probe set, for the manifest's shape check.
 
     Returns:
         Process exit code.
+
+    Raises:
+        ManifestError: If preflight has not run, failed, or described a
+            different probe set or owner.
     """
+    manifest = load_manifest(
+        args.artifact_root,
+        probe_set=probe_set,
+        probe_set_path=args.probe_set,
+        user_id=args.user_id,
+    )
     validate_run_shape(probe_set)
+
+    # Defence in depth: main() gates the CLI, but _phase_run is importable and
+    # _dispatch calls it directly, so the live-fire phase asserts for itself
+    # (Codex round 1, finding 9).
+    if not (args.authorized_by or "").strip():
+        raise RuntimeError(
+            "_phase_run reached without authorization — this phase fires real "
+            "turns at the live gateway under the owner's identity"
+        )
 
     answers: list[ProbeAnswer] = []
     session_id: str | None = None
 
     async with httpx.AsyncClient(timeout=_TURN_TIMEOUT_SECONDS) as client:
-        for probe in probe_set.probes:
+        for probe in manifest.probes:
             params = {"message": probe.question, "channel": "EVAL"}
             if session_id:
                 params["session_id"] = session_id
@@ -268,7 +318,10 @@ async def _phase_run(args: argparse.Namespace, probe_set: ProbeSet) -> int:
             trace_id = payload.get("trace_id", "")
 
             classification = classify_answer(
-                answer, status=probe.status, expected_tokens=probe.expected_tokens
+                answer,
+                status=probe.status,
+                expected_tokens=probe.expected_tokens,
+                subject_terms=probe.subject_terms,
             )
             answers.append(
                 ProbeAnswer(
@@ -295,7 +348,8 @@ async def _phase_run(args: argparse.Namespace, probe_set: ProbeSet) -> int:
         json.dumps(
             {
                 "session_id": session_id,
-                "authorized_by": args.authorized_by,
+                "authorized_by": args.authorized_by.strip(),
+                "manifest_digest": manifest.digest,
                 "answers": [asdict(a) for a in answers],
             },
             indent=2,
@@ -325,14 +379,36 @@ async def _phase_postcheck(args: argparse.Namespace, probe_set: ProbeSet) -> int
     then again. Whether the third pass returns to zero rows is what decides
     AC-6's substrate branch.
 
+    A dry run is NOT cleanup. It reports what would be deleted and exits
+    non-zero, because "cleanup applied" is the thing AC-3 asks to be
+    demonstrated (Codex round 1, finding 5).
+
     Args:
         args: Parsed CLI arguments.
-        probe_set: The loaded probe set.
+        probe_set: The loaded probe set, for the manifest's shape check.
 
     Returns:
-        Process exit code.
+        Process exit code: 0 only when cleanup actually ran and the absent half
+        returned to zero rows. Unrestored residue is a real result — it selects
+        AC-6's test-substrate branch — but it is not a success.
     """
+    manifest = load_manifest(
+        args.artifact_root,
+        probe_set=probe_set,
+        probe_set_path=args.probe_set,
+        user_id=args.user_id,
+        require_ground_truth=False,
+    )
     run_artifact = json.loads((args.artifact_root / "run_answers.json").read_text())
+
+    if run_artifact.get("manifest_digest") != manifest.digest:
+        raise ManifestError(
+            "run_answers.json was produced against a different manifest "
+            f"({str(run_artifact.get('manifest_digest'))[:12]} != "
+            f"{manifest.digest[:12]}) — the pollution measured would not be this "
+            "run's"
+        )
+
     session_id = run_artifact["session_id"]
     trace_ids = [a["trace_id"] for a in run_artifact["answers"] if a["trace_id"]]
 
@@ -342,12 +418,13 @@ async def _phase_postcheck(args: argparse.Namespace, probe_set: ProbeSet) -> int
     try:
         after_run = [
             asdict(await gather_evidence(driver, pg_conn, p, user_id=args.user_id))
-            for p in probe_set.absent_probes
+            for p in manifest.absent_probes
         ]
 
         cleanup = await cleanup_probe_session(
             driver,
             session_id,
+            user_id=args.user_id,
             snapshot_path=_artifact(args.artifact_root, "cleanup_snapshot.jsonl"),
             trace_ids=trace_ids,
             dry_run=args.dry_run,
@@ -355,7 +432,7 @@ async def _phase_postcheck(args: argparse.Namespace, probe_set: ProbeSet) -> int
 
         after_cleanup = [
             asdict(await gather_evidence(driver, pg_conn, p, user_id=args.user_id))
-            for p in probe_set.absent_probes
+            for p in manifest.absent_probes
         ]
     finally:
         await pg_conn.close()
@@ -373,6 +450,8 @@ async def _phase_postcheck(args: argparse.Namespace, probe_set: ProbeSet) -> int
                 "after_cleanup": after_cleanup,
                 "absent_half_restored": restored,
                 "residual_rows": residual,
+                "manifest_digest": manifest.digest,
+                "cleanup_executed": not args.dry_run,
                 "substrate_decision": (
                     "live corpus — cleanup restored the absent half, so the "
                     "FRE-1118 delta can run on the same probes (AC-6)"
@@ -391,20 +470,89 @@ async def _phase_postcheck(args: argparse.Namespace, probe_set: ProbeSet) -> int
         restored=restored,
         residual_rows=residual,
         dry_run=args.dry_run,
+        adopted_entities_retained=len(cleanup.adopted_entities_retained),
     )
-    return 0
+    if args.dry_run:
+        log.warning(
+            "fre1122_postcheck_dry_run",
+            reason="nothing was deleted; re-run with --execute to apply cleanup",
+        )
+        return 3
+    return 0 if restored else 4
 
 
-def _phase_report(args: argparse.Namespace) -> int:
+def _validate_run_artifact(manifest: Manifest, run_artifact: dict[str, object]) -> None:
+    """Refuse to report unless the answers actually cover the manifest's probes.
+
+    Without this an empty or stale artifact produced a clean "0 / 0" baseline and
+    exited zero — the report asserting a rate it had no data for (Codex round 1,
+    finding 6). Every check here is a way that could happen.
+
+    Args:
+        manifest: The effective manifest for this run.
+        run_artifact: The parsed ``run_answers.json``.
+
+    Raises:
+        ManifestError: If the answers do not correspond, one-to-one and in full,
+            to the manifest's probes.
+    """
+    answers = run_artifact.get("answers") or []
+    if not isinstance(answers, list) or not answers:
+        raise ManifestError("run_answers.json holds no answers; there is no baseline to report")
+
+    if run_artifact.get("manifest_digest") != manifest.digest:
+        raise ManifestError(
+            "run_answers.json was produced against a different manifest — the "
+            "report would attribute one run's answers to another run's probes"
+        )
+
+    answered = [str(a.get("probe_id")) for a in answers]
+    expected = [p.probe_id for p in manifest.probes]
+    if sorted(answered) != sorted(expected):
+        missing = sorted(set(expected) - set(answered))
+        extra = sorted(set(answered) - set(expected))
+        raise ManifestError(
+            f"answers do not match the manifest's probes (missing={missing}, extra={extra})"
+        )
+    if len(answered) != len(set(answered)):
+        raise ManifestError("run_answers.json contains duplicate probe ids")
+
+    valid = {str(o) for o in Outcome}
+    for answer in answers:
+        if str(answer.get("outcome")) not in valid:
+            raise ManifestError(
+                f"probe {answer.get('probe_id')} carries an unknown outcome "
+                f"{answer.get('outcome')!r} — every answer must be classified (AC-4)"
+            )
+        if not str(answer.get("trace_id") or "").strip():
+            raise ManifestError(
+                f"probe {answer.get('probe_id')} has no trace_id, so its rendered "
+                "memory cannot be traced (AC-5)"
+            )
+
+
+def _phase_report(args: argparse.Namespace, probe_set: ProbeSet) -> int:
     """Assemble the six-cell report from the run artifacts (AC-4, AC-5, AC-6).
 
     Args:
         args: Parsed CLI arguments.
+        probe_set: The loaded probe set, for the manifest's shape check.
 
     Returns:
         Process exit code.
+
+    Raises:
+        ManifestError: If the artifacts do not describe a complete run.
     """
+    manifest = load_manifest(
+        args.artifact_root,
+        probe_set=probe_set,
+        probe_set_path=args.probe_set,
+        user_id=args.user_id,
+        require_ground_truth=False,
+    )
     run_artifact = json.loads((args.artifact_root / "run_answers.json").read_text())
+    _validate_run_artifact(manifest, run_artifact)
     answers = run_artifact["answers"]
 
     cells: dict[tuple[str, str], list[str]] = {}
@@ -451,14 +599,58 @@ def _phase_report(args: argparse.Namespace) -> int:
     lines += [
         "## Per-probe classification (AC-4)",
         "",
-        "| Probe | Status | Outcome | Span |",
-        "|---|---|---|---|",
+        "| Probe | Status | Outcome | Span | Why |",
+        "|---|---|---|---|---|",
     ]
     for answer in answers:
         span = answer["evidence_span"].replace("|", "\\|")[:160]
+        why = answer["reason"].replace("|", "\\|")[:160]
         lines.append(
-            f"| {answer['probe_id']} | {answer['status']} | {answer['outcome']} | {span} |"
+            f"| {answer['probe_id']} | {answer['status']} | {answer['outcome']} | {span} | {why} |"
         )
+
+    # AC-6 is a same-probe guarantee, so the report names the identifiers the
+    # delta must reuse rather than merely asserting that it will.
+    lines += [
+        "",
+        "## Same-probe re-run (AC-6)",
+        "",
+        f"Manifest digest: `{manifest.digest}`",
+        "",
+        "The FRE-1118 delta must reuse these identifiers exactly. A delta measured",
+        "across two different probe sets is not a delta.",
+        "",
+        "| Probe | Status | Question |",
+        "|---|---|---|",
+    ]
+    lines += [
+        f"| {p.probe_id} | {p.status} | {p.question.replace('|', chr(92) + '|')} |"
+        for p in manifest.probes
+    ]
+
+    postcheck_path = args.artifact_root / "postcheck.json"
+    if postcheck_path.exists():
+        postcheck = json.loads(postcheck_path.read_text())
+        cleanup = postcheck["cleanup"]
+        lines += [
+            "",
+            f"Substrate decision: {postcheck['substrate_decision']}",
+            "",
+            f"- cleanup executed: {postcheck.get('cleanup_executed')}",
+            f"- absent half restored: {postcheck['absent_half_restored']}",
+            f"- residual rows: {postcheck['residual_rows']}",
+            f"- residue — mutated entities {cleanup['mutated_entities']}, "
+            f"descriptions filled {cleanup['descriptions_filled']}, "
+            f"descriptions rewritten {cleanup['descriptions_rewritten']}",
+            f"- probe-created entities adopted by later turns, therefore retained: "
+            f"{cleanup['adopted_entities_retained']}",
+        ]
+    else:
+        lines += [
+            "",
+            "**Substrate decision not yet taken** — postcheck has not run, so AC-6's",
+            "branch is undecided and this baseline cannot yet be paired with a delta.",
+        ]
 
     path = _artifact(args.artifact_root, "report.md")
     path.write_text("\n".join(lines) + "\n")
@@ -514,10 +706,10 @@ async def _dispatch(args: argparse.Namespace) -> int:
     Returns:
         Process exit code.
     """
-    if args.phase == "report":
-        return _phase_report(args)
-
     probe_set = load_probe_set(args.probe_set)
+
+    if args.phase == "report":
+        return _phase_report(args, probe_set)
 
     if args.phase == "preflight":
         return await _phase_preflight(args, probe_set)
@@ -535,11 +727,11 @@ def main() -> int:
     args = _build_parser().parse_args()
     args.dry_run = not args.execute
 
-    if args.phase in ("preflight", "run", "postcheck") and not args.user_id:
+    if not args.user_id:
         print("--user-id is required for this phase", file=sys.stderr)  # noqa: T201 — CLI usage error
         return 2
 
-    if args.phase == "run" and not args.authorized_by:
+    if args.phase == "run" and not (args.authorized_by or "").strip():
         print(  # noqa: T201 — CLI usage error, before logging is configured
             "refusing to run: --authorized-by is required.\n"
             "This phase fires twenty real turns at the live gateway under the "

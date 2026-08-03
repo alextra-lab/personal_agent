@@ -56,12 +56,14 @@ if TYPE_CHECKING:
 from personal_agent.config import settings
 
 __all__ = [
+    "CleanupRefused",
     "CleanupResult",
     "ExecutedQuery",
     "ProbeEvidence",
     "cleanup_probe_session",
     "connect_graph",
     "gather_evidence",
+    "verify_expected_source",
 ]
 
 # Evidence rows are quoted into the report, so cap what a single query returns:
@@ -122,7 +124,12 @@ class CleanupResult:
         session_id: The probe session.
         dry_run: Whether anything was actually deleted.
         turns_removed: Count of ``:Turn`` nodes deleted (or that would be).
-        entities_removed: Count of probe-created ``:Entity`` nodes deleted.
+        entities_removed: Count of probe-created ``:Entity`` nodes deleted —
+            only those never referenced from outside the probe session.
+        claims_removed: Count of ``:Claim`` nodes the run asserted and cleanup
+            deleted. Consolidation writes claims on every turn, so without this
+            the run's own facts survive and the absent half never returns to
+            zero rows.
         mutated_entities: Pre-existing entities the run touched but cleanup
             cannot restore — the residue AC-3 requires be reported with its size.
         descriptions_filled: Pre-existing entities whose empty description the
@@ -130,6 +137,10 @@ class CleanupResult:
         descriptions_rewritten: Pre-existing descriptions the run overwrote.
             Recoverable — FRE-711 archives the prior text to an
             ``:EntityDescriptionVersion`` node — but not restored by cleanup.
+        adopted_entities_retained: Probe-created entities a later, unrelated turn
+            adopted. Deliberately NOT deleted — another session now depends on
+            them — and named here so the residue is visible rather than either
+            silently destroyed or silently ignored.
         snapshot_path: Where the pre-deletion snapshot was written.
     """
 
@@ -137,9 +148,11 @@ class CleanupResult:
     dry_run: bool
     turns_removed: int
     entities_removed: int
+    claims_removed: int
     mutated_entities: int
     descriptions_filled: int
     descriptions_rewritten: int
+    adopted_entities_retained: tuple[str, ...]
     snapshot_path: pathlib.Path | None
 
 
@@ -203,15 +216,201 @@ RETURN t.turn_id AS turn_id,
 LIMIT $limit
 """
 
+# Owner-scoped CURRENT claims. This surface is not reachable from :Entity or
+# :Turn — a claim carries its own ``content`` text, is written by consolidation
+# on every turn (consolidator.py:876 -> assert_claim), and is read back by
+# search_memory (service.py:2814). Omitting it was a false-zero hole: a fact
+# retrievable by the authenticated gateway would have been reported absent, and
+# that silently invalidates the entire absent half (Codex round 1, finding 3).
+_CLAIM_QUERY = """
+MATCH (:Person {user_id: $user_id})-[:HAS_FACT]->(cl:Claim)
+WHERE cl.valid_to IS NULL AND cl.invalid_at IS NULL
+  AND toLower(coalesce(cl.content, '')) CONTAINS $term
+RETURN cl.claim_id AS claim_id,
+       cl.content AS content,
+       cl.session_id AS session_id
+LIMIT $limit
+"""
+
+# Counting counterparts. The evidence queries carry LIMIT so the report can quote
+# rows, but a capped count understates AC-3's pollution size — "at most 25" is
+# not a size (Codex round 1, non-blocking 3). Zero/non-zero is unaffected; the
+# magnitude is what these recover.
+_ENTITY_COUNT = """
+MATCH (e:Entity)
+WHERE toLower(e.name) CONTAINS $term
+   OR toLower(coalesce(e.description, '')) CONTAINS $term
+RETURN count(e) AS total
+"""
+
+_TURN_COUNT = """
+MATCH (t:Turn)
+WHERE t.user_id = $user_id
+  AND (toLower(coalesce(t.user_message, '')) CONTAINS $term
+    OR toLower(coalesce(t.assistant_response, '')) CONTAINS $term
+    OR toLower(coalesce(t.summary, '')) CONTAINS $term)
+RETURN count(t) AS total
+"""
+
+_CLAIM_COUNT = """
+MATCH (:Person {user_id: $user_id})-[:HAS_FACT]->(cl:Claim)
+WHERE cl.valid_to IS NULL AND cl.invalid_at IS NULL
+  AND toLower(coalesce(cl.content, '')) CONTAINS $term
+RETURN count(cl) AS total
+"""
+
 # sessions.messages is a JSONB column on the session row (docker/postgres/init.sql:14)
 # — there is no separate messages table, so the whole message history of a
 # session lives in one row and a single ILIKE covers it.
-_MESSAGE_QUERY = """
+#
+# ESCAPE '\' is not decoration: a subject term containing % or _ would otherwise
+# become a wildcard and manufacture false hits (Codex round 1, non-blocking 2).
+_MESSAGE_QUERY = r"""
 SELECT session_id::text AS session_id, created_at::text AS created_at
 FROM sessions
-WHERE user_id = $1::uuid AND messages::text ILIKE $2
+WHERE user_id = $1::uuid AND messages::text ILIKE $2 ESCAPE '\'
 LIMIT $3
 """
+
+_MESSAGE_COUNT = r"""
+SELECT count(*) AS total
+FROM sessions
+WHERE user_id = $1::uuid AND messages::text ILIKE $2 ESCAPE '\'
+"""
+
+
+def _ilike_pattern(term: str) -> str:
+    r"""Build an ILIKE pattern with SQL wildcards in ``term`` escaped.
+
+    Args:
+        term: A probe subject term, authored by a human and never sanitised
+            upstream.
+
+    Returns:
+        A ``%term%`` pattern in which any literal ``%``, ``_`` or ``\`` from the
+        term matches itself rather than acting as a wildcard.
+    """
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+_SOURCE_TURN = """
+MATCH (t:Turn {turn_id: $row_id})
+WHERE t.user_id = $user_id
+RETURN t.turn_id AS turn_id,
+       coalesce(t.user_message, '') + ' ' + coalesce(t.assistant_response, '')
+         + ' ' + coalesce(t.summary, '') AS content
+"""
+
+_SOURCE_CLAIM = """
+MATCH (:Person {user_id: $user_id})-[:HAS_FACT]->(cl:Claim {claim_id: $row_id})
+WHERE cl.valid_to IS NULL AND cl.invalid_at IS NULL
+RETURN cl.claim_id AS claim_id, cl.content AS content
+"""
+
+_SOURCE_ENTITY = """
+MATCH (e:Entity {name: $row_id})
+RETURN e.name AS name, coalesce(e.description, '') AS content
+"""
+
+_SOURCE_KINDS: dict[str, str] = {
+    "turn": _SOURCE_TURN,
+    "claim": _SOURCE_CLAIM,
+    "entity": _SOURCE_ENTITY,
+}
+
+
+async def verify_expected_source(
+    driver: AsyncDriver,
+    pg_conn: Connection,
+    probe: Probe,
+    *,
+    user_id: str,
+) -> ExecutedQuery:
+    """Fetch the stored row a present probe names, and check it holds the fact.
+
+    This is what makes AC-2 mean what it says. Establishing "present" from any
+    lexical hit on a subject term let an unrelated row vouch for a fact that was
+    never stored — a probe naming ``Turn:does-not-exist`` still passed as long as
+    some entity somewhere matched one of its terms (Codex round 1, finding 4).
+
+    A row satisfies the check only when it exists, is visible to this owner, and
+    its stored text contains **every** expected token. Anything less returns zero
+    rows, which fails the probe rather than warning about it.
+
+    Args:
+        driver: An open Neo4j async driver.
+        pg_conn: An open asyncpg connection (reserved for message-backed sources).
+        probe: The present probe whose ``expected_source`` is being verified.
+        user_id: The owner's user UUID.
+
+    Returns:
+        The executed query and its output, with ``row_count`` 1 when the named
+        row exists *and* reproduces every expected token, else 0.
+    """
+    raw = probe.expected_source or ""
+    kind, _, row_id = raw.partition(":")
+    statement = _SOURCE_KINDS.get(kind.strip().lower(), "")
+    label = f"AC-2 stored row {raw!r} for {probe.probe_id}"
+
+    if not statement or not row_id.strip():
+        return ExecutedQuery(
+            label=label,
+            store="graph",
+            statement="(none — unparseable expected_source)",
+            parameters={"expected_source": raw},
+            row_count=0,
+            rows=(
+                {
+                    "error": (
+                        f"expected_source must be one of {sorted(_SOURCE_KINDS)} "
+                        f"followed by ':<id>'; got {raw!r}"
+                    )
+                },
+            ),
+        )
+
+    async with driver.session() as session:
+        result = await session.run(statement, row_id=row_id.strip(), user_id=user_id)
+        found = await result.data()
+
+    if not found:
+        return ExecutedQuery(
+            label=label,
+            store="graph",
+            statement=statement.strip(),
+            parameters={"row_id": row_id.strip(), "user_id": user_id},
+            row_count=0,
+            rows=({"error": "the named row does not exist or is not visible to this owner"},),
+        )
+
+    content = _normalise_text(str(found[0].get("content", "")))
+    missing = [t for t in probe.expected_tokens if _normalise_text(t) not in content]
+
+    return ExecutedQuery(
+        label=label,
+        store="graph",
+        statement=statement.strip(),
+        parameters={"row_id": row_id.strip(), "user_id": user_id},
+        row_count=0 if missing else 1,
+        rows=(
+            _stringify(found[0])
+            if not missing
+            else {"error": f"stored row found but missing expected token(s): {missing!r}"},
+        ),
+    )
+
+
+def _normalise_text(text: str) -> str:
+    """Lowercase and collapse whitespace, for token containment checks.
+
+    Args:
+        text: Raw stored text or an expected token.
+
+    Returns:
+        The comparable form.
+    """
+    return " ".join(text.split()).lower()
 
 
 async def gather_evidence(
@@ -223,17 +422,27 @@ async def gather_evidence(
 ) -> ProbeEvidence:
     """Establish a probe's status by query, and return the queries with it.
 
-    Runs three checks per subject term: entities and turns in the graph, and the
-    message history in Postgres. The entity check is deliberately **not**
-    user-scoped — ``:Entity`` nodes are keyed by name rather than by owner, so an
-    entity of that name existing at all means the subject is present in the
-    store, whoever put it there.
+    Runs four checks per subject term — entities, turns and owner-scoped current
+    claims in the graph, and the message history in Postgres. The claim check
+    matters disproportionately: a ``:Claim`` carries its own ``content``, is
+    written by consolidation on every turn and read back by ``search_memory``, so
+    a subject present only there would otherwise be reported absent.
+
+    The entity check is deliberately **not** user-scoped — ``:Entity`` nodes are
+    keyed by name rather than by owner, so an entity of that name existing at all
+    means the subject is present, whoever put it there. Stances reach the same
+    node (``(:Person)-[:HAS_STANCE]->(:Entity {name})``) and are covered by it.
+
+    For a **present** probe, subject-term hits are supporting diagnostics only.
+    Its status is decided by :func:`verify_expected_source`, which fetches the
+    row the probe names and checks the expected tokens are in it — a lexical hit
+    on an unrelated row proves nothing about the fact being recallable (AC-2).
 
     Args:
         driver: An open Neo4j async driver.
         pg_conn: An open asyncpg connection.
         probe: The probe whose status is being established.
-        user_id: The owner's user UUID, for the turn and message checks.
+        user_id: The owner's user UUID, for the turn, claim and message checks.
 
     Returns:
         The evidence bundle, including whether the claimed status holds.
@@ -244,51 +453,55 @@ async def gather_evidence(
         for term in probe.subject_terms:
             lowered = term.lower()
 
-            result = await session.run(_ENTITY_QUERY, term=lowered, limit=_EVIDENCE_ROW_LIMIT)
-            rows = [_stringify(dict(r)) for r in await result.data()]
-            queries.append(
-                ExecutedQuery(
-                    label=f"graph entities matching {term!r}",
-                    store="graph",
-                    statement=_ENTITY_QUERY.strip(),
-                    parameters={"term": lowered, "limit": str(_EVIDENCE_ROW_LIMIT)},
-                    row_count=len(rows),
-                    rows=tuple(rows),
+            for label, evidence_q, count_q, params in (
+                ("entities", _ENTITY_QUERY, _ENTITY_COUNT, {"term": lowered}),
+                ("turns", _TURN_QUERY, _TURN_COUNT, {"term": lowered, "user_id": user_id}),
+                (
+                    "current claims",
+                    _CLAIM_QUERY,
+                    _CLAIM_COUNT,
+                    {"term": lowered, "user_id": user_id},
+                ),
+            ):
+                query_params = {**params, "limit": _EVIDENCE_ROW_LIMIT}
+                result = await session.run(evidence_q, query_params)
+                rows = [_stringify(dict(r)) for r in await result.data()]
+                total = await _count(session, count_q, "total", **params)
+                queries.append(
+                    ExecutedQuery(
+                        label=f"graph {label} matching {term!r}",
+                        store="graph",
+                        statement=evidence_q.strip(),
+                        parameters={k: str(v) for k, v in params.items()},
+                        row_count=total,
+                        rows=tuple(rows),
+                    )
                 )
-            )
-
-            result = await session.run(
-                _TURN_QUERY, term=lowered, user_id=user_id, limit=_EVIDENCE_ROW_LIMIT
-            )
-            rows = [_stringify(dict(r)) for r in await result.data()]
-            queries.append(
-                ExecutedQuery(
-                    label=f"graph turns mentioning {term!r}",
-                    store="graph",
-                    statement=_TURN_QUERY.strip(),
-                    parameters={"term": lowered, "user_id": user_id},
-                    row_count=len(rows),
-                    rows=tuple(rows),
-                )
-            )
 
     for term in probe.subject_terms:
-        pattern = f"%{term}%"
+        pattern = _ilike_pattern(term)
         records = await pg_conn.fetch(_MESSAGE_QUERY, user_id, pattern, _EVIDENCE_ROW_LIMIT)
         rows = [_stringify(dict(r)) for r in records]
+        total_row = await pg_conn.fetchrow(_MESSAGE_COUNT, user_id, pattern)
         queries.append(
             ExecutedQuery(
                 label=f"message history containing {term!r}",
                 store="messages",
                 statement=_MESSAGE_QUERY.strip(),
                 parameters={"user_id": user_id, "pattern": pattern},
-                row_count=len(rows),
+                row_count=int(total_row["total"]) if total_row else 0,
                 rows=tuple(rows),
             )
         )
 
     hit_count = sum(q.row_count for q in queries)
-    holds = hit_count == 0 if probe.status == "absent" else hit_count > 0
+
+    if probe.status == "absent":
+        holds = hit_count == 0
+    else:
+        source = await verify_expected_source(driver, pg_conn, probe, user_id=user_id)
+        queries.append(source)
+        holds = source.row_count > 0
 
     return ProbeEvidence(
         probe_id=probe.probe_id,
@@ -299,17 +512,74 @@ async def gather_evidence(
     )
 
 
+# Snapshots carry stable element ids, relationship direction and relationship
+# properties. The first draft stored only the type and a lossy
+# coalesce(o.name, o.turn_id), which could not reconstruct what DETACH DELETE
+# destroyed (Codex round 1, finding 8).
 _SNAPSHOT_TURNS = """
 MATCH (t:Turn)
 WHERE t.session_id = $sid OR t.originating_session_id = $sid
-RETURN t AS node, [(t)-[r]-(o) | {type: type(r), other: coalesce(o.name, o.turn_id)}] AS rels
+RETURN elementId(t) AS element_id, labels(t) AS labels, properties(t) AS node,
+       [(t)-[r]->(o) | {type: type(r), direction: 'out', properties: properties(r),
+                        other_element_id: elementId(o), other_labels: labels(o),
+                        other_key: coalesce(o.name, o.turn_id, o.claim_id)}] AS rels_out,
+       [(t)<-[r]-(o) | {type: type(r), direction: 'in', properties: properties(r),
+                        other_element_id: elementId(o), other_labels: labels(o),
+                        other_key: coalesce(o.name, o.turn_id, o.claim_id)}] AS rels_in
 """
 
+# Only entities created by this session AND never referenced from outside it.
+# The originating_session_id stamp alone was not enough: an entity the probe
+# created can afterwards be mentioned by a real turn, and DETACH DELETE would
+# then destroy a node another session depends on along with that turn's edge
+# (Codex round 1, finding 7).
 _SNAPSHOT_ENTITIES = """
 MATCH (e:Entity)
 WHERE e.originating_session_id = $sid
-RETURN e AS node, [(e)-[r]-(o) | {type: type(r), other: coalesce(o.name, o.turn_id)}] AS rels
+  AND NOT EXISTS {
+      MATCH (t:Turn)-[:DISCUSSES]->(e)
+      WHERE coalesce(t.session_id, '') <> $sid
+        AND coalesce(t.originating_session_id, '') <> $sid
+  }
+RETURN elementId(e) AS element_id, labels(e) AS labels, properties(e) AS node,
+       [(e)-[r]->(o) | {type: type(r), direction: 'out', properties: properties(r),
+                        other_element_id: elementId(o), other_labels: labels(o),
+                        other_key: coalesce(o.name, o.turn_id, o.claim_id)}] AS rels_out,
+       [(e)<-[r]-(o) | {type: type(r), direction: 'in', properties: properties(r),
+                        other_element_id: elementId(o), other_labels: labels(o),
+                        other_key: coalesce(o.name, o.turn_id, o.claim_id)}] AS rels_in
 """
+
+# Probe-created entities that a LATER, unrelated turn adopted. Not deleted —
+# reported as retained, with their names, so the residue is visible rather than
+# silently destroyed or silently ignored.
+_ADOPTED_ENTITIES = """
+MATCH (e:Entity)
+WHERE e.originating_session_id = $sid
+  AND EXISTS {
+      MATCH (t:Turn)-[:DISCUSSES]->(e)
+      WHERE coalesce(t.session_id, '') <> $sid
+        AND coalesce(t.originating_session_id, '') <> $sid
+  }
+RETURN e.name AS name
+"""
+
+# Binds the session to this run before anything destructive happens: it must
+# belong to the expected owner and contain the trace ids the run recorded. A
+# stale or hand-edited run artifact naming a real production session would
+# otherwise have its turns and entities deleted (Codex round 1, finding 7).
+_VERIFY_SESSION_BINDING = """
+MATCH (t:Turn)
+WHERE t.session_id = $sid OR t.originating_session_id = $sid
+RETURN count(t) AS turns,
+       count(CASE WHEN t.user_id = $user_id THEN 1 END) AS owned,
+       count(CASE WHEN t.trace_id IN $trace_ids THEN 1 END) AS matching_traces
+"""
+
+
+class CleanupRefused(RuntimeError):
+    """Cleanup was asked to delete something it could not prove belongs to the run."""
+
 
 # Entities the probe session touched but did NOT create — cleanup cannot restore
 # their bumped mention_count / last_seen, so they are counted as residue.
@@ -343,16 +613,40 @@ WHERE v.source_trace_id IN $trace_ids
 RETURN count(v) AS rewritten
 """
 
+# Claims the run asserted. Consolidation writes :Claim on every turn
+# (consolidator.py:876), so without this the run's own facts survive cleanup and
+# the absent half never returns to zero rows (Codex round 1, finding 5).
+_SNAPSHOT_CLAIMS = """
+MATCH (p:Person)-[:HAS_FACT]->(cl:Claim {session_id: $sid})
+RETURN elementId(cl) AS element_id, labels(cl) AS labels, properties(cl) AS node,
+       [(cl)<-[r]-(o) | {type: type(r), direction: 'in', properties: properties(r),
+                         other_element_id: elementId(o), other_labels: labels(o),
+                         other_key: coalesce(o.name, o.turn_id, o.user_id)}] AS rels_in,
+       [] AS rels_out
+"""
+
+_DELETE_CLAIMS = """
+MATCH (:Person)-[:HAS_FACT]->(cl:Claim {session_id: $sid})
+DETACH DELETE cl
+"""
+
+# Deletion mirrors the snapshot predicate exactly. If the two ever diverge, the
+# run deletes something it did not record an undo for — so they are asserted
+# equal by the delete-scope test rather than left to review.
 _DELETE_ENTITIES = """
-MATCH (e:Entity) WHERE e.originating_session_id = $sid
+MATCH (e:Entity)
+WHERE e.originating_session_id = $sid
+  AND NOT EXISTS {
+      MATCH (t:Turn)-[:DISCUSSES]->(e)
+      WHERE coalesce(t.session_id, '') <> $sid
+        AND coalesce(t.originating_session_id, '') <> $sid
+  }
 DETACH DELETE e
-RETURN count(*) AS removed
 """
 
 _DELETE_TURNS = """
 MATCH (t:Turn) WHERE t.session_id = $sid OR t.originating_session_id = $sid
 DETACH DELETE t
-RETURN count(*) AS removed
 """
 
 
@@ -377,6 +671,7 @@ async def cleanup_probe_session(
     driver: AsyncDriver,
     session_id: str,
     *,
+    user_id: str,
     snapshot_path: pathlib.Path,
     trace_ids: Sequence[str] = (),
     dry_run: bool = True,
@@ -402,33 +697,82 @@ async def cleanup_probe_session(
     Args:
         driver: An open Neo4j async driver.
         session_id: The probe session's id.
+        user_id: The owner the session must belong to. Checked before any
+            deletion; a session whose turns are not all this owner's is refused.
         snapshot_path: Where to write the durable pre-deletion snapshot. Written,
             flushed and fsynced before any mutation, so a crash mid-cleanup
             leaves a complete undo record on disk.
-        trace_ids: The run's trace ids, for the description-rewrite count. When
-            empty that count is reported as 0 and nothing is inferred from it.
+        trace_ids: The run's trace ids. Required for a real delete — they bind
+            the session to this run. Also drives the description-rewrite count.
         dry_run: When True (the default), snapshot and count but delete nothing.
 
     Returns:
         What was removed, and the residue that could not be.
+
+    Raises:
+        CleanupRefused: If a real delete is requested for a session that cannot
+            be proven to belong to this run and this owner.
     """
     async with driver.session() as session:
+        # Prove the session belongs to this run BEFORE anything destructive. A
+        # stale or hand-edited run artifact naming a real production session
+        # would otherwise have its turns and entities deleted.
+        if not dry_run:
+            if not trace_ids:
+                raise CleanupRefused(
+                    "refusing to delete: no trace ids were supplied, so the session "
+                    "cannot be bound to this run"
+                )
+            result = await session.run(
+                _VERIFY_SESSION_BINDING,
+                sid=session_id,
+                user_id=user_id,
+                trace_ids=list(trace_ids),
+            )
+            binding = await result.single()
+            turns = int(binding["turns"]) if binding else 0
+            owned = int(binding["owned"]) if binding else 0
+            matching = int(binding["matching_traces"]) if binding else 0
+            if turns == 0 or owned != turns or matching == 0:
+                raise CleanupRefused(
+                    f"refusing to delete session {session_id}: {turns} turn(s), "
+                    f"{owned} owned by {user_id}, {matching} carrying a recorded "
+                    "trace id — the session is not provably this run's"
+                )
+
         snapshots: list[dict[str, object]] = []
-        for label, statement in (("Turn", _SNAPSHOT_TURNS), ("Entity", _SNAPSHOT_ENTITIES)):
+        for label, statement in (
+            ("Turn", _SNAPSHOT_TURNS),
+            ("Entity", _SNAPSHOT_ENTITIES),
+            ("Claim", _SNAPSHOT_CLAIMS),
+        ):
             result = await session.run(statement, sid=session_id)
             for record in await result.data():
                 snapshots.append(
-                    {"label": label, "properties": record["node"], "relationships": record["rels"]}
+                    {
+                        "label": label,
+                        "element_id": record["element_id"],
+                        "labels": record["labels"],
+                        "properties": record["node"],
+                        "relationships": list(record["rels_out"]) + list(record["rels_in"]),
+                    }
                 )
 
         # Durable before destructive: flush() alone only reaches the OS buffer,
         # so a host crash could lose the undo record while the delete survived.
+        # The containing directory is fsynced too, or the file's own directory
+        # entry may not survive the same crash.
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         with snapshot_path.open("w", encoding="utf-8") as handle:
             for entry in snapshots:
                 handle.write(json.dumps(entry, default=str) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+        dir_fd = os.open(snapshot_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
         mutated = await _count(session, _MUTATED_ENTITIES, "mutated", sid=session_id)
         filled = await _count(session, _FILLED_DESCRIPTIONS, "filled", sid=session_id)
@@ -438,22 +782,27 @@ async def cleanup_probe_session(
             else 0
         )
 
+        result = await session.run(_ADOPTED_ENTITIES, sid=session_id)
+        adopted = tuple(str(r["name"]) for r in await result.data())
+
         turn_count = sum(1 for s in snapshots if s["label"] == "Turn")
         entity_count = sum(1 for s in snapshots if s["label"] == "Entity")
+        claim_count = sum(1 for s in snapshots if s["label"] == "Claim")
 
         if not dry_run:
-            result = await session.run(_DELETE_ENTITIES, sid=session_id)
-            await result.consume()
-            result = await session.run(_DELETE_TURNS, sid=session_id)
-            await result.consume()
+            for statement in (_DELETE_CLAIMS, _DELETE_ENTITIES, _DELETE_TURNS):
+                result = await session.run(statement, sid=session_id)
+                await result.consume()
 
     return CleanupResult(
         session_id=session_id,
         dry_run=dry_run,
         turns_removed=turn_count,
         entities_removed=entity_count,
+        claims_removed=claim_count,
         mutated_entities=mutated,
         descriptions_filled=filled,
         descriptions_rewritten=rewritten,
+        adopted_entities_retained=adopted,
         snapshot_path=snapshot_path,
     )

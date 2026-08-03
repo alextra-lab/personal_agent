@@ -55,8 +55,26 @@ it for arbitrary hedging on questions the system can actually answer.
 | `probes.py` | Schema + the construction rules, enforced at load |
 | `classify.py` | Deterministic three-way classification (AC-4) |
 | `ground_truth.py` | The AC-1/AC-2 evidence queries and session-scoped cleanup (AC-3) |
+| `manifest.py` | The effective-probe manifest binding the phases together |
 | `runner.py` | Four-phase CLI |
 | `probe_set.template.yaml` | Construction rules + non-personal worked examples |
+
+## The manifest binds the phases
+
+Preflight writes `effective_manifest.json` — the probes **after** any AC-1
+replacement, the owner, a digest of the source YAML, and whether ground truth
+held. Every later phase loads it and refuses on mismatch.
+
+That indirection is not ceremony. Without it each phase re-read the source YAML
+independently, so a probe preflight replaced was still the probe `run` fired,
+and the report labelled a present subject absent. The manifest is also what lets
+`report` refuse an empty or stale artifact instead of rendering "0 / 0" and
+exiting zero.
+
+Exit codes are load-bearing on `postcheck`: `0` only when cleanup actually ran
+and the absent half returned to zero rows; `3` for a dry run (nothing was
+deleted, so nothing was demonstrated); `4` when residue remains — a real result
+that selects AC-6's test-substrate branch, but not a success.
 
 ## Where the real probe set lives, and why not here
 
@@ -145,6 +163,13 @@ reversible*, and the answer turns out to be readable from the write path:
 On the absent half all three are nil by construction. On the present half they
 are real, and AC-3 requires each be reported with its size rather than glossed.
 
+**The absent half is checked against four substrates, not three.** Entities,
+turns, owner-scoped **current claims**, and the Postgres message history. The
+claim surface is the one that matters most: a `:Claim` carries its own
+`content`, is written by consolidation on every turn, and is read back by
+`search_memory` — so a subject present only there would have been reported
+absent, silently invalidating the entire absent half.
+
 **Eval mode does more than the ticket credits it with.** FRE-711's *correction*
 arm carries `AND NOT ($eval_mode AND coalesce(_old_eval, false) = false)`, so an
 eval-mode description can never overwrite a non-eval one — and the runner fires
@@ -154,7 +179,16 @@ The *fill* arm has no such guard, so `descriptions_filled` is live; with FRE-111
 measuring 18.7% of the corpus as empty-description, it is the class most likely
 to come back non-zero.
 
+**Deletion refuses what it cannot prove.** Before anything destructive,
+`postcheck --execute` verifies the session's turns all belong to the named owner
+and that at least one carries a trace id the run recorded — a stale or
+hand-edited artifact naming a real production session is refused, not deleted.
+Entities are removed only when nothing outside the probe session references
+them; a probe-created entity a later turn adopted is retained and reported by
+name rather than destroyed along with that turn's edge.
+
 `postcheck` measures all of this and records the substrate decision AC-6 turns
 on: if cleanup restores the absent half, the FRE-1118 delta runs live on the
 same probes; if it does not, the delta runs on the test substrate so the
-comparison stays same-probe either way.
+comparison stays same-probe either way. Either way the report names the exact
+probe identifiers the delta must reuse.

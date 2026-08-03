@@ -67,41 +67,61 @@ class Classification:
 _ABSENCE_MARKERS: tuple[str, ...] = (
     "no record of",
     "no records of",
-    "don't have a record",
-    "do not have a record",
-    "don't have any record",
-    "do not have any record",
+    # "record" must be followed by "of/that/any" — "I don't have a record player"
+    # is a noun phrase, not a declaration of absence (Codex round 1, non-blocking 1).
+    r"do(?:n't| not) have (?:a|any) record (?:of|that|for)",
     "no memory of",
-    "don't have any memory",
-    "do not have any memory",
+    r"do(?:n't| not) have any memory",
     "nothing in my memory",
     "not in my memory",
     "no stored",
     "nothing stored",
-    "haven't discussed",
+    r"have ?n't discussed",
     "have not discussed",
-    "haven't talked about",
+    r"have ?n't talked about",
     "have not talked about",
+    r"have ?n't mentioned",
+    "have not mentioned",
     "no prior discussion",
     "no previous discussion",
-    "don't have information about",
-    "do not have information about",
-    "don't have anything about",
-    "do not have anything about",
-    "couldn't find any",
+    r"do(?:n't| not) have information about",
+    r"do(?:n't| not) have anything about",
+    r"could ?n't find any",
     "could not find any",
-    "didn't find any",
+    r"did ?n't find any",
     "did not find any",
     "no conversation",
     "nothing on record",
+    # Natural abstentions the first draft missed entirely, so they scored as
+    # confabulation (Codex round 1, finding 1).
+    r"can ?n?'?t recall",
+    "cannot recall",
+    r"do(?:n't| not) recall",
+    r"do(?:n't| not) see any",
+    "never mentioned",
+    "no information about",
 )
+
+# Compiled with word boundaries so a marker cannot fire inside a longer word.
+_ABSENCE_RE = re.compile(r"\b(?:" + "|".join(_ABSENCE_MARKERS) + r")\b", re.IGNORECASE)
 
 # A trailing clause offering the nearest thing does not undo the declaration —
 # "no record of X, but you did mention Y" is FRE-1118's *target* behaviour, and
 # scoring it as an assertion would penalise exactly the change being measured.
+# What DOES undo it is a trailing clause answering the probe's own subject; the
+# two are separated by testing the clause against the probe's subject_terms.
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _WHITESPACE = re.compile(r"\s+")
+
+# Negation cues. A present probe's expected token appearing inside a negated
+# clause is not correct recall — "it was not wavelength or numerical aperture"
+# contains every token (Codex round 1, finding 1). Negation is not decidable in
+# general, so a negated token yields UNCLASSIFIABLE rather than a guess.
+_NEGATION_RE = re.compile(
+    r"\b(?:not|no|never|isn'?t|wasn'?t|aren'?t|weren'?t|didn'?t|doesn'?t|don'?t)\b",
+    re.IGNORECASE,
+)
 
 # Below this length a non-question sentence is a fragment ("Sure.", "Hmm."),
 # not a claim about the subject. Assertion requires an actual claim.
@@ -148,10 +168,65 @@ def _find_absence_span(answer: str) -> str:
         ``answer``; empty if no marker is present.
     """
     for sentence in _sentences(answer):
-        normalised = _normalise(sentence)
-        if any(marker in normalised for marker in _ABSENCE_MARKERS):
+        if _ABSENCE_RE.search(_normalise(sentence)):
             return sentence
     return ""
+
+
+def _find_subject_assertion(answer: str, subject_terms: Sequence[str]) -> str:
+    """Return a clause that asserts something about the probe's own subject.
+
+    This is the discriminator that separates FRE-1118's *target* behaviour from a
+    confabulation wearing its clothes. "No record of that trip, but you did
+    mention Lisbon" offers a neighbouring fact and is honest absence. "No record
+    of the exact date, but your sister's dog is Bramble" answers the very subject
+    that has nothing stored, and must not be counted as honest.
+
+    Args:
+        answer: The rendered answer.
+        subject_terms: The probe's subject terms.
+
+    Returns:
+        The first clause that names a subject term without itself being the
+        absence declaration; empty when there is none.
+    """
+    if not subject_terms:
+        return ""
+
+    normalised_terms = [_normalise(t) for t in subject_terms if t.strip()]
+    for sentence in _sentences(answer):
+        for clause in re.split(r"\b(?:but|although|though|however)\b", sentence):
+            normalised = _normalise(clause)
+            if _ABSENCE_RE.search(normalised) or len(clause.strip()) < _MIN_ASSERTION_CHARS:
+                continue
+            if any(term in normalised for term in normalised_terms):
+                return clause.strip()
+    return ""
+
+
+def _token_is_negated(answer: str, token: str) -> bool:
+    """Whether an expected token appears only inside a negated clause.
+
+    Args:
+        answer: The rendered answer.
+        token: One expected token.
+
+    Returns:
+        True when every clause containing the token also carries a negation cue
+        ahead of it.
+    """
+    normalised_token = _normalise(token)
+    found_any = False
+    for sentence in _sentences(answer):
+        for clause in re.split(r"\b(?:but|although|though|however)\b", sentence):
+            normalised = _normalise(clause)
+            index = normalised.find(normalised_token)
+            if index < 0:
+                continue
+            found_any = True
+            if not _NEGATION_RE.search(normalised[:index]):
+                return False
+    return found_any
 
 
 def _find_token_span(answer: str, expected_tokens: Sequence[str]) -> str:
@@ -210,6 +285,7 @@ def classify_answer(
     *,
     status: ProbeStatus,
     expected_tokens: Sequence[str],
+    subject_terms: Sequence[str] = (),
 ) -> Classification:
     """Classify one rendered answer into exactly one outcome.
 
@@ -229,6 +305,10 @@ def classify_answer(
         expected_tokens: For a ``present`` probe, the text a correct answer must
             reproduce, taken from the stored row named in AC-2. Must be empty
             for an ``absent`` probe — there is nothing correct to match.
+        subject_terms: The probe's subject terms. Load-bearing on the absent
+            half: they are what separates a nearest-thing offer from a
+            confabulation that answers the absent subject behind an absence
+            clause. Omitting them weakens the absent half's classification.
 
     Returns:
         The classification with the verbatim span or the reason that decided it.
@@ -253,6 +333,17 @@ def classify_answer(
     absence_span = _find_absence_span(answer)
     token_span = _find_token_span(answer, expected_tokens)
 
+    # A present probe's token inside a negated clause ("it was NOT wavelength")
+    # is not correct recall. Negation is not decidable in general, so this is
+    # reported undecided rather than guessed either way.
+    negated = [t for t in expected_tokens if _token_is_negated(answer, t)]
+    if token_span and negated:
+        return Classification(
+            outcome=Outcome.UNCLASSIFIABLE,
+            evidence_span=token_span,
+            reason=f"expected token(s) {negated!r} appear only inside a negated clause",
+        )
+
     # Both signals fired. Neither cell is defensible, and picking one by
     # precedence would inflate it with genuinely ambiguous answers (AC-4).
     if absence_span and token_span:
@@ -264,6 +355,23 @@ def classify_answer(
                 f"absence; assertion span: {token_span!r}"
             ),
         )
+
+    # An absence clause followed by an assertion about *this probe's subject* is
+    # a confabulation wearing an abstention's clothes. Before this check the
+    # ambiguity rule above was unreachable on the absent half — absent probes
+    # carry no expected tokens — so every such answer scored as honest absence
+    # and inflated the one number this fixture produces.
+    if absence_span:
+        subject_assertion = _find_subject_assertion(answer, subject_terms)
+        if subject_assertion:
+            return Classification(
+                outcome=Outcome.UNCLASSIFIABLE,
+                evidence_span=absence_span,
+                reason=(
+                    "the answer declares absence and then asserts something about "
+                    f"the probe's own subject: {subject_assertion!r}"
+                ),
+            )
 
     if absence_span:
         return Classification(

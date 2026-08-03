@@ -182,3 +182,59 @@ def test_the_run_phase_never_dispatches_when_unauthorized(monkeypatch) -> None: 
 
     assert main() == 2
     assert dispatched == [], "an unauthorized run reached dispatch"
+
+
+# ── Codex round 1, finding 9: the gate accepted whitespace and was bypassable ──
+
+
+def test_whitespace_authorization_is_refused(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    """A space is truthy. It is not an authorization."""
+    dispatched: list[str] = []
+
+    async def _stub(args) -> int:  # type: ignore[no-untyped-def]
+        dispatched.append(args.phase)
+        return 0
+
+    monkeypatch.setattr("scripts.eval.fre1122_absence_probe.runner._dispatch", _stub)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "runner.py",
+            "run",
+            "--probe-set",
+            str(_TEMPLATE),
+            "--user-id",
+            "00000000-0000-0000-0000-000000000000",
+            "--authorized-by",
+            "   ",
+        ],
+    )
+
+    assert main() == 2
+    assert "authorized-by" in capsys.readouterr().err
+    assert dispatched == []
+
+
+@pytest.mark.asyncio
+async def test_the_run_phase_asserts_authorization_for_itself() -> None:
+    """``_phase_run`` is importable and ``_dispatch`` calls it directly.
+
+    A gate that lives only in ``main`` is not a gate for an in-process caller,
+    so the live-fire phase refuses on its own account too.
+    """
+    import argparse
+
+    from scripts.eval.fre1122_absence_probe.probes import load_probe_set
+    from scripts.eval.fre1122_absence_probe.runner import _phase_run
+
+    args = argparse.Namespace(
+        authorized_by="  ",
+        artifact_root=pathlib.Path("/nonexistent"),
+        probe_set=_TEMPLATE,
+        user_id="00000000-0000-0000-0000-000000000000",
+    )
+
+    with pytest.raises(Exception) as excinfo:  # noqa: PT011 — manifest or auth, both are refusals
+        await _phase_run(args, load_probe_set(_TEMPLATE))
+
+    assert "authoriz" in str(excinfo.value).lower() or "preflight" in str(excinfo.value).lower()

@@ -342,16 +342,20 @@ class TestSuccessClass:
 class TestReadSkill3Bucket:
     """Verify the three read_skill bucket flags."""
 
-    def _events(self, read_skills: list[str], routing_skills: list[str] | None = None) -> list[dict]:
+    def _events(
+        self, read_skills: list[str], routing_skills: list[str] | None = None
+    ) -> list[dict]:
         events: list[dict] = [
             {"event_type": "read_skill_invoked", "skill_name": s} for s in read_skills
         ]
         if routing_skills is not None:
-            events.append({
-                "event_type": "skill_routing_call_completed",
-                "skills_returned": routing_skills,
-                "latency_ms": 50,
-            })
+            events.append(
+                {
+                    "event_type": "skill_routing_call_completed",
+                    "skills_returned": routing_skills,
+                    "latency_ms": 50,
+                }
+            )
         return events
 
     def _routing_fired_event(self, skills: list[str]) -> dict:

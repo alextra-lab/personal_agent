@@ -203,7 +203,7 @@ async def run_backfill(
     start = perf_counter()
     cp = checkpoint or _load_checkpoint()
     cp.last_scan_started_at = datetime.now(timezone.utc).isoformat()
-    log.info(
+    log.info(  # trace-allow: run_backfill scan start — background job, no per-request trace at scan scope
         CAPTAINS_LOG_BACKFILL_STARTED,
         checkpoint_captures=cp.captures.get("last_processed_path"),
         checkpoint_reflections=cp.reflections.get("last_processed_path"),
@@ -250,7 +250,7 @@ async def run_backfill(
                 result.failed_count += 1
         except Exception as e:
             result.failed_count += 1
-            log.warning(
+            log.warning(  # trace-allow: run_backfill scan warning — background job, scan-level (no single trace_id)
                 CAPTAINS_LOG_BACKFILL_FILE_FAILED,
                 file_path=rel,
                 kind="capture",
@@ -301,7 +301,7 @@ async def run_backfill(
                 result.failed_count += 1
         except Exception as e:
             result.failed_count += 1
-            log.warning(
+            log.warning(  # trace-allow: run_backfill scan warning — background job, scan-level (no single trace_id)
                 CAPTAINS_LOG_BACKFILL_FILE_FAILED,
                 file_path=rel,
                 kind="reflection",
@@ -312,7 +312,7 @@ async def run_backfill(
     _save_checkpoint(cp)
     result.elapsed_ms = (perf_counter() - start) * 1000
 
-    log.info(
+    log.info(  # trace-allow: run_backfill scan summary — background job, scan-level (no single trace_id)
         CAPTAINS_LOG_BACKFILL_COMPLETED,
         files_scanned=result.files_scanned,
         indexed_count=result.indexed_count,

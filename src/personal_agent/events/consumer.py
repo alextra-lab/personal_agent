@@ -208,7 +208,7 @@ class ConsumerRunner:
         """
         raw = fields.get("data")
         if raw is None:
-            log.warning(
+            log.warning(  # trace-allow: pre-parse guard — payload (and trace_id) unavailable
                 "consumer_message_missing_data",
                 stream=sub.stream,
                 message_id=message_id,
@@ -220,7 +220,7 @@ class ConsumerRunner:
             payload = orjson.loads(raw)
             event = parse_stream_event(payload)
         except Exception as exc:
-            log.error(
+            log.error(  # trace-allow: payload failed to parse, no trace_id extractable
                 "consumer_deserialize_error",
                 stream=sub.stream,
                 message_id=message_id,

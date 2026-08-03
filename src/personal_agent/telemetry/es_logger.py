@@ -214,7 +214,9 @@ class ElasticsearchLogger:
             success, _ = await async_bulk(self.client, actions)
             return success
         except Exception as e:
-            log.error("elasticsearch_bulk_failed", error=str(e))
+            log.error(  # trace-allow: batch-level sink failure, no single trace_id for the bulk
+                "elasticsearch_bulk_failed", error=str(e)
+            )
             return 0
 
     async def search_events(

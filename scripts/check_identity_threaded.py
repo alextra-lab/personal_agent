@@ -4,24 +4,34 @@ Enforces ADR-0074 §I3 (every async boundary preserves identity) and §I5
 (memory writes carry origination). Pulled forward from FRE-376 Phase 5 as the
 definition-of-done for Phase 3.
 
+Genuine false-positives are suppressed with an inline ``# trace-allow: <reason>``
+comment on the exact source line the violation is reported against (ADR-0074's
+originally-specified escape hatch — FRE-1129 replaced the earlier ``(path, line)``
+YAML allowlist, which drifted out of sync every time a line was inserted above an
+entry). For a multi-line ``log.*()``/``bus.publish()`` call that's the call's
+opening line; for a Cypher string built via concatenation that's the line of the
+*first* string operand (the AST node's ``lineno``). Placing the marker on the
+wrong line just means the violation isn't suppressed — rerun the hook to check.
+
 Usage:
     uv run python scripts/check_identity_threaded.py src/personal_agent/
     uv run python scripts/check_identity_threaded.py --strict src/personal_agent/
 
-Exit code is non-zero if any non-allowlisted violation is found.
+Exit code is non-zero if any unsuppressed violation is found. ``--strict`` ignores
+all ``# trace-allow:`` markers, reporting the raw underlying violations.
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import io
 import re
 import sys
+import tokenize
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-
-import yaml  # type: ignore[import-untyped]
 
 LOG_METHODS = {"info", "debug", "warning", "error", "exception", "critical"}
 REQUIRED_LOG_KWARGS = frozenset({"trace_id"})
@@ -33,6 +43,22 @@ TRACE_CARRIERS = frozenset({"trace_id", "ctx", "trace_ctx", "trace_context"})
 REQUIRED_BUS_KWARGS = frozenset({"trace_id", "session_id"})
 ORIGIN_NODE_LABELS = ("Turn", "Entity", "Relationship", "DescriptionVersion")
 ORIGIN_PROPS = ("originating_trace_id", "originating_session_id")
+# A marker only counts with a non-empty reason after the colon.
+TRACE_ALLOW_RE = re.compile(r"^trace-allow:\s*\S")
+
+
+def _trace_allow_lines(src: str) -> set[int]:
+    """Return the 1-based line numbers carrying a genuine ``# trace-allow: <reason>`` comment.
+
+    Uses :mod:`tokenize` rather than a regex over raw source text so a string
+    *literal* that happens to contain the marker text (e.g. a log message) can
+    never be mistaken for a real suppression comment (FRE-1129).
+    """
+    return {
+        tok.start[0]
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline)
+        if tok.type == tokenize.COMMENT and TRACE_ALLOW_RE.match(tok.string.lstrip("#").strip())
+    }
 
 
 @dataclass(frozen=True)
@@ -324,13 +350,13 @@ def _cypher_violations_for_query(text: str, lineno: int, path: Path) -> list[Vio
     ]
 
 
-def lint_file(path: Path, allowlist: Iterable[dict[str, object]]) -> list[Violation]:
+def lint_file(path: Path, *, strict: bool = False) -> list[Violation]:
     """Lint a single Python source file and return all unsuppressed violations.
 
     Args:
         path: Path to the ``.py`` source file.
-        allowlist: Iterable of dicts with at least ``path`` (str) and ``line`` (int)
-            keys. Entries whose ``(path, line)`` matches a violation suppress it.
+        strict: If ``True``, ignore ``# trace-allow:`` markers and report every
+            raw violation (used to audit what's currently suppressed).
 
     Returns:
         List of :class:`Violation` instances. Empty list means clean.
@@ -354,6 +380,10 @@ def lint_file(path: Path, allowlist: Iterable[dict[str, object]]) -> list[Violat
                     violations.append(
                         Violation(path, node.lineno, "bus_publish_missing_identity", "")
                     )
+            elif isinstance(node.func, ast.Attribute) and node.func.attr == "join":
+                joined = "".join(_string_chunks(node))
+                if joined:
+                    violations.extend(_cypher_violations_for_query(joined, node.lineno, path))
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             violations.extend(_cypher_violations_for_query(node.value, node.lineno, path))
         elif (
@@ -365,40 +395,25 @@ def lint_file(path: Path, allowlist: Iterable[dict[str, object]]) -> list[Violat
             joined = "".join(_string_chunks(node))
             if joined:
                 violations.extend(_cypher_violations_for_query(joined, node.lineno, path))
-        elif (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "join"
-        ):
-            joined = "".join(_string_chunks(node))
-            if joined:
-                violations.extend(_cypher_violations_for_query(joined, node.lineno, path))
 
-    allow = {(item["path"], item["line"]) for item in allowlist}
-    return [v for v in violations if (str(v.path), v.line) not in allow]
+    if strict:
+        return violations
+    marked = _trace_allow_lines(src)
+    return [v for v in violations if v.line not in marked]
 
 
 def main() -> int:
     """CLI entrypoint. Returns non-zero if any violation is found."""
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("paths", nargs="+", type=Path)
-    ap.add_argument(
-        "--allowlist",
-        type=Path,
-        default=Path("scripts/identity_threading_allowlist.yaml"),
-    )
-    ap.add_argument("--strict", action="store_true", help="ignore allowlist")
+    ap.add_argument("--strict", action="store_true", help="ignore # trace-allow: markers")
     args = ap.parse_args()
-
-    allowlist: list[dict[str, object]] = []
-    if not args.strict and args.allowlist.exists():
-        allowlist = yaml.safe_load(args.allowlist.read_text()) or []
 
     total: list[Violation] = []
     for root in args.paths:
         files = [root] if root.is_file() else list(root.rglob("*.py"))
         for f in files:
-            total.extend(lint_file(f, allowlist))
+            total.extend(lint_file(f, strict=args.strict))
 
     for v in total:
         print(f"{v.path}:{v.line}: {v.kind} {v.detail}")

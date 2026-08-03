@@ -30,7 +30,7 @@ def test_log_info_without_trace_id_is_flagged(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     log_violations = [v for v in violations if v.kind == "log_missing_trace_id"]
     assert len(log_violations) == 1
 
@@ -48,7 +48,7 @@ def test_log_info_with_trace_id_is_clean(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     log_violations = [v for v in violations if v.kind == "log_missing_trace_id"]
     assert log_violations == []
 
@@ -67,7 +67,7 @@ def test_connection_scope_requires_session_id(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     assert any(v.kind == "log_missing_session_id" for v in violations)
 
 
@@ -84,7 +84,7 @@ def test_connection_scope_with_session_id_is_clean(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     assert [v for v in violations if v.kind.startswith("log_missing")] == []
 
 
@@ -102,7 +102,7 @@ def test_boot_scope_with_no_identity_is_exempt(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     assert [v for v in violations if v.kind.startswith("log_missing")] == []
 
 
@@ -120,7 +120,7 @@ def test_request_scope_via_trace_ctx_carrier_is_flagged(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     assert any(v.kind == "log_missing_trace_id" for v in violations)
 
 
@@ -138,7 +138,7 @@ def test_trace_scope_takes_priority_over_session(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     assert any(v.kind == "log_missing_trace_id" for v in violations)
 
 
@@ -152,7 +152,7 @@ def test_bus_publish_without_identity_is_flagged(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     assert any(v.kind == "bus_publish_missing_identity" for v in violations)
 
 
@@ -169,7 +169,7 @@ def test_bus_publish_with_inline_identity_payload_is_clean(tmp_path: Path) -> No
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     bus_violations = [v for v in violations if v.kind == "bus_publish_missing_identity"]
     assert bus_violations == []
 
@@ -188,7 +188,7 @@ def test_bus_publish_typed_event_inline_is_clean(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     bus_violations = [v for v in violations if v.kind == "bus_publish_missing_identity"]
     assert bus_violations == []
 
@@ -205,7 +205,7 @@ def test_bus_publish_typed_event_via_local_var_is_clean(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     bus_violations = [v for v in violations if v.kind == "bus_publish_missing_identity"]
     assert bus_violations == []
 
@@ -221,7 +221,7 @@ def test_bus_publish_typed_event_via_function_param_is_clean(tmp_path: Path) -> 
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     bus_violations = [v for v in violations if v.kind == "bus_publish_missing_identity"]
     assert bus_violations == []
 
@@ -237,7 +237,7 @@ def test_bus_publish_opaque_var_is_still_flagged(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     assert any(v.kind == "bus_publish_missing_identity" for v in violations)
 
 
@@ -252,7 +252,7 @@ def test_self_bus_publish_is_recognized(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     assert any(v.kind == "bus_publish_missing_identity" for v in violations)
 
 
@@ -268,7 +268,7 @@ def test_cypher_merge_turn_without_origination_is_flagged(tmp_path: Path) -> Non
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     assert any(v.kind == "cypher_merge_missing_origination" for v in violations)
 
 
@@ -287,7 +287,7 @@ def test_cypher_merge_turn_with_origination_is_clean(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     cypher_violations = [v for v in violations if v.kind == "cypher_merge_missing_origination"]
     assert cypher_violations == []
 
@@ -303,7 +303,7 @@ def test_cypher_merge_session_is_not_flagged(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     cypher_violations = [v for v in violations if v.kind == "cypher_merge_missing_origination"]
     assert cypher_violations == []
 
@@ -326,11 +326,46 @@ def test_cypher_merge_via_join_is_flagged(tmp_path: Path) -> None:
             """
         )
     )
-    violations = lint_file(src, allowlist=[])
+    violations = lint_file(src)
     assert any(v.kind == "cypher_merge_missing_origination" for v in violations)
 
 
-def test_allowlisted_violations_are_suppressed(tmp_path: Path) -> None:
+def _write_marked_fixture(tmp_path: Path, num_filler_lines: int = 0) -> Path:
+    """A request-scoped log call missing trace_id, marked `# trace-allow:` (FRE-1129).
+
+    Uses a genuine violation (a `ctx` carrier is reachable) so suppression actually
+    proves something — a carrier-free fixture would produce no violation regardless
+    of any allowlist/marker, which is vacuous (Codex plan-review, 2026-08-03).
+    """
+    src = tmp_path / "x.py"
+    lines = [
+        "import structlog",
+        "log = structlog.get_logger(__name__)",
+        "",
+        *(f"# filler line {i}" for i in range(num_filler_lines)),
+        "async def handle(ctx) -> None:",
+        '    log.info("did a thing")  # trace-allow: reason',
+        "",
+    ]
+    src.write_text("\n".join(lines))
+    return src
+
+
+def test_trace_allow_marker_suppresses_violation(tmp_path: Path) -> None:
+    src = _write_marked_fixture(tmp_path)
+    violations = lint_file(src)
+    assert [v for v in violations if v.kind == "log_missing_trace_id"] == []
+
+
+def test_insertion_above_marker_does_not_break_suppression(tmp_path: Path) -> None:
+    """FRE-1129 AC-1: lines inserted above the marked site must not un-suppress it."""
+    src = _write_marked_fixture(tmp_path, num_filler_lines=20)
+    violations = lint_file(src)
+    assert [v for v in violations if v.kind == "log_missing_trace_id"] == []
+
+
+def test_unmarked_violation_of_same_kind_still_flagged(tmp_path: Path) -> None:
+    """FRE-1129 AC-3: a marker on one line must not suppress a neighboring unmarked one."""
     src = tmp_path / "x.py"
     src.write_text(
         textwrap.dedent(
@@ -338,12 +373,59 @@ def test_allowlisted_violations_are_suppressed(tmp_path: Path) -> None:
             import structlog
             log = structlog.get_logger(__name__)
 
-            def lifecycle() -> None:
-                log.info("startup")
+            async def handle(ctx) -> None:
+                log.info("marked")  # trace-allow: reason
+                log.info("unmarked")
             """
         )
     )
-    allowlist = [{"path": str(src), "line": 6, "pattern": "log.info", "reason": "lifecycle"}]
-    violations = lint_file(src, allowlist=allowlist)
-    log_violations = [v for v in violations if v.kind == "log_missing_trace_id"]
-    assert log_violations == []
+    violations = [v for v in lint_file(src) if v.kind == "log_missing_trace_id"]
+    assert len(violations) == 1
+    assert violations[0].line == 7
+
+
+def test_strict_ignores_trace_allow_marker(tmp_path: Path) -> None:
+    src = _write_marked_fixture(tmp_path)
+    violations = lint_file(src, strict=True)
+    assert any(v.kind == "log_missing_trace_id" for v in violations)
+
+
+def test_marker_inside_string_literal_is_not_a_suppression(tmp_path: Path) -> None:
+    """A log *message* that happens to contain the marker text is not a real comment."""
+    src = tmp_path / "x.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            import structlog
+            log = structlog.get_logger(__name__)
+
+            async def handle(ctx) -> None:
+                log.info("# trace-allow: reason")
+            """
+        )
+    )
+    violations = lint_file(src)
+    assert any(v.kind == "log_missing_trace_id" for v in violations)
+
+
+def test_standalone_join_reconstructs_split_merge_clause(tmp_path: Path) -> None:
+    """Regression for a dead `elif isinstance(node, ast.Call) ... "join"` branch (FRE-1129):
+
+    the preceding `if isinstance(node, ast.Call):` consumed every Call node, so a
+    standalone `.join()`-built Cypher query with no surrounding BinOp was never
+    checked. Split the MERGE keyword across list elements so neither fragment alone
+    matches `_MERGE_RE` — only the reconstructed joined text does — to prove the
+    join-dispatch branch itself ran.
+    """
+    src = tmp_path / "x.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            async def write_entity(session):
+                query = "".join(["MERGE (e", ":Entity {name: $name})"])
+                await session.run(query)
+            """
+        )
+    )
+    violations = lint_file(src)
+    assert any(v.kind == "cypher_merge_missing_origination" for v in violations)

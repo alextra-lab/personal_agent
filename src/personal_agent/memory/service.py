@@ -2235,7 +2235,7 @@ class MemoryService:
                 # two concurrent consolidations cannot double-archive), then the old value
                 # is archived to a HAD_DESCRIPTION history node BEFORE the SET overwrites it.
                 query = (
-                    "MERGE (e:Entity {name: $name})\n"
+                    "MERGE (e:Entity {name: $name})\n"  # trace-allow: dynamic on_create_clauses set origination; static analyzer can't see joined props (FRE-657 FP)
                     "ON CREATE SET " + ",\n    ".join(on_create_clauses) + "\n"
                     "WITH e, e.description AS _old_desc, e.description_confidence AS _old_conf,\n"
                     "     e.description_eval_mode AS _old_eval, e.description_set_at AS _old_set_at\n"

@@ -252,3 +252,35 @@ same-index oracle; deployed code identified by container file hash, not board st
 the running process (`/app/.venv/bin/python`), not the repo; Neo4j via cypher-shell with `_count`
 verification; no substrate writes, no board mutations, no live turns fired, worktree re-pinned to
 deployed tip `41e76267` on the owner's instruction.
+
+---
+
+## Correction 2026-08-03, post-reconciliation
+
+Appended by master at the explore seat's request; the seat authored this text and does not commit.
+
+§F1's mechanism-B row and §F3's "fired 0×" used a wrong event name. The audit queried
+`within_session_compressed`, which has never existed in `agent-logs`; the real emits are
+`within_session_compression_hard_trigger` / `_recorded`. True counts are **260 all-time / 2 since
+07-20**, confirming that within-turn compaction fires and shrinks (`api_costs` traces `4df79c99`,
+`4ad4bb12`, both 2026-07-24 — the day after FRE-942 bounded the compaction tail band).
+
+§F3's "≤7 calls" on the 796K turn is corrected to **25** (from that capture's own `steps` array;
+the audit generalised a `primary_call_count` field that the 07-22 capture predates). The within-turn
+axis is therefore **governed-but-thin** rather than ungoverned, and its dominant cost is
+**re-transmission** — ~32K average input per call across 25 calls — which sits below every threshold
+by design.
+
+Per-call series authority is **Postgres `api_costs`**, not Elasticsearch: the ES per-call emit has
+been dark since 2026-05-10.
+
+**What this changes and what it does not.** The three-disconnected-systems verdict stands, as do the
+slice's starvation of the conversational axis, Stage 6's discarded output, the attachment-turn drop,
+and the ADR census. What changes is that the within-turn story now has a working backstop in it, and
+the economic question moves from "nothing governs this" to "re-transmission is the spend and nothing
+is designed to reduce it."
+
+**Method note carried forward.** The audit's `~12K` fixed-overhead figure was derived by elimination
+(usage minus characters÷4 of the stored context), not itemised, and characters÷4 undercounts
+non-English text. It is superseded by the differencing method in FRE-1142, which obtains every figure
+from the inference server's own accounting.

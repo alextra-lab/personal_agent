@@ -9,6 +9,7 @@ FRE-533 classification semantics, and a smoke test over the committed repo files
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from scripts.audit.telemetry_surface_check import (
     REPO,
     Finding,
     check_mapping_dashboard,
+    check_sample_document_types,
     check_trap_lint,
     diff_baseline,
     finding_key,
@@ -392,6 +394,139 @@ def test_gold_classification_semantics(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Check 5 — sample document ↔ mapping (FRE-1107)
+# ---------------------------------------------------------------------------
+
+# The literal producer output (RequestMonitor._check_thresholds), not the ticket's prose paraphrase.
+_VIOLATION_TEXT = "CPU critically high: 100.0% (DEGRADED threshold)"
+
+
+def _fake_fetch(
+    docs: list[dict[str, object]],
+) -> "Callable[[str, str, int], list[dict[str, object]]]":
+    def fetch(es_url: str, pattern: str, size: int) -> list[dict[str, object]]:
+        return docs
+
+    return fetch
+
+
+def test_sample_mapping_flags_list_in_numeric_field(tmp_path: Path) -> None:
+    _write_template(
+        tmp_path / "index-template.json",
+        index_patterns=["agent-captains-captures-*"],
+        properties={
+            "metrics_summary": {"properties": {"threshold_violations": {"type": "integer"}}}
+        },
+    )
+    templates = load_templates(tmp_path)
+    doc = {"metrics_summary": {"threshold_violations": [_VIOLATION_TEXT]}}
+    findings = check_sample_document_types(templates, "http://es", fetch=_fake_fetch([doc]))
+    assert [(f.check, f.klass, f.field) for f in findings] == [
+        ("sample-mapping", "producer-type-mismatch", "metrics_summary.threshold_violations")
+    ]
+
+
+def test_sample_mapping_clean_after_keyword_fix(tmp_path: Path) -> None:
+    _write_template(
+        tmp_path / "index-template.json",
+        index_patterns=["agent-captains-captures-*"],
+        properties={
+            "metrics_summary": {
+                "properties": {"threshold_violations": {"type": "keyword", "ignore_above": 1024}}
+            }
+        },
+    )
+    templates = load_templates(tmp_path)
+    doc = {"metrics_summary": {"threshold_violations": [_VIOLATION_TEXT]}}
+    findings = check_sample_document_types(templates, "http://es", fetch=_fake_fetch([doc]))
+    assert findings == []
+
+
+def test_sample_mapping_does_not_flag_legitimate_keyword_list(tmp_path: Path) -> None:
+    # A list value in a keyword field (e.g. tools_used) is the NORMAL shape — a blanket
+    # "any list = mismatch" rule would false-fire here. Regression-guards the codex-review fix:
+    # the check is element-wise, not shape-wise.
+    _write_template(
+        tmp_path / "index-template.json",
+        index_patterns=["agent-logs-*"],
+        properties={"tools_used": {"type": "keyword"}},
+    )
+    templates = load_templates(tmp_path)
+    doc = {"tools_used": ["run_python", "web_search"]}
+    findings = check_sample_document_types(templates, "http://es", fetch=_fake_fetch([doc]))
+    assert findings == []
+
+
+def test_sample_mapping_flags_dict_in_keyword_field(tmp_path: Path) -> None:
+    _write_template(
+        tmp_path / "index-template.json",
+        index_patterns=["agent-logs-*"],
+        properties={"model": {"type": "keyword"}},
+    )
+    templates = load_templates(tmp_path)
+    doc = {"model": {"unexpected": "object"}}
+    findings = check_sample_document_types(templates, "http://es", fetch=_fake_fetch([doc]))
+    assert [f.klass for f in findings] == ["producer-type-mismatch"]
+
+
+def test_sample_mapping_flags_non_bool_in_boolean_field(tmp_path: Path) -> None:
+    _write_template(
+        tmp_path / "index-template.json",
+        index_patterns=["agent-logs-*"],
+        properties={"eval_mode": {"type": "boolean"}},
+    )
+    templates = load_templates(tmp_path)
+    doc = {"eval_mode": "yes"}
+    findings = check_sample_document_types(templates, "http://es", fetch=_fake_fetch([doc]))
+    assert [f.klass for f in findings] == ["producer-type-mismatch"]
+
+
+def test_sample_mapping_empty_list_is_inconclusive(tmp_path: Path) -> None:
+    _write_template(
+        tmp_path / "index-template.json",
+        index_patterns=["agent-captains-captures-*"],
+        properties={
+            "metrics_summary": {"properties": {"threshold_violations": {"type": "integer"}}}
+        },
+    )
+    templates = load_templates(tmp_path)
+    doc: dict[str, object] = {"metrics_summary": {"threshold_violations": []}}
+    findings = check_sample_document_types(templates, "http://es", fetch=_fake_fetch([doc]))
+    assert findings == []
+
+
+def test_sample_mapping_dedupes_across_multiple_docs(tmp_path: Path) -> None:
+    _write_template(
+        tmp_path / "index-template.json",
+        index_patterns=["agent-captains-captures-*"],
+        properties={
+            "metrics_summary": {"properties": {"threshold_violations": {"type": "integer"}}}
+        },
+    )
+    templates = load_templates(tmp_path)
+    docs = [
+        {"metrics_summary": {"threshold_violations": [_VIOLATION_TEXT]}},
+        {"metrics_summary": {"threshold_violations": ["Memory high: 91.0% (ALERT threshold)"]}},
+    ]
+    findings = check_sample_document_types(templates, "http://es", fetch=_fake_fetch(docs))
+    assert len(findings) == 1  # one Finding per (family, field), not one per offending document
+
+
+def test_sample_mapping_real_committed_captures_template_is_clean() -> None:
+    # End-to-end against the actual repo template (post-FRE-1107 fix), proving the guard is
+    # verified against a document the producer actually writes, not just eyeballed against JSON.
+    templates = [
+        t
+        for t in load_templates(DEFAULT_TEMPLATES_DIR)
+        if "captains-captures-index-template" in t.path
+    ]
+    assert templates, "captains-captures-index-template.json not found"
+    doc = {"metrics_summary": {"threshold_violations": [_VIOLATION_TEXT]}}
+    findings = check_sample_document_types(templates, "http://es", fetch=_fake_fetch([doc]))
+    assert findings == []
+
+
+# ---------------------------------------------------------------------------
 # Real-file smoke (hermetic, against the committed surface)
 # ---------------------------------------------------------------------------
 
@@ -420,18 +555,15 @@ def test_real_joinability_template_is_fully_clean() -> None:
 def test_real_committed_floor_is_exactly_the_allowlisted_exceptions() -> None:
     # FRE-555: after the _meta-detection fix + the two dashboard fixes, the only residual floor
     # findings are the reviewed-correct / deferred trap-lint exceptions captured in the committed
-    # allowlist. Locks completeness: a *new* floor finding fails this test (and CI).
+    # allowlist. Locks completeness: a *new* floor finding, or a wrong check/klass/family/source on
+    # a surviving one, fails this test (and CI). FRE-1107 removed metrics_summary.threshold_violations
+    # from the baseline — it was never a count (see the corrected template _meta), so the mapping fix
+    # makes this field's finding disappear rather than need re-allowlisting.
     report = run_checks(DEFAULT_TEMPLATES_DIR, DEFAULT_DASHBOARDS_DIR)
     keys = {finding_key(f) for f in report.floor}
-    expected_fields = {
-        "metrics_summary.threshold_violations",  # integer count, deliberately pinned
-        "latency_ms",  # *_ms → float pending reindex (follow-up)
-        "probe_duration_ms",  # *_ms → float pending reindex (follow-up)
-        "reason",  # short keyword enum, keyword correct
-        "decomposition_reason",  # short keyword enum, keyword correct
-        "threshold",  # issue_budget_threshold cap (integer count), deliberately pinned (FRE-719)
-    }
-    assert {k[3] for k in keys} == expected_fields, sorted(k[3] for k in keys)
+    baseline = REPO / "scripts" / "audit" / "telemetry_surface_baseline.json"
+    expected_keys = load_baseline(baseline)
+    assert keys == expected_keys, sorted(k[3] for k in keys)
     assert all(k[0] == "trap-lint" for k in keys), keys
 
 

@@ -23,6 +23,14 @@ Report-only / environment-gated checks (never affect exit code, clearly separate
    explicit mapping. Heuristic (no runtime hook); a *report* until a field registry exists.
 4. **Repo template ↔ live mapping.** When ``--es-url`` is reachable, compare ``GET /<family>/_mapping``
    against the repo template. Environment-gated; cannot run in the hermetic pass.
+5. **Repo template ↔ sampled document (FRE-1107).** When ``--es-url`` is reachable, sample real
+   documents per family and flag explicit fields whose live *value* shape doesn't fit the declared
+   mapped type — catches a producer writing something the mapping was never built for, which check 4
+   can't see (it only compares template type vs. live *mapping* type, both derived from the same
+   template, so a mapping that was always wrong for the producer looks consistent to it). Scoped to
+   the numeric/string/boolean type families, applied element-wise to list values, so a legitimately
+   list-valued keyword field (e.g. ``tools_used``) is not flagged for merely being a list —
+   ``date``/``geo_point``/other exotic types are not validated (a different, fragile problem).
 
 Phasing (ADR-0090 D5): shipped in **report mode** while FRE-534/535 burned the baseline down. FRE-555
 flips CI to ``--gate`` with a small committed **allowlist** of reviewed-correct / deferred exceptions
@@ -51,7 +59,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -81,6 +89,15 @@ JOIN_KEYS: frozenset[str] = frozenset(JOIN_KEY | {"task_id"})
 _INT_TYPES = frozenset({"long", "integer", "short", "byte"})
 # Default ignore_above values that silently drop long strings from the index.
 _DEFAULT_IGNORE_ABOVE = frozenset({256, 1024})
+
+# Type families for check 5 (sample document ↔ mapping, FRE-1107) — the ES types this check can
+# validate a live value against without guessing. Anything outside these three families (date,
+# geo_point, ...) is left unvalidated.
+_NUMERIC_TYPES = frozenset(
+    {"integer", "long", "short", "byte", "float", "double", "half_float", "scaled_float"}
+)
+_STRING_TYPES = frozenset({"keyword", "text"})
+_BOOLEAN_TYPES = frozenset({"boolean"})
 
 FLOOR_CHECKS = frozenset({"mapping-dashboard", "trap-lint"})
 
@@ -707,6 +724,165 @@ def check_live_mapping(templates: Sequence[LoadedTemplate], es_url: str) -> list
 
 
 # ---------------------------------------------------------------------------
+# Report-only check 5 — sample document ↔ mapping (environment-gated, FRE-1107)
+# ---------------------------------------------------------------------------
+
+
+def _is_numeric_scalar(value: Any) -> bool:
+    """Whether a single JSON value is int/float-shaped (a bool does not count)."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return True
+    if isinstance(value, str):
+        try:
+            float(value)
+        except ValueError:
+            return False
+        return True
+    return False
+
+
+def _field_type_mismatch(mapped_type: str, value: Any) -> str | None:
+    """Check one sampled field value against its mapped ES type.
+
+    Applied element-wise: a list is only flagged when an element's shape doesn't fit, not merely
+    for being a list — a bare list is the normal shape for a keyword/text array field (e.g.
+    ``tools_used``). Only the numeric/string/boolean type families are validated; ``date``/
+    ``geo_point``/other types are left alone rather than guessed at.
+
+    Args:
+        mapped_type: The field's explicitly mapped ES type.
+        value: The raw JSON value sampled from a live document.
+
+    Returns:
+        A klass string if a mismatch is found, else ``None``.
+    """
+    elements = value if isinstance(value, list) else [value]
+    if not elements:
+        return None  # empty list is inconclusive, not a mismatch
+
+    if mapped_type in _NUMERIC_TYPES:
+        if any(not _is_numeric_scalar(el) for el in elements):
+            return "producer-type-mismatch"
+    elif mapped_type in _STRING_TYPES:
+        if any(isinstance(el, dict) for el in elements):
+            return "producer-type-mismatch"
+    elif mapped_type in _BOOLEAN_TYPES:
+        if any(not isinstance(el, bool) for el in elements):
+            return "producer-type-mismatch"
+    return None
+
+
+def _flatten_doc_values(doc: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    """Dotted-path leaf values from a real sampled document.
+
+    Every path gets its own raw value, dict or not — a dict recorded at a path that a template maps
+    as a scalar (e.g. ``keyword``) is itself the mismatch this check needs to see. Dicts are then
+    also recursed into for their own children's paths. A list is left as an opaque leaf value at its
+    own path — arrays of dicts (``nested`` fields) are out of scope, since they aren't
+    numeric/string/boolean leaves.
+
+    Args:
+        doc: A sampled document's ``_source``.
+        prefix: Internal recursion accumulator.
+
+    Returns:
+        Dotted-path -> raw JSON value for every path reachable without descending into a list.
+    """
+    out: dict[str, Any] = {}
+    for key, value in doc.items():
+        path = f"{prefix}.{key}" if prefix else key
+        out[path] = value
+        if isinstance(value, dict):
+            out.update(_flatten_doc_values(value, path))
+    return out
+
+
+def sample_documents(es_url: str, pattern: str, size: int) -> list[dict[str, Any]]:
+    """Best-effort fetch of up to ``size`` live documents' ``_source`` from an index pattern.
+
+    Args:
+        es_url: Base Elasticsearch URL.
+        pattern: Index wildcard pattern to sample from.
+        size: Maximum number of documents to fetch.
+
+    Returns:
+        The sampled ``_source`` dicts, or an empty list on any error — a liveness-probe, same as
+        :func:`check_live_mapping`, never raises.
+    """
+    body = json.dumps({"size": size, "query": {"match_all": {}}}).encode()
+    req = urllib.request.Request(
+        f"{es_url}/{pattern}/_search",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+            raw = json.loads(resp.read().decode())
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        return []
+    hits = raw.get("hits", {}).get("hits", [])
+    return [h["_source"] for h in hits if isinstance(h.get("_source"), dict)]
+
+
+def check_sample_document_types(
+    templates: Sequence[LoadedTemplate],
+    es_url: str,
+    size: int = 20,
+    fetch: Callable[[str, str, int], list[dict[str, Any]]] = sample_documents,
+) -> list[Finding]:
+    """Report-only, environment-gated: sample real documents and flag producer/mapping type drift.
+
+    Generalizes the static trap-lint hint-based check into an empirical one: a field's *mapped*
+    type is compared against what the *producer actually writes*, catching the class of defect a
+    name-hint regex cannot (FRE-1107 — ``metrics_summary.threshold_violations`` was mapped
+    ``integer`` while the producer wrote a list of strings; ``FLOAT_HINT`` false-fired on the word
+    "threshold" and the static lint's finding was wrongly baselined as intentional).
+
+    Args:
+        templates: Loaded repo templates.
+        es_url: Base Elasticsearch URL.
+        size: Documents to sample per family.
+        fetch: Injectable document-sampling function (defaults to :func:`sample_documents`; tests
+            inject a fake to avoid a live ES dependency).
+
+    Returns:
+        One Finding per distinct ``(family, field)`` mismatch found across the sampled documents.
+    """
+    findings: list[Finding] = []
+    for tmpl in templates:
+        if not tmpl.index_patterns:
+            continue
+        docs = fetch(es_url, tmpl.index_patterns[0], size)
+        flagged: set[str] = set()
+        for doc in docs:
+            flat = _flatten_doc_values(doc)
+            for fname, attrs in tmpl.template.explicit.items():
+                if attrs.get("container") or fname in flagged or fname not in flat:
+                    continue
+                klass = _field_type_mismatch(attrs.get("type", ""), flat[fname])
+                if klass:
+                    flagged.add(fname)
+                    findings.append(
+                        Finding(
+                            check="sample-mapping",
+                            klass=klass,
+                            family=tmpl.path,
+                            field=fname,
+                            detail=(
+                                f"'{fname}' is mapped '{attrs.get('type')}' but a sampled document "
+                                f"holds a value that doesn't fit that type — the producer writes "
+                                f"something else"
+                            ),
+                            source=tmpl.path,
+                        )
+                    )
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Reporting + driver
 # ---------------------------------------------------------------------------
 
@@ -742,6 +918,7 @@ def run_checks(
     report.report_only.extend(check_emit_mapping(templates))
     if es_url:
         report.report_only.extend(check_live_mapping(templates, es_url))
+        report.report_only.extend(check_sample_document_types(templates, es_url))
     return report
 
 
@@ -899,7 +1076,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         f"mode: {mode}{baseline_note} · templates: {args.templates_dir} · dashboards: {args.dashboards_dir}"
     )
-    _print_section("REPORT-ONLY — emit→mapping + live-mapping (never gated)", report.report_only)
+    _print_section(
+        "REPORT-ONLY — emit→mapping + live-mapping + sample-mapping (never gated)",
+        report.report_only,
+    )
 
     if args.baseline is not None:
         baseline = load_baseline(args.baseline)

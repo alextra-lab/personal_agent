@@ -42,7 +42,7 @@ from typing import Any
 import orjson
 import structlog
 
-from personal_agent.memory.dedup import _normalize_name
+from personal_agent.memory.dedup import _is_allcaps_identifier, _normalize_name
 from personal_agent.memory.service import MemoryService
 
 log = structlog.get_logger(__name__)
@@ -57,14 +57,27 @@ WHERE {_ORPHAN_PREDICATE}
 OPTIONAL MATCH (t:Turn)-[:DISCUSSES]->(e)
 OPTIONAL MATCH (e)-[r]-(o:Entity)
 RETURN e.name AS name,
+       coalesce(e.entity_type, '') AS entity_type,
        count(DISTINCT t) AS turn_edges,
        count(DISTINCT r) AS entity_edges
 """
 
+# entity_type comes back with the name: the fold predicate has to be at least as strict
+# as the dedup gate, which scopes candidates to one entity_type (memory/dedup.py).
 _FETCH_DESCRIBED = f"""
 MATCH (e:Entity)
 WHERE NOT ({_ORPHAN_PREDICATE})
-RETURN e.name AS name
+RETURN e.name AS name, coalesce(e.entity_type, '') AS entity_type
+"""
+
+# Re-assert the orphan signature before touching anything. The plan is computed from a
+# snapshot; if live consolidation described this node in between, the fold must abort
+# BEFORE its edges are moved, not after (moving them and then declining to delete would
+# leave a described node stripped of every edge).
+_ASSERT_STILL_ORPHAN = f"""
+MATCH (e:Entity {{name: $orphan}})
+WHERE {_ORPHAN_PREDICATE}
+RETURN count(e) AS still_orphan
 """
 
 # Redirect every edge off the orphan, then remove it. DISCUSSES is MERGEd onto the
@@ -77,11 +90,13 @@ DELETE r
 RETURN count(*) AS moved
 """
 
-# Arbitrary relationship types cannot be re-created in plain Cypher, so the endpoints
-# are refactored in place. Self-loops onto the canonical are dropped rather than made.
+# Arbitrary relationship types cannot be re-created in plain Cypher, so the endpoints are
+# refactored in place. An edge whose far end is the canonical itself is DELETED rather
+# than refactored — refactoring it would produce a self-loop on the canonical, which is
+# not information the graph had before.
 _REPOINT_OUTGOING = """
 MATCH (orphan:Entity {name: $orphan})-[r]->(other)
-WHERE NOT other:Turn
+WHERE NOT other:Turn AND other.name <> $canonical
 MATCH (canonical:Entity {name: $canonical})
 CALL apoc.refactor.from(r, canonical) YIELD input
 RETURN count(input) AS moved
@@ -89,10 +104,16 @@ RETURN count(input) AS moved
 
 _REPOINT_INCOMING = """
 MATCH (other)-[r]->(orphan:Entity {name: $orphan})
-WHERE NOT other:Turn
+WHERE NOT other:Turn AND other.name <> $canonical
 MATCH (canonical:Entity {name: $canonical})
 CALL apoc.refactor.to(r, canonical) YIELD input
 RETURN count(input) AS moved
+"""
+
+_DROP_EDGES_TO_CANONICAL = """
+MATCH (orphan:Entity {name: $orphan})-[r]-(canonical:Entity {name: $canonical})
+DELETE r
+RETURN count(r) AS dropped
 """
 
 _DELETE_ORPHAN = f"""
@@ -125,33 +146,46 @@ class OrphanPlan:
 
 
 def plan_repairs(
-    orphans: Sequence[dict[str, Any]], described_names: Sequence[str]
+    orphans: Sequence[dict[str, Any]], described: Sequence[dict[str, Any]]
 ) -> list[OrphanPlan]:
     """Decide each orphan's disposition without touching the database.
 
+    The fold predicate is deliberately **at least as strict as the live dedup gate**
+    (``memory/dedup.py``): same normalized name, same ``entity_type`` (dedup only ever
+    considers same-type candidates), and matching ALL_CAPS shape (FRE-412). A weaker
+    predicate here would delete entities the write path would have kept distinct.
+
     Args:
-        orphans: Rows of ``{name, turn_edges, entity_edges}`` for description-less nodes.
-        described_names: Names of every entity that does carry a description.
+        orphans: Rows of ``{name, entity_type, turn_edges, entity_edges}`` for
+            description-less nodes.
+        described: Rows of ``{name, entity_type}`` for every entity carrying a
+            description.
 
     Returns:
         One :class:`OrphanPlan` per orphan, in input order.
     """
-    by_normalized: dict[str, list[str]] = {}
-    for name in described_names:
-        by_normalized.setdefault(_normalize_name(name), []).append(name)
+    by_key: dict[tuple[str, str], list[str]] = {}
+    for row in described:
+        key = (_normalize_name(row["name"]), row.get("entity_type", "") or "")
+        by_key.setdefault(key, []).append(row["name"])
 
     plans: list[OrphanPlan] = []
     for row in orphans:
         name = row["name"]
+        entity_type = row.get("entity_type", "") or ""
         turn_edges = int(row.get("turn_edges", 0))
         entity_edges = int(row.get("entity_edges", 0))
-        twins = by_normalized.get(_normalize_name(name), [])
+        twins = [
+            twin
+            for twin in by_key.get((_normalize_name(name), entity_type), [])
+            if _is_allcaps_identifier(name) == _is_allcaps_identifier(twin)
+        ]
         if len(twins) == 1:
             plans.append(
                 OrphanPlan(
                     name=name,
                     action="fold",
-                    reason=f"same name as described entity {twins[0]!r}",
+                    reason=(f"same name and entity_type as described entity {twins[0]!r}"),
                     canonical=twins[0],
                     turn_edges=turn_edges,
                     entity_edges=entity_edges,
@@ -193,13 +227,41 @@ async def _apply_plan(service: MemoryService, plan: OrphanPlan) -> dict[str, int
         plan: A ``fold`` plan carrying a resolved canonical name.
 
     Returns:
-        Counts of moved discusses edges, moved entity edges and deleted nodes.
+        Counts of moved discusses edges, moved entity edges, dropped orphan-to-canonical
+        edges and deleted nodes. ``aborted`` is 1 when the node stopped being an orphan
+        between plan and apply, in which case nothing was touched.
     """
     assert service.driver is not None
     assert plan.canonical is not None
-    moved_discusses = moved_entity = deleted = 0
+    moved_discusses = moved_entity = dropped = deleted = 0
     async with service.driver.session() as session:
         params = {"orphan": plan.name, "canonical": plan.canonical}
+        # Re-assert the signature BEFORE any write. The plan came from a snapshot; if
+        # live consolidation described this node since, abort without touching it —
+        # repointing first and declining to delete later would leave a described node
+        # stripped of every edge.
+        result = await session.run(_ASSERT_STILL_ORPHAN, orphan=plan.name)
+        record = await result.single()
+        if record is None or int(record["still_orphan"]) == 0:
+            log.warning(
+                "fre1115_orphan_fold_aborted",
+                entity_name=plan.name,
+                canonical_name=plan.canonical,
+                trace_id=None,
+                reason="node no longer matches the orphan signature; nothing touched",
+            )
+            return {
+                "discusses_moved": 0,
+                "entity_edges_moved": 0,
+                "edges_to_canonical_dropped": 0,
+                "deleted": 0,
+                "aborted": 1,
+            }
+        # A direct orphan<->canonical edge carries no information once the two are one
+        # node, and refactoring it would mint a self-loop. Drop it instead.
+        result = await session.run(_DROP_EDGES_TO_CANONICAL, **params)
+        record = await result.single()
+        dropped = int(record["dropped"]) if record else 0
         for query, key in (
             (_REPOINT_DISCUSSES, "discusses"),
             (_REPOINT_OUTGOING, "outgoing"),
@@ -218,7 +280,9 @@ async def _apply_plan(service: MemoryService, plan: OrphanPlan) -> dict[str, int
     return {
         "discusses_moved": moved_discusses,
         "entity_edges_moved": moved_entity,
+        "edges_to_canonical_dropped": dropped,
         "deleted": deleted,
+        "aborted": 0,
     }
 
 
@@ -244,7 +308,7 @@ async def run(*, apply: bool, as_json: bool, out_path: str | None) -> int:
             result = await session.run(_FETCH_ORPHANS)
             orphans = [dict(record) async for record in result]
             result = await session.run(_FETCH_DESCRIBED)
-            described = [record["name"] async for record in result]
+            described = [dict(record) async for record in result]
 
         plans = plan_repairs(orphans, described)
         applied: list[dict[str, Any]] = []

@@ -765,11 +765,18 @@ class SecondBrainConsolidator:
                 entity_ids.append(entity_id)
                 canonical_by_raw[raw_name] = entity_id
             elif raw_name:
-                # FRE-1115: no raw-name fallback. Naming an unwritten entity on the Turn
-                # would have create_conversation bare-MERGE it — re-minting the exact
-                # orphan this reorder removes. The mention is recorded as a Turn property
-                # instead, so the turn stays joinable (ADR-0074) without a knowledge-free
-                # node entering the graph.
+                # FRE-1115: create_entity returns "" ONLY on failure (disconnected driver
+                # or a caught exception) — never on a rename, which returns the canonical
+                # name. So falling back to the raw name here cannot recreate the
+                # dedup-orphan class this ticket removes; it only covers a genuinely
+                # failed write, where losing the Turn's DISCUSSES edge would be worse.
+                # That edge is the sole path from a turn to its entities, and nothing
+                # re-derives it, so the turn would become permanently unreachable by every
+                # entity-anchored recall query. The bare node the inline MERGE then
+                # creates is repaired by the next successful extraction of the same name.
+                # The mention is ALSO recorded as a Turn property so the failure stays
+                # diagnosable rather than looking like a normal write.
+                canonical_by_raw[raw_name] = raw_name
                 unresolved_entity_mentions.append(raw_name)
                 log.warning(
                     "consolidation_entity_write_unresolved",
@@ -899,22 +906,16 @@ class SecondBrainConsolidator:
                     target=target_name,
                 )
                 continue
-            # FRE-1115: follow the rename. create_relationship MATCHes endpoints by
-            # `entity_id OR name`, so a raw name that dedup renamed now matches nothing —
-            # or, worse, an unrelated pre-existing node that happens to share it. On the
-            # live graph 2,115 edges hang off orphan nodes for exactly this reason.
-            canonical_source = canonical_by_raw.get(source_name)
-            canonical_target = canonical_by_raw.get(target_name)
-            if canonical_source is None or canonical_target is None:
-                relationships_dispatch_skipped += 1
-                log.warning(
-                    "dispatch_relationship_endpoint_unresolved",
-                    trace_id=capture.trace_id,
-                    source=source_name,
-                    target=target_name,
-                    reason="endpoint has no Core entity; edge would attach to a stranger",
-                )
-                continue
+            # FRE-1115: follow the rename when this turn wrote the entity, otherwise pass
+            # the raw name through. create_relationship MATCHes endpoints by
+            # `entity_id OR name`, so an endpoint dedup renamed must be translated or the
+            # edge lands on nothing. But the extractor is NOT required to repeat an
+            # endpoint in `entities[]` — a relationship may legitimately reference an
+            # entity written by an earlier turn — so an untranslated name is resolved
+            # against the existing graph exactly as it was before this reorder. Dropping
+            # it here instead would silently delete every cross-turn edge.
+            canonical_source = canonical_by_raw.get(source_name, source_name)
+            canonical_target = canonical_by_raw.get(target_name, target_name)
             relationship = Relationship(
                 source_id=canonical_source,
                 target_id=canonical_target,
@@ -939,6 +940,15 @@ class SecondBrainConsolidator:
             stance = _build_stance(stance_data)
             if stance is None:
                 continue
+            # FRE-1115: assert_stance resolves the target with MATCH (:Entity {name}), so
+            # it has to be the canonical name. Before the reorder the raw-name node was
+            # bare-MERGEd and the stance landed on it; that node no longer exists, so a
+            # renamed target would silently drop the owner's stated preference.
+            # (assert_claim needs no equivalent — it resolves via Person/Claim, not by
+            # entity name.)
+            canonical_target = canonical_by_raw.get(stance.target)
+            if canonical_target is not None and canonical_target != stance.target:
+                stance = stance.model_copy(update={"target": canonical_target})
             if await self.memory_service.assert_stance(stance, trace_id=capture.trace_id):
                 stances_created += 1
 

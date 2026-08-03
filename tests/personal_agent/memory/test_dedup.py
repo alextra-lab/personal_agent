@@ -475,3 +475,80 @@ class TestNamesAreEquivalent:
     def test_not_equivalent(self, a: str, b: str) -> None:
         """Distinct names are not equivalent however similar their embeddings."""
         assert not _names_are_equivalent(a, b)
+
+
+class TestCandidateScanning:
+    """FRE-1115 code-review finding: the guards must not blind dedup to rank 2-5.
+
+    The first cut applied the name guard to ``similar[0]`` only, so a topically-close
+    neighbour outranking the true case-variant twin caused a duplicate node — exactly the
+    ordering the guards exist to distrust.
+    """
+
+    @pytest.mark.asyncio
+    async def test_name_equivalent_twin_below_rank_one_is_still_merged(self) -> None:
+        """Rank 1 is name-incompatible; the real twin sits at rank 2."""
+        with patch(
+            "personal_agent.memory.dedup._find_similar_entities",
+            new_callable=AsyncMock,
+            return_value=[
+                {"name": "computer science", "similarity": 0.96, "entity_type": "DomainOrTopic"},
+                {"name": "Mathematics", "similarity": 0.94, "entity_type": "DomainOrTopic"},
+            ],
+        ):
+            result = await check_entity_duplicate(
+                name="mathematics",
+                entity_type="DomainOrTopic",
+                embedding=[0.1] * 1536,
+                neo4j_session=AsyncMock(),
+            )
+        assert result.decision == DedupDecision.MERGE_EXISTING
+        assert result.canonical_name == "Mathematics"
+
+    @pytest.mark.asyncio
+    async def test_exact_match_below_rank_one_still_wins(self) -> None:
+        """An exact (case-insensitive) name match anywhere in the candidates merges."""
+        with patch(
+            "personal_agent.memory.dedup._find_similar_entities",
+            new_callable=AsyncMock,
+            return_value=[
+                {"name": "Apricots", "similarity": 0.97, "entity_type": "DomainOrTopic"},
+                {"name": "Blueberries", "similarity": 0.93, "entity_type": "DomainOrTopic"},
+            ],
+        ):
+            result = await check_entity_duplicate(
+                name="blueberries",
+                entity_type="DomainOrTopic",
+                embedding=[0.1] * 1536,
+                neo4j_session=AsyncMock(),
+            )
+        assert result.decision == DedupDecision.MERGE_EXISTING
+        assert result.canonical_name == "Blueberries"
+
+    @pytest.mark.asyncio
+    async def test_no_compatible_candidate_still_creates_new_and_audits(self) -> None:
+        """When nothing above threshold is the same name, the top one is the audit row."""
+        with (
+            patch(
+                "personal_agent.memory.dedup._find_similar_entities",
+                new_callable=AsyncMock,
+                return_value=[
+                    {"name": "Apricots", "similarity": 0.96, "entity_type": "DomainOrTopic"},
+                    {"name": "Melon", "similarity": 0.94, "entity_type": "DomainOrTopic"},
+                ],
+            ),
+            patch.object(dedup_module.logger, "info") as mock_log,
+        ):
+            result = await check_entity_duplicate(
+                name="Blueberries",
+                entity_type="DomainOrTopic",
+                embedding=[0.1] * 1536,
+                neo4j_session=AsyncMock(),
+            )
+        assert result.decision == DedupDecision.CREATE_NEW
+        kwargs = next(
+            c.kwargs
+            for c in mock_log.call_args_list
+            if c.args and c.args[0] == "entity_dedup_rejected_name_incompatible"
+        )
+        assert kwargs["candidate_name"] == "Apricots"

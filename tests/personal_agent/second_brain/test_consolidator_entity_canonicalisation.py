@@ -186,37 +186,22 @@ async def test_several_raw_names_converging_on_one_canonical_are_deduplicated(
     assert _turn_of(memory_service).key_entities == ["Neo4j"]
 
 
-@pytest.mark.asyncio
-async def test_failed_entity_write_does_not_fall_back_to_the_raw_name(
-    consolidator: SecondBrainConsolidator, memory_service: MagicMock
-) -> None:
-    """A raw-name fallback would re-mint the exact orphan this ticket removes."""
-    memory_service.create_entity = AsyncMock(return_value="")
-    result = await _run(consolidator, _extraction([_entity("Blueberries")]))
-
-    turn = _turn_of(memory_service)
-    assert turn.key_entities == [], "no bare :Entity may be minted for an unresolved name"
-    assert result["entities_created"] == 0
-    # The mention is still recorded on the Turn so the turn stays joinable (ADR-0074).
-    assert turn.properties.get("unresolved_entity_mentions") == ["Blueberries"]
-
-
-@pytest.mark.asyncio
-async def test_relationship_touching_an_unresolved_endpoint_is_skipped(
-    consolidator: SecondBrainConsolidator, memory_service: MagicMock
-) -> None:
-    """An endpoint with no Core node must not be spliced onto a same-named stranger."""
-    memory_service.create_entity = AsyncMock(
-        side_effect=lambda entity, **kw: "" if entity.name == "Blueberries" else entity.name
-    )
-    extraction = _extraction(
-        [_entity("Blueberries"), _entity("Apricots")],
-        [{"source": "Blueberries", "target": "Apricots", "type": "RELATED_TO"}],
-    )
-    result = await _run(consolidator, extraction)
-
-    memory_service.create_relationship.assert_not_awaited()
-    assert result["relationships_created"] == 0
+# Two tests were removed here by the FRE-1115 code review, both because they asserted
+# behaviour that loses graph structure:
+#
+#   test_failed_entity_write_does_not_fall_back_to_the_raw_name — asserted key_entities
+#   was emptied when create_entity failed. That costs the Turn its only DISCUSSES edge,
+#   permanently, and nothing re-derives it. Superseded by
+#   TestReorderDoesNotLoseGraphEdges::test_failed_entity_write_keeps_the_turns_discusses_edge.
+#
+#   test_relationship_touching_an_unresolved_endpoint_is_skipped — asserted an endpoint
+#   absent from this turn's canonical map is dropped. The extractor is not required to
+#   repeat an endpoint in entities[], so that silently deleted every cross-turn edge.
+#   Superseded by TestReorderDoesNotLoseGraphEdges::
+#   test_endpoint_from_an_earlier_turn_still_gets_its_edge. The "spliced onto a
+#   same-named stranger" risk it was guarding is pre-existing (create_relationship has
+#   always matched on name) and belongs to the dedup-semantics ticket, not here — paying
+#   for it with the whole cross-turn edge population was the wrong trade.
 
 
 @pytest.mark.asyncio
@@ -241,3 +226,95 @@ async def test_entity_data_type_map_uses_canonical_names(
     turn = _turn_of(memory_service)
     names = {e.get("name") for e in getattr(turn, "_entity_data", [])}
     assert "Predictive Processing" in names
+
+
+class TestReorderDoesNotLoseGraphEdges:
+    """FRE-1115 code-review findings 1-3: the reorder must not silently drop edges.
+
+    The first cut of this fix resolved relationship endpoints and stance targets ONLY
+    through the current turn's canonical map, and dropped an entity entirely when
+    create_entity failed. All three lose graph structure that the pre-reorder code wrote.
+    """
+
+    @pytest.mark.asyncio
+    async def test_endpoint_from_an_earlier_turn_still_gets_its_edge(
+        self, consolidator: SecondBrainConsolidator, memory_service: MagicMock
+    ) -> None:
+        """A relationship may name an entity this turn did not re-extract."""
+        extraction = _extraction(
+            [_entity("Neo4j")],
+            [{"source": "Cypher", "target": "Neo4j", "type": "USES"}],
+        )
+        result = await _run(consolidator, extraction)
+
+        assert result["relationships_created"] == 1, (
+            "an endpoint written by an earlier turn must still resolve against the graph"
+        )
+        rel = memory_service.create_relationship.await_args.args[0]
+        assert rel.source_id == "Cypher"
+        assert rel.target_id == "Neo4j"
+
+    @pytest.mark.asyncio
+    async def test_renamed_endpoint_is_still_translated(
+        self, consolidator: SecondBrainConsolidator, memory_service: MagicMock
+    ) -> None:
+        """Pass-through must not cost the rename translation it was added for."""
+        memory_service.create_entity = AsyncMock(
+            side_effect=lambda entity, **kw: (
+                "Predictive Processing" if entity.name == "predictive processing" else entity.name
+            )
+        )
+        extraction = _extraction(
+            [_entity("predictive processing"), _entity("Neo4j")],
+            [{"source": "predictive processing", "target": "Neo4j", "type": "RELATED_TO"}],
+        )
+        await _run(consolidator, extraction)
+
+        rel = memory_service.create_relationship.await_args.args[0]
+        assert rel.source_id == "Predictive Processing"
+
+    @pytest.mark.asyncio
+    async def test_stance_target_follows_the_rename(
+        self, consolidator: SecondBrainConsolidator, memory_service: MagicMock
+    ) -> None:
+        """assert_stance MATCHes :Entity by name, so the raw name would find nothing."""
+        memory_service.create_entity = AsyncMock(return_value="Météo France")
+        extraction = _extraction([_entity("Météo-France")])
+        extraction["stances"] = [
+            {
+                "subject": "owner",
+                "target": "Météo-France",
+                "affect": "trusts the forecasts",
+                "mastery": None,
+                "provenance": {
+                    "observed_at": _TURN_TS.isoformat(),
+                    "extracted_at": _TURN_TS.isoformat(),
+                    "source_type": "conversation",
+                },
+            }
+        ]
+        result = await _run(consolidator, extraction)
+
+        assert result["stances_created"] == 1
+        stance = memory_service.assert_stance.await_args.args[0]
+        assert stance.target == "Météo France", (
+            "the stance must target the canonical node that actually exists"
+        )
+
+    @pytest.mark.asyncio
+    async def test_failed_entity_write_keeps_the_turns_discusses_edge(
+        self, consolidator: SecondBrainConsolidator, memory_service: MagicMock
+    ) -> None:
+        """DISCUSSES is the only path from a Turn to its entities; nothing re-derives it."""
+        memory_service.create_entity = AsyncMock(return_value="")
+        result = await _run(consolidator, _extraction([_entity("Blueberries")]))
+
+        turn = _turn_of(memory_service)
+        assert turn.key_entities == ["Blueberries"], (
+            "a failed entity write must not cost the Turn its edge — create_entity "
+            "returns '' only on failure, never on a rename, so this cannot re-mint "
+            "the dedup orphan class"
+        )
+        assert result["entities_created"] == 0
+        # Still flagged, so the failure stays diagnosable rather than looking normal.
+        assert turn.properties.get("unresolved_entity_mentions") == ["Blueberries"]

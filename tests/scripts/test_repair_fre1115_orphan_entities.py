@@ -20,12 +20,23 @@ from scripts.repair_fre1115_orphan_entities import OrphanPlan, _apply_plan, plan
 from personal_agent.memory.service import MemoryService
 
 
-def _orphan(name: str, turn_edges: int = 1, entity_edges: int = 0) -> dict[str, Any]:
-    return {"name": name, "turn_edges": turn_edges, "entity_edges": entity_edges}
+def _orphan(
+    name: str, turn_edges: int = 1, entity_edges: int = 0, entity_type: str = "DomainOrTopic"
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "entity_type": entity_type,
+        "turn_edges": turn_edges,
+        "entity_edges": entity_edges,
+    }
+
+
+def _described(*names: str, entity_type: str = "DomainOrTopic") -> list[dict[str, Any]]:
+    return [{"name": n, "entity_type": entity_type} for n in names]
 
 
 def test_orphan_folds_into_its_name_equivalent_twin() -> None:
-    plans = plan_repairs([_orphan("predictive processing")], ["Predictive Processing"])
+    plans = plan_repairs([_orphan("predictive processing")], _described("Predictive Processing"))
     assert len(plans) == 1
     assert plans[0].action == "fold"
     assert plans[0].canonical == "Predictive Processing"
@@ -43,7 +54,7 @@ def test_orphan_folds_into_its_name_equivalent_twin() -> None:
 )
 def test_distinct_entity_is_kept_not_folded(orphan_name: str, described: list[str]) -> None:
     """These are the pairs dedup wrongly merged; folding them would re-conflate."""
-    plans = plan_repairs([_orphan(orphan_name)], described)
+    plans = plan_repairs([_orphan(orphan_name)], _described(*described))
     assert plans[0].action == "keep"
     assert plans[0].canonical is None
     assert "no name-equivalent twin" in plans[0].reason
@@ -52,7 +63,7 @@ def test_distinct_entity_is_kept_not_folded(orphan_name: str, described: list[st
 def test_diacritic_and_punctuation_variants_are_the_same_name() -> None:
     plans = plan_repairs(
         [_orphan("Pate a bombe"), _orphan("Météo-France")],
-        ["Pâté à bombe", "Météo France"],
+        _described("Pâté à bombe", "Météo France"),
     )
     assert [p.action for p in plans] == ["fold", "fold"]
     assert plans[0].canonical == "Pâté à bombe"
@@ -61,7 +72,7 @@ def test_diacritic_and_punctuation_variants_are_the_same_name() -> None:
 
 def test_ambiguous_twins_are_kept_and_named() -> None:
     """Two described nodes normalize the same — the script must not guess."""
-    plans = plan_repairs([_orphan("neo4j")], ["Neo4j", "NEO 4J"])
+    plans = plan_repairs([_orphan("neo4j")], _described("Neo4j", "NEO 4J"))
     assert plans[0].action == "keep"
     assert plans[0].canonical is None
     assert "ambiguous" in plans[0].reason
@@ -72,7 +83,7 @@ def test_every_orphan_gets_a_reason() -> None:
     """AC-6: the run explains each disposition rather than reporting a bare count."""
     plans = plan_repairs(
         [_orphan("predictive processing"), _orphan("mathematics"), _orphan("neo4j")],
-        ["Predictive Processing", "computer science", "Neo4j", "NEO 4J"],
+        _described("Predictive Processing", "computer science", "Neo4j", "NEO 4J"),
     )
     assert len(plans) == 3
     assert all(p.reason for p in plans)
@@ -82,7 +93,7 @@ def test_edge_counts_are_carried_into_the_plan() -> None:
     """The operator sees how much is being moved before approving a write."""
     plans = plan_repairs(
         [_orphan("predictive processing", turn_edges=4, entity_edges=7)],
-        ["Predictive Processing"],
+        _described("Predictive Processing"),
     )
     assert plans[0].turn_edges == 4
     assert plans[0].entity_edges == 7
@@ -175,3 +186,85 @@ class TestApplyAgainstLiveNeo4j:
         assert row["outgoing"] == 1, "the outgoing edge must have followed the fold"
         assert row["incoming"] == 1, "the incoming edge must have followed the fold"
         assert row["description"] == "A graph database", "the description is never touched"
+
+    @pytest.mark.asyncio
+    async def test_edge_between_orphan_and_canonical_is_dropped_not_self_looped(
+        self, svc: MemoryService
+    ) -> None:
+        """Refactoring an orphan<->canonical edge would mint a self-loop (review finding)."""
+        assert svc.driver is not None
+        async with svc.driver.session() as s:
+            await s.run(
+                """
+                CREATE (orphan:Entity {name: 'FRE1115R_neo4j'})
+                CREATE (canon:Entity {name: 'FRE1115R_Neo4J', entity_id: 'FRE1115R_Neo4J',
+                                      description: 'A graph database'})
+                CREATE (orphan)-[:RELATED_TO]->(canon)
+                """
+            )
+
+        plan = OrphanPlan(
+            name="FRE1115R_neo4j",
+            action="fold",
+            reason="test",
+            canonical="FRE1115R_Neo4J",
+            turn_edges=0,
+            entity_edges=1,
+        )
+        counts = await _apply_plan(svc, plan)
+
+        assert counts["edges_to_canonical_dropped"] == 1
+        assert counts["deleted"] == 1
+        async with svc.driver.session() as s:
+            result = await s.run(
+                """
+                MATCH (canon:Entity {name: 'FRE1115R_Neo4J'})
+                OPTIONAL MATCH (canon)-[loop]->(canon)
+                RETURN count(loop) AS self_loops
+                """
+            )
+            assert (await result.single())["self_loops"] == 0, "no self-loop may be created"
+
+    @pytest.mark.asyncio
+    async def test_fold_aborts_untouched_when_the_node_stopped_being_an_orphan(
+        self, svc: MemoryService
+    ) -> None:
+        """Plan/apply TOCTOU: a described node must keep every edge (review finding)."""
+        assert svc.driver is not None
+        async with svc.driver.session() as s:
+            # Node matches the plan's name but has since been described by live traffic.
+            await s.run(
+                """
+                CREATE (n:Entity {name: 'FRE1115R_neo4j', entity_id: 'FRE1115R_neo4j',
+                                  description: 'Described between plan and apply'})
+                CREATE (canon:Entity {name: 'FRE1115R_Neo4J', entity_id: 'FRE1115R_Neo4J',
+                                      description: 'A graph database'})
+                CREATE (t:Turn {turn_id: 'FRE1115R_turn'})
+                CREATE (t)-[:DISCUSSES]->(n)
+                """
+            )
+
+        plan = OrphanPlan(
+            name="FRE1115R_neo4j",
+            action="fold",
+            reason="stale plan",
+            canonical="FRE1115R_Neo4J",
+            turn_edges=1,
+            entity_edges=0,
+        )
+        counts = await _apply_plan(svc, plan)
+
+        assert counts["aborted"] == 1
+        assert counts["deleted"] == 0
+        assert counts["discusses_moved"] == 0
+        async with svc.driver.session() as s:
+            result = await s.run(
+                """
+                MATCH (n:Entity {name: 'FRE1115R_neo4j'})
+                OPTIONAL MATCH (t:Turn)-[:DISCUSSES]->(n)
+                RETURN n.description AS description, count(t) AS turns
+                """
+            )
+            row = await result.single()
+        assert row["description"] == "Described between plan and apply"
+        assert row["turns"] == 1, "the node must keep its edges — nothing was touched"

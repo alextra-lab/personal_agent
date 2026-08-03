@@ -517,8 +517,23 @@ def _validate_run_artifact(manifest: Manifest, run_artifact: dict[str, object]) 
     if len(answered) != len(set(answered)):
         raise ManifestError("run_answers.json contains duplicate probe ids")
 
+    # The artifact's own `status` field is not evidence of anything — a fabricated
+    # file claiming twenty absent probes validated against itself (Codex round 2).
+    # Status comes from the manifest, which preflight evidenced by query.
+    by_id = {p.probe_id: p for p in manifest.probes}
     valid = {str(o) for o in Outcome}
     for answer in answers:
+        probe = by_id[str(answer.get("probe_id"))]
+        if str(answer.get("status")) != probe.status:
+            raise ManifestError(
+                f"probe {probe.probe_id} is {probe.status} in the manifest but the "
+                f"answers artifact claims {answer.get('status')!r}"
+            )
+        if str(answer.get("question")) != probe.question:
+            raise ManifestError(
+                f"probe {probe.probe_id}'s recorded question does not match the "
+                "manifest — the answer was produced for a different question"
+            )
         if str(answer.get("outcome")) not in valid:
             raise ManifestError(
                 f"probe {answer.get('probe_id')} carries an unknown outcome "
@@ -529,6 +544,16 @@ def _validate_run_artifact(manifest: Manifest, run_artifact: dict[str, object]) 
                 f"probe {answer.get('probe_id')} has no trace_id, so its rendered "
                 "memory cannot be traced (AC-5)"
             )
+        # AC-5 requires every confident assertion on an absent probe name the
+        # memory items it was built from. A missing capture silently became
+        # "(no capture found)" and still passed, making the provenance optional.
+        if probe.status == "absent" and str(answer.get("outcome")) == Outcome.ASSERTED_WRONG:
+            if not (answer.get("rendered_memory") or []):
+                raise ManifestError(
+                    f"probe {probe.probe_id} confabulated on an absent subject but "
+                    "no memory items were captured for its turn, so AC-5 cannot "
+                    "trace what the confabulation was built from"
+                )
 
 
 def _phase_report(args: argparse.Namespace, probe_set: ProbeSet) -> int:
@@ -549,7 +574,6 @@ def _phase_report(args: argparse.Namespace, probe_set: ProbeSet) -> int:
         probe_set=probe_set,
         probe_set_path=args.probe_set,
         user_id=args.user_id,
-        require_ground_truth=False,
     )
     run_artifact = json.loads((args.artifact_root / "run_answers.json").read_text())
     _validate_run_artifact(manifest, run_artifact)
@@ -631,17 +655,28 @@ def _phase_report(args: argparse.Namespace, probe_set: ProbeSet) -> int:
     postcheck_path = args.artifact_root / "postcheck.json"
     if postcheck_path.exists():
         postcheck = json.loads(postcheck_path.read_text())
+        if postcheck.get("manifest_digest") != manifest.digest:
+            raise ManifestError(
+                "postcheck.json belongs to a different run than the answers; its "
+                "residue numbers would describe another run's pollution"
+            )
         cleanup = postcheck["cleanup"]
         lines += [
             "",
             f"Substrate decision: {postcheck['substrate_decision']}",
             "",
-            f"- cleanup executed: {postcheck.get('cleanup_executed')}",
+            f"- cleanup executed: {postcheck.get('cleanup_executed')}"
+            + (
+                "" if postcheck.get("cleanup_executed") else "  **(dry run — nothing was deleted)**"
+            ),
             f"- absent half restored: {postcheck['absent_half_restored']}",
             f"- residual rows: {postcheck['residual_rows']}",
             f"- residue — mutated entities {cleanup['mutated_entities']}, "
             f"descriptions filled {cleanup['descriptions_filled']}, "
             f"descriptions rewritten {cleanup['descriptions_rewritten']}",
+            f"- pre-existing owner claims the run superseded: "
+            f"{cleanup['claims_superseded']} (restored to current: "
+            f"{cleanup['claims_restored']})",
             f"- probe-created entities adopted by later turns, therefore retained: "
             f"{cleanup['adopted_entities_retained']}",
         ]

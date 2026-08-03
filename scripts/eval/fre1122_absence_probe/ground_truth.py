@@ -137,6 +137,13 @@ class CleanupResult:
         descriptions_rewritten: Pre-existing descriptions the run overwrote.
             Recoverable — FRE-711 archives the prior text to an
             ``:EntityDescriptionVersion`` node — but not restored by cleanup.
+        claims_superseded: Pre-existing owner claims the run invalidated by
+            asserting over them. Not residue but **data loss** if left — the
+            write path sets valid_to, invalid_at and superseded_by on the claim
+            it replaces, so deleting the run's claim would strand a real fact
+            as invalid with a dangling pointer.
+        claims_restored: How many of those were restored to current. Zero on a
+            dry run, which is why a dry run cannot attest to restoration.
         adopted_entities_retained: Probe-created entities a later, unrelated turn
             adopted. Deliberately NOT deleted — another session now depends on
             them — and named here so the residue is visible rather than either
@@ -149,6 +156,8 @@ class CleanupResult:
     turns_removed: int
     entities_removed: int
     claims_removed: int
+    claims_superseded: int
+    claims_restored: int
     mutated_entities: int
     descriptions_filled: int
     descriptions_rewritten: int
@@ -577,6 +586,50 @@ RETURN count(t) AS turns,
 """
 
 
+# The graph carries its own :Session node (service.py:1369), distinct from the
+# Postgres row. It survived an otherwise "zero residue" cleanup (Codex round 2).
+_SNAPSHOT_SESSION = """
+MATCH (s:Session {session_id: $sid})
+RETURN elementId(s) AS element_id, labels(s) AS labels, properties(s) AS node,
+       [(s)-[r]->(o) | {type: type(r), direction: 'out', properties: properties(r),
+                        other_element_id: elementId(o), other_labels: labels(o),
+                        other_key: coalesce(o.name, o.turn_id, o.claim_id)}] AS rels_out,
+       [(s)<-[r]-(o) | {type: type(r), direction: 'in', properties: properties(r),
+                        other_element_id: elementId(o), other_labels: labels(o),
+                        other_key: coalesce(o.name, o.turn_id, o.claim_id)}] AS rels_in
+"""
+
+_DELETE_SESSION = """
+MATCH (s:Session {session_id: $sid})
+DETACH DELETE s
+"""
+
+# Pre-existing claims the run SUPERSEDED. assert_claim sets valid_to, invalid_at
+# and superseded_by on the claim it replaces (service.py:2677-2693), so deleting
+# the run's own claim leaves a real owner fact invalidated with a dangling
+# pointer. That is data loss, not residue, and it is restored rather than
+# counted — the probe's supersession is the only thing that set those fields.
+_SUPERSEDED_BY_RUN = """
+MATCH (o:Person)-[:HAS_FACT]->(old:Claim)
+WHERE old.superseded_by IN $claim_ids
+RETURN elementId(old) AS element_id, labels(old) AS labels, properties(old) AS node,
+       [] AS rels_out, [] AS rels_in
+"""
+
+_RESTORE_SUPERSEDED = """
+MATCH (o:Person)-[:HAS_FACT]->(old:Claim)
+WHERE old.superseded_by IN $claim_ids
+SET old.valid_to = null, old.invalid_at = null,
+    old.superseded_by = null, old.supersession_reason = null
+RETURN count(old) AS restored
+"""
+
+_RUN_CLAIM_IDS = """
+MATCH (:Person)-[:HAS_FACT]->(cl:Claim {session_id: $sid})
+RETURN collect(cl.claim_id) AS claim_ids
+"""
+
+
 class CleanupRefused(RuntimeError):
     """Cleanup was asked to delete something it could not prove belongs to the run."""
 
@@ -733,18 +786,29 @@ async def cleanup_probe_session(
             turns = int(binding["turns"]) if binding else 0
             owned = int(binding["owned"]) if binding else 0
             matching = int(binding["matching_traces"]) if binding else 0
-            if turns == 0 or owned != turns or matching == 0:
+            # Every turn must be this owner's AND carry a trace id the run
+            # recorded. "at least one matches" would have let a session that
+            # merely overlaps the run be deleted wholesale (Codex round 2).
+            if turns == 0 or owned != turns or matching != turns:
                 raise CleanupRefused(
                     f"refusing to delete session {session_id}: {turns} turn(s), "
                     f"{owned} owned by {user_id}, {matching} carrying a recorded "
-                    "trace id — the session is not provably this run's"
+                    "trace id — every turn must be both, or the session is not "
+                    "provably this run's alone"
                 )
+
+        # Claim ids first: the superseded-claim snapshot keys off them, and it
+        # has to be captured while the run's claims still exist.
+        result = await session.run(_RUN_CLAIM_IDS, sid=session_id)
+        claim_id_row = await result.single()
+        run_claim_ids = list(claim_id_row["claim_ids"]) if claim_id_row else []
 
         snapshots: list[dict[str, object]] = []
         for label, statement in (
             ("Turn", _SNAPSHOT_TURNS),
             ("Entity", _SNAPSHOT_ENTITIES),
             ("Claim", _SNAPSHOT_CLAIMS),
+            ("Session", _SNAPSHOT_SESSION),
         ):
             result = await session.run(statement, sid=session_id)
             for record in await result.data():
@@ -782,15 +846,36 @@ async def cleanup_probe_session(
             else 0
         )
 
+        if run_claim_ids:
+            result = await session.run(_SUPERSEDED_BY_RUN, claim_ids=run_claim_ids)
+            for record in await result.data():
+                snapshots.append(
+                    {
+                        "label": "SupersededClaim",
+                        "element_id": record["element_id"],
+                        "labels": record["labels"],
+                        "properties": record["node"],
+                        "relationships": [],
+                    }
+                )
+
         result = await session.run(_ADOPTED_ENTITIES, sid=session_id)
         adopted = tuple(str(r["name"]) for r in await result.data())
 
         turn_count = sum(1 for s in snapshots if s["label"] == "Turn")
         entity_count = sum(1 for s in snapshots if s["label"] == "Entity")
         claim_count = sum(1 for s in snapshots if s["label"] == "Claim")
+        superseded = sum(1 for s in snapshots if s["label"] == "SupersededClaim")
 
+        restored = 0
         if not dry_run:
-            for statement in (_DELETE_CLAIMS, _DELETE_ENTITIES, _DELETE_TURNS):
+            # Restore before deleting the run's claims: once they are gone the
+            # superseded_by pointers no longer identify what to undo.
+            if run_claim_ids:
+                restored = await _count(
+                    session, _RESTORE_SUPERSEDED, "restored", claim_ids=run_claim_ids
+                )
+            for statement in (_DELETE_CLAIMS, _DELETE_ENTITIES, _DELETE_TURNS, _DELETE_SESSION):
                 result = await session.run(statement, sid=session_id)
                 await result.consume()
 
@@ -800,6 +885,8 @@ async def cleanup_probe_session(
         turns_removed=turn_count,
         entities_removed=entity_count,
         claims_removed=claim_count,
+        claims_superseded=superseded,
+        claims_restored=restored,
         mutated_entities=mutated,
         descriptions_filled=filled,
         descriptions_rewritten=rewritten,

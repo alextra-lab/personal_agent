@@ -179,12 +179,22 @@ The *fill* arm has no such guard, so `descriptions_filled` is live; with FRE-111
 measuring 18.7% of the corpus as empty-description, it is the class most likely
 to come back non-zero.
 
+**The run can invalidate real owner facts, and cleanup undoes that.** Asserting
+a claim supersedes the claim it replaces — the write path sets `valid_to`,
+`invalid_at` and `superseded_by` on the older one (`service.py:2677-2693`). So
+deleting only the run's own claims would strand a genuine owner fact as invalid
+with a dangling pointer. That is data loss rather than residue, so cleanup
+snapshots those claims and restores them to current, and the report states how
+many. A dry run restores nothing, which is one more reason it cannot attest to
+restoration.
+
 **Deletion refuses what it cannot prove.** Before anything destructive,
 `postcheck --execute` verifies the session's turns all belong to the named owner
 and that at least one carries a trace id the run recorded — a stale or
 hand-edited artifact naming a real production session is refused, not deleted.
-Entities are removed only when nothing outside the probe session references
-them; a probe-created entity a later turn adopted is retained and reported by
+Every turn in the session must be the owner's *and* carry a trace id the run
+recorded — not merely one of them. Entities are removed only when nothing
+outside the probe session references them; a probe-created entity a later turn adopted is retained and reported by
 name rather than destroyed along with that turn's edge.
 
 `postcheck` measures all of this and records the substrate decision AC-6 turns

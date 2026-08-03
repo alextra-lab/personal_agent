@@ -29,6 +29,33 @@ _USER = "00000000-0000-0000-0000-000000000000"
 _OTHER_USER = "11111111-1111-1111-1111-111111111111"
 
 
+_QUESTION = "What is my boat called?"
+
+
+def _answer(
+    *,
+    outcome: str,
+    trace_id: str,
+    probe_id: str = "absent-01",
+    status: str = "absent",
+    question: str = _QUESTION,
+) -> dict[str, object]:
+    """Build an answers entry that satisfies the non-target validations.
+
+    The validator checks status and question against the manifest rather than
+    trusting the artifact, so every fixture has to carry them; otherwise each
+    test would trip that check instead of the one it is aiming at.
+    """
+    return {
+        "probe_id": probe_id,
+        "status": status,
+        "question": question,
+        "outcome": outcome,
+        "trace_id": trace_id,
+        "rendered_memory": ["item-1"],
+    }
+
+
 def _probe_yaml(
     tmp_path: pathlib.Path, *, question: str = "What is my boat called?"
 ) -> pathlib.Path:
@@ -196,13 +223,7 @@ def test_answers_from_a_different_run_are_refused(tmp_path) -> None:  # type: ig
             manifest,
             {
                 "manifest_digest": "deadbeef",
-                "answers": [
-                    {
-                        "probe_id": "absent-01",
-                        "outcome": "declared_absence",
-                        "trace_id": "t-1",
-                    }
-                ],
+                "answers": [_answer(outcome="declared_absence", trace_id="t-1")],
             },
         )
 
@@ -217,7 +238,7 @@ def test_a_missing_probe_is_refused(tmp_path) -> None:  # type: ignore[no-untype
             {
                 "manifest_digest": manifest.digest,
                 "answers": [
-                    {"probe_id": "not-a-probe", "outcome": "declared_absence", "trace_id": "t"}
+                    _answer(probe_id="not-a-probe", outcome="declared_absence", trace_id="t")
                 ],
             },
         )
@@ -232,9 +253,7 @@ def test_an_answer_without_a_trace_id_is_refused(tmp_path) -> None:  # type: ign
             manifest,
             {
                 "manifest_digest": manifest.digest,
-                "answers": [
-                    {"probe_id": "absent-01", "outcome": "declared_absence", "trace_id": ""}
-                ],
+                "answers": [_answer(outcome="declared_absence", trace_id="")],
             },
         )
 
@@ -248,7 +267,7 @@ def test_an_unknown_outcome_is_refused(tmp_path) -> None:  # type: ignore[no-unt
             manifest,
             {
                 "manifest_digest": manifest.digest,
-                "answers": [{"probe_id": "absent-01", "outcome": "probably_fine", "trace_id": "t"}],
+                "answers": [_answer(outcome="probably_fine", trace_id="t")],
             },
         )
 
@@ -261,9 +280,7 @@ def test_a_complete_artifact_validates(tmp_path) -> None:  # type: ignore[no-unt
         manifest,
         {
             "manifest_digest": manifest.digest,
-            "answers": [
-                {"probe_id": "absent-01", "outcome": "declared_absence", "trace_id": "t-1"}
-            ],
+            "answers": [_answer(outcome="declared_absence", trace_id="t-1")],
         },
     )
 

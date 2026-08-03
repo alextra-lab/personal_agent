@@ -64,9 +64,17 @@ class Manifest:
         """Stable digest of the effective probe list, for cross-phase binding.
 
         Returns:
-            A hex digest over every probe id and question, in order.
+            A hex digest over every field of every probe, in order.
+
+        Note:
+            Digesting only id and question left status, subject_terms, expected
+            tokens and expected_source editable after preflight without
+            invalidating existing artifacts (Codex round 2) — an answer set
+            could be re-attributed to probes whose expected content had changed.
         """
-        payload = "|".join(f"{p.probe_id}:{p.question}" for p in self.probes)
+        payload = json.dumps(
+            [asdict(p) for p in self.probes], sort_keys=True, separators=(",", ":")
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @property
@@ -176,14 +184,33 @@ def load_manifest(
         )
 
     raw = json.loads(path.read_text())
+
+    # Strict, not coercive. bool("false") is True, and a tuple field arriving as
+    # a string would silently collapse to () — either would let a corrupt
+    # manifest pass as a valid one (Codex round 2).
+    holds = raw.get("ground_truth_holds")
+    if not isinstance(holds, bool):
+        raise ManifestError(
+            f"ground_truth_holds must be a JSON boolean, got {holds!r} — a "
+            "coerced value could turn a failed preflight into a passing one"
+        )
+
     manifest = Manifest(
         probes=tuple(Probe(**{**p, **_tuplify(p)}) for p in raw["probes"]),
         user_id=raw["user_id"],
         probe_set_digest=raw["probe_set_digest"],
-        ground_truth_holds=bool(raw["ground_truth_holds"]),
+        ground_truth_holds=holds,
         replacements=tuple(raw.get("replacements") or []),
         created_at=raw["created_at"],
     )
+
+    stored = raw.get("digest")
+    if stored and stored != manifest.digest:
+        raise ManifestError(
+            "the manifest's recorded digest does not match its contents "
+            f"({str(stored)[:12]} != {manifest.digest[:12]}) — it has been edited "
+            "in place since preflight wrote it"
+        )
 
     if manifest.user_id != user_id:
         raise ManifestError(
@@ -223,10 +250,21 @@ def _tuplify(raw: dict[str, object]) -> dict[str, tuple[str, ...]]:
 
     Returns:
         The fields needing conversion back to tuples.
+
+    Raises:
+        ManifestError: If a tuple-typed field is present but not a JSON list.
     """
-    subject_terms = raw.get("subject_terms")
-    expected_tokens = raw.get("expected_tokens")
-    return {
-        "subject_terms": tuple(subject_terms) if isinstance(subject_terms, list) else (),
-        "expected_tokens": tuple(expected_tokens) if isinstance(expected_tokens, list) else (),
-    }
+    out: dict[str, tuple[str, ...]] = {}
+    for field_name in ("subject_terms", "expected_tokens"):
+        value = raw.get(field_name)
+        if value is None:
+            out[field_name] = ()
+            continue
+        if not isinstance(value, list):
+            raise ManifestError(
+                f"{field_name} must be a JSON list, got {type(value).__name__} — "
+                "silently collapsing it to empty would discard the probe's "
+                "ground-truth terms"
+            )
+        out[field_name] = tuple(str(v) for v in value)
+    return out

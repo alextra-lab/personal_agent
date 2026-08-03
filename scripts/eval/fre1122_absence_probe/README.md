@@ -134,21 +134,27 @@ reversible*, and the answer turns out to be readable from the write path:
   (`docker/postgres/init.sql:14`) — there is no separate messages table, so
   deleting the session row removes its whole history.
 
-**The residue cleanup cannot undo.** The write path also mutates *pre-existing*
-entities on every mention — `e.last_seen`, `e.mention_count + 1`, and
-`e.entity_type` when previously empty (`service.py:1279-1283`). Deleting
-probe-created nodes does not roll those back. On the absent half this is nil by
-construction; on the present half it is real and is reported as residue with its
-size, never glossed (AC-3).
+**The residue cleanup cannot undo**, in three measured classes:
+
+| Class | Cause | Reversible? |
+|---|---|---|
+| `mutated_entities` | `last_seen` / `mention_count + 1` / `entity_type` on every mention (`service.py:1279-1283`) | No |
+| `descriptions_filled` | consolidation populating a previously-**empty** description (FRE-711 fill arm) | No |
+| `descriptions_rewritten` | consolidation **overwriting** an existing description | Yes in principle — FRE-711 archives the prior text to an `:EntityDescriptionVersion` node stamped with the causing trace |
+
+On the absent half all three are nil by construction. On the present half they
+are real, and AC-3 requires each be reported with its size rather than glossed.
+
+**Eval mode does more than the ticket credits it with.** FRE-711's *correction*
+arm carries `AND NOT ($eval_mode AND coalesce(_old_eval, false) = false)`, so an
+eval-mode description can never overwrite a non-eval one — and the runner fires
+every probe on `channel="EVAL"`, which sets `eval_mode` (`app.py:2111`). So the
+`descriptions_rewritten` class is structurally suppressed for real descriptions.
+The *fill* arm has no such guard, so `descriptions_filled` is live; with FRE-1115
+measuring 18.7% of the corpus as empty-description, it is the class most likely
+to come back non-zero.
 
 `postcheck` measures all of this and records the substrate decision AC-6 turns
 on: if cleanup restores the absent half, the FRE-1118 delta runs live on the
 same probes; if it does not, the delta runs on the test substrate so the
 comparison stays same-probe either way.
-
-## Not yet established
-
-Whether consolidation or episodic→semantic promotion rewrites `description` on
-**pre-existing** entities. If it does, that is genuinely irreversible residue,
-and it lands on the present half. `postcheck`'s mutated-entity count surfaces the
-population it would affect; characterising it is not this fixture's job.

@@ -15,12 +15,24 @@ construction, so every node bearing the probe session's stamp is the probe's own
 and is safely removable. ``:Turn`` nodes carry ``session_id`` and
 ``originating_session_id`` directly.
 
-**The residue this cannot undo.** The write path also mutates *pre-existing*
-entities on every mention — ``e.last_seen``, ``e.mention_count + 1``, and
-``e.entity_type`` when it was previously empty (``service.py:1279-1283``).
-Deleting probe-created nodes does not roll those back. On the absent half that
-is nil by construction; on the present half it is real, and AC-3 requires it be
-reported as residue with its size rather than glossed.
+**The residue this cannot undo**, in three measured classes. The write path
+mutates *pre-existing* entities on every mention — ``e.last_seen``,
+``e.mention_count + 1``, and ``e.entity_type`` when previously empty
+(``service.py:1279-1283``) — and consolidation can additionally *fill* an empty
+description or *overwrite* an existing one (FRE-711, ``service.py:2201-2230``).
+Deleting probe-created nodes rolls none of that back. On the absent half it is
+nil by construction; on the present half it is real, and AC-3 requires it be
+reported with its size rather than glossed, which is what
+:class:`CleanupResult`'s three residue counts are for.
+
+**One protection worth stating precisely**, because the ticket understates it:
+eval mode does more than suppress Linear promotion. FRE-711's *correction* arm
+carries ``AND NOT ($eval_mode AND coalesce(_old_eval, false) = false)``, so an
+eval-mode description can never overwrite a non-eval one — and the runner fires
+every probe on ``channel="EVAL"``, which sets ``eval_mode`` (``app.py:2111``).
+The *fill* arm has no such guard, so a previously-empty description can still be
+populated by a probe turn. Given FRE-1115 measured 18.7% of the corpus as
+empty-description, that is the residue class most likely to be non-zero.
 
 Deletion is destructive, so every node is snapshotted durably before any
 mutation — the discipline ``sweep_fre868_evict_system_entities.py`` established.
@@ -29,7 +41,9 @@ mutation — the discipline ``sweep_fre868_evict_system_entities.py`` establishe
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -111,6 +125,11 @@ class CleanupResult:
         entities_removed: Count of probe-created ``:Entity`` nodes deleted.
         mutated_entities: Pre-existing entities the run touched but cleanup
             cannot restore — the residue AC-3 requires be reported with its size.
+        descriptions_filled: Pre-existing entities whose empty description the
+            run populated. Not undone by cleanup.
+        descriptions_rewritten: Pre-existing descriptions the run overwrote.
+            Recoverable — FRE-711 archives the prior text to an
+            ``:EntityDescriptionVersion`` node — but not restored by cleanup.
         snapshot_path: Where the pre-deletion snapshot was written.
     """
 
@@ -119,6 +138,8 @@ class CleanupResult:
     turns_removed: int
     entities_removed: int
     mutated_entities: int
+    descriptions_filled: int
+    descriptions_rewritten: int
     snapshot_path: pathlib.Path | None
 
 
@@ -299,6 +320,29 @@ WHERE (t.session_id = $sid OR t.originating_session_id = $sid)
 RETURN count(DISTINCT e) AS mutated
 """
 
+# Pre-existing entities whose EMPTY description the run filled. FRE-711's
+# _do_fill arm carries no eval-mode guard, so an eval turn can populate a
+# previously-empty description — and given FRE-1115 measured 18.7% of the corpus
+# as empty-description, this is the residue class most likely to be non-zero.
+_FILLED_DESCRIPTIONS = """
+MATCH (t:Turn)-[:DISCUSSES]->(e:Entity)
+WHERE (t.session_id = $sid OR t.originating_session_id = $sid)
+  AND coalesce(e.originating_session_id, '') <> $sid
+  AND coalesce(e.description_eval_mode, false) = true
+  AND coalesce(e.description, '') <> ''
+RETURN count(DISTINCT e) AS filled
+"""
+
+# Pre-existing descriptions the run OVERWROTE. FRE-711 archives the prior text to
+# a :HAD_DESCRIPTION -> :EntityDescriptionVersion node stamped with the trace
+# that caused it, so this residue is both countable and — unlike a mention_count
+# bump — recoverable from the archived version.
+_REWRITTEN_DESCRIPTIONS = """
+MATCH (e:Entity)-[:HAD_DESCRIPTION]->(v:EntityDescriptionVersion)
+WHERE v.source_trace_id IN $trace_ids
+RETURN count(v) AS rewritten
+"""
+
 _DELETE_ENTITIES = """
 MATCH (e:Entity) WHERE e.originating_session_id = $sid
 DETACH DELETE e
@@ -312,11 +356,29 @@ RETURN count(*) AS removed
 """
 
 
+async def _count(session, statement: str, key: str, **params: object) -> int:  # type: ignore[no-untyped-def]
+    """Run a single-row counting query and return the count.
+
+    Args:
+        session: An open Neo4j async session.
+        statement: A Cypher statement returning one row with ``key``.
+        key: The returned column name.
+        **params: Query parameters.
+
+    Returns:
+        The count, or 0 when the query returned no row.
+    """
+    result = await session.run(statement, **params)
+    row = await result.single()
+    return int(row[key]) if row else 0
+
+
 async def cleanup_probe_session(
     driver: AsyncDriver,
     session_id: str,
     *,
     snapshot_path: pathlib.Path,
+    trace_ids: Sequence[str] = (),
     dry_run: bool = True,
 ) -> CleanupResult:
     """Remove the probe session's graph footprint, snapshotting first.
@@ -324,15 +386,27 @@ async def cleanup_probe_session(
     Deletes ``:Entity`` nodes whose *only* provenance is this session and the
     session's ``:Turn`` nodes. Entities that pre-existed keep their original
     ``originating_session_id`` and are left alone — they are counted as residue
-    instead, because their ``mention_count`` and ``last_seen`` were bumped by the
-    run and cleanup cannot roll that back.
+    instead, in three classes cleanup cannot roll back:
+
+    * ``mention_count`` / ``last_seen`` bumps on every entity the run mentioned;
+    * an empty description the run *filled* — FRE-711's fill arm carries no
+      eval-mode guard, and FRE-1115 measured 18.7% of the corpus as
+      empty-description, so this is the class most likely to be non-zero;
+    * a description the run *overwrote* — recoverable, since FRE-711 archives the
+      prior text to an ``:EntityDescriptionVersion``, but not restored here.
+
+    A pre-existing description cannot be silently *corrected* by this run:
+    FRE-711's correction arm excludes an eval-mode description overwriting a
+    non-eval one, and the runner fires every probe on ``channel="EVAL"``.
 
     Args:
         driver: An open Neo4j async driver.
         session_id: The probe session's id.
-        snapshot_path: Where to write the durable pre-deletion snapshot. Written
-            and flushed before any mutation, so a crash mid-cleanup leaves an
-            undo record on disk.
+        snapshot_path: Where to write the durable pre-deletion snapshot. Written,
+            flushed and fsynced before any mutation, so a crash mid-cleanup
+            leaves a complete undo record on disk.
+        trace_ids: The run's trace ids, for the description-rewrite count. When
+            empty that count is reported as 0 and nothing is inferred from it.
         dry_run: When True (the default), snapshot and count but delete nothing.
 
     Returns:
@@ -347,15 +421,22 @@ async def cleanup_probe_session(
                     {"label": label, "properties": record["node"], "relationships": record["rels"]}
                 )
 
+        # Durable before destructive: flush() alone only reaches the OS buffer,
+        # so a host crash could lose the undo record while the delete survived.
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         with snapshot_path.open("w", encoding="utf-8") as handle:
             for entry in snapshots:
                 handle.write(json.dumps(entry, default=str) + "\n")
             handle.flush()
+            os.fsync(handle.fileno())
 
-        result = await session.run(_MUTATED_ENTITIES, sid=session_id)
-        mutated_row = await result.single()
-        mutated = int(mutated_row["mutated"]) if mutated_row else 0
+        mutated = await _count(session, _MUTATED_ENTITIES, "mutated", sid=session_id)
+        filled = await _count(session, _FILLED_DESCRIPTIONS, "filled", sid=session_id)
+        rewritten = (
+            await _count(session, _REWRITTEN_DESCRIPTIONS, "rewritten", trace_ids=list(trace_ids))
+            if trace_ids
+            else 0
+        )
 
         turn_count = sum(1 for s in snapshots if s["label"] == "Turn")
         entity_count = sum(1 for s in snapshots if s["label"] == "Entity")
@@ -372,5 +453,7 @@ async def cleanup_probe_session(
         turns_removed=turn_count,
         entities_removed=entity_count,
         mutated_entities=mutated,
+        descriptions_filled=filled,
+        descriptions_rewritten=rewritten,
         snapshot_path=snapshot_path,
     )

@@ -334,6 +334,7 @@ async def _phase_postcheck(args: argparse.Namespace, probe_set: ProbeSet) -> int
     """
     run_artifact = json.loads((args.artifact_root / "run_answers.json").read_text())
     session_id = run_artifact["session_id"]
+    trace_ids = [a["trace_id"] for a in run_artifact["answers"] if a["trace_id"]]
 
     driver = connect_graph()
     pg_conn = await _open_pg()
@@ -348,6 +349,7 @@ async def _phase_postcheck(args: argparse.Namespace, probe_set: ProbeSet) -> int
             driver,
             session_id,
             snapshot_path=_artifact(args.artifact_root, "cleanup_snapshot.jsonl"),
+            trace_ids=trace_ids,
             dry_run=args.dry_run,
         )
 

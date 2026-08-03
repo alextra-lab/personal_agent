@@ -180,7 +180,7 @@ def test_validate_run_shape_accepts_a_full_set(tmp_path) -> None:  # type: ignor
 
 
 def test_a_placeholder_rationale_is_rejected(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """ "private" argued nothing and passed the original non-empty check."""
+    """A rationale of "private" argued nothing and passed the non-empty check."""
     with pytest.raises(ProbeSetError, match="personal_scope_rationale"):
         load_probe_set(_write(tmp_path, [_absent(personal_scope_rationale="private")]))
 

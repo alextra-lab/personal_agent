@@ -204,8 +204,15 @@ def load_manifest(
         created_at=raw["created_at"],
     )
 
+    # Required, not optional. Enforcing only when present meant deleting the
+    # field skipped verification entirely (Codex round 3).
     stored = raw.get("digest")
-    if stored and stored != manifest.digest:
+    if not stored:
+        raise ManifestError(
+            "the manifest carries no digest — it was not written by preflight, "
+            "or the field was removed to evade the integrity check"
+        )
+    if stored != manifest.digest:
         raise ManifestError(
             "the manifest's recorded digest does not match its contents "
             f"({str(stored)[:12]} != {manifest.digest[:12]}) — it has been edited "

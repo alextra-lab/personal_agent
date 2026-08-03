@@ -183,10 +183,19 @@ to come back non-zero.
 a claim supersedes the claim it replaces — the write path sets `valid_to`,
 `invalid_at` and `superseded_by` on the older one (`service.py:2677-2693`). So
 deleting only the run's own claims would strand a genuine owner fact as invalid
-with a dangling pointer. That is data loss rather than residue, so cleanup
-snapshots those claims and restores them to current, and the report states how
-many. A dry run restores nothing, which is one more reason it cannot attest to
-restoration.
+with a dangling pointer. That is data loss rather than residue.
+
+Cleanup therefore snapshots every such claim and **reports** it. Restoring it is
+opt-in (`--restore-superseded-claims`) and off by default, because the restore
+is an inference: it assumes each claim pointing at one of the run's claims was
+current immediately before the run, and that cannot be proven from the graph
+after the fact — `assert_claim` picks supersession candidates and mutates them
+in separate transactions with no compare-and-set, so a real assertion racing a
+probe turn could leave a predecessor whose resurrection would itself be
+corruption. Off, the owner sees exactly what was invalidated and decides. On, it
+repairs the common uncontended case. Either way the pre-restore state is on
+disk. Deletion runs before restoration, so a crash cannot leave two current
+claims for the same fact.
 
 **Deletion refuses what it cannot prove.** Before anything destructive,
 `postcheck --execute` verifies the session's turns all belong to the named owner

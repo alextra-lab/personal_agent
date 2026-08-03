@@ -728,6 +728,7 @@ async def cleanup_probe_session(
     snapshot_path: pathlib.Path,
     trace_ids: Sequence[str] = (),
     dry_run: bool = True,
+    restore_superseded: bool = False,
 ) -> CleanupResult:
     """Remove the probe session's graph footprint, snapshotting first.
 
@@ -758,6 +759,17 @@ async def cleanup_probe_session(
         trace_ids: The run's trace ids. Required for a real delete — they bind
             the session to this run. Also drives the description-rewrite count.
         dry_run: When True (the default), snapshot and count but delete nothing.
+        restore_superseded: Whether to restore pre-existing owner claims the run
+            invalidated. **Defaults to False, deliberately.** The restore is an
+            inference — it assumes every claim pointing at one of the run's
+            claims was current immediately before the run — and that assumption
+            cannot be proven from the graph after the fact. ``assert_claim``
+            selects supersession candidates and mutates them in separate
+            transactions with no compare-and-set, so a real owner assertion
+            racing a probe turn could leave a predecessor whose resurrection
+            would itself be corruption. Off by default, the run *reports* what
+            it invalidated and the owner decides; on, it repairs the common
+            uncontended case. Either way the pre-restore state is snapshotted.
 
     Returns:
         What was removed, and the residue that could not be.
@@ -822,6 +834,23 @@ async def cleanup_probe_session(
                     }
                 )
 
+        # Collected BEFORE the file is written. An earlier draft appended these
+        # after the fsync and never rewrote the file, so the durable snapshot
+        # held zero SupersededClaim records — the undo log for the one operation
+        # that mutates pre-existing owner data was empty (Codex round 3).
+        if run_claim_ids:
+            result = await session.run(_SUPERSEDED_BY_RUN, claim_ids=run_claim_ids)
+            for record in await result.data():
+                snapshots.append(
+                    {
+                        "label": "SupersededClaim",
+                        "element_id": record["element_id"],
+                        "labels": record["labels"],
+                        "properties": record["node"],
+                        "relationships": [],
+                    }
+                )
+
         # Durable before destructive: flush() alone only reaches the OS buffer,
         # so a host crash could lose the undo record while the delete survived.
         # The containing directory is fsynced too, or the file's own directory
@@ -846,19 +875,6 @@ async def cleanup_probe_session(
             else 0
         )
 
-        if run_claim_ids:
-            result = await session.run(_SUPERSEDED_BY_RUN, claim_ids=run_claim_ids)
-            for record in await result.data():
-                snapshots.append(
-                    {
-                        "label": "SupersededClaim",
-                        "element_id": record["element_id"],
-                        "labels": record["labels"],
-                        "properties": record["node"],
-                        "relationships": [],
-                    }
-                )
-
         result = await session.run(_ADOPTED_ENTITIES, sid=session_id)
         adopted = tuple(str(r["name"]) for r in await result.data())
 
@@ -869,15 +885,21 @@ async def cleanup_probe_session(
 
         restored = 0
         if not dry_run:
-            # Restore before deleting the run's claims: once they are gone the
-            # superseded_by pointers no longer identify what to undo.
-            if run_claim_ids:
-                restored = await _count(
-                    session, _RESTORE_SUPERSEDED, "restored", claim_ids=run_claim_ids
-                )
             for statement in (_DELETE_CLAIMS, _DELETE_ENTITIES, _DELETE_TURNS, _DELETE_SESSION):
                 result = await session.run(statement, sid=session_id)
                 await result.consume()
+
+            # Delete FIRST, restore after. Restoring first opened a window where
+            # a crash left the restored predecessor AND the probe's claim both
+            # current, violating the one-current-claim invariant — strictly
+            # worse than the pre-cleanup state. Deleting first cannot lose the
+            # pointers, because run_claim_ids is already in memory; a crash
+            # after the delete simply leaves the predecessor invalidated, which
+            # is the state as if restore had never been attempted (Codex round 3).
+            if run_claim_ids and restore_superseded:
+                restored = await _count(
+                    session, _RESTORE_SUPERSEDED, "restored", claim_ids=run_claim_ids
+                )
 
     return CleanupResult(
         session_id=session_id,

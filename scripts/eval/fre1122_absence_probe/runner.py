@@ -78,6 +78,13 @@ _DEFAULT_CAPTURES_ROOT = _PROJECT_ROOT / "telemetry" / "captains_log" / "capture
 # whether probe N-1 had finished writing.
 _TURN_TIMEOUT_SECONDS = 300.0
 
+# A capture that could not be read is NOT the same as a turn that rendered no
+# memory. "Zero items admitted" is a legitimate, and for FRE-1118 an
+# interesting, result; a missing capture is a gap in the evidence. Collapsing
+# both to an empty list made AC-5 unprovable in one direction and over-strict in
+# the other (Codex round 3).
+_CAPTURE_MISSING = "(capture missing — memory items for this turn are unknown)"
+
 
 @dataclass(frozen=True)
 class ProbeAnswer:
@@ -140,13 +147,13 @@ def _load_rendered_memory(captures_root: pathlib.Path, trace_id: str) -> tuple[s
     matches = list(captures_root.glob(f"*/{trace_id}.json"))
     if not matches:
         log.warning("fre1122_capture_missing", trace_id=trace_id)
-        return ()
+        return (_CAPTURE_MISSING,)
 
     try:
         capture = json.loads(matches[0].read_text())
     except (OSError, json.JSONDecodeError) as exc:
         log.warning("fre1122_capture_unreadable", trace_id=trace_id, error=str(exc))
-        return ()
+        return (_CAPTURE_MISSING,)
 
     admission = capture.get("recall_admission") or {}
     items = admission.get("items") or admission.get("admitted") or []
@@ -428,6 +435,7 @@ async def _phase_postcheck(args: argparse.Namespace, probe_set: ProbeSet) -> int
             snapshot_path=_artifact(args.artifact_root, "cleanup_snapshot.jsonl"),
             trace_ids=trace_ids,
             dry_run=args.dry_run,
+            restore_superseded=args.restore_superseded_claims,
         )
 
         after_cleanup = [
@@ -548,11 +556,17 @@ def _validate_run_artifact(manifest: Manifest, run_artifact: dict[str, object]) 
         # memory items it was built from. A missing capture silently became
         # "(no capture found)" and still passed, making the provenance optional.
         if probe.status == "absent" and str(answer.get("outcome")) == Outcome.ASSERTED_WRONG:
-            if not (answer.get("rendered_memory") or []):
+            rendered = answer.get("rendered_memory")
+            if not isinstance(rendered, list):
+                raise ManifestError(
+                    f"probe {probe.probe_id}: rendered_memory must be a list, got "
+                    f"{type(rendered).__name__}"
+                )
+            if _CAPTURE_MISSING in rendered:
                 raise ManifestError(
                     f"probe {probe.probe_id} confabulated on an absent subject but "
-                    "no memory items were captured for its turn, so AC-5 cannot "
-                    "trace what the confabulation was built from"
+                    "its capture could not be read, so AC-5 cannot trace what the "
+                    "confabulation was built from"
                 )
 
 
@@ -728,6 +742,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--execute",
         action="store_true",
         help="postcheck: actually delete. Omit for a dry run (the default).",
+    )
+    parser.add_argument(
+        "--restore-superseded-claims",
+        action="store_true",
+        help="postcheck: also restore pre-existing owner claims the run invalidated. "
+        "OFF by default — the restore assumes each such claim was current "
+        "immediately before the run, which cannot be proven from the graph "
+        "afterwards. Without it the run reports what it invalidated and leaves "
+        "the repair to the owner.",
     )
     return parser
 

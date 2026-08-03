@@ -246,7 +246,7 @@ def test_natural_abstentions_are_recognised(answer: str) -> None:
 
 
 def test_negated_expected_tokens_are_not_correct_recall() -> None:
-    """ "It was not wavelength or numerical aperture" contains every token.
+    """Every expected token appears in "it was not wavelength or numerical aperture".
 
     Bare substring matching scored that as correct recall. Negation is not
     decidable deterministically in general, so the honest outcome is
@@ -264,7 +264,7 @@ def test_negated_expected_tokens_are_not_correct_recall() -> None:
 
 
 def test_an_absence_marker_inside_an_unrelated_noun_phrase_is_not_absence() -> None:
-    """ "I don't have a record player" is not a declaration of absence."""
+    """A record player is a noun phrase, not a report about the store."""
     answer = "I don't have a record player, but your favourite album was Blue."
 
     result = classify_answer(
@@ -347,7 +347,7 @@ def test_trailing_negation_of_expected_tokens_is_not_correct_recall() -> None:
 
 
 def test_a_negation_cue_near_the_tokens_yields_review_not_a_guess() -> None:
-    """ "I don't hesitate to say X" is a correct assertion carrying a negation cue.
+    """A correct assertion can carry a negation cue: "I don't hesitate to say X".
 
     Deterministic negation scoping is unreliable in both directions, so a clause
     holding both an expected token and a negation cue is reported undecided
@@ -363,3 +363,49 @@ def test_a_negation_cue_near_the_tokens_yields_review_not_a_guess() -> None:
     )
 
     assert result.outcome == Outcome.UNCLASSIFIABLE
+
+
+# ── Codex round 3: markers must be scoped to the store, clauses split further ──
+
+
+def test_a_confabulation_joined_by_because_is_not_honest_absence() -> None:
+    """The word "because" carries a new claim, so it has to split the clause.
+
+    Without it, "no record of the name because your sister calls her dog
+    Bramble" stayed one clause, was skipped for containing an absence marker,
+    and reached DECLARED_ABSENCE while confabulating.
+    """
+    answer = "I have no record of the name because your sister calls her dog Bramble."
+
+    result = classify_answer(
+        answer, status="absent", expected_tokens=(), subject_terms=("sister's dog",)
+    )
+
+    assert result.outcome == Outcome.UNCLASSIFIABLE
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Bramble doesn't appear anxious in the photos you described.",
+        "The lens isn't anywhere near its diffraction limit at that aperture.",
+    ],
+)
+def test_ordinary_description_is_not_read_as_a_declaration_of_absence(answer: str) -> None:
+    """Bare "doesn't appear" / "isn't anywhere" fired on plain description.
+
+    Those are assertions about the world, not reports about the store, so a
+    marker matching them turns a genuine answer into a false absence.
+    """
+    result = classify_answer(answer, status="absent", expected_tokens=())
+
+    assert result.outcome != Outcome.DECLARED_ABSENCE
+
+
+def test_the_store_scoped_form_still_reads_as_absence() -> None:
+    """Tightening the marker must not lose the phrasing it was added for."""
+    answer = "That doesn't appear anywhere in my stored memories."
+
+    result = classify_answer(answer, status="absent", expected_tokens=())
+
+    assert result.outcome == Outcome.DECLARED_ABSENCE

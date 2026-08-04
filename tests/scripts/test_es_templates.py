@@ -597,3 +597,29 @@ def test_live_mapping_skips_gracefully_on_404() -> None:
         'Script must have at least one path where http_status=="404" leads to return 0 '
         "(skip). apply_live_index_mapping must skip cleanly when the alias is absent."
     )
+
+
+# --------------------------------------------------------------------------- #
+# FRE-1109 — three mutually-incompatible fields pinned as keyword.
+# --------------------------------------------------------------------------- #
+
+
+def test_logs_three_colliding_fields_are_explicit_keyword() -> None:
+    """FRE-1109: status/priority/resolved are explicitly keyword (not dynamic).
+
+    These three fields can arrive as either numeric or string from different producers:
+    - status: HTTP code (numeric) vs. health word "up"/"success" (string)
+    - priority: numeric level (long) vs. label "high"/"low" (keyword)
+    - resolved: boolean (some producers) vs. "true"/"false" string (others)
+
+    Without explicit mapping, the first document to arrive determines the type for the
+    whole monthly index. Under monthly indices, a wrong guess persists for up to 31 days.
+    The three fields must be pinned as keyword (accepts all values both producers emit)
+    so type never depends on arrival order.
+    """
+    props = _props(_load("index-template.json"))
+    for field in ("status", "priority", "resolved"):
+        assert field in props, f"{field} must be explicitly defined in properties"
+        assert props[field].get("type") == "keyword", (
+            f"{field} must be keyword to accept both numeric and string values"
+        )

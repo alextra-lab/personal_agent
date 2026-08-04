@@ -44,7 +44,7 @@ Linear MCP: Team `FrenchForest` · `save_issue` to create · `get_issue` to veri
 | `/docs/architecture_decisions/` | ADRs |
 | `/docs/superpowers/plans/` | Implementation plans (canonical location) |
 | `/config/` | Runtime configuration templates |
-| `/telemetry/` | Runtime telemetry data (gitignored) |
+| `/telemetry/` | Runtime telemetry data (evaluation runs, logs, etc. — mostly gitignored; see `.gitignore` for tracked baseline results) |
 | **Never at root** | Session logs, action items, temp files |
 
 ### 3. Coding Standards

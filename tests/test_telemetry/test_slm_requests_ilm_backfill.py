@@ -16,7 +16,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 pytestmark = [
-    pytest.mark.requires_llm_server,  # ES runs in compose with LLM server
     pytest.mark.integration,
 ]
 
@@ -66,18 +65,22 @@ def _es_request(es_url: str, method: str, path: str, data: dict | None = None) -
 
 def test_slm_requests_policy_applied(es_url: str) -> None:
     """Policy exists on ES after setup script runs."""
-    policy = _es_request(es_url, "GET", "/_ilm/policy/slm-requests")
-    assert policy, "slm-requests policy should exist"
-    assert "policy" in policy
-    assert policy["policy"]["phases"]["delete"]["min_age"] == "30d"
+    resp = _es_request(es_url, "GET", "/_ilm/policy/slm-requests")
+    assert resp, "slm-requests policy should exist"
+    policy = resp.get("slm-requests", {}).get("policy", {})
+    assert policy, "policy dict should exist"
+    assert policy["phases"]["delete"]["min_age"] == "30d"
 
 
 def test_slm_requests_template_references_policy(es_url: str) -> None:
     """Template binds new indices to the policy."""
-    tpl = _es_request(es_url, "GET", "/_index_template/slm-requests-template")
-    assert tpl, "slm-requests-template should exist"
-    settings = tpl["indexTemplate"]["template"].get("settings", {})
-    assert settings.get("index.lifecycle.name") == "slm-requests", (
+    resp = _es_request(es_url, "GET", "/_index_template/slm-requests-template")
+    assert resp, "slm-requests-template should exist"
+    tpl = resp.get("index_templates", [{}])[0].get("index_template", {})
+    settings = tpl.get("template", {}).get("settings", {})
+    # ES nests the dot-notation setting, so check the nested form
+    lifecycle_name = settings.get("index", {}).get("lifecycle", {}).get("name")
+    assert lifecycle_name == "slm-requests", (
         "template must set index.lifecycle.name to slm-requests"
     )
 
@@ -92,9 +95,10 @@ def test_new_index_is_lifecycle_managed(es_url: str) -> None:
     try:
         # Check its lifecycle status
         explain = _es_request(es_url, "GET", f"/{index_name}/_ilm/explain")
-        assert index_name in explain, f"Index {index_name} not in explain output"
+        indices = explain.get("indices", {})
+        assert index_name in indices, f"Index {index_name} not in explain output"
 
-        index_info = explain["indices"][index_name]
+        index_info = indices[index_name]
         assert index_info.get("managed"), f"{index_name} should be managed by ILM"
         assert index_info.get("policy") == "slm-requests", (
             f"{index_name} should be managed by slm-requests policy"
@@ -114,7 +118,8 @@ def test_backfill_unmanaged_to_managed(es_url: str) -> None:
     """Backfill converts an existing unmanaged index to managed."""
     # Create an index BEFORE the template carries the policy
     # (simulate an index that existed before FRE-1106).
-    unmanaged_index = "slm-requests-2026.08.01-backfill-test"
+    # Use a name that doesn't match slm-requests-* so it doesn't auto-get the policy
+    unmanaged_index = "backfill-test-slm-requests-old-index"
 
     # Create without template by directly POSTing to bypass template matching.
     # This simulates an index created by the external SLM producer before this policy existed.
@@ -123,8 +128,9 @@ def test_backfill_unmanaged_to_managed(es_url: str) -> None:
     try:
         # Verify it starts unmanaged
         explain_before = _es_request(es_url, "GET", f"/{unmanaged_index}/_ilm/explain")
-        assert unmanaged_index in explain_before
-        assert not explain_before["indices"][unmanaged_index].get("managed"), (
+        indices_before = explain_before.get("indices", {})
+        assert unmanaged_index in indices_before
+        assert not indices_before[unmanaged_index].get("managed"), (
             f"{unmanaged_index} should start unmanaged"
         )
 
@@ -138,8 +144,9 @@ def test_backfill_unmanaged_to_managed(es_url: str) -> None:
 
         # Verify it's now managed
         explain_after = _es_request(es_url, "GET", f"/{unmanaged_index}/_ilm/explain")
-        assert unmanaged_index in explain_after
-        index_info = explain_after["indices"][unmanaged_index]
+        indices_after = explain_after.get("indices", {})
+        assert unmanaged_index in indices_after
+        index_info = indices_after[unmanaged_index]
         assert index_info.get("managed"), f"{unmanaged_index} should be managed after backfill"
         assert index_info.get("policy") == "slm-requests", (
             f"{unmanaged_index} should be managed by slm-requests policy after backfill"

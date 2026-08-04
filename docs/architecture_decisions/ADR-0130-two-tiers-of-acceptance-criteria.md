@@ -1,6 +1,6 @@
 # ADR-0130: Two Tiers of Acceptance Criteria — A Sub-Ticket Proves Its Own Work, One Seam Ticket Proves the ADR
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-31
 **Deciders:** project owner (FRE-1078)
 **Tags:** process, delivery, acceptance-criteria, lifecycle, skills

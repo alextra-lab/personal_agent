@@ -1,6 +1,6 @@
 # ADR-0132: Outbound Authenticated Egress — Caddy Terminates the Cloudflare Barrier; Application Credentials Stay in the Application
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-04
 **Deciders:** Owner + adr session (FRE-1143)
 **Tags:** security, infrastructure, egress, caddy, cloudflare, observability, configuration

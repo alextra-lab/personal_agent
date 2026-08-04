@@ -217,9 +217,9 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0127](ADR-0127-harness-self-analysis-pillar.md) | The Harness Self-Analysis Pillar — Collectors Emit Facts, One Analyzer Judges, Findings Are Keyed by Evidence | Proposed |
 | [ADR-0128](ADR-0128-telemetry-naming-and-structure-convention.md) | One Telemetry Naming and Structure Convention Across Every Substrate — Enforced at Emit and at the Substrate Boundary (closes ADR-0090's deferred field registry; adopts ADR-0093's OTel choice) | Superseded |
 | [ADR-0129](ADR-0129-opentelemetry-instrumentation-and-trace-visibility.md) | OpenTelemetry Instrumentation, with Trace Visibility as the Acceptance Bar — SDK context propagation, Collector, Tempo (un-parks ADR-0093 D3 and supersedes FRE-588's Elastic route; supersedes ADR-0128's enforcement mechanisms) | Accepted |
-| [ADR-0130](ADR-0130-two-tiers-of-acceptance-criteria.md) | Two Tiers of Acceptance Criteria — A Sub-Ticket Proves Its Own Work, One Seam Ticket Proves the ADR (severs criterion inheritance across the four contract documents) | Proposed |
-| [ADR-0131](ADR-0131-retire-master-plan-owner-console.md) | Retire MASTER_PLAN — an Owner Console with an Explicit Trust Ladder, One Writer per Store | Proposed |
-| [ADR-0132](ADR-0132-outbound-authenticated-egress.md) | Outbound Authenticated Egress — Caddy Terminates the Cloudflare Barrier; Application Credentials Stay in the Application | Proposed |
+| [ADR-0130](ADR-0130-two-tiers-of-acceptance-criteria.md) | Two Tiers of Acceptance Criteria — A Sub-Ticket Proves Its Own Work, One Seam Ticket Proves the ADR (severs criterion inheritance across the four contract documents) | Accepted |
+| [ADR-0131](ADR-0131-retire-master-plan-owner-console.md) | Retire MASTER_PLAN — an Owner Console with an Explicit Trust Ladder, One Writer per Store | Accepted |
+| [ADR-0132](ADR-0132-outbound-authenticated-egress.md) | Outbound Authenticated Egress — Caddy Terminates the Cloudflare Barrier; Application Credentials Stay in the Application | Accepted |
 
 ### Supplementary
 

@@ -1,6 +1,6 @@
 # ADR-0131: Retire MASTER_PLAN — an Owner Console with an Explicit Trust Ladder, One Writer per Store
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-31
 **Deciders:** project owner (FRE-1082)
 **Tags:** process, delivery, coordination, trust, documentation

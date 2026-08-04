@@ -120,6 +120,13 @@ class DropReason(StrEnum):
     # turn-id dedupe is deliberately absent: a duplicate row shares the kept row's
     # identity, so recording it here would state that a memory was dropped when that same
     # memory reached the model. A dedupe collapse is not a loss.
+    #
+    # RECALL_EMPTY_DESCRIPTION (FRE-1114) fires first, ahead of every other RECALL_*
+    # gate: an entity with no description carries no usable content, so it must never
+    # win the candidate-cap window, a mentioned-entity pin, the item cap, or the token
+    # budget on relevance alone only to be filtered at the renderer with nothing left
+    # to backfill the slot it burned.
+    RECALL_EMPTY_DESCRIPTION = "recall_empty_description"
     RECALL_SCORE_THRESHOLD = "recall_score_threshold"
     RECALL_CANDIDATE_CAP = "recall_candidate_cap"
     RECALL_ITEM_CAP = "recall_item_cap"

@@ -98,11 +98,20 @@ def _episode_row(index: int, vector_score: float) -> dict[str, Any]:
 
 
 def _melon_entity_row() -> dict[str, Any]:
-    """The `Melon` entity as the lexical arm appends it: at the floor, no vector score."""
+    """The `Melon` entity as the lexical arm appends it: at the floor, no vector score.
+
+    Populated ``description`` (FRE-1114): production's one real producer of these rows,
+    ``MemoryService.suggest_proactive_raw``, always selects ``node.description`` from the
+    dense arm's Cypher, so an entity actually missing one is discarded before it ever
+    reaches the rank race this module tests (its own regression coverage lives in
+    ``test_proactive_discards.py::TestEmptyDescriptionGate``). This module remains the
+    regression for the hint/overlap lever and gate naming specifically, so the fixture
+    needs a real description to stay eligible for that race at all.
+    """
     return {
         "name": "Melon",
         "entity_type": "FoodOrIngredient",
-        "description": None,
+        "description": "A honeydew or cantaloupe melon.",
         "key_entities": ["Melon"],
         "vector_score": LEXICAL_FLOOR,
         "timestamp_iso": _now_iso(),

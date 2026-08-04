@@ -120,8 +120,12 @@ def _split_row_payloads(row: dict[str, Any]) -> list[tuple[_CandidateKind, dict[
 
     Order is load-bearing: the entity payload comes **first**, so after the stable
     score sort the entity precedes its equal-scored sibling episode. This is a tie-break,
-    not an admission guarantee — later gates (caps, budget, renderer description filter)
-    still apply per candidate.
+    not an admission guarantee — later gates (the empty-description filter, caps,
+    budget) still apply per candidate. The empty-description filter (FRE-1114) is the
+    earliest of these — it runs before scoring even joins the ranked list, so it can
+    never itself win a slot a populated candidate would otherwise take. The renderer
+    keeps its own description filter too, as a backstop for content that reaches it by
+    some other route.
 
     Args:
         row: One raw graph row, carrying entity fields and/or best-turn fields.
@@ -241,7 +245,7 @@ def build_proactive_suggestions(
     query_embedding_ms: float | None,
     mentioned_entity_names: Sequence[str] | None = None,
 ) -> ProactiveMemorySuggestions:
-    """Score raw Neo4j rows, apply threshold, candidate cap, budget, diminishing returns.
+    """Score raw Neo4j rows; apply the empty-description filter, threshold, caps, budget.
 
     Args:
         raw_rows: Rows from MemoryService.suggest_proactive_raw().
@@ -309,6 +313,22 @@ def build_proactive_suggestions(
         # The pair shares its row's subscores by construction, so the sibling candidates
         # carry one score and the stable sort below keeps the entity (emitted first)
         # ahead of its episode.
+
+        if kind == "entity" and not (payload.get("description") or "").strip():
+            # FRE-1114: an empty-description entity carries no usable content. Dropped
+            # here -- before ranking, the candidate-cap window, pins, the item cap or
+            # the token budget -- so it can never win a slot only to be filtered at the
+            # renderer with nothing left to backfill it. Episodes are never checked:
+            # they always carry non-empty text by construction (_split_row_payloads).
+            discarded.append(
+                ProactiveMemoryDiscard(
+                    kind=kind,
+                    payload=payload,
+                    relevance_score=final,
+                    drop_reason=DropReason.RECALL_EMPTY_DESCRIPTION,
+                )
+            )
+            continue
 
         if final < cfg.proactive_memory_min_score:
             # Recorded, not skipped (FRE-1060).

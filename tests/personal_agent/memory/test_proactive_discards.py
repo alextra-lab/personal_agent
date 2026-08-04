@@ -88,6 +88,22 @@ def _episode(turn_id: str, vector_score: float) -> dict[str, Any]:
     }
 
 
+def _entity(
+    name: str, vector_score: float, description: str | None = "a description"
+) -> dict[str, Any]:
+    """A turnless entity row -- yields an entity candidate only (FRE-1114).
+
+    No ``turn_id``, so :func:`_split_row_payloads` never also emits an episode sibling.
+    """
+    return {
+        "name": name,
+        "entity_type": "Thing",
+        "description": description,
+        "vector_score": vector_score,
+        "timestamp_iso": None,
+    }
+
+
 def _selected(suggestions: Any) -> list[str]:
     """Ordered identities of the emitted candidates."""
     return [
@@ -325,6 +341,110 @@ class TestGateAttribution:
         emitted = {c.payload.get("conversation_id") for c in out.candidates}
         dropped = {d.payload.get("conversation_id") for d in out.discarded}
         assert emitted & dropped == set(), f"identity in both sets: {emitted & dropped}"
+
+
+class TestEmptyDescriptionGate:
+    """FRE-1114 — an empty-description entity must never consume a slot another gate
+
+    would otherwise give to a populated candidate. Before this ticket, the emptiness
+    check lived only at the renderer, downstream of every producer-side gate below —
+    so an empty entity could win the item cap, the candidate-cap window, or a
+    mentioned-entity pin, reach the renderer, be filtered there, and leave nothing to
+    backfill the slot it burned.
+    """
+
+    def test_does_not_consume_the_item_cap_slot(self, deployed_scoring: None) -> None:
+        """The ticket's own stated proof: an empty entity ranked ahead of a populated
+        one under a cap of one must not crowd the populated one out.
+        """
+        rows = [_entity("Empty1", 0.90, ""), _entity("Populated1", 0.80, "x")]
+
+        out = _run(rows, "t-empty-item-cap")
+
+        assert _selected(out) == ["Populated1"]
+
+    def test_does_not_consume_the_candidate_cap_window(
+        self, deployed_scoring: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The gate runs before scoring's stable sort, so it also can't consume the
+        earlier ``max_candidates`` window -- not just the item cap.
+        """
+        monkeypatch.setattr(proactive_mod.settings, "proactive_memory_max_candidates", 1)
+        rows = [_entity("Empty1", 0.90, ""), _entity("Populated1", 0.80, "x")]
+
+        out = _run(rows, "t-empty-candidate-cap")
+
+        assert _selected(out) == ["Populated1"]
+
+    def test_mentioned_entity_pin_with_empty_description_is_not_pinned(
+        self, deployed_scoring: None
+    ) -> None:
+        """FRE-1062 pins bypass rank, not emptiness -- an empty mentioned entity must
+        not ride the pin past this gate either.
+
+        ``Other1``'s score (0.60) is chosen well clear of ``diminishing_score_floor``
+        (0.35): with ``Empty1`` gone before scoring, no episode floor candidate exists
+        to head the walk, so ``Other1`` is judged by the ordinary floor/gap checks like
+        any rest-region candidate -- this isolates the pin behaviour under test from
+        that unrelated gate.
+        """
+        rows = [_entity("Empty1", 0.50, ""), _entity("Other1", 0.60, "x")]
+
+        out = build_proactive_suggestions(
+            rows, set(), None, "t-empty-pin", None, mentioned_entity_names=["Empty1"]
+        )
+
+        assert "Empty1" not in _selected(out)
+        assert _selected(out) == ["Other1"]
+
+    def test_whitespace_only_description_is_also_empty(self, deployed_scoring: None) -> None:
+        rows = [_entity("Whitespace1", 0.90, "   "), _entity("Populated1", 0.80, "x")]
+
+        out = _run(rows, "t-empty-whitespace")
+
+        assert _selected(out) == ["Populated1"]
+
+    def test_discard_names_its_own_reason_with_a_real_score(self, deployed_scoring: None) -> None:
+        """The discard is attributed to emptiness, not silently absorbed into another
+        gate, and carries the score it actually earned -- useful for seeing where it
+        would have ranked.
+        """
+        rows = [_entity("Empty1", 0.90, "")]
+
+        out = _run(rows, "t-empty-attr")
+
+        assert out.candidates == []
+        assert len(out.discarded) == 1
+        assert out.discarded[0].drop_reason is DropReason.RECALL_EMPTY_DESCRIPTION
+        assert out.discarded[0].relevance_score == pytest.approx(SCORES[0.90])
+
+    def test_takes_precedence_over_the_score_threshold(self, deployed_scoring: None) -> None:
+        """A low-scoring empty entity is named for its emptiness, not for a threshold
+        it also happened to miss -- the gate runs before the threshold check.
+        """
+        rows = [_entity("Empty1", 0.20, "")]
+
+        out = _run(rows, "t-empty-vs-threshold")
+
+        assert out.discarded[0].drop_reason is DropReason.RECALL_EMPTY_DESCRIPTION
+
+    def test_dedupe_can_still_prefer_an_empty_duplicate_over_a_populated_one(
+        self, deployed_scoring: None
+    ) -> None:
+        """Documented residual risk (codex plan-review, FRE-1114): candidate dedupe
+        (``proactive.py``, keyed on name) runs *before* this gate and keeps whichever
+        duplicate appears first in ``raw_rows`` -- irrespective of which one has content.
+        Two distinct graph nodes sharing one name is exactly the orphaning FRE-1115
+        repairs; this test does not fix that, it characterizes what happens today so the
+        gap stays visible rather than silently assumed away.
+        """
+        rows = [_entity("Dup1", 0.90, ""), _entity("Dup1", 0.50, "populated")]
+
+        out = _run(rows, "t-empty-dedupe")
+
+        assert out.candidates == []
+        assert [d.payload["name"] for d in out.discarded] == ["Dup1"]
+        assert out.discarded[0].drop_reason is DropReason.RECALL_EMPTY_DESCRIPTION
 
 
 class TestConservation:

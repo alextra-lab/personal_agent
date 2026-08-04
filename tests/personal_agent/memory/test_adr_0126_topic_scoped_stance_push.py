@@ -283,14 +283,22 @@ def _entity_and_stance_sections_of(wire: list[dict[str, Any]]) -> str:
     return section[:start] + section[next_heading:]
 
 
-# The seven RECALL_* members (FRE-1060) name a producer-side gate that discarded a
-# candidate *before* context assembly -- i.e. before _enrich_with_stances ever saw it.
-# An item bearing one of these was never delivered to the stance mechanism, so it must
-# not satisfy the entity-selection precondition even though it appears in
-# evidence.recall.items (a gap codex's plan review found: RecalledMemoryRecord carries
-# these discards alongside genuinely-delivered candidates).
+# The eight RECALL_* members (FRE-1060, FRE-1114) name a producer-side gate that
+# discarded a candidate *before* context assembly -- i.e. before _enrich_with_stances
+# ever saw it. An item bearing one of these was never delivered to the stance
+# mechanism, so it must not satisfy the entity-selection precondition even though it
+# appears in evidence.recall.items (a gap codex's plan review found: RecalledMemoryRecord
+# carries these discards alongside genuinely-delivered candidates).
+#
+# RECALL_EMPTY_DESCRIPTION (FRE-1114) means an entity with no description is no longer
+# delivered to _enrich_with_stances at all when recalled via the proactive path -- a
+# deliberate behaviour change (previously it reached candidacy and could still be
+# stance-enriched even though its own description never rendered). This suite's fixtures
+# are unaffected: they route through the legacy/multipath entity-name-match path (see
+# module docstring), which never produces a RECALL_* drop_reason in the first place.
 _PRODUCER_DISCARD_REASONS = frozenset(
     {
+        DropReason.RECALL_EMPTY_DESCRIPTION,
         DropReason.RECALL_SCORE_THRESHOLD,
         DropReason.RECALL_CANDIDATE_CAP,
         DropReason.RECALL_ITEM_CAP,

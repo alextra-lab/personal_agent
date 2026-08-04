@@ -194,11 +194,12 @@ def _wire_json_bytes(wire: list[dict[str, Any]]) -> int:
     return len(json.dumps(wire, ensure_ascii=False).encode("utf-8"))
 
 
-# The seven RECALL_* members (FRE-1060) name a producer-side gate that discarded a
-# candidate before context assembly. Mirrors test_adr_0126_topic_scoped_stance_push.py's
-# precondition helper exactly.
+# The eight RECALL_* members (FRE-1060, FRE-1114) name a producer-side gate that
+# discarded a candidate before context assembly. Mirrors
+# test_adr_0126_topic_scoped_stance_push.py's precondition helper exactly.
 _PRODUCER_DISCARD_REASONS = frozenset(
     {
+        DropReason.RECALL_EMPTY_DESCRIPTION,
         DropReason.RECALL_SCORE_THRESHOLD,
         DropReason.RECALL_CANDIDATE_CAP,
         DropReason.RECALL_ITEM_CAP,

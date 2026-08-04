@@ -8,21 +8,22 @@ slm-requests-ilm-policy is deployed.
 The script:
 1. Discovers all slm-requests-* indices
 2. Checks if they are already managed (no-op if so)
-3. Sets index.lifecycle.name="slm-requests" on unmanaged indices
+3. Sets index.lifecycle.name="slm-requests" on unmanaged indices (--apply only)
 4. Verifies the lifecycle binding took effect
 
-Usage:
-    python3 scripts/backfill-slm-requests-ilm.py [--es-url <url>] [--dry-run]
+**Default mode is read-only** (dry-run). Use --apply to make changes, with
+--confirm-prod required to acknowledge that this hands unmanaged indices to the
+30-day delete phase (most are already older than 30d, so deletion is immediate).
 
-Environment:
-    ES_URL: Elasticsearch URL (default: http://localhost:9200)
+Usage:
+    python3 scripts/backfill-slm-requests-ilm.py --es-url http://prod-es:9200
+    python3 scripts/backfill-slm-requests-ilm.py --es-url http://prod-es:9200 --apply --confirm-prod
 """
 
 import argparse
 import json
 import logging
 import sys
-from datetime import datetime, timezone
 from urllib.error import HTTPError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
@@ -74,9 +75,9 @@ def get_ilm_status(es_url: str, index: str) -> dict:
     return resp.get("indices", {}).get(index, {})
 
 
-def set_lifecycle_policy(es_url: str, index: str, policy: str, dry_run: bool = False) -> bool:
+def set_lifecycle_policy(es_url: str, index: str, policy: str, apply: bool = False) -> bool:
     """Set index.lifecycle.name on an index."""
-    if dry_run:
+    if not apply:
         log.info(f"[DRY-RUN] Would set lifecycle policy '{policy}' on {index}")
         return True
 
@@ -90,28 +91,39 @@ def set_lifecycle_policy(es_url: str, index: str, policy: str, dry_run: bool = F
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Backfill ILM lifecycle policy to slm-requests-* indices"
-    )
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--es-url",
-        default="http://localhost:9200",
-        help="Elasticsearch URL (default: http://localhost:9200)",
+        required=True,
+        help="Elasticsearch URL (REQUIRED — no default to prevent accidental production writes)",
     )
     parser.add_argument(
-        "--dry-run",
+        "--apply",
         action="store_true",
-        help="Show what would be done without making changes",
+        help="write changes (default is a read-only dry run)",
+    )
+    parser.add_argument(
+        "--confirm-prod",
+        action="store_true",
+        help="required acknowledgement alongside --apply (sets 44 indices to delete at 30d)",
     )
     args = parser.parse_args()
 
+    # Safety check: --apply requires --confirm-prod
+    if args.apply and not args.confirm_prod:
+        print(
+            "--apply requires --confirm-prod (this hands 44+ indices to the 30-day delete phase).",
+            file=sys.stderr,
+        )
+        return 1
+
     es_url = args.es_url
     policy_name = "slm-requests"
-    dry_run = args.dry_run
+    apply = args.apply
 
     log.info(f"Starting backfill on {es_url}")
-    if dry_run:
-        log.info("[DRY-RUN MODE]")
+    if not apply:
+        log.info("[DRY-RUN MODE] — no changes will be made")
 
     # 1. Verify policy exists
     try:
@@ -150,7 +162,7 @@ def main() -> int:
                 log.info(f"→ {index} already managed by '{policy_name}'")
                 skipped += 1
             else:
-                if set_lifecycle_policy(es_url, index, policy_name, dry_run):
+                if set_lifecycle_policy(es_url, index, policy_name, apply):
                     updated += 1
                 else:
                     failed += 1

@@ -127,9 +127,13 @@ Four parts, decided together because they only make sense together.
 
 ### D1 — Caddy terminates the outbound Cloudflare barrier — for every CF-Access-protected upstream, phased
 
-The target state: **the application holds no Cloudflare credentials and no Cloudflare
-concept; every outbound call to a CF-Access-protected upstream addresses an internal
-Caddy egress block, and Caddy injects the service-token headers.** One egress site block
+The target state: **the application holds no outbound CF service-token concept; every
+outbound call to a CF-Access-protected upstream addresses an internal Caddy egress
+block, and Caddy injects the service-token headers.** (The *inbound* Cloudflare surface
+— JWT verification via `cf_access_team_domain`/`cf_access_aud` and the
+`Cf-Access-Jwt-Assertion` / authenticated-user-email headers in
+`service/cf_access_jwt.py` and `service/auth.py` — is deliberately retained; it is the
+gateway authenticating its callers, not the app calling out.) One egress site block
 per upstream class, each path-scoped in the FRE-411 style, each with a JSON access log.
 
 Delivery is phased because the two upstream classes have different risk profiles, but
@@ -147,8 +151,10 @@ until both land:
   inference, provider health, embedding, reranking, artifact export, envelope probing —
   is part of this phase's tickets, not an afterthought.
 - **Completion**: delete `cf_access_client_id`, `cf_access_client_secret`,
-  `slm_tunnel_base_url`, and `cf_service_token.py`; the inbound JWT-verification fields
-  (`cf_access_team_domain`, `cf_access_aud`) are untouched.
+  `slm_tunnel_base_url` (including its consumer
+  `config/model_loader.py:_apply_slm_tunnel_override`), and `cf_service_token.py`; the
+  inbound JWT-verification fields (`cf_access_team_domain`, `cf_access_aud`) are
+  untouched.
 
 Because the gateway imports the whole `.env` (measured above), the custody move also
 requires a **compose environment split**: the CF pair moves to a Caddy-only env source
@@ -223,9 +229,12 @@ obligation is stated as scope, not as a vague "the paths": outbound HTTP for the
 application's egress seams — LLM client, SLM health (scheduler runner, probe, provider
 health), embeddings, reranker, artifact export, envelope probe, and web/search tools —
 is **centralized behind one transport factory that consults `DomainGuard.check_url`
-before a connection is formed**, and a static repo check (ast-grep rule) forbids
-constructing an outbound httpx client outside that factory, so a new seam cannot
-silently bypass the guard. The two layers are then real: the guard catches the URL
+before a connection is formed**, and a static repo check (ast-grep rule set) forbids
+the known bypass forms outside that factory — httpx client construction, module-level
+`httpx.get/post/request` calls, **and** direct construction of the Anthropic/OpenAI SDK
+clients (which own their transports; the factory supplies theirs). Stated honestly:
+this is lint-grade enforcement over the enumerated forms, not a proof — a novel HTTP
+library would enter through review, not past the rule *(reasoned)*. The two layers are then real: the guard catches the URL
 before a request is formed; Caddy catches the host at the boundary. Deliberately
 redundant — once both actually exist.
 
@@ -235,9 +244,16 @@ A Filebeat sidecar container ships the caddy container's logs to a `caddy-access
 index with an index template and ILM policy from day one (monthly rollover per the
 FRE-1036 convention), using the currently supported mechanism — a `filestream` input
 with the `container` parser over the Docker json-file logs, a stable input `id`, and a
-**persistent registry volume** so recreations of either container neither re-ingest nor
-drop *(reasoned from current Filebeat documentation; the legacy `container` input type
-is deprecated)*.
+**persistent registry volume** so a Filebeat recreation does not re-ingest already
+shipped lines *(reasoned from current Filebeat documentation; the legacy `container`
+input type is deprecated)*. The delivery guarantee is stated honestly:
+**at-least-once after harvest, not lossless across arbitrary recreation.** The registry
+preserves read offsets, not unread content — recreating the caddy container deletes its
+json-file logs, so lines Filebeat has not yet harvested in that window are gone
+*(reasoned from Filebeat's documented harvesting model)*. That loss window (harvest lag,
+typically sub-second) is accepted; what the decision guarantees, and AC-3 asserts, is
+that **once ingested, evidence survives recreation of both containers, without
+duplication** — which is precisely what the 30 MB ring buffer cannot do.
 
 The owner's stated benefit of the chokepoint — one place to look when connectivity is
 troubled — does not exist while the only record is a thirty-megabyte ring buffer that
@@ -262,7 +278,7 @@ plus the `APP_ENV=test` / FRE-375 axis — not in invented profile names:
 | `cloud` (VPS — prod and dev, per the owner's standing position) | internal Caddy egress URL | none |
 | `local` (Mac install) | direct SLM server URL; no Caddy required | none |
 | `eval` | the endpoint its compose file (`docker-compose.eval.yml`) declares; never the dead loopback default | none |
-| `APP_ENV=test` (any profile) | FRE-375 isolation substrate value; tests never reach the tunnel | none |
+| `APP_ENV=test` (any profile) | an explicit test-fixture SLM URL **defined by this chain** in the FRE-375 conftest (today FRE-375 pins Postgres/Neo4j/ES targets but no SLM endpoint — *measured: `tests/conftest.py`*), taking precedence over the profile value; tests never reach the tunnel | none |
 
 The `127.0.0.1:1234` default is **deleted**, not overridden. Enforcement is structural:
 deleting the settings fields makes the CI config guard's orphan-env check *(measured:
@@ -447,15 +463,17 @@ quo.
   network only.
 - **Application deletions (phased per D1)**: Phase 1 — construction logic in
   `llm_client/client.py`, `slm_health/scheduler_runner.py`,
-  `llm_client/provider_health.py`; forwarding through `slm_health/probe.py`. Phase 2 —
+  `llm_client/provider_health.py`; forwarding through `slm_health/probe.py`; the
+  `slm_tunnel_base_url` override in `config/model_loader.py`. Phase 2 —
   `service/cf_service_token.py` and its four consumers (embeddings, reranker,
   artifacts_router export, artifact_envelope probe), with regression checks for all six
   affected features. Completion — `cf_access_client_id`, `cf_access_client_secret`,
   `slm_tunnel_base_url` fields in `settings.py`.
 - **Guard wiring** (new obligation from the measured finding): one outbound transport
   factory consulting `DomainGuard.check_url`, adopted by the enumerated egress seams
-  (D2); an ast-grep static check forbidding outbound httpx client construction outside
-  the factory; its own ticket in the chain.
+  (D2); an ast-grep rule set forbidding the enumerated bypass forms (httpx client
+  construction, module-level `httpx.get/post/request`, direct Anthropic/OpenAI SDK
+  client construction) outside the factory; its own ticket in the chain.
 - **Config correction**: `llm_base_url` default and per-profile values per the D4
   matrix; `.env.example` updated.
 - **ES**: `caddy-access-*` index template + ILM policy (monthly rollover per the
@@ -477,21 +495,28 @@ D1/D2). Each can fail; a half-finished implementation fails at least one.
   A real generation of at least 420 seconds (longer than the longest observed turn,
   417 s) driven through the Caddy egress path completes un-severed and streams for its
   whole duration, not merely at its start. · **Check:** run the same prompt twice —
-  direct to the tunnel (CF headers supplied out-of-band from the host's `.env`) as
-  baseline, and through the proxy — recording **every** SSE-event timestamp client-side,
-  with a per-run correlation id (trace id) present in both the `caddy-access-*` document
-  and the route-trace record. Pass requires: first event within +2 s of baseline,
-  events distributed across the full run, and maximum inter-event gap within 2× the
-  baseline's maximum gap. · *Fails if* the stream buffers at the start, degrades into
+  direct to the tunnel (CF headers supplied out-of-band from the Caddy-only secret
+  source, since D1 removes them from the gateway-visible `.env`) as baseline, and
+  through the proxy — recording **every** SSE-event timestamp client-side, with a
+  per-run correlation id (trace id) present in both the `caddy-access-*` document and
+  the route-trace record. Pass requires all three, objectively: first event within
+  +2 s of baseline; at least as many SSE events as the baseline run minus 5%; and
+  maximum inter-event gap within 2× the baseline's maximum gap. · *Fails if* the
+  stream buffers at the start, degrades into
   batch delivery mid-run (single early event then silence until completion), any
   timeout severs the ≥420 s run, or the correlation id is absent from the Caddy log
   (the request bypassed the proxy).
 - **AC-2 — The application demonstrably sends no Cloudflare credential, and the barrier
-  demonstrably still exists.** · **Check:** (a) repo scan: `CF-Access-`, `CF_ACCESS_`,
-  `cf_access_client`, `slm_tunnel_base_url`, `cf_access_service_token_headers` appear
-  nowhere in application source (`src/`) — only in the Caddyfile, compose, `.env*`,
-  docs, and history; (b) runtime: the gateway container's `env` contains neither the
-  raw `CF_ACCESS_*` names nor any prefixed alias of them; (c) **negative control,
+  demonstrably still exists.** The scan targets the **outbound service-token pair
+  only** — the retained inbound surface (`cf_access_team_domain`, `cf_access_aud`,
+  `Cf-Access-Jwt-Assertion`, the authenticated-user-email header) is explicitly
+  permitted. · **Check:** (a) repo scan: `CF-Access-Client-Id`,
+  `CF-Access-Client-Secret`, `cf_access_client_id`, `cf_access_client_secret`,
+  `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`, `slm_tunnel_base_url`,
+  `cf_access_service_token_headers` appear nowhere in application source (`src/`) —
+  only in the Caddyfile, compose, `.env*`, docs, and history; (b) runtime: the gateway
+  container's `env` contains neither the raw client-id/secret names nor any prefixed
+  alias of them; (c) **negative control,
   proving the Access policy is active rather than bypassed:** the same upstream request
   sent directly *without* CF headers is rejected at the Cloudflare edge; (d) evidence
   from the wire: the `caddy-access-*` document for a live successful call (SLM **and**
@@ -501,23 +526,28 @@ D1/D2). Each can fail; a half-finished implementation fails at least one.
   hard-coded headers are caught by the header-name scan), the gateway env still carries
   the pair under any name, the negative control is *not* rejected (barrier silently
   off), or the logged incoming request shows a CF header.
-- **AC-3 — The evidence trail survives what used to erase it, without loss or replay.**
-  · **Check:** send a uniquely-tagged request through the egress block (unique
-  path/query marker), `docker compose up -d --force-recreate caddy filebeat`, send a
-  second uniquely-tagged request; query `caddy-access-*` filtered to the egress site's
-  logger identity: **exactly one** document per marker (pre- and post-recreation), and
-  the index's applied template carries the intended ILM policy
-  (`GET caddy-access-*/_settings` shows the lifecycle name). · *Fails if* either marker
-  is missing (evidence lost or ingestion dead), either marker appears more than once
-  (ephemeral registry re-ingested the backlog), or the index has no ILM policy
-  attached — regardless of what any healthcheck claims, and unsatisfiable by unrelated
-  inbound Caddy traffic.
+- **AC-3 — Ingested evidence survives what used to erase it, without replay.** (The
+  guarantee under test is D3's stated one: at-least-once after harvest — not lossless
+  recreation, which the mechanism cannot provide.) · **Check:** send a uniquely-tagged
+  request through the egress block (unique path/query marker) and **confirm its
+  document is queryable in `caddy-access-*` first**; then `docker compose up -d
+  --force-recreate caddy filebeat`; then send a second uniquely-tagged request. Query
+  the index filtered to the egress site's logger identity: **exactly one** document per
+  marker (the confirmed pre-recreation doc still present, the post-recreation doc
+  ingested), and the index's applied template carries the intended ILM policy
+  (`GET caddy-access-*/_settings` shows the lifecycle name). · *Fails if* the confirmed
+  pre-recreation document is gone (ES-side evidence did not survive), the
+  post-recreation marker never appears (ingestion dead after recreate), either marker
+  appears more than once (ephemeral registry re-ingested the backlog), or the index has
+  no ILM policy attached — regardless of what any healthcheck claims, and unsatisfiable
+  by unrelated inbound Caddy traffic.
 - **AC-4 — Every real profile resolves to a live-correct endpoint; the dead-default
   class is closed.** · **Check:** a test loads each of `deployment_profile ∈ {local,
   cloud, eval}` and the `APP_ENV=test` axis through the real settings resolver and
   asserts the resolved SLM endpoint per the D4 matrix (cloud → the internal Caddy
   egress URL; local → a direct SLM URL; eval → its compose-declared endpoint; test →
-  the FRE-375 substrate value) and the absence of any CF field; behaviourally, the
+  the chain-defined test-fixture SLM URL, asserted by exact value) and the absence of
+  any outbound CF field; behaviourally, the
   cloud profile's endpoint answers the existing SLM health probe through the egress
   block, and the FRE-375 isolation guard still passes under `APP_ENV=test`. The local
   profile's resolution is asserted by the test; its live reachability is owner-verified
@@ -533,10 +563,12 @@ D1/D2). Each can fail; a half-finished implementation fails at least one.
   web/search tools) drives each seam's real production wiring with allowlist mode
   active and a disallowed domain, asserting refusal *before* any connection is
   attempted, and permission for an allowlisted domain; plus the static check: the
-  ast-grep rule finds zero outbound httpx client constructions outside the transport
-  factory. · *Fails if* any enumerated seam bypasses the guard (today's measured state
-  for all of them), the test exercises the guard class directly instead of seam wiring,
-  refusal happens only after a connection attempt, or the static scan finds a bypass.
+  ast-grep rule set finds zero occurrences of the enumerated bypass forms (httpx client
+  construction, module-level `httpx.get/post/request`, direct Anthropic/OpenAI SDK
+  client construction) outside the transport factory. · *Fails if* any enumerated seam
+  bypasses the guard (today's measured state for all of them), the test exercises the
+  guard class directly instead of seam wiring, refusal happens only after a connection
+  attempt, or the static scan finds any enumerated bypass form.
 
 **Seam ticket:** filed with the implementation chain (FRE-1143 close-out names it), due
 **2026-09-08** — the earliest date all five criteria are adjudicable (both phases merged
@@ -564,4 +596,4 @@ D1/D2). Each can fail; a half-finished implementation fails at least one.
 
 ### 2026-08-04 - Proposed
 **Changed By:** adr session (FRE-1143)
-**Reason:** Authored after owner discussion settled all four decisions and the sequencing constraint. Codex round 1 (7 blocking, 3 minor) surfaced a measured finding — the FRE-225 domain guard has zero production callers — adding the guard-wiring obligation. Codex round 2 (7 blocking) corrected the CF credential inventory (the pair also authenticates artifact origins via `cf_service_token.py`, making D1 two-phase), exposed the blanket `env_file` custody hole, aligned D4 to the real profile axes, and tightened all five ACs to be unfakeable.
+**Reason:** Authored after owner discussion settled all four decisions and the sequencing constraint. Codex round 1 (7 blocking, 3 minor) surfaced a measured finding — the FRE-225 domain guard has zero production callers — adding the guard-wiring obligation. Codex round 2 (7 blocking) corrected the CF credential inventory (the pair also authenticates artifact origins via `cf_service_token.py`, making D1 two-phase), exposed the blanket `env_file` custody hole, aligned D4 to the real profile axes, and tightened all five ACs to be unfakeable. Codex round 3 (4 blocking, 2 minor) narrowed the target state and AC-2 scan to the outbound service-token pair (the inbound JWT surface is retained), restated D3/AC-3 honestly as at-least-once-after-harvest, defined the test-axis SLM fixture value, broadened AC-5's static rule set to the enumerated bypass forms, and added the `model_loader.py` consumer to the deletion inventory.

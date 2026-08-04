@@ -1,0 +1,23 @@
+{
+  "policy": {
+    "_meta": {
+      "description": "ILM for slm-requests-* (daily SLM inference request telemetry shipped by slm_server, FRE-411). No rollover (date-partitioned, no write-alias). Retention: 30d, matching the application-log policy and the elasticsearch_logs RETENTION_POLICIES entry. No warm/forcemerge phase: the 30d retention is short, and any warm min_age >= delete min_age causes ES 400 phase-monotonicity error (FRE-1036 trap). Authored in FRE-1106.",
+      "retention_days": 30,
+      "managed_by": "scripts/setup-elasticsearch.sh"
+    },
+    "phases": {
+      "hot": {
+        "min_age": "0ms",
+        "actions": {
+          "set_priority": { "priority": 100 }
+        }
+      },
+      "delete": {
+        "min_age": "30d",
+        "actions": {
+          "delete": {}
+        }
+      }
+    }
+  }
+}

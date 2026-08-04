@@ -338,11 +338,18 @@ put_and_apply_template "Index template: agent-monitors-joinability-substrate-tem
   "/_index_template/agent-monitors-joinability-substrate-template" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-joinability-substrate-index-template.json"
 
-# 6. SLM request telemetry template (FRE-411). The slm_server shipper has no
-#    template of its own, so without this the daily slm-requests-* index gets
-#    default dynamic mapping (text join keys) and exact-match term joins on
-#    trace_id/span_id silently return nothing — the exact failure mode this
-#    script's header warns about.
+# 6. SLM request telemetry ILM policy (FRE-1106). Mirror the application-log
+#    policy (hot at zero, delete at 30d, no warm phase). PUT the policy before
+#    the template so new indices bind on creation.
+put_resource "ILM policy: slm-requests-policy" \
+  "/_ilm/policy/slm-requests" \
+  "$PROJECT_ROOT/docker/elasticsearch/slm-requests-ilm-policy.json"
+
+# 6a. SLM request telemetry template (FRE-411). The slm_server shipper has no
+#     template of its own, so without this the daily slm-requests-* index gets
+#     default dynamic mapping (text join keys) and exact-match term joins on
+#     trace_id/span_id silently return nothing — the exact failure mode this
+#     script's header warns about. Now lifecycle-managed (FRE-1106).
 put_and_apply_template "Index template: slm-requests-template" \
   "/_index_template/slm-requests-template" \
   "$PROJECT_ROOT/docker/elasticsearch/slm-requests-index-template.json"

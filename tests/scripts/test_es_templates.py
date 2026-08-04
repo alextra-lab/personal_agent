@@ -472,6 +472,12 @@ ILM_FAMILIES = [
         90,
     ),
     (
+        "slm-requests-ilm-policy.json",
+        "slm-requests",
+        "slm-requests-index-template.json",
+        30,
+    ),
+    (
         "user-turn-ratings-ilm-policy.json",
         "user-turn-ratings-policy",
         "user-turn-ratings-index-template.json",

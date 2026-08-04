@@ -30,7 +30,7 @@ personal_agent/
 ├── functional-spec/
 ├── governance/                # Meta governance README (policies live in config/governance/)
 ├── src/personal_agent/        # Application package (orchestrator, request_gateway, memory, …)
-├── telemetry/                 # Runtime logs / eval output (gitignored)
+├── telemetry/                 # Runtime logs / eval output (mostly gitignored; see .gitignore for tracked baselines)
 ├── tests/                     # Mirror package layout under tests/personal_agent/
 ├── pyproject.toml
 ├── uv.lock

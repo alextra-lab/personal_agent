@@ -25,7 +25,7 @@
 - `governance/` — Governance framework (if not consolidated)
 - `models/` — Model strategy
 - `src/` — Source code
-- `telemetry/` — Runtime observability data (gitignored)
+- `telemetry/` — Runtime observability data (evaluation runs, logs, etc. — mostly gitignored; see `.gitignore` for tracked baseline results and curated summaries)
 - `tests/` — Test suite
 - `tools/` — Development/operational tools
 

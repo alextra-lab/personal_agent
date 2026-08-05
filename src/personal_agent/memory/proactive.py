@@ -70,7 +70,7 @@ def _topic_subscore(
     tokens = {w for w in session_topic_hint.lower().split() if len(w) > 2}
     if not tokens:
         return 0.5
-    names = {entity_name.lower(), *[e.lower() for e in key_entities if e]}
+    names = {e.lower() for e in ([entity_name] if entity_name else []) + key_entities if e}
     hits = 0
     for name in names:
         for t in tokens:

@@ -19,6 +19,7 @@ _QWEN_INSTRUCT = "qwen3.6-35b-instruct"
 _CLAUDE_SONNET = "claude_sonnet"
 _CLAUDE_HAIKU = "claude_haiku"
 _GPT_MINI = "gpt-5.4-mini"
+_QWEN_27B_OVH = "qwen3.6-27b-ovh"
 
 _EXPECTED_DEFAULTS_BY_PRIMARY = {
     _QWEN_THINKING: _QWEN_INSTRUCT,  # ADR-0121 Addendum A example; durable form of FRE-963
@@ -26,6 +27,7 @@ _EXPECTED_DEFAULTS_BY_PRIMARY = {
     _CLAUDE_SONNET: _CLAUDE_SONNET,  # ADR-0121 Addendum A example
     _CLAUDE_HAIKU: _CLAUDE_HAIKU,  # self-pair, already the cheap Anthropic tier
     _GPT_MINI: _GPT_MINI,  # self-pair, no cheaper GPT tier in the catalog
+    _QWEN_27B_OVH: _QWEN_27B_OVH,  # self-pair, no cheaper OVH-hosted companion
 }
 
 

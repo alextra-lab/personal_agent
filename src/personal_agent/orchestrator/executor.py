@@ -958,6 +958,7 @@ _tool_execution_layer: ToolExecutionLayer | None = None
 if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.error_classification import ClassifiedError
     from personal_agent.mcp.gateway import MCPGatewayAdapter
+    from personal_agent.memory.service import MemoryService
     from personal_agent.orchestrator.cache_reset_scheduler import ResetDecision
     from personal_agent.orchestrator.constraint_options import ConstraintDecision
     from personal_agent.service.repositories.session_repository import SessionRepository
@@ -1246,6 +1247,7 @@ def _record_turn_evidence(
     rendered_memory_ids: tuple[str, ...],
     inline_outcome: InlineOutcome,
     skill_body_names: tuple[str, ...],
+    prompt_component_ids: tuple[str, ...] = (),
 ) -> None:
     """Build and store this turn's evidence record (ADR-0125 D3 items 5 and 6).
 
@@ -1260,6 +1262,7 @@ def _record_turn_evidence(
         rendered_memory_ids: Identities the memory renderer actually emitted.
         inline_outcome: What the volatile-block inliner did.
         skill_body_names: Names of the skill bodies loaded into the prompt.
+        prompt_component_ids: Components spliced into this call, in assembly order.
     """
     try:
         gw_context = ctx.gateway_output.context if ctx.gateway_output is not None else None
@@ -1285,6 +1288,11 @@ def _record_turn_evidence(
                 if gw_context is not None
                 else CandidatePopulation.POST_SELECTION
             ),
+            # FRE-1150: what the prompt actually carried, and the identity it asserted.
+            # Both read from the same values the model was given, never re-derived.
+            prompt_component_ids=prompt_component_ids,
+            operator_identity=ctx.operator_name or None,
+            operator_stanza=ctx.operator_stanza or None,
         )
     except Exception:
         log.exception(
@@ -1292,6 +1300,78 @@ def _record_turn_evidence(
             trace_id=ctx.trace_id,
             session_id=ctx.session_id,
         )
+
+
+async def _populate_operator_identity(
+    ctx: ExecutionContext, memory_service: "MemoryService | None"
+) -> None:
+    """Resolve the connected user's identity onto ``ctx`` (FRE-213 / ADR-0052).
+
+    Sets ``ctx.operator_stanza`` and ``ctx.operator_name`` from a single resolution, so
+    the prompt and the turn's capture record cannot name the user differently.
+
+    Every path that produces no stanza is logged (FRE-1150). Before this, the guard's
+    false branches were silent, so nothing distinguished "never ran" from "ran and
+    produced nothing" — which is what let a wrong diagnosis of a *present* stanza stand.
+    Severity follows how anomalous each case is: an unidentified request is the supported
+    CLI/unauthenticated path and would be per-turn noise as a warning.
+
+    Args:
+        ctx: Execution context; both operator fields are set on success.
+        memory_service: Connected MemoryService, or None when unavailable.
+    """
+    if not (ctx.user_id and ctx.user_email):
+        log.info(
+            "operator_stanza_skipped",
+            reason="unidentified_request",
+            has_user_id=bool(ctx.user_id),
+            has_user_email=bool(ctx.user_email),
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+        return
+
+    if not (memory_service and memory_service.connected):
+        log.warning(
+            "operator_stanza_skipped",
+            reason="memory_service_unavailable",
+            memory_service_present=bool(memory_service),
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+        return
+
+    try:
+        from personal_agent.orchestrator.prompts import get_owner_identity  # noqa: PLC0415
+
+        identity = await get_owner_identity(
+            memory_service=memory_service,
+            user_id=ctx.user_id,
+            email=ctx.user_email,
+            display_name=ctx.user_display_name,
+        )
+    except Exception as stanza_err:
+        log.warning(
+            "operator_stanza_failed",
+            error=str(stanza_err),
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+        return
+
+    if not identity.name:
+        # The call succeeded and yielded nothing — no :Person facts, or a node with no
+        # name. Previously indistinguishable from the stanza never being attempted.
+        log.warning(
+            "operator_stanza_skipped",
+            reason="identity_unresolved",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+        return
+
+    ctx.operator_stanza = identity.stanza
+    ctx.operator_name = identity.name
 
 
 def _inline_volatile_with_outcome(
@@ -2404,9 +2484,17 @@ def _render_memory_section_with_ids(
         rendered_ids.extend(memory_item_identity(m)[1] for m in described)
         section = "\n\n## Your Memory Graph — Known Entities\n"
         section += "\n".join(_entity_line(m) for m in described)
+        # FRE-1150: the previous wording — "use this list to directly answer questions
+        # about what the user has previously discussed" — licensed exactly the failure
+        # that shipped: an entity describing a *third party* ("Susan: the user's stated
+        # name in the conversation") was used to answer who the connected user is. The
+        # list's subject is what was discussed, never who is being spoken to; the
+        # authenticated identity in the cached head is the only source for that.
         section += (
-            "\n\nUse this list to directly answer questions about what the user "
-            "has previously discussed. Do NOT say you have no memory."
+            "\n\nThese are entities drawn from earlier conversations, including other "
+            "people; they record what was discussed, not who you are speaking with. "
+            "Use them to answer questions about what the user has previously discussed. "
+            "Do NOT say you have no memory."
         )
         sections.append(section)
 
@@ -3464,21 +3552,15 @@ async def step_init(
                 trace_id=ctx.trace_id,
                 conversations_found=len(gw.context.memory_context),
             )
-        # Populate operator stanza in gateway path (was only wired for legacy path).
-        if ctx.user_id and ctx.user_email:
-            try:
-                from personal_agent.orchestrator.prompts import get_owner_stanza  # noqa: PLC0415
-                from personal_agent.service.app import memory_service as _ms
+        # Populate operator identity in gateway path (was only wired for legacy path).
+        # This is the live site: 186 executions over 30 days, versus zero for the legacy
+        # one below (FRE-1150 investigation).
+        try:
+            from personal_agent.service.app import memory_service as _ms
 
-                if _ms and _ms.connected:
-                    ctx.operator_stanza = await get_owner_stanza(
-                        memory_service=_ms,
-                        user_id=ctx.user_id,
-                        email=ctx.user_email,
-                        display_name=ctx.user_display_name,
-                    )
-            except Exception as _stanza_e:
-                log.warning("operator_stanza_failed", error=str(_stanza_e), trace_id=ctx.trace_id)
+            await _populate_operator_identity(ctx, _ms)
+        except ImportError as _stanza_e:
+            log.warning("operator_stanza_failed", error=str(_stanza_e), trace_id=ctx.trace_id)
         log.info(
             "step_init_gateway_path",
             trace_id=ctx.trace_id,
@@ -3871,18 +3953,10 @@ async def step_init(
                             error=str(behavioural_err),
                         )
 
-                # Populate operator stanza (FRE-213 / ADR-0052) while service is connected.
-                if ctx.user_id and ctx.user_email:
-                    from personal_agent.orchestrator.prompts import (
-                        get_owner_stanza,  # noqa: PLC0415
-                    )
-
-                    ctx.operator_stanza = await get_owner_stanza(
-                        memory_service=memory_service,
-                        user_id=ctx.user_id,
-                        email=ctx.user_email,
-                        display_name=ctx.user_display_name,
-                    )
+                # Populate operator identity (FRE-213 / ADR-0052) while service is
+                # connected. Unreachable in production — every live entrypoint passes a
+                # gateway_output, so the branch above returns first (FRE-1150).
+                await _populate_operator_identity(ctx, memory_service)
 
                 if memory_service != global_memory_service:
                     await memory_service.disconnect()
@@ -4636,7 +4710,13 @@ async def step_llm_call(
             # ADR-0081 D4: distinct VOLATILE marker — these bytes feed dynamic_hash,
             # never static_prefix_hash (they are appended after the capture point).
             _component_ids.append("skill_bodies")
-        if ctx.memory_context:
+        if memory_section:
+            # FRE-1150: keyed on what was actually spliced, not on ctx.memory_context
+            # being non-empty. A turn whose candidates all rendered blank set the flag
+            # while contributing no bytes — harmless while this list was log-only, but
+            # this diff promotes it to the capture's audit surface, where a component
+            # named but not present is the same class of false negative the ticket exists
+            # to close. Safe: component_ids feeds neither hash in derive_prompt_identity.
             _component_ids.append("memory_section")
         if ctx.artifact_builder_planning_note:
             # ADR-0122 §5/T6: distinct VOLATILE marker — turn-scoped, never enters
@@ -4667,6 +4747,7 @@ async def step_llm_call(
                 rendered_memory_ids=_rendered_memory_ids,
                 inline_outcome=_inline_outcome,
                 skill_body_names=_skill_body_names,
+                prompt_component_ids=tuple(_component_ids),
             )
 
         # FRE-973: bound this call to the turn's remaining wall-clock budget so a

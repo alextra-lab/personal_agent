@@ -56,6 +56,14 @@ EVIDENCE_RECORD_KEYS: tuple[str, ...] = (
 )
 """The eight records ADR-0125 D3 requires every turn to carry, in table order."""
 
+_MAX_RECORDED_STANZA_CHARS = 2000
+"""Bound on the recorded operator stanza (FRE-1150).
+
+Generous against the ~400 chars a five-field stanza renders to, but finite: the stanza
+interpolates :Person properties, each already capped at 120 chars by the renderer, and
+the capture must not become unbounded because a node gained fields.
+"""
+
 
 class EvidenceState(StrEnum):
     """Presence of one D3 evidence record on one turn.
@@ -402,6 +410,16 @@ class AssembledContextRecord(BaseModel):
         primary_call_count: How many primary calls the turn ultimately made. Stamped at
             capture time, since it is not knowable at the admission point. A reader needs
             it to interpret the record: it says plainly that this describes call 0 of N.
+        prompt_component_ids: The prompt components actually spliced into this call, in
+            assembly order (FRE-1150). Emitted to the logs since ADR-0078, but absent from
+            the capture — so the capture could not answer "what was in the prompt" at all.
+        operator_identity: The name the operator component asserted, or None when no
+            identity was resolved. Read from the same resolution the prompt used.
+        operator_stanza: The operator stanza verbatim, bounded, or None. The capture
+            stored only ``system_prompt_chars``, so a search of the corpus for any prompt
+            string returned zero **by construction** — which is how "the stanza never
+            rendered" became reachable from a correct reading. The stanza *is* the
+            identity claim, so storing it is what makes identity auditable.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -414,6 +432,9 @@ class AssembledContextRecord(BaseModel):
     memory_identities: list[str] = Field(default_factory=list)
     primary_call_index: int = 0
     primary_call_count: int = 1
+    prompt_component_ids: list[str] = Field(default_factory=list)
+    operator_identity: str | None = None
+    operator_stanza: str | None = None
 
 
 class TurnEvidence(BaseModel):
@@ -669,6 +690,9 @@ def build_turn_evidence(
     call_index: int,
     primary_call_count: int = 1,
     candidate_population: CandidatePopulation = CandidatePopulation.POST_SELECTION,
+    prompt_component_ids: Sequence[str] = (),
+    operator_identity: str | None = None,
+    operator_stanza: str | None = None,
 ) -> TurnEvidence:
     """Build both D3 records for one turn from its final serialized model input.
 
@@ -690,6 +714,11 @@ def build_turn_evidence(
             producing paths considered, or only their survivors. The caller knows this
             and the record must state it (FRE-1060); the default is the conservative
             claim, so a caller that does not pass it cannot over-claim completeness.
+        prompt_component_ids: Components spliced into this call, in assembly order.
+        operator_identity: Name the operator component asserted, None when unresolved.
+        operator_stanza: The operator stanza verbatim; truncated to
+            ``_MAX_RECORDED_STANZA_CHARS`` so an enriched :Person node cannot bloat the
+            capture.
 
     Returns:
         A :class:`TurnEvidence` whose two halves describe the same model call.
@@ -758,6 +787,11 @@ def build_turn_evidence(
         memory_identities=admitted_identities,
         primary_call_index=call_index,
         primary_call_count=primary_call_count,
+        prompt_component_ids=list(prompt_component_ids),
+        operator_identity=operator_identity,
+        operator_stanza=(
+            operator_stanza[:_MAX_RECORDED_STANZA_CHARS] if operator_stanza else operator_stanza
+        ),
     )
 
     return TurnEvidence(recall=recall, assembled_context=assembled)

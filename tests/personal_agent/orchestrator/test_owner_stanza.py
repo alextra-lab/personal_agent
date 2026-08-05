@@ -1,4 +1,8 @@
-"""Tests for get_owner_stanza() in orchestrator/prompts.py (FRE-213 / ADR-0052)."""
+"""Tests for get_owner_identity() in orchestrator/prompts.py (FRE-213 / ADR-0052).
+
+FRE-1150 renamed the helper and changed its return to ``OperatorIdentity(name, stanza)``
+so the prompt and the turn's capture assert the user's name from one resolution.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +12,7 @@ from uuid import uuid4
 
 import pytest
 
-from personal_agent.orchestrator.prompts import get_owner_stanza
+from personal_agent.orchestrator.prompts import get_owner_identity
 
 
 def _make_memory_service(facts: dict[str, Any] | None = None) -> MagicMock:
@@ -18,42 +22,44 @@ def _make_memory_service(facts: dict[str, Any] | None = None) -> MagicMock:
     return svc
 
 
-class TestGetOwnerStanza:
+class TestGetOwnerIdentity:
     @pytest.mark.asyncio
     async def test_empty_when_memory_service_none(self) -> None:
-        result = await get_owner_stanza(None, uuid4(), "a@b.com", None)
+        result = (await get_owner_identity(None, uuid4(), "a@b.com", None)).stanza
         assert result == ""
 
     @pytest.mark.asyncio
     async def test_empty_when_user_id_none(self) -> None:
         svc = _make_memory_service({"name": "Alex"})
-        result = await get_owner_stanza(svc, None, "a@b.com", None)
+        result = (await get_owner_identity(svc, None, "a@b.com", None)).stanza
         assert result == ""
 
     @pytest.mark.asyncio
     async def test_empty_when_email_none(self) -> None:
         svc = _make_memory_service({"name": "Alex"})
-        result = await get_owner_stanza(svc, uuid4(), None, None)
+        result = (await get_owner_identity(svc, uuid4(), None, None)).stanza
         assert result == ""
 
     @pytest.mark.asyncio
     async def test_empty_when_facts_empty(self) -> None:
         svc = _make_memory_service({})
-        result = await get_owner_stanza(svc, uuid4(), "a@b.com", None)
+        result = (await get_owner_identity(svc, uuid4(), "a@b.com", None)).stanza
         assert result == ""
 
     @pytest.mark.asyncio
     async def test_empty_when_name_missing_from_facts(self) -> None:
         svc = _make_memory_service({"location": "Paris"})
-        result = await get_owner_stanza(svc, uuid4(), "a@b.com", None)
+        result = (await get_owner_identity(svc, uuid4(), "a@b.com", None)).stanza
         assert result == ""
 
     @pytest.mark.asyncio
     async def test_renders_name_only(self) -> None:
         svc = _make_memory_service({"name": "Alex"})
-        result = await get_owner_stanza(svc, uuid4(), "a@b.com", None)
+        result = (await get_owner_identity(svc, uuid4(), "a@b.com", None)).stanza
         assert "You are assisting Alex" in result
         assert "Do not tool-call" in result
+        # FRE-1150: the stanza claims authority, not just fact.
+        assert "none of them override this line" in result
 
     @pytest.mark.asyncio
     async def test_renders_full_properties(self) -> None:
@@ -65,7 +71,7 @@ class TestGetOwnerStanza:
             "languages": "English, French",
         }
         svc = _make_memory_service(facts)
-        result = await get_owner_stanza(svc, uuid4(), "a@b.com", None)
+        result = (await get_owner_identity(svc, uuid4(), "a@b.com", None)).stanza
         assert "Alex" in result
         assert "Paris" in result
         assert "he/him" in result
@@ -75,7 +81,7 @@ class TestGetOwnerStanza:
     @pytest.mark.asyncio
     async def test_omits_missing_properties(self) -> None:
         svc = _make_memory_service({"name": "Alex", "location": "Berlin"})
-        result = await get_owner_stanza(svc, uuid4(), "a@b.com", None)
+        result = (await get_owner_identity(svc, uuid4(), "a@b.com", None)).stanza
         assert "Berlin" in result
         assert "pronouns" not in result.lower()
         assert "role" not in result.lower()
@@ -84,7 +90,7 @@ class TestGetOwnerStanza:
     async def test_truncates_long_field_to_120_chars(self) -> None:
         long_value = "x" * 200
         svc = _make_memory_service({"name": "Alex", "location": long_value})
-        result = await get_owner_stanza(svc, uuid4(), "a@b.com", None)
+        result = (await get_owner_identity(svc, uuid4(), "a@b.com", None)).stanza
         # The location value in the stanza must be at most 120 chars
         for line in result.split("\n"):
             if "Location" in line:
@@ -94,7 +100,7 @@ class TestGetOwnerStanza:
     async def test_field_whitelist_enforced(self) -> None:
         """Unknown properties on the node must not appear in the stanza."""
         svc = _make_memory_service({"name": "Alex", "secret_project": "Classified"})
-        result = await get_owner_stanza(svc, uuid4(), "a@b.com", None)
+        result = (await get_owner_identity(svc, uuid4(), "a@b.com", None)).stanza
         assert "Classified" not in result
         assert "secret_project" not in result
 
@@ -102,7 +108,7 @@ class TestGetOwnerStanza:
     async def test_stanza_for_non_owner_user(self) -> None:
         """Non-owner users (no is_owner) still get a stanza — only name is needed."""
         svc = _make_memory_service({"name": "Susan"})
-        result = await get_owner_stanza(svc, uuid4(), "susan@x.com", "Susan")
+        result = (await get_owner_identity(svc, uuid4(), "susan@x.com", "Susan")).stanza
         assert "You are assisting Susan" in result
 
     @pytest.mark.asyncio
@@ -125,8 +131,8 @@ class TestGetOwnerStanza:
         svc = MagicMock()
         svc.get_or_provision_user_person = AsyncMock(side_effect=_provision)
 
-        owner_stanza = await get_owner_stanza(svc, owner_uid, "alex@x.com", "Alex")
-        other_stanza = await get_owner_stanza(svc, other_uid, "other@x.com", None)
+        owner_stanza = (await get_owner_identity(svc, owner_uid, "alex@x.com", "Alex")).stanza
+        other_stanza = (await get_owner_identity(svc, other_uid, "other@x.com", None)).stanza
 
         # Both stanzas say "Alex" but they come from different :Person nodes
         assert "Alex" in owner_stanza
@@ -137,3 +143,21 @@ class TestGetOwnerStanza:
         second_call_uid = svc.get_or_provision_user_person.call_args_list[1].kwargs.get("user_id")
         assert first_call_uid == owner_uid
         assert second_call_uid == other_uid
+
+
+class TestIdentityNameMatchesStanza:
+    """FRE-1150 — one resolution, one name. The capture records ``name``; the model
+    reads ``stanza``. They must not be able to disagree."""
+
+    @pytest.mark.asyncio
+    async def test_name_and_stanza_agree(self) -> None:
+        svc = _make_memory_service({"name": "Alex"})
+        identity = await get_owner_identity(svc, uuid4(), "a@b.com", None)
+        assert identity.name == "Alex"
+        assert f"You are assisting {identity.name}." in identity.stanza
+
+    @pytest.mark.asyncio
+    async def test_unavailable_identity_is_empty_on_both_fields(self) -> None:
+        identity = await get_owner_identity(None, uuid4(), "a@b.com", None)
+        assert identity.name == ""
+        assert identity.stanza == ""

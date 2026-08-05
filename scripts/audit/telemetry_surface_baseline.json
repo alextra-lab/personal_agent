@@ -5,8 +5,8 @@
     "family": "docker/elasticsearch/index-template.json",
     "field": "latency_ms",
     "source": "docker/elasticsearch/index-template.json",
-    "note": "DEFERRED — genuine *_ms→float fix, but a type change on the hot agent-logs index that ES rejects in place (needs reindex/rollover). Tracked by FRE-599; drop this entry when that ships.",
-    "detail": "'latency_ms' is numeric/duration-named but mapped 'long'; a non-integer value is rejected or truncated (the 0.0→long trap)"
+    "note": "DEFERRED \u2014 genuine *_ms\u2192float fix, but a type change on the hot agent-logs index that ES rejects in place (needs reindex/rollover). Tracked by FRE-599; drop this entry when that ships.",
+    "detail": "'latency_ms' is numeric/duration-named but mapped 'long'; a non-integer value is rejected or truncated (the 0.0\u2192long trap)"
   },
   {
     "check": "trap-lint",
@@ -14,8 +14,8 @@
     "family": "docker/elasticsearch/index-template.json",
     "field": "probe_duration_ms",
     "source": "docker/elasticsearch/index-template.json",
-    "note": "DEFERRED — genuine *_ms→float fix, but a type change on the hot agent-logs index that ES rejects in place (needs reindex/rollover). Tracked by FRE-599; drop this entry when that ships.",
-    "detail": "'probe_duration_ms' is numeric/duration-named but mapped 'integer'; a non-integer value is rejected or truncated (the 0.0→long trap)"
+    "note": "DEFERRED \u2014 genuine *_ms\u2192float fix, but a type change on the hot agent-logs index that ES rejects in place (needs reindex/rollover). Tracked by FRE-599; drop this entry when that ships.",
+    "detail": "'probe_duration_ms' is numeric/duration-named but mapped 'integer'; a non-integer value is rejected or truncated (the 0.0\u2192long trap)"
   },
   {
     "check": "trap-lint",
@@ -23,7 +23,7 @@
     "family": "docker/elasticsearch/index-template.json",
     "field": "reason",
     "source": "docker/elasticsearch/index-template.json",
-    "note": "ACCEPTED — reviewed-correct (FRE-555). agent-logs 'reason' holds short categorical enums (e.g. 'archive_disabled', 'no_es_client', 'no_trace_ids'); keyword ignore_above:1024 is never exceeded and is the right mapping for exact-match aggregation. TEXT_TRAP_HINT false-fires on the word 'reason'.",
+    "note": "ACCEPTED \u2014 reviewed-correct (FRE-555). agent-logs 'reason' holds short categorical enums (e.g. 'archive_disabled', 'no_es_client', 'no_trace_ids'); keyword ignore_above:1024 is never exceeded and is the right mapping for exact-match aggregation. TEXT_TRAP_HINT false-fires on the word 'reason'.",
     "detail": "long-text field 'reason' is keyword ignore_above:1024; values over the limit are silently dropped from the index"
   },
   {
@@ -32,7 +32,7 @@
     "family": "docker/elasticsearch/topology-index-template.json",
     "field": "decomposition_reason",
     "source": "docker/elasticsearch/topology-index-template.json",
-    "note": "ACCEPTED — reviewed-correct (FRE-555). topology 'decomposition_reason' is a short routing-decision categorical (keyword, per the template _meta routing-surface note); ignore_above:1024 is never exceeded. TEXT_TRAP_HINT false-fires on the word 'reason'.",
+    "note": "ACCEPTED \u2014 reviewed-correct (FRE-555). topology 'decomposition_reason' is a short routing-decision categorical (keyword, per the template _meta routing-surface note); ignore_above:1024 is never exceeded. TEXT_TRAP_HINT false-fires on the word 'reason'.",
     "detail": "long-text field 'decomposition_reason' is keyword ignore_above:1024; values over the limit are silently dropped from the index"
   },
   {
@@ -41,7 +41,16 @@
     "family": "docker/elasticsearch/captains-funnel-events-index-template.json",
     "field": "threshold",
     "source": "docker/elasticsearch/captains-funnel-events-index-template.json",
-    "note": "ACCEPTED — reviewed-correct (FRE-719). This is the configured issue_budget_threshold CAP (an integer open-issue count, e.g. 200), not a ratio/percentage value; integer is intentional. FLOAT_HINT false-fires on the word 'threshold'; no static linter can tell a threshold count from a threshold ratio.",
-    "detail": "'threshold' is numeric/duration-named but mapped 'integer'; a non-integer value is rejected or truncated (the 0.0→long trap)"
+    "note": "ACCEPTED \u2014 reviewed-correct (FRE-719). This is the configured issue_budget_threshold CAP (an integer open-issue count, e.g. 200), not a ratio/percentage value; integer is intentional. FLOAT_HINT false-fires on the word 'threshold'; no static linter can tell a threshold count from a threshold ratio.",
+    "detail": "'threshold' is numeric/duration-named but mapped 'integer'; a non-integer value is rejected or truncated (the 0.0\u2192long trap)"
+  },
+  {
+    "check": "trap-lint",
+    "klass": "long-text-ignore-above",
+    "family": "docker/elasticsearch/captains-captures-index-template.json",
+    "field": "assembled_context.prompt_component_ids",
+    "source": "docker/elasticsearch/captains-captures-index-template.json",
+    "note": "ACCEPTED \u2014 reviewed-correct (FRE-1150). Values are the fixed short registry tokens of PROMPT_COMPONENT_TAXONOMY (llm_client/prompt_identity.py) \u2014 longest is 'artifact_builder_planning_note' at 30 chars \u2014 so ignore_above:1024 can never be exceeded, and keyword is the correct type: the field exists to be aggregated on exactly ('which turns carried operator_stanza'). TEXT_TRAP_HINT false-fires on the word 'prompt'. The sibling assembled_context.operator_stanza, which genuinely holds prompt text, is mapped 'text' for this reason.",
+    "detail": "long-text field 'assembled_context.prompt_component_ids' is keyword ignore_above:1024; values over the limit are silently dropped from the index"
   }
 ]

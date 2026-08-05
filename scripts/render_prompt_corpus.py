@@ -209,7 +209,7 @@ LEAF_PROMPTS: list[ConstantEntry | FunctionEntry | ClassDocEntry] = [
     FunctionEntry(
         "operator_stanza",
         SRC_ROOT / "orchestrator" / "prompts.py",
-        "get_owner_stanza",
+        "get_owner_identity",
         "SEMI_STATIC",
         (
             "Async function. Renders a compact Markdown stanza with the owner's "

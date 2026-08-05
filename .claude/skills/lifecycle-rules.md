@@ -186,6 +186,12 @@ Required checks: the 6 CI jobs (Any source) + `CodeQL` aggregate + a code-scanni
   now. A one-line body is enough. Backlog is *not* a request for owner review, so filing there costs
   no approval bandwidth — this is deliberately the cheap path, and it is what makes D1's "file it or
   drop it" a genuine choice. (This generalizes the existing seam-ticket parking exception.)
+- **A remedy a ticket names but is not committing to goes under `## Open remedies`.** A body may
+  propose candidate fixes it does not itself build — alternatives, follow-ons, "we could also". Put
+  them under that exact heading, one item per line. Prose elsewhere in the body carries no
+  disposition obligation. The heading is what makes the obligation below checkable: without a marker,
+  "no remedies were named" and "a remedy was named and missed" produce identical evidence at every
+  gate.
 - **State lifecycle — the board must not lie (be accurate, no stale entries):**
   `Approved` (ready; dispatched once it also carries a `stream:*` label) → `In Progress` (a session is
   building it **now** — ≤1 per stream, transient; umbrellas/pillars go to `Backlog`, parked-project
@@ -250,7 +256,10 @@ a same-model before/after, and no owner turn was needed at all.
 **Close-out evidence comment (master, on every Done — plain prose + links, no code blocks / CLI / SQL
 tokens; the WAF rejects them):** PR link · merge SHA · CI run link · deploy class (standing-approval
 class or ask-first, and who authorized) · deploy timestamp · health/verification result · rollback
-available yes/no · each acceptance criterion with how it was verified. A ticket reaching Done without
+available yes/no · each acceptance criterion with how it was verified · **open-remedy disposition** —
+each `## Open remedies` item as it stands at close (in scope, naming the criterion that proved it;
+filed, naming the id; rejected, stating the reason). An item still undispositioned at close is drift;
+fix it here, before the ticket leaves every mechanism's view. A ticket reaching Done without
 this comment is drift — catch it.
 
 ## Dispatch (Linear-native)
@@ -282,6 +291,14 @@ Dispatch state lives in Linear and is computed by the resolver (process v2, 2026
   tickets are exempt** — they exist to carry exactly those criteria; their dispatch check is D2's, and
   master's advance-dispatch pass is also what activates them once their due date is reached
   (§ Ticket state › Seam tickets).
+- **Every `## Open remedies` item carries a disposition before the `stream:` label goes on.** Exactly
+  one of: **in scope** — it becomes one of this ticket's acceptance criteria, and the close-out gate
+  then proves it through machinery that already exists; **filed** — its own ticket, id recorded on the
+  line; **rejected** — with a stated reason. **Silence is not a disposition.** Master applies this in
+  the same pass as the D6 decidability check, so it is an added read at an existing mandatory step,
+  not a new step to remember. The ticket is still open at this point, which is the point: a missed
+  item is still recoverable. Default when undecided: file it to `Backlog` — the cheap path, and a rule
+  that is cheap to obey survives.
 - **Chains** are "blocked by" relations; only the unblocked head is pickable, and completing it
   automatically exposes the next — no re-dispatch step.
 - **Master removes a satisfied relation the moment its blocker merges** (reaches Awaiting

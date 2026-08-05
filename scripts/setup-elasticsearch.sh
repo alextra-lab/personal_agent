@@ -407,6 +407,18 @@ put_and_apply_template "Index template: agent-topology-template" \
   "/_index_template/agent-topology-template" \
   "$PROJECT_ROOT/docker/elasticsearch/topology-index-template.json"
 
+# 8. Caddy access-log evidence, shipped by the Filebeat sidecar (FRE-1146 / ADR-0132 D3).
+#    caddy.logger distinguishes egress-block traffic (http.log.access.egress_slm/.egress_artifacts)
+#    from inbound. ILM (FRE-1036): monthly, warm forcemerge at 32d, delete at 90d (min_age) — the
+#    default for a new family with no existing precedent. PUT the policy before the template so
+#    new indices bind on creation.
+put_resource "ILM policy: caddy-access-policy" \
+  "/_ilm/policy/caddy-access-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/caddy-access-ilm-policy.json"
+put_and_apply_template "Index template: caddy-access-template" \
+  "/_index_template/caddy-access-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/caddy-access-index-template.json"
+
 echo ""
 if [[ "$failures" -gt 0 ]]; then
   echo "=== Elasticsearch setup completed with $failures failure(s) ==="

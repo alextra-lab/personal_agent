@@ -483,6 +483,12 @@ ILM_FAMILIES = [
         "user-turn-ratings-index-template.json",
         365,
     ),
+    (
+        "caddy-access-ilm-policy.json",
+        "caddy-access-policy",
+        "caddy-access-index-template.json",
+        90,
+    ),
 ]
 
 

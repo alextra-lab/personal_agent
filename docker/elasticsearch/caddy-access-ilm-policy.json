@@ -1,0 +1,30 @@
+{
+  "policy": {
+    "_meta": {
+      "description": "ILM for caddy-access-* (Caddy access-log evidence shipped by Filebeat, FRE-1146 / ADR-0132 D3). Monthly client-bucketed indices (FRE-1036 convention), no rollover. Retention: 90d, the established default for a new family with no existing precedent (matches agent-monitors-slm-health, agent-topology, agent-monitors-cache-reset-cadence). warm forcemerge at min_age 32d (per the FRE-1036 fix: a monthly index is still open at less than 32d, so an earlier min_age would forcemerge a still-written index). Note: min_age is measured from index creation, so documents written late in a given month's bucket get less than a full 90 days before deletion — a property of the FRE-1036 mechanism itself, not unique to this family.",
+      "retention_days": 90,
+      "managed_by": "scripts/setup-elasticsearch.sh"
+    },
+    "phases": {
+      "hot": {
+        "min_age": "0ms",
+        "actions": {
+          "set_priority": { "priority": 100 }
+        }
+      },
+      "warm": {
+        "min_age": "32d",
+        "actions": {
+          "forcemerge": { "max_num_segments": 1 },
+          "set_priority": { "priority": 50 }
+        }
+      },
+      "delete": {
+        "min_age": "90d",
+        "actions": {
+          "delete": {}
+        }
+      }
+    }
+  }
+}

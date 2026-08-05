@@ -230,3 +230,63 @@ class TestCompetingClaimSurvives:
         wire = out[-1]["content"]
         assert "Susan" in wire
         assert wire.index("Susan") < wire.index("Good evening")
+
+
+class TestDeicticDisambiguation:
+    """FRE-1150 — a stored description saying "the user" is disambiguated at render.
+
+    Measured on the live graph 2026-08-05: 202 of 6,220 described entities are deictic,
+    and only 26 retain the turn provenance a backfill would need. The other 176 can only
+    be handled here, at render.
+    """
+
+    def test_deictic_description_is_disambiguated(self) -> None:
+        from personal_agent.orchestrator.executor import _entity_line
+
+        line = _entity_line(SUSAN_ENTITY)
+
+        # The claim itself is untouched — not removed, not reworded, not reordered.
+        assert "Susan" in line
+        assert "The user's stated name in the conversation." in line
+        # And it can no longer read as a statement about the connected user.
+        assert "not necessarily the person you are assisting now" in line
+
+    def test_non_deictic_description_is_untouched(self) -> None:
+        """The 96.8% that make no claim about the reader pay nothing."""
+        from personal_agent.orchestrator.executor import _entity_line
+
+        line = _entity_line(
+            {
+                "name": "Haiku",
+                "entity_type": "Technology",
+                "description": "A model referenced when discussing routing tiers.",
+            }
+        )
+
+        assert line == "- [Technology] Haiku: A model referenced when discussing routing tiers."
+
+    def test_disambiguation_survives_truncation(self) -> None:
+        """Appended after truncation, so the clarifier can never be the part cut off."""
+        from personal_agent.orchestrator.executor import _entity_line
+
+        line = _entity_line(
+            {
+                "name": "Merck",
+                "entity_type": "Organization",
+                "description": "The user's employer. " + ("x" * 5000),
+            }
+        )
+
+        assert "not necessarily the person you are assisting now" in line
+
+    def test_match_is_word_bounded_and_case_insensitive(self) -> None:
+        from personal_agent.orchestrator.executor import _entity_line
+
+        tagged = _entity_line({"name": "X", "entity_type": "T", "description": "The User asked."})
+        assert "not necessarily" in tagged
+
+        # "the username" is not a deictic reference to the connected user.
+        untagged = _entity_line(
+            {"name": "Y", "entity_type": "T", "description": "the username field is required."}
+        )
+        assert "not necessarily" not in untagged

@@ -6,6 +6,7 @@ The executor coordinates task execution through explicit state transitions.
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
@@ -2361,8 +2362,38 @@ target. Truncation that does bite is marked, never silent (ADR-0125 D5).
 """
 
 
+_DEICTIC_USER_RE = re.compile(r"\bthe user\b", re.IGNORECASE)
+"""Matches a stored description that refers to "the user" (FRE-1150).
+
+Such a description is **deictic**: it only means something relative to the conversation
+it was extracted from, but it is stored globally and rendered to every reader. The
+incident entity — ``Susan: The user's stated name in the conversation.`` — is this class,
+and read by a different user it asserts their name is Susan. Measured 2026-08-05: 202 of
+6,220 described entities, of which only 26 retain the turn provenance a backfill would
+need, so 176 cannot be repaired in the data and must be handled at render.
+"""
+
+_DEICTIC_DISAMBIGUATION = (
+    ' (in this note "the user" means whoever that earlier conversation was with,'
+    " not necessarily the person you are assisting now)"
+)
+"""Clarifier appended to a deictic description, at the point of the conflict.
+
+Deliberately narrow. Applied to every entity line, it would tax the 96.8% of
+descriptions that are not deictic — measured on the 27B, a blanket tag costs ~122s per
+turn against ~68s without it — for no benefit, since a non-deictic description makes no
+claim about the reader. It also does not remove or reorder the item: the claim stays
+admitted, rendered and in position, which the ticket requires (cross-user scoping is
+FRE-674's, not this ticket's).
+"""
+
+
 def _entity_line(item: dict[str, Any]) -> str:
     """Render one described entity.
+
+    A description that says "the user" is disambiguated in place (FRE-1150), so a fact
+    about somebody else's conversation cannot read as a statement about the connected
+    user. Applied after truncation so the clarifier can never itself be truncated away.
 
     The mention count is read as ``mention_count`` first and legacy ``mentions``
     second: three of the four producers write ``mention_count``
@@ -2373,6 +2404,8 @@ def _entity_line(item: dict[str, Any]) -> str:
     not one.
     """
     description = mark_truncated((item.get("description") or "").strip(), _MAX_ITEM_CHARS)
+    if _DEICTIC_USER_RE.search(description):
+        description += _DEICTIC_DISAMBIGUATION
     line = f"- [{item.get('entity_type', '')}] {item.get('name', '')}: {description}"
     count = item.get("mention_count", item.get("mentions"))
     if count is not None:

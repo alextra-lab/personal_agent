@@ -561,6 +561,9 @@ Connection: `AGENT_DATABASE_URL` environment variable (Pydantic settings).
 | `channel` | `varchar(50)` | yes | `NULL` | Client identifier (`pwa`, `cli`, etc.) |
 | `metadata` | `jsonb` | no | `'{}'` | Arbitrary client metadata |
 | `messages` | `jsonb` | no | `'[]'` | Array of `{role, content, timestamp, metadata}` objects |
+| `primary_model_at_creation` | `varchar(120)` | yes | `NULL` | Model name at session creation; row-level attribution per ADR-0074 (FRE-376) |
+| `model_config_path` | `varchar(255)` | yes | `NULL` | Model configuration path at session creation; per ADR-0074 (FRE-376) |
+| `execution_profile` | `varchar(50)` | no | `'local'` | Server-authoritative execution profile (`'local'` \| `'cloud'`); per ADR-0079 (FRE-416) |
 
 #### `messages` JSONB element schema
 

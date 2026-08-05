@@ -156,9 +156,18 @@ For concurrent-session safety, still confirm timing if another session is active
 ## 8 — Close out (same session as deploy, never deferred)
 - **Close the ticket: state → Done + the evidence comment** (template: lifecycle-rules § Evidence
   contract — plain prose + links; PR, merge SHA, CI run, deploy class + authorization, deploy
-  timestamp, verification result, rollback availability, each acceptance criterion + how verified).
+  timestamp, verification result, rollback availability, each acceptance criterion + how verified,
+  open-remedy disposition — each `## Open remedies` item as it stands at close: in scope naming the
+  criterion that proved it, filed naming the id, or rejected with the reason).
 - **If verification failed: state → `Verify Failed`** (not Done, not left in Awaiting Deploy), file
   the follow-up issue, consider rollback. Verify Failed is the exception flag that demands a decision.
+- **A `Canceled` or `Duplicate` exit still owes its open-remedy dispositions.** The rest of the
+  evidence comment does not apply to an abandoned ticket, but every `## Open remedies` item still gets
+  **filed** (id on the line) or **rejected** (with a reason) in a closing comment — **`in scope` is not
+  available here**: it died with the ticket that would have proven it, so accepting it is how a remedy
+  disappears while the box looks ticked. **This binds wherever you cancel, not only at this step**
+  (lifecycle-rules § Ticket state) — this skill is the PR-integration flow, and a ticket abandoned
+  before it ever reached a PR never passes through here at all.
 - **Advance dispatch (replaces advancing the board):** run this at every MERGE, not just at Done —
   the merge is the event that frees the stream and un-blocks chain successors (a blocker is open
   until it reaches `Awaiting Deploy`; lifecycle-rules § Dispatch). **Re-derive the stream's eligible
@@ -187,6 +196,11 @@ For concurrent-session safety, still confirm timing if another session is active
     be rewritten — or moved to the ADR's seam ticket — before the label goes on. This is the last
     point *before* the build: a criterion that first bites at the gate has already cost the build, and
     an **unmeetable** one (the dead-emit-path case) cannot be fixed by bouncing at all.
+  - **Open-remedy disposition before a `stream:` label.** In the same pass, every `## Open remedies`
+    item on the ticket must carry exactly one of **in scope** (it becomes one of this ticket's
+    acceptance criteria), **filed** (its own ticket, id recorded on the line) or **rejected** (with a
+    stated reason) before the label goes on — **silence is not a disposition**. Default when
+    undecided: file it to `Backlog`.
   - **Seam-activation sweep.** In the same pass, find every parked seam ticket whose due date is on or
     before today and activate it — `Approved` + `stream:adr` (lifecycle-rules § Ticket state › Seam
     tickets). The due date is a **marker, not an actuator**: the resolver never reads due dates, so

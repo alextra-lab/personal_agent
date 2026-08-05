@@ -564,6 +564,8 @@ Connection: `AGENT_DATABASE_URL` environment variable (Pydantic settings).
 | `primary_model_at_creation` | `varchar(120)` | yes | `NULL` | Model name at session creation; row-level attribution per ADR-0074 (FRE-376) |
 | `model_config_path` | `varchar(255)` | yes | `NULL` | Model configuration path at session creation; per ADR-0074 (FRE-376) |
 | `execution_profile` | `varchar(50)` | no | `'local'` | Server-authoritative execution profile (`'local'` \| `'cloud'`); per ADR-0079 (FRE-416) |
+| `purged_at` | `timestamptz` | yes | `NULL` | Retention soft-prune tombstone; `NULL` = not yet purged. Set (and `messages` cleared to `'[]'`) by the scheduled retention sweep once the session is inactive past the window; cleared back to `NULL` if resumed. Per ADR-0098 D4/D6 (FRE-860) |
+| `last_event_seq` | `integer` | no | `0` | Per-session AG-UI transport event counter — the allocator for `session_events.seq`. Stored rather than derived from `MAX(seq)`, because `session_events` is swept on a 24h TTL and a derived counter would re-issue seqs the client already acknowledged. Per ADR-0075 (FRE-1040) |
 
 #### `messages` JSONB element schema
 

@@ -730,6 +730,7 @@ _SELECTION_GET_ALL = (
 _ALL_PROVIDERS_UP = {
     "slm_local": True,
     "ovh": True,
+    "ovhcloud": True,
     "openai": True,
     "anthropic": True,
     "voyage": True,
@@ -788,7 +789,10 @@ def test_get_session_config_ac5_candidates_exclude_down_provider_both_directions
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
 
     candidates = {c["key"] for c in resp.json()["roles"]["primary"]["candidates"]}
-    assert candidates == {"claude_sonnet", "claude_haiku", "gpt-5.4-mini"}
+    # qwen3.6-27b-ovh is the same Qwen the local seat serves, hosted by OVH — a
+    # cloud provider, so a down slm_local does not remove it. That is the point of
+    # the deployment: it stays selectable exactly when the local model cannot serve.
+    assert candidates == {"claude_sonnet", "claude_haiku", "gpt-5.4-mini", "qwen3.6-27b-ovh"}
     assert "qwen3.6-35b-thinking" not in candidates
     assert "qwen3.6-35b-instruct" not in candidates
     assert "embedding" not in candidates

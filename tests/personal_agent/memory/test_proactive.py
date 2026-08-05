@@ -11,6 +11,7 @@ import pytest
 import personal_agent.memory.proactive as proactive_mod
 from personal_agent.memory.proactive import (
     _split_row_payloads,
+    _topic_subscore,
     build_proactive_suggestions,
     estimate_tokens_from_text,
 )
@@ -234,3 +235,20 @@ def test_dedupe_same_turn(monkeypatch: pytest.MonkeyPatch) -> None:
         ("entity", "B"),
         ("episode", "same"),
     ]
+
+
+def test_topic_subscore_empty_entity_name_no_artificial_hit() -> None:
+    """FRE-1053: Empty entity name should not score a hit on any topic.
+
+    Episode rows carry no entity name (empty string). The topic subscore
+    must filter for emptiness like key_entities already do, so empty names
+    do not match via the empty-string-in-every-string arithmetic trick.
+    """
+    # Episode row (empty entity name) scored against a topic it doesn't contain
+    score = _topic_subscore(
+        session_topic_hint="kubernetes docker container",
+        entity_name="",  # Episode: no entity name
+        key_entities=[],  # No related entities
+    )
+    # Should be no-hit (0.3), not artificial hit from empty-string containment
+    assert score == 0.3, f"Expected 0.3 (no-hit), got {score}"

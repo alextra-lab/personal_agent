@@ -368,21 +368,6 @@ services:
       # so we remap them here. Everything else flows through env_file above.
       AGENT_CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID}
       AGENT_CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET}
-      # ── OVH AI Endpoints chat auth (FRE-1155) ────────────────────────────────
-      # litellm's native `ovhcloud` provider takes its credential from an
-      # api_key argument or, failing that, the bare OVHCLOUD_API_KEY env var.
-      # LiteLLMClient resolves api_key from a hardcoded if/elif covering only
-      # anthropic and openai, so `ovhcloud` gets None and the call goes out
-      # UNAUTHENTICATED. OVH allows that but rate-limits anonymous callers to
-      # 2 requests per minute per IP per model, against 400/min for an
-      # authenticated project -- which is exactly the 429 observed live on
-      # 2026-08-05 after two requests six seconds apart.
-      # Remapped from the token already used for the OVH embedder: same vendor,
-      # same project, same credential. Same shape as the CF remap above.
-      # The durable fix is for the client to read the provider's declared
-      # auth_env from the catalog instead of a hardcoded branch; that is a src
-      # change and is filed rather than done here.
-      OVHCLOUD_API_KEY: ${AGENT_MANAGED_EMBEDDING_TOKEN}
     ports:
       # Localhost only — Caddy proxies to this port internally
       - "127.0.0.1:9001:9001"

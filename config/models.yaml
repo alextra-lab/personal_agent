@@ -84,7 +84,15 @@ models:
     # "Thinking Mode — General Tasks" preset. The card requires context >= 128K
     # to preserve thinking capability across multi-turn agent loops.
     provider: slm_local
-    id: "unsloth/qwen3.6-35-A3B"
+    # Owner-directed 2026-08-05: the SLM server now serves Qwen3.6-27B-MTP-GGUF
+    # as the reasoning model, to evaluate its reasoning against the identity-
+    # precedence failure. Deliberately reversible -- the owner may switch back,
+    # so this is a one-line id change and nothing else. The catalog KEY still
+    # says 35b and is left alone on purpose: it is referenced from three src
+    # modules, both role bindings and ~20 test files, and renaming it would make
+    # the revert expensive. Only the wire id moved; without it the router
+    # resolves to a model that is no longer served.
+    id: "unsloth/qwen3.6-27B"
     context_length: 131072       # Qwen card: thinking-mode minimum (was 64000)
     quantization: "8bit"
     min_concurrency: 1

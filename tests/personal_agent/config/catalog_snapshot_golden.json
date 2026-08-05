@@ -218,7 +218,7 @@
         "default_timeout": 600,
         "disable_thinking": false,
         "endpoint": "https://slm.example.com/v1",
-        "id": "unsloth/qwen3.6-35-A3B",
+        "id": "unsloth/qwen3.6-27B",
         "input_cost_per_token": null,
         "input_cost_per_token_eur": null,
         "max_concurrency": 1,

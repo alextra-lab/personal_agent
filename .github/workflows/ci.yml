@@ -77,6 +77,12 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      # tests/test_security/test_bypass_rules.py (ADR-0132 D2 / FRE-1147) shells
+      # out to the ast-grep binary directly — pinned to match the Lint job's
+      # install so both jobs enforce the identical rule-set version.
+      - name: Install ast-grep
+        run: uv tool install ast-grep-cli@0.45.0
+
       - name: Run unit tests
         run: uv run python -m pytest -m "not integration" -q --tb=short
         env:
@@ -181,6 +187,14 @@ jobs:
 
       - name: ruff format (check only)
         run: uv tool run ruff@0.15.15 format --check src/
+
+      # ADR-0132 D2 (FRE-1147): static bypass rule set for the outbound transport
+      # factory. Pinned to the version verified in the implementation plan, matching
+      # the ruff pin above — an unpinned `uv tool run` would drift silently.
+      - name: Egress bypass rule set (ast-grep)
+        run: |
+          uv tool install ast-grep-cli@0.45.0
+          uv run python scripts/check_egress_bypass_rules.py
 
   # ── Telemetry surface reconciliation (ADR-0090 D5, GATE) ─────────────────────
   # Hermetic static check: ES index templates ↔ Kibana dashboard NDJSON + trap-class

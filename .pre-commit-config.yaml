@@ -49,3 +49,9 @@ repos:
         language: system
         files: ^docs/architecture_decisions/.*$
         pass_filenames: false
+      - id: check-egress-bypass-rules
+        name: ADR-0132 D2 egress bypass rule set (ast-grep)
+        entry: uv run python scripts/check_egress_bypass_rules.py
+        language: system
+        files: ^src/personal_agent/.*\.py$
+        pass_filenames: false

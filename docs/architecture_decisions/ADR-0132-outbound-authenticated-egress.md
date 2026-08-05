@@ -594,6 +594,36 @@ D1/D2). Each can fail; a half-finished implementation fails at least one.
 
 ## Status Updates
 
+### 2026-08-05 - D2 implemented: guard wiring + static bypass rule set
+**Changed By:** build session (FRE-1147)
+**Reason:** `DomainGuard.check_url` had zero production callers (measured above); this obligation wires
+it in. One outbound transport factory (`create_guarded_http_client`, `security.py`) installs an async
+httpx request hook — not a custom `Transport` subclass as originally sketched — because hooks fire
+before transport/mount/proxy selection (verified against httpx 0.28.1 source: `AsyncClient.
+_send_handling_redirects` runs request hooks strictly before `_transport_for_url`), so a caller-supplied
+`mounts=`/`proxy=` cannot silently bypass it the way a transport override could.
+
+Adopted at all 7 enumerated seams (LLM client, SLM health probe, embeddings, reranker, artifact
+export, envelope probe, 4 web/search tools) plus 4 more real sites the static check's unqualified
+wording ("forbids the known bypass forms outside that factory") also covers: `gateway/chat_api.py`
+(raw Anthropic SDK), `gateway/client.py`, `captains_log/linear_client.py`, `service/cf_access_jwt.py`
+(CF JWKS fetch). `ui/` (CLI-to-own-backend, one sync `httpx.Client`) is a deliberate exclusion — a
+different call shape the ADR never named, and `DomainGuard.ensure_loaded()` is async.
+
+The ast-grep static rule set (`.ast-grep/rules/`, wired into pre-commit + CI) forbids raw
+`httpx.Client`/`AsyncClient` construction, module-level `httpx.get/post/...`, and direct
+Anthropic/OpenAI SDK construction outside the factory — the SDK rules use a `has`-relational
+exclusion for a present `http_client=` kwarg (position-independent), not a positional pattern, after
+a naive `$$$, kw=$_, $$$` shape was found to under-match empirically.
+
+`LiteLLMClient` (the cloud-provider path via `litellm.acompletion()`) is out of scope — the ADR's own
+measured inventory above never names it, only the local/SLM client family. Its internal SDK/httpx
+construction happens inside the third-party `litellm` package, invisible to both the factory and an
+ast-grep sweep scoped to `src/`. Filed as a Backlog gap, not pulled into this ticket.
+
+**Still open from this ADR:** D3 (Filebeat shipping `caddy-access-*`, FRE-1146) and the seam ticket
+FRE-1148, which adjudicates AC-1 through AC-5 across the full chain.
+
 ### 2026-08-05 - D1 implemented (both phases), with a correction to this ADR's inventory
 **Changed By:** build session (FRE-1144)
 **Reason:** D1 landed in one change rather than the two phases this ADR planned, because the phasing

@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 
+from personal_agent.security import create_guarded_http_client
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.types import ToolDefinition, ToolParameter
@@ -107,7 +108,7 @@ async def get_library_docs_executor(
     log.info("get_library_docs_started", trace_id=trace_id, library=library, topic=topic)
 
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+        async with create_guarded_http_client(timeout=_TIMEOUT, follow_redirects=True) as client:
             # Step 1: resolve library name → Context7 ID
             library_id, resolved_name = await _resolve_library(client, library, trace_id)
 

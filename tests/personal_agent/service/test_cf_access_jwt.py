@@ -12,7 +12,6 @@ import base64
 import time
 from typing import Any
 
-import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -116,7 +115,7 @@ def verifier_with_jwks(
         async def get(self, url: str) -> _FakeResp:
             return _FakeResp()
 
-    monkeypatch.setattr(cf_access_jwt.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(cf_access_jwt, "create_guarded_http_client", _FakeClient)
     return verifier
 
 
@@ -188,7 +187,7 @@ async def test_verify_rejects_token_signed_by_other_key(
 async def test_verify_rejects_missing_email_claim(
     rsa_key: RSAPrivateKey, verifier_with_jwks: CFAccessVerifier
 ) -> None:
-    """pyjwt's ``options.require=['email']`` makes a missing email fatal."""
+    """Pyjwt's ``options.require=['email']`` makes a missing email fatal."""
     # We can't use `_sign` here because we need to omit email entirely.
     now = int(time.time())
     pem = rsa_key.private_bytes(
@@ -276,7 +275,7 @@ async def test_jwks_refresh_retries_on_unknown_kid(
             fetch_count["n"] += 1
             return _FakeResp(payload)
 
-    monkeypatch.setattr(cf_access_jwt.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(cf_access_jwt, "create_guarded_http_client", _FakeClient)
 
     token = _sign(rsa_key)
     claims = await verifier.verify(token)

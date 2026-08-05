@@ -1,0 +1,17 @@
+id: no-raw-openai-client
+language: python
+severity: error
+message: >-
+  Pass http_client=create_guarded_http_client() to openai.OpenAI/AsyncOpenAI
+  (ADR-0132 D2) instead of letting the SDK build its own unguarded transport.
+rule:
+  any:
+    - pattern: openai.OpenAI($$$)
+    - pattern: openai.AsyncOpenAI($$$)
+  not:
+    has:
+      stopBy: end
+      kind: keyword_argument
+      has:
+        field: name
+        regex: '^http_client$'

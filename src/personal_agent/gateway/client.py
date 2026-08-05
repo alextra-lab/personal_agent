@@ -61,14 +61,14 @@ class GatewayKnowledgeGraphClient:
             timeout: Per-request timeout in seconds.
         """
         try:
-            import httpx
+            from personal_agent.security import create_guarded_http_client
         except ModuleNotFoundError as exc:  # pragma: no cover
             raise ImportError(
                 "httpx is required for GatewayKnowledgeGraphClient. "
                 "Install it with: pip install httpx"
             ) from exc
 
-        self._client = httpx.AsyncClient(
+        self._client = create_guarded_http_client(
             base_url=base_url,
             headers={"Authorization": f"Bearer {token}"},
             timeout=timeout,

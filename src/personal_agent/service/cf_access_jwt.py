@@ -23,11 +23,11 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
 import jwt
 import structlog
 
 from personal_agent.config import settings
+from personal_agent.security import create_guarded_http_client
 
 log = structlog.get_logger(__name__)
 
@@ -138,7 +138,7 @@ class CFAccessVerifier:
                 and (time.monotonic() - self._cached_at) < _JWKS_TTL_SECONDS
             ):
                 return
-            async with httpx.AsyncClient(timeout=_JWKS_FETCH_TIMEOUT_SECONDS) as client:
+            async with create_guarded_http_client(timeout=_JWKS_FETCH_TIMEOUT_SECONDS) as client:
                 resp = await client.get(self._certs_url)
                 resp.raise_for_status()
                 self._jwks = resp.json()

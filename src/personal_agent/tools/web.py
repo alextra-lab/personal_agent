@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from personal_agent.config import settings
+from personal_agent.security import create_guarded_http_client
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.types import ToolDefinition, ToolParameter
@@ -224,7 +225,7 @@ async def web_search_executor(
     headers = {"X-Forwarded-For": "127.0.0.1"}
 
     try:
-        async with httpx.AsyncClient(
+        async with create_guarded_http_client(
             timeout=settings.searxng_timeout_seconds,
         ) as client:
             response = await client.get(

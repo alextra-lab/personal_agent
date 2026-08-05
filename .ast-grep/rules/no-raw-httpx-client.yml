@@ -1,0 +1,12 @@
+id: no-raw-httpx-client
+language: python
+severity: error
+message: >-
+  Construct httpx clients via personal_agent.security.create_guarded_http_client
+  (ADR-0132 D2) instead of httpx.Client/AsyncClient directly, so DomainGuard
+  consults the URL before a connection is formed. Exempt: security.py itself
+  (the factory's own implementation and DomainGuard's URLhaus feed fetch).
+rule:
+  any:
+    - pattern: httpx.Client($$$)
+    - pattern: httpx.AsyncClient($$$)

@@ -1,0 +1,15 @@
+id: no-raw-httpx-module-calls
+language: python
+severity: error
+message: >-
+  Module-level httpx.get/post/put/patch/delete/request() calls bypass
+  DomainGuard entirely (ADR-0132 D2) — use create_guarded_http_client()
+  and call the method on the returned client instead.
+rule:
+  any:
+    - pattern: httpx.get($$$)
+    - pattern: httpx.post($$$)
+    - pattern: httpx.put($$$)
+    - pattern: httpx.patch($$$)
+    - pattern: httpx.delete($$$)
+    - pattern: httpx.request($$$)

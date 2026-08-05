@@ -50,6 +50,7 @@ from personal_agent.llm_client.types import (
     LLMTimeout,
     ModelRole,
 )
+from personal_agent.security import create_guarded_http_client
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.events import (
     MODEL_CALL_ERROR,
@@ -450,7 +451,9 @@ class LocalLLMClient:
                 # only when this option is set; OpenAI ignores unknown keys).
                 payload["stream_options"] = {"include_usage": True}
 
-                async with httpx.AsyncClient(timeout=timeout_config, verify=verify_ssl) as client:
+                async with create_guarded_http_client(
+                    timeout=timeout_config, verify=verify_ssl
+                ) as client:
                     chunks: list[dict[str, Any]] = []
                     async with client.stream(
                         "POST",

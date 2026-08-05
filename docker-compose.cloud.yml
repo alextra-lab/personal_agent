@@ -537,6 +537,38 @@ services:
         ipv4_address: 172.25.0.12
     restart: unless-stopped
 
+  # Filebeat sidecar — ships cloud-sim-caddy's access logs to caddy-access-*
+  # (FRE-1146 / ADR-0132 D3). Resolves caddy's container ID itself at startup
+  # (see Dockerfile.filebeat / config/filebeat/resolve-caddy-container.sh) by
+  # reading config.v2.json under the read-only containers mount below —
+  # deliberately NOT /var/run/docker.sock, which would grant full Docker
+  # Engine API access (host-mount container creation) rather than the
+  # read-only log access this sidecar actually needs.
+  filebeat:
+    build:
+      context: .
+      dockerfile: Dockerfile.filebeat
+    container_name: cloud-sim-filebeat
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - filebeat_registry_cloud:/usr/share/filebeat/data
+    depends_on:
+      caddy:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      # Filebeat exposes no HTTP endpoint by default; confirm the resolved
+      # entrypoint actually exec'd into the filebeat process (PID 1).
+      test: ["CMD-SHELL", "grep -q filebeat /proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - cloud-sim
+    restart: unless-stopped
+
   # Cloudflare Tunnel — WARP private network access
   # Purpose: Connects VPS Docker network to Cloudflare Zero Trust
   # WARP devices route 172.25.0.0/16 through this tunnel → reach Caddy at 172.25.0.10
@@ -576,6 +608,12 @@ volumes:
   caddy_data:
     driver: local
   caddy_config:
+    driver: local
+
+  # Filebeat's filestream registry (FRE-1146 / ADR-0132 D3) — persists read
+  # offsets across a `docker compose restart filebeat` so already-shipped
+  # caddy-access-* lines aren't re-ingested (AC-c).
+  filebeat_registry_cloud:
     driver: local
 
   # FRE-910: parent mount for /app/telemetry — durable-by-default for every writer,

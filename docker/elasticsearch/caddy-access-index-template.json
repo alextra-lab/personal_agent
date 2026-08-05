@@ -1,0 +1,66 @@
+{
+  "index_patterns": ["caddy-access-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "5s",
+      "index.lifecycle.name": "caddy-access-policy"
+    },
+    "mappings": {
+      "dynamic": true,
+      "dynamic_templates": [
+        {
+          "ms_fields_as_float": {
+            "match_pattern": "regex",
+            "match": "^(.*_ms|.*_seconds|.*_latency|.*_duration|duration)$",
+            "match_mapping_type": "*",
+            "mapping": { "type": "float" }
+          }
+        },
+        {
+          "ids_keyword": {
+            "match": "*_id",
+            "match_mapping_type": "string",
+            "mapping": { "type": "keyword" }
+          }
+        },
+        {
+          "default_string_keyword": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "caddy": {
+          "properties": {
+            "logger": { "type": "keyword" },
+            "status": { "type": "integer" },
+            "duration": { "type": "float" },
+            "resp_headers": { "type": "flattened" },
+            "request": {
+              "properties": {
+                "host": { "type": "keyword" },
+                "uri": { "type": "keyword" },
+                "remote_ip": { "type": "keyword" },
+                "method": { "type": "keyword" },
+                "headers": { "type": "flattened" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Caddy access-log evidence shipped by Filebeat (FRE-1146 / ADR-0132 D3). One doc per HTTP request through any Caddy site block, decoded from Caddy's JSON stdout access log under Docker's json-file wrapper. caddy.logger distinguishes egress-block traffic (http.log.access.egress_slm / .egress_artifacts, ADR-0132 D1) from inbound (the site's default/unnamed logger) — the field AC-a's filtering relies on. caddy.request.headers and caddy.resp_headers are mapped flattened rather than left to dynamic mapping: header keys are attacker-influenced (arbitrary inbound request headers), so per-key dynamic field creation would be an unbounded mapping-explosion risk.",
+    "managed_by": "scripts/setup-elasticsearch.sh"
+  }
+}

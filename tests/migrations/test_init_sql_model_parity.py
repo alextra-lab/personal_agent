@@ -22,6 +22,7 @@ Run it::
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -102,6 +103,10 @@ async def init_sql_schema():
     try:
         conn = await asyncpg.connect(dsn, timeout=5)
     except Exception as exc:  # pragma: no cover - environment guard
+        # In integration mode (CI), connection failures are real and must fail the test.
+        # In dev mode (make test-infra-up), skip cleanly if Postgres isn't running.
+        if os.getenv("PERSONAL_AGENT_INTEGRATION"):
+            raise
         pytest.skip(f"test-stack Postgres unavailable ({exc}); run `make test-infra-up`")
     try:
         await conn.execute(f"CREATE SCHEMA {schema}")
@@ -114,6 +119,7 @@ async def init_sql_schema():
         await conn.close()
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_every_model_column_exists_in_init_sql(init_sql_schema) -> None:
     """No SQLAlchemy model column may be missing from the init.sql-built schema.
@@ -132,6 +138,7 @@ async def test_every_model_column_exists_in_init_sql(init_sql_schema) -> None:
     )
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_guard_detects_dropped_column(init_sql_schema) -> None:
     """Synthetic drift reproduces the FRE-591 gap: dropping ``sessions.user_id``.

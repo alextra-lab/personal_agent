@@ -163,6 +163,10 @@ services:
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
+      # ADR-0132 D4: the eval profile declares its own SLM endpoint. There is no
+      # default to inherit, and evals must never traverse the Cloudflare egress
+      # path (no CF credential is available to this stack).
+      AGENT_SLM_BASE_URL: ${AGENT_SLM_BASE_URL:-http://localhost:8000}
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
       API_HOST: 0.0.0.0
@@ -198,6 +202,10 @@ services:
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
+      # ADR-0132 D4: the eval profile declares its own SLM endpoint. There is no
+      # default to inherit, and evals must never traverse the Cloudflare egress
+      # path (no CF credential is available to this stack).
+      AGENT_SLM_BASE_URL: ${AGENT_SLM_BASE_URL:-http://localhost:8000}
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
       API_HOST: 0.0.0.0

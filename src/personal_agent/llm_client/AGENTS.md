@@ -30,7 +30,7 @@ llm_client/
 from personal_agent.llm_client import LocalLLMClient
 from personal_agent.llm_client.types import ModelRole
 
-client = LocalLLMClient(base_url="http://localhost:1234/v1")
+client = LocalLLMClient()  # base URL comes from settings.slm_base_url
 trace_ctx = TraceContext.new_trace()
 
 response = await client.respond(
@@ -159,7 +159,7 @@ log.info("llm_response", response_length=len(response), duration_ms=duration, tr
 
 ## Config
 
-- Base URL: `http://localhost:1234/v1` (LM Studio default)
+- Base URL: `settings.slm_base_url` — declared per deployment (ADR-0132 D4); no default
 - Model: Qwen-based (configured in LM Studio)
 - **No API key needed** - local only
 
@@ -196,8 +196,8 @@ rg -n "LLMClientError" src/
 ```bash
 # 1. Download: https://lmstudio.ai
 # 2. Download Qwen model from UI
-# 3. Start local server (http://localhost:1234)
-# 4. Test: curl http://localhost:1234/v1/models
+# 3. Start local server on the port AGENT_SLM_BASE_URL names
+# 4. Test: curl $AGENT_SLM_BASE_URL/v1/models
 ```
 
 ## Pre-PR

@@ -80,7 +80,7 @@ class TestAppConfig:
         """Test AppConfig has correct code defaults (isolated from .env)."""
         monkeypatch.delenv("AGENT_LOG_LEVEL", raising=False)
         monkeypatch.delenv("APP_LOG_LEVEL", raising=False)
-        monkeypatch.delenv("AGENT_LLM_BASE_URL", raising=False)
+        monkeypatch.setenv("AGENT_SLM_BASE_URL", "http://localhost:9099")
         config = AppConfig()
         assert config.environment == Environment.DEVELOPMENT
         assert config.debug is False
@@ -88,7 +88,6 @@ class TestAppConfig:
         assert config.version == "0.1.0"
         assert config.log_level == "INFO"
         assert config.log_format == "json"
-        assert config.llm_base_url == "http://127.0.0.1:1234/v1"
         assert config.llm_timeout_seconds == 120
         assert config.orchestrator_max_concurrent_tasks == 5
 
@@ -100,15 +99,15 @@ class TestAppConfig:
         """
         monkeypatch.delenv("APP_LOG_LEVEL", raising=False)
         monkeypatch.delenv("APP_DEBUG", raising=False)
-        monkeypatch.delenv("AGENT_LLM_BASE_URL", raising=False)
+        monkeypatch.setenv("AGENT_SLM_BASE_URL", "http://localhost:9099")
         monkeypatch.setenv("APP_DEBUG", "1")
         monkeypatch.setenv("APP_LOG_LEVEL", "DEBUG")
-        monkeypatch.setenv("AGENT_LLM_BASE_URL", "http://test:8080/v1")
+        monkeypatch.setenv("AGENT_SLM_BASE_URL", "http://test:8080/v1")
 
         config = AppConfig()
         assert config.debug is True
         assert config.log_level == "DEBUG"
-        assert config.llm_base_url == "http://test:8080/v1"
+        assert config.slm_base_url == "http://test:8080/v1"
 
     def test_app_config_log_level_validation(self) -> None:
         """Test log level validation."""
@@ -339,28 +338,12 @@ class TestLoadAppConfig:
 class TestCFAccessSettings:
     """Test CF Access credential fields on AppConfig."""
 
-    def test_cf_access_client_id_reads_from_env(self) -> None:
-        """CF_ACCESS_CLIENT_ID env var is read into cf_access_client_id."""
-        os.environ["CF_ACCESS_CLIENT_ID"] = "test-client-id"
-        try:
-            config = AppConfig()
-            assert config.cf_access_client_id == "test-client-id"
-        finally:
-            del os.environ["CF_ACCESS_CLIENT_ID"]
+    def test_outbound_cf_fields_deleted_by_adr_0132(self) -> None:
+        """The outbound CF service-token pair no longer exists (ADR-0132 D1).
 
-    def test_cf_access_client_secret_reads_from_env(self) -> None:
-        """CF_ACCESS_CLIENT_SECRET env var is read into cf_access_client_secret."""
-        os.environ["CF_ACCESS_CLIENT_SECRET"] = "test-client-secret"
-        try:
-            config = AppConfig()
-            assert config.cf_access_client_secret == "test-client-secret"
-        finally:
-            del os.environ["CF_ACCESS_CLIENT_SECRET"]
-
-    def test_cf_access_fields_default_to_none(self) -> None:
-        """CF access fields are None when env vars are not set."""
-        os.environ.pop("CF_ACCESS_CLIENT_ID", None)
-        os.environ.pop("CF_ACCESS_CLIENT_SECRET", None)
+        Caddy holds the credential now; the inbound JWT-verification fields
+        (cf_access_team_domain / cf_access_aud) are deliberately retained.
+        """
         config = AppConfig()
-        assert config.cf_access_client_id is None
-        assert config.cf_access_client_secret is None
+        assert not hasattr(config, "cf_access_client_id")
+        assert not hasattr(config, "cf_access_client_secret")

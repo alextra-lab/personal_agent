@@ -236,6 +236,29 @@ jobs:
       - name: Run cross-config guard
         run: uv run python scripts/check_config.py
 
+  # ── Caddyfile validation (ADR-0132, FRE-1144) ───────────────────────────────
+  # The Caddyfile is edited routinely (8 commits in three months) and now carries
+  # the outbound egress blocks that hold the Cloudflare credential — a syntax
+  # error there takes down inference and the inbound sites together. `config/**`
+  # is already in the `backend` path filter, so no filter change is needed.
+  #
+  # Scope, stated honestly: this validates SYNTAX only. It cannot check that
+  # CF_ACCESS_CLIENT_ID/SECRET or SLM_HOST are populated at deploy time — the
+  # env-var placeholders adapt fine while empty.
+  caddy-validate:
+    name: Caddyfile validate
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.backend == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Caddyfile
+        run: |
+          docker run --rm \
+            -v "$PWD/config/cloud-sim/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+
   # ── PWA unit tests ──────────────────────────────────────────────────────────
   # WS2 (Vitest component tests) — added once `make test-pwa` is wired in PR2.
   pwa-unit:

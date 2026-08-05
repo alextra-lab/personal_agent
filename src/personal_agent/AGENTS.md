@@ -150,7 +150,7 @@ from personal_agent.config import settings
 
 # All configuration access goes through settings
 log_level = settings.log_level
-base_url = settings.llm_base_url
+base_url = settings.resolved_slm_base_url
 timeout = settings.llm_timeout_seconds
 ```
 

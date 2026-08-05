@@ -171,7 +171,7 @@ def configure_dspy_lm(
         )
 
     # ── Local model path (existing behaviour) ────────────────────────────────
-    effective_base_url = base_url or model_def.endpoint or settings.llm_base_url
+    effective_base_url = base_url or model_def.endpoint or settings.resolved_slm_base_url
 
     # Ensure base_url includes /v1 (required by LiteLLM routing)
     if not effective_base_url.endswith("/v1"):

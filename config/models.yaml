@@ -17,7 +17,7 @@
 #   default_timeout  Request timeout in seconds
 #
 # Local-model fields (omit for cloud models):
-#   endpoint         Base URL override (defaults to settings.llm_base_url)
+#   endpoint         Base URL override (defaults to settings.slm_base_url)
 #   quantization     e.g. "8bit", "4bit" (omit for cloud models)
 #   temperature, top_p, presence_penalty   Sampling params
 #   top_k            Passed via extra_body (vLLM/LM Studio extension)

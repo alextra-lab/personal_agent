@@ -51,7 +51,7 @@ profiles:
     elasticsearch: { kind: local, source: "setting:elasticsearch_url" }
     embedder:      { kind: local, source: "model_endpoint:embedding" }
     reranker:      { kind: local, source: "model_endpoint:reranker" }
-    slm:           { kind: local, source: "setting:llm_base_url" }
+    slm:           { kind: local, source: "setting:slm_base_url" }
     vector_index:  { kind: local, source: "backed_by:neo4j" }
 
   # ── managed (opt-in): any operator needing compliance/SOTA managed substrate
@@ -82,7 +82,7 @@ profiles:
     elasticsearch: { kind: local, source: "setting:elasticsearch_url" }
     embedder:      { kind: managed, source: "setting:managed_embedding_endpoint" }
     reranker:      { kind: local, source: "model_endpoint:reranker" }
-    slm:           { kind: local, source: "setting:llm_base_url" }
+    slm:           { kind: local, source: "setting:slm_base_url" }
     vector_index:  { kind: local, source: "backed_by:neo4j" }
 
   # ── dev / test: local, disposable, isolated backends. FRE-816 establishes the
@@ -97,7 +97,7 @@ profiles:
     elasticsearch: { kind: local, source: "setting:elasticsearch_url" }
     embedder:      { kind: local, source: "model_endpoint:embedding" }
     reranker:      { kind: local, source: "model_endpoint:reranker" }
-    slm:           { kind: local, source: "setting:llm_base_url" }
+    slm:           { kind: local, source: "setting:slm_base_url" }
     vector_index:  { kind: local, source: "backed_by:neo4j" }
   test:
     postgres:      { kind: local, source: "setting:database_url" }
@@ -105,5 +105,5 @@ profiles:
     elasticsearch: { kind: local, source: "setting:elasticsearch_url" }
     embedder:      { kind: local, source: "model_endpoint:embedding" }
     reranker:      { kind: local, source: "model_endpoint:reranker" }
-    slm:           { kind: local, source: "setting:llm_base_url" }
+    slm:           { kind: local, source: "setting:slm_base_url" }
     vector_index:  { kind: local, source: "backed_by:neo4j" }

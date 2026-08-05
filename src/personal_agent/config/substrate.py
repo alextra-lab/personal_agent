@@ -110,7 +110,7 @@ def _resolve_model_endpoint(role: str, settings: AppConfig, root: Path) -> str |
     Reuses the ADR-0099 role matrix + model loader so there is one canonical
     role→endpoint path, not a second copy. Returns ``None`` when the model-def
     declares no ``endpoint`` override (the runtime consumer then falls back to
-    ``settings.llm_base_url`` — a runtime-adoption detail, not this seam's).
+    ``settings.slm_base_url`` — a runtime-adoption detail, not this seam's).
     """
     from personal_agent.config.model_loader import (  # noqa: PLC0415 — avoid import cycle
         load_model_config,

@@ -21,7 +21,7 @@ profiles:
     elasticsearch: {{ kind: local, source: "setting:elasticsearch_url" }}
     embedder:      {{ kind: local, source: "model_endpoint:embedding" }}
     reranker:      {{ kind: local, source: "model_endpoint:reranker" }}
-    slm:           {{ kind: local, source: "setting:llm_base_url" }}
+    slm:           {{ kind: local, source: "setting:slm_base_url" }}
 {extra}
 """
 

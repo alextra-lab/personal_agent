@@ -32,24 +32,6 @@ from personal_agent.telemetry.trace import SystemTraceContext
 log = structlog.get_logger(__name__)
 
 
-def _cf_access_headers(settings: AppConfig) -> dict[str, str]:
-    """Build Cloudflare Access service-token headers from settings.
-
-    Local duplicate of ``service/app.py``'s ``_cf_access_headers`` — kept local
-    rather than imported to avoid a ``llm_client`` -> ``service`` layering
-    inversion (``service.app`` imports from ``llm_client``, not the reverse).
-
-    Returns:
-        A dict with ``CF-Access-Client-Id`` and ``CF-Access-Client-Secret``
-        when both settings are present, else an empty dict.
-    """
-    headers: dict[str, str] = {}
-    if settings.cf_access_client_id and settings.cf_access_client_secret:
-        headers["CF-Access-Client-Id"] = settings.cf_access_client_id
-        headers["CF-Access-Client-Secret"] = settings.cf_access_client_secret
-    return headers
-
-
 async def is_provider_available(
     provider: ProviderDefinition, settings: AppConfig, *, trace_id: str | None = None
 ) -> bool:
@@ -73,8 +55,7 @@ async def is_provider_available(
 
     ctx_trace_id = trace_id or SystemTraceContext.new("provider_health_probe").trace_id
     snapshot = await probe_slm_health(
-        url=settings.slm_health_url,
-        cf_headers=_cf_access_headers(settings),
+        url=settings.resolved_slm_health_url,
         timeout_s=3.0,
         trace_id=ctx_trace_id,
         gpu_util_degraded_pct=settings.slm_gpu_util_degraded_pct,

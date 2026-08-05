@@ -111,7 +111,6 @@ class TestRerank:
         assert results[0].document == "a"
 
 
-_CF_HEADERS = {"CF-Access-Client-Id": "id", "CF-Access-Client-Secret": "sec"}
 
 
 class TestCfAccessInjection:
@@ -132,8 +131,9 @@ class TestCfAccessInjection:
         return client
 
     @pytest.mark.asyncio
-    async def test_slm_endpoint_gets_cf_headers(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.example.com")
+    async def test_slm_endpoint_gets_no_cf_headers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """ADR-0132 D1: the Caddy egress block injects the token, not this client."""
+        monkeypatch.setattr(settings, "slm_base_url", "https://slm.example.com")
         client = self._mock_client()
         with (
             patch(
@@ -141,14 +141,10 @@ class TestCfAccessInjection:
                 return_value=("Voodisss/Qwen3-Reranker-4B", "https://slm.example.com/v1"),
             ),
             patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
-            patch(
-                "personal_agent.memory.reranker.cf_access_service_token_headers",
-                return_value=dict(_CF_HEADERS),
-            ),
         ):
             await rerank("q", ["a"])
 
-        assert client.post.call_args.kwargs["headers"] == _CF_HEADERS
+        assert client.post.call_args.kwargs["headers"] == {}
 
     @pytest.mark.asyncio
     async def test_non_slm_endpoint_no_cf_headers(self) -> None:
@@ -159,10 +155,6 @@ class TestCfAccessInjection:
                 return_value=("ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF", "http://localhost:8504/v1"),
             ),
             patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
-            patch(
-                "personal_agent.memory.reranker.cf_access_service_token_headers",
-                return_value=dict(_CF_HEADERS),
-            ),
         ):
             await rerank("q", ["a"])
 
@@ -305,7 +297,7 @@ class TestRerankTelemetryJoinability:
     async def test_trace_headers_sent_to_slm_when_trace_id(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.example.com")
+        monkeypatch.setattr(settings, "slm_base_url", "https://slm.example.com")
         client = self._mock_client([])
         with (
             patch(
@@ -313,10 +305,6 @@ class TestRerankTelemetryJoinability:
                 return_value=("Voodisss/Qwen3-Reranker-4B", "https://slm.example.com/v1"),
             ),
             patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
-            patch(
-                "personal_agent.memory.reranker.cf_access_service_token_headers",
-                return_value=dict(_CF_HEADERS),
-            ),
         ):
             await rerank("q", ["a"], trace_id="tr-1", session_id="se-1")
 
@@ -324,14 +312,15 @@ class TestRerankTelemetryJoinability:
         assert headers["X-Trace-Id"] == "tr-1"
         assert headers["X-Session-Id"] == "se-1"
         assert headers["X-Span-Id"]
-        # CF-Access headers must be preserved alongside the trace headers.
-        assert headers["CF-Access-Client-Id"] == "id"
-        assert headers["CF-Access-Client-Secret"] == "sec"
+        # No CF-Access headers: Caddy attaches them (ADR-0132 D1). The trace
+        # headers are the application's own and must still be forwarded.
+        assert "CF-Access-Client-Id" not in headers
+        assert "CF-Access-Client-Secret" not in headers
 
     @pytest.mark.asyncio
     async def test_no_trace_headers_without_trace_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Context-less calls send only CF headers — no X-* injection (gating)."""
-        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.example.com")
+        monkeypatch.setattr(settings, "slm_base_url", "https://slm.example.com")
         client = self._mock_client([])
         with (
             patch(
@@ -339,15 +328,11 @@ class TestRerankTelemetryJoinability:
                 return_value=("Voodisss/Qwen3-Reranker-4B", "https://slm.example.com/v1"),
             ),
             patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
-            patch(
-                "personal_agent.memory.reranker.cf_access_service_token_headers",
-                return_value=dict(_CF_HEADERS),
-            ),
         ):
             await rerank("q", ["a"])
 
         headers = client.post.call_args.kwargs["headers"]
-        assert headers == _CF_HEADERS
+        assert headers == {}
         assert "X-Trace-Id" not in headers
 
 
@@ -621,10 +606,6 @@ class TestFallbackToMacTunnel:
                 return_value=("Qwen/Qwen3-Reranker-4B-mxfp8", "https://slm.example.com/v1"),
             ),
             patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
-            patch(
-                "personal_agent.memory.reranker.cf_access_service_token_headers",
-                return_value=dict(_CF_HEADERS),
-            ),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
             patch("personal_agent.memory.reranker.record_vendor_cost", mock_record),
             patch("personal_agent.memory.reranker.log") as mock_log,
@@ -632,7 +613,7 @@ class TestFallbackToMacTunnel:
             mock_settings.return_value.reranker_enabled = True
             mock_settings.return_value.reranker_input_cap = 25
             mock_settings.return_value.voyage_api_key = "test-voyage-key"
-            mock_settings.return_value.slm_tunnel_base_url = "https://slm.example.com"
+            mock_settings.return_value.slm_base_url = "https://slm.example.com"
             await rerank("q", ["a"], top_k=5, trace_id="tr-1", session_id="se-1")
 
         mock_record.assert_not_awaited()
@@ -663,17 +644,13 @@ class TestFallbackToMacTunnel:
                 return_value=("Qwen/Qwen3-Reranker-4B-mxfp8", "https://slm.example.com/v1"),
             ),
             patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
-            patch(
-                "personal_agent.memory.reranker.cf_access_service_token_headers",
-                return_value=dict(_CF_HEADERS),
-            ),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
             patch("personal_agent.memory.reranker.log") as mock_log,
         ):
             mock_settings.return_value.reranker_enabled = True
             mock_settings.return_value.reranker_input_cap = 25
             mock_settings.return_value.voyage_api_key = "test-voyage-key"
-            mock_settings.return_value.slm_tunnel_base_url = "https://slm.example.com"
+            mock_settings.return_value.slm_base_url = "https://slm.example.com"
             results = await rerank("q", ["a"], top_k=5, trace_id="tr-1", session_id="se-1")
 
         assert len(results) == 1
@@ -683,7 +660,7 @@ class TestFallbackToMacTunnel:
         # and (unlike the Voyage attempt) carries the trace join-key headers.
         second_call = client.post.call_args_list[1]
         assert second_call.kwargs["json"]["top_n"] == 5
-        assert second_call.kwargs["headers"]["CF-Access-Client-Id"] == "id"
+        assert "CF-Access-Client-Id" not in second_call.kwargs["headers"]
         assert second_call.kwargs["headers"]["X-Trace-Id"] == "tr-1"
 
         failed = [
@@ -721,7 +698,7 @@ class TestFallbackToMacTunnel:
             mock_settings.return_value.reranker_enabled = True
             mock_settings.return_value.reranker_input_cap = 25
             mock_settings.return_value.voyage_api_key = "test-voyage-key"
-            mock_settings.return_value.slm_tunnel_base_url = "https://slm.example.com"
+            mock_settings.return_value.slm_base_url = "https://slm.example.com"
             results = await rerank("q", ["a", "b"], top_k=5)
 
         assert len(results) == 2
@@ -791,7 +768,7 @@ class TestFallbackToMacTunnel:
             mock_settings.return_value.reranker_enabled = True
             mock_settings.return_value.reranker_input_cap = 25
             mock_settings.return_value.voyage_api_key = None
-            mock_settings.return_value.slm_tunnel_base_url = "https://slm.example.com"
+            mock_settings.return_value.slm_base_url = "https://slm.example.com"
             results = await rerank("q", ["a"], top_k=5)
 
         assert len(results) == 1
@@ -843,7 +820,7 @@ class TestFallbackToMacTunnel:
             mock_settings.return_value.reranker_enabled = True
             mock_settings.return_value.reranker_input_cap = 25
             mock_settings.return_value.voyage_api_key = "test-voyage-key"
-            mock_settings.return_value.slm_tunnel_base_url = "https://slm.example.com"
+            mock_settings.return_value.slm_base_url = "https://slm.example.com"
             await rerank("q", ["a"], top_k=5)
 
         # Exactly 6 reads: rerank()'s start, the reranker_failed duration, the

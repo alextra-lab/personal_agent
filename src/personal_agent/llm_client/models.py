@@ -189,7 +189,7 @@ class ModelDefinition(BaseModel):
             cloud models where output length is billed per token. None = provider
             default / LocalLLMClient call-site default.
         endpoint: Optional base URL override for this model. If None, uses
-            settings.llm_base_url. Not used for cloud models (they use provider SDK).
+            settings.slm_base_url. Not used for cloud models (they use provider SDK).
         context_length: Maximum context length for this model.
         quantization: Quantization level (e.g., "8bit", "4bit", "5bit"). None for
             cloud models where quantization is managed by the provider.

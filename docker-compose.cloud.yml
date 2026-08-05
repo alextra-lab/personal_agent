@@ -363,11 +363,16 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: "9001"
       APP_ENV: production
-      # ── Cloudflare Access: rename host var → AGENT_ prefixed container var ────
-      # CF_ACCESS_CLIENT_ID/SECRET have no AGENT_ prefix in .env (used by cloudflared too)
-      # so we remap them here. Everything else flows through env_file above.
-      AGENT_CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID}
-      AGENT_CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET}
+      # ── Outbound egress (ADR-0132 D1) ────────────────────────────────────────
+      # The Cloudflare Access service-token pair is deliberately ABSENT here. It
+      # now lives only in the caddy service's own env file; this service
+      # addresses the internal Caddy egress blocks and Caddy injects the
+      # credential. Re-adding CF_ACCESS_* here would undo the custody move.
+      # NOTE: the pair must also be REMOVED from /opt/seshat/.env — env_file
+      # above imports that whole file, so leaving it there puts it back
+      # in-process and makes the move cosmetic.
+      AGENT_SLM_BASE_URL: http://caddy:8600
+      AGENT_ARTIFACTS_EGRESS_BASE_URL: http://caddy:8601
     ports:
       # Localhost only — Caddy proxies to this port internally
       - "127.0.0.1:9001:9001"
@@ -476,14 +481,39 @@ services:
   caddy:
     image: caddy:2-alpine
     container_name: cloud-sim-caddy
+    # ADR-0132 D1: the Cloudflare Access service-token pair lives HERE and only
+    # here. A separate file from /opt/seshat/.env precisely because the gateway
+    # imports that one wholesale via env_file — a shared file would leave the
+    # credential in the application process and make the custody move cosmetic.
+    # required: false so a host without the file (a fresh clone, CI running
+    # `compose config`, a deployment with no Cloudflare barrier) still parses.
+    # A missing file is not silent: the egress blocks then send empty CF headers,
+    # Cloudflare answers 403, and the SLM health probe reports down with a hint
+    # naming this file — a visible failure rather than a broken compose command
+    # for everyone.
+    env_file:
+      - path: /opt/seshat/.env.caddy
+        required: false
     environment:
       AGENT_HOST: ${AGENT_HOST:-agent.example.com}
       GRAPH_HOST: ${GRAPH_HOST:-graph.example.com}
       ES_HOST: ${ES_HOST:-es.example.com}
       API_HOST: ${API_HOST:-api.example.com}
+      # Outbound egress upstreams (ADR-0132 D1). Real hosts come from .env;
+      # tracked source ships inert placeholders (FRE-895).
+      SLM_HOST: ${SLM_HOST:-slm.example.com}
+      ARTIFACTS_HOST: ${ARTIFACTS_HOST:-artifacts.example.com}
     ports:
       - "80:80"
       - "443:443"
+      # Outbound egress listeners (ADR-0132 D1), bound to LOOPBACK ONLY.
+      # Not exposed off-box: this exists so host-side tooling (eval scripts,
+      # `uv run agent`) keeps a route to the SLM. Before this change those
+      # scripts reached the tunnel directly using CF headers from /opt/seshat/.env;
+      # that credential now lives only in the caddy container, so without a
+      # loopback route they would have no path at all.
+      - "127.0.0.1:8600:8600"
+      - "127.0.0.1:8601:8601"
     volumes:
       - ./config/cloud-sim/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

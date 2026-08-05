@@ -40,12 +40,12 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.config.settings import get_settings
+from personal_agent.service.artifact_egress import to_artifacts_egress_url
 from personal_agent.service.auth import RequestUser, get_or_create_user_by_email, get_request_user
 from personal_agent.service.cf_access_jwt import (
     CFAccessVerifierError,
     get_verifier,
 )
-from personal_agent.service.cf_service_token import cf_access_service_token_headers
 from personal_agent.service.database import get_db_session
 from personal_agent.service.models import ArtifactModel
 from personal_agent.storage import get_artifact_store
@@ -352,10 +352,11 @@ class _HttpAssetFetcher:
     *trusted* substitution map. Any other host (a redirect target, or a URL
     smuggled in via artifact content) is refused before the request is issued,
     and redirects are not followed (a 3xx could otherwise relocate the request
-    off an allowed host). The CF Access service token is attached **only** for
-    the artifacts origin (Access-gated); public CDN hosts are fetched plain. Any
-    non-200 is raised as :class:`ArtifactExportError` so the endpoint maps it to
-    502.
+    off an allowed host). No CF Access service token is attached here (ADR-0132
+    D1): a request to the Access-gated artifacts origin is instead sent to the
+    internal Caddy egress block, which injects the token. Public CDN hosts are
+    fetched directly. Any non-200 is raised as :class:`ArtifactExportError` so
+    the endpoint maps it to 502.
     """
 
     def __init__(
@@ -363,25 +364,41 @@ class _HttpAssetFetcher:
         *,
         origin_host: str,
         allowed_hosts: frozenset[str],
+        egress_base_url: str | None = None,
         timeout: float = _EXPORT_FETCH_TIMEOUT_S,
     ) -> None:
         self._origin_host = origin_host.lower()
         self._allowed_hosts = allowed_hosts
+        self._egress_base_url = egress_base_url
         self._timeout = timeout
 
     async def fetch(self, url: str) -> bytes:
         host = urlparse(url).netloc.lower()
+        # The allowlist is checked against the URL AS GIVEN, before any egress
+        # rewrite. Rewriting first would replace the host with the proxy's and
+        # make every URL look allowed — the SSRF check must see the real target.
         if host not in self._allowed_hosts:
             raise ArtifactExportError(f"refusing to fetch from disallowed host: {host!r}")
-        headers = cf_access_service_token_headers() if host == self._origin_host else {}
+        request_url = self._to_egress_url(url) if host == self._origin_host else url
         try:
             async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
-                response = await client.get(url, headers=headers)
+                response = await client.get(request_url)
         except httpx.HTTPError as exc:
             raise ArtifactExportError(f"failed to fetch {url}: {exc}") from exc
         if response.status_code != 200:
             raise ArtifactExportError(f"fetch {url} returned HTTP {response.status_code}")
         return response.content
+
+    def _to_egress_url(self, url: str) -> str:
+        """Rewrite an artifacts-origin URL onto the Caddy egress base.
+
+        Args:
+            url: The artifacts-origin URL, already allowlist-checked.
+
+        Returns:
+            The URL to request; unchanged when no egress base is configured.
+        """
+        return to_artifacts_egress_url(url, egress_base_url=self._egress_base_url)
 
 
 def _build_asset_fetcher(sub_map: SubstitutionMap) -> AssetFetcher:
@@ -398,7 +415,11 @@ def _build_asset_fetcher(sub_map: SubstitutionMap) -> AssetFetcher:
             cdn_host = urlparse(asset.public_cdn_url).netloc.lower()
             if cdn_host:
                 allowed.add(cdn_host)
-    return _HttpAssetFetcher(origin_host=origin_host, allowed_hosts=frozenset(allowed))
+    return _HttpAssetFetcher(
+        origin_host=origin_host,
+        allowed_hosts=frozenset(allowed),
+        egress_base_url=settings.artifacts_egress_base_url,
+    )
 
 
 @router.get(

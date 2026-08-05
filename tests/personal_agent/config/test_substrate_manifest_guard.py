@@ -22,9 +22,9 @@ profiles:
     postgres:      {{ kind: local, source: "setting:database_url" }}
     neo4j:         {{ kind: local, source: "setting:neo4j_uri" }}
     elasticsearch: {{ kind: local, source: "setting:elasticsearch_url" }}
-    embedder:      {{ kind: local, source: "setting:llm_base_url" }}
-    reranker:      {{ kind: local, source: "setting:llm_base_url" }}
-    slm:           {{ kind: local, source: "setting:llm_base_url" }}
+    embedder:      {{ kind: local, source: "setting:slm_base_url" }}
+    reranker:      {{ kind: local, source: "setting:slm_base_url" }}
+    slm:           {{ kind: local, source: "setting:slm_base_url" }}
 {extra}
 """
 

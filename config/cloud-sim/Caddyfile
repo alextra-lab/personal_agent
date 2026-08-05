@@ -131,3 +131,105 @@ http://{$ES_HOST:es.example.com}:80 {
 		respond @5xx "Internal Server Error" 500
 	}
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTBOUND EGRESS BLOCKS (ADR-0132 D1, FRE-1144)
+#
+# Every block above is INBOUND: external traffic -> an internal service. The two
+# below are OUTBOUND: the application dials them on the compose network and
+# Caddy attaches the Cloudflare Access service token on the way out, so no
+# outbound CF credential is resident in the gateway process.
+#
+# The credential comes from the caddy service's own env file
+# (/opt/seshat/.env.caddy), which the gateway's blanket env_file does NOT
+# import. Both listeners are reachable from the cloud-sim network and, via a
+# LOOPBACK-ONLY port binding, from the VPS host — the latter so host-side eval
+# tooling keeps a route to the SLM now that it holds no CF credential of its
+# own. Neither is exposed off-box.
+#
+# A bare :port site address serves plain HTTP: `local_certs` in the global block
+# only applies to addresses carrying a hostname.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Mac SLM tunnel — the VPS's path to the local models. Streaming-critical.
+:8600 {
+	# Path-scoped in the FRE-411 style (ADR-0132 D1): the inference surface plus
+	# the health endpoint, nothing else. Anything that reaches this listener can
+	# only spend the credential on the calls the application actually makes.
+	@allowed path_regexp ^/(health|v1/(chat/completions|models|embeddings|rerank))$
+	handle @allowed {
+		reverse_proxy https://{$SLM_HOST:slm.example.com} {
+			header_up CF-Access-Client-Id {$CF_ACCESS_CLIENT_ID}
+			header_up CF-Access-Client-Secret {$CF_ACCESS_CLIENT_SECRET}
+			# Upstream is a public CF-fronted host: Host must name it, not the
+			# internal address the application dialled.
+			header_up Host {$SLM_HOST:slm.example.com}
+			# The OpenAI SDK's default User-Agent is WAF-blocked at the edge. That is
+			# a Cloudflare-topology concern, so the override lives here rather than
+			# in the embedding/inference clients (ADR-0132 D1).
+			header_up User-Agent "seshat-gateway/1.0"
+
+			transport http {
+				# Fail fast on a dead tunnel.
+				dial_timeout 10s
+				# Time-to-first-header only. This CANNOT sever a stream that has
+				# begun — see the load-bearing omissions below.
+				response_header_timeout 60s
+				# Pinned explicitly so connection reuse survives later edits to this
+				# block rather than silently inheriting a changed default.
+				keepalive 90s
+				keepalive_idle_conns 8
+			}
+
+			# LOAD-BEARING OMISSION 1 — no `flush_interval`.
+			# Caddy auto-flushes when the response Content-Type is text/event-stream
+			# or the content length is unknown, which SSE inference responses are.
+			# Forcing `-1` is unnecessary for SSE AND has a documented side effect:
+			# it prevents Caddy cancelling the upstream request when the downstream
+			# client disconnects, orphaning long generations and burning Mac-side
+			# compute for an abandoned turn.
+			#
+			# LOAD-BEARING OMISSION 2 — no body-duration / idle timeout.
+			# A real turn has been observed running 417 seconds. Caddy's HTTP
+			# transport imposes no overall response timeout by default; adding one
+			# here would sever long generations mid-stream.
+			#
+			# Do not "tidy" either omission in. Both are decisions, not oversights.
+		}
+	}
+	respond "Forbidden" 403
+	log {
+		output stdout
+		format json
+	}
+}
+
+# Artifacts origin — the artifacts Worker / /lib/ shelf / served artifact URLs.
+# Unlike the SLM block this carries no streaming constraint; requests are short
+# asset fetches and header-only envelope probes.
+:8601 {
+	# Path-scoped in the FRE-411 style (ADR-0132 D1), and load-bearing here: an
+	# unscoped listener would let anything that reaches it read EVERY user's
+	# artifacts with the Access barrier bypassed. Restricted to the two shapes
+	# the application actually fetches — a served artifact (UUID) and the /lib/
+	# asset shelf.
+	@allowed path_regexp ^/(lib/.+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$
+	handle @allowed {
+		reverse_proxy https://{$ARTIFACTS_HOST:artifacts.example.com} {
+			header_up CF-Access-Client-Id {$CF_ACCESS_CLIENT_ID}
+			header_up CF-Access-Client-Secret {$CF_ACCESS_CLIENT_SECRET}
+			header_up Host {$ARTIFACTS_HOST:artifacts.example.com}
+
+			transport http {
+				dial_timeout 10s
+				response_header_timeout 30s
+				keepalive 90s
+			}
+		}
+	}
+	respond "Forbidden" 403
+	log {
+		output stdout
+		format json
+	}
+}

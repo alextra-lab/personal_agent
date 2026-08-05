@@ -157,8 +157,20 @@ class AppConfig(BaseSettings):
         return resolve_path(v)
 
     # LLM Client
-    llm_base_url: str = Field(
-        default="http://127.0.0.1:1234/v1", description="Base URL for LLM API (LM Studio default)"
+    slm_base_url: str | None = Field(
+        default=None,
+        description=(
+            "Base URL of the SLM (local-model) server for THIS deployment (ADR-0132 D4). "
+            "Deliberately has no default: the value it replaced "
+            "(llm_base_url, a loopback LM Studio address) was unreachable from every "
+            "deployment and nothing noticed, which is the defect ADR-0132 exists to close. "
+            "Each deployment declares its own — cloud resolves to the internal Caddy egress "
+            "block (which injects the Cloudflare Access service token), local to a direct SLM "
+            "URL, eval to its compose-declared endpoint, and APP_ENV=test to the FRE-375 "
+            "fixture value so tests never address the tunnel. This is an ORIGIN "
+            "(scheme://host[:port]) with no /v1 suffix — callers that speak the "
+            "OpenAI API append their own path."
+        ),
     )
     llm_timeout_seconds: int = Field(default=120, ge=1, description="Request timeout")
     llm_max_retries: int = Field(default=3, ge=0, description="Maximum retry attempts")
@@ -1583,13 +1595,14 @@ class AppConfig(BaseSettings):
     )
 
     # SLM health monitor (FRE-399 Layer 3 / ADR-0083)
-    slm_health_url: str = Field(
-        default="https://slm.example.com/health",
+    slm_health_url: str | None = Field(
+        default=None,
         description=(
-            "URL of the Mac SLM server health endpoint, polled by the SLM-health monitor "
-            "and the /api/inference/status endpoint. The liveness-only response (today) "
-            "degrades gracefully; a richer response (from the Mac-side child ticket) "
-            "fills in GPU util, VRAM, queue depth, and model-loaded status."
+            "Override for the SLM health endpoint polled by the SLM-health monitor and "
+            "the /api/inference/status endpoint. Normally left unset: it then derives "
+            "from slm_base_url (ADR-0132 D4), so the probe traverses the same egress "
+            "path as inference rather than a separately-configured host that can drift. "
+            "Read via the resolved_slm_health_url property, never directly."
         ),
     )
     slm_health_probe_enabled: bool = Field(
@@ -1961,32 +1974,20 @@ class AppConfig(BaseSettings):
         default="config/gateway_access.yaml",
         description="Path to the YAML file declaring gateway bearer tokens and scopes.",
     )
-    cf_access_client_id: str | None = Field(
-        default=None,
-        alias="CF_ACCESS_CLIENT_ID",
-        description=(
-            "Cloudflare Zero Trust service token client ID for Mac SLM tunnel. "
-            "Injected as CF-Access-Client-Id header on requests to the SLM tunnel host "
-            "(see slm_tunnel_base_url)."
-        ),
-    )
-    cf_access_client_secret: str | None = Field(
-        default=None,
-        alias="CF_ACCESS_CLIENT_SECRET",
-        description=(
-            "Cloudflare Zero Trust service token secret for Mac SLM tunnel. "
-            "Injected as CF-Access-Client-Secret header on requests to the SLM tunnel host "
-            "(see slm_tunnel_base_url)."
-        ),
-        json_schema_extra={"secret": True},
-    )
-    slm_tunnel_base_url: str | None = Field(
+    # The outbound Cloudflare Access service-token pair (cf_access_client_id /
+    # cf_access_client_secret) and slm_tunnel_base_url were DELETED here by
+    # ADR-0132 D1 (FRE-1144). Caddy now terminates the outbound Cloudflare
+    # barrier: the application addresses an internal egress block and Caddy
+    # injects the service token, so no outbound CF credential is process-resident.
+    # The *inbound* JWT-verification fields (cf_access_team_domain / cf_access_aud,
+    # below) are deliberately retained — they authenticate arriving requests.
+    artifacts_egress_base_url: str | None = Field(
         default=None,
         description=(
-            "Real base URL of the CF-Access-gated Mac SLM Cloudflare tunnel (e.g. "
-            "https://slm.example.com), overriding the placeholder host baked into "
-            "config/models*.yaml endpoints when set. Also identifies which outbound "
-            "requests should get CF-Access headers injected (FRE-895)."
+            "Internal Caddy egress base URL fronting the CF-Access-protected artifacts "
+            "origin (ADR-0132 D1). Artifact export and the envelope probe rewrite an "
+            "artifacts-origin URL onto this base so Caddy can attach the service token. "
+            "Unset on deployments with no Cloudflare barrier (local, eval)."
         ),
     )
     pwa_public_origin: str = Field(
@@ -2472,6 +2473,53 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    @property
+    def resolved_slm_base_url(self) -> str:
+        """The SLM base URL for this deployment, guaranteed present (ADR-0132 D4).
+
+        ``slm_base_url`` is declared optional so that a missing value produces the
+        explanatory error in :meth:`_validate_slm_endpoint_declared` rather than
+        pydantic's bare "Field required". That validator runs on every
+        construction, so this accessor cannot return ``None`` in practice — it
+        exists to give callers a non-optional type.
+
+        Returns:
+            Absolute base URL of the SLM server for this deployment.
+
+        Raises:
+            ValueError: If ``slm_base_url`` is unset (unreachable post-validation).
+        """
+        if not self.slm_base_url:  # pragma: no cover - validator guarantees this
+            raise ValueError("AGENT_SLM_BASE_URL is not set.")
+        return self.slm_base_url
+
+    @property
+    def resolved_slm_health_url(self) -> str:
+        """The SLM health endpoint for this deployment (ADR-0132 D4).
+
+        Derives from :attr:`slm_base_url` so the health probe traverses the same
+        egress path as inference — on the cloud profile that means through the
+        Caddy egress block, which is what AC-d measures. An explicit
+        :attr:`slm_health_url` overrides the derivation.
+
+        Returns:
+            Absolute URL of the SLM server's health endpoint.
+
+        Raises:
+            ValueError: If neither an override nor ``slm_base_url`` is set.
+        """
+        if self.slm_health_url:
+            return self.slm_health_url
+        if not self.slm_base_url:
+            raise ValueError(
+                "Cannot resolve the SLM health URL: neither AGENT_SLM_HEALTH_URL nor "
+                "AGENT_SLM_BASE_URL is set."
+            )
+        # models.yaml endpoints carry an OpenAI-style /v1 suffix; /health sits at
+        # the server root, not under it.
+        origin = self.slm_base_url.rstrip("/").removesuffix("/v1")
+        return f"{origin}/health"
+
     @model_validator(mode="after")
     def _validate_compression_geometry(self) -> "AppConfig":
         """Reject configurations that leave too little budget for head + middle.
@@ -2779,6 +2827,44 @@ def _log_active_substrate_profile(config: "AppConfig") -> None:
 _settings: AppConfig | None = None
 
 
+def enforce_slm_endpoint_declared(config: AppConfig) -> None:
+    """Require a real DEPLOYMENT to declare its SLM endpoint (ADR-0132 D4).
+
+    Scoped to the deployed profiles (``cloud``, ``eval``) — the ones whose
+    compose file declares the profile explicitly — rather than to every
+    construction of the config. Two reasons, both measured rather than assumed:
+
+    * ``settings = get_settings()`` runs at import scope across the codebase, so
+      an unconditional failure bricks every script, CLI entrypoint and diagnostic
+      on a host whose ``.env`` predates this field — including the tooling needed
+      to diagnose it.
+    * Static tooling legitimately loads config with no deployment behind it.
+      ``scripts/check_config.py`` (the ADR-0099 cross-config guard, run by
+      pre-commit and CI) does exactly this, and CI runners have no ``.env`` at
+      all — an unconditional check turns every CI run red.
+
+    The dead-default class stays closed regardless of profile: the field has no
+    default, so an unset value can never resolve to something unreachable. Where
+    this check does not apply, :attr:`AppConfig.resolved_slm_base_url` raises at
+    the point of use instead.
+
+    Args:
+        config: The freshly constructed application config.
+
+    Raises:
+        ValueError: If a deployed profile declares no SLM endpoint.
+    """
+    if config.slm_base_url or config.deployment_profile not in ("cloud", "eval"):
+        return
+    raise ValueError(
+        "AGENT_SLM_BASE_URL is not set. Every deployment must declare its own SLM "
+        f"endpoint (deployment_profile={config.deployment_profile!r}): cloud -> the "
+        "internal Caddy egress URL, local -> a direct SLM URL, eval -> its "
+        "compose-declared endpoint, APP_ENV=test -> the FRE-375 fixture value. "
+        "ADR-0132 D4 deliberately removed the default rather than replacing it."
+    )
+
+
 def load_app_config() -> AppConfig:
     """Load and validate application configuration.
 
@@ -2804,6 +2890,7 @@ def load_app_config() -> AppConfig:
     try:
         config = AppConfig()
         enforce_required_secrets(config)
+        enforce_slm_endpoint_declared(config)
         _log_active_substrate_profile(config)
         log.info(
             "app_config_loaded",

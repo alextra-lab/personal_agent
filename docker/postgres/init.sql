@@ -196,25 +196,10 @@ CREATE INDEX idx_route_traces_created_at ON route_traces(created_at DESC);
 CREATE INDEX idx_route_traces_task_type ON route_traces(task_type);
 CREATE INDEX idx_route_traces_orchestration_event ON route_traces(orchestration_event);
 
--- Embeddings table (for future semantic search)
--- Uses pgvector for efficient similarity search
-CREATE TABLE IF NOT EXISTS embeddings (
-    id BIGSERIAL PRIMARY KEY,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    source_type VARCHAR(50) NOT NULL,  -- 'conversation', 'entity', 'reflection'
-    source_id UUID NOT NULL,           -- Reference to source record
-    content_hash VARCHAR(64),          -- SHA256 of embedded content (dedup)
-    embedding vector(1536),            -- OpenAI ada-002 dimension (adjust as needed)
-    metadata JSONB DEFAULT '{}'
-);
-
--- HNSW index for fast approximate nearest neighbor search
-CREATE INDEX idx_embeddings_vector ON embeddings
-    USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
-
-CREATE INDEX idx_embeddings_source ON embeddings(source_type, source_id);
-CREATE INDEX idx_embeddings_hash ON embeddings(content_hash);
+-- (No `embeddings` table here — it was a speculative pgvector table, never
+-- read or written by any code; dropped for existing DBs by migration 0024,
+-- FRE-597. Semantic search lives in Neo4j instead. The `vector` extension
+-- stays enabled above for `artifacts.embedding`, below.)
 
 -- ===========================================================================
 -- Cost Check Gate (ADR-0065 / FRE-303)

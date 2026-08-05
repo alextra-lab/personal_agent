@@ -259,8 +259,12 @@ class or ask-first, and who authorized) · deploy timestamp · health/verificati
 available yes/no · each acceptance criterion with how it was verified · **open-remedy disposition** —
 each `## Open remedies` item as it stands at close (in scope, naming the criterion that proved it;
 filed, naming the id; rejected, stating the reason). An item still undispositioned at close is drift;
-fix it here, before the ticket leaves every mechanism's view. A ticket reaching Done without
-this comment is drift — catch it.
+fix it here, before the ticket leaves every mechanism's view. **That one field also binds the
+`Canceled` and `Duplicate` exits**, where the rest of this comment does not apply: a ticket abandoned
+or folded into another still names each item's disposition in a closing comment, because abandoning
+the *ticket* is not a decision about the *remedies it named*. Those two exits pass neither the
+dispatch gate nor the Done gate, so they are the one path where a named remedy can leave view
+unnoticed. A ticket reaching Done without this comment is drift — catch it.
 
 ## Dispatch (Linear-native)
 

@@ -408,13 +408,42 @@ class LiteLLMClient:
 
         api_messages, _ = sanitise_messages(api_messages, trace_id=trace_id)
 
-        # Resolve provider API key from AGENT_-prefixed settings so LiteLLM
-        # doesn't have to find a bare ANTHROPIC_API_KEY / OPENAI_API_KEY env var.
+        # Resolve credential + base URL from the provider's catalog entry
+        # (ADR-0121 Layer 1) instead of a provider-name branch (FRE-1155): the
+        # old if/elif covered only anthropic and openai, so every other
+        # provider dispatched with no credential and no declared base_url.
+        # OVH's anonymous-access allowance (2 req/min vs 400 authenticated)
+        # let that through invisibly until a rate limit surfaced it live.
+        from personal_agent.config import load_model_config  # noqa: PLC0415
+
+        provider_def = load_model_config().providers.get(self.provider)
+
+        # Fails closed rather than dispatching unauthenticated (FRE-1155
+        # decision) — both when the provider isn't in the catalog at all (no
+        # way to know its auth policy; reachable via
+        # second_brain.entity_extraction.ExtractionModelOverride, which
+        # doesn't validate its provider string against the catalog) and when
+        # a declared auth_env resolves empty. Mirrors how
+        # is_provider_available() already treats a missing credential as
+        # unselectable, and embeddings.py's identical guard for the same
+        # catalog field (memory/embeddings.py:_get_embedding_config).
+        if provider_def is None:
+            raise LLMClientError(
+                f"provider {self.provider!r} is not declared in the model "
+                "catalog (config/models.yaml); refusing to dispatch without "
+                "a known auth policy for it."
+            )
+
         api_key: str | None = None
-        if self.provider == "anthropic":
-            api_key = _settings.anthropic_api_key or None
-        elif self.provider == "openai":
-            api_key = _settings.openai_api_key or None
+        if provider_def.auth_env:
+            resolved_key = getattr(_settings, provider_def.auth_env, None)
+            if not resolved_key:
+                raise LLMClientError(
+                    f"provider {self.provider!r} declares auth_env "
+                    f"{provider_def.auth_env!r}, which is unset. Refusing to "
+                    "dispatch unauthenticated."
+                )
+            api_key = str(resolved_key)
 
         # Build litellm call kwargs
         litellm_kwargs: dict[str, Any] = {
@@ -424,6 +453,8 @@ class LiteLLMClient:
         }
         if api_key:
             litellm_kwargs["api_key"] = api_key
+        if provider_def.base_url:
+            litellm_kwargs["api_base"] = provider_def.base_url
         if tools:
             litellm_kwargs["tools"] = tools
         if tool_choice is not None:

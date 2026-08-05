@@ -96,7 +96,7 @@ class TestPrivateMirrorsReality:
         assert resolution.backends["elasticsearch"].target == str(
             managed_settings.elasticsearch_url
         )
-        assert resolution.backends["slm"].target == str(managed_settings.llm_base_url)
+        assert resolution.backends["slm"].target == str(managed_settings.slm_base_url)
 
     def test_embedder_reranker_mirror_model_def_endpoint(self, managed_settings: AppConfig) -> None:
         resolution = resolve_substrate("private", settings=managed_settings)

@@ -3,7 +3,7 @@
 
 Re-scores top-K candidates from the hybrid search pipeline. PRIMARY target is
 Voyage rerank-2.5 (managed API); on error/timeout, falls back to the Mac-tunnel
-Qwen3-Reranker-4B (MLX, via the CF-Access-gated SLM tunnel — settings.slm_tunnel_base_url);
+Qwen3-Reranker-4B (MLX, via the SLM endpoint — settings.slm_base_url);
 on total failure, degrades to passthrough (FRE-851).
 
 Model identity and endpoints are configured in config/models.yaml (ADR-0031),
@@ -27,7 +27,6 @@ import structlog
 from personal_agent.config import get_settings
 from personal_agent.config.settings import AppConfig
 from personal_agent.llm_client.cost_tracker import record_vendor_cost
-from personal_agent.service.cf_service_token import cf_access_service_token_headers
 
 log = structlog.get_logger(__name__)
 
@@ -112,7 +111,7 @@ def _get_reranker_fallback_config() -> tuple[str, str]:
             (missing matrix, or resolved key absent from the active model
             config).
     """
-    slm_base = get_settings().slm_tunnel_base_url or "https://slm.example.com"
+    slm_base = get_settings().resolved_slm_base_url
     return _resolve_reranker_role_config("reranker_fallback", f"{slm_base.rstrip('/')}/v1")
 
 
@@ -191,9 +190,9 @@ async def _attempt_rerank(
         if not settings.voyage_api_key:
             raise RuntimeError("voyage_api_key not configured")
         headers: dict[str, str] = {"Authorization": f"Bearer {settings.voyage_api_key}"}
-    elif settings.slm_tunnel_base_url and settings.slm_tunnel_base_url in endpoint:
-        headers = cf_access_service_token_headers()
     else:
+        # No CF service token (ADR-0132 D1): a CF-gated SLM endpoint resolves to
+        # the internal Caddy egress block, which injects it.
         headers = {}
 
     # Forward join keys only when a real trace exists (a standalone span

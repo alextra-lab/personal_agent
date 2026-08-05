@@ -40,7 +40,6 @@ class TestProbeSlmHealth:
             mock_client.get = AsyncMock(return_value=resp)
             return await probe_slm_health(
                 url="https://slm.example.com/health",
-                cf_headers={},
                 trace_id="test-trace-1",
                 **kwargs,
             )
@@ -143,7 +142,6 @@ class TestProbeSlmHealth:
             mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
             snap = await probe_slm_health(
                 url="https://slm.example.com/health",
-                cf_headers={},
                 trace_id="test-timeout",
             )
         assert snap.status == "down"
@@ -162,7 +160,6 @@ class TestProbeSlmHealth:
             mock_client.get = AsyncMock(side_effect=ConnectionRefusedError("refused"))
             snap = await probe_slm_health(
                 url="https://slm.example.com/health",
-                cf_headers={},
                 trace_id="test-conn-err",
             )
         assert snap.status == "down"

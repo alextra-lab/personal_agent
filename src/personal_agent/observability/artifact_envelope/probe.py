@@ -22,7 +22,7 @@ from personal_agent.observability.artifact_envelope.verifier import (
     classify_access_denied,
     verify_envelope,
 )
-from personal_agent.service.cf_service_token import cf_access_service_token_headers
+from personal_agent.service.artifact_egress import to_artifacts_egress_url
 
 log = structlog.get_logger(__name__)
 
@@ -69,9 +69,10 @@ async def probe_served_envelope(
     try:
         timeout = float(settings.artifact_envelope_probe_timeout_s)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            async with client.stream(
-                "GET", public_url, headers=cf_access_service_token_headers()
-            ) as response:
+            # ADR-0132 D1: no CF service token is attached — the request goes
+            # to the internal Caddy egress block, which injects it. public_url
+            # stays the recorded identity; only the transport target changes.
+            async with client.stream("GET", to_artifacts_egress_url(public_url)) as response:
                 status_code = int(response.status_code)
                 header_pairs = list(response.headers.multi_items())
         # Headers only — the stream is closed without ever reading the body

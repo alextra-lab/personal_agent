@@ -55,17 +55,19 @@ _REAL_CATALOGS: frozenset[Path] = frozenset({CATALOG_PATH})
 #: three layers validate in one pass.
 ROLE_BINDINGS_PATH: Path = Path(__file__).resolve().parents[3] / "config" / "model_roles.yaml"
 
-#: Neutral placeholder host baked into config/models*.yaml (FRE-895) — the real Mac
-#: SLM Cloudflare-tunnel host never lands in tracked source. See settings.slm_tunnel_base_url.
+#: Neutral placeholder host baked into config/models*.yaml (FRE-895) — the real
+#: SLM host never lands in tracked source. See settings.slm_base_url.
 _SLM_TUNNEL_PLACEHOLDER_HOST = "slm.example.com"
 
 
-def _apply_slm_tunnel_override(config: ModelConfig, settings: AppConfig) -> ModelConfig:
-    """Rewrite placeholder SLM tunnel endpoints to the real tunnel base (FRE-895).
+def _resolve_slm_endpoints(config: ModelConfig, settings: AppConfig) -> ModelConfig:
+    """Rewrite placeholder SLM endpoints to this deployment's SLM base (FRE-895).
 
     Any model endpoint pointed at ``_SLM_TUNNEL_PLACEHOLDER_HOST`` is rewritten to
-    ``settings.slm_tunnel_base_url`` (path preserved) when that setting is configured;
-    otherwise the placeholder passes through untouched.
+    ``settings.slm_base_url`` (path preserved). Under ADR-0132 D4 that base is
+    whatever the deployment declares — on the cloud profile it is the internal
+    Caddy egress block, so the rewrite is what routes inference through the
+    proxy that holds the Cloudflare credential.
 
     Args:
         config: The loaded model config to rewrite.
@@ -75,7 +77,7 @@ def _apply_slm_tunnel_override(config: ModelConfig, settings: AppConfig) -> Mode
             "same interface, no code edit" seam) gets a deterministic result from
             *that* config, not whatever the current process happens to have set.
     """
-    real_base = settings.slm_tunnel_base_url
+    real_base = settings.slm_base_url
     if not real_base:
         return config
 
@@ -225,7 +227,7 @@ def load_model_config(
     if not config_path.is_file():
         raise ModelConfigError(f"Model config path is not a file: {config_path}")
 
-    return _apply_slm_tunnel_override(_load_model_config_at_path(str(config_path)), settings)
+    return _resolve_slm_endpoints(_load_model_config_at_path(str(config_path)), settings)
 
 
 @functools.lru_cache(maxsize=8)

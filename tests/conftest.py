@@ -40,6 +40,11 @@ os.environ.setdefault(
 )
 os.environ.setdefault("AGENT_ELASTICSEARCH_INDEX_PREFIX", "agent-logs-test")
 os.environ.setdefault("AGENT_CAPTAINS_LOG_INDEX_PREFIX", "agent-captains-test")
+# ADR-0132 D4: the SLM endpoint has no default — every deployment declares its own,
+# and AppConfig refuses to construct without one. Pin an unreachable loopback port
+# for the suite so tests can never address the real tunnel (the FRE-375 principle
+# applied to the inference path, which FRE-375 itself did not cover).
+os.environ.setdefault("AGENT_SLM_BASE_URL", "http://localhost:9099")
 
 import httpx
 import pytest
@@ -81,7 +86,7 @@ def _llm_server_reachable() -> tuple[bool, str]:
         return False, f"Unknown cloud provider '{primary.provider}'"
 
     # Local model — probe the endpoint
-    endpoint = primary.endpoint or settings.llm_base_url
+    endpoint = primary.endpoint or settings.resolved_slm_base_url
     # Normalise: strip trailing /v1 if present, then re-add /v1/models
     base = endpoint.rstrip("/")
     if base.endswith("/v1"):

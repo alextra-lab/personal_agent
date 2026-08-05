@@ -259,7 +259,7 @@ models:
 class TestSlmTunnelOverride:
     """FRE-895: config/models*.yaml ship a placeholder SLM tunnel host; the real host
 
-    is only ever supplied at runtime via ``settings.slm_tunnel_base_url``, never
+    is only ever supplied at runtime via ``settings.slm_base_url``, never
     hardcoded in tracked source.
     """
 
@@ -289,7 +289,7 @@ models:
     def test_placeholder_untouched_when_unset(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(settings, "slm_tunnel_base_url", None)
+        monkeypatch.setattr(settings, "slm_base_url", None)
         config_file = self._write_config(tmp_path)
 
         config = load_model_config(config_file)
@@ -299,7 +299,7 @@ models:
     def test_rewritten_when_set_path_preserved(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.real-tunnel.test")
+        monkeypatch.setattr(settings, "slm_base_url", "https://slm.real-tunnel.test")
         config_file = self._write_config(tmp_path)
 
         config = load_model_config(config_file)
@@ -316,7 +316,7 @@ models:
         (FRE-917 unifies resolution onto the provider). The override covers both
         the model endpoint and the provider base_url so the two never disagree.
         """
-        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.real-tunnel.test")
+        monkeypatch.setattr(settings, "slm_base_url", "https://slm.real-tunnel.test")
         config_file = tmp_path / "models.yaml"
         config_file.write_text(
             """
@@ -346,7 +346,7 @@ models:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A local/dev endpoint that isn't the placeholder host is never rewritten."""
-        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.real-tunnel.test")
+        monkeypatch.setattr(settings, "slm_base_url", "https://slm.real-tunnel.test")
         config_file = tmp_path / "models.yaml"
         config_file.write_text(
             """
@@ -367,7 +367,7 @@ models:
 
     def test_no_endpoint_untouched(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A role with no endpoint override (cloud models) is left as None."""
-        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.real-tunnel.test")
+        monkeypatch.setattr(settings, "slm_base_url", "https://slm.real-tunnel.test")
         config_file = self._write_config(tmp_path)
 
         config = load_model_config(config_file)
@@ -381,13 +381,13 @@ models:
 
         against an explicit ``AppConfig`` (ADR-0112 D3/AC-2's "same interface, no
         code edit" seam, e.g. ``resolve_substrate(profile, settings=custom)``)
-        must get *that* config's slm_tunnel_base_url, never the live process-wide
+        must get *that* config's slm_base_url, never the live process-wide
         singleton's — even when they differ.
         """
-        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.live-singleton.test")
+        monkeypatch.setattr(settings, "slm_base_url", "https://slm.live-singleton.test")
         config_file = self._write_config(tmp_path)
 
-        explicit_settings = AppConfig(slm_tunnel_base_url="https://slm.explicit-config.test")
+        explicit_settings = AppConfig(slm_base_url="https://slm.explicit-config.test")
         config = load_model_config(config_file, settings=explicit_settings)
 
         assert config.models["reranker"].endpoint == "https://slm.explicit-config.test/v1"
@@ -395,7 +395,7 @@ models:
     def test_no_settings_param_falls_back_to_live_singleton(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.live-singleton.test")
+        monkeypatch.setattr(settings, "slm_base_url", "https://slm.live-singleton.test")
         config_file = self._write_config(tmp_path)
 
         config = load_model_config(config_file)

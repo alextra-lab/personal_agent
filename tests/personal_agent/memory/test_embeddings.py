@@ -192,7 +192,6 @@ class TestGenerateEmbeddingsBatch:
             assert all(x == 0.0 for e in embeddings for x in e)
 
 
-_CF_HEADERS = {"CF-Access-Client-Id": "id", "CF-Access-Client-Secret": "sec"}
 
 
 class TestCfAccessInjection:
@@ -213,26 +212,21 @@ class TestCfAccessInjection:
         return ctor
 
     @pytest.mark.asyncio
-    async def test_slm_endpoint_gets_cf_headers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_slm_endpoint_gets_no_cf_headers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """ADR-0132 D1: Caddy injects the token and the UA, not this client."""
         from personal_agent.memory.embeddings import _call_embeddings_api
 
-        monkeypatch.setattr(settings, "slm_tunnel_base_url", "https://slm.example.com")
+        monkeypatch.setattr(settings, "slm_base_url", "https://slm.example.com")
         captured: list[dict[str, object]] = []
         with (
             patch.dict("personal_agent.memory.embeddings._openai_clients", {}, clear=True),
             patch("openai.AsyncOpenAI", side_effect=self._fake_ctor(captured)),
-            patch(
-                "personal_agent.memory.embeddings.cf_access_service_token_headers",
-                return_value=dict(_CF_HEADERS),
-            ),
         ):
             await _call_embeddings_api(["x"], "m", "https://slm.example.com/v1")
 
-        sent = captured[0]["default_headers"]
-        assert sent["CF-Access-Client-Id"] == "id"
-        assert sent["CF-Access-Client-Secret"] == "sec"
-        # SDK default UA is WAF-blocked on the gateway → must be overridden.
-        assert sent["User-Agent"] == "seshat-memory/1.0"
+        # No default_headers are passed at all: the CF token and the benign
+        # User-Agent are both injected by the Caddy egress block.
+        assert "default_headers" not in captured[0]
 
     @pytest.mark.asyncio
     async def test_non_slm_endpoint_no_cf_headers(self) -> None:
@@ -242,16 +236,10 @@ class TestCfAccessInjection:
         with (
             patch.dict("personal_agent.memory.embeddings._openai_clients", {}, clear=True),
             patch("openai.AsyncOpenAI", side_effect=self._fake_ctor(captured)),
-            patch(
-                "personal_agent.memory.embeddings.cf_access_service_token_headers",
-                return_value=dict(_CF_HEADERS),
-            ),
         ):
             await _call_embeddings_api(["x"], "m", "http://embeddings:8503/v1")
 
-        # Gated by hostname: even with creds available, the internal Docker
-        # endpoint must not receive the service token.
-        assert captured[0]["default_headers"] == {}
+        assert "default_headers" not in captured[0]
 
     @pytest.mark.asyncio
     async def test_distinct_client_per_endpoint(self) -> None:
@@ -261,10 +249,6 @@ class TestCfAccessInjection:
         with (
             patch.dict("personal_agent.memory.embeddings._openai_clients", {}, clear=True),
             patch("openai.AsyncOpenAI", side_effect=self._fake_ctor(captured)),
-            patch(
-                "personal_agent.memory.embeddings.cf_access_service_token_headers",
-                return_value={},
-            ),
         ):
             await _call_embeddings_api(["x"], "m", "http://embeddings:8503/v1")
             await _call_embeddings_api(["x"], "m", "https://slm.example.com/v1")

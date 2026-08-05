@@ -35,7 +35,7 @@ from personal_agent.config import settings
 
 # Access any configuration value (type-safe, validated)
 log_level = settings.log_level
-base_url = settings.llm_base_url
+base_url = settings.resolved_slm_base_url
 timeout = settings.llm_timeout_seconds
 max_tasks = settings.orchestrator_max_concurrent_tasks
 poll_interval = settings.brainstem_sensor_poll_interval_seconds
@@ -108,7 +108,7 @@ The `AppConfig` class provides these configuration groups:
 - `log_format: Literal["json", "console"]` - Log format
 
 ### LLM Client
-- `llm_base_url: str` - Base URL for LLM API
+- `slm_base_url: str | None` - SLM base URL, declared per deployment (ADR-0132 D4; no default)
 - `llm_timeout_seconds: int` - Request timeout
 - `llm_max_retries: int` - Maximum retry attempts
 
@@ -130,7 +130,7 @@ Environment variables use `UPPER_SNAKE_CASE` with `APP_` prefix for app-level se
 - `APP_ENV` → `environment`
 - `APP_DEBUG` → `debug`
 - `APP_LOG_LEVEL` → `log_level`
-- `LLM_BASE_URL` → `llm_base_url`
+- `AGENT_SLM_BASE_URL` → `slm_base_url`
 
 Pydantic `BaseSettings` automatically maps environment variable names to field names.
 
@@ -144,7 +144,7 @@ Components should accept `AppConfig` as a parameter (default to singleton):
 class LLMClient:
     def __init__(self, config: AppConfig | None = None):
         self.config = config or settings
-        self.base_url = self.config.llm_base_url
+        self.base_url = self.config.resolved_slm_base_url
         self.timeout = self.config.llm_timeout_seconds
 ```
 
@@ -155,7 +155,7 @@ from personal_agent.config import AppConfig
 
 # Create test configuration
 test_config = AppConfig(
-    llm_base_url="http://test-server:1234/v1",
+    slm_base_url="http://test-server:8000",
     llm_timeout_seconds=5,
     debug=True,
 )
@@ -169,10 +169,10 @@ client = LLMClient(config=test_config)
 ```python
 from personal_agent.config import override_settings
 
-with override_settings(llm_base_url="http://test-server:1234/v1"):
+with override_settings(slm_base_url="http://test-server:8000"):
     # Use settings here - temporarily overridden
     client = LLMClient()
-    # settings.llm_base_url is "http://test-server:1234/v1"
+    # settings.slm_base_url is "http://test-server:8000"
 # Original settings restored after context
 ```
 
@@ -223,7 +223,7 @@ from personal_agent.config import settings
 def do_something():
     # Use settings directly (singleton pattern)
     timeout = settings.llm_timeout_seconds
-    base_url = settings.llm_base_url
+    base_url = settings.resolved_slm_base_url
     # ...
 ```
 

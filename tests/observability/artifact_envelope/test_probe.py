@@ -171,24 +171,31 @@ class TestProbeDegradedPaths:
         assert "boom" in event["error_message"]
 
 
-class TestServiceTokenHeaders:
-    @pytest.mark.asyncio
-    async def test_token_headers_attached_when_configured(self, monkeypatch: Any) -> None:
-        from personal_agent.config import settings
-
-        monkeypatch.setattr(settings, "cf_access_client_id", "client-id-1")
-        monkeypatch.setattr(settings, "cf_access_client_secret", "secret-1")
-        _, client = await _run(_good_response())
-        _, kwargs = client.stream.call_args
-        assert kwargs["headers"]["CF-Access-Client-Id"] == "client-id-1"
-        assert kwargs["headers"]["CF-Access-Client-Secret"] == "secret-1"
+class TestEgressRouting:
+    """ADR-0132 D1: the probe carries no credential and goes via Caddy instead."""
 
     @pytest.mark.asyncio
-    async def test_no_token_headers_when_unconfigured(self, monkeypatch: Any) -> None:
+    async def test_request_is_routed_through_the_egress_base(self, monkeypatch: Any) -> None:
+        """The probed URL is rewritten onto the egress; Caddy attaches the token."""
         from personal_agent.config import settings
 
-        monkeypatch.setattr(settings, "cf_access_client_id", None)
-        monkeypatch.setattr(settings, "cf_access_client_secret", None)
+        monkeypatch.setattr(settings, "artifacts_egress_base_url", "http://caddy:8601")
         _, client = await _run(_good_response())
-        _, kwargs = client.stream.call_args
-        assert "CF-Access-Client-Id" not in kwargs.get("headers", {})
+        args, kwargs = client.stream.call_args
+
+        assert args[1].startswith("http://caddy:8601"), args[1]
+        assert "CF-Access-Client-Id" not in kwargs.get("headers", {}) or {}
+
+    @pytest.mark.asyncio
+    async def test_no_egress_configured_addresses_the_origin_directly(
+        self, monkeypatch: Any
+    ) -> None:
+        """Deployments with no Cloudflare barrier need no rewrite and no token."""
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "artifacts_egress_base_url", None)
+        _, client = await _run(_good_response())
+        args, kwargs = client.stream.call_args
+
+        assert "caddy" not in args[1]
+        assert "CF-Access-Client-Id" not in (kwargs.get("headers") or {})

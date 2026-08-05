@@ -30,9 +30,7 @@ def _settings(**overrides: object) -> SimpleNamespace:
         "openai_api_key": None,
         "voyage_api_key": None,
         "managed_embedding_token": None,
-        "cf_access_client_id": None,
-        "cf_access_client_secret": None,
-        "slm_health_url": "https://slm.example.com/health",
+        "resolved_slm_health_url": "https://slm.example.com/health",
         "slm_gpu_util_degraded_pct": 95.0,
         "slm_queue_depth_degraded": 4,
     }

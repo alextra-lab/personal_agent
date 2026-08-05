@@ -74,8 +74,6 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 24 | `captains_log_reflection_cadence_enabled` | `AGENT_CAPTAINS_LOG_REFLECTION_CADENCE_ENABLED` | `bool` | `True` |  | — |
 | 25 | `captains_log_reflection_min_interval_seconds` | `AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS` | `float` | `1800.0` |  | — |
 | 26 | `cf_access_aud` | `AGENT_CF_ACCESS_AUD` · `CF_ACCESS_AUD` | `str \| None` | `None` |  | ✅ |
-| 27 | `cf_access_client_id` | `AGENT_CF_ACCESS_CLIENT_ID` · `CF_ACCESS_CLIENT_ID` | `str \| None` | `None` |  | ✅ |
-| 28 | `cf_access_client_secret` | `AGENT_CF_ACCESS_CLIENT_SECRET` · `CF_ACCESS_CLIENT_SECRET` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
 | 29 | `cf_access_team_domain` | `AGENT_CF_ACCESS_TEAM_DOMAIN` · `CF_ACCESS_TEAM_DOMAIN` | `str \| None` | `None` |  | ✅ |
 | 30 | `cloud_weekly_budget_usd` | `AGENT_CLOUD_WEEKLY_BUDGET_USD` | `float` | `5.0` |  | ✅ |
 | 31 | `consolidator_max_extraction_attempts` | `AGENT_CONSOLIDATOR_MAX_EXTRACTION_ATTEMPTS` | `int` | `5` |  | — |
@@ -171,7 +169,8 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 121 | `linear_promotion_project` | `AGENT_LINEAR_PROMOTION_PROJECT` | `str` | `'2.3 Homeostasis & Feedback'` |  | ✅ |
 | 122 | `linear_team_name` | `AGENT_LINEAR_TEAM_NAME` | `str` | `'FrenchForest'` |  | ✅ |
 | 123 | `llm_append_no_think_to_tool_prompts` | `AGENT_LLM_APPEND_NO_THINK_TO_TOOL_PROMPTS` | `bool` | `False` |  | ✅ |
-| 124 | `llm_base_url` | `AGENT_LLM_BASE_URL` | `str` | `'http://127.0.0.1:1234/v1'` |  | ✅ |
+| 124 | `slm_base_url` | `AGENT_SLM_BASE_URL` | `str \| None` | `None` (no default — ADR-0132 D4) |  | ✅ |
+| 124a | `artifacts_egress_base_url` | `AGENT_ARTIFACTS_EGRESS_BASE_URL` | `str \| None` | `None` |  | ✅ |
 | 125 | `llm_max_retries` | `AGENT_LLM_MAX_RETRIES` | `int` | `3` |  | ✅ |
 | 126 | `llm_no_think_suffix` | `AGENT_LLM_NO_THINK_SUFFIX` | `str` | `'/no_think'` |  | ✅ |
 | 127 | `llm_timeout_seconds` | `AGENT_LLM_TIMEOUT_SECONDS` | `int` | `120` |  | ✅ |
@@ -312,9 +311,8 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 262 | `slm_health_index_prefix` | `AGENT_SLM_HEALTH_INDEX_PREFIX` | `str` | `'agent-monitors-slm-health'` |  | — |
 | 263 | `slm_health_probe_enabled` | `AGENT_SLM_HEALTH_PROBE_ENABLED` | `bool` | `True` |  | — |
 | 264 | `slm_health_probe_interval_seconds` | `AGENT_SLM_HEALTH_PROBE_INTERVAL_SECONDS` | `float` | `300.0` |  | — |
-| 265 | `slm_health_url` | `AGENT_SLM_HEALTH_URL` | `str` | `'https://<deployment-host>/health'` |  | ✅ |
+| 265 | `slm_health_url` | `AGENT_SLM_HEALTH_URL` | `str \| None` | `None` (derives from `slm_base_url`) |  | ✅ |
 | 266 | `slm_queue_depth_degraded` | `AGENT_SLM_QUEUE_DEPTH_DEGRADED` | `int` | `4` |  | — |
-| 267 | `slm_tunnel_base_url` | `AGENT_SLM_TUNNEL_BASE_URL` | `str \| None` | `None` |  | ✅ |
 | 268 | `structural_arm_enabled` | `AGENT_STRUCTURAL_ARM_ENABLED` | `bool` | `False` |  | — |
 | 269 | `structural_arm_top_k` | `AGENT_STRUCTURAL_ARM_TOP_K` | `int` | `50` |  | — |
 | 270 | `structural_class_predicate_enabled` | `AGENT_STRUCTURAL_CLASS_PREDICATE_ENABLED` | `bool` | `False` |  | — |
@@ -613,7 +611,7 @@ Every deployment reads the same catalog (`config/models.yaml`) since FRE-916 pha
 
 ## §8 — Secret inventory (ADR-0099 D2, derived)
 
-8 `AppConfig` fields match the tightened secret heuristic: `anthropic_api_key`, `openai_api_key`, `perplexity_api_key`, `linear_api_key`, `neo4j_password`, `cf_access_client_secret`, `r2_secret_access_key`, `artifact_resolve_internal_token`.
+7 `AppConfig` fields match the tightened secret heuristic: `anthropic_api_key`, `openai_api_key`, `perplexity_api_key`, `linear_api_key`, `neo4j_password`, `r2_secret_access_key`, `artifact_resolve_internal_token`. (`cf_access_client_secret` was deleted by ADR-0132 D1 — Caddy holds the outbound CF credential now.)
 
 **Committed-value check (corrected — FRE-648 CodeQL remediation).** The six API-key-style fields default `None`. But **two defaults did carry a clear-text credential**: `neo4j_password` defaulted to `'neo4j_dev_password'`, and `database_url`'s DSN embedded `agent:agent_dev_password@…`. These are **dev placeholders** (the same values docker-compose supplies via `${…:-dev_password}`) — **prod passwords use `${…:?required}` with no default**, so no production secret was ever a committed default. Even so, clear-text credentials must not be re-published: this inventory now **redacts every secret field's default** (🔒 marker) and **strips `user:pass@` credentials from all DSN defaults** via `scripts/audit/config_inventory.py::_sanitize_urls`. This resolved a CodeQL high-severity "clear-text logging of sensitive information" alert. **Follow-up for the owner:** consider moving `neo4j_password`/`database_url` dev-placeholder defaults out of `settings.py` (env-only) so the source itself carries no credential (an `src/` change beyond this docs ticket).
 

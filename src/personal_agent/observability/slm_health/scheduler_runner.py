@@ -53,17 +53,12 @@ async def run_scheduled_slm_health_probe(
 
     ctx = SystemTraceContext.new("slm_health_probe")
 
-    # Build CF Access headers from settings (same pattern as client.py:400-405
-    # and app.py:inference_status).
-    cf_headers: dict[str, str] = {}
-    if settings.cf_access_client_id and settings.cf_access_client_secret:
-        cf_headers["CF-Access-Client-Id"] = settings.cf_access_client_id
-        cf_headers["CF-Access-Client-Secret"] = settings.cf_access_client_secret
-
+    # No Cloudflare Access headers are built here (ADR-0132 D1): the health URL
+    # resolves to the internal Caddy egress block on deployments behind
+    # Cloudflare, and Caddy injects the service token.
     try:
         snapshot = await probe_slm_health(
-            url=settings.slm_health_url,
-            cf_headers=cf_headers,
+            url=settings.resolved_slm_health_url,
             timeout_s=3.0,
             trace_id=ctx.trace_id,
             gpu_util_degraded_pct=settings.slm_gpu_util_degraded_pct,

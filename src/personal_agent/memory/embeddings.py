@@ -25,7 +25,6 @@ import structlog
 
 from personal_agent.config import get_settings
 from personal_agent.llm_client.cost_tracker import record_vendor_cost
-from personal_agent.service.cf_service_token import cf_access_service_token_headers
 
 if TYPE_CHECKING:
     from personal_agent.config.settings import AppConfig
@@ -61,7 +60,6 @@ _QUERY_PREFIX = "Instruct: Given a query, retrieve relevant entities and passage
 # WAF managed rule on the gateway (a 403 "request blocked", which would degrade
 # silently to a zero vector). The raw-httpx LLM client is unaffected; only this
 # SDK path needs a benign UA. Applied only for the gated host. (FRE-656)
-_EMBEDDING_USER_AGENT = "seshat-memory/1.0"
 
 
 def _get_embedding_config() -> tuple[str, str, str]:
@@ -534,21 +532,17 @@ async def _call_embeddings_api(
     if client is None:
         import openai  # noqa: PLC0415
 
-        # Access-gated Mac SLM gateway needs the CF service token and a benign
-        # User-Agent (the SDK default is WAF-blocked); internal Docker endpoints
-        # need neither (gated by hostname).
-        headers: dict[str, str] = {}
-        if settings.slm_tunnel_base_url and settings.slm_tunnel_base_url in endpoint:
-            headers = {
-                **cf_access_service_token_headers(),
-                "User-Agent": _EMBEDDING_USER_AGENT,
-            }
+        # No CF service token and no User-Agent override are set here
+        # (ADR-0132 D1). Both were Cloudflare-topology concerns: the token
+        # authenticated the Access-gated tunnel, and the benign User-Agent
+        # existed because the SDK default is WAF-blocked at the edge. The
+        # endpoint now resolves to the internal Caddy egress block, which
+        # injects both on the way out.
         # Local server does not require an API key, but the OpenAI client
         # requires a non-empty string.
         client = openai.AsyncOpenAI(
             api_key=api_key,
             base_url=endpoint,
-            default_headers=headers,
         )
         _openai_clients[(endpoint, api_key)] = client
 

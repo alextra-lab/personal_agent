@@ -113,7 +113,7 @@ models:
     def client(self, mock_model_config: Path) -> LocalLLMClient:
         """Create a LocalLLMClient instance."""
         return LocalLLMClient(
-            base_url="http://localhost:1234/v1",
+            base_url="http://localhost:8000",
             timeout_seconds=30,
             max_retries=2,
             model_config_path=mock_model_config,
@@ -221,10 +221,15 @@ models:
             assert "CF-Access-Client-Id" not in headers
 
     @pytest.mark.asyncio
-    async def test_respond_sends_cf_access_headers_with_trace_on_tunnel(
+    async def test_respond_never_sends_cf_access_headers_on_tunnel(
         self, tunnel_client: LocalLLMClient
     ) -> None:
-        """CF-Access headers coexist with trace headers on the tunnel hostname."""
+        """No CF-Access headers are sent, even for the tunnel host (ADR-0132 D1).
+
+        Caddy injects the service token at the egress block; the application
+        holds no outbound Cloudflare credential, so configuring one must not
+        cause the client to construct a header.
+        """
         mock_response = {
             "choices": [{"message": {"role": "assistant", "content": "OK"}}],
             "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
@@ -233,9 +238,7 @@ models:
             patch("httpx.AsyncClient") as mock_client_class,
             patch("personal_agent.llm_client.client.settings") as mock_settings,
         ):
-            mock_settings.cf_access_client_id = "test-client-id"
-            mock_settings.cf_access_client_secret = "test-client-secret"
-            mock_settings.slm_tunnel_base_url = "https://slm.example.com"
+            mock_settings.slm_base_url = "https://slm.example.com"
             mock_client = AsyncMock()
             mock_client.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_client
@@ -251,8 +254,8 @@ models:
             assert headers["X-Trace-Id"] == str(trace_ctx.trace_id)
             assert "X-Span-Id" in headers
             assert headers["X-Session-Id"] == "sess-xyz"
-            assert headers["CF-Access-Client-Id"] == "test-client-id"
-            assert headers["CF-Access-Client-Secret"] == "test-client-secret"
+            assert "CF-Access-Client-Id" not in headers
+            assert "CF-Access-Client-Secret" not in headers
 
     @pytest.mark.asyncio
     async def test_respond_with_tools(self, client: LocalLLMClient) -> None:
@@ -498,7 +501,7 @@ models:
 
         # Create a client with empty configs to test missing role
         client_empty = LocalLLMClient(
-            base_url="http://localhost:1234/v1",
+            base_url="http://localhost:8000",
             model_config_path=Path("/nonexistent.yaml"),
         )
 
@@ -596,7 +599,7 @@ models:
         )
 
         client = LocalLLMClient(
-            base_url="http://localhost:1234/v1",
+            base_url="http://localhost:8000",
             model_config_path=config_file,
         )
 
@@ -629,7 +632,7 @@ models:
                 trace_ctx=trace_ctx,
             )
             call_args = mock_client.stream.call_args
-            assert "http://localhost:1234/v1/chat/completions" in str(call_args)
+            assert "http://localhost:8000/v1/chat/completions" in str(call_args)
 
     @pytest.mark.asyncio
     async def test_connection_error_retries_then_raises(self, client: LocalLLMClient) -> None:
@@ -667,7 +670,7 @@ models:
     temperature: 0.15
 """
         )
-        client = LocalLLMClient(base_url="http://localhost:1234/v1", model_config_path=config_file)
+        client = LocalLLMClient(base_url="http://localhost:8000", model_config_path=config_file)
         mock_response = {
             "choices": [{"message": {"role": "assistant", "content": "OK"}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
@@ -704,7 +707,7 @@ models:
     temperature: 0.15
 """
         )
-        client = LocalLLMClient(base_url="http://localhost:1234/v1", model_config_path=config_file)
+        client = LocalLLMClient(base_url="http://localhost:8000", model_config_path=config_file)
         mock_response = {
             "choices": [{"message": {"role": "assistant", "content": "OK"}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
@@ -755,8 +758,8 @@ models:
             assert payload["response_format"] == response_format
 
     @pytest.mark.asyncio
-    async def test_cf_access_headers_injected_for_slm_endpoint(self, tmp_path: Path) -> None:
-        """CF-Access headers are injected when endpoint matches settings.slm_tunnel_base_url."""
+    async def test_cf_access_headers_never_injected_for_slm_endpoint(self, tmp_path: Path) -> None:
+        """No CF-Access headers are injected for an SLM endpoint (ADR-0132 D1)."""
         config_file = tmp_path / "models_slm.yaml"
         config_file.write_text(
             """
@@ -790,9 +793,7 @@ models:
             patch("personal_agent.llm_client.client.settings") as mock_settings,
             patch("httpx.AsyncClient") as mock_client_class,
         ):
-            mock_settings.cf_access_client_id = "test-id-123"
-            mock_settings.cf_access_client_secret = "test-secret-456"
-            mock_settings.slm_tunnel_base_url = "https://slm.example.com"
+            mock_settings.slm_base_url = "https://slm.example.com"
             mock_http = AsyncMock()
             mock_http.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_http
@@ -806,8 +807,8 @@ models:
 
             call_kwargs = mock_http.stream.call_args[1]
             headers = call_kwargs.get("headers") or {}
-            assert headers.get("CF-Access-Client-Id") == "test-id-123"
-            assert headers.get("CF-Access-Client-Secret") == "test-secret-456"
+            assert "CF-Access-Client-Id" not in headers
+            assert "CF-Access-Client-Secret" not in headers
 
     @pytest.mark.asyncio
     async def test_no_cf_headers_for_localhost_endpoint(self, client: LocalLLMClient) -> None:
@@ -821,9 +822,7 @@ models:
             patch("personal_agent.llm_client.client.settings") as mock_settings,
             patch("httpx.AsyncClient") as mock_client_class,
         ):
-            mock_settings.cf_access_client_id = "test-id-123"
-            mock_settings.cf_access_client_secret = "test-secret-456"
-            mock_settings.slm_tunnel_base_url = "https://slm.example.com"
+            mock_settings.slm_base_url = "https://slm.example.com"
             mock_http = AsyncMock()
             mock_http.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_http

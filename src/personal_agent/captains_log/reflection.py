@@ -364,7 +364,7 @@ async def generate_reflection_entry(
 
     # ── DSPy → manual JSON → basic ───────────────────────────────────────────
     llm_client = LocalLLMClient(
-        base_url=settings.llm_base_url,
+        base_url=settings.resolved_slm_base_url,
         timeout_seconds=settings.llm_timeout_seconds,
         max_retries=settings.llm_max_retries,
     )

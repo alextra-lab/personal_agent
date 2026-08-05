@@ -142,14 +142,14 @@ def test_self_attribute_alias_read_detected() -> None:
 
 
 def test_manifest_read_detected() -> None:
-    """`llm_base_url` and `database_url` resolve via `config/substrate.yaml`'s `setting:` sources.
+    """`slm_base_url` and `database_url` resolve via `config/substrate.yaml`'s `setting:` sources.
 
     `src/personal_agent/config/substrate.py::_resolve_setting` calls
     `getattr(settings, field)` where `field` is a variable sourced from the
     manifest text, not a literal string a grep pattern can match — this is the
     dynamic-resolution gap a codex plan-review pass found.
     """
-    for name in ("llm_base_url", "database_url"):
+    for name in ("slm_base_url", "database_url"):
         result = categorize(name, AppConfig.model_fields[name])
         assert result.manifest_read is True, name
 

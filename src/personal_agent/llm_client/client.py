@@ -58,9 +58,6 @@ from personal_agent.telemetry.trace import TraceContext
 
 log = get_logger(__name__)
 
-_CF_ACCESS_CLIENT_ID_HEADER = "CF-Access-Client-Id"
-_CF_ACCESS_CLIENT_SECRET_HEADER = "CF-Access-Client-Secret"
-
 
 class LocalLLMClient:
     """Client for interacting with local LLM servers.
@@ -69,7 +66,7 @@ class LocalLLMClient:
     (via LM Studio, Ollama, etc.) with proper error handling, retries, and telemetry.
 
     Attributes:
-        base_url: Base URL for the LLM API (e.g., "http://localhost:1234/v1").
+        base_url: Base URL for the SLM (local-model) API for this deployment.
         timeout_seconds: Default timeout for requests.
         max_retries: Maximum number of retry attempts.
         model_configs: Dictionary mapping model role names (str) to ModelDefinition.
@@ -85,14 +82,14 @@ class LocalLLMClient:
         """Initialize the LocalLLMClient.
 
         Args:
-            base_url: Base URL for the LLM API. If None, uses settings.llm_base_url.
+            base_url: Base URL for the SLM API. If None, uses settings.slm_base_url.
             timeout_seconds: Default timeout for requests. If None, uses settings.llm_timeout_seconds.
             max_retries: Maximum number of retry attempts. If None, uses settings.llm_max_retries.
             model_config_path: Path to a models.yaml file. If None, uses the single
                 deployment catalog (model_loader.CATALOG_PATH). Tests and fixtures
                 pass an explicit path; there is no per-environment catalog choice.
         """
-        self.base_url = base_url or settings.llm_base_url
+        self.base_url = base_url or settings.resolved_slm_base_url
         self.timeout_seconds = timeout_seconds or settings.llm_timeout_seconds
         self.max_retries = max_retries or settings.llm_max_retries
 
@@ -437,15 +434,10 @@ class LocalLLMClient:
                 }
                 if trace_ctx.session_id:
                     request_headers["X-Session-Id"] = trace_ctx.session_id
-                if (
-                    settings.slm_tunnel_base_url
-                    and settings.slm_tunnel_base_url in current_endpoint
-                ):
-                    if settings.cf_access_client_id and settings.cf_access_client_secret:
-                        request_headers[_CF_ACCESS_CLIENT_ID_HEADER] = settings.cf_access_client_id
-                        request_headers[_CF_ACCESS_CLIENT_SECRET_HEADER] = (
-                            settings.cf_access_client_secret
-                        )
+                # No Cloudflare Access headers are constructed here (ADR-0132 D1).
+                # On deployments behind Cloudflare the endpoint resolves to an
+                # internal Caddy egress block which injects the service token, so
+                # the application holds no outbound CF credential at all.
 
                 # Stream the chat/completions response. Streaming keeps the
                 # connection alive byte-by-byte, eliminating Cloudflare 524

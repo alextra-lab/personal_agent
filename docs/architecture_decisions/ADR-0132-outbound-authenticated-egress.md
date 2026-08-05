@@ -594,6 +594,42 @@ D1/D2). Each can fail; a half-finished implementation fails at least one.
 
 ## Status Updates
 
+### 2026-08-05 - D1 implemented (both phases), with a correction to this ADR's inventory
+**Changed By:** build session (FRE-1144)
+**Reason:** D1 landed in one change rather than the two phases this ADR planned, because the phasing
+was not separable. AC-a of the Phase-1 ticket requires the outbound CF pair to be absent from the
+gateway process; but `cf_service_token.py` reads the same settings fields, so removing them without
+migrating its consumers would have silently broken artifact export, the envelope probe, and the
+CF-gated embedding/rerank paths. Phase 1 could not satisfy its own criterion while Phase 2 was
+outstanding. FRE-1145 is therefore absorbed by FRE-1144.
+
+**Correction to "What is true today".** This ADR's inventory buckets `memory/embeddings.py` and
+`memory/reranker.py` under class 2 (artifact origins) because they call the shared
+`cf_service_token.py` helper. Measured, they reach the **SLM tunnel**, not the artifacts origin: both
+gate on `settings.slm_tunnel_base_url in endpoint` (`embeddings.py:541`, `reranker.py:194`) and
+`reranker.py:115` builds its endpoint from that same setting. The inventory classified by *which
+helper a caller invokes* rather than *which upstream it reaches*. The true split is five SLM-tunnel
+consumers (`client.py`, `scheduler_runner.py`, `provider_health.py`, `embeddings.py`, `reranker.py`)
+and two artifact-origin consumers (`artifacts_router.py`, `artifact_envelope/probe.py`).
+
+**Two implementation decisions worth recording, because both are departures:**
+
+1. **The egress listeners are bound to loopback on the host**, not left compose-network-only as the
+   Implementation Notes state. Host-side tooling (eval scripts, `uv run agent`) previously reached the
+   tunnel directly using CF headers from `/opt/seshat/.env`; once that credential moves to the
+   Caddy-only source, an unpublished listener would leave that tooling with no route at all. A
+   `127.0.0.1`-bound binding preserves the route without exposing the listener off-box, and custody is
+   unaffected — the credential still lives only in Caddy.
+2. **The per-profile endpoint requirement is enforced at boot, not in a model validator.**
+   `settings = get_settings()` runs at import scope across the codebase, so a construction-time failure
+   would brick every script, CLI entrypoint and diagnostic on a host whose `.env` predates the field —
+   including the tooling needed to diagnose it. The dead-default class stays closed regardless: the
+   field has no default, so an unset value cannot resolve to something unreachable.
+
+**Still open from this ADR:** D2 (domain-guard wiring behind one transport factory) and D3 (Filebeat
+shipping `caddy-access-*`, FRE-1146, which FRE-1144 blocks). The five ACs remain unadjudicated — they
+belong to the seam ticket FRE-1148, not to FRE-1144.
+
 ### 2026-08-04 - Proposed
 **Changed By:** adr session (FRE-1143)
 **Reason:** Authored after owner discussion settled all four decisions and the sequencing constraint. Codex round 1 (7 blocking, 3 minor) surfaced a measured finding — the FRE-225 domain guard has zero production callers — adding the guard-wiring obligation. Codex round 2 (7 blocking) corrected the CF credential inventory (the pair also authenticates artifact origins via `cf_service_token.py`, making D1 two-phase), exposed the blanket `env_file` custody hole, aligned D4 to the real profile axes, and tightened all five ACs to be unfakeable. Codex round 3 (4 blocking, 2 minor) narrowed the target state and AC-2 scan to the outbound service-token pair (the inbound JWT surface is retained), restated D3/AC-3 honestly as at-least-once-after-harvest, defined the test-axis SLM fixture value, broadened AC-5's static rule set to the enumerated bypass forms, and added the `model_loader.py` consumer to the deletion inventory.

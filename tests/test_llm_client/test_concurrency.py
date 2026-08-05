@@ -122,13 +122,13 @@ class TestInferenceConcurrencyController:
     """Test the main concurrency controller."""
 
     def _make_controller(self) -> InferenceConcurrencyController:
-        ctrl = InferenceConcurrencyController(default_base_url="http://127.0.0.1:1234/v1")
+        ctrl = InferenceConcurrencyController(default_base_url="http://slm-test:8000/v1")
         ctrl.register_provider("slm_local", max_concurrency=2)
         for role, limit in (("router", 4), ("reasoning", 1), ("standard", 2)):
             ctrl.register_model(
                 role,
                 max_concurrency=limit,
-                endpoint="http://127.0.0.1:1234/v1",
+                endpoint="http://slm-test:8000/v1",
                 provider="slm_local",
             )
         return ctrl
@@ -175,7 +175,7 @@ class TestInferenceConcurrencyController:
         as "cloud", so a declared cloud limit was dead config. Cloud ceilings are
         now real — set high enough to be a safety valve, but enforced.
         """
-        ctrl = InferenceConcurrencyController(default_base_url="http://127.0.0.1:1234/v1")
+        ctrl = InferenceConcurrencyController(default_base_url="http://slm-test:8000/v1")
         ctrl.register_provider("anthropic", max_concurrency=2)
         ctrl.register_model(
             "reasoning_cloud",
@@ -229,16 +229,16 @@ class TestInferenceConcurrencyController:
     @pytest.mark.asyncio
     async def test_priority_ordering_across_models(self) -> None:
         """User-facing request should be served before background when both wait."""
-        ctrl = InferenceConcurrencyController(default_base_url="http://127.0.0.1:1234/v1")
+        ctrl = InferenceConcurrencyController(default_base_url="http://slm-test:8000/v1")
         ctrl.register_provider("slm_local", max_concurrency=1)
         ctrl.register_model(
             "reasoning",
             max_concurrency=2,
-            endpoint="http://127.0.0.1:1234/v1",
+            endpoint="http://slm-test:8000/v1",
             provider="slm_local",
         )
         ctrl.register_model(
-            "standard", max_concurrency=2, endpoint="http://127.0.0.1:1234/v1", provider="slm_local"
+            "standard", max_concurrency=2, endpoint="http://slm-test:8000/v1", provider="slm_local"
         )
 
         order: list[str] = []

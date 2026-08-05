@@ -157,7 +157,9 @@ class InferenceConcurrencyController:
 
     Args:
         default_base_url: Default base URL, retained for log context on
-            deployments that declare no endpoint of their own.
+            deployments that declare no endpoint of their own. ``None`` when the
+            caller has no base URL to attribute (ADR-0132 D4 removed the dead
+            loopback default that used to stand in here).
         default_provider_limit: Ceiling applied to a provider referenced by a
             deployment but never explicitly registered. A fallback for tests and
             partial fixtures — the real catalog declares every provider.
@@ -165,7 +167,7 @@ class InferenceConcurrencyController:
 
     def __init__(
         self,
-        default_base_url: str = "http://127.0.0.1:1234/v1",
+        default_base_url: str | None = None,
         default_provider_limit: int = 2,
     ) -> None:
         """Initialize the controller with a default URL and fallback provider ceiling."""
@@ -214,7 +216,10 @@ class InferenceConcurrencyController:
         """
         effective_provider = provider or f"_unattributed:{role}"
         self._model_provider[role] = effective_provider
-        self._model_endpoint[role] = endpoint or self._default_base_url
+        # `""` rather than None when neither is known: this value is log context
+        # only, and the dead loopback default that used to stand in here is
+        # exactly what ADR-0132 D4 removed.
+        self._model_endpoint[role] = endpoint or self._default_base_url or ""
 
         if effective_provider not in self._provider_semaphores:
             self.register_provider(effective_provider, self._default_provider_limit)

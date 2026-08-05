@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -36,7 +35,6 @@ _DEFAULT_TIMEOUT_S = 3.0
 async def probe_slm_health(
     *,
     url: str,
-    cf_headers: Mapping[str, str],
     timeout_s: float = _DEFAULT_TIMEOUT_S,
     trace_id: str,
     gpu_util_degraded_pct: float = 95.0,
@@ -45,10 +43,10 @@ async def probe_slm_health(
     """Probe the SLM health endpoint and return a frozen snapshot.
 
     Args:
-        url: Full URL of the SLM ``/health`` endpoint.
-        cf_headers: Cloudflare Access headers (``CF-Access-Client-Id`` /
-            ``CF-Access-Client-Secret``). Pass an empty dict when the SLM is
-            accessed without CF Access (e.g. in tests or local-only mode).
+        url: Full URL of the SLM ``/health`` endpoint. On deployments behind
+            Cloudflare this addresses the internal Caddy egress block, which
+            injects the Access service token (ADR-0132 D1) — this probe never
+            constructs or forwards a credential.
         timeout_s: HTTP connection + read timeout in seconds.
         trace_id: Probe's trace ID for log correlation.
         gpu_util_degraded_pct: GPU utilisation threshold that triggers
@@ -65,7 +63,7 @@ async def probe_slm_health(
 
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as client:
-            resp = await client.get(url, headers=dict(cf_headers))
+            resp = await client.get(url)
     except httpx.TimeoutException as exc:
         log.warning(
             "slm_health_probe_timeout",
@@ -100,12 +98,17 @@ async def probe_slm_health(
 
     probe_latency_ms = (time.monotonic() - start) * 1000
 
-    # 403 = expired / invalid CF Access service token
+    # 403 = expired / invalid CF Access service token. Since ADR-0132 D1 the
+    # token is held by Caddy, not this process, so the rotation target is the
+    # Caddy-only env source — not anything the application can see.
     if resp.status_code == 403:
         log.warning(
             "inference_tunnel_auth_failed",
             status=403,
-            hint="Rotate CF_ACCESS_CLIENT_ID/SECRET via terraform apply",
+            hint=(
+                "Rotate the CF Access service token via terraform apply, then update "
+                "the Caddy-only env source (.env.caddy) and recreate the caddy container"
+            ),
             trace_id=trace_id,
             component="slm_health",
         )

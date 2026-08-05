@@ -199,11 +199,16 @@ models:
     # config edit. Declared as provider truth regardless, so the catalog does
     # not lie about the model.
     context_length: 262144
-    # Owner-directed 2026-08-05: kept at provider truth rather than bounded.
-    # The cost exposure was raised and accepted -- thinking bills as completion
-    # here (extra_body cannot reach this path, so it cannot be capped), which
-    # puts the worst case near $0.84 for a single call.
-    max_tokens: 262144
+    # NOT provider truth, and cannot be: OVH counts requested OUTPUT tokens
+    # against the context window, so max_tokens 262144 leaves zero room for
+    # input and every call fails 400 before it starts -- observed live
+    # 2026-08-05 ("you requested 262144 output tokens ... which is the upper
+    # bound for 0 input tokens"). context_length and max_completion_tokens both
+    # reading 262144 in OVH's model record does not mean both can be requested;
+    # they share one budget. 32768 matches the local primary's thinking budget
+    # and leaves 229376 for input. It also bounds the cost exposure -- thinking
+    # bills as completion here and extra_body cannot reach this path to cap it.
+    max_tokens: 32768
     # 25 of the provider's 50 ceiling, against the local primary's single GPU
     # slot. This is the axis with immediate value: prompt-level defects are
     # model-portable (FRE-1150 reproduced identically on three model families),

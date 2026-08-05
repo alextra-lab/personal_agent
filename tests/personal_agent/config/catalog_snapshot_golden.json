@@ -400,7 +400,7 @@
         },
         "qwen3.6-27b-ovh": {
           "active": 0,
-          "limit": 10
+          "limit": 25
         },
         "qwen3.6-35b-instruct": {
           "active": 0,

@@ -173,9 +173,28 @@ models:
     provider: ovhcloud
     id: "Qwen3.6-27B"
     # Provider truth, read from OVH's own model record rather than assumed.
+    #
+    # The 262144 window is NOT reachable today, and that is worth knowing before
+    # anyone plans around it. Two ceilings bind first and both are below it:
+    # `conversation_max_history_messages` (10) slices session history in the
+    # hydration phase, before the gateway pipeline runs at all, so occupancy
+    # cannot grow; and `context_window_max_tokens` (96000) is a single GLOBAL
+    # budget, not per-model. Using a larger window needs the window policy
+    # decided AND that global ceiling made per-model -- a design change, not a
+    # config edit. Declared as provider truth regardless, so the catalog does
+    # not lie about the model.
     context_length: 262144
+    # Owner-directed 2026-08-05: kept at provider truth rather than bounded.
+    # The cost exposure was raised and accepted -- thinking bills as completion
+    # here (extra_body cannot reach this path, so it cannot be capped), which
+    # puts the worst case near $0.84 for a single call.
     max_tokens: 262144
-    max_concurrency: 10
+    # 25 of the provider's 50 ceiling, against the local primary's single GPU
+    # slot. This is the axis with immediate value: prompt-level defects are
+    # model-portable (FRE-1150 reproduced identically on three model families),
+    # so prompt-behaviour evals can fan out here instead of serialising on the
+    # one local slot.
+    max_concurrency: 25
     default_timeout: 300
     # USD per token, quoted directly by OVH's model record (prompt / completion).
     # Declared in the USD fields the pricing registry actually reads -- the EUR
@@ -183,11 +202,28 @@ models:
     # here would silently register as zero if it were copied from that shape.
     input_cost_per_token: 0.00000047     # $0.47/MTok
     output_cost_per_token: 0.00000319    # $3.19/MTok
+    # Owner-directed 2026-08-05, "a good starting point". Matches the local
+    # primary so the two are comparable on this axis. It is the ONLY sampling
+    # parameter that reaches this model: the LiteLLM path sends temperature and
+    # not top_p, top_k, min_p, presence_penalty or repetition_penalty, so
+    # everything else runs at OVH's defaults. Declaring them here would read as
+    # configured while doing nothing -- the same trap as the thinking fields
+    # below. This model is therefore NOT parameter-comparable to the local one
+    # for evaluation purposes without a client change.
+    temperature: 0.6
+    # PROVENANCE WARNING for the three capability flags below. OVH's models
+    # endpoint returns exactly seven keys -- id, created, object, owned_by,
+    # pricing, context_length, max_completion_tokens -- and no capability
+    # information at all, on either the list or the per-model path. So every
+    # NUMBER above is read from the provider; these three flags are not, and
+    # come from the OVH console. Verify them there when adding an OVH model
+    # rather than inferring, which is how supports_vision was first set wrong.
     supports_function_calling: true
     tool_calling_strategy: "native"
-    # Fail-closed until proven: OVH's model record does not state multimodality,
-    # and the vision role is pinned to claude_sonnet regardless (ADR-0101).
-    supports_vision: false
+    # Console lists this model as Multimodal (also Function calling, Reasoning,
+    # Streaming; output formats raw_text / json_object / json_schema). Corrected
+    # from an initial fail-closed `false`, which was a guess, not a reading.
+    supports_vision: true
     supports_pdf_document: false
     # NOTE: thinking_budget_tokens / disable_thinking are deliberately absent.
     # They are delivered via extra_body, which the LiteLLM path does not send --

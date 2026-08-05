@@ -1,89 +1,90 @@
-# Last session — 2026-08-05 (the day the owner drove, and master kept asserting the layer beneath)
+# Last session — 2026-08-05 (the day the owner cut scope, and master kept verifying the wrong artifact)
 
 ## Doing / discussing
 
-The identity thread closed end to end — the Susan-greeting bug is fixed, deployed and proven live on
-its own phrasing. Around it the owner ran a day of model experimentation: the local 27B swapped in and
-rolled back within the hour, then the OVH-hosted 27B added as a selectable cloud primary, which broke
-twice before working. The session ended at a **deliberate clean break** the owner asked for so they
-could pivot: nothing in progress, nothing awaiting deploy, both build seats idle. **Do not start
-anything** — the owner names the next subject.
+The owner ended the pause by naming **VPS/Cloud Architecture Stabilization + ADR-0132** as the subject,
+and that project is now nearly closed out. The session ended clean at a deliberate boundary: nothing in
+flight, both build seats idle, no open PRs. The one live thread is **FRE-241** — the slm_server watchdog,
+rewritten today and now carrying its own working instructions because that repo has no machinery to
+enforce anything. It is **owner-dispatched**; no seat here can reach that repo. One question is open and
+unanswered: whether to give slm_server minimal CI first.
 
 ## What was decided and why
 
-**Unsloth is the parameter authority for the local models, not the official Qwen card.** Owner's
-ruling, and it is the right one: we run Unsloth's GGUF quant on llama.cpp and their guidance is written
-for that path. It resolved a real incoherence — we were running temperature 0.6 (the cards' *coding*
-preset) beside presence_penalty 1.5 (the *general* preset), a pairing no source recommends. Now exactly
-one documented preset. The owner's server was separately at top_p 0.85 / top_k 10, which matches
-neither source and is overridden by the catalog anyway; they know.
+**The uptime figure cannot be cited as evidence that availability is fine, and this is the most important
+thing to carry forward.** The gateway's SLM health probe hits the router's `/health`, which returns a
+hardcoded string and whose own docstring calls it a check *for the router itself*. So the 30-day figure
+(98.39% up, 8,569 samples) measures **router** availability. A wedged model is recorded as **up** —
+structurally invisible, not merely underrepresented. Master quoted that figure as decisive before
+discovering this, and the owner's "how you determine *usable* is critical" is what forced the check.
 
-**Keeping the catalog KEY stable across model swaps was the decision that paid.** Master argued for
-changing only the wire `id` and leaving `qwen3.6-35b-thinking` alone. That made both the swap and the
-rollback one-line changes in each direction. The cost landed as predicted: the PWA renders the *key*,
-so it read "35b" while the 27B answered. The durable fix — surface the id alongside the key in the
-session-config endpoint — is deferred and belongs with Config Management.
+**"Usable" is determined by monitoring errors on real traffic** — the owner's call, and better than the
+synthetic-probe design master proposed. A probe occupies the model every cycle, and a small probe prompt
+can pass while a real long-context turn wedges. Real errors *are* the definition. Known caveat, stated
+rather than designed around: error-monitoring is traffic-dependent, so an idle wedge isn't caught until
+someone hits it.
 
-**"Provider truth" does not transfer across providers.** The catalog convention of declaring real
-provider ceilings (established for Anthropic/OpenAI) made every OVH call fail: OVH counts requested
-*output* tokens against the context window, so `max_tokens: 262144` on a 262144 window leaves zero for
-input. Master had recommended lowering it **on cost grounds** and framed a trade-off the owner could
-decline — but it was not a trade-off, it was inoperable. The owner declined a recommendation whose real
-justification was never given.
+**Three slm_server tickets collapsed to one, and the reasoning is not obvious from the outcome.**
+All 138 down-samples in 30 days were `reachable=false` — none reachable-but-degraded — so FRE-444's
+enriched health fields described a failure mode this system does not exhibit. The owner's independent
+point (single-user MBP, no concurrency, so queue-depth and GPU-util carry no decision) reached the same
+place from the hardware. FRE-238 died with it. Note the ordering: master had *sequenced* 444→241→238
+before asking whether any of it was worth wanting — the owner's "do we really give a shit about 444?"
+is what surfaced that.
 
-**Bounces are expensive — if master can fix a small thing, it should.** Owner's correction, mid-gate,
-and it changed the outcome: master bounced PR #822 for an unproven AC, then merged it and took the
-measurement itself. Carry this as a standing bias, not a one-off.
+**Master's dominant failure today, twice, both owner-caught: verifying a plausible *adjacent* artifact
+instead of the file the ticket names, then reading the match as confirmation.** FRE-338 names
+`docker/mcp/run-gateway.sh`; master checked a settings field. FRE-340 names
+`infrastructure/scripts/transfer-models.sh`; master searched `scripts/`. Both were wrongly cancelled and
+had to be reopened. Each ticket states its path — one command each would have returned the opposite
+answer. It nearly happened a third time: `heartbeat` *is* in slm_server, as SSE keep-alive, which a
+keyword search would have read as satisfying FRE-241.
 
-**The FRE-1053 census obligation was retired rather than chased.** A comment on that ticket from 07-31
-already recorded that the claim the census existed to test was dead — the entity path was fixed by
-other mechanisms — and recommended re-scoping. Nobody edited the body, so the obligation survived into
-the build by inertia. Watch for that shape: a superseded requirement nobody deletes.
+**An ADR's body can lag its own amendments — read Status Updates before concluding a constraint is open.**
+Master told the owner ADR-0105's dead-embedder reference needed a design judgement. It did not: the ADR's
+own 2026-07-06 amendment (via ADR-0112) had already permitted a managed endpoint a month earlier. The body
+had simply never been reconciled. The part that mattered: **AC-10 required a run to succeed "using only
+`embeddings:8503`"** — an acceptance criterion that could not pass, which nothing would have surfaced until
+someone tried to adjudicate it.
 
-**Nothing in the recall scorer prefers episodes.** Verified in source against the owner's question: one
-combine function, four weights, no branch on candidate kind. The roughly 2:1 admission is the sum of
-three accidents — the empty-name topic hit (now fixed), a recency term at 0.20 that correlates with
-kind by construction, and the 07-30 pair split that doubled one population against a fixed cap. That is
-FRE-1158, filed and parked.
+**The `embeddings` drop survived three owner challenges, each strengthening it** (full analysis on FRE-597).
+Worth carrying only as a pattern: the owner's "some ticket or ADR must have specified creating it" was the
+question that settled it — git said nothing did.
 
-**Master's dominant failure, five occurrences, several caught by the owner.** Asserting a derived fact
-without checking the layer beneath it. The 429 blamed on a busy endpoint when we were dispatching
-*unauthenticated*; a claim that OVH's dedicated endpoint needed a client change when litellm reads
-`OVHCLOUD_API_BASE` from env; a claim that the embedder's credential would flow to chat, read off the
-config without checking the code path that consumes it; `preserve_thinking` floated as the
-estimator-gap explanation when we never resend reasoning content at all; and a ranking probe that
-scored on one subscore in isolation when it carries a tenth of the weight, producing a confident 76.7%
-that was discarded rather than reported. Each time the instrument answered an adjacent question and
-looked authoritative.
+**FRE-619's second attempt was worse than the original defect** — the guard got selected but still skipped,
+so a green *required check* asserted coverage that didn't exist, where before it plainly looked unwired.
+
+**The theme, four separate instances in one day:** mechanisms reporting success while checking nothing —
+FRE-619's silent skip, CI's schema-apply swallowing four errors and exiting zero, the stale health-URL
+override, ADR-0105's unsatisfiable AC. Three were visible only by reading actual output rather than status.
 
 ## Worktrees — anything special
 
-- **build / build2** hold merged-but-undeleted branches, so `--delete-branch` fails locally every merge.
-  Known, harmless.
-- **build1 wedged twice today** at interactive prompts, hours apart, and invisible in dispatch state
-  both times because a worktree-dirty refusal writes no record at all. Recorded on FRE-1077.
-- **explore** stays pinned to the deployed SHA, not `origin/main`.
+- **build1 wedged on an interactive permission prompt** — third time in two days. Master released it with
+  a send-keys `1`. It is invisible in dispatch state, so nothing detects it but a human looking.
+- **A build seat's commit appeared on master's local `main`** (FRE-619's, while its PR was open). Only
+  `git pull --ff-only` caught it; branch protection was the second layer. Concurrent-worktree hazard.
 
 ## Sequence position + drift
 
-The whole day was owner-directed: the identity incident, then model work. **None of it touched the
-console's standing four-item sequence** (telemetry residuals → Config Management → Linear async
-feedback → Seshat Inference), which remains unstarted. That is drift only in the sense that live
-incidents keep outranking it. Console untouched apart from one transcription; 39 of its 60 lines.
+The owner drove the whole day and named the subject explicitly, so this was directed work, not drift.
+**The console's standing four-item sequence (telemetry residuals → Config Management → Linear async
+feedback → Seshat Inference) remains unstarted** — unchanged from yesterday. Both console directives
+touched today were transcribe-then-retire, both conditions met and cited.
 
 ## Answers for the fresh start
 
-- **Why is the `adr` stream wedged?** Deliberate. A stale dispatch-state entry names FRE-1127 as
-  `launched` since 08-03 while that ticket sits in `Backlog`, so the daemon stalls every tick. Clearing
-  it is one action and immediately dispatches FRE-1132 — a new subject, which the pause directive
-  reserves for the owner.
-- **Why is FRE-1122 `Approved` with no stream label?** Master moved it out of `Awaiting Deploy`: its
-  fixture merged days ago and is live, so it never awaited a deploy — it awaits the baseline *run*,
-  which needs owner authorization plus three recorded fixture defects fixed. The 9/20 partial is dead
-  (produced under a different primary model) and must not be reused.
-- **Is the OVH model safe as the daily driver?** No — as a fast option and for parallel evals, yes. It
-  has **no prompt caching**, so re-transmission (~32K/call × ~25 calls) bills in full, roughly $0.40 a
-  session, where the local model's cache absorbs it. Prompt-level defects are model-portable (FRE-1150
-  reproduced on three model families), which is what makes it a good eval target.
-- **Can it be compared to the local model in an experiment?** Not on parameters. The cloud path sends
-  only `temperature` — no `top_p`, `top_k`, `min_p`, `presence_penalty`, and no `extra_body` at all.
+- **Why does FRE-241 carry unusually long working instructions?** Because slm_server has *no* machinery —
+  verified: no `.claude/`, no CI, no lifecycle rules, `main` directly pushable, and its CLAUDE.md mentions
+  Linear/tickets/gates/PRs zero times. The ticket has to be the gate.
+- **Why is FRE-1163 High and in Needs Approval?** Three occurrences today. The third proved it can swallow a
+  *safety* signal: the watcher correctly re-triggered on a changed head to say "your review is stale," hit a
+  busy seat, and the message was lost — which is exactly when master merged the stale head and the owner had
+  to decline it.
+- **Is the local-model residue finished?** No. FRE-1165 (live system prompt still advertises the dead
+  containers) and FRE-1166 (script, mount, compose definitions) are open. FRE-1125 and the ADR-0105 site are
+  done.
+- **Was anything deployed?** Yes — the ADR-0132 chain earlier, and the `embeddings` DROP against prod
+  (owner-authorized, zero rows, DDL captured to `telemetry/purge-backups/` first).
+- **Open, undecided:** minimal CI for slm_server so its existing pytest suite runs on push. Master raised it
+  twice; the owner has not answered. Not filed.

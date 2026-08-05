@@ -1,90 +1,89 @@
-# Last session — 2026-08-04 → 08-05 (the session that kept mistaking its instruments for evidence)
+# Last session — 2026-08-05 (the day the owner drove, and master kept asserting the layer beneath)
 
 ## Doing / discussing
 
-Seven tickets closed and two production deploys, then the evening turned on a live incident: Seshat
-greeted the owner as **Susan**, a different registered user. That is now FRE-1150, re-scoped by build2
-after it corrected master's diagnosis. The FRE-1122 baseline is parked at nine of twenty turns — the
-probe set is finished and verified and does **not** need re-authoring. Pick up FRE-1150's gate and the
-owner's `Awaiting Deploy` decision on FRE-1114.
+The identity thread closed end to end — the Susan-greeting bug is fixed, deployed and proven live on
+its own phrasing. Around it the owner ran a day of model experimentation: the local 27B swapped in and
+rolled back within the hour, then the OVH-hosted 27B added as a selectable cloud primary, which broke
+twice before working. The session ended at a **deliberate clean break** the owner asked for so they
+could pivot: nothing in progress, nothing awaiting deploy, both build seats idle. **Do not start
+anything** — the owner names the next subject.
 
 ## What was decided and why
 
-**The owner's ruling that collapsed three tickets: stop maintaining application-log history.** Master
-tested it before agreeing and the corpus supported it — the log corpus already had a 47-day hole, so
-longitudinal analysis was impossible anyway, and the family's own retention policy is 30 days, so the
-migration was fighting to preserve data our own accepted decision would delete. FRE-1036 therefore
-closed **by deletion, not migration**. FRE-1109's premise vanished with it and was re-scoped to a
-template fix; FRE-1113's tier-two lost its near-term justification. One decision, three tickets simpler.
+**Unsloth is the parameter authority for the local models, not the official Qwen card.** Owner's
+ruling, and it is the right one: we run Unsloth's GGUF quant on llama.cpp and their guidance is written
+for that path. It resolved a real incoherence — we were running temperature 0.6 (the cards' *coding*
+preset) beside presence_penalty 1.5 (the *general* preset), a pairing no source recommends. Now exactly
+one documented preset. The owner's server was separately at top_p 0.85 / top_k 10, which matches
+neither source and is overridden by the catalog anyway; they know.
 
-**Master's dominant failure mode this session, four occurrences: reading a negative result from an
-unverified instrument as a finding.** The worst was the identity incident. Master searched 3,556
-captures for the operator stanza's rendered text, found zero, and concluded it had never worked — but
-**captures store `system_prompt_chars` and never hold prompt text**, so that query returns zero by
-construction. build2 caught it in six minutes by reading prompt geometry instead. The real cause: the
-stanza *was* present in the cached prefix; ADR-0081's volatile-tail layout inlines the memory section
-into the current user turn, so the recalled identity claim sat nearer the query and won. **Override,
-not gap** — which is why it survives FRE-674 and earns its own ticket.
+**Keeping the catalog KEY stable across model swaps was the decision that paid.** Master argued for
+changing only the wire `id` and leaving `qwen3.6-35b-thinking` alone. That made both the swap and the
+rollback one-line changes in each direction. The cost landed as predicted: the PWA renders the *key*,
+so it read "35b" while the 27B answered. The durable fix — surface the id alongside the key in the
+session-config endpoint — is deferred and belongs with Config Management.
 
-**Two PR bounces that were vindicated, and one deliberate departure.** #809 was bounced twice — first
-for citing integration tests as evidence when the module's `requires_llm_server` marker made them skip
-everywhere including CI, second for a backfill script defaulting to writing to production. Both were
-real: unskipping exposed four assertion bugs including one that made a test pass *vacuously*, and the
-seat had in fact already written to production ES at 15:50 during its own iteration. Conversely #810
-was **merged despite no self-review summary and no codex review on a `src` memory diff** — master
-substituted its own review, stated as a judgment call against the letter of the backstop, because the
-diff was 23 lines and strictly subtractive. Both calls are defensible; both are worth knowing were made.
+**"Provider truth" does not transfer across providers.** The catalog convention of declaring real
+provider ceilings (established for Anthropic/OpenAI) made every OVH call fail: OVH counts requested
+*output* tokens against the context window, so `max_tokens: 262144` on a 262144 window leaves zero for
+input. Master had recommended lowering it **on cost grounds** and framed a trade-off the owner could
+decline — but it was not a trade-off, it was inoperable. The owner declined a recommendation whose real
+justification was never given.
 
-**Master recommended superseded work twice in one day.** FRE-1049 was cancelled as superseded by
-ADR-0129 — and master had recommended approving it hours earlier without checking the ADR governing its
-seam. Then master proposed bolting CF service-token headers onto FRE-1122, which ADR-0132 D1 retires.
-Same root: reading a ticket or a codebase precedent without checking the decision record above it.
+**Bounces are expensive — if master can fix a small thing, it should.** Owner's correction, mid-gate,
+and it changed the outcome: master bounced PR #822 for an unproven AC, then merged it and took the
+measurement itself. Carry this as a standing bias, not a one-off.
 
-**The identity leak is not news, and the owner said so.** ADR-0064 recorded cross-user memory sharing
-as an *accepted risk* in April under a trusted-group premise, with the three-level private/group/public
-model designed and deliberately deferred. That premise expired when a second user's session produced an
-entity asserting the user's name. Master over-weighted the framing and reported it as discovery.
+**The FRE-1053 census obligation was retired rather than chased.** A comment on that ticket from 07-31
+already recorded that the claim the census existed to test was dead — the entity path was fixed by
+other mechanisms — and recommended re-scoping. Nobody edited the body, so the obligation survived into
+the build by inertia. Watch for that shape: a superseded requirement nobody deletes.
 
-**Owner's scope discipline, explicit: fix user session identity only.** Additional features and
-controls come when the owner chooses. Do **not** escalate FRE-674 or expand FRE-1150.
+**Nothing in the recall scorer prefers episodes.** Verified in source against the owner's question: one
+combine function, four weights, no branch on candidate kind. The roughly 2:1 admission is the sum of
+three accidents — the empty-name topic hit (now fixed), a recency term at 0.20 that correlates with
+kind by construction, and the 07-30 pair split that doubled one population against a fixed cap. That is
+FRE-1158, filed and parked.
 
-**Owner's design steer for FRE-1150:** the connected user's identity is a **static instruction in the
-cached portion** of the prompt — it never varies, being derived from the authenticated user — and must
-be authoritative over any identity claim arriving through recall. Not to be solved by moving the memory
-section or re-ranking recall.
-
-**Eval harnesses reaching a local model must run across the tunnel.** Master instead stood up a second
-agent service on the VPS pointed at a model endpoint that only exists on the owner's machine, and burned
-an hour on it. The existing pattern was in the repo the whole time.
+**Master's dominant failure, five occurrences, several caught by the owner.** Asserting a derived fact
+without checking the layer beneath it. The 429 blamed on a busy endpoint when we were dispatching
+*unauthenticated*; a claim that OVH's dedicated endpoint needed a client change when litellm reads
+`OVHCLOUD_API_BASE` from env; a claim that the embedder's credential would flow to chat, read off the
+config without checking the code path that consumes it; `preserve_thinking` floated as the
+estimator-gap explanation when we never resend reasoning content at all; and a ranking probe that
+scored on one subscore in isolation when it carries a tenth of the weight, producing a confident 76.7%
+that was discarded rather than reported. Each time the instrument answered an adjacent question and
+looked authoritative.
 
 ## Worktrees — anything special
 
-- **build2** holds FRE-1150. Its branch name no longer matches the re-scoped title and it was told to
-  recreate it; there were zero commits, so nothing to unwind.
-- **explore** stays pinned to the **deployed** SHA, not `origin/main`, for any analysis.
+- **build / build2** hold merged-but-undeleted branches, so `--delete-branch` fails locally every merge.
+  Known, harmless.
+- **build1 wedged twice today** at interactive prompts, hours apart, and invisible in dispatch state
+  both times because a worktree-dirty refusal writes no record at all. Recorded on FRE-1077.
+- **explore** stays pinned to the deployed SHA, not `origin/main`.
 
 ## Sequence position + drift
 
-Still entirely memory/recall + context, owner-directed. The console was **not touched** this session —
-38 of its 60 lines, contract intact. The standing four-item sequence (telemetry residuals → Config
-Management → Linear async feedback → Seshat Inference) remains unstarted, which is drift only in the
-sense that the recall work keeps earning priority over it.
+The whole day was owner-directed: the identity incident, then model work. **None of it touched the
+console's standing four-item sequence** (telemetry residuals → Config Management → Linear async
+feedback → Seshat Inference), which remains unstarted. That is drift only in the sense that live
+incidents keep outranking it. Console untouched apart from one transcription; 39 of its 60 lines.
 
 ## Answers for the fresh start
 
-- **Why is FRE-1114 sitting in `Awaiting Deploy`?** It is merged but its deploy is a gateway rebuild —
-  ask-first. Master asked; the owner has not authorized. Waiting on the owner, not on work.
-- **Why is the FRE-1122 baseline parked at 9/20?** Three fixture gaps, all recorded there: no auth path
-  on the run phase, all twenty probes share one session (so probe N answers inside probes 1..N-1), and a
-  hardcoded 300s per-turn ceiling that one legitimate five-tool-iteration turn exceeded by 18 seconds.
-  Turn latency itself is **fine** across the tunnel — median ~40s. The probe set is done: 10/10, zero
-  rows on every absent subject, digest `abdd70fb4bc6`.
-- **Is the corpus polluted by the failed eval runs?** No. Eleven turns landed, all from *present*
-  probes. No absent probe ever fired and all ten absent subjects re-measure at zero. Baseline integrity
-  is intact.
-- **Was FRE-998 really fixed?** Half. Its write path works — every turn since 07-31 carries `user_id`.
-  Its backfill never ran: 2,288 of 2,325 historical turns still have none, and master closed it Done
-  with that criterion unmet. Recorded on the ticket, not silently reopened.
-- **Why is the owner's patience thin?** Every thread this session spawned more work than it closed, and
-  master reported each blocker serially as it was hit rather than tracing the whole path first. That is
-  a working-style problem to correct, not a property of the codebase.
+- **Why is the `adr` stream wedged?** Deliberate. A stale dispatch-state entry names FRE-1127 as
+  `launched` since 08-03 while that ticket sits in `Backlog`, so the daemon stalls every tick. Clearing
+  it is one action and immediately dispatches FRE-1132 — a new subject, which the pause directive
+  reserves for the owner.
+- **Why is FRE-1122 `Approved` with no stream label?** Master moved it out of `Awaiting Deploy`: its
+  fixture merged days ago and is live, so it never awaited a deploy — it awaits the baseline *run*,
+  which needs owner authorization plus three recorded fixture defects fixed. The 9/20 partial is dead
+  (produced under a different primary model) and must not be reused.
+- **Is the OVH model safe as the daily driver?** No — as a fast option and for parallel evals, yes. It
+  has **no prompt caching**, so re-transmission (~32K/call × ~25 calls) bills in full, roughly $0.40 a
+  session, where the local model's cache absorbs it. Prompt-level defects are model-portable (FRE-1150
+  reproduced on three model families), which is what makes it a good eval target.
+- **Can it be compared to the local model in an experiment?** Not on parameters. The cloud path sends
+  only `temperature` — no `top_p`, `top_k`, `min_p`, `presence_penalty`, and no `extra_body` at all.

@@ -77,6 +77,12 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      # tests/test_security/test_bypass_rules.py (ADR-0132 D2 / FRE-1147) shells
+      # out to the ast-grep binary directly — pinned to match the Lint job's
+      # install so both jobs enforce the identical rule-set version.
+      - name: Install ast-grep
+        run: uv tool install ast-grep-cli@0.45.0
+
       - name: Run unit tests
         run: uv run python -m pytest -m "not integration" -q --tb=short
         env:

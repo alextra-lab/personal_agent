@@ -114,8 +114,19 @@ models:
     top_p: 0.95
     top_k: 20                    # via extra_body
     min_p: 0.0                   # Qwen card recommended; via extra_body
-    presence_penalty: 1.5        # Qwen card recommended for thinking
-    repetition_penalty: 1.0      # Qwen card default; via extra_body
+    # 1.5 -> 0.0, owner-directed 2026-08-05 on Unsloth's guidance, which is the
+    # authority for this deployment: we run Unsloth's GGUF quant on llama.cpp,
+    # and Unsloth recommends presence_penalty 0.0 for thinking mode on BOTH
+    # Qwen3.6 sizes. Only the official 35B-A3B card says 1.5, and that value is
+    # paired there with temperature 1.0; the 27B card says 0.0. Holding 1.5 next
+    # to our temperature 0.6 made this entry a hybrid of two presets that no
+    # source recommends together -- a strong repetition penalty tuned for
+    # temperature-1.0 sampling, applied to much tighter sampling. With this
+    # change the entry is exactly Unsloth's thinking-mode preset for precise
+    # tasks: 0.6 / 0.95 / 20 / 0.0 / 0.0 / 1.0. The temperature was already
+    # chosen on evidence (EVAL-2026-05-11) and independently matches it.
+    presence_penalty: 0.0
+    repetition_penalty: 1.0      # Unsloth + Qwen card: disabled or 1.0; via extra_body
     thinking_budget_tokens: 32768  # Qwen card "standard" max output
     supports_function_calling: true
     supports_vision: true         # Qwen3.6-35B-A3B vision-capable on the deployed build (ADR-0101)
@@ -142,8 +153,12 @@ models:
     top_p: 0.80                  # Qwen card Instruct
     top_k: 20
     min_p: 0.0                   # Qwen card Instruct (new)
-    presence_penalty: 1.5        # Qwen card Instruct (was 0.5)
-    repetition_penalty: 1.0      # Qwen card Instruct (new); via extra_body
+    # Deliberately NOT changed alongside the thinking model's 1.5 -> 0.0.
+    # Unsloth's non-thinking preset recommends presence_penalty 1.5, and this
+    # entry runs thinking disabled, so 1.5 is the correct value here. Checked
+    # 2026-08-05 rather than assumed to move with its sibling.
+    presence_penalty: 1.5        # Unsloth + Qwen card, Instruct/non-thinking
+    repetition_penalty: 1.0      # Unsloth + Qwen card: disabled or 1.0; via extra_body
     max_tokens: 2048             # Bounded output for summary-length sub-task results
     disable_thinking: true       # Hard disable via chat_template_kwargs (ADR-0023)
     supports_function_calling: true

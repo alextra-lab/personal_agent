@@ -191,7 +191,13 @@ Required checks: the 6 CI jobs (Any source) + `CodeQL` aggregate + a code-scanni
   them under that exact heading, one item per line. Prose elsewhere in the body carries no
   disposition obligation. The heading is what makes the obligation below checkable: without a marker,
   "no remedies were named" and "a remedy was named and missed" produce identical evidence at every
-  gate.
+  gate. **The obligation follows the ticket to whichever exit it takes** — `Done` through the close-out
+  evidence comment (§ Evidence contract), `Canceled`/`Duplicate` through a closing comment carrying the
+  dispositions alone. A ticket abandoned before it was ever dispatched passed no gate at all, which
+  makes that the path where a named remedy leaves view unnoticed. **At those two exits only `filed`
+  (id on the line) or `rejected` (with a reason) remain available** — `in scope` died with the ticket
+  that would have proven it, so accepting it there is how a remedy disappears while the box looks
+  ticked.
 - **State lifecycle — the board must not lie (be accurate, no stale entries):**
   `Approved` (ready; dispatched once it also carries a `stream:*` label) → `In Progress` (a session is
   building it **now** — ≤1 per stream, transient; umbrellas/pillars go to `Backlog`, parked-project
@@ -262,9 +268,8 @@ filed, naming the id; rejected, stating the reason). An item still undisposition
 fix it here, before the ticket leaves every mechanism's view. **That one field also binds the
 `Canceled` and `Duplicate` exits**, where the rest of this comment does not apply: a ticket abandoned
 or folded into another still names each item's disposition in a closing comment, because abandoning
-the *ticket* is not a decision about the *remedies it named*. Those two exits pass neither the
-dispatch gate nor the Done gate, so they are the one path where a named remedy can leave view
-unnoticed. A ticket reaching Done without this comment is drift — catch it.
+the *ticket* is not a decision about the *remedies it named* — and there, only `filed` or `rejected`
+are available (§ Ticket state). A ticket reaching Done without this comment is drift — catch it.
 
 ## Dispatch (Linear-native)
 

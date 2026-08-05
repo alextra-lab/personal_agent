@@ -163,9 +163,11 @@ For concurrent-session safety, still confirm timing if another session is active
   the follow-up issue, consider rollback. Verify Failed is the exception flag that demands a decision.
 - **A `Canceled` or `Duplicate` exit still owes its open-remedy dispositions.** The rest of the
   evidence comment does not apply to an abandoned ticket, but every `## Open remedies` item still gets
-  in scope / filed with id / rejected with reason in a closing comment — those two exits pass neither
-  the dispatch gate nor the Done gate, so they are the one path where a named remedy leaves view
-  unnoticed.
+  **filed** (id on the line) or **rejected** (with a reason) in a closing comment — **`in scope` is not
+  available here**: it died with the ticket that would have proven it, so accepting it is how a remedy
+  disappears while the box looks ticked. **This binds wherever you cancel, not only at this step**
+  (lifecycle-rules § Ticket state) — this skill is the PR-integration flow, and a ticket abandoned
+  before it ever reached a PR never passes through here at all.
 - **Advance dispatch (replaces advancing the board):** run this at every MERGE, not just at Done —
   the merge is the event that frees the stream and un-blocks chain successors (a blocker is open
   until it reaches `Awaiting Deploy`; lifecycle-rules § Dispatch). **Re-derive the stream's eligible

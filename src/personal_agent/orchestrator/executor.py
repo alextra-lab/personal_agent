@@ -1292,7 +1292,7 @@ def _record_turn_evidence(
             # Both read from the same values the model was given, never re-derived.
             prompt_component_ids=prompt_component_ids,
             operator_identity=ctx.operator_name or None,
-            operator_stanza=ctx.operator_stanza or None,
+            operator_assertion=ctx.operator_assertion or None,
         )
     except Exception:
         log.exception(
@@ -1372,6 +1372,7 @@ async def _populate_operator_identity(
 
     ctx.operator_stanza = identity.stanza
     ctx.operator_name = identity.name
+    ctx.operator_assertion = identity.assertion
 
 
 def _inline_volatile_with_outcome(
@@ -3559,7 +3560,10 @@ async def step_init(
             from personal_agent.service.app import memory_service as _ms
 
             await _populate_operator_identity(ctx, _ms)
-        except ImportError as _stanza_e:
+        # Broad by intent: the import of service.app pulls the whole app module graph, and
+        # step_init must not fail a turn because the operator stanza could not be built.
+        # The helper already handles its own failures; this covers the import itself.
+        except Exception as _stanza_e:
             log.warning("operator_stanza_failed", error=str(_stanza_e), trace_id=ctx.trace_id)
         log.info(
             "step_init_gateway_path",

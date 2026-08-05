@@ -34,7 +34,7 @@ from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 TURN_CONTEXT_FENCE = "<turn_context>"
 """Opening fence the executor wraps per-turn volatile content in (ADR-0081 §D2).
@@ -56,12 +56,24 @@ EVIDENCE_RECORD_KEYS: tuple[str, ...] = (
 )
 """The eight records ADR-0125 D3 requires every turn to carry, in table order."""
 
-_MAX_RECORDED_STANZA_CHARS = 2000
-"""Bound on the recorded operator stanza (FRE-1150).
+_VOLATILE_TAIL_COMPONENTS: frozenset[str] = frozenset(
+    {"skill_bodies", "memory_section", "artifact_builder_planning_note"}
+)
+"""Prompt components that ride the volatile block inlined into the user message.
 
-Generous against the ~400 chars a five-field stanza renders to, but finite: the stanza
-interpolates :Person properties, each already capped at 120 chars by the renderer, and
-the capture must not become unbounded because a node gained fields.
+They reach the model only when that block does, so the record filters them on the same
+``block_reached_input`` rule ``skill_bodies`` already uses (FRE-1150). The assembler's own
+component list is intentionally left alone: it describes what assembly produced, which is
+what the ADR-0078 prompt identity means; only the *capture's* claim is narrowed to what
+the model actually received.
+"""
+
+_MAX_RECORDED_ASSERTION_CHARS = 2000
+"""Bound on the recorded operator assertion (FRE-1150).
+
+Generous against the ~450 chars the assertion renders to, but finite: it interpolates the
+:Person name, and the capture must not become unbounded because a node holds a pathological
+value.
 """
 
 
@@ -410,16 +422,20 @@ class AssembledContextRecord(BaseModel):
         primary_call_count: How many primary calls the turn ultimately made. Stamped at
             capture time, since it is not knowable at the admission point. A reader needs
             it to interpret the record: it says plainly that this describes call 0 of N.
-        prompt_component_ids: The prompt components actually spliced into this call, in
-            assembly order (FRE-1150). Emitted to the logs since ADR-0078, but absent from
-            the capture — so the capture could not answer "what was in the prompt" at all.
+        prompt_component_ids: The prompt components that actually reached the model on
+            this call, in assembly order (FRE-1150). Emitted to the logs since ADR-0078
+            but absent from the capture, so the capture could not answer "what was in the
+            prompt" at all. Volatile-tail components are filtered out when the block never
+            reached the input, on the same rule and for the same reason as ``skill_bodies``.
         operator_identity: The name the operator component asserted, or None when no
             identity was resolved. Read from the same resolution the prompt used.
-        operator_stanza: The operator stanza verbatim, bounded, or None. The capture
-            stored only ``system_prompt_chars``, so a search of the corpus for any prompt
-            string returned zero **by construction** — which is how "the stanza never
-            rendered" became reachable from a correct reading. The stanza *is* the
-            identity claim, so storing it is what makes identity auditable.
+        operator_assertion: The operator stanza's identity claim and authority rule
+            verbatim, bounded, or None. The capture stored only ``system_prompt_chars``,
+            so a search of the corpus for any prompt string returned zero **by
+            construction** — which is how "the stanza never rendered" became reachable
+            from a correct reading. This is deliberately the assertion and not the whole
+            stanza: it carries the entire mechanism while keeping the user's profile
+            attributes (location, pronouns, role, languages) out of a text-indexed store.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -434,7 +450,20 @@ class AssembledContextRecord(BaseModel):
     primary_call_count: int = 1
     prompt_component_ids: list[str] = Field(default_factory=list)
     operator_identity: str | None = None
-    operator_stanza: str | None = None
+    operator_assertion: str | None = None
+
+    @field_validator("operator_assertion")
+    @classmethod
+    def _bound_assertion(cls, value: str | None) -> str | None:
+        """Bound the recorded assertion on the record itself, not at the caller.
+
+        A cap enforced only in the builder is a cap any future writer can miss; making it
+        a property of the model means the record cannot hold an unbounded value however
+        it is constructed.
+        """
+        if value is None:
+            return None
+        return mark_truncated(value, _MAX_RECORDED_ASSERTION_CHARS)
 
 
 class TurnEvidence(BaseModel):
@@ -692,7 +721,7 @@ def build_turn_evidence(
     candidate_population: CandidatePopulation = CandidatePopulation.POST_SELECTION,
     prompt_component_ids: Sequence[str] = (),
     operator_identity: str | None = None,
-    operator_stanza: str | None = None,
+    operator_assertion: str | None = None,
 ) -> TurnEvidence:
     """Build both D3 records for one turn from its final serialized model input.
 
@@ -714,11 +743,12 @@ def build_turn_evidence(
             producing paths considered, or only their survivors. The caller knows this
             and the record must state it (FRE-1060); the default is the conservative
             claim, so a caller that does not pass it cannot over-claim completeness.
-        prompt_component_ids: Components spliced into this call, in assembly order.
+        prompt_component_ids: Components the assembler produced, in assembly order.
+            Volatile-tail components are dropped from the record when the block never
+            reached the model input.
         operator_identity: Name the operator component asserted, None when unresolved.
-        operator_stanza: The operator stanza verbatim; truncated to
-            ``_MAX_RECORDED_STANZA_CHARS`` so an enriched :Person node cannot bloat the
-            capture.
+        operator_assertion: The operator stanza's identity claim and authority rule; the
+            model bounds its length.
 
     Returns:
         A :class:`TurnEvidence` whose two halves describe the same model call.
@@ -787,11 +817,13 @@ def build_turn_evidence(
         memory_identities=admitted_identities,
         primary_call_index=call_index,
         primary_call_count=primary_call_count,
-        prompt_component_ids=list(prompt_component_ids),
+        prompt_component_ids=[
+            c
+            for c in prompt_component_ids
+            if block_reached_input or c not in _VOLATILE_TAIL_COMPONENTS
+        ],
         operator_identity=operator_identity,
-        operator_stanza=(
-            operator_stanza[:_MAX_RECORDED_STANZA_CHARS] if operator_stanza else operator_stanza
-        ),
+        operator_assertion=operator_assertion,
     )
 
     return TurnEvidence(recall=recall, assembled_context=assembled)

@@ -126,6 +126,9 @@ class TestOperatorIdentityPopulation:
 
         assert ctx.operator_name == "Alex"
         assert "You are assisting Alex" in ctx.operator_stanza
+        # The recorded assertion carries the mechanism but not the profile detail block.
+        assert "You are assisting Alex" in ctx.operator_assertion
+        assert "none of them override this line" in ctx.operator_assertion
 
     @pytest.mark.asyncio
     async def test_logs_unidentified_request(self, caplog: pytest.LogCaptureFixture) -> None:

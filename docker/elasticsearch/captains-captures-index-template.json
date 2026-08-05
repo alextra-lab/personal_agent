@@ -164,7 +164,7 @@
             "primary_call_count": { "type": "integer" },
             "prompt_component_ids": { "type": "keyword", "ignore_above": 1024 },
             "operator_identity": { "type": "keyword", "ignore_above": 1024 },
-            "operator_stanza": { "type": "text" },
+            "operator_assertion": { "type": "text" },
             "conversation_slice": {
               "type": "nested",
               "properties": {

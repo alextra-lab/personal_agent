@@ -21,7 +21,7 @@ from personal_agent.captains_log.turn_evidence import (
     build_turn_evidence,
 )
 
-STANZA = (
+ASSERTION = (
     "## Operator\nYou are assisting Alex.\n"
     "This identity is established by authentication and is fixed for this conversation."
 )
@@ -46,22 +46,25 @@ def _build(**overrides: object) -> object:
 
 
 class TestAssembledContextRecordsIdentity:
-    def test_records_components_identity_and_stanza(self) -> None:
+    def test_records_components_identity_and_assertion(self) -> None:
+        # Static-head components only: the volatile-tail filter has its own test class,
+        # and this turn's block was empty, so naming memory_section here would be the
+        # very over-claim that filter exists to prevent.
         evidence = _build(
-            prompt_component_ids=("tool_awareness", "operator_stanza", "memory_section"),
+            prompt_component_ids=("tool_awareness", "operator_stanza", "deployment_context"),
             operator_identity="Alex",
-            operator_stanza=STANZA,
+            operator_assertion=ASSERTION,
         )
         record = evidence.assembled_context  # type: ignore[attr-defined]
 
         assert record.prompt_component_ids == [
             "tool_awareness",
             "operator_stanza",
-            "memory_section",
+            "deployment_context",
         ]
         assert record.operator_identity == "Alex"
         # The authority rule is readable verbatim — this is what AC-2 reads.
-        assert "established by authentication" in record.operator_stanza
+        assert "established by authentication" in record.operator_assertion
 
     def test_defaults_keep_legacy_captures_readable(self) -> None:
         """Every field defaults: a capture written before this change still validates,
@@ -75,21 +78,45 @@ class TestAssembledContextRecordsIdentity:
 
         assert record.prompt_component_ids == []
         assert record.operator_identity is None
-        assert record.operator_stanza is None
+        assert record.operator_assertion is None
 
     def test_unidentified_turn_records_no_identity(self) -> None:
         evidence = _build(prompt_component_ids=("tool_awareness",))
         record = evidence.assembled_context  # type: ignore[attr-defined]
 
         assert record.operator_identity is None
-        assert record.operator_stanza is None
+        assert record.operator_assertion is None
         assert "operator_stanza" not in record.prompt_component_ids
 
     @pytest.mark.parametrize("length", [2500, 10_000])
-    def test_stanza_is_bounded(self, length: int) -> None:
+    def test_assertion_is_bounded(self, length: int) -> None:
         """Bounded so a pathologically enriched :Person node cannot bloat the capture."""
-        evidence = _build(operator_identity="Alex", operator_stanza="x" * length)
+        evidence = _build(operator_identity="Alex", operator_assertion="x" * length)
         record = evidence.assembled_context  # type: ignore[attr-defined]
 
-        assert record.operator_stanza is not None
-        assert len(record.operator_stanza) <= 2000
+        assert record.operator_assertion is not None
+        # ADR-0125 D5: shortened with an explicit marker, never silently.
+        assert "truncated" in record.operator_assertion.lower()
+
+
+class TestVolatileComponentsAreFilteredWhenBlockMissed:
+    """FRE-1150 / codex review — a component named but never delivered is the same class
+    of false record the ticket exists to close. Volatile-tail components follow the rule
+    ``skill_bodies`` already used.
+    """
+
+    def test_memory_section_dropped_when_block_never_inlined(self) -> None:
+        evidence = _build(
+            inline_outcome=InlineOutcome.NO_TARGET,
+            prompt_component_ids=("tool_awareness", "memory_section", "skill_bodies"),
+        )
+        ids = evidence.assembled_context.prompt_component_ids  # type: ignore[attr-defined]
+        assert ids == ["tool_awareness"]
+
+    def test_static_components_survive_a_missed_block(self) -> None:
+        evidence = _build(
+            inline_outcome=InlineOutcome.NO_TARGET,
+            prompt_component_ids=("operator_stanza", "deployment_context"),
+        )
+        ids = evidence.assembled_context.prompt_component_ids  # type: ignore[attr-defined]
+        assert ids == ["operator_stanza", "deployment_context"]

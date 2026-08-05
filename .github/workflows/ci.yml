@@ -125,6 +125,10 @@ jobs:
       - name: Start PostgreSQL and create test database
         run: |
           sudo systemctl start postgresql
+          # Install pgvector extension (required by init.sql)
+          sudo apt-get update && sudo apt-get install -y postgresql-16-pgvector
+          # Set password for postgres superuser (needed for test schema creation)
+          sudo -u postgres psql -c "ALTER ROLE postgres WITH PASSWORD 'postgres_dev_password';"
           sudo -u postgres psql -c "CREATE USER agent WITH PASSWORD 'agent_dev_password';"
           sudo -u postgres createdb -O agent personal_agent
           # Bind on 5433 so the existing AGENT_DATABASE_URL (port 5433) works without changes.
@@ -140,16 +144,17 @@ jobs:
             -h localhost -p 5433 -U agent -d personal_agent \
             -f docker/postgres/init.sql
 
-      - name: Run transport integration tests
+      - name: Run integration tests (transport + schema parity)
         run: |
           PERSONAL_AGENT_INTEGRATION=1 uv run python -m pytest -m integration \
-            -k "transport" \
+            -k "transport or init_sql" \
             -v --tb=short
         env:
           APP_ENV: test
           AGENT_NEO4J_URI: bolt://localhost:7688
           AGENT_ELASTICSEARCH_URL: http://localhost:9201
           AGENT_DATABASE_URL: postgresql+asyncpg://agent:agent_dev_password@localhost:5433/personal_agent
+          AGENT_DATABASE_ADMIN_URL: postgresql+asyncpg://postgres:postgres_dev_password@localhost:5433/personal_agent
           AGENT_ELASTICSEARCH_INDEX_PREFIX: agent-logs-test
           AGENT_CAPTAINS_LOG_INDEX_PREFIX: agent-captains-test
           AGENT_OWNER_EMAIL: ci-test@example.com

@@ -45,8 +45,15 @@ seshat-gateway dependencies (all on cloud-sim bridge network):
   neo4j:7687           (knowledge graph — memory)
   elasticsearch:9200   (traces, logs, telemetry)
   redis:6379           (event bus — Redis Streams)
-  embeddings:8503      (Qwen3-Embedding-0.6B via llama.cpp)
-  reranker:8504        (Qwen3-Reranker-0.6B via llama.cpp)
+
+seshat-gateway external dependencies (managed endpoints):
+  OVH AI Endpoints     (Qwen3-Embedding-8B — semantic search)
+  Voyage AI            (rerank-2.5 — ranked retrieval)
+  Anthropic/OpenAI     (Claude Sonnet/Haiku — cloud profiles)
+
+Optional local services (defined in compose but not started by default):
+  embeddings:8503      (Qwen3-Embedding-0.6B via llama.cpp — manual use only)
+  reranker:8504        (Qwen3-Reranker-0.6B via llama.cpp — manual use only)
 
 Network: cloud-sim bridge, subnet 172.25.0.0/16
 OVH firewall: SSH (custom port), HTTP/80, HTTPS/443, ICMP only
@@ -110,14 +117,16 @@ NEO4J_PASSWORD=<strong-password>
 CLOUDFLARE_TUNNEL_TOKEN=<token-from-cloudflare>
 ```
 
-### 3.3 Transfer embedding and reranker models
+### 3.3 Transfer embedding and reranker models (optional)
+
+**Skip this step for standard deployments.** The gateway uses OVH managed embeddings and Voyage reranker; these local models are optional and only needed if you plan to start the `embeddings` or `reranker` containers for manual testing or fallback.
 
 From your Mac (requires ~1.2 GB):
 ```bash
 bash infrastructure/scripts/transfer-models.sh
 ```
 
-This copies GGUF files to `/opt/seshat/models/embedding/` and `/opt/seshat/models/reranker/` on the VPS.
+This copies GGUF files to `/opt/seshat/models/embedding/` and `/opt/seshat/models/reranker/` on the VPS, which the `embeddings` and `reranker` containers will load if started manually.
 
 ### 3.4 Harden the server
 
@@ -200,20 +209,27 @@ File: `docker-compose.cloud.yml`
 
 ### Services
 
+**Live (started automatically)**
+
 | Service | Image | Port (internal) | RAM limit | Purpose |
 |---------|-------|-----------------|-----------|---------|
 | `postgres` | pgvector/pgvector:pg17 | 5432 | 512 MB | Sessions, history, metrics |
 | `neo4j` | neo4j:5.26-community | 7474/7687 | 1536 MB | Knowledge graph, memory |
 | `elasticsearch` | elasticsearch:8.19 | 9200 | 2048 MB | Logs, traces, telemetry |
 | `redis` | redis:7-alpine | 6379 | 128 MB | Event bus (Redis Streams) |
-| `embeddings` | llmserver (local build) | 8503 | 2048 MB | Qwen3-Embedding-0.6B |
-| `reranker` | llmserver (local build) | 8504 | 1024 MB | Qwen3-Reranker-0.6B |
 | `seshat-gateway` | seshat-seshat-gateway | 9001 | 768 MB | Full service app (FastAPI) |
 | `seshat-pwa` | seshat-seshat-pwa | 3000 | 256 MB | Next.js PWA |
 | `caddy` | caddy:2-alpine | 80/443 | 64 MB | Reverse proxy |
 | `cloudflared` | cloudflare/cloudflared | — | — | WARP tunnel |
 
-**Total RAM budget**: ~8.4 GB (comfortably within 24 GB)
+**Total RAM budget**: ~5.3 GB (comfortably within 24 GB)
+
+**Optional (defined but not started — manual use only)**
+
+| Service | Image | Port (internal) | RAM limit | Purpose |
+|---------|-------|-----------------|-----------|---------|
+| `embeddings` | llmserver (local build) | 8503 | 2048 MB | Qwen3-Embedding-0.6B (legacy, not used in live path) |
+| `reranker` | llmserver (local build) | 8504 | 1024 MB | Qwen3-Reranker-0.6B (legacy, not used in live path) |
 
 ### Network
 
@@ -232,11 +248,12 @@ postgres, neo4j, elasticsearch, redis (no deps)
     → seshat-pwa (depends_on: seshat-gateway)
       → caddy (depends_on: seshat-gateway + seshat-pwa)
         → cloudflared (depends_on: caddy)
+```
 
-embeddings, reranker: defined but not started automatically (FRE-1123) — the gateway no longer
-depends_on either, since neither role resolves to these local containers under the live
-substrate profile. Start deliberately if ever needed:
-`docker compose -f docker-compose.cloud.yml up embeddings` / `up reranker`.
+**Optional services** (`embeddings`, `reranker`): Defined in the compose file but NOT started automatically and NOT required for normal operation. The gateway resolves embeddings to the OVH managed endpoint (Qwen3-Embedding-8B) and reranker to Voyage AI (rerank-2.5), with fallback to the Mac tunnel reranker. Start these containers deliberately only if you need to use local models for development or fallback testing:
+```bash
+docker compose -f docker-compose.cloud.yml up embeddings    # Qwen3-Embedding-0.6B on localhost:8503
+docker compose -f docker-compose.cloud.yml up reranker      # Qwen3-Reranker-0.6B on localhost:8504
 ```
 
 Full cold-start: ~5 minutes. Warm restart (no image rebuild): ~90 seconds.
@@ -364,52 +381,59 @@ CLOUDFLARE_TUNNEL_TOKEN=eyJ...
 
 ## 9. Model Configuration
 
-Every deployment reads the same catalog, `config/models.yaml`. The second file
-and `AGENT_MODEL_CONFIG_PATH` were removed in FRE-916 (ADR-0121) — a role can no
-longer resolve to a different model on the VPS than it does locally.
+Every deployment reads the same catalog, `config/models.yaml`. The single source of truth for all model assignments (ADR-0121). Each role resolves identically on the VPS and locally.
 
-What each compose file still declares is `AGENT_DEPLOYMENT_PROFILE`
-(`local` | `cloud` | `eval`), which keys the required-secret set in
-`config/model_roles.yaml`, not the catalog.
+What each compose file declares is `AGENT_DEPLOYMENT_PROFILE` (`local` | `cloud` | `eval`), which keys the required-secret set in `config/model_roles.yaml`.
 
+### Layer 1 — Providers (deployment endpoints and auth)
+
+| Provider | Base URL | Purpose | Auth |
+|----------|----------|---------|------|
+| `slm_local` | https://slm.example.com/v1 | Owner's Mac GPU via CF-Access tunnel (llama.cpp + MLX) | none |
+| `ovh` | https://oai.endpoints.kepler.ai.cloud.ovh.net/v1 | OVH AI Endpoints — managed embedding inference | `managed_embedding_token` |
+| `voyage` | https://api.voyageai.com/v1 | Voyage AI — managed reranking service | `voyage_api_key` |
+| `anthropic` | (cloud) | Anthropic Claude models | `anthropic_api_key` |
+| `openai` | (cloud) | OpenAI models for extraction/compression | `openai_api_key` |
+
+### Layer 2 — Live model assignments (embeddings and reranker)
+
+The gateway resolves embeddings and reranker through `config/models.yaml`, not through local Docker containers:
+
+**Embedding (semantic search):**
 ```yaml
-# Layer 1 — providers carry endpoint, auth, placement and the concurrency ceiling
-providers:
-  anthropic:
-    auth_env: anthropic_api_key
-    placement: cloud
-    max_concurrency: 50
-
-# Layer 2 — deployments reference a provider
-claude_sonnet:
-  provider: anthropic
-  id: "claude-sonnet-4-6"
-  max_tokens: 8192
-
-claude_haiku:
-  id: "claude-haiku-4-5-20251001"
-  provider: "anthropic"
-  provider_type: "cloud"
-  max_tokens: 4096
-
-# Background task models (entity extraction, Captain's Log)
-gpt-5.4-nano:
-  id: "gpt-5.4-nano"
-  provider: "openai"
-  provider_type: "cloud"
-  max_tokens: 4096
-
-# Local embedding + reranker (Docker service hostnames)
 embedding:
-  id: "Qwen/Qwen3-Embedding-0.6B"
-  provider_type: "local"
-  endpoint: "http://embeddings:8503/v1"
-
-reranker:
-  id: "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
-  provider_type: "local"
-  endpoint: "http://reranker:8504/v1"
+  kind: embedding
+  provider: ovh                                    # Managed OVH endpoint
+  id: "Qwen3-Embedding-8B"                         # Model ID on OVH
+  endpoint: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+  context_length: 32768
+  max_concurrency: 50
+  input_cost_per_token_eur: 0.0000001              # €0.10/MTok
 ```
+
+**Reranker (ranked retrieval):**
+```yaml
+reranker:
+  kind: reranker
+  provider: voyage                                 # Managed Voyage endpoint
+  id: "rerank-2.5"                                 # Model ID at Voyage
+  endpoint: "https://api.voyageai.com/v1"
+  context_length: 32000
+  max_concurrency: 5
+  input_cost_per_token: 0.00000005                 # $0.05/MTok
+```
+
+**Reranker fallback** (if Voyage is unavailable):
+```yaml
+reranker_fallback:
+  kind: reranker
+  provider: slm_local                              # Mac tunnel fallback
+  id: "Qwen/Qwen3-Reranker-4B-mxfp8"               # Model ID on Mac
+  endpoint: "https://slm.example.com/v1"
+  max_concurrency: 1
+```
+
+**Do not use local Docker containers** (`embeddings:8503` / `reranker:8504`) for production. They are retained in `docker-compose.cloud.yml` for optional manual testing only and are not started by default (see § 5, Startup order).
 
 ---
 
@@ -533,12 +557,16 @@ OVH blocks UDP/443. Ensure `cloudflared` command has `--protocol http2`:
 command: tunnel --no-autoupdate --protocol http2 run
 ```
 
-### Embeddings / reranker container won't start
+### Embeddings / reranker container won't start (optional services)
 
-GGUF model files missing. Run:
+These containers are **not required for standard operation** — the gateway uses OVH managed embeddings and Voyage reranker by default. 
+
+If you explicitly started them and they fail, GGUF model files are likely missing:
 ```bash
 bash infrastructure/scripts/transfer-models.sh
 ```
+
+If you don't need these containers, you can ignore this error. They are defined in the compose file but are never started automatically or depended on by the gateway.
 
 ### Services won't start after VPS reboot
 

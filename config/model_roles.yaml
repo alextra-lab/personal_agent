@@ -123,6 +123,7 @@ bindings:
     defaults_by_primary:
       qwen3.6-35b-thinking: qwen3.6-35b-instruct  # local thinking primary -> local instruct companion
       qwen3.6-35b-instruct: qwen3.6-35b-instruct  # self-pair — no cheaper local companion
+      qwen3.6-27b-ovh:      qwen3.6-27b-ovh       # self-pair — no cheaper OVH-hosted companion
       claude_sonnet:        claude_sonnet          # frontier primary -> itself (no cheaper same-family sub)
       claude_haiku:         claude_haiku           # self-pair — already the cheap Anthropic tier
       gpt-5.4-mini:         gpt-5.4-mini           # self-pair — no cheaper GPT tier in the catalog

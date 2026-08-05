@@ -57,6 +57,20 @@ providers:
     placement: cloud
     max_concurrency: 50
     summary: "OVH AI Endpoints — managed embedding inference"
+  # Same vendor, same endpoint, same credential as `ovh` above — a SECOND entry
+  # rather than a rename, deliberately. The key doubles as litellm's dispatch
+  # prefix, and litellm's native provider is spelled `ovhcloud`; but `"ovh"` is
+  # also hard-coded as a cost-attribution label in memory/embeddings.py, so
+  # renaming the existing key would split OVH spend across two provider names in
+  # the ledger and would touch src/ (owner directive: route those through a build
+  # seat). Two entries keeps this config-only and keeps each call type's spend
+  # attributable. Consolidating them is in scope for the single-call-point study.
+  ovhcloud:
+    base_url: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+    auth_env: managed_embedding_token
+    placement: cloud
+    max_concurrency: 50
+    summary: "OVH AI Endpoints — managed chat inference (litellm-native provider)"
   openai:
     auth_env: openai_api_key
     placement: cloud
@@ -84,15 +98,13 @@ models:
     # "Thinking Mode — General Tasks" preset. The card requires context >= 128K
     # to preserve thinking capability across multi-turn agent loops.
     provider: slm_local
-    # Owner-directed 2026-08-05: the SLM server now serves Qwen3.6-27B-MTP-GGUF
-    # as the reasoning model, to evaluate its reasoning against the identity-
-    # precedence failure. Deliberately reversible -- the owner may switch back,
-    # so this is a one-line id change and nothing else. The catalog KEY still
-    # says 35b and is left alone on purpose: it is referenced from three src
-    # modules, both role bindings and ~20 test files, and renaming it would make
-    # the revert expensive. Only the wire id moved; without it the router
-    # resolves to a model that is no longer served.
-    id: "unsloth/qwen3.6-27B"
+    # Owner-directed 2026-08-05, second move: rolled back to the 35B after a
+    # ~1h trial of the local Qwen3.6-27B-MTP-GGUF. The 27B answered an identity
+    # probe correctly but at materially worse latency (66s vs a ~40s median),
+    # and the owner reloaded the 35B on the inference server in parallel with
+    # this revert. Keeping the catalog key stable across both moves is what
+    # made this a one-line change in each direction.
+    id: "unsloth/qwen3.6-35-A3B"
     context_length: 131072       # Qwen card: thinking-mode minimum (was 64000)
     quantization: "8bit"
     min_concurrency: 1
@@ -141,6 +153,45 @@ models:
     endpoint: "https://slm.example.com/v1"
 
 
+
+  # ── Managed Qwen (OVH AI Endpoints) ─────────────────────────────
+  qwen3.6-27b-ovh:
+    # Owner-directed 2026-08-05. The same Qwen3.6-27B, hosted by OVH instead of
+    # on the owner's Mac — added as a SELECTABLE alternative, not as the bound
+    # primary. `primary` stays on the local 35B; this appears in the PWA model
+    # picker because the primary binding is `open: true` and role_candidates
+    # offers every available llm-kind deployment.
+    #
+    # Motivation: the local 27B trial measured 66s on a single turn against a
+    # ~40s median for the local 35B. The managed copy is expected to be
+    # materially faster; this entry is what makes that comparable rather than
+    # asserted.
+    #
+    # No api_base is needed: litellm ships a native `ovhcloud` provider whose
+    # default base URL is byte-identical to the one declared above, so dispatch
+    # is `ovhcloud/Qwen3.6-27B` and the pricing registry keys on the same string.
+    provider: ovhcloud
+    id: "Qwen3.6-27B"
+    # Provider truth, read from OVH's own model record rather than assumed.
+    context_length: 262144
+    max_tokens: 262144
+    max_concurrency: 10
+    default_timeout: 300
+    # USD per token, quoted directly by OVH's model record (prompt / completion).
+    # Declared in the USD fields the pricing registry actually reads -- the EUR
+    # field used by the embedding entry is never read for chat models, so pricing
+    # here would silently register as zero if it were copied from that shape.
+    input_cost_per_token: 0.00000047     # $0.47/MTok
+    output_cost_per_token: 0.00000319    # $3.19/MTok
+    supports_function_calling: true
+    tool_calling_strategy: "native"
+    # Fail-closed until proven: OVH's model record does not state multimodality,
+    # and the vision role is pinned to claude_sonnet regardless (ADR-0101).
+    supports_vision: false
+    supports_pdf_document: false
+    # NOTE: thinking_budget_tokens / disable_thinking are deliberately absent.
+    # They are delivered via extra_body, which the LiteLLM path does not send --
+    # declaring them here would read as configured while doing nothing.
 
   # ── Cloud Models (ADR-0031) ─────────────────────────────────────
   # API key is NOT stored here — set AGENT_ANTHROPIC_API_KEY / AGENT_OPENAI_API_KEY in .env

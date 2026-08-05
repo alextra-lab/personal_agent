@@ -21,12 +21,12 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-import httpx
 import structlog
 
 from personal_agent.config import get_settings
 from personal_agent.config.settings import AppConfig
 from personal_agent.llm_client.cost_tracker import record_vendor_cost
+from personal_agent.security import create_guarded_http_client
 
 log = structlog.get_logger(__name__)
 
@@ -209,7 +209,7 @@ async def _attempt_rerank(
     response_key = "data" if is_voyage else "results"
 
     call_start = time.monotonic()
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with create_guarded_http_client(timeout=timeout) as client:
         resp = await client.post(
             f"{endpoint}/rerank",
             json={

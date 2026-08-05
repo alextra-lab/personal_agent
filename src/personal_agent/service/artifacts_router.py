@@ -40,6 +40,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.config.settings import get_settings
+from personal_agent.security import create_guarded_http_client
 from personal_agent.service.artifact_egress import to_artifacts_egress_url
 from personal_agent.service.auth import RequestUser, get_or_create_user_by_email, get_request_user
 from personal_agent.service.cf_access_jwt import (
@@ -381,7 +382,9 @@ class _HttpAssetFetcher:
             raise ArtifactExportError(f"refusing to fetch from disallowed host: {host!r}")
         request_url = self._to_egress_url(url) if host == self._origin_host else url
         try:
-            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
+            async with create_guarded_http_client(
+                timeout=self._timeout, follow_redirects=False
+            ) as client:
                 response = await client.get(request_url)
         except httpx.HTTPError as exc:
             raise ArtifactExportError(f"failed to fetch {url}: {exc}") from exc

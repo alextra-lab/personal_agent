@@ -47,7 +47,7 @@ class TestRerank:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF", "http://localhost:8504/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=mock_client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=mock_client),
         ):
             results = await rerank("what database?", ["doc0", "doc1", "doc2"])
 
@@ -85,7 +85,7 @@ class TestRerank:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF", "http://localhost:8504/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=mock_client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=mock_client),
         ):
             results = await rerank("query", ["a", "b"])
 
@@ -140,7 +140,7 @@ class TestCfAccessInjection:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("Voodisss/Qwen3-Reranker-4B", "https://slm.example.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
         ):
             await rerank("q", ["a"])
 
@@ -154,7 +154,7 @@ class TestCfAccessInjection:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF", "http://localhost:8504/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
         ):
             await rerank("q", ["a"])
 
@@ -192,7 +192,7 @@ class TestRerankTelemetryJoinability:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("model-x", "http://localhost:8504/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.log") as mock_log,
         ):
             await rerank(
@@ -227,7 +227,7 @@ class TestRerankTelemetryJoinability:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("model-x", "http://localhost:8504/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.log") as mock_log,
         ):
             await rerank("q1", ["d"], trace_id="tr", session_id="se")
@@ -252,7 +252,7 @@ class TestRerankTelemetryJoinability:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("model-x", "http://localhost:8504/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.log") as mock_log,
         ):
             results = await rerank("q", ["a", "b"], trace_id="tr", session_id="se", task_id="ta")
@@ -280,7 +280,7 @@ class TestRerankTelemetryJoinability:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("model-x", "http://localhost:8504/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.log") as mock_log,
         ):
             await rerank("q", ["d"], trace_id="tr", session_id="se")
@@ -304,7 +304,7 @@ class TestRerankTelemetryJoinability:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("Voodisss/Qwen3-Reranker-4B", "https://slm.example.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
         ):
             await rerank("q", ["a"], trace_id="tr-1", session_id="se-1")
 
@@ -327,7 +327,7 @@ class TestRerankTelemetryJoinability:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("Voodisss/Qwen3-Reranker-4B", "https://slm.example.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
         ):
             await rerank("q", ["a"])
 
@@ -362,7 +362,7 @@ class TestVoyagePrimary:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
         ):
             mock_settings.return_value.reranker_enabled = True
@@ -386,7 +386,7 @@ class TestVoyagePrimary:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
         ):
             mock_settings.return_value.reranker_enabled = True
@@ -406,7 +406,7 @@ class TestVoyagePrimary:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
         ):
             mock_settings.return_value.reranker_enabled = True
@@ -427,7 +427,7 @@ class TestVoyagePrimary:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
             patch("personal_agent.memory.reranker.log") as mock_log,
         ):
@@ -463,7 +463,7 @@ class TestVoyagePrimary:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
             patch("personal_agent.memory.reranker.record_vendor_cost", mock_record),
             patch(
@@ -508,7 +508,7 @@ class TestVoyagePrimary:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
             patch("personal_agent.memory.reranker.record_vendor_cost", mock_record),
             patch("personal_agent.memory.reranker.log") as mock_log,
@@ -544,7 +544,7 @@ class TestVoyagePrimary:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
             patch("personal_agent.memory.reranker.record_vendor_cost", mock_record),
         ):
@@ -564,7 +564,7 @@ class TestVoyagePrimary:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
             patch("personal_agent.memory.reranker.log") as mock_log,
         ):
@@ -605,7 +605,7 @@ class TestFallbackToMacTunnel:
                 "personal_agent.memory.reranker._get_reranker_fallback_config",
                 return_value=("Qwen/Qwen3-Reranker-4B-mxfp8", "https://slm.example.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
             patch("personal_agent.memory.reranker.record_vendor_cost", mock_record),
             patch("personal_agent.memory.reranker.log") as mock_log,
@@ -643,7 +643,7 @@ class TestFallbackToMacTunnel:
                 "personal_agent.memory.reranker._get_reranker_fallback_config",
                 return_value=("Qwen/Qwen3-Reranker-4B-mxfp8", "https://slm.example.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
             patch("personal_agent.memory.reranker.log") as mock_log,
         ):
@@ -691,7 +691,7 @@ class TestFallbackToMacTunnel:
                 "personal_agent.memory.reranker._get_reranker_fallback_config",
                 return_value=("Qwen/Qwen3-Reranker-4B-mxfp8", "https://slm.example.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
             patch("personal_agent.memory.reranker.log") as mock_log,
         ):
@@ -727,7 +727,7 @@ class TestFallbackToMacTunnel:
                 "personal_agent.memory.reranker._get_reranker_fallback_config",
                 side_effect=KeyError("reranker_fallback"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
         ):
             mock_settings.return_value.reranker_enabled = True
@@ -761,7 +761,7 @@ class TestFallbackToMacTunnel:
                 "personal_agent.memory.reranker._get_reranker_fallback_config",
                 return_value=("Qwen/Qwen3-Reranker-4B-mxfp8", "https://slm.example.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
             patch("personal_agent.memory.reranker.log") as mock_log,
         ):
@@ -811,7 +811,7 @@ class TestFallbackToMacTunnel:
                 "personal_agent.memory.reranker._get_reranker_fallback_config",
                 return_value=("Qwen/Qwen3-Reranker-4B-mxfp8", "https://slm.example.com/v1"),
             ),
-            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
             patch("personal_agent.memory.reranker.get_settings") as mock_settings,
             patch(
                 "personal_agent.memory.reranker.time.monotonic", wraps=real_monotonic

@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from personal_agent.config import settings
+from personal_agent.security import EgressBlockedError, create_guarded_http_client
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -194,12 +195,14 @@ class LinearClient:
         if not api_key:
             raise RuntimeError("AGENT_LINEAR_API_KEY not configured")
         try:
-            async with httpx.AsyncClient(timeout=25) as client:
+            async with create_guarded_http_client(timeout=25) as client:
                 resp = await client.post(
                     _LINEAR_URL,
                     json={"query": query, "variables": variables},
                     headers={"Authorization": api_key, "Content-Type": "application/json"},
                 )
+        except EgressBlockedError as exc:
+            raise RuntimeError(f"Linear API call refused by egress policy: {exc.reason}") from exc
         except httpx.ConnectError as exc:
             raise RuntimeError("Cannot connect to Linear API (api.linear.app).") from exc
         except httpx.TimeoutException as exc:

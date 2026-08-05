@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
+
+import httpx
 
 from personal_agent.config import settings
 from personal_agent.config.env_loader import Environment
@@ -100,6 +103,11 @@ class DomainGuard:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @property
+    def mode(self) -> GuardMode:
+        """Current operating mode — lets callers skip ``ensure_loaded()`` when off."""
+        return self._mode
 
     async def ensure_loaded(self) -> None:
         """Load or refresh the blocklist if the cache is stale.
@@ -236,8 +244,6 @@ class DomainGuard:
 
     async def _fetch_urlhaus(self) -> set[str]:
         """Download the URLhaus plaintext feed and extract unique hostnames."""
-        import httpx
-
         async with httpx.AsyncClient(timeout=_FEED_TIMEOUT_SECONDS) as client:
             resp = await client.get(_URLHAUS_FEED)
             resp.raise_for_status()
@@ -276,6 +282,99 @@ def get_domain_guard() -> DomainGuard:
             allowlist=frozenset(getattr(settings, "url_guard_allowlist", [])),
         )
     return _guard
+
+
+# ---------------------------------------------------------------------------
+# Outbound transport factory (ADR-0132 D2 / FRE-1147)
+# ---------------------------------------------------------------------------
+
+
+class EgressBlockedError(httpx.RequestError):
+    """Raised by the DomainGuard request hook before a request is ever sent.
+
+    Subclasses ``httpx.RequestError`` (not ``httpx.TransportError`` — this
+    never reaches a transport) so it is still caught by any existing
+    ``except httpx.RequestError`` / ``except httpx.HTTPError`` handler at a
+    seam call site. A seam whose except clauses are narrower (e.g. only
+    ``httpx.ConnectError``) needs an explicit ``except EgressBlockedError``.
+    """
+
+    def __init__(self, request: httpx.Request, reason: str, matched_entry: str | None) -> None:
+        """Build the error from the refused request and the guard's verdict.
+
+        Args:
+            request: The httpx request that was refused.
+            reason: Machine-readable reason from ``GuardResult.reason``.
+            matched_entry: The blocklist/allowlist entry that triggered the
+                refusal, if any.
+        """
+        super().__init__(
+            f"egress blocked by DomainGuard: {request.url} ({reason})",
+            request=request,
+        )
+        self.reason = reason
+        self.matched_entry = matched_entry
+
+
+async def _guard_request_hook(request: httpx.Request, *, guard: DomainGuard) -> None:
+    """Httpx async request hook — refuses a request before it is sent.
+
+    Skips ``ensure_loaded()`` entirely in ``GuardMode.OFF``: that mode never
+    consults the blocklist, but ``ensure_loaded()`` doesn't know that and
+    would otherwise pay a real network fetch on the first call of a fresh
+    process for a blocklist nothing will read.
+    """
+    if guard.mode is not GuardMode.OFF:
+        await guard.ensure_loaded()
+    result = guard.check_url(str(request.url))
+    if not result.allowed:
+        log.warning(
+            "egress_blocked",
+            url=str(request.url),
+            reason=result.reason,
+            matched_entry=result.matched_entry,
+        )
+        raise EgressBlockedError(request, result.reason, result.matched_entry)
+
+
+def create_guarded_http_client(
+    *,
+    guard: DomainGuard | None = None,
+    **client_kwargs: Any,
+) -> httpx.AsyncClient:
+    """Build an ``httpx.AsyncClient`` whose every request is checked by DomainGuard first.
+
+    This is the one outbound transport factory obliged by ADR-0132 D2: every
+    enumerated egress seam constructs its client through this function
+    instead of constructing ``httpx.AsyncClient`` directly — or passes the
+    client it returns as ``http_client=`` to an Anthropic/OpenAI SDK client.
+
+    Every ``httpx.AsyncClient`` keyword continues to work unchanged (verify,
+    cert, timeout, follow_redirects, proxy, mounts, transport, ...) — this
+    only installs the DomainGuard check as the first request hook, ahead of
+    any caller-supplied hooks, so it fires before transport/mount/proxy
+    selection and on every redirect (``AsyncClient._send_handling_redirects``
+    runs request hooks strictly before transport dispatch, httpx 0.28).
+
+    Args:
+        guard: DomainGuard instance to consult; defaults to the process
+            singleton (``get_domain_guard()``).
+        **client_kwargs: Forwarded to ``httpx.AsyncClient`` unmodified,
+            except ``event_hooks`` which is merged with the guard hook.
+
+    Returns:
+        An ``httpx.AsyncClient`` that refuses disallowed URLs pre-connection.
+    """
+    resolved_guard = guard or get_domain_guard()
+    existing_hooks = dict(client_kwargs.pop("event_hooks", None) or {})
+    request_hooks = [
+        functools.partial(_guard_request_hook, guard=resolved_guard),
+        *existing_hooks.get("request", []),
+    ]
+    return httpx.AsyncClient(
+        event_hooks={**existing_hooks, "request": request_hooks},
+        **client_kwargs,
+    )
 
 
 def _user_message_with_debug_hint(base: str, error_type: str, error_str: str) -> str:

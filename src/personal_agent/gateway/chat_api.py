@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 
 from personal_agent.config.settings import get_settings
 from personal_agent.llm_client.message_content import get_text_content
+from personal_agent.security import create_guarded_http_client
 from personal_agent.service.auth import RequestUser, get_request_user
 from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.service.models import SessionModel
@@ -91,7 +92,7 @@ async def _stream_to_queue(
     full_text = ""
     final_message: Any = None
     try:
-        client = anthropic.AsyncAnthropic(api_key=api_key)
+        client = anthropic.AsyncAnthropic(api_key=api_key, http_client=create_guarded_http_client())
         async with client.messages.stream(
             model=_CLOUD_MODEL,
             max_tokens=_MAX_TOKENS,

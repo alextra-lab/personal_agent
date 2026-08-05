@@ -25,6 +25,7 @@ from typing import Any
 import httpx
 
 from personal_agent.observability.slm_health.snapshot import SlmHealthSnapshot
+from personal_agent.security import create_guarded_http_client
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -62,7 +63,7 @@ async def probe_slm_health(
     start = time.monotonic()
 
     try:
-        async with httpx.AsyncClient(timeout=timeout_s) as client:
+        async with create_guarded_http_client(timeout=timeout_s) as client:
             resp = await client.get(url)
     except httpx.TimeoutException as exc:
         log.warning(

@@ -25,6 +25,7 @@ import structlog
 
 from personal_agent.config import get_settings
 from personal_agent.llm_client.cost_tracker import record_vendor_cost
+from personal_agent.security import create_guarded_http_client
 
 if TYPE_CHECKING:
     from personal_agent.config.settings import AppConfig
@@ -485,7 +486,7 @@ async def _embed_managed(
             for chunk in chunks
         ]
     else:
-        async with httpx.AsyncClient(timeout=120.0) as owned_client:
+        async with create_guarded_http_client(timeout=120.0) as owned_client:
             results = [
                 await _embed_managed_batch(
                     chunk,
@@ -543,6 +544,7 @@ async def _call_embeddings_api(
         client = openai.AsyncOpenAI(
             api_key=api_key,
             base_url=endpoint,
+            http_client=create_guarded_http_client(),
         )
         _openai_clients[(endpoint, api_key)] = client
 

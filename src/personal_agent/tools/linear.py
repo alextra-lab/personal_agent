@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 
 from personal_agent.config import settings
+from personal_agent.security import EgressBlockedError, create_guarded_http_client
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.types import ToolDefinition, ToolParameter
@@ -219,12 +220,14 @@ async def _gql(query: str, variables: dict[str, Any] | None = None) -> dict[str,
     if not api_key:
         raise ToolExecutionError("Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.")
     try:
-        async with httpx.AsyncClient(timeout=25) as client:
+        async with create_guarded_http_client(timeout=25) as client:
             resp = await client.post(
                 _LINEAR_URL,
                 json={"query": query, "variables": variables or {}},
                 headers={"Authorization": api_key, "Content-Type": "application/json"},
             )
+    except EgressBlockedError as exc:
+        raise ToolExecutionError(f"Linear API call refused by egress policy: {exc.reason}") from exc
     except httpx.ConnectError as exc:
         raise ToolExecutionError("Cannot connect to Linear API (api.linear.app).") from exc
     except httpx.TimeoutException as exc:

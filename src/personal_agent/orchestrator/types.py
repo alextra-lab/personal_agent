@@ -351,6 +351,14 @@ class ExecutionContext:
     user_display_name: str | None = None
     # Rendered operator stanza populated in step_init; injected into system prompt in step_llm_call.
     operator_stanza: str = ""
+    # FRE-1150: the name that stanza asserts, carried alongside it so the turn's capture
+    # records the asserted identity from the same resolution the prompt used — never a
+    # second source that could disagree with what the model was actually told.
+    operator_name: str = ""
+    # FRE-1150: the stanza's identity claim + authority rule without the profile detail
+    # block. Recorded on the capture so the mechanism is auditable without persisting the
+    # user's location, pronouns, role or languages into a text-indexed telemetry store.
+    operator_assertion: str = ""
 
     # --- Expansion controller state (Slice 3, ADR-0036) ---
     expansion_strategy: str | None = None

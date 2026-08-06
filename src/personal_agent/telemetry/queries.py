@@ -337,6 +337,16 @@ class TelemetryQueries:
         Returns:
             Aggregated task pattern report.
         """
+        from personal_agent.telemetry.field_validator import FieldValidator
+
+        # Verify fields exist before querying (FRE-1108)
+        validator = FieldValidator()
+        validator.require_validated(
+            ["trace_id", "outcome", "tools_used"],
+            self._captures_index_prefix + "-*",
+            "get_task_patterns",
+        )
+
         client = await self._get_client()
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=days)
@@ -420,6 +430,16 @@ class TelemetryQueries:
               - ``missing_context_terms`` (list[tuple[str, int]]): (term, count) pairs,
                 sorted descending by count, lowercased + truncated to 80 chars
         """
+        from personal_agent.telemetry.field_validator import FieldValidator
+
+        # Verify fields exist before querying (FRE-1108)
+        validator = FieldValidator()
+        validator.require_validated(
+            ["event", "task_id", "what_was_missing"],
+            f"{self._logs_index_prefix}-*",
+            "get_delegation_pattern_buckets",
+        )
+
         client = await self._get_client()
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=days)
@@ -945,6 +965,16 @@ class TelemetryQueries:
         Returns:
             List of ``ErrorPatternCluster`` records, one per qualifying group.
         """
+        from personal_agent.telemetry.field_validator import FieldValidator
+
+        # Verify fields exist before querying (FRE-1108)
+        validator = FieldValidator()
+        validator.require_validated(
+            ["source_component", "event", "error_type", "level", "trace_id", "error"],
+            f"{self._logs_index_prefix}-*",
+            "get_error_patterns",
+        )
+
         client = await self._get_client()
         now = datetime.now(timezone.utc)
         start = now - timedelta(hours=window_hours)

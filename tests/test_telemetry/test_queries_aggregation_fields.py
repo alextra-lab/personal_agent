@@ -4,11 +4,47 @@ Verifies that aggregations query fields that exist in the target indices
 and use correct field names (no .keyword suffix for explicitly-mapped keyword fields).
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from personal_agent.config.settings import get_settings
 from personal_agent.telemetry.queries import TelemetryQueries
+
+
+@pytest.fixture(autouse=True)
+def reset_field_validator_singleton():
+    """Reset FieldValidator singleton between tests and pre-populate validation."""
+    from personal_agent.telemetry import field_validator
+    from personal_agent.telemetry.field_validator import FieldValidator
+
+    settings = get_settings()
+
+    yield
+
+    # Reset singleton after each test
+    field_validator.FieldValidator._instance = None
+
+
+def setup_validator_for_test():
+    """Initialize validator with all patterns marked as valid."""
+    from personal_agent.telemetry.field_validator import FieldValidator
+
+    settings = get_settings()
+    validator = FieldValidator()
+
+    # Populate validation_ready for all index patterns used in tests
+    logs_pattern = f"{settings.elasticsearch_index_prefix}-*"
+    captures_pattern = f"{settings.captains_log_index_prefix}-captures-*"
+
+    validator._validation_ready[logs_pattern] = True
+    validator._validation_ready[captures_pattern] = True
+
+    # Initialize empty caches for the patterns (will be populated when needed)
+    validator._field_cache[logs_pattern] = {}
+    validator._field_cache[captures_pattern] = {}
+
+    return validator
 
 
 class TestAggregationFieldValidity:
@@ -32,7 +68,13 @@ class TestAggregationFieldValidity:
             }
         )
 
+        from personal_agent.telemetry.field_validator import FieldValidator
+
         queries = TelemetryQueries(es_client=mock_client)
+
+        # Set up validator (singleton) to pass validation
+        setup_validator_for_test()
+
         result = await queries.get_task_patterns(days=7)
 
         # Verify the aggregation query does NOT use trace_id.keyword
@@ -65,7 +107,13 @@ class TestAggregationFieldValidity:
             }
         )
 
+        from personal_agent.telemetry.field_validator import FieldValidator
+
         queries = TelemetryQueries(es_client=mock_client)
+
+        # Set up validator (singleton) to pass validation
+        setup_validator_for_test()
+
         await queries.get_task_patterns(days=7)
 
         call_args = mock_client.search.call_args
@@ -94,6 +142,12 @@ class TestAggregationFieldValidity:
         )
 
         queries = TelemetryQueries(es_client=mock_client)
+
+        from personal_agent.telemetry.field_validator import FieldValidator
+
+        # Set up validator (singleton) to pass validation
+        setup_validator_for_test()
+
         await queries.get_delegation_pattern_buckets(days=7)
 
         call_args = mock_client.search.call_args
@@ -128,6 +182,12 @@ class TestAggregationFieldValidity:
         )
 
         queries = TelemetryQueries(es_client=mock_client)
+
+        from personal_agent.telemetry.field_validator import FieldValidator
+
+        # Set up validator (singleton) to pass validation
+        setup_validator_for_test()
+
         await queries.get_delegation_pattern_buckets(days=7)
 
         call_args = mock_client.search.call_args
@@ -166,7 +226,13 @@ class TestAggregationFieldValidity:
             }
         )
 
+        from personal_agent.telemetry.field_validator import FieldValidator
+
         queries = TelemetryQueries(es_client=mock_client)
+
+        # Set up validator (singleton) to pass validation
+        setup_validator_for_test()
+
         clusters = await queries.get_error_patterns(window_hours=24, min_occurrences=10)
 
         call_args = mock_client.search.call_args
@@ -200,7 +266,10 @@ class TestFieldValidatorGuard:
     @pytest.mark.asyncio
     async def test_field_validator_detects_missing_field(self) -> None:
         """Field validator should raise error for non-existent fields."""
-        from personal_agent.telemetry.field_validator import FieldValidator
+        from personal_agent.telemetry.field_validator import (
+            FieldValidationError,
+            FieldValidator,
+        )
 
         mock_client = AsyncMock()
 
@@ -217,16 +286,48 @@ class TestFieldValidatorGuard:
 
         validator = FieldValidator(es_client=mock_client)
 
-        # Valid field should not raise
-        await validator.validate_field("trace_id", index_pattern="agent-logs-*")
+        # Valid fields should not raise
+        await validator.validate_fields(["trace_id", "outcome"], index_pattern="agent-logs-*")
 
-        # Invalid field should raise
-        with pytest.raises(ValueError, match="Field 'nonexistent_field' not found"):
-            await validator.validate_field("nonexistent_field", index_pattern="agent-logs-*")
+        # Invalid field should raise FieldValidationError
+        with pytest.raises(FieldValidationError, match="nonexistent_field"):
+            await validator.validate_fields(["nonexistent_field"], index_pattern="agent-logs-*")
 
     @pytest.mark.asyncio
-    async def test_field_validator_caches_results(self) -> None:
-        """Field validator should cache field capabilities to avoid repeated queries."""
+    async def test_field_validator_require_validated_raises_on_unvalidated(
+        self,
+    ) -> None:
+        """require_validated should raise if preflight validation not done."""
+        from personal_agent.telemetry.field_validator import (
+            FieldValidationError,
+            FieldValidator,
+        )
+
+        validator = FieldValidator()
+        # No preflight validation has been done
+
+        # Should raise because validation was not completed
+        with pytest.raises(FieldValidationError, match="Validation not completed"):
+            validator.require_validated(["trace_id"], "agent-logs-*", "test_query")
+
+    @pytest.mark.asyncio
+    async def test_get_task_patterns_raises_on_validation_not_ready(self) -> None:
+        """Real query method should raise if field validation not completed."""
+        from personal_agent.telemetry.field_validator import FieldValidationError
+
+        mock_client = AsyncMock()
+
+        queries = TelemetryQueries(es_client=mock_client)
+
+        # Call without doing preflight validation first
+        with pytest.raises(FieldValidationError, match="Validation not completed"):
+            await queries.get_task_patterns(days=7)
+
+    @pytest.mark.asyncio
+    async def test_field_validator_require_validated_passes_after_preflight(
+        self,
+    ) -> None:
+        """require_validated should pass only after preflight validation."""
         from personal_agent.telemetry.field_validator import FieldValidator
 
         mock_client = AsyncMock()
@@ -234,17 +335,15 @@ class TestFieldValidatorGuard:
             return_value={
                 "fields": {
                     "trace_id": {"keyword": {"searchable": True}},
+                    "outcome": {"keyword": {"searchable": True}},
                 }
             }
         )
 
         validator = FieldValidator(es_client=mock_client)
 
-        # First call
-        await validator.validate_field("trace_id", index_pattern="agent-logs-*")
+        # Preflight validation
+        await validator.validate_fields(["trace_id", "outcome"], index_pattern="agent-logs-*")
 
-        # Second call should use cache (field_caps not called again)
-        await validator.validate_field("trace_id", index_pattern="agent-logs-*")
-
-        # field_caps should only be called once due to caching
-        assert mock_client.field_caps.call_count == 1
+        # Now require_validated should pass
+        validator.require_validated(["trace_id", "outcome"], "agent-logs-*", "test_query")

@@ -62,9 +62,22 @@ ADR-0128 D5 illustrates the envelope's value with *"a misspelled identifier sitt
 
 (Ratios are `difflib.SequenceMatcher`, computed 2026-08-06.)
 
-This table is load-bearing and it falsifies the intuitive mechanism. **A near-miss detector tuned to catch `tarce_id` at 0.88 catches none of the five divergences that actually happened.** Any threshold low enough to catch `ts`/`@timestamp` at 0.33 would flag most of the 716-name mapping.
+This table is load-bearing and it falsifies the intuitive mechanism. **A near-miss detector tuned to catch `tarce_id` at 0.875 catches none of the five divergences that actually happened.** Lowering the threshold until it does is not available either — scanned against the 716 field names live in `agent-logs-*` on 2026-08-06:
 
-A near-miss scan run over the live `agent-logs-*` mapping at a 0.82 threshold returns exactly two hits, **both legitimate**: `max_latency_ms` (a genuinely different measure) and `component` (a real name-versus-id pair). So string similarity is simultaneously too weak for the observed failure and productive of false positives on the observed corpus.
+| Threshold | Names flagged | Share of live mapping |
+|---|---|---|
+| 0.85 | 1 | 0.1% |
+| 0.82 | 2 | 0.3% |
+| 0.60 | 77 | 10.8% |
+| 0.33 — the threshold needed to catch `ts` / `@timestamp` | **675** | **94.3%** |
+
+The two hits at 0.82 are **both legitimate**: `component` (0.857 against `component_id` — a real name-versus-id pair) and `max_latency_ms` (0.833 against `latency_ms` — a genuinely different measure). So string similarity is simultaneously too weak for the observed failure class and productive of false positives on the observed corpus, and there is no threshold that escapes both.
+
+### The write path is singular, but only for one family
+
+`es_logger.log_event` has exactly **one** production caller in `src/` — `telemetry/es_handler.py:205`, the structlog-to-Elasticsearch bridge. Every `agent-logs` document therefore passes through one seam, which is what makes seam-level enforcement viable at all rather than requiring 551 emit-site edits.
+
+That property does **not** extend to the other families. Captures, reflections, insights, joinability and slm-health are written by their own code paths and never touch the structlog pipeline. This bounds what any structlog-registered mechanism can honestly claim, and D1 is scoped accordingly rather than asserting reach it does not have.
 
 ### Why the ingest pipeline no longer has a case
 
@@ -87,11 +100,13 @@ There is a second, sharper ambiguity in the same sentence. Read narrowly, *"no p
 
 ## Decision
 
-### D1 — Tier 1 is restored, scoped to the residual log corpus, and re-founded
+### D1 — Tier 1 is restored, scoped to the `agent-logs` write path, and re-founded
 
-The typed emit envelope is built. Its governed surface is **Elasticsearch log records that do not become spans** — 99.64% of the corpus as measured above — and it is founded on a declared vocabulary rather than on `CANONICAL_MODEL_CALL_*_FIELDS`, which FRE-1067 retires.
+The typed emit envelope is built. Its governed surface is **the records this repository writes to `agent-logs` through the structlog seam** — of which 99.64% remain log records after the ADR-0129 chain lands — and it is founded on a declared vocabulary rather than on `CANONICAL_MODEL_CALL_*_FIELDS`, which FRE-1067 retires.
 
-Span attributes are **out of scope**. They are governed by semantic conventions and asserted by FRE-1067's AC-6, AC-7 and AC-8. This ADR governs the log path only, and the two mechanisms meet at no point — which is why restoring tier one contradicts nothing in ADR-0129 and requires no amendment to its D8 table beyond the row this ADR's Status Update records.
+**The scope is the write path, not the corpus, and the difference is stated rather than blurred.** `agent-logs` is ~98.8% of all telemetry documents (ADR-0128's census), so this reaches the overwhelming majority — but captures, reflections, insights, joinability and slm-health have their own writers, never traverse the structlog pipeline, and are **not governed by this decision**. Claiming otherwise would repeat the overclaim ADR-0128 criticised in its predecessors, and it would make every criterion below unprovable.
+
+Span attributes are also **out of scope**. They are governed by semantic conventions and asserted by FRE-1067's AC-6, AC-7 and AC-8. This ADR governs the log path only, and the two mechanisms meet at no point — which is why restoring tier one contradicts nothing in ADR-0129 and requires no amendment to its D8 table beyond the row this ADR's Status Update records.
 
 ### D2 — Enforcement lives at the single emit seam, never at 551 call sites
 
@@ -103,13 +118,25 @@ Enforcement at the seam also makes coverage a property of the pipeline rather th
 
 ### D3 — What the envelope enforces: three rules, in priority order
 
-**Rule 1 — Declared retired spellings are rejected, by exact match.** The vocabulary declares, for each governed name, the spellings it retires. `latency_ms` and `duration_ms` are retired in favour of intrinsic span duration; `prompt_tokens` and `completion_tokens` in favour of `input_tokens` / `output_tokens`; `ts`, `timestamp`, `started_at`, `probed_at` and `rated_at` in favour of `@timestamp`. A record carrying a retired spelling fails.
+**Rule 1 — Declared retired spellings are rejected, by exact match.** The vocabulary declares, for each governed name, the spellings it retires:
 
-This is the rule that carries the decision. It is exact, so it produces no false positives, and per the Context table it catches **all five** divergences this project has actually paid for — every one of which a similarity threshold misses.
+| Canonical | Retired spellings |
+|---|---|
+| *(intrinsic span duration — no log field)* | `duration_ms`, `latency_ms` |
+| `input_tokens` | `prompt_tokens` |
+| `output_tokens` | `completion_tokens` |
+| `@timestamp` | `ts`, `timestamp`, `started_at`, `probed_at`, `rated_at` |
+| `event_type` | `event`, `event.name` — **as stored document keys** |
 
-**Rule 2 — Near-miss of a governed name is rejected, with a declared exception list.** A key that is not itself governed, is not family-private-and-declared, and exceeds the stated similarity threshold against a governed name, fails. This catches the typo class (`tarce_id` at 0.88, `sesion_id` at 0.95, `trace_ids` at 0.94) that Rule 1 cannot see.
+A record carrying a retired spelling fails. This is the rule that carries the decision: it is exact, so it produces no false positives, and it catches **all five** divergences this project has actually paid for — every one of which a similarity threshold misses.
 
-The exception list is closed and each entry states why. It opens with the two legitimate hits measured on the live mapping: `max_latency_ms` and `component`. An exception without a stated reason is a defect, not a configuration.
+**The event-key row is a decision, not an inheritance, and it reverses ADR-0128.** ADR-0128 D3 chose `event.name`; ADR-0129 D8 dropped that guarantee as unreachable ("semconv names spans, not every log record's event key"). Left there, the fifth divergence would have no canonical side and Rule 1 could not retire anything. This ADR therefore settles it the other way: **`event_type` is the canonical stored key**, because it is present on 100% of documents today and nothing is proposing to move it. structlog's in-process `event` key is untouched — it is structlog's message field, and `es_handler.py:121` performs the single translation, exactly as ADR-0128 D3 described. What Rule 1 forbids is a *stored document* carrying `event` or `event.name` as a field.
+
+**Rule 2 — Near-miss of a governed name is rejected, with a declared exception list.** A key that is not itself governed, is not family-private-and-declared, and scores **≥ 0.85** `difflib.SequenceMatcher` similarity against a governed name, fails. This catches the typo class Rule 1 cannot see: `tarce_id` (0.875), `trace_ids` (0.941), `sesion_id` (0.947).
+
+**The threshold is 0.85 and is decided here, not left to implementation** — it is the parameter that determines whether the rule works, and the Context table shows the cost curve is steep. At 0.85 the live 716-name mapping yields exactly **one** flagged name, `component` at 0.857, which is therefore the exception list's single opening entry. `max_latency_ms` scores 0.833 and falls below the threshold, needing no exception at all.
+
+The exception list is closed and each entry states why. An exception without a stated reason is a defect, not a configuration.
 
 **Rule 3 — Governed names carry their declared type.** A governed name whose value does not match its declared type fails. This is the rule that would have caught FRE-1107, where the capture template mapped `threshold_violations` as `integer` while the producer wrote a list of strings and Elasticsearch rejected every affected document whole.
 
@@ -124,6 +151,8 @@ The processor's behaviour is split by environment, and the split is the whole po
 
 Telemetry that is deleted for being malformed cannot tell you why it was malformed — ADR-0128 D4's reasoning, unchanged and re-affirmed. A validating processor that raised in production would take the service down on a telemetry defect, which is a strictly worse failure than the one it prevents.
 
+**The counter publishes a denominator as well as a numerator: violations *and* records validated.** This is decided here because without it the production half of this ADR is unverifiable in the specific way that matters. A validator that is registered but never reached — a mis-ordered processor, an exception swallowed upstream, a second write path — publishes a permanent zero violations, which is indistinguishable from a clean corpus. The validated count is the **invocation witness**: compared against the documents actually indexed into `agent-logs` for the same window, it separates "nothing was wrong" from "nothing was checked." AC-2 rests entirely on it, and AC-5's zero-is-success clause is only honest because AC-2 supplies the denominator.
+
 ### D5 — Tier 2, the substrate-boundary ingest pipeline, is dropped
 
 It is not deferred, parked or left for later evidence. The corpus it was designed to normalise was deleted by owner ruling on 2026-08-04, and the ticket that justified it (FRE-1109) closed the same day by a different remedy. FRE-1045 (ADR-0128 A3) is closed rather than left in `Backlog` implying a plan.
@@ -136,9 +165,13 @@ No registry is built. No per-field declaration generates Elasticsearch templates
 
 ADR-0090 listed *"a declared field registry — a typed catalog the emit sites and templates both derive from"* under its open decisions in June. ADR-0128 D6 committed to it; ADR-0129 D8 abandoned it; FRE-1048 has sat unbuilt throughout. **This ADR answers it in the negative, which closes it by decision rather than by a fourth deferral.** FRE-1048 is closed.
 
-**FRE-1067's AC-12 is upheld in its narrow reading and rejected in its broad one.** What AC-12 forbids is a generated registry, a template-generation step, and CI drift-gating — all of which this ADR also forbids, permanently. What it must not be read as forbidding is D3's vocabulary module, which declares roughly sixty names, their retired spellings and their types, generates nothing, and is consumed by one processor. The distinction is generation: a registry is a **source** that other artifacts are derived from; the vocabulary is a **leaf** that only the validator reads.
+**On FRE-1067's AC-12 — its intent is upheld and its wording is overridden, and this ADR states that plainly rather than reading its way out of it.**
 
-Because a build session reading AC-12 cold could reasonably reach the broad reading, its wording needs reconciling before FRE-1067 builds. That is recorded as doc-drift in this ADR's handoff rather than actioned here.
+AC-12 reads: *"no generated field registry, no per-field type declaration file and no template-generation step."* D3's vocabulary declares a type per governed name. **Under the literal words, it is a per-field type declaration file, and no reading of "registry versus vocabulary" changes that** — the honest position is that this ADR conflicts with AC-12 as worded and overrides it, not that AC-12 secretly permits it.
+
+What AC-12 was written to prevent, and what this ADR upholds permanently, is the **registry as a generating source**: no artifact generates template `properties`, no CI job diff-gates generated output, no second derivation of the envelope's field sets. What it forbids by accident is a sixty-line leaf file that generates nothing and is read by one processor — which is not the debt AC-12 exists to prevent, and which the owner ruled on 2026-08-06 should be built.
+
+**FRE-1067's AC-12 must therefore be re-worded before that ticket is built** — to name the generator and the diff-gate rather than any per-field type declaration. That is a control-plane edit on an Approved ticket, so it is master's, and it is recorded in this ADR's handoff comment as a required action rather than a note. Until it is re-worded, a build session picking up FRE-1067 will read a criterion this ADR contradicts.
 
 ### D7 — Sequencing: after B1, before or alongside B3, and never blocking the chain
 
@@ -227,7 +260,7 @@ The ADR-0129 chain is funded and sequenced, with FRE-1064 the labelled head. Thi
 - Avoids a seventh telemetry ADR in a lineage where six changed nothing.
 
 **Cons:**
-- Leaves 99.64% of the corpus with no naming mechanism of any kind.
+- Leaves the `agent-logs` write path — ~98.8% of telemetry documents, 99.64% of them still log records after the chain — with no naming mechanism of any kind.
 - Semconv is silent on Elasticsearch log-document field names by construction — ADR-0128 D2 established this for the timestamp and it holds generally.
 - The divergence class recurs at emit and is discovered months later in the substrate, which is the entire measured history.
 
@@ -239,8 +272,8 @@ The ADR-0129 chain is funded and sequenced, with FRE-1064 the labelled head. Thi
 
 ### Positive Consequences
 
-- **The residual corpus acquires a naming mechanism for the first time** — 99.64% of documents, currently governed by nothing.
-- **The measured divergence class becomes structurally impossible at emit.** All five recorded instances are exact-match retired spellings under Rule 1; a sixth of the same shape fails in CI.
+- **The `agent-logs` write path acquires a naming mechanism for the first time** — the family holding ~98.8% of all telemetry documents, of which 99.64% remain log records after the ADR-0129 chain, currently governed by nothing.
+- **The measured divergence class can no longer be introduced through CI.** All five recorded instances are exact-match retired spellings under Rule 1, and a sixth of the same shape fails the build. **This is deliberately weaker than "impossible at emit":** D4 lets a violation through in production rather than dropping the record, so the guarantee is that such a key cannot be *written into the codebase*, not that one can never reach storage. A key assembled dynamically at runtime, or emitted by a path CI never exercised, still lands — and is counted rather than blocked.
 - **Coverage is a property of the pipeline, not of authors.** A new emit site is governed the moment it is written, with nothing to remember — the same argument ADR-0129 makes for context propagation, applied to names.
 - **A three-times-deferred question is answered.** ADR-0090's registry open decision closes *no*, by decision, and stops consuming review attention.
 - **FRE-1067's AC-12 acquires a ruling** before a build session has to guess at it.
@@ -251,7 +284,8 @@ The ADR-0129 chain is funded and sequenced, with FRE-1064 the labelled head. Thi
 
 - **"Exclusivity" is not delivered.** An unrecognised key still passes. A genuinely novel misspelling that is neither a declared retired spelling nor similar enough to trip Rule 2 is stored silently, exactly as today. ADR-0128 D5 promised more and this ADR does not.
 - **The vocabulary is a maintained artifact.** Roughly sixty names, their retired spellings and their types, kept current by hand. A name added to a template and not to the vocabulary is ungoverned and nothing says so — which is the registry's diff-gate, declined in D6.
-- **Rule 2 will produce false positives**, and its exception list will grow. Two are known today; more will surface, and each is a small tax paid at CI time.
+- **Rule 2 will produce false positives**, and its exception list will grow. One is known today (`component`, 0.857); more will surface, and each is a small tax paid at CI time.
+- **The other governed families are not reached.** Captures, reflections, insights, joinability and slm-health write outside the structlog seam and keep the naming freedom ADR-0129 left them. D1 states this rather than claiming corpus-wide governance, but it is a genuine hole: the divergence class remains fully available in those families.
 - **Templates stay hand-written and can drift.** ADR-0090's mapping corner is unimproved, and FRE-1107's failure mode — producer and template disagreeing on type — is caught by Rule 3 at emit but not reconciled against the mapping.
 - **Production violations are counted, not prevented.** D4's split means a wrong name still reaches Elasticsearch in production; only the development-time path fails. A violation counter nobody reads is a real risk, mitigated only by routing it through a monitor that already has a reader.
 - **This is the seventh telemetry ADR**, in a lineage of six that changed nothing observable. Its defence is that its mechanism is small and lands inside a chain already funded — not that its diagnosis is better than its predecessors', which were correct.
@@ -261,12 +295,13 @@ The ADR-0129 chain is funded and sequenced, with FRE-1064 the labelled head. Thi
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| This becomes the seventh ADR that changes no bytes | **High** | The chain is three tickets landing inside a funded chain, and D7 sequences them against a head that is already labelled; AC-1 and AC-2 are outcome checks over production documents, not merge checks |
-| The vocabulary rots — names added to templates, never declared | **High** | AC-6 measures declared-versus-live coverage over the governed families rather than trusting the artifact; the registry's diff-gate that would have prevented this structurally is declined in D6 and the gap is stated |
-| Rule 2's exception list becomes a dumping ground that disables the rule | Medium | AC-5 requires a planted typo to still fail with the list in force, so an over-broad list fails the criterion rather than quietly passing |
-| The processor raises in production and takes the service down | Medium | D4 makes the environment split a decision rather than a configuration; AC-3 asserts production volume is unaffected |
+| This becomes the seventh ADR that changes no bytes | **High** | The chain is three tickets landing inside a funded chain, and D7 sequences them against a head that is already labelled; AC-2 and AC-3 are outcome checks over production documents, not merge checks |
+| **The validator is registered but never reached, and publishes a clean zero** | **High** | D4 commits the counter to publishing a denominator; AC-2 compares it against the independently-sourced `agent-logs` indexed count, so "nothing was checked" cannot present as "nothing was wrong" — every other production criterion is explicitly conditioned on it |
+| The vocabulary rots — names added to templates, never declared | **High** | AC-7 measures declared-versus-live coverage from the corpus rather than trusting the artifact; the registry's diff-gate that would have prevented this structurally is declined in D6 and the gap is stated |
+| Rule 2's exception list becomes a dumping ground that disables the rule | Medium | AC-1(ii) plants a typo at the advertised 0.875 boundary, not only an easy one; AC-6 caps and justifies the list and fails if an excepted field stops being emitted |
+| The processor raises in production and takes the service down | Medium | D4 makes the environment split a decision rather than a configuration; AC-4 asserts validated count equals indexed count, so a raising validator shows as a shortfall |
 | B1's falsification gate fails and this work continues regardless | Medium | D7 binds this chain to the same gate — it stops when the chain stops |
-| Violation counter is published and never read | Low | It rides the existing joinability monitor, which already has a reader and an escalation path; AC-4 measures the rate's trajectory, not the counter's existence |
+| Violation counter is published and never read | Low | It rides the existing joinability monitor, which already has a reader and an escalation path; AC-5 measures the rate's trajectory against a proven denominator, not the counter's existence |
 
 ---
 
@@ -294,21 +329,23 @@ The ADR-0129 chain is funded and sequenced, with FRE-1064 the labelled head. Thi
 
 **Population guard, applying to every criterion below.** Each check records its enumerated population and compares it against the pre-change volume for the same window length. A criterion whose population has collapsed **fails as inconclusive rather than passing** — a check that evaluates zero rows and reports success is the failure mode an acceptance suite is most prone to.
 
-- **AC-1 — A retired spelling cannot reach production, and a new name is unimpeded.** · **Check:** on a scratch branch, (i) add `latency_ms` to a record emitted on a governed path and run CI; (ii) separately add `queue_depth` — a name in no vocabulary — and run CI. · *Fails if* (i) passes CI, **or** (ii) fails CI. Both halves are required: a validator that rejects everything satisfies (i) trivially, and (ii) is what proves the 178 family-private names kept the freedom D3 grants them.
+- **AC-1 — Every declared rule rejects every violation it claims to, and rejects nothing else.** · **Check:** on a scratch branch, parameterised over the committed vocabulary rather than over one example: (i) for **each** declared retired spelling, a record carrying it fails CI; (ii) `tarce_id` (0.875) **and** `sesion_id` (0.947) each fail CI with the committed exception list in force; (iii) a governed name carrying a wrong-typed value fails CI; (iv) `queue_depth` — a name in no vocabulary and no near-miss — passes CI. · *Fails if* any spelling in (i) passes, **or** either name in (ii) passes, **or** (iii) passes, **or** (iv) fails. Each clause kills a specific cheat: (i) defeats a validator hard-coded to one spelling; (ii) pins Rule 2's threshold at both ends, since a threshold set above 0.875 still catches `sesion_id` and would pass a single-example check while missing the case D3 advertises; (iii) proves Rule 3 exists at all; (iv) proves the 178 family-private names kept the freedom D3 grants them, which a reject-everything validator would fail.
 
-- **AC-2 — No declared retired spelling survives in stored production documents.** · **Check:** for each retired spelling in the vocabulary, an `exists` query across all governed families over the post-cutover window — over documents, not mapping declarations. · *Fails if* any returns non-zero. Mapping-absence is insufficient: a retired field persists in `_source` under a dynamic type with no declaration at all. This is the criterion Rule 1 exists to satisfy, and it is stated over the corpus rather than over the validator so a validator that is registered but not reached still fails it.
+- **AC-2 — The validator actually ran over the production corpus.** · **Check:** over the window, the validated-record count published per D4 against the number of documents indexed into `agent-logs` for the same window, taken from Elasticsearch rather than from the counter. · *Fails if* the validated count is absent, **or** is below 99% of documents indexed. **This is the criterion the rest depend on, and it is stated first among the production checks for that reason.** A registered-but-unreached validator — mis-ordered processor, swallowed exception, a second write path — publishes zero violations over zero records and would otherwise satisfy AC-3 and AC-5 perfectly. The 1% allowance covers records emitted before processor registration at startup, not a coverage gap; a systematically-missed path shows up far below the threshold.
 
-- **AC-3 — Production telemetry was not reduced, dropped or mutated by the validator.** · **Check:** total indexed document count across governed families for the post-cutover window, against the pre-change count for the same window length from the recorded baseline; **and** a production record deliberately carrying a violation is present in Elasticsearch, unmodified, with its violation counted. · *Fails if* volume falls below the recorded baseline, **or** the planted violating record is absent, altered or stripped of the offending key. The second half is what discriminates D4's decision from a validator that quietly sanitises records — sanitising would satisfy AC-2 while destroying the evidence AC-4 counts.
+- **AC-3 — No declared retired spelling survives in stored production documents.** · **Check:** for each retired spelling in the vocabulary, an `exists` query over `agent-logs` documents for the post-cutover window — over documents, not mapping declarations. · *Fails if* any returns non-zero. Mapping-absence is insufficient: a retired field persists in `_source` under a dynamic type with no declaration at all. This carries force **only in combination with AC-2**, which is what distinguishes "Rule 1 held" from "no producer happened to emit one this week."
 
-- **AC-4 — The violation rate is published, bounded, and shrinking while it matters.** · **Check:** violation count divided by total documents, per family, per week, published by the joinability monitor, over three consecutive weeks. · *Fails if* the rate is unpublished for any week, **or** exceeds 1% in any family, **or** is at or above 0.1% and has not declined across the three weeks. A genuinely-zero rate is success and is not required to decline; a persistent sub-1% plateau is an unfixed producer and must not sit behind a ceiling forever.
+- **AC-4 — The validator neither dropped nor altered a record.** · **Check:** (a) the validated count from AC-2 equals the `agent-logs` indexed count for the window within the same 1% — an equality against an independently-sourced number, not a volume trend; (b) a production record deliberately carrying a violation is present in Elasticsearch, byte-identical to what was emitted, with the offending key intact and its violation counted. · *Fails if* (a) diverges, **or** the planted record is absent, altered, or stripped of the offending key. (b) is what discriminates D4's decision from a validator that quietly sanitises: sanitising would satisfy AC-3 while destroying the evidence AC-5 counts, and comparing against a pre-change volume baseline instead — as an earlier draft of this criterion did — would let a rising workload conceal dropped records.
 
-- **AC-5 — Rule 2 still fires with its exception list in force.** · **Check:** with the exception list as committed, plant `sesion_id` on a governed path and run CI; separately confirm `max_latency_ms` and `component` still emit to production in the window. · *Fails if* the planted typo passes CI, **or** either excepted name stopped being emitted. The first half is what stops the exception list growing until it disables the rule; the second is what stops the rule being satisfied by suppressing legitimate fields.
+- **AC-5 — The violation rate is published, bounded, and shrinking while it matters.** · **Check:** violation count divided by **AC-2's validated count** (never by an assumed total), published by the joinability monitor, over three consecutive weeks. · *Fails if* the rate is unpublished for any week, **or** exceeds 1%, **or** is at or above 0.1% and has not declined across the three weeks. A genuinely-zero rate is success and is not required to decline — but only because AC-2 has independently proven the denominator is the real corpus; a zero over an unproven denominator is the vanity number this criterion would otherwise be.
 
-- **AC-6 — The vocabulary describes the corpus it claims to govern.** · **Check:** enumerate distinct field names actually present in governed-family documents over the window; every name that crosses two or more families is either declared in the vocabulary or listed as a stated exclusion with a reason. · *Fails if* any cross-family name is neither declared nor excluded. This is the criterion that catches vocabulary rot, and it is deliberately measured **from the live corpus rather than from the templates** — the registry's template diff-gate is declined in D6, so the corpus is the only remaining witness.
+- **AC-6 — The exception list did not grow until it disabled Rule 2.** · **Check:** every entry on the committed exception list states the governed name it excepts, its measured similarity, and a reason; and `component` — the single entry justified at authoring — is still present in production documents over the window. · *Fails if* any entry lacks a stated reason or similarity, **or** the list exceeds five entries without each addition naming the emit site that forced it, **or** `component` stopped being emitted. The last clause matters: suppressing a legitimate field is the cheapest way to make a false positive disappear, and it would satisfy AC-1 while quietly deleting a field the corpus uses.
 
-- **AC-7 — No registry was built.** · **Check:** the repository contains no artifact generating Elasticsearch template `properties`, and no CI job diffing generated template output against committed templates. · *Fails if* either appears. A **guard**, not a proof of success: it asserts only that D6's ruling held and that FRE-1067's AC-12 was not defeated by a later ticket. AC-6 carries the substance.
+- **AC-7 — The vocabulary describes the corpus it claims to govern.** · **Check:** enumerate distinct field names actually present in `agent-logs` documents over the window; every name also present in one or more other governed families is either declared in the vocabulary or listed as a stated exclusion with a reason. · *Fails if* any such name is neither declared nor excluded. This is the vocabulary-rot check, and it is deliberately measured **from the live corpus rather than from the templates** — D6 declines the registry's template diff-gate, so the corpus is the only remaining witness that the artifact still matches reality.
 
-**Seam ticket:** **FRE-1178** — *ADR-0133 SEAM — adjudicate the emit-envelope criteria*. Filed parked (`Backlog`, no `stream:` label). **Due date: 2026-10-15.** That is the earliest date all seven criteria become adjudicable: AC-4 alone needs three consecutive published weeks after the last child deploys, and the chain sequences behind FRE-1064 and FRE-1067, neither of which has started. Master activates it at the first advance-dispatch on or after that date; an `adr` session adjudicates it and records one verdict per criterion in this ADR's Status Updates. This ADR reaches `Implemented` only if every verdict is green.
+- **AC-8 — No registry was built.** · **Check:** the repository contains no artifact generating Elasticsearch template `properties`, and no CI job diffing generated template output against committed templates. · *Fails if* either appears. A **guard**, not a proof of success — it asserts only that D6's ruling held and was not defeated by a later ticket. AC-1 and AC-2 carry the substance.
+
+**Seam ticket:** **FRE-1178** — *ADR-0133 SEAM — adjudicate the emit-envelope criteria*. Filed parked (`Backlog`, no `stream:` label). **Due date: 2026-10-15.** That is the earliest date all eight criteria become adjudicable: AC-5 alone needs three consecutive published weeks after the last child deploys, and the chain sequences behind FRE-1064 and FRE-1067, neither of which has started. Master activates it at the first advance-dispatch on or after that date; an `adr` session adjudicates it and records one verdict per criterion in this ADR's Status Updates. This ADR reaches `Implemented` only if every verdict is green.
 
 ---
 

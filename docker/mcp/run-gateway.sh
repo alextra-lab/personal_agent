@@ -25,10 +25,19 @@ set -euo pipefail
 
 : "${MCP_SECRETS_FILE:=/opt/seshat/mcp-secrets.env}"
 
+# Parse MCP server list from JSON array env var, with sensible default.
+# The env var is expected to be a JSON array (e.g., ["sequentialthinking", "context7"]).
+# We convert it to CSV for the --servers flag.
+# Note: linear is intentionally excluded (see comment above) — no DCR on VPS.
+# Requires jq for JSON→CSV parsing (hard dependency under set -euo pipefail).
+DEFAULT_SERVERS='["sequentialthinking","context7"]'
+SERVERS_JSON="${AGENT_MCP_GATEWAY_ENABLED_SERVERS:-$DEFAULT_SERVERS}"
+SERVERS_CSV=$(echo "$SERVERS_JSON" | jq -r 'join(",")')
+
 exec docker run \
   --rm \
   -i \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "${MCP_SECRETS_FILE}:/.env:ro" \
   docker/mcp-gateway \
-  --servers "sequentialthinking,context7"
+  --servers "$SERVERS_CSV"

@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
+
+    from personal_agent.telemetry.field_validator import FieldValidator
 else:
     AsyncElasticsearch = Any
 
@@ -73,18 +75,36 @@ class TaskPatternReport:
 class TelemetryQueries:
     """Common analytics queries for Elasticsearch telemetry data."""
 
-    def __init__(self, es_client: AsyncElasticsearch | None = None) -> None:
+    def __init__(
+        self,
+        es_client: AsyncElasticsearch | None = None,
+        field_validator: "FieldValidator | None" = None,
+    ) -> None:
         """Initialize query service.
 
         Args:
             es_client: Optional preconfigured Elasticsearch client.
+            field_validator: Optional field validator; uses default if not provided.
         """
+        from personal_agent.telemetry.field_validator import (
+            FieldValidator,
+            default_field_validator,
+        )
+
         settings = get_settings()
         self._es_client = es_client
         self._client_owned = es_client is None
         self._logs_index_prefix = settings.elasticsearch_index_prefix
         self._captures_index_prefix = f"{settings.captains_log_index_prefix}-captures"
         self._reflections_index_prefix = f"{settings.captains_log_index_prefix}-reflections"
+        # If a field_validator is provided, use it; otherwise create one with the provided es_client.
+        # This ensures tests with mock clients can validate fields using those mocks.
+        if field_validator is not None:
+            self._field_validator = field_validator
+        elif es_client is not None:
+            self._field_validator = FieldValidator(es_client=es_client)
+        else:
+            self._field_validator = default_field_validator
 
     async def _get_client(self) -> AsyncElasticsearch:
         """Get active Elasticsearch client, creating one if needed."""
@@ -337,6 +357,13 @@ class TelemetryQueries:
         Returns:
             Aggregated task pattern report.
         """
+        # Verify fields exist before querying (FRE-1108)
+        await self._field_validator.require_validated(
+            ["trace_id", "outcome", "tools_used"],
+            self._captures_index_prefix + "-*",
+            "get_task_patterns",
+        )
+
         client = await self._get_client()
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=days)
@@ -356,12 +383,12 @@ class TelemetryQueries:
             },
             size=0,
             aggs={
-                "total": {"value_count": {"field": "trace_id.keyword"}},
-                "completed": {"filter": {"term": {"outcome.keyword": "completed"}}},
+                "total": {"value_count": {"field": "trace_id"}},
+                "completed": {"filter": {"term": {"outcome": "completed"}}},
                 "avg_duration_ms": {"avg": {"field": "duration_ms"}},
                 "avg_cpu": {"avg": {"field": "metrics_summary.cpu_avg"}},
                 "avg_memory": {"avg": {"field": "metrics_summary.memory_avg"}},
-                "top_tools": {"terms": {"field": "tools_used.keyword", "size": 5}},
+                "top_tools": {"terms": {"field": "tools_used", "size": 5}},
                 "hours": {
                     "terms": {
                         "script": {
@@ -406,8 +433,8 @@ class TelemetryQueries:
         """Aggregate delegation_outcome_recorded events over trailing ``days``.
 
         Queries agent-logs-* for events with event == "delegation_outcome_recorded"
-        and returns aggregate stats: total count, success count, distribution of
-        rounds_needed, and a terms aggregation on what_was_missing.
+        and returns aggregate stats: total count, success count, and distribution of
+        rounds_needed.
 
         Args:
             days: Rolling look-back window size in days.
@@ -417,9 +444,14 @@ class TelemetryQueries:
               - ``total`` (int): total delegation records found
               - ``successes`` (int): sum of success=True records
               - ``rounds_needed_values`` (list[int]): full distribution (one value per record)
-              - ``missing_context_terms`` (list[tuple[str, int]]): (term, count) pairs,
-                sorted descending by count, lowercased + truncated to 80 chars
         """
+        # Verify fields exist before querying (FRE-1108)
+        await self._field_validator.require_validated(
+            ["event", "task_id"],
+            f"{self._logs_index_prefix}-*",
+            "get_delegation_pattern_buckets",
+        )
+
         client = await self._get_client()
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=days)
@@ -437,29 +469,16 @@ class TelemetryQueries:
                                 }
                             }
                         },
-                        {"term": {"event.keyword": "delegation_outcome_recorded"}},
+                        {"term": {"event": "delegation_outcome_recorded"}},
                     ]
                 }
             },
             size=0,
             aggs={
-                "total": {"value_count": {"field": "task_id.keyword"}},
+                "total": {"value_count": {"field": "task_id"}},
                 "successes": {"sum": {"field": "success"}},
                 "rounds_histogram": {
                     "histogram": {"field": "rounds_needed", "interval": 1, "min_doc_count": 1}
-                },
-                "missing_context_terms": {
-                    "terms": {
-                        "script": {
-                            "source": (
-                                "def v = doc['what_was_missing.keyword'].size() == 0 "
-                                "? '' : doc['what_was_missing.keyword'].value; "
-                                "return v.toLowerCase().substring(0, Math.min(v.length(), 80));"
-                            )
-                        },
-                        "size": 20,
-                        "min_doc_count": 1,
-                    }
                 },
             },
         )
@@ -471,18 +490,10 @@ class TelemetryQueries:
             count = int(bucket.get("doc_count", 0) or 0)
             rounds = int(bucket.get("key", 0) or 0)
             rounds_values.extend([rounds] * count)
-        missing_terms: list[tuple[str, int]] = []
-        for bucket in aggs.get("missing_context_terms", {}).get("buckets", []):
-            term = str(bucket.get("key", "") or "").strip()
-            count = int(bucket.get("doc_count", 0) or 0)
-            if not term:
-                continue
-            missing_terms.append((term, count))
         return {
             "total": total,
             "successes": successes,
             "rounds_needed_values": rounds_values,
-            "missing_context_terms": missing_terms,
         }
 
     async def get_missing_skill_buckets(self, days: int) -> list[tuple[str, int, int]]:
@@ -945,6 +956,13 @@ class TelemetryQueries:
         Returns:
             List of ``ErrorPatternCluster`` records, one per qualifying group.
         """
+        # Verify fields exist before querying (FRE-1108)
+        await self._field_validator.require_validated(
+            ["component", "event", "error_type", "level", "trace_id", "error.keyword"],
+            f"{self._logs_index_prefix}-*",
+            "get_error_patterns",
+        )
+
         client = await self._get_client()
         now = datetime.now(timezone.utc)
         start = now - timedelta(hours=window_hours)
@@ -956,7 +974,7 @@ class TelemetryQueries:
                     "bool": {
                         "must": [
                             {"term": {"level": "WARNING"}},
-                            {"terms": {"event.keyword": sorted(warning_allowlist)}},
+                            {"terms": {"event": sorted(warning_allowlist)}},
                         ]
                     }
                 }
@@ -986,23 +1004,23 @@ class TelemetryQueries:
                     "composite": {
                         "size": 200,
                         "sources": [
-                            {"source_component": {"terms": {"field": "source_component.keyword"}}},
-                            {"event": {"terms": {"field": "event.keyword"}}},
+                            {"component": {"terms": {"field": "component"}}},
+                            {"event": {"terms": {"field": "event"}}},
                             {
                                 "error_type_normalised": {
                                     "terms": {
-                                        "field": "error_type.keyword",
+                                        "field": "error_type",
                                         "missing_bucket": True,
                                     }
                                 }
                             },
-                            {"level": {"terms": {"field": "level.keyword"}}},
+                            {"level": {"terms": {"field": "level"}}},
                         ],
                     },
                     "aggs": {
                         "first_seen": {"min": {"field": "@timestamp"}},
                         "last_seen": {"max": {"field": "@timestamp"}},
-                        "sample_trace_ids": {"terms": {"field": "trace_id.keyword", "size": 5}},
+                        "sample_trace_ids": {"terms": {"field": "trace_id", "size": 5}},
                         "sample_messages": {"terms": {"field": "error.keyword", "size": 3}},
                     },
                 }
@@ -1013,7 +1031,7 @@ class TelemetryQueries:
         clusters: list[ErrorPatternCluster] = []
         for bucket in buckets:
             key = bucket.get("key", {})
-            component = str(key.get("source_component", ""))
+            component = str(key.get("component", ""))
             event_name = str(key.get("event", ""))
             error_type = str(key.get("error_type_normalised", "<no_exc>") or "<no_exc>")
             level = str(key.get("level", "ERROR"))

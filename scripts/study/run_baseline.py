@@ -11,12 +11,11 @@ proves the harness+rig run end-to-end; the real AC-4 pre-registered
 concurrently-tracked ticket) — pass it via ``--cues`` once it lands, and
 FRE-843's v0-synthesis seam is what assembles the full AC-4 verdict.
 
-Run (study infra up, embedder reachable):
+Run (study infra up; the embedder role resolves straight to the managed OVH
+endpoint per ``config/models.yaml`` -- FRE-1166 retired the local 0.6B
+llama.cpp container this used to require starting manually):
 
     make study-infra-up
-    docker start cloud-sim-embeddings   # stop again when done -- the live
-                                         # default profile is the managed
-                                         # OVH embedder
     uv run python -m scripts.study.run_baseline
 """
 
@@ -101,9 +100,9 @@ async def run(args: argparse.Namespace) -> int:
         log.error(
             "embedder_unreachable",
             hint=(
-                "the local embedder is unreachable (zero-vector probe) -- "
-                "`docker start cloud-sim-embeddings` then retry; "
-                "`docker stop cloud-sim-embeddings` when done"
+                "the managed OVH embedder is unreachable (zero-vector probe) -- "
+                "check AGENT_MANAGED_EMBEDDING_TOKEN and network reachability to "
+                "the OVH AI Endpoints base URL in config/models.yaml"
             ),
         )
         return 2

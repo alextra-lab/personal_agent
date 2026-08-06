@@ -12,12 +12,14 @@ checks itself against (``probe_result.json["decision"]``) -- see the FRE-720 pla
 Downstream contract. No production (``src/``) code changes.
 
 OFFLINE-ADJACENT BY DESIGN: this script embeds a committed, real-proposal corpus
-(``corpus.yaml``) via the deployed 0.6B embedder (``embeddings:8503``/``localhost:8503``)
--- it touches no ES/Neo4j/Postgres substrate at run time (the corpus was pulled from the
-real ``agent-captains-reflections-*`` index once, 2026-07-05, and committed so the probe
-replays without live ES access). The defensive test-substrate env pinning below mirrors
-``separation_benchmark.py``'s convention (stay past the ADR-0099 validator) even though
-no substrate is touched.
+(``corpus.yaml``) via the deployed embedder (the managed OVH endpoint per
+``config/models.yaml`` -- the local 0.6B llama.cpp container this originally ran
+against was retired by FRE-1166) -- it touches no ES/Neo4j/Postgres substrate at
+run time (the corpus was pulled from the real ``agent-captains-reflections-*``
+index once, 2026-07-05, and committed so the probe replays without live ES
+access). The defensive test-substrate env pinning below mirrors
+``separation_benchmark.py``'s convention (stay past the ADR-0099 validator) even
+though no substrate is touched.
 
 Run::
 

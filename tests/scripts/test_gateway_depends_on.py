@@ -1,6 +1,9 @@
 # ruff: noqa: D103
 """FRE-1123 — gateway must not depend_on the unreachable local embeddings/reranker containers.
 
+FRE-1166 — the embeddings/reranker service definitions themselves are retired (the local
+0.6B llama.cpp provisioning path is dead residue; embedding/reranking are OVH/Voyage-managed).
+
 Renders the actual docker-compose.cloud.yml through `docker compose config` (not just parses
 the source) so the assertion matches what `docker compose up` reads at runtime, per the
 ticket's own failure condition: "the change is asserted from the compose source rather than
@@ -59,10 +62,8 @@ class TestGatewayDependsOn:
         depends_on = compose["services"]["seshat-gateway"]["depends_on"]
         assert set(depends_on) == {"postgres", "neo4j", "elasticsearch", "redis", "searxng"}
 
-    def test_embeddings_and_reranker_service_definitions_still_exist(self) -> None:
+    def test_embeddings_and_reranker_service_definitions_removed(self) -> None:
         compose = _render_compose()
         services = compose["services"]
-        assert "embeddings" in services
-        assert "reranker" in services
-        assert services["embeddings"]["build"]["dockerfile"] == "Dockerfile.llmserver"
-        assert services["reranker"]["build"]["dockerfile"] == "Dockerfile.llmserver"
+        assert "embeddings" not in services
+        assert "reranker" not in services

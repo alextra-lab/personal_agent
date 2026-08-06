@@ -140,8 +140,9 @@ jobs:
 
       - name: Apply database schema
         run: |
-          PGPASSWORD=agent_dev_password psql \
-            -h localhost -p 5433 -U agent -d personal_agent \
+          PGPASSWORD=postgres_dev_password psql \
+            -h localhost -p 5433 -U postgres -d personal_agent \
+            -v ON_ERROR_STOP=1 \
             -f docker/postgres/init.sql
 
       - name: Run integration tests (transport + schema parity)

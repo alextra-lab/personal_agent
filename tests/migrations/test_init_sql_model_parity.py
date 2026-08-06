@@ -153,3 +153,35 @@ async def test_guard_detects_dropped_column(init_sql_schema) -> None:
     missing = await _missing_model_columns(conn, schema)
 
     assert "sessions.user_id" in missing
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_vector_extension_and_artifacts_table_exist(init_sql_schema) -> None:
+    """FRE-1168: verify vector extension and artifacts table are fully created.
+
+    CI's schema-apply step failed silently when the agent role lacked superuser
+    privileges, preventing vector extension creation and cascading into missing
+    artifacts table. This test ensures the schema is complete end-to-end.
+    """
+    conn, schema = init_sql_schema
+
+    # Verify vector extension exists in public schema (extensions are global)
+    extension_exists = await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')"
+    )
+    assert extension_exists, "pgvector extension not created — schema apply failed"
+
+    # Verify artifacts table exists with expected structure
+    artifacts_exists = await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = $1 AND table_name = 'artifacts')",
+        schema,
+    )
+    assert artifacts_exists, "artifacts table not created — vector extension likely failed"
+
+    # Verify vector type is available (depends on extension)
+    vector_type_exists = await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM pg_type WHERE typname = 'vector')"
+    )
+    assert vector_type_exists, "vector type not available — extension not loaded"

@@ -433,8 +433,8 @@ class TelemetryQueries:
         """Aggregate delegation_outcome_recorded events over trailing ``days``.
 
         Queries agent-logs-* for events with event == "delegation_outcome_recorded"
-        and returns aggregate stats: total count, success count, distribution of
-        rounds_needed, and a terms aggregation on what_was_missing.
+        and returns aggregate stats: total count, success count, and distribution of
+        rounds_needed.
 
         Args:
             days: Rolling look-back window size in days.
@@ -444,12 +444,10 @@ class TelemetryQueries:
               - ``total`` (int): total delegation records found
               - ``successes`` (int): sum of success=True records
               - ``rounds_needed_values`` (list[int]): full distribution (one value per record)
-              - ``missing_context_terms`` (list[tuple[str, int]]): (term, count) pairs,
-                sorted descending by count, lowercased + truncated to 80 chars
         """
         # Verify fields exist before querying (FRE-1108)
         await self._field_validator.require_validated(
-            ["event", "task_id", "what_was_missing"],
+            ["event", "task_id"],
             f"{self._logs_index_prefix}-*",
             "get_delegation_pattern_buckets",
         )
@@ -482,19 +480,6 @@ class TelemetryQueries:
                 "rounds_histogram": {
                     "histogram": {"field": "rounds_needed", "interval": 1, "min_doc_count": 1}
                 },
-                "missing_context_terms": {
-                    "terms": {
-                        "script": {
-                            "source": (
-                                "def v = doc['what_was_missing'].size() == 0 "
-                                "? '' : doc['what_was_missing'].value; "
-                                "return v.toLowerCase().substring(0, Math.min(v.length(), 80));"
-                            )
-                        },
-                        "size": 20,
-                        "min_doc_count": 1,
-                    }
-                },
             },
         )
         aggs = response.get("aggregations", {})
@@ -505,18 +490,10 @@ class TelemetryQueries:
             count = int(bucket.get("doc_count", 0) or 0)
             rounds = int(bucket.get("key", 0) or 0)
             rounds_values.extend([rounds] * count)
-        missing_terms: list[tuple[str, int]] = []
-        for bucket in aggs.get("missing_context_terms", {}).get("buckets", []):
-            term = str(bucket.get("key", "") or "").strip()
-            count = int(bucket.get("doc_count", 0) or 0)
-            if not term:
-                continue
-            missing_terms.append((term, count))
         return {
             "total": total,
             "successes": successes,
             "rounds_needed_values": rounds_values,
-            "missing_context_terms": missing_terms,
         }
 
     async def get_missing_skill_buckets(self, days: int) -> list[tuple[str, int, int]]:
@@ -981,7 +958,7 @@ class TelemetryQueries:
         """
         # Verify fields exist before querying (FRE-1108)
         await self._field_validator.require_validated(
-            ["source_component", "event", "error_type", "level", "trace_id", "error"],
+            ["component", "event", "error_type", "level", "trace_id", "error"],
             f"{self._logs_index_prefix}-*",
             "get_error_patterns",
         )
@@ -1027,7 +1004,7 @@ class TelemetryQueries:
                     "composite": {
                         "size": 200,
                         "sources": [
-                            {"source_component": {"terms": {"field": "source_component"}}},
+                            {"component": {"terms": {"field": "component"}}},
                             {"event": {"terms": {"field": "event"}}},
                             {
                                 "error_type_normalised": {
@@ -1054,7 +1031,7 @@ class TelemetryQueries:
         clusters: list[ErrorPatternCluster] = []
         for bucket in buckets:
             key = bucket.get("key", {})
-            component = str(key.get("source_component", ""))
+            component = str(key.get("component", ""))
             event_name = str(key.get("event", ""))
             error_type = str(key.get("error_type_normalised", "<no_exc>") or "<no_exc>")
             level = str(key.get("level", "ERROR"))

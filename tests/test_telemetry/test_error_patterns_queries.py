@@ -23,7 +23,7 @@ def _setup_field_caps_mock(mock_client: AsyncMock) -> None:
     mock_client.field_caps = AsyncMock(
         return_value={
             "fields": {
-                "source_component": {"keyword": {"searchable": True}},
+                "component": {"keyword": {"searchable": True}},
                 "event": {"keyword": {"searchable": True}},
                 "error_type": {"keyword": {"searchable": True}},
                 "level": {"keyword": {"searchable": True}},
@@ -61,7 +61,7 @@ def _make_bucket(
 ) -> dict:
     return {
         "key": {
-            "source_component": component,
+            "component": component,
             "event": event_name,
             "error_type_normalised": error_type,
             "level": level,

@@ -127,7 +127,6 @@ class TestAggregationFieldValidity:
                 "fields": {
                     "event": {"keyword": {"searchable": True}},
                     "task_id": {"keyword": {"searchable": True}},
-                    "what_was_missing": {"keyword": {"searchable": True}},
                 }
             }
         )
@@ -177,7 +176,6 @@ class TestAggregationFieldValidity:
                 "fields": {
                     "event": {"keyword": {"searchable": True}},
                     "task_id": {"keyword": {"searchable": True}},
-                    "what_was_missing": {"keyword": {"searchable": True}},
                 }
             }
         )
@@ -217,7 +215,7 @@ class TestAggregationFieldValidity:
         mock_client.field_caps = AsyncMock(
             return_value={
                 "fields": {
-                    "source_component": {"keyword": {"searchable": True}},
+                    "component": {"keyword": {"searchable": True}},
                     "event": {"keyword": {"searchable": True}},
                     "error_type": {"keyword": {"searchable": True}},
                     "level": {"keyword": {"searchable": True}},
@@ -234,7 +232,7 @@ class TestAggregationFieldValidity:
                         "buckets": [
                             {
                                 "key": {
-                                    "source_component": "test_comp",
+                                    "component": "test_comp",
                                     "event": "test_event",
                                     "error_type_normalised": "TestError",
                                     "level": "ERROR",
@@ -265,9 +263,9 @@ class TestAggregationFieldValidity:
         sources = composite_agg.get("sources", [])
 
         # Verify field names (should NOT have .keyword suffix)
-        source_component_source = next((s for s in sources if "source_component" in s), None)
-        assert source_component_source is not None
-        assert source_component_source["source_component"]["terms"]["field"] == "source_component"
+        component_source = next((s for s in sources if "component" in s), None)
+        assert component_source is not None
+        assert component_source["component"]["terms"]["field"] == "component"
 
         event_source = next((s for s in sources if "event" in s), None)
         assert event_source is not None

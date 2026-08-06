@@ -73,18 +73,31 @@ class TaskPatternReport:
 class TelemetryQueries:
     """Common analytics queries for Elasticsearch telemetry data."""
 
-    def __init__(self, es_client: AsyncElasticsearch | None = None) -> None:
+    def __init__(
+        self,
+        es_client: AsyncElasticsearch | None = None,
+        field_validator: "FieldValidator | None" = None,
+    ) -> None:
         """Initialize query service.
 
         Args:
             es_client: Optional preconfigured Elasticsearch client.
+            field_validator: Optional field validator; uses default if not provided.
         """
+        from personal_agent.telemetry.field_validator import (
+            FieldValidator,
+            default_field_validator,
+        )
+
         settings = get_settings()
         self._es_client = es_client
         self._client_owned = es_client is None
         self._logs_index_prefix = settings.elasticsearch_index_prefix
         self._captures_index_prefix = f"{settings.captains_log_index_prefix}-captures"
         self._reflections_index_prefix = f"{settings.captains_log_index_prefix}-reflections"
+        self._field_validator = (
+            field_validator if field_validator is not None else default_field_validator
+        )
 
     async def _get_client(self) -> AsyncElasticsearch:
         """Get active Elasticsearch client, creating one if needed."""
@@ -337,11 +350,8 @@ class TelemetryQueries:
         Returns:
             Aggregated task pattern report.
         """
-        from personal_agent.telemetry.field_validator import FieldValidator
-
         # Verify fields exist before querying (FRE-1108)
-        validator = FieldValidator()
-        validator.require_validated(
+        await self._field_validator.require_validated(
             ["trace_id", "outcome", "tools_used"],
             self._captures_index_prefix + "-*",
             "get_task_patterns",
@@ -430,11 +440,8 @@ class TelemetryQueries:
               - ``missing_context_terms`` (list[tuple[str, int]]): (term, count) pairs,
                 sorted descending by count, lowercased + truncated to 80 chars
         """
-        from personal_agent.telemetry.field_validator import FieldValidator
-
         # Verify fields exist before querying (FRE-1108)
-        validator = FieldValidator()
-        validator.require_validated(
+        await self._field_validator.require_validated(
             ["event", "task_id", "what_was_missing"],
             f"{self._logs_index_prefix}-*",
             "get_delegation_pattern_buckets",
@@ -965,11 +972,8 @@ class TelemetryQueries:
         Returns:
             List of ``ErrorPatternCluster`` records, one per qualifying group.
         """
-        from personal_agent.telemetry.field_validator import FieldValidator
-
         # Verify fields exist before querying (FRE-1108)
-        validator = FieldValidator()
-        validator.require_validated(
+        await self._field_validator.require_validated(
             ["source_component", "event", "error_type", "level", "trace_id", "error"],
             f"{self._logs_index_prefix}-*",
             "get_error_patterns",

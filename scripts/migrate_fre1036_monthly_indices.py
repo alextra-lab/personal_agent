@@ -210,10 +210,10 @@ EXCLUDED_PREFIXES: dict[str, str] = {
         "migration story, not one of FRE-1036's per-family targets."
     ),
     "slm-requests": (
-        "has no lifecycle policy and has never cut over to a monthly destination shape "
-        "at all (still 100% daily-dotted, actively written as of 2026-08-06) — a "
-        "distinct, already-tracked gap (FRE-1106), not this migration's "
-        "daily/monthly-consolidation problem."
+        "is still actively written in daily-dotted shape (100% dotted-daily as of "
+        "2026-08-06, none dash-monthly) with no monthly destination to consolidate "
+        "into — out of scope for this migration, which only consolidates a family's "
+        "existing legacy indices into a destination shape, not changes its write path."
     ),
 }
 

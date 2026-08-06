@@ -4191,9 +4191,13 @@ async def step_llm_call(
             "- App code is at `/app` — the host's repo mount point is NOT accessible from here\n"
             "- Configuration is injected as environment variables at startup; there is no `.env` file inside the container\n"
             "- Do NOT search for files at host filesystem paths (the host's repo checkout or home directory) — they do not exist inside the container\n"
+            # FRE-1165: embeddings/reranker deliberately absent — that substrate is the
+            # managed profile now (an external endpoint, not a Docker DNS name), and the
+            # local containers they'd have named are stopped. Naming either wrongly gave
+            # the model a dialable-looking address for something it can't reach.
             "- All backend services are reachable via Docker internal DNS:\n"
             "    postgres:5432  |  neo4j:7687 (bolt) / neo4j:7474 (HTTP)  |  elasticsearch:9200\n"
-            "    redis:6379  |  embeddings:8503  |  reranker:8504"
+            "    redis:6379"
         )
 
     # Operator identity stanza (FRE-213 / ADR-0052) — populated in step_init.

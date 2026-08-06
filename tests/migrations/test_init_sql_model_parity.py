@@ -157,7 +157,7 @@ async def test_guard_detects_dropped_column(init_sql_schema) -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_vector_extension_and_artifacts_table_exist(init_sql_schema) -> None:
+async def test_init_sql_vector_extension_and_artifacts_table(init_sql_schema) -> None:
     """FRE-1168: verify vector extension and artifacts table are fully created.
 
     CI's schema-apply step failed silently when the agent role lacked superuser

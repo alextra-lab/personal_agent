@@ -51,10 +51,6 @@ seshat-gateway external dependencies (managed endpoints):
   Voyage AI            (rerank-2.5 — ranked retrieval)
   Anthropic/OpenAI     (Claude Sonnet/Haiku — cloud profiles)
 
-Optional local services (defined in compose but not started by default):
-  embeddings:8503      (Qwen3-Embedding-0.6B via llama.cpp — manual use only)
-  reranker:8504        (Qwen3-Reranker-0.6B via llama.cpp — manual use only)
-
 Network: cloud-sim bridge, subnet 172.25.0.0/16
 OVH firewall: SSH (custom port), HTTP/80, HTTPS/443, ICMP only
 Cloudflare: WARP Zero Trust + cloudflared tunnel (HTTP/2)
@@ -86,7 +82,6 @@ Cloudflare: WARP Zero Trust + cloudflared tunnel (HTTP/2)
 - Docker Engine + Docker Compose v2 (`apt install docker-compose-plugin`)
 - `uv` not required on VPS (installed inside containers)
 - `/opt/seshat/` deployment directory
-- `/opt/seshat/models/` — embedding + reranker GGUF files (see §3)
 
 ---
 
@@ -117,18 +112,7 @@ NEO4J_PASSWORD=<strong-password>
 CLOUDFLARE_TUNNEL_TOKEN=<token-from-cloudflare>
 ```
 
-### 3.3 Transfer embedding and reranker models (optional)
-
-**Skip this step for standard deployments.** The gateway uses OVH managed embeddings and Voyage reranker; these local models are optional and only needed if you plan to start the `embeddings` or `reranker` containers for manual testing or fallback.
-
-From your Mac (requires ~1.2 GB):
-```bash
-bash infrastructure/scripts/transfer-models.sh
-```
-
-This copies GGUF files to `/opt/seshat/models/embedding/` and `/opt/seshat/models/reranker/` on the VPS, which the `embeddings` and `reranker` containers will load if started manually.
-
-### 3.4 Harden the server
+### 3.3 Harden the server
 
 ```bash
 # On VPS
@@ -137,7 +121,7 @@ bash infrastructure/scripts/harden.sh
 
 Applies: non-root SSH only, fail2ban, sysctl hardening, unattended-upgrades.
 
-### 3.5 First deploy
+### 3.4 First deploy
 
 ```bash
 cd /opt/seshat
@@ -224,13 +208,6 @@ File: `docker-compose.cloud.yml`
 
 **Total RAM budget**: ~5.3 GB (comfortably within 24 GB)
 
-**Optional (defined but not started — manual use only)**
-
-| Service | Image | Port (internal) | RAM limit | Purpose |
-|---------|-------|-----------------|-----------|---------|
-| `embeddings` | llmserver (local build) | 8503 | 2048 MB | Qwen3-Embedding-0.6B (legacy, not used in live path) |
-| `reranker` | llmserver (local build) | 8504 | 1024 MB | Qwen3-Reranker-0.6B (legacy, not used in live path) |
-
 ### Network
 
 All services share the `cloud-sim` bridge network (`172.25.0.0/16`). Static IPs assigned only to Caddy (`172.25.0.10`) and the PWA (`172.25.0.11`) — these are the addresses WARP routes to.
@@ -248,12 +225,6 @@ postgres, neo4j, elasticsearch, redis (no deps)
     → seshat-pwa (depends_on: seshat-gateway)
       → caddy (depends_on: seshat-gateway + seshat-pwa)
         → cloudflared (depends_on: caddy)
-```
-
-**Optional services** (`embeddings`, `reranker`): Defined in the compose file but NOT started automatically and NOT required for normal operation. The gateway resolves embeddings to the OVH managed endpoint (Qwen3-Embedding-8B) and reranker to Voyage AI (rerank-2.5), with fallback to the Mac tunnel reranker. Start these containers deliberately only if you need to use local models for development or fallback testing:
-```bash
-docker compose -f docker-compose.cloud.yml up embeddings    # Qwen3-Embedding-0.6B on localhost:8503
-docker compose -f docker-compose.cloud.yml up reranker      # Qwen3-Reranker-0.6B on localhost:8504
 ```
 
 Full cold-start: ~5 minutes. Warm restart (no image rebuild): ~90 seconds.
@@ -433,7 +404,8 @@ reranker_fallback:
   max_concurrency: 1
 ```
 
-**Do not use local Docker containers** (`embeddings:8503` / `reranker:8504`) for production. They are retained in `docker-compose.cloud.yml` for optional manual testing only and are not started by default (see § 5, Startup order).
+There is no local-Docker-container path for embedding or reranking (FRE-1166 retired the
+0.6B llama.cpp provisioning chain — it predated the OVH/Voyage cutover and nothing calls it).
 
 ---
 
@@ -556,17 +528,6 @@ OVH blocks UDP/443. Ensure `cloudflared` command has `--protocol http2`:
 ```yaml
 command: tunnel --no-autoupdate --protocol http2 run
 ```
-
-### Embeddings / reranker container won't start (optional services)
-
-These containers are **not required for standard operation** — the gateway uses OVH managed embeddings and Voyage reranker by default. 
-
-If you explicitly started them and they fail, GGUF model files are likely missing:
-```bash
-bash infrastructure/scripts/transfer-models.sh
-```
-
-If you don't need these containers, you can ignore this error. They are defined in the compose file but are never started automatically or depended on by the gateway.
 
 ### Services won't start after VPS reboot
 

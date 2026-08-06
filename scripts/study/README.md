@@ -155,11 +155,7 @@ statistical rig FRE-843 will later point at arm C.
 
 ```
 make study-infra-up
-docker start cloud-sim-embeddings   # stop again when done -- the live
-                                     # default profile is the managed OVH
-                                     # embedder (README convention above)
 uv run python -m scripts.study.run_baseline
-docker stop cloud-sim-embeddings
 ```
 
 **Baseline harness** (`scripts/study/baseline_harness.py`): connects a

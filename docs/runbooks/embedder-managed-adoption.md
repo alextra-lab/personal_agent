@@ -9,8 +9,16 @@ Qwen3-Embedding-8B, nDCG@5 0.9566 vs the deployed 0.6B's 0.9303). FRE-821 shippe
 the `managed_embedder` substrate profile (`config/substrate.yaml`), the
 managed-call + same-model local-fallback runtime path
 (`src/personal_agent/memory/embeddings.py`), and the static identity guard
-(`config_guard.check_embedding_fallback_identity`). None of the steps below have
-run yet — the default deployed profile is still `private` (local 0.6B).
+(`config_guard.check_embedding_fallback_identity`).
+
+**Stale as of FRE-1166 (2026-08-06):** `config/models.yaml`'s `embedding:` entry
+was pointed directly at the OVH endpoint on 2026-07-19 (`ba81b8985`), bypassing
+this runbook's `managed_embedder` profile flip — every substrate profile now
+resolves `model_endpoint:embedding` to OVH regardless of `AGENT_SUBSTRATE_PROFILE`.
+The steps below (re-embed, AC-5/AC-6 live verification, same-model local-8B
+fallback) were never run against that switch — there is currently no verified
+fallback for the managed embedder. Flagged to master/owner as a discovered gap,
+not resolved here.
 
 ## What this adoption changes
 
@@ -24,11 +32,11 @@ run yet — the default deployed profile is still `private` (local 0.6B).
 ## Sequence
 
 1. **Provision the local-8B fallback.** Download/mount the Qwen3-Embedding-8B
-   GGUF weights (mirrors the existing `cloud-sim-embeddings` container's 0.6B
-   setup in `docker-compose.cloud.yml`, same `--pooling last` flag — pooling
-   must match the OVH endpoint's, per AC-6). Bring it up on a **new** port/service
-   (do not replace the running 0.6B container yet — it still serves live traffic
-   until step 6). Confirm it answers `/v1/embeddings`.
+   GGUF weights and bring up a new llama.cpp service (`--pooling last` — pooling
+   must match the OVH endpoint's, per AC-6). FRE-1166 retired the old 0.6B
+   `cloud-sim-embeddings` container this step used to mirror; write the new
+   service definition fresh rather than adapting the deleted one. Confirm it
+   answers `/v1/embeddings`.
 
 2. **One-time corpus re-embed.** Per ADR-0112 D6: spin up an owner-account
    ephemeral GPU (OVH/Scaleway L4, ~€0.75/hr) OR let the OVH-managed endpoint do
@@ -58,7 +66,7 @@ run yet — the default deployed profile is still `private` (local 0.6B).
    `entity_embedding` on boot — the index shape stays put; only its *contents*
    change, via step 2's re-embed.
 
-5. **Verify AC-6 live**, before removing the old container:
+5. **Verify AC-6 live**:
    ```bash
    uv run python -m scripts.eval.fre821_embedder_failover_probe.probe cosine \
      --fallback-endpoint <step-1 local-8B endpoint>
@@ -66,11 +74,10 @@ run yet — the default deployed profile is still `private` (local 0.6B).
      --fallback-endpoint <step-1 local-8B endpoint>
    ```
    Both must print `[PASS]` (cosine ≥ 0.999 min pairwise; retrieval overlap ≥
-   0.95 mean top-10). If either fails, **do not proceed to step 6** — investigate
+   0.95 mean top-10). If either fails, **do not proceed to step 7** — investigate
    pooling/normalization/revision drift between the two endpoints first.
 
-6. **Stop the old 0.6B container** (`cloud-sim-embeddings` in
-   `docker-compose.cloud.yml`) once step 5 passes.
+6. The old 0.6B container is already gone (FRE-1166) — nothing to stop here.
 
 7. **Verify AC-5 live:**
    - `docker ps` (or `make ps`) — confirm no embedder container runs on the host.
@@ -84,6 +91,7 @@ run yet — the default deployed profile is still `private` (local 0.6B).
 ## Rollback
 
 Revert `AGENT_SUBSTRATE_PROFILE` to `private`, redeploy (`AGENT_EMBEDDING_DIMENSIONS`
-needs no change — it never left its default `1024`). Keep the old 0.6B
-container/image available until AC-5/AC-6 are confirmed live — do not delete
-it in the same change that flips the profile.
+needs no change — it never left its default `1024`). The old 0.6B container is
+retired (FRE-1166); rollback falls back to whatever `model_endpoint:embedding`
+resolves to in `config/models.yaml` (currently OVH — see the stale-precondition
+note above), not to a local container.

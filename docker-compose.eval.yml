@@ -38,10 +38,6 @@ x-seshat-gateway-eval-base: &seshat-gateway-eval-base
       condition: service_healthy
     redis:
       condition: service_healthy
-    embeddings:
-      condition: service_healthy
-    reranker:
-      condition: service_healthy
     searxng:
       condition: service_healthy
   volumes:

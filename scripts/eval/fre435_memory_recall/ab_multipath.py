@@ -39,9 +39,9 @@ contributes nothing — a graceful degrade, not a crash. Dense + lexical arms ar
 unaffected and are what this driver's off-vs-on measurement actually rests on
 in this environment.
 
-Run (test substrate up + local embedder reachable — ``docker start
-cloud-sim-embeddings`` first if it's stopped; ``docker stop`` it again after,
-since the live default profile is the managed OVH embedder):
+Run (test substrate up — the embedder role resolves straight to the managed OVH
+endpoint per ``config/models.yaml``; FRE-1166 retired the local 0.6B llama.cpp
+container this used to require starting manually):
 
     PYTHONPATH=. uv run python scripts/eval/fre435_memory_recall/ab_multipath.py \\
         --run-id fre778-$(date +%Y%m%d) --gate-set both
@@ -523,9 +523,9 @@ async def run(args: argparse.Namespace) -> int:
         log.error(
             "embedder_unreachable",
             hint=(
-                "the local embedder is unreachable (zero-vector probe) -- "
-                "`docker start cloud-sim-embeddings` then retry; "
-                "`docker stop cloud-sim-embeddings` when done"
+                "the managed OVH embedder is unreachable (zero-vector probe) -- "
+                "check AGENT_MANAGED_EMBEDDING_TOKEN and network reachability to "
+                "the OVH AI Endpoints base URL in config/models.yaml"
             ),
         )
         return 2

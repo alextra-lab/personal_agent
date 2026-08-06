@@ -35,4 +35,4 @@ PYTHONPATH=. uv run python scripts/eval/fre720_insights_separation/separation_pr
 ```
 
 The live run touches no ES/Neo4j/Postgres substrate (the corpus is committed) but does call the
-deployed embedder (`embeddings:8503`/`localhost:8503`).
+deployed embedder (the managed OVH endpoint per `config/models.yaml`).

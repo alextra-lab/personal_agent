@@ -356,12 +356,12 @@ class TelemetryQueries:
             },
             size=0,
             aggs={
-                "total": {"value_count": {"field": "trace_id.keyword"}},
-                "completed": {"filter": {"term": {"outcome.keyword": "completed"}}},
+                "total": {"value_count": {"field": "trace_id"}},
+                "completed": {"filter": {"term": {"outcome": "completed"}}},
                 "avg_duration_ms": {"avg": {"field": "duration_ms"}},
                 "avg_cpu": {"avg": {"field": "metrics_summary.cpu_avg"}},
                 "avg_memory": {"avg": {"field": "metrics_summary.memory_avg"}},
-                "top_tools": {"terms": {"field": "tools_used.keyword", "size": 5}},
+                "top_tools": {"terms": {"field": "tools_used", "size": 5}},
                 "hours": {
                     "terms": {
                         "script": {
@@ -437,13 +437,13 @@ class TelemetryQueries:
                                 }
                             }
                         },
-                        {"term": {"event.keyword": "delegation_outcome_recorded"}},
+                        {"term": {"event": "delegation_outcome_recorded"}},
                     ]
                 }
             },
             size=0,
             aggs={
-                "total": {"value_count": {"field": "task_id.keyword"}},
+                "total": {"value_count": {"field": "task_id"}},
                 "successes": {"sum": {"field": "success"}},
                 "rounds_histogram": {
                     "histogram": {"field": "rounds_needed", "interval": 1, "min_doc_count": 1}
@@ -452,8 +452,8 @@ class TelemetryQueries:
                     "terms": {
                         "script": {
                             "source": (
-                                "def v = doc['what_was_missing.keyword'].size() == 0 "
-                                "? '' : doc['what_was_missing.keyword'].value; "
+                                "def v = doc['what_was_missing'].size() == 0 "
+                                "? '' : doc['what_was_missing'].value; "
                                 "return v.toLowerCase().substring(0, Math.min(v.length(), 80));"
                             )
                         },
@@ -956,7 +956,7 @@ class TelemetryQueries:
                     "bool": {
                         "must": [
                             {"term": {"level": "WARNING"}},
-                            {"terms": {"event.keyword": sorted(warning_allowlist)}},
+                            {"terms": {"event": sorted(warning_allowlist)}},
                         ]
                     }
                 }
@@ -986,24 +986,24 @@ class TelemetryQueries:
                     "composite": {
                         "size": 200,
                         "sources": [
-                            {"source_component": {"terms": {"field": "source_component.keyword"}}},
-                            {"event": {"terms": {"field": "event.keyword"}}},
+                            {"source_component": {"terms": {"field": "source_component"}}},
+                            {"event": {"terms": {"field": "event"}}},
                             {
                                 "error_type_normalised": {
                                     "terms": {
-                                        "field": "error_type.keyword",
+                                        "field": "error_type",
                                         "missing_bucket": True,
                                     }
                                 }
                             },
-                            {"level": {"terms": {"field": "level.keyword"}}},
+                            {"level": {"terms": {"field": "level"}}},
                         ],
                     },
                     "aggs": {
                         "first_seen": {"min": {"field": "@timestamp"}},
                         "last_seen": {"max": {"field": "@timestamp"}},
-                        "sample_trace_ids": {"terms": {"field": "trace_id.keyword", "size": 5}},
-                        "sample_messages": {"terms": {"field": "error.keyword", "size": 3}},
+                        "sample_trace_ids": {"terms": {"field": "trace_id", "size": 5}},
+                        "sample_messages": {"terms": {"field": "error", "size": 3}},
                     },
                 }
             },

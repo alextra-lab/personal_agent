@@ -260,6 +260,26 @@ async def _process_chat_stream_background(
 
             set_current_selection({"primary": primary_selection_key})
 
+        # FRE-1033: resolve the bus once — determines both whether we wait for
+        # a prior turn's async consumer-append (below) and, at the end of this
+        # function, whether we publish request.completed (consumer appends)
+        # or append directly ourselves (no consumer is running).
+        from personal_agent.events.bus import get_event_bus
+        from personal_agent.events.redis_backend import RedisStreamBus
+        from personal_agent.events.session_write_waiter import (
+            await_previous_session_write,
+            register_session_write_waiter,
+            release_session_write_wait,
+        )
+
+        bus = get_event_bus()
+        using_redis_bus = isinstance(bus, RedisStreamBus)
+        if using_redis_bus:
+            # FRE-51: a prior turn on this session may still have an async
+            # cg:session-writer append in flight — wait for it to land before
+            # this turn hydrates history, same protocol _chat_impl uses.
+            await await_previous_session_write(session_id, trace_id=trace_id)
+
         # ── Session ──────────────────────────────────────────────────────
         session_uuid = UUID(session_id)
         db_messages: list[dict[str, Any]] = []
@@ -386,6 +406,9 @@ async def _process_chat_stream_background(
         # ── Orchestrator ─────────────────────────────────────────────────
         response_content = ""
         request_started = False
+        # FRE-1033: captured so trace_summary/trace_breakdown are available
+        # after the call, for the request.completed publish below.
+        timer = RequestTimer(trace_id=trace_id)
         try:
             from personal_agent.orchestrator import Orchestrator
             from personal_agent.orchestrator.channels import Channel
@@ -408,7 +431,7 @@ async def _process_chat_stream_background(
                 mode=None,
                 channel=None,
                 trace_id=trace_id,
-                request_timer=RequestTimer(trace_id=trace_id),
+                request_timer=timer,
                 gateway_output=gateway_output,
                 user_id=user_id,
                 user_email=user_email,
@@ -439,33 +462,89 @@ async def _process_chat_stream_background(
 
         await _push_event(TextDeltaEvent(text=response_content, session_id=session_id), session_id)
 
-        try:
-            primary_model_id, config_path_str = _resolve_active_model_attribution(
-                trace_id=trace_id,
-            )
-            async with AsyncSessionLocal() as db:
-                repo = SessionRepository(db)
-                await repo.append_message(
-                    session_uuid,
-                    {
-                        "role": "assistant",
-                        "content": response_content,
-                        "trace_id": trace_id,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "metadata": {
-                            "source": "service.app",
-                            "model": primary_model_id,
-                            "model_role": "primary",
-                            "model_config_path": config_path_str,
-                        },
-                    },
+        async def _append_assistant_directly() -> None:
+            """Append the assistant reply to Postgres directly (no consumer involved)."""
+            try:
+                primary_model_id, config_path_str = _resolve_active_model_attribution(
+                    trace_id=trace_id,
                 )
-        except Exception as e:
-            log.error(
-                "chat_stream.db_append_assistant_failed",
-                trace_id=trace_id,
-                error=sanitize_error_message(e),
-            )
+                async with AsyncSessionLocal() as db:
+                    repo = SessionRepository(db)
+                    await repo.append_message(
+                        session_uuid,
+                        {
+                            "role": "assistant",
+                            "content": response_content,
+                            "trace_id": trace_id,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "metadata": {
+                                "source": "service.app",
+                                "model": primary_model_id,
+                                "model_role": "primary",
+                                "model_config_path": config_path_str,
+                            },
+                        },
+                    )
+            except Exception as e:
+                log.error(
+                    "chat_stream.db_append_assistant_failed",
+                    trace_id=trace_id,
+                    error=sanitize_error_message(e),
+                )
+
+        # FRE-1033: durable side effects — Redis Streams (consumer appends +
+        # indexes) or direct writes (NoOp bus, no consumer running). Mirrors
+        # the pattern _chat_impl already uses (current lines ~2153-2189).
+        if using_redis_bus:
+            from personal_agent.events.models import STREAM_REQUEST_COMPLETED, RequestCompletedEvent
+
+            # cg:session-writer will append the assistant message — do NOT
+            # append directly here, or the turn is written twice (the
+            # handler appends unconditionally on every request.completed
+            # event; see events/request_completed_handlers.py).
+            register_session_write_waiter(session_id)
+            try:
+                await bus.publish(
+                    STREAM_REQUEST_COMPLETED,
+                    RequestCompletedEvent(
+                        trace_id=trace_id,
+                        session_id=session_id,
+                        assistant_response=response_content,
+                        trace_summary=timer.to_trace_summary(),
+                        trace_breakdown=timer.to_breakdown(),
+                        source_component="service.app",
+                        user_id=user_id,
+                    ),
+                )
+            except asyncio.CancelledError:
+                # Task cancellation is not a publish failure — no fallback
+                # append (the caller is tearing this turn down), but the
+                # waiter must still be released or it leaks until timeout.
+                release_session_write_wait(session_id)
+                raise
+            except Exception as e:
+                # The client already has this answer (pushed above) —
+                # silently losing it from history/telemetry would be worse
+                # than a rare duplicate, so fall back to direct persistence
+                # instead of dropping the turn.
+                log.error(
+                    "chat_stream.request_completed_publish_failed",
+                    trace_id=trace_id,
+                    error=sanitize_error_message(e),
+                )
+                release_session_write_wait(session_id)
+                await _append_assistant_directly()
+        else:
+            await _append_assistant_directly()
+            if es_handler and getattr(es_handler, "_connected", False):
+                asyncio.create_task(
+                    es_handler.es_logger.index_request_trace(
+                        trace_id=trace_id,
+                        timer=timer,
+                        session_id=session_id,
+                        user_id=user_id,
+                    )
+                )
 
     except Exception as e:
         bg_error_id = str(uuid4())[:8]

@@ -142,6 +142,42 @@ is broken, so blaming the pipeline would send you to the wrong system. It still 
 - **No drain on shutdown.** `disconnect()` closes the client without awaiting in-flight
   writes, and `create_task` results are discarded, so a task may be collected mid-flight.
 
+## Secret redaction — one chokepoint, and why the index template is not it (FRE-1068)
+
+Every write to `agent-logs-*` goes through `ElasticsearchLogger._index_agent_log`,
+which applies `telemetry.redaction.redact_mapping` before indexing. **Add no new write
+path to this family that bypasses it** — `test_no_agent_logs_write_bypasses_the_chokepoint`
+parses this module and fails if you do.
+
+That test exists because the FRE-1068 audit found the family had **five** write paths
+(`log_event`, `log_batch`, the request-trace summary and step writes, the latency-breakdown
+summary and phase writes) and four of them bypassed `log_event`, so any guarantee stated on
+`log_event` was false.
+
+**The index template cannot enforce this, and reasoning about it as if it could is the trap
+the ticket itself fell into.** `dynamic_templates` govern **searchability**, not **storage**:
+Elasticsearch retains the submitted value in `_source` whatever the mapping says. Two measured
+consequences, both of which make an `exists`-based audit lie:
+
+- `arguments` is `dynamic: false` → `arguments.command` returned **0** from an `exists` query
+  while **262 documents** carried full shell command lines in `_source`. **43 fields** are in that
+  state; **174 of 273** string fields have some gap between the two counts.
+- `command` is `keyword`/`ignore_above: 1024` → values above that length are stored but not
+  indexed (**390 of 951** documents carrying the field).
+
+So **never conclude a field is empty from an `exists` count.** Read `_source`. The audit script
+`scripts/audit/fre1068_free_text_inventory.py` does exactly this and reports the delta between
+the two counts as a column; re-run it rather than trusting the committed numbers.
+
+Redaction is **fail-closed**: a value whose redaction raises becomes `[REDACTED:error]` rather
+than being forwarded intact. Detectors are deliberately high-precision and skip
+environment-lookup and placeholder forms (`password=os.environ.get(...)` appears in live
+telemetry and is not a secret), so a novel secret shape can pass — `detect_secrets()` over the
+corpus is how that drift is measured rather than assumed.
+
+`index_document()` is **not** routed through the chokepoint: it writes the Captain's Log named
+indices, a different family under a different template and retention policy.
+
 ## Elasticsearch Analytics (Phase 2.3)
 
 `TelemetryQueries` provides async ES queries for adaptive threshold tuning:

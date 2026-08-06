@@ -11,6 +11,7 @@ else:
     AsyncElasticsearch = Any  # noqa: A001
 
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.redaction import redact_mapping
 
 log = get_logger(__name__)
 
@@ -65,6 +66,52 @@ class ElasticsearchLogger:
         """Get index name with month suffix (monthly rotation, FRE-1036)."""
         month_str = datetime.utcnow().strftime("%Y-%m")
         return f"{self.index_prefix}-{month_str}"
+
+    async def _index_agent_log(
+        self,
+        document: dict[str, Any],
+        *,
+        id: str | None = None,
+    ) -> str | None:
+        """Index one document into the agent-logs family, redacting it first.
+
+        The single write chokepoint for ``agent-logs-*`` (FRE-1068). Every
+        caller writing to this family must route through here: the audit found
+        five independent write paths, four of which bypassed ``log_event`` and
+        so bypassed any guarantee stated on it. ``redact_mapping`` governs what
+        is stored, which the index template cannot — the template controls
+        searchability, while ``_source`` retains whatever was submitted.
+
+        ``index_document`` is deliberately *not* routed here: it writes the
+        Captain's Log named indices, a different family under a different
+        template and retention policy.
+
+        A structural test (``test_no_agent_logs_write_bypasses_the_chokepoint``)
+        fails if a new write path reaches this index without passing through.
+
+        Args:
+            document: Document to index; redacted in place of the original.
+            id: Optional document ID for idempotent upsert.
+
+        Returns:
+            Document ID if the write succeeded, None if no client is attached.
+
+        Raises:
+            Exception: Propagated from the Elasticsearch client. Write failures
+                are deliberately not swallowed here — each calling path already
+                logs them with its own event name and context, and catching
+                them centrally would erase that attribution.
+        """
+        if not self.client:
+            return None
+        kwargs: dict[str, Any] = {
+            "index": self._get_index_name(),
+            "document": redact_mapping(document),
+        }
+        if id is not None:
+            kwargs["id"] = id
+        result = await self.client.index(**kwargs)
+        return str(result["_id"])
 
     async def index_document(
         self,
@@ -171,8 +218,7 @@ class ElasticsearchLogger:
         }
 
         try:
-            result = await self.client.index(index=self._get_index_name(), document=doc)
-            return str(result["_id"])
+            return await self._index_agent_log(doc)
         except Exception as e:
             log.error(
                 "elasticsearch_log_failed",
@@ -200,12 +246,16 @@ class ElasticsearchLogger:
         actions = [
             {
                 "_index": index_name,
-                "_source": {
-                    "@timestamp": datetime.utcnow().isoformat(),
-                    "event_type": event_type,
-                    "trace_id": str(trace_id) if trace_id else None,
-                    **data,
-                },
+                # FRE-1068: the bulk path writes agent-logs directly rather
+                # than through _index_agent_log, so it redacts here.
+                "_source": redact_mapping(
+                    {
+                        "@timestamp": datetime.utcnow().isoformat(),
+                        "event_type": event_type,
+                        "trace_id": str(trace_id) if trace_id else None,
+                        **data,
+                    }
+                ),
             }
             for event_type, data, trace_id in events
         ]
@@ -369,12 +419,10 @@ class ElasticsearchLogger:
         }
 
         try:
-            result = await self.client.index(
-                index=index_name,
-                document=trace_doc,
-                id=f"trace_{trace_id}",
-            )
-            doc_id = str(result["_id"])
+            written = await self._index_agent_log(trace_doc, id=f"trace_{trace_id}")
+            if written is None:
+                return None
+            doc_id = written
 
             for entry in trace_breakdown:
                 if entry.get("phase") == "total":
@@ -399,11 +447,7 @@ class ElasticsearchLogger:
                             step_doc[k] = v
                 step_id = f"trace_{trace_id}_step_{entry.get('sequence', 0)}"
                 try:
-                    await self.client.index(
-                        index=index_name,
-                        document=step_doc,
-                        id=step_id,
-                    )
+                    await self._index_agent_log(step_doc, id=step_id)
                 except Exception as step_e:
                     log.warning(
                         "elasticsearch_index_failed",
@@ -489,12 +533,10 @@ class ElasticsearchLogger:
 
         index_name = self._get_index_name()
         try:
-            result = await self.client.index(
-                index=index_name,
-                document=doc,
-                id=trace_id,
-            )
-            doc_id = str(result["_id"])
+            written = await self._index_agent_log(doc, id=trace_id)
+            if written is None:
+                return None
+            doc_id = written
 
             # Index one flat doc per phase so Kibana can aggregate without nested agg
             ts = datetime.utcnow().isoformat()
@@ -513,11 +555,7 @@ class ElasticsearchLogger:
                 }
                 flat_id = f"{trace_id}_{phase_name}"
                 try:
-                    await self.client.index(
-                        index=index_name,
-                        document=flat_doc,
-                        id=flat_id,
-                    )
+                    await self._index_agent_log(flat_doc, id=flat_id)
                 except Exception as flat_e:
                     log.warning(
                         "elasticsearch_index_failed",

@@ -1,90 +1,78 @@
-# Last session — 2026-08-05 (the day the owner cut scope, and master kept verifying the wrong artifact)
+# Last session — 2026-08-06 (the day the owner priced my ticket-filing habit)
 
 ## Doing / discussing
 
-The owner ended the pause by naming **VPS/Cloud Architecture Stabilization + ADR-0132** as the subject,
-and that project is now nearly closed out. The session ended clean at a deliberate boundary: nothing in
-flight, both build seats idle, no open PRs. The one live thread is **FRE-241** — the slm_server watchdog,
-rewritten today and now carrying its own working instructions because that repo has no machinery to
-enforce anything. It is **owner-dispatched**; no seat here can reach that repo. One question is open and
-unanswered: whether to give slm_server minimal CI first.
+The VPS/Cloud project was driven to its floor at the owner's direction and now holds exactly one open
+ticket, a seam that cannot be adjudicated before September. Observability is the named next subject and
+its first two tickets are Approved — but the owner said **no** to dispatching them when offered, so all
+three streams are deliberately idle. Nothing is in flight. The last live thread was the owner correcting
+how I generate work, which is the most important thing on this page.
 
 ## What was decided and why
 
-**The uptime figure cannot be cited as evidence that availability is fine, and this is the most important
-thing to carry forward.** The gateway's SLM health probe hits the router's `/health`, which returns a
-hardcoded string and whose own docstring calls it a check *for the router itself*. So the 30-day figure
-(98.39% up, 8,569 samples) measures **router** availability. A wedged model is recorded as **up** —
-structurally invisible, not merely underrepresented. Master quoted that figure as decisive before
-discovering this, and the owner's "how you determine *usable* is critical" is what forced the check.
+**Filing a ticket is expensive, and the reason is not backlog clutter.** Owner: *"filing is very
+expensive. My time, your time, CI tests, Unit tests, all these processes rerun for small small things."*
+Every ticket carries a **fixed delivery overhead regardless of size** — approval, dispatch, a seat, a
+plan, codex, my gate, a full CI run, the deploy ask, the close-out. A one-liner pays the same toll as a
+1,600-line change. So "it's only a Backlog entry" is the wrong frame: the cost lands later, when it is
+worked. The instruction: **"complete it. don't create new. this could have been folded in/ended in the
+original."** I had filed three in one morning; all three are now cancelled with their substance moved
+into the originating tickets as records explicitly marked *not a request*.
 
-**"Usable" is determined by monitoring errors on real traffic** — the owner's call, and better than the
-synthetic-probe design master proposed. A probe occupies the model every cycle, and a small probe prompt
-can pass while a real long-context turn wedges. Real errors *are* the definition. Known caveat, stated
-rather than designed around: error-monitoring is traffic-dependent, so an idle wedge isn't caught until
-someone hits it.
+**One of everything is the architecture, not a gap.** Owner: *"you are building resiliency when I did not
+ask for it. I don't have 2 of everything."* Single-node Elasticsearch with one shard, one Postgres, one
+Neo4j, one inference host, no embedder fallback. **A single point of failure here is not a finding.**
+This is a general ruling, delivered while dismissing the missing-embedder-fallback ticket — do not
+re-surface this class. Correctness and wrong-data-in-front-of-the-owner still outrank it.
 
-**Three slm_server tickets collapsed to one, and the reasoning is not obvious from the outcome.**
-All 138 down-samples in 30 days were `reachable=false` — none reachable-but-degraded — so FRE-444's
-enriched health fields described a failure mode this system does not exhibit. The owner's independent
-point (single-user MBP, no concurrency, so queue-depth and GPU-util carry no decision) reached the same
-place from the hardware. FRE-238 died with it. Note the ordering: master had *sequenced* 444→241→238
-before asking whether any of it was worth wanting — the owner's "do we really give a shit about 444?"
-is what surfaced that.
+**The SLM server must not auto-start** — models live on an external volume and the owner decides start
+and stop. That withdrew FRE-241's reboot criterion (**withdrawn, not unproven** — the two record
+differently) and forced a second, non-obvious decision: the launcher's exit-0-on-no-backends existed
+*solely* so launchd's KeepAlive would not churn. Remove launchd and that rationale evaporates while the
+behaviour gets worse, because the consumer of the exit code becomes a human's shell — success reported
+with nothing running. It exits 1 now.
 
-**Master's dominant failure today, twice, both owner-caught: verifying a plausible *adjacent* artifact
-instead of the file the ticket names, then reading the match as confirmation.** FRE-338 names
-`docker/mcp/run-gateway.sh`; master checked a settings field. FRE-340 names
-`infrastructure/scripts/transfer-models.sh`; master searched `scripts/`. Both were wrongly cancelled and
-had to be reopened. Each ticket states its path — one command each would have returned the opposite
-answer. It nearly happened a third time: `heartbeat` *is* in slm_server, as SSE keep-alive, which a
-keyword search would have read as satisfying FRE-241.
+**Three tickets today had premises that dissolved on contact with the running system**, and I made one of
+them worse. FRE-1160: the eval compose file is an *overlay* by design, so validating it standalone always
+fails; I "corrected its scope" authoritatively after validating it in isolation, which was the same error
+the ticket already contained. FRE-1159: the two Cloudflare settings carry an explicit pydantic `alias`,
+which **bypasses** the `AGENT_` env prefix — so the unprefixed names were correct all along and inbound
+JWT verification has been live. One command against the running container overturned it. The generalisable
+form: **verify at the answer, not at the definition or a plausible neighbour.**
 
-**An ADR's body can lag its own amendments — read Status Updates before concluding a constraint is open.**
-Master told the owner ADR-0105's dead-embedder reference needed a design judgement. It did not: the ADR's
-own 2026-07-06 amendment (via ADR-0112) had already permitted a managed endpoint a month earlier. The body
-had simply never been reconciled. The part that mattered: **AC-10 required a run to succeed "using only
-`embeddings:8503`"** — an acceptance criterion that could not pass, which nothing would have surfaced until
-someone tried to adjudicate it.
-
-**The `embeddings` drop survived three owner challenges, each strengthening it** (full analysis on FRE-597).
-Worth carrying only as a pattern: the owner's "some ticket or ADR must have specified creating it" was the
-question that settled it — git said nothing did.
-
-**FRE-619's second attempt was worse than the original defect** — the guard got selected but still skipped,
-so a green *required check* asserted coverage that didn't exist, where before it plainly looked unwired.
-
-**The theme, four separate instances in one day:** mechanisms reporting success while checking nothing —
-FRE-619's silent skip, CI's schema-apply swallowing four errors and exiting zero, the stale health-URL
-override, ADR-0105's unsatisfiable AC. Three were visible only by reading actual output rather than status.
+**Prose volume is part of the same over-production problem.** Owner, on a 400-word cancellation comment:
+*"this is true, but noise."* Match a comment's length to the decision's weight.
 
 ## Worktrees — anything special
 
-- **build1 wedged on an interactive permission prompt** — third time in two days. Master released it with
-  a send-keys `1`. It is invisible in dispatch state, so nothing detects it but a human looking.
-- **A build seat's commit appeared on master's local `main`** (FRE-619's, while its PR was open). Only
-  `git pull --ff-only` caught it; branch protection was the second layer. Concurrent-worktree hazard.
+- Both build seats idle and clean. `build` and `build2` still hold their merged branches, so
+  `--delete-branch` fails locally every time — benign, recurring, not worth acting on.
+- **build1 stopped mid-close-out on FRE-1166**: PR open, CI green, handoff unwritten, two scored review
+  findings alive only in its context. A `send-keys` poke recovered it. The machinery cannot see this —
+  a green PR with an unfinished close-out looks *ready* to the watcher.
 
 ## Sequence position + drift
 
-The owner drove the whole day and named the subject explicitly, so this was directed work, not drift.
-**The console's standing four-item sequence (telemetry residuals → Config Management → Linear async
-feedback → Seshat Inference) remains unstarted** — unchanged from yesterday. Both console directives
-touched today were transcribe-then-retire, both conditions met and cited.
+No drift; the owner drove the whole day. The console gained one directive — VPS-then-Observability,
+transcribed verbatim. **I attached its retirement condition myself** because the contract refuses a
+directive without one; the owner has not confirmed that it names the right event, and it interacts with
+the existing four-item sequence directive, which they may want collapsed into one line. That is theirs
+to edit, not mine.
 
 ## Answers for the fresh start
 
-- **Why does FRE-241 carry unusually long working instructions?** Because slm_server has *no* machinery —
-  verified: no `.claude/`, no CI, no lifecycle rules, `main` directly pushable, and its CLAUDE.md mentions
-  Linear/tickets/gates/PRs zero times. The ticket has to be the gate.
-- **Why is FRE-1163 High and in Needs Approval?** Three occurrences today. The third proved it can swallow a
-  *safety* signal: the watcher correctly re-triggered on a changed head to say "your review is stale," hit a
-  busy seat, and the message was lost — which is exactly when master merged the stale head and the owner had
-  to decline it.
-- **Is the local-model residue finished?** No. FRE-1165 (live system prompt still advertises the dead
-  containers) and FRE-1166 (script, mount, compose definitions) are open. FRE-1125 and the ADR-0105 site are
-  done.
-- **Was anything deployed?** Yes — the ADR-0132 chain earlier, and the `embeddings` DROP against prod
-  (owner-authorized, zero rows, DDL captured to `telemetry/purge-backups/` first).
-- **Open, undecided:** minimal CI for slm_server so its existing pytest suite runs on push. Master raised it
-  twice; the owner has not answered. Not filed.
+- **Why are FRE-1105/1108 Approved but unlabelled?** Offered and declined at 10:05. Parked deliberately;
+  do not dispatch without asking.
+- **Why is FRE-1148 the only open VPS ticket?** It is the ADR-0132 seam, due 2026-09-08, and the due date
+  is a marker not an actuator — it wakes only at my advance-dispatch pass on or after that date. If
+  nothing merges in early September it will sit past its date unnoticed.
+- **Why were FRE-1159/1160/1172 cancelled after being approved or dispatched?** See above — two wrong
+  premises and one owner ruling. Each cancellation carries its reasoning.
+- **`run_confirmed` in `dispatch_state.json` is always False.** It is not a stall signal; both seats show
+  it while demonstrably working. Trust `phase`, the worktree branch and Linear state instead.
+- **Dispatch is not instant after a merge.** The orchestrator clears the slot on one ~5-minute tick and
+  launches on the next, so up to ~10 minutes is normal. The owner asked about this once already.
+- **I leaked a secret into this session's transcript** — a broad `printenv | grep` printed
+  `AGENT_MANAGED_EMBEDDING_TOKEN` in full. Verified **not** in git (no tracked file, no commit in
+  history, `.env` is ignored); two stray on-disk copies shredded. The transcript itself I cannot redact.
+  Rotation is the owner's call and was raised. Check presence, never values, when inspecting env.

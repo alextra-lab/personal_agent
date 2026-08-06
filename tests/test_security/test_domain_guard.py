@@ -19,12 +19,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from personal_agent.security import (
+    _BUNDLED_BLOCKLIST,
     DomainGuard,
     GuardMode,
     GuardResult,
-    _BUNDLED_BLOCKLIST,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -190,7 +189,9 @@ class TestFeedUnavailableFallback:
             mode=GuardMode.BLOCKLIST,
         )
         # Simulate network failure on URLhaus fetch
-        with patch.object(g, "_fetch_urlhaus", new=AsyncMock(side_effect=ConnectionError("timeout"))):
+        with patch.object(
+            g, "_fetch_urlhaus", new=AsyncMock(side_effect=ConnectionError("timeout"))
+        ):
             await g._refresh()
 
         assert g._blocklist == _BUNDLED_BLOCKLIST
@@ -217,11 +218,13 @@ class TestFeedUnavailableFallback:
         cache_path = tmp_path / "blocklist.json"
         cached_domains = ["evil.com", "phish.net"]
         cache_path.write_text(
-            json.dumps({
-                "cached_at": datetime.now(timezone.utc).isoformat(),
-                "domain_count": 2,
-                "domains": cached_domains,
-            })
+            json.dumps(
+                {
+                    "cached_at": datetime.now(timezone.utc).isoformat(),
+                    "domain_count": 2,
+                    "domains": cached_domains,
+                }
+            )
         )
 
         g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
@@ -278,6 +281,80 @@ class TestEnsureLoaded:
             await g.ensure_loaded()
 
         fetch_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# note_staleness (FRE-1162) — the request-path freshness signal that never fetches
+# ---------------------------------------------------------------------------
+
+
+class TestNoteStaleness:
+    def test_logs_once_when_stale_and_blocklist_mode(self, tmp_path: Path) -> None:
+        """A never-loaded guard is stale; note_staleness() logs a warning."""
+        g = DomainGuard(cache_path=tmp_path / "bl.json", mode=GuardMode.BLOCKLIST)
+        assert g._last_loaded is None
+
+        with patch("personal_agent.security.log") as mock_log:
+            g.note_staleness()
+
+        mock_log.warning.assert_called_once()
+        assert mock_log.warning.call_args.args[0] == "domain_guard_stale_on_request_path"
+
+    def test_noop_when_off_mode(self, tmp_path: Path) -> None:
+        """GuardMode.OFF never logs staleness — it never consults the blocklist at all."""
+        g = DomainGuard(cache_path=tmp_path / "bl.json", mode=GuardMode.OFF)
+        assert g._last_loaded is None
+
+        with patch("personal_agent.security.log") as mock_log:
+            g.note_staleness()
+
+        mock_log.warning.assert_not_called()
+
+    def test_silent_when_fresh(self, tmp_path: Path) -> None:
+        """A recently-loaded guard is not stale — note_staleness() logs nothing."""
+        g = _guard(tmp_path)  # _guard() sets _last_loaded = now()
+
+        with patch("personal_agent.security.log") as mock_log:
+            g.note_staleness()
+
+        mock_log.warning.assert_not_called()
+
+    def test_does_not_log_twice_for_same_staleness_episode(self, tmp_path: Path) -> None:
+        """Repeated calls during one staleness episode log only once — no per-request flood."""
+        g = DomainGuard(cache_path=tmp_path / "bl.json", mode=GuardMode.BLOCKLIST)
+
+        with patch("personal_agent.security.log") as mock_log:
+            g.note_staleness()
+            g.note_staleness()
+            g.note_staleness()
+
+        mock_log.warning.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_resets_after_refresh(self, tmp_path: Path) -> None:
+        """A fresh staleness episode after a successful refresh logs again.
+
+        Proves the ``_logged_stale`` throttle actually resets on reload, not just
+        that a freshly-loaded guard stays quiet (that's test_silent_when_fresh).
+        """
+        g = DomainGuard(
+            cache_path=tmp_path / "bl.json", mode=GuardMode.BLOCKLIST, ttl_seconds=3600.0
+        )
+
+        with patch("personal_agent.security.log") as mock_log:
+            g.note_staleness()  # 1st staleness episode
+        assert mock_log.warning.call_count == 1
+
+        with patch.object(g, "_fetch_urlhaus", new=AsyncMock(return_value={"new.evil"})):
+            await g._refresh()
+
+        # Force a second staleness episode by pushing _last_loaded back past the TTL.
+        g._last_loaded = datetime.now(timezone.utc) - timedelta(seconds=g._ttl + 1)
+
+        with patch("personal_agent.security.log") as mock_log2:
+            g.note_staleness()
+
+        mock_log2.warning.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@ import pytest_asyncio
 import personal_agent.brainstem.scheduler as scheduler_module
 from personal_agent.brainstem.scheduler import BrainstemScheduler
 from personal_agent.brainstem.sensors.metrics_daemon import MetricsSample
+from personal_agent.security import GuardMode
 
 
 @pytest_asyncio.fixture
@@ -626,3 +627,151 @@ class TestConsolidationCloudPath:
         with structlog.testing.capture_logs() as cap3:
             scheduler._emit_consolidation_health(now=now, trace_id="h-3")
         assert [e for e in cap3 if e.get("event") == "consolidation_health"]
+
+
+@pytest.mark.asyncio
+class TestDomainGuardWarmScheduling:
+    """FRE-1162: DomainGuard blocklist warm moves off the request path onto the scheduler."""
+
+    async def test_start_warms_domain_guard_before_spawning_tasks(self, scheduler):
+        """start() warms the guard synchronously — closes the cold-start gap before the
+        first _lifecycle_loop tick (~60s later) would otherwise leave early requests
+        seeing only the 3-entry bundled fallback.
+        """
+        mock_guard = MagicMock()
+        mock_guard.mode = GuardMode.BLOCKLIST
+        mock_guard.ensure_loaded = AsyncMock()
+
+        with patch("personal_agent.security.get_domain_guard", return_value=mock_guard):
+            await scheduler.start()
+
+        mock_guard.ensure_loaded.assert_awaited_once()
+        assert scheduler._last_domain_guard_warm_run is not None
+
+    async def test_start_skips_domain_guard_warm_in_off_mode(self, scheduler):
+        """OFF mode never touches the network, even at startup."""
+        mock_guard = MagicMock()
+        mock_guard.mode = GuardMode.OFF
+        mock_guard.ensure_loaded = AsyncMock()
+
+        with patch("personal_agent.security.get_domain_guard", return_value=mock_guard):
+            await scheduler.start()
+
+        mock_guard.ensure_loaded.assert_not_awaited()
+
+    async def test_lifecycle_loop_warms_domain_guard_when_due(self, scheduler):
+        """The periodic job calls ensure_loaded() and advances the warm timestamp."""
+        scheduler.running = True
+        scheduler._last_domain_guard_warm_run = None
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        mock_guard = MagicMock()
+        mock_guard.mode = GuardMode.BLOCKLIST
+        mock_guard.ensure_loaded = AsyncMock()
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch("personal_agent.security.get_domain_guard", return_value=mock_guard),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()
+
+        mock_guard.ensure_loaded.assert_awaited_once()
+        assert scheduler._last_domain_guard_warm_run is not None
+
+    async def test_lifecycle_loop_skips_domain_guard_warm_when_recent(self, scheduler):
+        """Within the interval, the loop does not call ensure_loaded() again."""
+        scheduler.running = True
+        now = datetime.now(timezone.utc)
+        scheduler._last_domain_guard_warm_run = now
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = now
+
+        mock_guard = MagicMock()
+        mock_guard.mode = GuardMode.BLOCKLIST
+        mock_guard.ensure_loaded = AsyncMock()
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch("personal_agent.security.get_domain_guard", return_value=mock_guard),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()
+
+        mock_guard.ensure_loaded.assert_not_awaited()
+
+    async def test_lifecycle_loop_skips_domain_guard_warm_in_off_mode(self, scheduler):
+        """OFF mode never touches the network from the periodic job either."""
+        scheduler.running = True
+        scheduler._last_domain_guard_warm_run = None
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        mock_guard = MagicMock()
+        mock_guard.mode = GuardMode.OFF
+        mock_guard.ensure_loaded = AsyncMock()
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch("personal_agent.security.get_domain_guard", return_value=mock_guard),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()
+
+        mock_guard.ensure_loaded.assert_not_awaited()
+
+    async def test_lifecycle_loop_domain_guard_warm_survives_failure(self, scheduler):
+        """A warm failure is caught, logged, and does not advance the timestamp (retries next tick)."""
+        scheduler.running = True
+        scheduler._last_domain_guard_warm_run = None
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        mock_guard = MagicMock()
+        mock_guard.mode = GuardMode.BLOCKLIST
+        mock_guard.ensure_loaded = AsyncMock(side_effect=RuntimeError("feed unreachable"))
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch("personal_agent.security.get_domain_guard", return_value=mock_guard),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()  # must not raise
+
+        mock_guard.ensure_loaded.assert_awaited_once()
+        assert scheduler._last_domain_guard_warm_run is None
+
+    async def test_domain_guard_warm_interval_derived_from_ttl(self):
+        """The warm interval is derived from the configured TTL, not a fixed constant."""
+        cases = [(40, 30.0), (800, 200.0), (3600, 300.0)]
+        for ttl, expected in cases:
+            with patch.object(scheduler_module.settings, "url_guard_cache_ttl_seconds", ttl):
+                sched = BrainstemScheduler()
+                assert sched.domain_guard_warm_interval_seconds == expected
+                if sched.running:
+                    await sched.stop()

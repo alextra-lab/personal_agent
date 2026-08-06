@@ -1541,13 +1541,6 @@ async def _budget_denied_handler(_request: _Request, exc: _BudgetDenied) -> _JSO
     )
 
 
-# OTel request-boundary root span (ADR-0129 D4): added before CORS so it wraps
-# the request as fully as possible (Starlette wraps innermost-to-outermost in
-# add_middleware call order — added first, wraps outermost).
-from personal_agent.telemetry.otel_middleware import RequestRootSpanMiddleware  # noqa: E402
-
-app.add_middleware(RequestRootSpanMiddleware)
-
 # CORS — allows the Next.js dev server (localhost:3000) to reach the backend (localhost:9000).
 # In production Caddy proxies both through the same origin so this middleware is a no-op there.
 app.add_middleware(
@@ -1557,6 +1550,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# OTel request-boundary root span (ADR-0129 D4): added after CORS so it wraps the
+# request as fully as possible. Starlette's add_middleware inserts at position 0 of
+# user_middleware, and build_middleware_stack wraps in reversed(middleware) order —
+# net effect: the LAST middleware added ends up OUTERMOST, not the first.
+from personal_agent.telemetry.otel_middleware import RequestRootSpanMiddleware  # noqa: E402
+
+app.add_middleware(RequestRootSpanMiddleware)
 
 # AG-UI transport — WebSocket endpoint (ADR-0075, FRE-388)
 from personal_agent.transport.agui.ws_endpoint import ws_router as transport_router  # noqa: E402

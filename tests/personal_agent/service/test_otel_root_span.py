@@ -10,7 +10,7 @@ exactly what production emits.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, MutableMapping
 from typing import Any
 
 import pytest
@@ -52,7 +52,7 @@ def traced_app() -> Iterator[tuple[TestClient, InMemorySpanExporter]]:
         yield client, exporter
 
 
-def _capture_probe_events(client: TestClient, query: str = "") -> list[dict[str, Any]]:
+def _capture_probe_events(client: TestClient, query: str = "") -> list[MutableMapping[str, Any]]:
     """Capture events with the real span-context processor active.
 
     Uses ``structlog.testing.capture_logs`` — it swaps in a capturing
@@ -61,7 +61,7 @@ def _capture_probe_events(client: TestClient, query: str = "") -> list[dict[str,
     state into other test modules.
     """
     with structlog.testing.capture_logs(
-        processors=[structlog.contextvars.merge_contextvars, _add_span_context]
+        processors=[structlog.contextvars.merge_contextvars, _add_span_context]  # type: ignore[list-item]
     ) as captured:
         response = client.get(f"/probe{query}")
         assert response.status_code == 200
@@ -130,7 +130,7 @@ def test_no_active_span_carries_no_invented_identity() -> None:
     absent, not a sentinel or zero id.
     """
     with structlog.testing.capture_logs(
-        processors=[structlog.contextvars.merge_contextvars, _add_span_context]
+        processors=[structlog.contextvars.merge_contextvars, _add_span_context]  # type: ignore[list-item]
     ) as captured:
         log = structlog.get_logger(__name__)
         log.info("unspanned_event")
@@ -151,3 +151,25 @@ def test_processor_introduces_no_second_timestamp_key(
     for event in events:
         added_keys = set(event) - {"event", "session_id", "log_level"}
         assert added_keys == {"trace_id", "span_id"}
+
+
+def test_root_span_middleware_wraps_cors_in_the_real_app() -> None:
+    """The root span should wrap as much of a served request as possible.
+
+    Starlette's ``add_middleware`` inserts at position 0 of ``user_middleware``,
+    and ``build_middleware_stack`` wraps in ``reversed(middleware)`` order — so
+    the LAST-added middleware ends up OUTERMOST, not the first. Registration
+    order in ``app.py`` must put ``RequestRootSpanMiddleware`` last so it wraps
+    ``CORSMiddleware``, not the reverse. Checked directly against the real app
+    module (not an isolated test app) since that's the only place this ordering
+    bug is observable.
+    """
+    from fastapi.middleware.cors import CORSMiddleware
+
+    from personal_agent.service.app import app
+
+    assert app.user_middleware[0].cls is RequestRootSpanMiddleware  # type: ignore[comparison-overlap]
+    assert any(
+        m.cls is CORSMiddleware  # type: ignore[comparison-overlap]
+        for m in app.user_middleware[1:]
+    )

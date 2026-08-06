@@ -15,7 +15,7 @@ releases its waiter.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -34,7 +34,7 @@ _TEST_USER_ID = uuid4()
 
 
 @asynccontextmanager
-async def _fake_db_session(_mock_db: MagicMock):
+async def _fake_db_session(_mock_db: MagicMock) -> AsyncIterator[MagicMock]:
     yield _mock_db
 
 

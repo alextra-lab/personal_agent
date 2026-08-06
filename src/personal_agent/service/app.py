@@ -463,6 +463,7 @@ async def _process_chat_stream_background(
         await _push_event(TextDeltaEvent(text=response_content, session_id=session_id), session_id)
 
         async def _append_assistant_directly() -> None:
+            """Append the assistant reply to Postgres directly (no consumer involved)."""
             try:
                 primary_model_id, config_path_str = _resolve_active_model_attribution(
                     trace_id=trace_id,

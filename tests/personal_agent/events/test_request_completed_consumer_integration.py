@@ -14,6 +14,7 @@ with only the DB and ES boundaries mocked.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -145,5 +146,5 @@ async def test_published_request_completed_reaches_both_real_handlers() -> None:
 
 
 @asynccontextmanager
-async def _fake_db_session():
+async def _fake_db_session() -> AsyncIterator[MagicMock]:
     yield MagicMock()

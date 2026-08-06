@@ -108,7 +108,14 @@ There is a second, sharper ambiguity in the same sentence. Read narrowly, *"no p
 
 The typed emit envelope is built. Its governed surface is **the records this repository writes to `agent-logs` through the Elasticsearch write path** — of which 99.64% remain log records after the ADR-0129 chain lands — and it is founded on a declared vocabulary rather than on `CANONICAL_MODEL_CALL_*_FIELDS`, which FRE-1067 retires.
 
-**The scope is the write path, not the corpus, and the difference is stated rather than blurred.** Measured live 2026-08-06, `agent-logs` holds **1,915,219 of 1,961,296 telemetry documents — 97.65%**. (ADR-0128's census put it at 98.8% in July; the figure is re-measured here rather than carried forward, because FRE-1036's index deletions moved it.) The families this decision does **not** reach total **2.35%**: `agent-monitors-*` (1.69%), `agent-insights` (0.21%), captures (0.18%), ratings (0.10%), reflections (0.10%), `slm-requests` (0.04%), topology (0.02%). Each has its own writer, none traverses the structlog pipeline, and none is governed here. Claiming otherwise would repeat the overclaim ADR-0128 criticised in its predecessors, and it would make every criterion below unprovable.
+**The scope is the write path, not the corpus, and the difference is stated rather than blurred.** Measured live 2026-08-06, `agent-logs` holds **1,916,161 of 1,962,750 documents — 97.63%**. (ADR-0128's census put it at 98.8% in July; the figure is re-measured rather than carried forward, because FRE-1036's index deletions moved it.)
+
+**Method, stated because a first attempt at this paragraph got it wrong twice.** The count is a single `terms` aggregation on `_index` across all non-system indices, grouped into families by stripping date and `-v2` suffixes. Two errors it corrects:
+
+1. *A self-selected denominator.* The first attempt summed a hand-written list of family globs, so any family not on the list left both numerator and denominator — which can only inflate `agent-logs`'s share. `caddy-access` was missing, and overlapping prefixes (`agent-monitors-joinability` against `agent-monitors-joinability-substrate`) double-counted and mis-attributed within the monitors families.
+2. *The wrong document unit.* `_cat/indices` `docs.count` reports **Lucene** documents, which include nested sub-documents; `_search` and `_count` report **top-level** documents. On the nested families the two disagree by a lot — `agent-monitors-joinability` is 1,964 top-level against 24,097 in `_cat`, reflections 2,013 against 11,814, captures 3,520 against 10,682 — while families with no nested mapping agree exactly. **Top-level is the correct unit here**, because the validator runs once per document written through `log_event` and a nested child is not a separate write. ADR-0128's Context recorded this same trap ("per-family `_count`, not `_cat/indices`, which inflates counts via nested sub-documents"); it is restated because it changes this paragraph's numbers by more than two points.
+
+The families this decision does **not** reach total **2.37%**, enumerated in full: `agent-monitors-slm-health` 0.94%, `agent-monitors-joinability-substrate` 0.64%, `agent-insights` 0.21%, `agent-captains-captures` 0.18%, `user-turn-ratings` 0.10%, `agent-captains-reflections` 0.10%, `agent-monitors-joinability` 0.10%, `slm-requests` 0.04%, `caddy-access` 0.03%, `agent-topology` 0.02%, `agent-monitors-projector-health` 0.02%, `agent-captains-captures-subagents` 0.004%. Each has its own writer, none reaches `es_logger.log_event`, and none is governed here. Claiming otherwise would repeat the overclaim ADR-0128 criticised in its predecessors — and an excluded set enumerated loosely would be that same overclaim in the paragraph that promises not to make it.
 
 Span attributes are also **out of scope**. They are governed by semantic conventions and asserted by FRE-1067's AC-6, AC-7 and AC-8. This ADR governs the log path only, and the two mechanisms meet at no point — which is why restoring tier one contradicts nothing in ADR-0129 and requires no amendment to its D8 table beyond the row this ADR's Status Update records.
 
@@ -275,7 +282,7 @@ The ADR-0129 chain is funded and sequenced, with FRE-1064 the labelled head. Thi
 - Avoids a seventh telemetry ADR in a lineage where six changed nothing.
 
 **Cons:**
-- Leaves the `agent-logs` write path — 97.65% of telemetry documents, 99.64% of them still log records after the chain — with no naming mechanism of any kind.
+- Leaves the `agent-logs` write path — 97.63% of documents, 99.64% of them still log records after the chain — with no naming mechanism of any kind.
 - Semconv is silent on Elasticsearch log-document field names by construction — ADR-0128 D2 established this for the timestamp and it holds generally.
 - The divergence class recurs at emit and is discovered months later in the substrate, which is the entire measured history.
 
@@ -287,7 +294,7 @@ The ADR-0129 chain is funded and sequenced, with FRE-1064 the labelled head. Thi
 
 ### Positive Consequences
 
-- **The `agent-logs` write path acquires a naming mechanism for the first time** — the family holding 97.65% of all telemetry documents, of which 99.64% remain log records after the ADR-0129 chain, currently governed by nothing.
+- **The `agent-logs` write path acquires a naming mechanism for the first time** — the family holding 97.63% of all documents, of which 99.64% remain log records after the ADR-0129 chain, currently governed by nothing.
 - **The measured divergence class can no longer be introduced through CI.** All five recorded instances are exact-match retired spellings under Rule 1, and a sixth of the same shape fails the build. **This is deliberately weaker than "impossible at emit":** D4 lets a violation through in production rather than dropping the record, so the guarantee is that such a key cannot be *written into the codebase*, not that one can never reach storage. A key assembled dynamically at runtime, or emitted by a path CI never exercised, still lands — and is counted rather than blocked.
 - **Coverage is a property of the pipeline, not of authors.** A new emit site is governed the moment it is written, with nothing to remember — the same argument ADR-0129 makes for context propagation, applied to names.
 - **A three-times-deferred question is answered.** ADR-0090's registry open decision closes *no*, by decision, and stops consuming review attention.

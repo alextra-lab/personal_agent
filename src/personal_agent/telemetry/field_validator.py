@@ -51,6 +51,7 @@ class FieldValidator:
     """
 
     _instance: "FieldValidator | None" = None
+    _initialized: bool = False
 
     def __new__(cls, es_client: AsyncElasticsearch | None = None) -> "FieldValidator":
         """Implement singleton pattern."""

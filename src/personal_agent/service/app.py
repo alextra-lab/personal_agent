@@ -646,6 +646,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
     log.info("service_starting")
 
+    # OTel tracer provider bootstrap (ADR-0129 D4): registers the process-wide
+    # tracer provider with no span processor attached — export to a backend is
+    # separately scoped work (FRE-1070). Must run before the first request, so
+    # the root-span middleware below has a real provider to draw tracers from.
+    from personal_agent.telemetry.otel_bootstrap import configure_tracing
+
+    configure_tracing(service_name=settings.agent_id or "personal-agent")
+
     # Vision-capability drift guard (ADR-0101 §5; FRE-734): log which roles are
     # vision-capable in the active config and warn if an expected production role
     # is not flagged. Non-fatal — surfaces config-parity drift in the boot logs so
@@ -1532,6 +1540,13 @@ async def _budget_denied_handler(_request: _Request, exc: _BudgetDenied) -> _JSO
         },
     )
 
+
+# OTel request-boundary root span (ADR-0129 D4): added before CORS so it wraps
+# the request as fully as possible (Starlette wraps innermost-to-outermost in
+# add_middleware call order — added first, wraps outermost).
+from personal_agent.telemetry.otel_middleware import RequestRootSpanMiddleware  # noqa: E402
+
+app.add_middleware(RequestRootSpanMiddleware)
 
 # CORS — allows the Next.js dev server (localhost:3000) to reach the backend (localhost:9000).
 # In production Caddy proxies both through the same origin so this middleware is a no-op there.

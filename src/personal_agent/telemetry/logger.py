@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import structlog
+from opentelemetry import trace
 
 
 def _get_log_level() -> str:
@@ -120,6 +121,35 @@ def _add_component_from_event_dict(
         component = logger_name or "unknown"
 
     event_dict["component"] = component
+    return event_dict
+
+
+def _add_span_context(logger: Any, method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:
+    """Inject the active OpenTelemetry span's trace/span identity (ADR-0129 D4).
+
+    Reads the current span via ``opentelemetry.trace.get_current_span()`` —
+    independent of any project-specific context threading — so identity
+    propagates through OTel's own context mechanism rather than needing to be
+    passed as an explicit argument at every log call site (ADR-0129 D1).
+    ``session_id`` is deliberately left untouched here: it continues to reach
+    the record through ``structlog.contextvars`` (ADR-0107 D5, merged earlier
+    in the processor chain) wherever it is already bound.
+
+    Args:
+        logger: The structlog logger instance.
+        method_name: The log method name (info, error, etc.).
+        event_dict: The event dictionary.
+
+    Returns:
+        Event dictionary with trace_id/span_id added, or unchanged if no span
+        is active (ADR-0129 D8 drops sentinels rather than inventing one).
+    """
+    span_context = trace.get_current_span().get_span_context()
+    if not span_context.is_valid:
+        return event_dict
+
+    event_dict["trace_id"] = format(span_context.trace_id, "032x")
+    event_dict["span_id"] = format(span_context.span_id, "016x")
     return event_dict
 
 
@@ -235,6 +265,9 @@ def configure_logging() -> None:
             # structlog.contextvars.bind_contextvars() into every log call in
             # scope, without needing them threaded as an explicit kwarg per site.
             structlog.contextvars.merge_contextvars,
+            # ADR-0129 D4: injects trace_id/span_id from the active OTel span,
+            # independent of and superseding any hand-threaded trace_id above.
+            _add_span_context,  # type: ignore[list-item]
             structlog.stdlib.filter_by_level,
             structlog.stdlib.add_logger_name,
             structlog.stdlib.add_log_level,

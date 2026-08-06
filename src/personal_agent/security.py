@@ -99,6 +99,7 @@ class DomainGuard:
         self._blocklist: frozenset[str] = _BUNDLED_BLOCKLIST
         self._last_loaded: datetime | None = None
         self._refresh_lock: asyncio.Lock = asyncio.Lock()
+        self._logged_stale: bool = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -112,12 +113,34 @@ class DomainGuard:
     async def ensure_loaded(self) -> None:
         """Load or refresh the blocklist if the cache is stale.
 
-        Safe to call from every request — the lock prevents duplicate refreshes.
+        Called by the brainstem scheduler's startup and periodic warm jobs
+        (FRE-1162), not from the request path — ``_guard_request_hook`` calls
+        ``note_staleness()`` instead, which never fetches. The lock still
+        guards against overlapping scheduler ticks or an explicit
+        ``refresh()`` racing this call.
         """
         if self._is_stale():
             async with self._refresh_lock:
                 if self._is_stale():
                     await self._refresh()
+
+    def note_staleness(self) -> None:
+        """Cheap, synchronous freshness signal for the request-hot-path (FRE-1162).
+
+        Never fetches — only ``ensure_loaded()``/``refresh()``, called from the
+        brainstem scheduler's warm jobs, touch the network. Logs once per
+        staleness episode so a stalled warm job is visible without the hot path
+        paying for it or flooding logs on every request.
+        """
+        if self._mode is GuardMode.OFF or not self._is_stale():
+            return
+        if not self._logged_stale:
+            log.warning(
+                "domain_guard_stale_on_request_path",
+                ttl_seconds=self._ttl,
+                last_loaded=self._last_loaded.isoformat() if self._last_loaded else None,
+            )
+            self._logged_stale = True
 
     def check_url(self, url: str) -> GuardResult:
         """Check whether *url* is permitted under the current guard mode.
@@ -187,19 +210,24 @@ class DomainGuard:
             return GuardResult(allowed=True, reason="allowlist_match", matched_entry=matched)
         return GuardResult(allowed=False, reason="not_in_allowlist", matched_entry=hostname)
 
+    def _mark_loaded(self) -> None:
+        """Record a successful load and reset the staleness log throttle (FRE-1162)."""
+        self._last_loaded = datetime.now(timezone.utc)
+        self._logged_stale = False
+
     async def _refresh(self) -> None:
         """Reload blocklist: disk cache → URLhaus feed → bundled fallback."""
         cached = self._load_from_disk_cache()
         if cached is not None:
             self._blocklist = cached
-            self._last_loaded = datetime.now(timezone.utc)
+            self._mark_loaded()
             log.debug("domain_guard_loaded_from_cache", count=len(self._blocklist))
             return
 
         try:
             domains = await self._fetch_urlhaus()
             self._blocklist = frozenset(domains) | _BUNDLED_BLOCKLIST
-            self._last_loaded = datetime.now(timezone.utc)
+            self._mark_loaded()
             self._save_to_disk_cache(self._blocklist)
             log.info(
                 "domain_guard_refreshed",
@@ -213,7 +241,7 @@ class DomainGuard:
                 fallback_count=len(_BUNDLED_BLOCKLIST),
             )
             self._blocklist = _BUNDLED_BLOCKLIST
-            self._last_loaded = datetime.now(timezone.utc)
+            self._mark_loaded()
             log.warning(
                 "domain_guard_using_bundled_fallback",
                 count=len(_BUNDLED_BLOCKLIST),
@@ -319,13 +347,12 @@ class EgressBlockedError(httpx.RequestError):
 async def _guard_request_hook(request: httpx.Request, *, guard: DomainGuard) -> None:
     """Httpx async request hook — refuses a request before it is sent.
 
-    Skips ``ensure_loaded()`` entirely in ``GuardMode.OFF``: that mode never
-    consults the blocklist, but ``ensure_loaded()`` doesn't know that and
-    would otherwise pay a real network fetch on the first call of a fresh
-    process for a blocklist nothing will read.
+    Never fetches (FRE-1162): the blocklist is warmed by the brainstem
+    scheduler's startup and periodic jobs, not on the request path. This only
+    logs a cheap staleness signal (``note_staleness()``) and reads whatever
+    blocklist is already in memory.
     """
-    if guard.mode is not GuardMode.OFF:
-        await guard.ensure_loaded()
+    guard.note_staleness()
     result = guard.check_url(str(request.url))
     if not result.allowed:
         log.warning(

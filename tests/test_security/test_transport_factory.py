@@ -4,10 +4,12 @@ All tests run without network access. The factory's contract:
 1. `create_guarded_http_client` installs a DomainGuard check as the first
    request hook, so a disallowed URL raises `EgressBlockedError` before any
    connection is attempted.
-2. `GuardMode.OFF` never touches `ensure_loaded()` — no latency regression
-   for the mode that never consults the blocklist (AC-c, strict reading).
+2. The hook never touches `ensure_loaded()` in ANY mode (FRE-1162) — the
+   blocklist is warmed by the brainstem scheduler, not the request path;
+   the hook only calls the non-fetching `note_staleness()`.
 3. `GuardMode.BLOCKLIST` (the settings.py default) passes through unaffected
-   when nothing matches — the practical AC-c reading.
+   when nothing matches, and still refuses a matching domain even when the
+   cache is stale — the fetch is skipped, not the blocking decision.
 4. Caller-supplied kwargs (timeout, follow_redirects, headers, verify, ...)
    and caller-supplied event hooks are preserved untouched.
 """
@@ -16,7 +18,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -90,6 +92,52 @@ class TestOffModeNoLatencyRegression:
         async with client:
             resp = await client.get("https://anything.example/path")
         assert resp.status_code == 200
+        guard.ensure_loaded.assert_not_awaited()
+
+
+class TestRequestPathNeverFetches:
+    """FRE-1162: the hook must never touch ensure_loaded() in ANY mode, not just OFF."""
+
+    @pytest.mark.asyncio
+    async def test_blocklist_mode_never_calls_ensure_loaded(self, tmp_path: Path) -> None:
+        """A stale BLOCKLIST guard — the mode that pays the fetch today — must not fetch.
+
+        Uses a plain AsyncMock (not ``wraps=guard.ensure_loaded``) so a regression that
+        actually calls it fails the assertion instead of silently performing a real fetch
+        through the wrapped mock.
+        """
+        guard = DomainGuard(cache_path=tmp_path / "blocklist.json", mode=GuardMode.BLOCKLIST)
+        guard._blocklist = frozenset()
+        guard._last_loaded = None  # never loaded => stale
+        guard.ensure_loaded = AsyncMock()  # type: ignore[method-assign]
+        client = create_guarded_http_client(guard=guard, transport=_ok_transport())
+        async with client:
+            resp = await client.get("https://anything.example/path")
+        assert resp.status_code == 200
+        guard.ensure_loaded.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_hook_calls_note_staleness(self, tmp_path: Path) -> None:
+        """The hook still performs a freshness signal — it doesn't just drop the check."""
+        guard = DomainGuard(cache_path=tmp_path / "blocklist.json", mode=GuardMode.BLOCKLIST)
+        guard._blocklist = frozenset()
+        guard.note_staleness = MagicMock(wraps=guard.note_staleness)  # type: ignore[method-assign]
+        client = create_guarded_http_client(guard=guard, transport=_ok_transport())
+        async with client:
+            await client.get("https://anything.example/path")
+        guard.note_staleness.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_stale_blocklist_still_refuses_without_fetching(self, tmp_path: Path) -> None:
+        """Staleness affects only the fetch, never the blocking decision itself."""
+        guard = DomainGuard(cache_path=tmp_path / "blocklist.json", mode=GuardMode.BLOCKLIST)
+        guard._blocklist = frozenset({"evil.example"})
+        guard._last_loaded = None  # stale
+        guard.ensure_loaded = AsyncMock()  # type: ignore[method-assign]
+        client = create_guarded_http_client(guard=guard, transport=_ok_transport())
+        async with client:
+            with pytest.raises(EgressBlockedError):
+                await client.get("https://evil.example/path")
         guard.ensure_loaded.assert_not_awaited()
 
 

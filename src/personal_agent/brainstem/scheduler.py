@@ -222,6 +222,15 @@ class BrainstemScheduler:
             settings, "slm_health_probe_interval_seconds", 300.0
         )
 
+        # DomainGuard blocklist warm (FRE-1162): moves the URLhaus feed fetch off the
+        # request path onto this scheduler's startup + periodic jobs. Interval is
+        # derived from the guard's own TTL setting rather than a fixed constant, so it
+        # scales with a non-default TTL instead of over/under-polling it: capped to
+        # [30s, 300s], targeting a quarter of the TTL in between.
+        self._last_domain_guard_warm_run: datetime | None = None
+        _domain_guard_ttl = float(getattr(settings, "url_guard_cache_ttl_seconds", 3600))
+        self.domain_guard_warm_interval_seconds = min(300.0, max(30.0, _domain_guard_ttl / 4))
+
     async def start(self) -> None:
         """Start the scheduler background task."""
         start_trace_id = _new_scheduler_trace_id("scheduler.lifecycle")
@@ -232,6 +241,25 @@ class BrainstemScheduler:
         self.running = True
         self._started_at = datetime.now(timezone.utc)
         log.info("brainstem_scheduler_started", trace_id=start_trace_id)
+
+        # DomainGuard blocklist warm (FRE-1162): synchronous warm before the
+        # background jobs are spawned, so requests handled during the periodic
+        # job's first ~60s cold-start gap still see a real blocklist instead of
+        # only the 3-entry bundled fallback.
+        try:
+            from personal_agent.security import GuardMode, get_domain_guard
+
+            guard = get_domain_guard()
+            if guard.mode is not GuardMode.OFF:
+                await guard.ensure_loaded()
+            self._last_domain_guard_warm_run = datetime.now(timezone.utc)
+        except Exception as guard_warm_err:
+            log.warning(
+                "domain_guard_startup_warm_failed",
+                error=str(guard_warm_err),
+                exc_info=True,
+                trace_id=start_trace_id,
+            )
 
         # Data lifecycle loop (hourly disk check, daily archive, weekly purge)
         self._lifecycle_task = asyncio.create_task(self._lifecycle_loop())
@@ -1092,6 +1120,29 @@ class BrainstemScheduler:
                         log.warning(
                             "slm_health_probe_failed",
                             error=str(slm_probe_err),
+                            exc_info=True,
+                            trace_id=iteration_trace_id,
+                        )
+
+                # DomainGuard blocklist warm (FRE-1162) — the request-path hook only
+                # ever reads memory now; this periodic job is what keeps that memory
+                # fresh, at an interval derived from the guard's TTL (see __init__).
+                if (
+                    self._last_domain_guard_warm_run is None
+                    or (now - self._last_domain_guard_warm_run).total_seconds()
+                    >= self.domain_guard_warm_interval_seconds
+                ):
+                    try:
+                        from personal_agent.security import GuardMode, get_domain_guard
+
+                        guard = get_domain_guard()
+                        if guard.mode is not GuardMode.OFF:
+                            await guard.ensure_loaded()
+                        self._last_domain_guard_warm_run = now
+                    except Exception as guard_warm_err:
+                        log.warning(
+                            "domain_guard_warm_failed",
+                            error=str(guard_warm_err),
                             exc_info=True,
                             trace_id=iteration_trace_id,
                         )

@@ -624,6 +624,23 @@ ast-grep sweep scoped to `src/`. Filed as a Backlog gap, not pulled into this ti
 **Still open from this ADR:** D3 (Filebeat shipping `caddy-access-*`, FRE-1146) and the seam ticket
 FRE-1148, which adjudicates AC-1 through AC-5 across the full chain.
 
+### 2026-08-06 - D2 follow-up: blocklist warm moved off the request path (FRE-1162)
+**Changed By:** build session (FRE-1162)
+**Reason:** Wiring the guard in (above) meant `_guard_request_hook` called
+`await guard.ensure_loaded()` on every request in any non-`OFF` mode. `ensure_loaded()` fetches the
+URLhaus feed (15s timeout) whenever the 1-hour cache is stale, so whichever egress seam was called
+first after staleness paid that fetch inline on a user turn — quantified at this gate on 2026-08-05.
+
+Fix: the hook now calls a new synchronous, non-fetching `DomainGuard.note_staleness()` (logs once
+per staleness episode, never awaits). `ensure_loaded()` itself is unchanged and moved to two new
+callers — an explicit synchronous warm in `BrainstemScheduler.start()` (before its background tasks
+spawn) and a periodic job in `_lifecycle_loop`, at an interval derived from the guard's configured
+TTL (`min(300, max(30, ttl/4))`) rather than a fixed constant. The startup warm exists specifically
+to close the gap the periodic job's own ~60s cold-start delay would otherwise leave — a request
+arriving in that window would see only the 3-entry bundled fallback, which could wrongly allow a
+domain the (unwarmed) disk cache already knows is bad. No change to `check_url()`, the seam wiring,
+or the ast-grep bypass rule set — this is purely a timing fix for when the guard's own data loads.
+
 ### 2026-08-05 - D1 implemented (both phases), with a correction to this ADR's inventory
 **Changed By:** build session (FRE-1144)
 **Reason:** D1 landed in one change rather than the two phases this ADR planned, because the phasing

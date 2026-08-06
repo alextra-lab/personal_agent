@@ -66,7 +66,7 @@ not resolved here.
    `entity_embedding` on boot — the index shape stays put; only its *contents*
    change, via step 2's re-embed.
 
-5. **Verify AC-6 live**, before removing the old container:
+5. **Verify AC-6 live**:
    ```bash
    uv run python -m scripts.eval.fre821_embedder_failover_probe.probe cosine \
      --fallback-endpoint <step-1 local-8B endpoint>
@@ -74,7 +74,7 @@ not resolved here.
      --fallback-endpoint <step-1 local-8B endpoint>
    ```
    Both must print `[PASS]` (cosine ≥ 0.999 min pairwise; retrieval overlap ≥
-   0.95 mean top-10). If either fails, **do not proceed to step 6** — investigate
+   0.95 mean top-10). If either fails, **do not proceed to step 7** — investigate
    pooling/normalization/revision drift between the two endpoints first.
 
 6. The old 0.6B container is already gone (FRE-1166) — nothing to stop here.

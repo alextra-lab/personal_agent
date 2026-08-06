@@ -104,9 +104,9 @@ class TestTelemetryQueries:
         mock_client.field_caps = AsyncMock(
             return_value={
                 "fields": {
-                    "trace_id": {"keyword": {"searchable": True}},
-                    "outcome": {"keyword": {"searchable": True}},
-                    "tools_used": {"keyword": {"searchable": True}},
+                    "trace_id": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "outcome": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "tools_used": {"keyword": {"searchable": True, "aggregatable": True}},
                 }
             }
         )

@@ -163,7 +163,7 @@ _DEFAULT_TELEMETRY_FIELDS = {
     "component": {"keyword": {"searchable": True}},
     "error_type": {"keyword": {"searchable": True}},
     "level": {"keyword": {"searchable": True}},
-    "error": {"text": {"searchable": True}},
+    "error.keyword": {"keyword": {"searchable": True, "aggregatable": True}},
 }
 
 

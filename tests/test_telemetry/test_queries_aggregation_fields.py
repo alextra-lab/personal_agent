@@ -28,9 +28,9 @@ class TestAggregationFieldValidity:
         mock_client.field_caps = AsyncMock(
             return_value={
                 "fields": {
-                    "trace_id": {"keyword": {"searchable": True}},
-                    "outcome": {"keyword": {"searchable": True}},
-                    "tools_used": {"keyword": {"searchable": True}},
+                    "trace_id": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "outcome": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "tools_used": {"keyword": {"searchable": True, "aggregatable": True}},
                 }
             }
         )
@@ -78,9 +78,9 @@ class TestAggregationFieldValidity:
         mock_client.field_caps = AsyncMock(
             return_value={
                 "fields": {
-                    "trace_id": {"keyword": {"searchable": True}},
-                    "outcome": {"keyword": {"searchable": True}},
-                    "tools_used": {"keyword": {"searchable": True}},
+                    "trace_id": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "outcome": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "tools_used": {"keyword": {"searchable": True, "aggregatable": True}},
                 }
             }
         )
@@ -125,8 +125,8 @@ class TestAggregationFieldValidity:
         mock_client.field_caps = AsyncMock(
             return_value={
                 "fields": {
-                    "event": {"keyword": {"searchable": True}},
-                    "task_id": {"keyword": {"searchable": True}},
+                    "event": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "task_id": {"keyword": {"searchable": True, "aggregatable": True}},
                 }
             }
         )
@@ -174,8 +174,8 @@ class TestAggregationFieldValidity:
         mock_client.field_caps = AsyncMock(
             return_value={
                 "fields": {
-                    "event": {"keyword": {"searchable": True}},
-                    "task_id": {"keyword": {"searchable": True}},
+                    "event": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "task_id": {"keyword": {"searchable": True, "aggregatable": True}},
                 }
             }
         )
@@ -215,12 +215,12 @@ class TestAggregationFieldValidity:
         mock_client.field_caps = AsyncMock(
             return_value={
                 "fields": {
-                    "component": {"keyword": {"searchable": True}},
-                    "event": {"keyword": {"searchable": True}},
-                    "error_type": {"keyword": {"searchable": True}},
-                    "level": {"keyword": {"searchable": True}},
-                    "trace_id": {"keyword": {"searchable": True}},
-                    "error": {"text": {"searchable": True}},
+                    "component": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "event": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "error_type": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "level": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "trace_id": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "error.keyword": {"keyword": {"searchable": True, "aggregatable": True}},
                 }
             }
         )
@@ -291,9 +291,9 @@ class TestFieldValidatorGuard:
         mock_es_client.field_caps = AsyncMock(
             return_value={
                 "fields": {
-                    "trace_id": {"keyword": {"searchable": True}},
-                    "outcome": {"keyword": {"searchable": True}},
-                    "tools_used": {"keyword": {"searchable": True}},
+                    "trace_id": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "outcome": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "tools_used": {"keyword": {"searchable": True, "aggregatable": True}},
                     # Note: 'invalid_field' is NOT in the response
                 }
             }
@@ -323,8 +323,8 @@ class TestFieldValidatorGuard:
         mock_es_client.field_caps = AsyncMock(
             return_value={
                 "fields": {
-                    "trace_id": {"keyword": {"searchable": True}},
-                    "event": {"keyword": {"searchable": True}},
+                    "trace_id": {"keyword": {"searchable": True, "aggregatable": True}},
+                    "event": {"keyword": {"searchable": True, "aggregatable": True}},
                 }
             }
         )
@@ -347,7 +347,7 @@ class TestFieldValidatorGuard:
         mock_es_client.field_caps = AsyncMock(
             return_value={
                 "fields": {
-                    "trace_id": {"keyword": {"searchable": True}},
+                    "trace_id": {"keyword": {"searchable": True, "aggregatable": True}},
                     # Note: 'missing_field' is NOT in the response
                 }
             }

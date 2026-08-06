@@ -958,7 +958,7 @@ class TelemetryQueries:
         """
         # Verify fields exist before querying (FRE-1108)
         await self._field_validator.require_validated(
-            ["component", "event", "error_type", "level", "trace_id", "error"],
+            ["component", "event", "error_type", "level", "trace_id", "error.keyword"],
             f"{self._logs_index_prefix}-*",
             "get_error_patterns",
         )
@@ -1021,7 +1021,7 @@ class TelemetryQueries:
                         "first_seen": {"min": {"field": "@timestamp"}},
                         "last_seen": {"max": {"field": "@timestamp"}},
                         "sample_trace_ids": {"terms": {"field": "trace_id", "size": 5}},
-                        "sample_messages": {"terms": {"field": "error", "size": 3}},
+                        "sample_messages": {"terms": {"field": "error.keyword", "size": 3}},
                     },
                 }
             },

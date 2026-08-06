@@ -23,12 +23,12 @@ def _setup_field_caps_mock(mock_client: AsyncMock) -> None:
     mock_client.field_caps = AsyncMock(
         return_value={
             "fields": {
-                "component": {"keyword": {"searchable": True}},
-                "event": {"keyword": {"searchable": True}},
-                "error_type": {"keyword": {"searchable": True}},
-                "level": {"keyword": {"searchable": True}},
-                "trace_id": {"keyword": {"searchable": True}},
-                "error": {"text": {"searchable": True}},
+                "component": {"keyword": {"searchable": True, "aggregatable": True}},
+                "event": {"keyword": {"searchable": True, "aggregatable": True}},
+                "error_type": {"keyword": {"searchable": True, "aggregatable": True}},
+                "level": {"keyword": {"searchable": True, "aggregatable": True}},
+                "trace_id": {"keyword": {"searchable": True, "aggregatable": True}},
+                "error.keyword": {"keyword": {"searchable": True, "aggregatable": True}},
             }
         }
     )

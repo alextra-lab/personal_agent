@@ -90,7 +90,11 @@ class FieldValidator:
         index_pattern: str = "agent-logs-*",
         query_family: str = "unknown",
     ) -> None:
-        """Validate that multiple fields exist in target indices.
+        """Validate that multiple fields exist and are aggregatable in target indices.
+
+        For aggregation queries, a field must not only exist but also be aggregatable.
+        When a field is present but not aggregatable (e.g., text type), ES field_caps
+        often provides a .keyword sub-field that is aggregatable.
 
         Args:
             field_names: List of field names to validate.
@@ -98,7 +102,7 @@ class FieldValidator:
             query_family: Name of the aggregation/query family (for error reporting).
 
         Raises:
-            FieldValidationError: If any field does not exist.
+            FieldValidationError: If any field does not exist or is not aggregatable.
         """
         client = await self._get_client()
         try:
@@ -129,26 +133,53 @@ class FieldValidator:
                 query_family,
             ) from exc
 
-        # Check which fields exist
+        # Check which fields exist and are aggregatable
         fields = response.get("fields", {})
-        missing = [f for f in field_names if f not in fields]
+        invalid = []
+        for f in field_names:
+            if f not in fields:
+                invalid.append(f"{f} (not found)")
+            else:
+                # Field exists; check if it's aggregatable in any type
+                field_caps = fields[f]
+                is_aggregatable = any(
+                    type_info.get("aggregatable", False) for type_info in field_caps.values()
+                )
+                if not is_aggregatable:
+                    # Field exists but not aggregatable; check for .keyword sub-field
+                    keyword_field = f"{f}.keyword"
+                    if keyword_field in fields:
+                        keyword_caps = fields[keyword_field]
+                        keyword_aggregatable = any(
+                            type_info.get("aggregatable", False)
+                            for type_info in keyword_caps.values()
+                        )
+                        if keyword_aggregatable:
+                            invalid.append(f"{f} (not aggregatable; use {keyword_field} instead)")
+                        else:
+                            invalid.append(f"{f} (not aggregatable)")
+                    else:
+                        invalid.append(f"{f} (not aggregatable)")
 
         # Cache all results
         for field_name in field_names:
-            self._field_cache[(index_pattern, field_name)] = field_name in fields
+            self._field_cache[(index_pattern, field_name)] = field_name in fields and any(
+                type_info.get("aggregatable", False)
+                for type_info in fields.get(field_name, {}).values()
+            )
 
-        if missing:
+        if invalid:
             log.error(
                 "telemetry_field_validation_failed",
-                missing_fields=missing,
+                invalid_fields=invalid,
                 index_pattern=index_pattern,
-                reason="field_not_found",
+                reason="field_not_aggregatable",
                 query_family=query_family,
             )
             raise FieldValidationError(
-                f"Fields {missing} not found in index pattern '{index_pattern}'",
+                f"Fields not aggregatable in '{index_pattern}': {', '.join(invalid)}",
                 index_pattern,
-                missing,
+                field_names,
                 query_family,
             )
 

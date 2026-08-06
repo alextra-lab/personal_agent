@@ -13,10 +13,25 @@ import pytest
 from personal_agent.events.models import ErrorPatternCluster
 from personal_agent.telemetry.queries import TelemetryQueries
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _setup_field_caps_mock(mock_client: AsyncMock) -> None:
+    """FRE-1108: Add field_caps mock to an AsyncMock Elasticsearch client."""
+    mock_client.field_caps = AsyncMock(
+        return_value={
+            "fields": {
+                "source_component": {"keyword": {"searchable": True}},
+                "event": {"keyword": {"searchable": True}},
+                "error_type": {"keyword": {"searchable": True}},
+                "level": {"keyword": {"searchable": True}},
+                "trace_id": {"keyword": {"searchable": True}},
+                "error": {"text": {"searchable": True}},
+            }
+        }
+    )
 
 
 def _make_composite_agg_response(
@@ -66,9 +81,8 @@ class TestGetErrorPatterns:
     async def test_happy_path_returns_error_pattern_clusters(self) -> None:
         """A bucket above min_occurrences becomes an ErrorPatternCluster."""
         mock_client = AsyncMock()
-        mock_client.search.return_value = _make_composite_agg_response(
-            [_make_bucket(doc_count=12)]
-        )
+        _setup_field_caps_mock(mock_client)
+        mock_client.search.return_value = _make_composite_agg_response([_make_bucket(doc_count=12)])
         queries = TelemetryQueries(es_client=mock_client)
 
         clusters = await queries.get_error_patterns(window_hours=24, min_occurrences=5)
@@ -87,9 +101,8 @@ class TestGetErrorPatterns:
     async def test_buckets_below_min_occurrences_are_excluded(self) -> None:
         """Buckets with doc_count < min_occurrences are not returned."""
         mock_client = AsyncMock()
-        mock_client.search.return_value = _make_composite_agg_response(
-            [_make_bucket(doc_count=3)]
-        )
+        _setup_field_caps_mock(mock_client)
+        mock_client.search.return_value = _make_composite_agg_response([_make_bucket(doc_count=3)])
         queries = TelemetryQueries(es_client=mock_client)
 
         clusters = await queries.get_error_patterns(window_hours=24, min_occurrences=5)
@@ -99,6 +112,7 @@ class TestGetErrorPatterns:
     async def test_out_of_scope_component_is_filtered(self) -> None:
         """Components in the out-of-scope list are dropped per ADR-0056 D1."""
         mock_client = AsyncMock()
+        _setup_field_caps_mock(mock_client)
         mock_client.search.return_value = _make_composite_agg_response(
             [_make_bucket(component="elastic_transport.network", doc_count=50)]
         )
@@ -111,6 +125,7 @@ class TestGetErrorPatterns:
     async def test_elasticsearch_component_is_filtered(self) -> None:
         """'elasticsearch.*' components are excluded from patterns."""
         mock_client = AsyncMock()
+        _setup_field_caps_mock(mock_client)
         mock_client.search.return_value = _make_composite_agg_response(
             [_make_bucket(component="elasticsearch.client", doc_count=20)]
         )
@@ -123,6 +138,7 @@ class TestGetErrorPatterns:
     async def test_httpx_component_is_filtered(self) -> None:
         """'httpx.*' components are excluded (third-party library noise)."""
         mock_client = AsyncMock()
+        _setup_field_caps_mock(mock_client)
         mock_client.search.return_value = _make_composite_agg_response(
             [_make_bucket(component="httpx._client", doc_count=20)]
         )
@@ -135,6 +151,7 @@ class TestGetErrorPatterns:
     async def test_empty_aggregation_returns_empty_list(self) -> None:
         """An empty ES aggregation bucket list returns an empty cluster list."""
         mock_client = AsyncMock()
+        _setup_field_caps_mock(mock_client)
         mock_client.search.return_value = _make_composite_agg_response([])
         queries = TelemetryQueries(es_client=mock_client)
 
@@ -145,9 +162,8 @@ class TestGetErrorPatterns:
     async def test_fingerprint_is_deterministic(self) -> None:
         """Same (component, event_name, error_type) always produces the same fingerprint."""
         mock_client = AsyncMock()
-        mock_client.search.return_value = _make_composite_agg_response(
-            [_make_bucket(doc_count=10)]
-        )
+        _setup_field_caps_mock(mock_client)
+        mock_client.search.return_value = _make_composite_agg_response([_make_bucket(doc_count=10)])
         queries = TelemetryQueries(es_client=mock_client)
 
         clusters1 = await queries.get_error_patterns(window_hours=24, min_occurrences=5)
@@ -158,9 +174,8 @@ class TestGetErrorPatterns:
     async def test_fingerprint_is_16_hex_chars(self) -> None:
         """Fingerprint is exactly 16 hex characters (sha256[:16])."""
         mock_client = AsyncMock()
-        mock_client.search.return_value = _make_composite_agg_response(
-            [_make_bucket(doc_count=10)]
-        )
+        _setup_field_caps_mock(mock_client)
+        mock_client.search.return_value = _make_composite_agg_response([_make_bucket(doc_count=10)])
         queries = TelemetryQueries(es_client=mock_client)
 
         clusters = await queries.get_error_patterns(window_hours=24, min_occurrences=5)
@@ -172,6 +187,7 @@ class TestGetErrorPatterns:
         """Cluster sample_trace_ids is capped at 5 even if ES returns more."""
         many_traces = [f"tid-{i}" for i in range(10)]
         mock_client = AsyncMock()
+        _setup_field_caps_mock(mock_client)
         mock_client.search.return_value = _make_composite_agg_response(
             [_make_bucket(doc_count=10, trace_ids=many_traces)]
         )
@@ -184,6 +200,7 @@ class TestGetErrorPatterns:
     async def test_sample_messages_capped_at_three(self) -> None:
         """Cluster sample_messages is capped at 3."""
         mock_client = AsyncMock()
+        _setup_field_caps_mock(mock_client)
         mock_client.search.return_value = _make_composite_agg_response(
             [_make_bucket(doc_count=10, messages=["m1", "m2", "m3", "m4", "m5"])]
         )
@@ -196,10 +213,13 @@ class TestGetErrorPatterns:
     async def test_multiple_valid_buckets_all_returned(self) -> None:
         """Multiple above-threshold buckets all become clusters."""
         mock_client = AsyncMock()
+        _setup_field_caps_mock(mock_client)
         mock_client.search.return_value = _make_composite_agg_response(
             [
                 _make_bucket(component="tools.fetch_url", doc_count=10),
-                _make_bucket(component="llm_client.main", event_name="model_call_error", doc_count=7),
+                _make_bucket(
+                    component="llm_client.main", event_name="model_call_error", doc_count=7
+                ),
             ]
         )
         queries = TelemetryQueries(es_client=mock_client)
@@ -220,11 +240,7 @@ class TestGetErrorEvents:
         """get_error_events returns list of _source dicts from ES hits."""
         mock_client = AsyncMock()
         mock_client.search.return_value = {
-            "hits": {
-                "hits": [
-                    {"_source": {"event": "fetch_url_timeout", "level": "ERROR"}}
-                ]
-            }
+            "hits": {"hits": [{"_source": {"event": "fetch_url_timeout", "level": "ERROR"}}]}
         }
         queries = TelemetryQueries(es_client=mock_client)
 

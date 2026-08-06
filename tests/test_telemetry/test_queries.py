@@ -100,6 +100,16 @@ class TestTelemetryQueries:
     async def test_get_task_patterns_aggregates_report(self) -> None:
         """Task pattern report computes rates and top tool list."""
         mock_client = AsyncMock()
+        # FRE-1108: Mock field_caps for lazy validation
+        mock_client.field_caps = AsyncMock(
+            return_value={
+                "fields": {
+                    "trace_id": {"keyword": {"searchable": True}},
+                    "outcome": {"keyword": {"searchable": True}},
+                    "tools_used": {"keyword": {"searchable": True}},
+                }
+            }
+        )
         mock_client.search.return_value = {
             "aggregations": {
                 "total": {"value": 10},

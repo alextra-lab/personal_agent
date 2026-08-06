@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
+
+    from personal_agent.telemetry.field_validator import FieldValidator
 else:
     AsyncElasticsearch = Any
 
@@ -95,9 +97,14 @@ class TelemetryQueries:
         self._logs_index_prefix = settings.elasticsearch_index_prefix
         self._captures_index_prefix = f"{settings.captains_log_index_prefix}-captures"
         self._reflections_index_prefix = f"{settings.captains_log_index_prefix}-reflections"
-        self._field_validator = (
-            field_validator if field_validator is not None else default_field_validator
-        )
+        # If a field_validator is provided, use it; otherwise create one with the provided es_client.
+        # This ensures tests with mock clients can validate fields using those mocks.
+        if field_validator is not None:
+            self._field_validator = field_validator
+        elif es_client is not None:
+            self._field_validator = FieldValidator(es_client=es_client)
+        else:
+            self._field_validator = default_field_validator
 
     async def _get_client(self) -> AsyncElasticsearch:
         """Get active Elasticsearch client, creating one if needed."""

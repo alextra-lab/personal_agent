@@ -151,3 +151,48 @@ def _substrate_test_env_guard() -> None:
         elasticsearch_url=os.environ.get("AGENT_ELASTICSEARCH_URL"),
         database_url=database_url[:50] + "..." if len(database_url) > 50 else database_url,
     )
+
+
+# Common field names used by telemetry aggregations (FRE-1108)
+_DEFAULT_TELEMETRY_FIELDS = {
+    "trace_id": {"keyword": {"searchable": True}},
+    "outcome": {"keyword": {"searchable": True}},
+    "tools_used": {"keyword": {"searchable": True}},
+    "event": {"keyword": {"searchable": True}},
+    "task_id": {"keyword": {"searchable": True}},
+    "what_was_missing": {"keyword": {"searchable": True}},
+    "source_component": {"keyword": {"searchable": True}},
+    "error_type": {"keyword": {"searchable": True}},
+    "level": {"keyword": {"searchable": True}},
+    "error": {"text": {"searchable": True}},
+}
+
+
+def _auto_mock_field_caps(mock_client: object) -> None:
+    """Auto-mock field_caps on an AsyncMock Elasticsearch client.
+
+    FRE-1108: Lazy field validation queries field_caps on first aggregation use.
+    Tests that create bare AsyncMock clients (without field_caps mocking) will
+    have validation fail. This helper sets up a reasonable default response that
+    allows tests to pass without modification.
+    """
+    from unittest.mock import AsyncMock
+
+    if not hasattr(mock_client, "field_caps"):
+        return
+    if isinstance(mock_client.field_caps, AsyncMock):
+        # Already mocked — replace with a better response
+        mock_client.field_caps = AsyncMock(return_value={"fields": _DEFAULT_TELEMETRY_FIELDS})
+
+
+@pytest.fixture
+def mock_es_client_with_field_caps() -> object:
+    """Create an AsyncMock Elasticsearch client with field_caps auto-mocked.
+
+    Intended for use in tests that don't need to customize field_caps behavior.
+    """
+    from unittest.mock import AsyncMock
+
+    client = AsyncMock()
+    client.field_caps = AsyncMock(return_value={"fields": _DEFAULT_TELEMETRY_FIELDS})
+    return client

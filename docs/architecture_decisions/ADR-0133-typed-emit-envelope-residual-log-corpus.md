@@ -104,7 +104,7 @@ There is a second, sharper ambiguity in the same sentence. Read narrowly, *"no p
 
 The typed emit envelope is built. Its governed surface is **the records this repository writes to `agent-logs` through the structlog seam** — of which 99.64% remain log records after the ADR-0129 chain lands — and it is founded on a declared vocabulary rather than on `CANONICAL_MODEL_CALL_*_FIELDS`, which FRE-1067 retires.
 
-**The scope is the write path, not the corpus, and the difference is stated rather than blurred.** `agent-logs` is ~98.8% of all telemetry documents (ADR-0128's census), so this reaches the overwhelming majority — but captures, reflections, insights, joinability and slm-health have their own writers, never traverse the structlog pipeline, and are **not governed by this decision**. Claiming otherwise would repeat the overclaim ADR-0128 criticised in its predecessors, and it would make every criterion below unprovable.
+**The scope is the write path, not the corpus, and the difference is stated rather than blurred.** Measured live 2026-08-06, `agent-logs` holds **1,915,219 of 1,961,296 telemetry documents — 97.65%**. (ADR-0128's census put it at 98.8% in July; the figure is re-measured here rather than carried forward, because FRE-1036's index deletions moved it.) The families this decision does **not** reach total **2.35%**: `agent-monitors-*` (1.69%), `agent-insights` (0.21%), captures (0.18%), ratings (0.10%), reflections (0.10%), `slm-requests` (0.04%), topology (0.02%). Each has its own writer, none traverses the structlog pipeline, and none is governed here. Claiming otherwise would repeat the overclaim ADR-0128 criticised in its predecessors, and it would make every criterion below unprovable.
 
 Span attributes are also **out of scope**. They are governed by semantic conventions and asserted by FRE-1067's AC-6, AC-7 and AC-8. This ADR governs the log path only, and the two mechanisms meet at no point — which is why restoring tier one contradicts nothing in ADR-0129 and requires no amendment to its D8 table beyond the row this ADR's Status Update records.
 
@@ -260,7 +260,7 @@ The ADR-0129 chain is funded and sequenced, with FRE-1064 the labelled head. Thi
 - Avoids a seventh telemetry ADR in a lineage where six changed nothing.
 
 **Cons:**
-- Leaves the `agent-logs` write path — ~98.8% of telemetry documents, 99.64% of them still log records after the chain — with no naming mechanism of any kind.
+- Leaves the `agent-logs` write path — 97.65% of telemetry documents, 99.64% of them still log records after the chain — with no naming mechanism of any kind.
 - Semconv is silent on Elasticsearch log-document field names by construction — ADR-0128 D2 established this for the timestamp and it holds generally.
 - The divergence class recurs at emit and is discovered months later in the substrate, which is the entire measured history.
 
@@ -272,7 +272,7 @@ The ADR-0129 chain is funded and sequenced, with FRE-1064 the labelled head. Thi
 
 ### Positive Consequences
 
-- **The `agent-logs` write path acquires a naming mechanism for the first time** — the family holding ~98.8% of all telemetry documents, of which 99.64% remain log records after the ADR-0129 chain, currently governed by nothing.
+- **The `agent-logs` write path acquires a naming mechanism for the first time** — the family holding 97.65% of all telemetry documents, of which 99.64% remain log records after the ADR-0129 chain, currently governed by nothing.
 - **The measured divergence class can no longer be introduced through CI.** All five recorded instances are exact-match retired spellings under Rule 1, and a sixth of the same shape fails the build. **This is deliberately weaker than "impossible at emit":** D4 lets a violation through in production rather than dropping the record, so the guarantee is that such a key cannot be *written into the codebase*, not that one can never reach storage. A key assembled dynamically at runtime, or emitted by a path CI never exercised, still lands — and is counted rather than blocked.
 - **Coverage is a property of the pipeline, not of authors.** A new emit site is governed the moment it is written, with nothing to remember — the same argument ADR-0129 makes for context propagation, applied to names.
 - **A three-times-deferred question is answered.** ADR-0090's registry open decision closes *no*, by decision, and stops consuming review attention.
@@ -345,7 +345,7 @@ The ADR-0129 chain is funded and sequenced, with FRE-1064 the labelled head. Thi
 
 - **AC-8 — No registry was built.** · **Check:** the repository contains no artifact generating Elasticsearch template `properties`, and no CI job diffing generated template output against committed templates. · *Fails if* either appears. A **guard**, not a proof of success — it asserts only that D6's ruling held and was not defeated by a later ticket. AC-1 and AC-2 carry the substance.
 
-**Seam ticket:** **FRE-1178** — *ADR-0133 SEAM — adjudicate the emit-envelope criteria*. Filed parked (`Backlog`, no `stream:` label). **Due date: 2026-10-15.** That is the earliest date all eight criteria become adjudicable: AC-5 alone needs three consecutive published weeks after the last child deploys, and the chain sequences behind FRE-1064 and FRE-1067, neither of which has started. Master activates it at the first advance-dispatch on or after that date; an `adr` session adjudicates it and records one verdict per criterion in this ADR's Status Updates. This ADR reaches `Implemented` only if every verdict is green.
+**Seam ticket:** **FRE-1176** — *ADR-0133 SEAM — adjudicate the emit-envelope criteria*. Filed parked (`Backlog`, no `stream:` label). **Due date: 2026-10-15.** That is the earliest date all eight criteria become adjudicable: AC-5 alone needs three consecutive published weeks after the last child deploys, and the chain sequences behind FRE-1064 and FRE-1067, neither of which has started. Master activates it at the first advance-dispatch on or after that date; an `adr` session adjudicates it and records one verdict per criterion in this ADR's Status Updates. This ADR reaches `Implemented` only if every verdict is green.
 
 ---
 
@@ -364,6 +364,7 @@ The ADR-0129 chain is funded and sequenced, with FRE-1064 the labelled head. Thi
 - `src/personal_agent/telemetry/es_logger.py:165-171` — the document assembly the validator runs immediately before
 - `tests/personal_agent/llm_client/test_telemetry_parity.py:100,130` — the existing parity assertion, which proves required-key presence only; retired by FRE-1067 and replaced by this ADR's rules
 - Linear FRE-1113 — this ADR's originating ticket
+- Linear FRE-1176 — this ADR's **seam ticket** (ADR-0130 D2), filed parked with a 2026-10-15 due date; the only place these eight criteria are asserted
 - Linear FRE-1064 — ADR-0129 B1, the processor pipeline this registers into; `Approved`, `stream:build1`
 - Linear FRE-1067 — ADR-0129 B3, whose AC-12 D6 rules on and whose scope retires the canonical field sets
 - Linear FRE-1044 — ADR-0128 A2, the original tier-one ticket, superseded in scope by this ADR's chain

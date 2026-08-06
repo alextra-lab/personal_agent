@@ -237,3 +237,9 @@ volumes:
     driver: local
   seshat_es_eval:
     driver: local
+
+networks:
+  # Isolated bridge network for cloud simulation
+  # Mimics the VPS internal network
+  cloud-sim:
+    driver: bridge

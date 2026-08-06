@@ -135,6 +135,47 @@ rather than the real cluster inventory that produced this finding"):
 | `agent-logs-000001` handled explicitly | `known_empty_deletions` + verified-count deletion path in `cleanup_family`, tests for both the empty and non-empty cases |
 | Fix proven against real cluster inventory, not just fixtures | Live `plan --confirm-prod` before/after in this plan + PR + ticket comment; fixture test built from the exact real family shape found |
 
+## Master gate bounce — cluster-level completeness (the ticket's thesis one level up)
+
+Master reproduced the per-family fix exactly (12 / 11 / `agent-logs-000001` pending / zero
+`UNACCOUNTED` / exit 0) and bounced on one finding: the completeness assertion above is per
+*configured* family — `families()` returns nine, but the live cluster holds a tenth prefix,
+`agent-topology` (39 live indices — dash-dailies through 31 Jul plus dash-monthly destinations
+for Jul/Aug, so its write path already cut over and the dailies are legacy residue). It's
+excluded by the `families()` docstring's claim of "zero live indices at authoring time" — true
+when FRE-1036 was authored, false now, and nothing noticed the claim had expired. This is the
+ticket's own thesis one level up: the PR fixed the denominator *within* a family and left the
+denominator *over* families — the config list itself — free to go stale the same way, silently.
+
+Investigating independently (not just trusting master's one example) turned up a **second**
+prefix in the same state: `agent-monitors-projector-health`, 37 live indices, same shape
+(dash-dailies + dash-monthly destinations already cut over) — also one of the four "zero at
+authoring time" exclusions, also now false. The other two (`agent-captains-funnel-events`,
+`agent-monitors-cache-reset-cadence`) are still genuinely zero.
+
+Also found while surveying the full live cluster (271 non-system indices, 13 distinct prefixes):
+two prefixes genuinely out of this migration's scope that were never in the docstring's
+exclusion list at all — `caddy-access` (1 index, already writes its own monthly-dash shape
+under a dedicated ILM policy, no legacy migration story) and `slm-requests` (26 indices, 100%
+daily-dotted, never cut over — a distinct, already-ticketed gap, FRE-1106).
+
+**Fix**: `cluster_unaccounted_indices()` — lists every live non-system index in the cluster
+(`_list_all_indices`, dot-prefixed ES system indices excluded) and classifies each as belonging
+to a configured `families()` entry, a new `EXCLUDED_PREFIXES: dict[str, str]` registry (each
+entry carries a stated reason — `caddy-access`, `slm-requests`), or unaccounted.
+`assert_cluster_complete`/`IncompleteClusterError` mirror the per-family shape. Wired into
+`plan` only (not `reindex`/`delta`/`cleanup`) per master's explicit instruction not to widen the
+migration — `agent-topology` and `agent-monitors-projector-health` are deliberately NOT added
+to `EXCLUDED_PREFIXES` or to `families()`; surfacing them as unaccounted is the fix working, not
+a regression to suppress. `families()`'s docstring no longer asserts a specific exclusion list
+is safe — it points at this live check as the only thing that can't go stale the same way.
+
+Live re-verification post-fix: `plan --confirm-prod` now exits 1 (expected — signal, not error),
+reports a new `=== CLUSTER: 76 index(es) ===` section listing exactly the 39 `agent-topology` +
+37 `agent-monitors-projector-health` indices, zero false positives among the other 11 prefixes
+(including the two newly-excluded ones), and the original per-family checks are unchanged
+(still 12 / 11 / `agent-logs-000001` pending / zero per-family `UNACCOUNTED`).
+
 ## Risk tier
 
 Standard — touches `scripts/` logic that reindexes/deletes real production Elasticsearch data.

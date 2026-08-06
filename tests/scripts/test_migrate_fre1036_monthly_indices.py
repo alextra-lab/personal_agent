@@ -27,15 +27,20 @@ from typing import Any
 
 import pytest
 from scripts.migrate_fre1036_monthly_indices import (
+    EXCLUDED_PREFIXES,
     FamilyConfig,
     FamilyPlan,
+    IncompleteClusterError,
     IncompleteFamilyError,
     SourceMapping,
     _dest_index,
+    _list_all_indices,
     _month_end,
     _run,
+    assert_cluster_complete,
     assert_family_complete,
     cleanup_family,
+    cluster_unaccounted_indices,
     families,
     plan_family,
     reindex_family,
@@ -103,13 +108,14 @@ class _FakeES:
 
 
 class _FakeCatES:
-    """Minimal fake AsyncElasticsearch client for plan_family's cat.indices call.
+    """Minimal fake AsyncElasticsearch client for cat.indices calls.
 
-    ``live_indices`` is the full set of index names a real cluster would report
-    for the family's prefix glob — including sibling-family indices that share
-    a prefix substring, already-migrated destinations, and anything genuinely
-    unaccounted for. plan_family does the classification; this fake only needs
-    to hand back names matching the requested glob, like a real cat.indices call.
+    ``live_indices`` is the full set of index names a real cluster would
+    report — including sibling-family indices that share a prefix substring,
+    already-migrated destinations, and anything genuinely unaccounted for.
+    Handles both plan_family's per-family glob (``f"{prefix}-*"``) and
+    _list_all_indices' cluster-wide glob (``"*"``), like a real cat.indices
+    call would for either pattern.
     """
 
     def __init__(self, live_indices: list[str]) -> None:
@@ -121,6 +127,8 @@ class _FakeCatES:
             self._parent = parent
 
         async def indices(self, index: str, format: str) -> list[dict[str, str]]:
+            if index == "*":
+                return [{"index": name} for name in self._parent._live_indices]
             assert index.endswith("-*")
             prefix = index[:-2]
             return [
@@ -620,6 +628,101 @@ async def test_user_turn_ratings_real_cluster_shape_has_zero_unaccounted_after_f
     assert len(plan.mappings) == 11  # 4 monthly + 7 daily
     assert plan.unaccounted == []
     assert_family_complete(plan)  # must not raise
+
+
+# Cluster-level completeness (FRE-1105 master-gate finding, PR #848): the
+# per-family check only ever sees families() already knows about. This is
+# the same check one level up — over the registry itself, not within one
+# family — catching a family whose "nothing to migrate" exclusion has gone
+# silently stale (agent-topology and agent-monitors-projector-health both
+# held zero live indices at authoring time and now hold dozens, confirmed
+# live on the real cluster 2026-08-06).
+
+
+def test_cluster_unaccounted_indices_flags_a_prefix_with_no_configured_family() -> None:
+    """agent-topology has no FamilyConfig and no EXCLUDED_PREFIXES entry — it must surface."""
+    live = [
+        "agent-logs-2026-07",  # configured family's own destination
+        "agent-topology-2026-07-07",  # genuinely unaccounted
+    ]
+
+    unaccounted = cluster_unaccounted_indices(live)
+
+    assert unaccounted == ["agent-topology-2026-07-07"]
+    with pytest.raises(IncompleteClusterError):
+        assert_cluster_complete(unaccounted)
+
+
+def test_cluster_unaccounted_indices_respects_excluded_prefixes() -> None:
+    """caddy-access and slm-requests are declared out of scope — must not surface."""
+    live = ["caddy-access-2026-08", "slm-requests-2026.07.20"]
+
+    unaccounted = cluster_unaccounted_indices(live)
+
+    assert unaccounted == []
+    assert_cluster_complete(unaccounted)  # must not raise
+
+
+def test_cluster_unaccounted_indices_recognizes_every_configured_family() -> None:
+    """One representative live index per configured family — none are unaccounted."""
+    live = [f"{cfg.dest_prefix}-2026-07" for cfg in families()]
+
+    unaccounted = cluster_unaccounted_indices(live)
+
+    assert unaccounted == []
+
+
+def test_excluded_prefixes_do_not_shadow_a_configured_family() -> None:
+    """EXCLUDED_PREFIXES and families() must not name overlapping prefixes."""
+    family_prefixes = {cfg.dest_prefix for cfg in families()}
+    assert family_prefixes.isdisjoint(EXCLUDED_PREFIXES)
+
+
+@pytest.mark.asyncio
+async def test_list_all_indices_excludes_dot_prefixed_system_indices() -> None:
+    """ES system indices (.kibana, .security-7, etc.) are never cluster-unaccounted candidates."""
+    es = _FakeCatES([".kibana", ".security-7", "agent-logs-2026-07"])
+
+    live = await _list_all_indices(es)
+
+    assert live == ["agent-logs-2026-07"]
+
+
+def test_assert_cluster_complete_is_a_noop_when_nothing_unaccounted() -> None:
+    """An empty unaccounted list never raises."""
+    assert_cluster_complete([])  # does not raise
+
+
+# Real-cluster-shape regression test (FRE-1105 master-gate finding) — one
+# representative index per prefix actually found live on the cluster
+# 2026-08-06 (13 prefixes total: 9 configured families + 2 excluded +
+# agent-topology + agent-monitors-projector-health), not a synthetic case.
+
+
+def test_cluster_real_shape_flags_exactly_the_two_drifted_prefixes() -> None:
+    """One representative index per real live prefix; only the two drifted ones surface."""
+    live = [
+        "agent-captains-captures-2026-07-01",
+        "agent-captains-captures-subagents-2026-02-22",
+        "agent-captains-reflections-2026-07",
+        "agent-insights-2026-04",
+        "agent-logs-2026-07",
+        "agent-monitors-joinability-2026-07",
+        "agent-monitors-joinability-substrate-2026-07",
+        "agent-monitors-slm-health-2026-08",
+        "user-turn-ratings-2026-08",
+        "caddy-access-2026-08",
+        "slm-requests-2026.08.06",
+        "agent-topology-2026-08",
+        "agent-monitors-projector-health-2026-08",
+    ]
+
+    unaccounted = cluster_unaccounted_indices(live)
+
+    assert unaccounted == [
+        "agent-monitors-projector-health-2026-08",
+        "agent-topology-2026-08",
+    ]
 
 
 def test_month_end_mid_year() -> None:

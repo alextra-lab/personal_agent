@@ -19,11 +19,14 @@ construction: a second pass overwrites the same destination docs in place rather
 duplicating them. That is what makes the "delta" step (see below) safe.
 
 The regex patterns below are anchored (``^...$`` against the FULL index name), which
-is what keeps ``agent-captains-captures-*`` from also matching
+is what keeps ``agent-captains-captures-*`` from also *matching*
 ``agent-captains-captures-subagents-*`` (and ``agent-monitors-joinability-*`` from
 matching its ``-substrate-`` sibling) — no manual exclusion list needed, since the
 character immediately after a family's dash prefix must be a digit for that family's
-pattern to match, and a sibling family's name puts a letter there instead.
+pattern to match, and a sibling family's name puts a letter there instead. The
+completeness check in ``plan_family`` (FRE-1105) is a separate concern from matching:
+``cat.indices`` itself returns a sibling's indices under the parent's glob prefix, so
+that check does need an explicit sibling registry to avoid flagging them unaccounted.
 
 Per-family sequence (see subcommands below):
   1. ``plan``    — read-only. Lists every legacy source index matched per family and
@@ -82,14 +85,23 @@ log = get_logger(__name__)
 
 @dataclass(frozen=True)
 class FamilyConfig:
-    """One family's legacy-source pattern and monthly destination prefix."""
+    """One family's legacy-source pattern(s) and monthly destination prefix."""
 
     name: str
     dest_prefix: str
-    # Anchored regex over the FULL index name; named groups year/month(/day) give the
+    # Anchored regexes over the FULL index name; named groups year/month(/day) give the
     # source index's own period. Anchoring (^...$) is what excludes sibling families
-    # whose prefix is a superset of this one's (see module docstring).
-    legacy_pattern: "re.Pattern[str]"
+    # whose prefix is a superset of this one's (see module docstring). A family may
+    # carry more than one shape of legacy index (e.g. agent-monitors-slm-health had
+    # both dotted-monthly and dotted-daily stragglers live at once — FRE-1105); the
+    # daily and monthly patterns are mutually exclusive by construction (the monthly
+    # pattern is anchored immediately after the month, the daily pattern requires a
+    # further separator + day group), so at most one pattern ever matches a given name.
+    legacy_patterns: tuple["re.Pattern[str]", ...]
+    # Index names confirmed to carry this family's prefix but hold no migratable data
+    # (a dead scaffold, verified empty) — cleanup deletes them directly once it
+    # re-verifies the live count is actually 0, independent of the reindex flow.
+    known_empty_deletions: frozenset[str] = field(default_factory=frozenset)
 
 
 def _daily_pattern(prefix: str, sep: str) -> "re.Pattern[str]":
@@ -107,57 +119,103 @@ def _monthly_pattern(prefix: str, sep: str) -> "re.Pattern[str]":
 def families() -> list[FamilyConfig]:
     """Every family with at least one legacy (pre-FRE-1036) index to migrate.
 
-    Families with zero live indices at authoring time (agent-topology,
-    agent-monitors-projector-health, agent-captains-funnel-events,
-    agent-monitors-cache-reset-cadence) are not listed — there is nothing to
-    migrate; their templates/policies alone (already in this PR) cover them.
-    agent-insights is listed only for its pre-FRE-543 daily stragglers — its
-    current monthly-dash indices do not match the daily pattern and are left
-    untouched.
+    A family absent from this list is NOT a verified-safe fact — it was true
+    at authoring time for agent-topology, agent-monitors-projector-health,
+    agent-captains-funnel-events, and agent-monitors-cache-reset-cadence (zero
+    live indices, nothing to migrate), and two of those four have since
+    silently accumulated dozens of live indices with no one noticing (FRE-1105
+    master-gate finding). Do not trust this list's completeness by reading it;
+    ``cluster_unaccounted_indices`` re-derives it live against the cluster
+    every time ``plan`` runs, which is the only thing that can't go stale the
+    same way. agent-insights is listed only for its pre-FRE-543 daily
+    stragglers — its current monthly-dash indices do not match the daily
+    pattern and are left untouched.
     """
     return [
-        FamilyConfig("agent-logs", "agent-logs", _daily_pattern("agent-logs", r"\.")),
+        FamilyConfig(
+            "agent-logs",
+            "agent-logs",
+            (_daily_pattern("agent-logs", r"\."),),
+            # Dead rollover-alias bootstrap index: agent-logs-template never set
+            # index.lifecycle.name, so no index was ever ILM-managed and this index
+            # sat at 0 docs (see docker/elasticsearch/ilm-policy.json). Confirmed
+            # 0 docs on the live cluster 2026-08-06 (FRE-1105).
+            known_empty_deletions=frozenset({"agent-logs-000001"}),
+        ),
         FamilyConfig(
             "agent-captains-captures",
             "agent-captains-captures",
-            _daily_pattern("agent-captains-captures", "-"),
+            (_daily_pattern("agent-captains-captures", "-"),),
         ),
         FamilyConfig(
             "agent-captains-captures-subagents",
             "agent-captains-captures-subagents",
-            _daily_pattern("agent-captains-captures-subagents", "-"),
+            (_daily_pattern("agent-captains-captures-subagents", "-"),),
         ),
         FamilyConfig(
             "agent-captains-reflections",
             "agent-captains-reflections",
-            _daily_pattern("agent-captains-reflections", "-"),
+            (_daily_pattern("agent-captains-reflections", "-"),),
         ),
         FamilyConfig(
             "agent-monitors-joinability",
             "agent-monitors-joinability",
-            _daily_pattern("agent-monitors-joinability", r"\."),
+            (_daily_pattern("agent-monitors-joinability", r"\."),),
         ),
         FamilyConfig(
             "agent-monitors-joinability-substrate",
             "agent-monitors-joinability-substrate",
-            _daily_pattern("agent-monitors-joinability-substrate", r"\."),
+            (_daily_pattern("agent-monitors-joinability-substrate", r"\."),),
         ),
         FamilyConfig(
             "agent-monitors-slm-health",
             "agent-monitors-slm-health",
-            _monthly_pattern("agent-monitors-slm-health", r"\."),
+            # FRE-1105: this family holds dotted-monthly AND dotted-daily legacy
+            # indices simultaneously — a monthly-only pattern silently orphaned
+            # the daily stragglers (10 found live on 2026-08-06).
+            (
+                _monthly_pattern("agent-monitors-slm-health", r"\."),
+                _daily_pattern("agent-monitors-slm-health", r"\."),
+            ),
         ),
         FamilyConfig(
             "user-turn-ratings",
             "user-turn-ratings",
-            _monthly_pattern("user-turn-ratings", r"\."),
+            # FRE-1105: same defect class as agent-monitors-slm-health (7 daily
+            # stragglers found live on 2026-08-06).
+            (
+                _monthly_pattern("user-turn-ratings", r"\."),
+                _daily_pattern("user-turn-ratings", r"\."),
+            ),
         ),
         FamilyConfig(
             "agent-insights",
             "agent-insights",
-            _daily_pattern("agent-insights", "-"),
+            (_daily_pattern("agent-insights", "-"),),
         ),
     ]
+
+
+#: Prefixes confirmed live (2026-08-06) to hold indices genuinely out of this
+#: migration's scope, each with a stated reason — a decision, not a default.
+#: Everything else is either a configured family above or is unaccounted:
+#: see ``cluster_unaccounted_indices``. Do NOT add agent-topology or
+#: agent-monitors-projector-health here — they are unaccounted on purpose
+#: (FRE-1105 master-gate finding); adding them here would silence the exact
+#: signal this registry exists to keep loud.
+EXCLUDED_PREFIXES: dict[str, str] = {
+    "caddy-access": (
+        "writes its monthly-dash destination shape natively under its own ILM policy "
+        "(docker/elasticsearch/caddy-access-ilm-policy.json) — never had a legacy-index "
+        "migration story, not one of FRE-1036's per-family targets."
+    ),
+    "slm-requests": (
+        "is still actively written in daily-dotted shape (100% dotted-daily as of "
+        "2026-08-06, none dash-monthly) with no monthly destination to consolidate "
+        "into — out of scope for this migration, which only consolidates a family's "
+        "existing legacy indices into a destination shape, not changes its write path."
+    ),
+}
 
 
 def _dest_index(cfg: FamilyConfig, match: "re.Match[str]") -> str:
@@ -185,10 +243,19 @@ class SourceMapping:
 
 @dataclass
 class FamilyPlan:
-    """Every legacy source index found for one family, mapped to its destination."""
+    """Every legacy source index found for one family, mapped to its destination.
+
+    ``pending_deletions`` and ``unaccounted`` complete the family's picture
+    (FRE-1105): every live index under the family's prefix must land in
+    ``mappings``, ``pending_deletions``, be a current destination, or belong
+    to a registered sibling family — anything left over is ``unaccounted``,
+    the exact silent-orphan condition this ticket exists to catch.
+    """
 
     family: str
     mappings: list[SourceMapping]
+    pending_deletions: list[str] = field(default_factory=list)
+    unaccounted: list[str] = field(default_factory=list)
 
     @property
     def destinations(self) -> set[str]:
@@ -196,20 +263,133 @@ class FamilyPlan:
         return {m.dest for m in self.mappings}
 
 
+class IncompleteFamilyError(RuntimeError):
+    """Raised when a FamilyPlan has unaccounted indices — see FamilyPlan's docstring.
+
+    FRE-1105: this is the assertion the pre-fix design had no equivalent of —
+    the condition that let cleanup report "deleted 2 of 2" while ten of a
+    family's fourteen indices sat untouched, uncounted by either denominator.
+    """
+
+
+def assert_family_complete(plan: FamilyPlan) -> None:
+    """Raise IncompleteFamilyError if any live index in ``plan`` is unaccounted for."""
+    if plan.unaccounted:
+        raise IncompleteFamilyError(
+            f"{plan.family}: {len(plan.unaccounted)} index(es) carry this family's prefix but are "
+            f"accounted for by no legacy pattern, no current destination, no sibling family, and "
+            f"no explicit exclusion: {plan.unaccounted}"
+        )
+
+
 async def _list_indices(es: Any, prefix: str) -> list[str]:
     cat = await es.cat.indices(index=f"{prefix}-*", format="json")
     return [row["index"] for row in cat if row.get("index")]
 
 
+async def _list_all_indices(es: Any) -> list[str]:
+    """Every live index in the cluster, excluding ES system indices (dot-prefixed)."""
+    cat = await es.cat.indices(index="*", format="json")
+    return [row["index"] for row in cat if row.get("index") and not row["index"].startswith(".")]
+
+
+def cluster_unaccounted_indices(live_indices: list[str]) -> list[str]:
+    """Every live index that maps to no configured family and no explicit exclusion.
+
+    FRE-1105 master-gate finding: the per-family completeness check
+    (plan_family/assert_family_complete) only ever sees the families()
+    already knows about — it fixed the denominator WITHIN a family and left
+    the denominator OVER families (the config list itself) free to go stale
+    the same way. This is that same check one level up: a family whose
+    "nothing to migrate" exclusion has silently expired (a prefix that held
+    zero indices when families() was authored and now holds dozens) becomes a
+    loud finding here instead of a permanent, undetectable blind spot.
+    """
+    known_prefixes = [f"{cfg.dest_prefix}-" for cfg in families()] + [
+        f"{prefix}-" for prefix in EXCLUDED_PREFIXES
+    ]
+    return sorted(
+        name for name in live_indices if not any(name.startswith(p) for p in known_prefixes)
+    )
+
+
+class IncompleteClusterError(RuntimeError):
+    """Raised when the cluster holds indices under no configured family and no exclusion."""
+
+
+def assert_cluster_complete(unaccounted: list[str]) -> None:
+    """Raise IncompleteClusterError if any live index maps to nothing in the registry."""
+    if unaccounted:
+        raise IncompleteClusterError(
+            f"{len(unaccounted)} live index(es) map to no configured family in families() "
+            f"and no explicit exclusion in EXCLUDED_PREFIXES — this is either real "
+            f"migration-target residue (a family whose 'nothing to migrate' exclusion has "
+            f"expired) or a genuinely new prefix that needs a stated reason: {unaccounted}"
+        )
+
+
+def _match_legacy(cfg: FamilyConfig, name: str) -> "re.Match[str] | None":
+    """First legacy pattern (of possibly several) that matches ``name``, if any."""
+    for pattern in cfg.legacy_patterns:
+        m = pattern.match(name)
+        if m is not None:
+            return m
+    return None
+
+
 async def plan_family(es: Any, cfg: FamilyConfig) -> FamilyPlan:
-    """Read-only: list this family's legacy sources and their destinations."""
+    """Read-only: list this family's legacy sources, destinations, and completeness.
+
+    Classifies every live index carrying this family's prefix (see
+    :class:`FamilyPlan` for the full classification this produces). FRE-1105:
+    an unaccounted index is exactly the silent-orphan defect this plan exists
+    to catch.
+    """
     live = await _list_indices(es, cfg.dest_prefix)
+    # cat.indices(f"{dest_prefix}-*") also returns a registered sibling family's
+    # own indices (e.g. agent-captains-captures-subagents under the
+    # agent-captains-captures glob) — those are that sibling's own plan_family
+    # call's responsibility, not an orphan of this family.
+    sibling_prefixes = [
+        f"{other.dest_prefix}-"
+        for other in families()
+        if other.name != cfg.name and other.dest_prefix.startswith(f"{cfg.dest_prefix}-")
+    ]
+    # A migrated destination is always dash-monthly (see _dest_index) — reuse
+    # the monthly-source pattern generator rather than a bespoke regex.
+    dest_pattern = _monthly_pattern(cfg.dest_prefix, "-")
+
     mappings: list[SourceMapping] = []
     for name in sorted(live):
-        m = cfg.legacy_pattern.match(name)
+        m = _match_legacy(cfg, name)
         if m:
             mappings.append(SourceMapping(source=name, dest=_dest_index(cfg, m), match=m))
-    return FamilyPlan(family=cfg.name, mappings=mappings)
+
+    matched = {m.source for m in mappings}
+    pending_deletions = sorted(set(live) & cfg.known_empty_deletions)
+    overlap = matched & set(pending_deletions)
+    if overlap:
+        # Would otherwise be deleted once by the reindex-verified path and again
+        # by cleanup_family's independent known_empty_deletions loop.
+        raise ValueError(
+            f"{cfg.name}: index both matched as a legacy source and declared a "
+            f"known-empty deletion — fix FamilyConfig: {sorted(overlap)}"
+        )
+
+    accounted = matched | set(pending_deletions)
+    unaccounted = sorted(
+        name
+        for name in live
+        if name not in accounted
+        and not dest_pattern.match(name)
+        and not any(name.startswith(prefix) for prefix in sibling_prefixes)
+    )
+    return FamilyPlan(
+        family=cfg.name,
+        mappings=mappings,
+        pending_deletions=pending_deletions,
+        unaccounted=unaccounted,
+    )
 
 
 async def _count(es: Any, index: str) -> int:
@@ -322,6 +502,15 @@ async def cleanup_family(es: Any, cfg: FamilyConfig, plan: FamilyPlan) -> tuple[
     :func:`reindex_family` avoids, and this is the step where a false pass
     causes irreversible data loss.
 
+    Also deletes ``plan.pending_deletions`` (FRE-1105: e.g. agent-logs-000001,
+    a dead scaffold index with no data to reindex) — a step independent of the
+    per-destination reindex flow above, since these carry no source/dest
+    relationship at all. Never trusted on the ``known_empty_deletions`` label
+    alone — the live count is re-verified as 0 immediately before deleting.
+    A nonzero count (config drift, or a name reused for something else)
+    refuses the deletion and fails the family rather than silently discarding
+    data.
+
     Returns ``(all_ok, deleted)``.
     """
     deleted: list[str] = []
@@ -344,6 +533,17 @@ async def cleanup_family(es: Any, cfg: FamilyConfig, plan: FamilyPlan) -> tuple[
             await es.indices.delete(index=m.source)
             deleted.append(m.source)
             log.info("fre1036_source_deleted", source=m.source, dest=dest)
+
+    for name in plan.pending_deletions:
+        count = await _count(es, name)
+        if count != 0:
+            log.warning("fre1036_cleanup_known_empty_not_actually_empty", index=name, count=count)
+            all_ok = False
+            continue
+        await es.indices.delete(index=name)
+        deleted.append(name)
+        log.info("fre1036_known_empty_deleted", index=name)
+
     return all_ok, deleted
 
 
@@ -364,16 +564,51 @@ async def _run(args: argparse.Namespace) -> int:
     try:
         exit_code = 0
         if args.command == "plan":
+            # Read-only diagnostic: must keep working, and show the breakage, even
+            # when a family is incomplete (FRE-1105) — it never raises, it reports.
+            any_unaccounted = False
             for cfg in families():
                 p = await plan_family(es, cfg)
                 print(f"\n=== {cfg.name} ({len(p.mappings)} source indices) ===")
                 for m in p.mappings:
                     print(f"  {m.source}  ->  {m.dest}")
-            return 0
+                if p.pending_deletions:
+                    print(f"  [pending deletion, verified empty at cleanup]: {p.pending_deletions}")
+                if p.unaccounted:
+                    any_unaccounted = True
+                    print(
+                        f"  !!! UNACCOUNTED (no pattern, no destination, no exclusion): "
+                        f"{p.unaccounted}"
+                    )
+
+            # Cluster-level check (FRE-1105 master-gate finding): the per-family loop
+            # above only ever sees the families() already knows about. This is the
+            # same check one level up — over the registry itself, not within one
+            # family — so a family whose exclusion has silently gone stale (a prefix
+            # that held zero indices at authoring time and now holds dozens) is a
+            # loud finding here instead of a permanent blind spot.
+            cluster_unaccounted = cluster_unaccounted_indices(await _list_all_indices(es))
+            if cluster_unaccounted:
+                any_unaccounted = True
+                print(
+                    f"\n=== CLUSTER: {len(cluster_unaccounted)} index(es) map to no "
+                    f"configured family and no EXCLUDED_PREFIXES entry ==="
+                )
+                for name in cluster_unaccounted:
+                    print(f"  !!! {name}")
+            return 1 if any_unaccounted else 0
 
         for cfg in _resolve_families(args.family):
             p = await plan_family(es, cfg)
-            if not p.mappings:
+            try:
+                assert_family_complete(p)
+            except IncompleteFamilyError as exc:
+                # One broken family must not abort the rest of a `--family all` run.
+                print(f"ERROR: {exc}", file=sys.stderr)
+                exit_code = 3
+                continue
+
+            if not p.mappings and not p.pending_deletions:
                 print(f"{cfg.name}: no legacy source indices found — nothing to do")
                 continue
 
@@ -394,9 +629,10 @@ async def _run(args: argparse.Namespace) -> int:
                     )
                     return 2
                 ok, deleted = await cleanup_family(es, cfg, p)
+                expected = len(p.mappings) + len(p.pending_deletions)
                 print(
                     f"{cfg.name}: cleanup {'OK' if ok else 'INCOMPLETE'} "
-                    f"— deleted {len(deleted)}/{len(p.mappings)} source indices"
+                    f"— deleted {len(deleted)}/{expected} indices"
                 )
                 if not ok:
                     exit_code = 3
@@ -414,7 +650,15 @@ def _parse_args() -> argparse.Namespace:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    plan_p = sub.add_parser("plan", help="Read-only: list every family's legacy sources.")
+    plan_p = sub.add_parser(
+        "plan",
+        help=(
+            "Read-only: list every family's legacy sources. Never writes; exits 1 "
+            "(not an error, a signal) if any family has an unaccounted index, or if "
+            "any live cluster index maps to no configured family and no "
+            "EXCLUDED_PREFIXES entry."
+        ),
+    )
     plan_p.add_argument("--confirm-prod", action="store_true", default=False)
 
     for name, help_text in (

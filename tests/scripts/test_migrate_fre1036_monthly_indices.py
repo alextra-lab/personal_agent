@@ -21,19 +21,27 @@ checked once before any of its sources are deleted), not per-source.
 
 from __future__ import annotations
 
+import argparse
 from datetime import timezone
 from typing import Any
 
 import pytest
 from scripts.migrate_fre1036_monthly_indices import (
+    FamilyConfig,
     FamilyPlan,
+    IncompleteFamilyError,
     SourceMapping,
     _dest_index,
     _month_end,
+    _run,
+    assert_family_complete,
     cleanup_family,
     families,
+    plan_family,
     reindex_family,
 )
+from scripts.migrate_fre1036_monthly_indices import _daily_pattern as daily_pattern
+from scripts.migrate_fre1036_monthly_indices import _match_legacy as _match
 
 
 def _cfg(name: str):
@@ -94,12 +102,56 @@ class _FakeES:
             self._parent.counts.pop(index, None)
 
 
+class _FakeCatES:
+    """Minimal fake AsyncElasticsearch client for plan_family's cat.indices call.
+
+    ``live_indices`` is the full set of index names a real cluster would report
+    for the family's prefix glob — including sibling-family indices that share
+    a prefix substring, already-migrated destinations, and anything genuinely
+    unaccounted for. plan_family does the classification; this fake only needs
+    to hand back names matching the requested glob, like a real cat.indices call.
+    """
+
+    def __init__(self, live_indices: list[str]) -> None:
+        self._live_indices = live_indices
+        self.cat = self._Cat(self)
+
+    class _Cat:
+        def __init__(self, parent: "_FakeCatES") -> None:
+            self._parent = parent
+
+        async def indices(self, index: str, format: str) -> list[dict[str, str]]:
+            assert index.endswith("-*")
+            prefix = index[:-2]
+            return [
+                {"index": name}
+                for name in self._parent._live_indices
+                if name.startswith(f"{prefix}-")
+            ]
+
+
+class _FakeFullES(_FakeCatES, _FakeES):
+    """Both fakes combined, needed to drive _run() end-to-end.
+
+    _FakeCatES (cat.indices, for plan_family) and _FakeES (count/reindex/
+    delete, for reindex_family/cleanup_family) — _run() calls plan_family
+    before the mutating calls.
+    """
+
+    def __init__(self, live_indices: list[str], counts: dict[str, int]) -> None:
+        _FakeCatES.__init__(self, live_indices)
+        _FakeES.__init__(self, counts)
+
+    async def close(self) -> None:
+        pass
+
+
 def _plan(cfg_name: str, source_names: list[str]) -> FamilyPlan:
     cfg = _cfg(cfg_name)
     mappings = []
     for name in source_names:
-        m = cfg.legacy_pattern.match(name)
-        assert m is not None, f"{name!r} does not match {cfg_name}'s legacy pattern"
+        m = _match(cfg, name)
+        assert m is not None, f"{name!r} does not match {cfg_name}'s legacy patterns"
         mappings.append(SourceMapping(source=name, dest=_dest_index(cfg, m), match=m))
     return FamilyPlan(family=cfg_name, mappings=mappings)
 
@@ -227,12 +279,12 @@ async def test_cleanup_family_destinations_are_verified_independently() -> None:
     good = SourceMapping(
         source="agent-logs-2026.07.01",
         dest="agent-logs-2026-07",
-        match=cfg.legacy_pattern.match("agent-logs-2026.07.01"),  # type: ignore[arg-type]
+        match=_match(cfg, "agent-logs-2026.07.01"),  # type: ignore[arg-type]
     )
     bad = SourceMapping(
         source="agent-logs-2026.08.01",
         dest="agent-logs-2026-08",
-        match=cfg.legacy_pattern.match("agent-logs-2026.08.01"),  # type: ignore[arg-type]
+        match=_match(cfg, "agent-logs-2026.08.01"),  # type: ignore[arg-type]
     )
     plan = FamilyPlan(family="agent-logs", mappings=[good, bad])
     es = _FakeES(
@@ -250,17 +302,68 @@ async def test_cleanup_family_destinations_are_verified_independently() -> None:
     assert deleted == ["agent-logs-2026.07.01"]  # but the healthy destination still proceeded
 
 
-def _cfg(name: str):
-    for cfg in families():
-        if cfg.name == name:
-            return cfg
-    raise AssertionError(f"no family config named {name!r}")
+@pytest.mark.asyncio
+async def test_cleanup_family_deletes_known_empty_deletion_when_verified_empty() -> None:
+    """agent-logs-000001 (FRE-1105) deletes cleanly once its live count re-verifies as 0.
+
+    This step is independent of the per-destination reindex flow above — the
+    index carries no data to reindex, so there is no source/dest relationship
+    for it at all.
+    """
+    cfg = _cfg("agent-logs")
+    plan = FamilyPlan(family="agent-logs", mappings=[], pending_deletions=["agent-logs-000001"])
+    es = _FakeES(counts={"agent-logs-000001": 0})
+
+    ok, deleted = await cleanup_family(es, cfg, plan)
+
+    assert ok is True
+    assert deleted == ["agent-logs-000001"]
+    assert "agent-logs-000001" in es.deleted
+
+
+@pytest.mark.asyncio
+async def test_cleanup_family_handles_mappings_and_pending_deletions_together() -> None:
+    """agent-logs' real shape: daily legacy stragglers AND agent-logs-000001 at once.
+
+    The two deletion paths (per-destination reindex-verified sources, and the
+    independent known-empty-deletion loop) must both run and neither interferes
+    with the other when a family actually has both kinds of work.
+    """
+    cfg = _cfg("agent-logs")
+    plan = _plan("agent-logs", ["agent-logs-2026.07.01"])
+    plan.pending_deletions = ["agent-logs-000001"]
+    es = _FakeES(
+        counts={
+            "agent-logs-2026.07.01": 100,
+            "agent-logs-2026-07": 100,
+            "agent-logs-000001": 0,
+        }
+    )
+
+    ok, deleted = await cleanup_family(es, cfg, plan)
+
+    assert ok is True
+    assert set(deleted) == {"agent-logs-2026.07.01", "agent-logs-000001"}
+
+
+@pytest.mark.asyncio
+async def test_cleanup_family_refuses_known_empty_deletion_when_not_actually_empty() -> None:
+    """Config-drift guard: the known-empty label is never trusted without a fresh count."""
+    cfg = _cfg("agent-logs")
+    plan = FamilyPlan(family="agent-logs", mappings=[], pending_deletions=["agent-logs-000001"])
+    es = _FakeES(counts={"agent-logs-000001": 5})
+
+    ok, deleted = await cleanup_family(es, cfg, plan)
+
+    assert ok is False
+    assert deleted == []
+    assert es.counts["agent-logs-000001"] == 5  # untouched
 
 
 def test_agent_logs_daily_dotted_matches_and_maps_to_monthly_dash() -> None:
     """A daily dotted agent-logs index maps to its monthly dash destination."""
     cfg = _cfg("agent-logs")
-    m = cfg.legacy_pattern.match("agent-logs-2026.02.22")
+    m = _match(cfg, "agent-logs-2026.02.22")
     assert m is not None
     assert _dest_index(cfg, m) == "agent-logs-2026-02"
 
@@ -268,7 +371,7 @@ def test_agent_logs_daily_dotted_matches_and_maps_to_monthly_dash() -> None:
 def test_agent_logs_v2_suffix_matches_same_destination() -> None:
     """A -v2 reindex-artifact index consolidates into the same monthly bucket."""
     cfg = _cfg("agent-logs")
-    m = cfg.legacy_pattern.match("agent-logs-2026.04.15-v2")
+    m = _match(cfg, "agent-logs-2026.04.15-v2")
     assert m is not None
     assert _dest_index(cfg, m) == "agent-logs-2026-04"
 
@@ -276,20 +379,20 @@ def test_agent_logs_v2_suffix_matches_same_destination() -> None:
 def test_agent_logs_pattern_does_not_match_already_monthly() -> None:
     """An already-migrated monthly index is not re-matched as a legacy source."""
     cfg = _cfg("agent-logs")
-    assert cfg.legacy_pattern.match("agent-logs-2026-02") is None
+    assert _match(cfg, "agent-logs-2026-02") is None
 
 
 def test_captains_captures_pattern_excludes_subagents_sibling() -> None:
     """The anchored parent pattern must not match the subagents family's indices."""
     cfg = _cfg("agent-captains-captures")
-    assert cfg.legacy_pattern.match("agent-captains-captures-2026-02-22") is not None
-    assert cfg.legacy_pattern.match("agent-captains-captures-subagents-2026-02-22") is None
+    assert _match(cfg, "agent-captains-captures-2026-02-22") is not None
+    assert _match(cfg, "agent-captains-captures-subagents-2026-02-22") is None
 
 
 def test_captains_captures_subagents_matches_its_own_pattern() -> None:
     """The subagents family's own pattern matches its own daily indices."""
     cfg = _cfg("agent-captains-captures-subagents")
-    m = cfg.legacy_pattern.match("agent-captains-captures-subagents-2026-02-22")
+    m = _match(cfg, "agent-captains-captures-subagents-2026-02-22")
     assert m is not None
     assert _dest_index(cfg, m) == "agent-captains-captures-subagents-2026-02"
 
@@ -297,45 +400,226 @@ def test_captains_captures_subagents_matches_its_own_pattern() -> None:
 def test_joinability_pattern_excludes_substrate_sibling() -> None:
     """The anchored parent pattern must not match the substrate family's indices."""
     cfg = _cfg("agent-monitors-joinability")
-    assert cfg.legacy_pattern.match("agent-monitors-joinability-2026.07.31") is not None
-    assert cfg.legacy_pattern.match("agent-monitors-joinability-substrate-2026.07.31") is None
+    assert _match(cfg, "agent-monitors-joinability-2026.07.31") is not None
+    assert _match(cfg, "agent-monitors-joinability-substrate-2026.07.31") is None
 
 
 def test_joinability_substrate_matches_its_own_pattern() -> None:
     """The substrate family's own pattern matches its own daily indices."""
     cfg = _cfg("agent-monitors-joinability-substrate")
-    m = cfg.legacy_pattern.match("agent-monitors-joinability-substrate-2026.07.31")
+    m = _match(cfg, "agent-monitors-joinability-substrate-2026.07.31")
     assert m is not None
     assert _dest_index(cfg, m) == "agent-monitors-joinability-substrate-2026-07"
 
 
-def test_slm_health_dotted_monthly_maps_to_dash_monthly() -> None:
-    """slm-health/user-turn-ratings are already monthly — only the separator moves."""
+def test_slm_health_matches_both_monthly_and_daily_patterns() -> None:
+    """FRE-1105: slm-health carries dotted monthly AND dotted daily legacy indices.
+
+    Before FRE-1105 this family carried only the monthly pattern, so its daily
+    stragglers matched nothing and were silently orphaned — this is the exact
+    defect the ticket reports (10 orphaned daily indices found on the live
+    cluster). A daily-suffixed name must now match, via the daily pattern.
+    """
     cfg = _cfg("agent-monitors-slm-health")
-    m = cfg.legacy_pattern.match("agent-monitors-slm-health-2026.06")
-    assert m is not None
-    assert _dest_index(cfg, m) == "agent-monitors-slm-health-2026-06"
-    # A daily-suffixed name (never produced by this family) must not match the
-    # monthly-only pattern.
-    assert cfg.legacy_pattern.match("agent-monitors-slm-health-2026.06.15") is None
+    m_monthly = _match(cfg, "agent-monitors-slm-health-2026.06")
+    assert m_monthly is not None
+    assert _dest_index(cfg, m_monthly) == "agent-monitors-slm-health-2026-06"
+
+    m_daily = _match(cfg, "agent-monitors-slm-health-2026.06.15")
+    assert m_daily is not None
+    assert _dest_index(cfg, m_daily) == "agent-monitors-slm-health-2026-06"
 
 
-def test_user_turn_ratings_dotted_monthly_maps_to_dash_monthly() -> None:
-    """A dotted monthly user-turn-ratings index maps to its dash destination."""
+def test_user_turn_ratings_matches_both_monthly_and_daily_patterns() -> None:
+    """FRE-1105: user-turn-ratings carries dotted monthly AND dotted daily legacy indices.
+
+    Same defect class as slm-health (7 orphaned daily indices found on the
+    live cluster) — see test_slm_health_matches_both_monthly_and_daily_patterns.
+    """
     cfg = _cfg("user-turn-ratings")
-    m = cfg.legacy_pattern.match("user-turn-ratings-2026.06")
-    assert m is not None
-    assert _dest_index(cfg, m) == "user-turn-ratings-2026-06"
+    m_monthly = _match(cfg, "user-turn-ratings-2026.06")
+    assert m_monthly is not None
+    assert _dest_index(cfg, m_monthly) == "user-turn-ratings-2026-06"
+
+    m_daily = _match(cfg, "user-turn-ratings-2026.05.31")
+    assert m_daily is not None
+    assert _dest_index(cfg, m_daily) == "user-turn-ratings-2026-05"
 
 
 def test_insights_pattern_only_matches_pre_cutover_daily_stragglers() -> None:
     """agent-insights already writes monthly-dash; only the daily orphans match."""
     cfg = _cfg("agent-insights")
-    m = cfg.legacy_pattern.match("agent-insights-2026-04-17")
+    m = _match(cfg, "agent-insights-2026-04-17")
     assert m is not None
     assert _dest_index(cfg, m) == "agent-insights-2026-04"
     # The current, correct monthly format must not match (nothing to migrate).
-    assert cfg.legacy_pattern.match("agent-insights-2026-04") is None
+    assert _match(cfg, "agent-insights-2026-04") is None
+
+
+# Completeness assertion (FRE-1105) — every live index under a family's prefix
+# must land in mappings, pending_deletions, an existing destination, or a
+# registered sibling family; anything left over is the silent-orphan defect.
+
+
+@pytest.mark.asyncio
+async def test_plan_family_flags_a_genuinely_unaccounted_index() -> None:
+    """A stray index matching no pattern, no destination shape, no exclusion, is unaccounted."""
+    cfg = _cfg("agent-logs")
+    es = _FakeCatES(
+        [
+            "agent-logs-2026.07.01",  # matched legacy source
+            "agent-logs-2026-07",  # existing destination
+            "agent-logs-mystery-index",  # genuinely unaccounted
+        ]
+    )
+
+    plan = await plan_family(es, cfg)
+
+    assert plan.unaccounted == ["agent-logs-mystery-index"]
+    with pytest.raises(IncompleteFamilyError):
+        assert_family_complete(plan)
+
+
+@pytest.mark.asyncio
+async def test_plan_family_excludes_sibling_family_indices_from_unaccounted() -> None:
+    """A registered sibling family's own indices must not count as the parent's orphans.
+
+    cat.indices(index="agent-captains-captures-*") also returns
+    agent-captains-captures-subagents-* indices on a real cluster — those
+    belong to, and are accounted for by, the subagents family's own
+    plan_family call, not the parent's.
+    """
+    cfg = _cfg("agent-captains-captures")
+    es = _FakeCatES(
+        [
+            "agent-captains-captures-2026-02-22",
+            "agent-captains-captures-subagents-2026-02-22",
+        ]
+    )
+
+    plan = await plan_family(es, cfg)
+
+    assert plan.unaccounted == []
+    assert_family_complete(plan)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_plan_family_puts_known_empty_deletion_in_pending_not_unaccounted() -> None:
+    """agent-logs-000001 is accounted for as a pending deletion, not an orphan."""
+    cfg = _cfg("agent-logs")
+    es = _FakeCatES(["agent-logs-000001"])
+
+    plan = await plan_family(es, cfg)
+
+    assert plan.pending_deletions == ["agent-logs-000001"]
+    assert plan.unaccounted == []
+    assert_family_complete(plan)  # must not raise
+
+
+def test_assert_family_complete_is_a_noop_when_nothing_unaccounted() -> None:
+    """A plan with no unaccounted indices never raises."""
+    plan = FamilyPlan(family="agent-logs", mappings=[], unaccounted=[])
+    assert_family_complete(plan)  # does not raise
+
+
+@pytest.mark.asyncio
+async def test_run_one_broken_family_does_not_abort_family_all(monkeypatch) -> None:
+    """FRE-1105: an IncompleteFamilyError in one family must not abort --family all.
+
+    Two families: one has a genuinely unaccounted index (broken), one is clean
+    (healthy). A `delta` run over "all" must still reindex the healthy family's
+    source even though the broken family fails.
+    """
+    broken = FamilyConfig("broken-family", "broken-family", (daily_pattern("broken-family", "-"),))
+    healthy = FamilyConfig(
+        "healthy-family", "healthy-family", (daily_pattern("healthy-family", "-"),)
+    )
+    monkeypatch.setattr(
+        "scripts.migrate_fre1036_monthly_indices.families", lambda: [broken, healthy]
+    )
+    es = _FakeFullES(
+        live_indices=[
+            "broken-family-2026-02-22",  # matched
+            "broken-family-mystery",  # unaccounted -> IncompleteFamilyError
+            "healthy-family-2026-02-22",  # matched, clean
+        ],
+        counts={"broken-family-2026-02-22": 5, "healthy-family-2026-02-22": 5},
+    )
+    monkeypatch.setattr("elasticsearch.AsyncElasticsearch", lambda *a, **k: es)
+    args = argparse.Namespace(command="delta", family="all", confirm_prod=True)
+
+    exit_code = await _run(args)
+
+    assert exit_code == 3  # the broken family failed
+    # the healthy family was still processed, not skipped:
+    assert es.counts.get("healthy-family-2026-02") == 5
+
+
+# Real-cluster-shape regression tests (FRE-1105) — the exact index names found
+# live on the cluster on 2026-08-06 via `plan --confirm-prod`, not a synthetic
+# minimal case. Before the fix, every daily-dotted name below matched nothing
+# (both families carried only their monthly pattern) and was silently
+# unaccounted — this reproduces the ticket's own reported defect directly.
+
+
+@pytest.mark.asyncio
+async def test_slm_health_real_cluster_shape_has_zero_unaccounted_after_fix() -> None:
+    """agent-monitors-slm-health: 12 daily orphans + 3 already-migrated monthly destinations."""
+    cfg = _cfg("agent-monitors-slm-health")
+    es = _FakeCatES(
+        [
+            "agent-monitors-slm-health-2026.06.02",
+            "agent-monitors-slm-health-2026.06.03",
+            "agent-monitors-slm-health-2026.06.04",
+            "agent-monitors-slm-health-2026.06.05",
+            "agent-monitors-slm-health-2026.06.06",
+            "agent-monitors-slm-health-2026.06.07",
+            "agent-monitors-slm-health-2026.06.08",
+            "agent-monitors-slm-health-2026.06.09",
+            "agent-monitors-slm-health-2026.06.10",
+            "agent-monitors-slm-health-2026.06.11",
+            "agent-monitors-slm-health-2026.06.12",
+            "agent-monitors-slm-health-2026.06.13",
+            "agent-monitors-slm-health-2026-06",
+            "agent-monitors-slm-health-2026-07",
+            "agent-monitors-slm-health-2026-08",
+        ]
+    )
+
+    plan = await plan_family(es, cfg)
+
+    assert len(plan.mappings) == 12
+    assert plan.unaccounted == []
+    assert_family_complete(plan)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_user_turn_ratings_real_cluster_shape_has_zero_unaccounted_after_fix() -> None:
+    """user-turn-ratings: 4 not-yet-migrated monthly sources + 7 daily orphans + 2 destinations."""
+    cfg = _cfg("user-turn-ratings")
+    es = _FakeCatES(
+        [
+            "user-turn-ratings-2026.04",
+            "user-turn-ratings-2026.05",
+            "user-turn-ratings-2026.06",
+            "user-turn-ratings-2026.07",
+            "user-turn-ratings-2026.05.31",
+            "user-turn-ratings-2026.06.01",
+            "user-turn-ratings-2026.06.02",
+            "user-turn-ratings-2026.06.04",
+            "user-turn-ratings-2026.06.05",
+            "user-turn-ratings-2026.06.06",
+            "user-turn-ratings-2026.06.07",
+            "user-turn-ratings-2026-07",
+            "user-turn-ratings-2026-08",
+        ]
+    )
+
+    plan = await plan_family(es, cfg)
+
+    assert len(plan.mappings) == 11  # 4 monthly + 7 daily
+    assert plan.unaccounted == []
+    assert_family_complete(plan)  # must not raise
 
 
 def test_month_end_mid_year() -> None:

@@ -331,3 +331,101 @@ def test_gateway_emit_tolerates_missing_usage() -> None:
     assert kwargs["input_tokens"] is None
     assert kwargs["output_tokens"] is None
     assert kwargs["prompt_identity"].callsite == "gateway.chat"
+
+
+# ---------------------------------------------------------------------------
+# request.completed field quality (FRE-1033 second defect)
+# ---------------------------------------------------------------------------
+#
+# This publish site is confirmed unreachable in production today (the
+# "seshat-gateway" container actually runs personal_agent.service.app:app, not
+# gateway.app:gateway_app — the only place chat_router is mounted). Fixed
+# anyway per the ticket's explicit ask, so a real deployment of this process
+# would not produce degraded request_trace documents.
+
+
+class _FakeAnthropicStream:
+    """Minimal async context manager mirroring anthropic's MessageStreamManager."""
+
+    def __init__(self, text_chunks: list[str], final_message: Any) -> None:
+        self._text_chunks = text_chunks
+        self._final_message = final_message
+
+    async def __aenter__(self) -> "_FakeAnthropicStream":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+    @property
+    async def text_stream(self):  # type: ignore[no-untyped-def]
+        for chunk in self._text_chunks:
+            yield chunk
+
+    async def get_final_message(self) -> Any:
+        return self._final_message
+
+
+def test_stream_to_queue_publishes_real_trace_summary_and_user_id() -> None:
+    """Redis branch publishes a real trace_summary/breakdown shape plus user_id.
+
+    Not the old hard-coded model/steps_count/final_state dict with an empty
+    breakdown and no identity.
+    """
+    import asyncio
+
+    import redis.asyncio as aioredis
+
+    from personal_agent.events.bus import NoOpBus, set_global_event_bus
+    from personal_agent.events.redis_backend import RedisStreamBus
+    from personal_agent.gateway.chat_api import _stream_to_queue
+
+    user_id = uuid4()
+    session_uuid = uuid4()
+    final_message = MagicMock(usage=MagicMock(input_tokens=10, output_tokens=5))
+
+    mock_redis = AsyncMock(spec=aioredis.Redis)
+    mock_redis.xadd = AsyncMock(return_value="1-0")
+    bus = RedisStreamBus(mock_redis)
+    set_global_event_bus(bus)
+    try:
+        with (
+            patch("personal_agent.gateway.chat_api.anthropic.AsyncAnthropic") as mock_anthropic_cls,
+            patch("personal_agent.transport.agui.transport._push_event", new_callable=AsyncMock),
+            patch("personal_agent.transport.agui.transport.emit_done", new_callable=AsyncMock),
+            patch("personal_agent.gateway.chat_api._emit_gateway_model_call_completed"),
+            patch(
+                "personal_agent.gateway.chat_api._record_gateway_cost_safe",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_client = MagicMock()
+            mock_client.messages.stream = MagicMock(
+                return_value=_FakeAnthropicStream(["Hello", " world"], final_message)
+            )
+            mock_anthropic_cls.return_value = mock_client
+
+            asyncio.run(
+                _stream_to_queue(
+                    trace_id="trace-gw-1",
+                    session_uuid=session_uuid,
+                    anthropic_messages=[{"role": "user", "content": "hi"}],
+                    api_key="fake-key",
+                    user_id=user_id,
+                )
+            )
+    finally:
+        set_global_event_bus(NoOpBus())
+
+    mock_redis.xadd.assert_called_once()
+    import orjson
+
+    fields = mock_redis.xadd.call_args[0][1]
+    payload = orjson.loads(fields["data"])
+    assert payload["user_id"] == str(user_id)
+    assert payload["source_component"] == "gateway.chat_api"
+    breakdown = payload["trace_breakdown"]
+    assert any(entry.get("name") == "llm_call:anthropic_stream" for entry in breakdown), breakdown
+    summary = payload["trace_summary"]
+    assert set(summary.keys()) == {"total_duration_ms", "total_steps", "phases_summary"}
+    assert summary["total_steps"] >= 1

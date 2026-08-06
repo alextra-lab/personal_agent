@@ -33,6 +33,7 @@ from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.service.models import SessionModel
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.request_timer import RequestTimer
 from personal_agent.transport.agui.transport import _push_event
 from personal_agent.transport.events import TextDeltaEvent
 
@@ -57,6 +58,7 @@ async def _stream_to_queue(
     session_uuid: UUID,
     anthropic_messages: list[Any],
     api_key: str,
+    user_id: UUID,
     reservation_id: UUID | None = None,
     reservation_estimate: Decimal | None = None,
 ) -> None:
@@ -78,6 +80,9 @@ async def _stream_to_queue(
         anthropic_messages: Full conversation history (prior + new user turn)
             in Anthropic wire format (``role`` + ``content`` only).
         api_key: Anthropic API key.
+        user_id: Authenticated caller's UUID (FRE-1033) — threaded onto the
+            published ``RequestCompletedEvent`` so request_trace docs are
+            attributable, matching ``service.app``'s publish site.
         reservation_id: Cost-gate reservation token from ``chat()``; the
             stream's success path commits it with the actual cost, the
             failure path refunds it.
@@ -87,29 +92,34 @@ async def _stream_to_queue(
     """
     session_id_str = str(session_uuid)
     start_time = time.time()
+    # FRE-1033: separate from `start_time` above, which feeds unrelated
+    # cost/latency telemetry (FRE-989) — this timer is only for the
+    # request.completed trace_summary/trace_breakdown.
+    timer = RequestTimer(trace_id=trace_id)
 
     # --- Stream from Anthropic --------------------------------------------
     full_text = ""
     final_message: Any = None
     try:
         client = anthropic.AsyncAnthropic(api_key=api_key, http_client=create_guarded_http_client())
-        async with client.messages.stream(
-            model=_CLOUD_MODEL,
-            max_tokens=_MAX_TOKENS,
-            system=_SYSTEM_PROMPT,
-            messages=anthropic_messages,
-        ) as stream:
-            async for text in stream.text_stream:
-                full_text += text
-                await _push_event(
-                    TextDeltaEvent(text=text, session_id=session_id_str), session_id_str
-                )
-            # Capture the final message so we can settle the reservation
-            # against actual input/output token counts (not the estimate).
-            try:
-                final_message = await stream.get_final_message()
-            except Exception:
-                final_message = None
+        with timer.span("llm_call:anthropic_stream"):
+            async with client.messages.stream(
+                model=_CLOUD_MODEL,
+                max_tokens=_MAX_TOKENS,
+                system=_SYSTEM_PROMPT,
+                messages=anthropic_messages,
+            ) as stream:
+                async for text in stream.text_stream:
+                    full_text += text
+                    await _push_event(
+                        TextDeltaEvent(text=text, session_id=session_id_str), session_id_str
+                    )
+                # Capture the final message so we can settle the reservation
+                # against actual input/output token counts (not the estimate).
+                try:
+                    final_message = await stream.get_final_message()
+                except Exception:
+                    final_message = None
 
         # --- Persist assistant message: bus consumer or direct write ------
         try:
@@ -128,13 +138,10 @@ async def _stream_to_queue(
                         trace_id=trace_id,
                         session_id=session_id_str,
                         assistant_response=full_text,
-                        trace_summary={
-                            "model": _CLOUD_MODEL,
-                            "steps_count": 1,
-                            "final_state": "COMPLETED",
-                        },
-                        trace_breakdown=[],
+                        trace_summary=timer.to_trace_summary(),
+                        trace_breakdown=timer.to_breakdown(),
                         source_component="gateway.chat_api",
+                        user_id=user_id,
                     ),
                 )
             else:
@@ -615,6 +622,7 @@ async def chat(
             session_uuid=session_uuid,
             anthropic_messages=anthropic_messages,
             api_key=api_key,
+            user_id=request_user.user_id,
             reservation_id=reservation_id,
             reservation_estimate=reservation_amount,
         )

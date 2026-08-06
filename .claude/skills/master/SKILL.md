@@ -130,20 +130,26 @@ grant exists **iff** the ladder records it, and this section states only the *me
 membership. **Read the ladder's two deploy rows before acting**; if a level below disagrees with the
 ladder, the ladder wins and the drift is worth surfacing.
 
-Per the ladder as granted 2026-06-26, three low-risk, reversible deploy classes are
-**standing-approved** — deploy these **without asking**, then verify + report:
-- **PWA-only rebuild** (`ENV=cloud make rebuild SERVICE=seshat-pwa`) — bump `CACHE_NAME` first.
-- **Additive ES-template** (`setup-elasticsearch.sh`) — *new/additive fields only, NO type change*.
-- **Kibana dashboard import** (`import_dashboards.sh`).
+**Class membership — the two rows the ladder scores.** This list says which deploy belongs to which
+row; it deliberately states **no level**, because a level written here goes stale the moment the owner
+moves a row, and a stale level in a skill is read as authority it no longer carries.
 
-**Always ASK ("deploy now?") — do NOT deploy on your own initiative — for everything else, in particular:**
-- **`seshat-gateway` rebuild** (backend code — running agent / cost / memory / emit sites)
-- **ES type-change or reindex** (the FRE-599 class — ES rejects in place / risks data)
-- **Postgres schema / migration**
-- **Anything touching `cost_gate` / budget / governance** (standing budget rule)
-- Anything you are unsure how to classify → treat as ask.
+- **Reversible classes** — PWA-only rebuild (`ENV=cloud make rebuild SERVICE=seshat-pwa`; bump
+  `CACHE_NAME` first) · additive ES-template (`setup-elasticsearch.sh`) — *new/additive fields only, NO
+  type change* · Kibana dashboard import (`import_dashboards.sh`).
+- **Everything else** — `seshat-gateway` rebuild (backend code: running agent / cost / memory / emit
+  sites) · ES type-change or reindex (the FRE-599 class — ES rejects in place / risks data) · Postgres
+  schema / migration · anything touching `cost_gate` / budget / governance.
+- Anything you cannot confidently place in a class → treat as the stricter row.
 
-For a standing-class deploy, note in your report that it ran under standing approval (which class).
+**Look the row up in the ladder, then act on its level.** At `standing-approved`, deploy without asking
+and report which class it ran under. At `do-and-report`, deploy and report. At `ask-first`, ask
+("deploy now?") and do not deploy on your own initiative.
+
+**A deploy grant is not a budget grant.** A standing-approved deploy of a cost or governance change
+still does not authorize raising a cap — that is a standing directive in its own right, and directives
+are not scored by the ladder.
+
 For concurrent-session safety, still confirm timing if another session is active.
 
 ## 7 — Deploy + verify

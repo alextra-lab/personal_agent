@@ -140,9 +140,17 @@ jobs:
 
       - name: Apply database schema
         run: |
-          PGPASSWORD=agent_dev_password psql \
-            -h localhost -p 5433 -U agent -d personal_agent \
+          PGPASSWORD=postgres_dev_password psql \
+            -h localhost -p 5433 -U postgres -d personal_agent \
+            -v ON_ERROR_STOP=1 \
             -f docker/postgres/init.sql
+          # Grant permissions to agent role (schema applied by superuser)
+          PGPASSWORD=postgres_dev_password psql \
+            -h localhost -p 5433 -U postgres -d personal_agent \
+            -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO agent;
+                GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO agent;
+                ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO agent;
+                ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO agent;"
 
       - name: Run integration tests (transport + schema parity)
         run: |

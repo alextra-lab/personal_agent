@@ -1,0 +1,87 @@
+apiVersion: 1
+prune: true
+
+datasources:
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: es-agent-logs
+        spanStartTimeShift: "-2s"
+        spanEndTimeShift: "2s"
+        filterByTraceID: true
+        customQuery: true
+        query: 'trace_id:"$${__span.traceId}"'
+      nodeGraph:
+        enabled: true
+
+  - name: Elasticsearch - agent-logs
+    type: elasticsearch
+    uid: es-agent-logs
+    access: proxy
+    url: http://elasticsearch:9200
+    jsonData:
+      index: "agent-logs*"
+      timeField: "@timestamp"
+      dataLinks:
+        - field: trace_id
+          datasourceUid: tempo
+          url: '$${__value.raw}'
+
+  - name: Elasticsearch - captains-captures
+    type: elasticsearch
+    uid: es-captains-captures
+    access: proxy
+    url: http://elasticsearch:9200
+    jsonData:
+      index: "agent-captains-captures-*"
+      timeField: "timestamp"
+
+  - name: Elasticsearch - captains-reflections
+    type: elasticsearch
+    uid: es-captains-reflections
+    access: proxy
+    url: http://elasticsearch:9200
+    jsonData:
+      index: "agent-captains-reflections-*"
+      timeField: "timestamp"
+
+  - name: Elasticsearch - insights
+    type: elasticsearch
+    uid: es-insights
+    access: proxy
+    url: http://elasticsearch:9200
+    jsonData:
+      index: "agent-insights-*"
+      timeField: "timestamp"
+
+  # Used by the monitors_joinability_slm dashboard rebuild (AC-6, F13).
+  - name: Elasticsearch - monitors-joinability
+    type: elasticsearch
+    uid: es-monitors-joinability
+    access: proxy
+    url: http://elasticsearch:9200
+    jsonData:
+      index: "agent-monitors-joinability-2*"
+      timeField: "started_at"
+
+  - name: Elasticsearch - monitors-slm-health
+    type: elasticsearch
+    uid: es-monitors-slm-health
+    access: proxy
+    url: http://elasticsearch:9200
+    jsonData:
+      index: "agent-monitors-slm-health-*"
+      timeField: "probed_at"
+
+  - name: Elasticsearch - monitors-joinability-substrate
+    type: elasticsearch
+    uid: es-monitors-joinability-substrate
+    access: proxy
+    url: http://elasticsearch:9200
+    jsonData:
+      index: "agent-monitors-joinability-substrate-*"
+      timeField: "started_at"

@@ -195,6 +195,66 @@ services:
       - cloud-sim
     restart: unless-stopped
 
+  # Tempo 2.10.7 — trace storage/query backend (ADR-0129 D6). Internal only, no tunnel host —
+  # Grafana is the UI; nothing external talks to Tempo directly. No Docker healthcheck: the
+  # image is distroless (no shell, no wget, no self-check flag — verified live) so no
+  # in-container check is possible; Grafana depends on the container having started, not a
+  # health condition.
+  # Resource limit: 512MB RAM, 0.5 CPU
+  tempo:
+    image: grafana/tempo:2.10.7
+    container_name: cloud-sim-tempo
+    volumes:
+      - ./docker/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data_cloud:/var/tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - cloud-sim
+    restart: unless-stopped
+
+  # Grafana 13.1.3 — trace/log visualization UI behind an observe Cloudflare Tunnel host
+  # Purpose: Dashboard UI for Tempo traces + Elasticsearch logs (ADR-0129 D6). Kibana is
+  # retained, not replaced — see the kibana block above and ADR-0129 D6's 2026-08-07 amendment.
+  # Access: CF Zero Trust backend_admin policy, scoped to the owner alone (runbook action, not
+  # decided in this repo — ADR-0129 D6's own AC-10 text)
+  # Tunnel: observe → http://grafana:3000 (bypasses Caddy, follows Kibana's topology, not Caddy's)
+  # Resource limit: 512MB RAM, 0.5 CPU
+  grafana:
+    image: grafana/grafana:13.1.3
+    container_name: cloud-sim-grafana
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_AUTH_BASIC_ENABLED=true
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_SERVER_ROUTER_LOGGING=true
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data_cloud:/var/lib/grafana
+    ports:
+      # Localhost only — use SSH tunnel: ssh -L 3000:localhost:3000 <your-vps-ssh-alias>
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      tempo:
+        condition: service_started
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - cloud-sim
+    restart: unless-stopped
+
   # Redis 7 (Alpine)
   # Purpose: Event bus (Redis Streams), session cache, rate limiting
   # Resource limit: 128MB RAM, 0.25 CPU
@@ -517,6 +577,14 @@ volumes:
 
   # Elasticsearch data (persisted)
   es_data_cloud:
+    driver: local
+
+  # Tempo trace blocks (persisted)
+  tempo_data_cloud:
+    driver: local
+
+  # Grafana's own state — org, users, provisioned-object bookkeeping (persisted)
+  grafana_data_cloud:
     driver: local
 
   # Redis data (persisted)

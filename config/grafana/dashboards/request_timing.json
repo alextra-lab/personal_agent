@@ -1,0 +1,200 @@
+{
+  "uid": "fre1072-request-timing-e2e",
+  "title": "Request Timing (E2E)",
+  "tags": [
+    "fre-1072",
+    "rebuilt-from-kibana"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Avg duration by stage",
+      "description": "Average phases_summary.<stage>.duration_ms across all request_trace events (90d, full history -- 794 requests, 2026-04-23 to 2026-06-07). llm_inference dominates (avg 24.9s), then tool_execution (avg 5.4s); setup/persistence/synthesis are negligible (<1s each). STALE SIGNAL: request_trace has emitted zero documents since 2026-06-07 (24+ days as of this build) -- this instrumentation has gone dark with no replacement found. This panel answers the stage-breakdown decision for the period it was live, not for current behavior. See the sibling Request volume over time panel, where the same cutoff is directly visible.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"request_trace\"",
+          "metrics": [
+            {
+              "type": "avg",
+              "id": "1",
+              "field": "phases_summary.setup.duration_ms"
+            },
+            {
+              "type": "avg",
+              "id": "2",
+              "field": "phases_summary.persistence.duration_ms"
+            },
+            {
+              "type": "avg",
+              "id": "3",
+              "field": "phases_summary.other.duration_ms"
+            },
+            {
+              "type": "avg",
+              "id": "4",
+              "field": "phases_summary.llm_inference.duration_ms"
+            },
+            {
+              "type": "avg",
+              "id": "5",
+              "field": "phases_summary.tool_execution.duration_ms"
+            },
+            {
+              "type": "avg",
+              "id": "6",
+              "field": "phases_summary.synthesis.duration_ms"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "99",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ],
+          "timeField": "@timestamp"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Total request duration over time",
+      "description": "Average total_duration_ms per request_trace event over time (90d, full history -- 794 requests, avg 29.8s). STALE SIGNAL: this event stopped emitting on 2026-06-07 -- the chart visibly ends 24+ days before today rather than continuing to the present, which is itself the key finding: end-to-end request-phase telemetry has gone dark with no replacement found.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"request_trace\"",
+          "metrics": [
+            {
+              "type": "avg",
+              "id": "1",
+              "field": "total_duration_ms"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ],
+          "timeField": "@timestamp"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Turn duration p50/p95 (Tempo span duration)",
+      "description": "FRE-1072 AC-4: per-day p50/p95 turn duration from Tempo span duration alone (TraceQL quantile_over_time) -- no union with any Elasticsearch field. This is deliberately the single duration source for this dashboard going forward: span duration is intrinsic to Tempo (no second field to union), and it replaces the sibling 'Total request duration over time' ES panel's total_duration_ms field, which this same dashboard's own history already flags as stale (the request_trace event stopped emitting on 2026-06-07). That ES panel is kept for its historical range; this one is the live signal.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{} | quantile_over_time(duration, 0.5, 0.95)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Request volume over time",
+      "description": "Count of request_trace events over time (90d, full history -- 794 requests, 2026-04-23 to 2026-06-07). Replaces the original single-number \"Request Count\" metric panel, which had no time axis and so could not show that this signal has been silent for 24+ days. STALE SIGNAL: no request_trace docs since 2026-06-07 -- end-to-end request-phase telemetry has gone dark with no replacement found; this dashboard answers the stage-breakdown decision for the period it was live, not current behavior.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"request_trace\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ],
+          "timeField": "@timestamp"
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}

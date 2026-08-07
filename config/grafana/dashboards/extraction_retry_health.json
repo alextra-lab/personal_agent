@@ -1,0 +1,209 @@
+{
+  "uid": "fre1072-extraction-retry-health",
+  "title": "Extraction Retry Health",
+  "tags": [
+    "fre-1072",
+    "rebuilt-from-kibana"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Consolidation outcome over time",
+      "description": "consolidation_attempt_recorded outcomes (success/extraction_returned_fallback/budget_denied) over time, 90d/full history. Replaces the original \"Dead-letter rate\" panel, which was mislabeled -- dead_letter is not a real outcome value this event ever emits; the real signal it queried was extraction_returned_fallback. Critical timeline finding, verified against live ES weekly buckets: week of 2026-04-27 was 99.7% fallback (702/704, an acute incident), week of 05-04 shifted to 100% budget_denied/success (0 fallback), a two-week gap (05-11 to 05-18) had zero attempts, and every week since 2026-05-25 (5+ consecutive weeks) has been 100% success. A time-collapsed aggregate (46.3% fallback all-time) would misleadingly read as an active crisis; the time axis is what makes current health legible.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"consolidation_attempt_recorded\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "outcome",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            },
+            {
+              "type": "date_histogram",
+              "id": "2",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ],
+          "timeField": "@timestamp"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "barchart",
+      "title": "Consolidation outcome totals",
+      "description": "Total consolidation_attempt_recorded outcomes (90d, full history -- 1517 attempts). See the Consolidation outcome over time panel before reading these totals in isolation: the 702 extraction_returned_fallback attempts are almost entirely from one resolved incident week (2026-04-27); the system has been 100% success for 5+ consecutive weeks since 2026-05-25.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"consolidation_attempt_recorded\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "outcome",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ],
+          "timeField": "@timestamp"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "Top denial reason",
+      "description": "denial_reason breakdown for budget_denied consolidation attempts (90d, full history). cap_exceeded is 100% of denials (259/259) -- the auto-tuning monitor (FRE-311) should propose a cap raise if this stays saturated.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"consolidation_attempt_recorded\" and outcome: \"budget_denied\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "denial_reason",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ],
+          "timeField": "@timestamp"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Median attempts to success",
+      "description": "Median attempt_number for successful consolidation attempts, over time (90d, full history -- 556 successes; median=1, p90=2, p99=12, max=13 attempts). Dropped the original per-role breakdown: role is always entity_extraction (a single value across all 1517 attempts ever recorded), so the split added no information.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"consolidation_attempt_recorded\" and outcome: \"success\"",
+          "metrics": [
+            {
+              "type": "percentiles",
+              "id": "1",
+              "field": "attempt_number",
+              "settings": {
+                "percents": [
+                  "50"
+                ]
+              }
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ],
+          "timeField": "@timestamp"
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}

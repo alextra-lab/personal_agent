@@ -1,0 +1,51 @@
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+
+metrics_generator:
+  storage:
+    path: /var/tempo/generator-wal
+  # The local-blocks processor (needed for AC-1/AC-4's TraceQL metrics queries) additionally
+  # needs its own traces WAL, separate from metrics_generator.storage above — without it,
+  # initialization fails with "local blocks processor requires traces wal" (verified live;
+  # traced to modules/generator/generator.go's `g.cfg.TracesWAL.Filepath != ""` gate, tag
+  # v2.10.7 — undocumented on grafana.com as of this writing).
+  traces_storage:
+    path: /var/tempo/generator-traces-wal
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [local-blocks]
+
+compactor:
+  compaction:
+    block_retention: 336h   # 14d — already the documented default; explicit for clarity
+
+query_frontend:
+  metrics:
+    # 15d, not 14d exactly: the ticket says "at least 14 days" (default is 24h and rejects a
+    # fortnight query, AC-1) — verified live that Tempo pads a query_range request's window
+    # internally (a literal now-336h request is itself rejected at ~335h even with this override
+    # raising the ceiling), so a clean 336h (exactly 14d) window needs real headroom above the
+    # nominal max, not an exact match to it.
+    max_duration: 360h
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal

@@ -1,0 +1,225 @@
+{
+  "uid": "fre1072-system-health",
+  "title": "System Health",
+  "tags": [
+    "fre-1072",
+    "rebuilt-from-kibana"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "CPU & memory over time",
+      "description": "Average cpu_load / memory_used from sensor_poll (170,242 docs, live today) over the last 90d. FIXES a bug: the prior committed panel OR'd in system_metrics_snapshot, which is dead test-harness pollution -- its 220 docs all come from logger=test_elasticsearch_logging (last emitted 2026-06-20), and it uses different field names (cpu_percent/memory_percent) that never matched this panel's cpu_load/memory_used aggregations anyway, so those docs silently contributed zero data. Rebuilt against sensor_poll alone. Verified live: avg CPU ~6.2%, avg memory ~55.8% over the last 24h (matches the VPS's 8 vCPU / ~10GiB envelope) -- system is healthy.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"sensor_poll\"",
+          "metrics": [
+            {
+              "type": "avg",
+              "id": "1",
+              "field": "cpu_load"
+            },
+            {
+              "type": "avg",
+              "id": "2",
+              "field": "memory_used"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ],
+          "timeField": "@timestamp"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Error events by type",
+      "description": "Count of error/failure events over time, broken down by event_type (top 10), using a self-adapting wildcard query -- event_type:*error* or event_type:*failed*, excluding error_monitor_* (the error-scanner's own housekeeping events, not actual failures). FIXES a staleness bug: the prior committed panel hardcoded 3 event types (elasticsearch_index_failed, model_call_error, entity_extraction_failed), and 2 of those 3 went dead 24-55 days ago (model_call_error last emitted 2026-06-07; entity_extraction_failed last emitted 2026-05-07) -- so the panel visually showed errors declining toward zero, which was actually just instrumentation churn, not improving health. Verified live over the last 7 days: 381 real error/failure events, dominated by elasticsearch_index_failed (170), generic error (107, level=ERROR asyncio/connector cleanup warnings), and slm_health_probe_http_error (90). This wildcard query self-adapts to future event-type churn instead of silently going stale again.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "(event_type: *error* or event_type: *failed*) and not event_type: error_monitor*",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "event_type",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            },
+            {
+              "type": "date_histogram",
+              "id": "2",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ],
+          "timeField": "@timestamp"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Consolidation activity",
+      "description": "Count of scheduler consolidation lifecycle events over time (consolidation_triggered / consolidation_started / consolidation_completed), broken down by stage. Query unchanged from the original (it was already correct) -- this is a value-confirm pass. Verified live: all three stages are alive today (960/960/1878 docs respectively, last emitted 2026-07-01T11:40), and triggered/started counts match 1:1 (960=960) while completed is roughly 2x (1878) -- consistent with consolidation completing more than once per trigger cycle. No staleness or mismatch found; consolidation is running normally.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: (consolidation_triggered or consolidation_completed or consolidation_started)",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "event_type",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            },
+            {
+              "type": "date_histogram",
+              "id": "2",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ],
+          "timeField": "@timestamp"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "State transitions",
+      "description": "Count of orchestrator state_transition events over time, broken down by originating state (from_state). Query unchanged from the original (it was already correct) -- this is a value-confirm pass. Verified live: alive today (13,772 total docs, last emitted 2026-07-01T11:40), with exactly 3 distinct from_state values -- llm_call (5,818), tool_execution (4,562), init (3,392). Orchestrator is transitioning states normally.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"state_transition\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "from_state",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            },
+            {
+              "type": "date_histogram",
+              "id": "2",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ],
+          "timeField": "@timestamp"
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}

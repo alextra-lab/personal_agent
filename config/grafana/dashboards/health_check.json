@@ -1,0 +1,30 @@
+{
+  "uid": "fre1072-health-check",
+  "title": "FRE-1072 Health Check",
+  "description": "Not part of the FRE-533 rebuild inventory (AC-6) — a dedicated canary for AC-5(a): proves Grafana is serving real query results against a live datasource, not merely running. The panel below queries es-agent-logs for the fixture marker AC-5's own test writes and asserts the exact record comes back.",
+  "tags": [
+    "fre-1072"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Fixture Health Check",
+      "description": "AC-5(a): queries es-agent-logs for event_type:\"fre1072_health_check\" — the fixture AC-5's test injects — and must return exactly that record, not an empty placeholder and not a wrong-datasource false positive.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "elasticsearch", "uid": "es-agent-logs" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "elasticsearch", "uid": "es-agent-logs" },
+          "query": "event_type: \"fre1072_health_check\"",
+          "metrics": [{ "type": "logs", "id": "1" }]
+        }
+      ]
+    }
+  ],
+  "time": { "from": "now-1h", "to": "now" }
+}

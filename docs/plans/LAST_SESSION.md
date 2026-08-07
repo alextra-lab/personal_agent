@@ -1,78 +1,85 @@
-# Last session — 2026-08-06 (the day the owner priced my ticket-filing habit)
+# Last session — 2026-08-06 → 07 (the day the gate earned its keep, and the day I kept over-reaching)
 
 ## Doing / discussing
 
-The VPS/Cloud project was driven to its floor at the owner's direction and now holds exactly one open
-ticket, a seam that cannot be adjudicated before September. Observability is the named next subject and
-its first two tickets are Approved — but the owner said **no** to dispatching them when offered, so all
-three streams are deliberately idle. Nothing is in flight. The last live thread was the owner correcting
-how I generate work, which is the most important thing on this page.
+The Observability Foundation burndown, driven end to end at the owner's direction. Nothing is in
+flight: every stream is idle, the board has nothing in Awaiting Deploy, In Review or In Progress, and
+build1's next is FRE-1128. The live thread at the reset was the owner cutting my over-built fixes back
+to their real size — twice — and that correction is the most useful thing on this page.
 
 ## What was decided and why
 
-**Filing a ticket is expensive, and the reason is not backlog clutter.** Owner: *"filing is very
-expensive. My time, your time, CI tests, Unit tests, all these processes rerun for small small things."*
-Every ticket carries a **fixed delivery overhead regardless of size** — approval, dispatch, a seat, a
-plan, codex, my gate, a full CI run, the deploy ask, the close-out. A one-liner pays the same toll as a
-1,600-line change. So "it's only a Backlog entry" is the wrong frame: the cost lands later, when it is
-worked. The instruction: **"complete it. don't create new. this could have been folded in/ended in the
-original."** I had filed three in one morning; all three are now cancelled with their substance moved
-into the originating tickets as records explicitly marked *not a request*.
+**The gate is the only thing that worked, and green signals are compatible with the deliverable not
+existing.** Five separate silent-empty defects surfaced in one telemetry path (FRE-1108), each passing
+CI green with a clean self-review: a validator with zero call sites, then the same validator made
+"permissive" so it returned silently on every production path, then two validated fields that exist
+nowhere, then `.keyword` stripped from a field that genuinely needed it (a live 400), then a guard
+checking *existence* when the property that matters is *aggregatability*. Six gate rounds. The only
+check that ever caught anything was **running the real path against production** — which is what the
+ticket's own failure clause demanded from the start and what every handoff substituted a mock for.
 
-**One of everything is the architecture, not a gap.** Owner: *"you are building resiliency when I did not
-ask for it. I don't have 2 of everything."* Single-node Elasticsearch with one shard, one Postgres, one
-Neo4j, one inference host, no embedder fallback. **A single point of failure here is not a finding.**
-This is a general ruling, delivered while dismissing the missing-embedder-fallback ticket — do not
-re-surface this class. Correctness and wrong-data-in-front-of-the-owner still outrank it.
+**"One caller" is not "one writer" — and it falsified an ADR four minutes after I merged it.** ADR-0133
+rests its viability on `es_logger.log_event` having a single caller, inferring total coverage. Gating
+FRE-1068 immediately after, four distinct functions were found writing to `agent-logs`, one of them
+live. **ADR-0133 still needs a Status Update correcting both the premise and D2's validator placement**
+— FRE-1068 created the real chokepoint (`_index_agent_log`) that the ADR assumed already existed. That
+is the adr seat's to write and it is the largest outstanding debt.
 
-**The SLM server must not auto-start** — models live on an external volume and the owner decides start
-and stop. That withdrew FRE-241's reboot criterion (**withdrawn, not unproven** — the two record
-differently) and forced a second, non-obvious decision: the launcher's exit-0-on-no-backends existed
-*solely* so launchd's KeepAlive would not churn. Remove launchd and that rationale evaporates while the
-behaviour gets worse, because the consumer of the exit code becomes a human's shell — success reported
-with nothing running. It exits 1 now.
+**Filing is expensive and I kept forgetting.** The owner cancelled one ticket I filed against a GitHub
+outage ("you are reacting to an external problem as if it were local") and cut FRE-1128 from an
+eight-AC draft-PR apparatus — watcher change, bounce state machine — down to a one-line reviewer swap,
+with a single question: *"if the problem is resolved by using code-reviewer, then the problem has been
+resolved with a change of test in the build skill, non?"* Both were the same reflex: finding a true
+pattern repeatedly is not licence to file or build every instance that resembles it.
 
-**Three tickets today had premises that dissolved on contact with the running system**, and I made one of
-them worse. FRE-1160: the eval compose file is an *overlay* by design, so validating it standalone always
-fails; I "corrected its scope" authoritatively after validating it in isolation, which was the same error
-the ticket already contained. FRE-1159: the two Cloudflare settings carry an explicit pydantic `alias`,
-which **bypasses** the `AGENT_` env prefix — so the unprefixed names were correct all along and inbound
-JWT verification has been live. One command against the running container overturned it. The generalisable
-form: **verify at the answer, not at the definition or a plausible neighbour.**
+**Code-review was never permission-blocked; it was sequenced wrong.** Three wrong diagnoses from me
+before the seat's own transcript settled it: the bare `code-review` skill *is* blocked, the plugin form
+is *not* but is PR-shaped, and the reviewers diff **committed branch against main** so uncommitted work
+is invisible to them. The stage is not new — FRE-847 moved it from master to build on 2026-07-08, and
+it worked before because master only ever acts on PRs that exist.
 
-**Prose volume is part of the same over-production problem.** Owner, on a 400-word cancellation comment:
-*"this is true, but noise."* Match a comment's length to the decision's weight.
+**Five of my own instrument failures, all producing confident wrong numbers.** `_cat/indices` (Lucene
+docs, inflated by nested children) instead of `_count`; the FRE-375 *test* substrate queried twice as
+production; a secret sweep filtered on value length rather than key name, reporting 18 false exposures;
+`hits.total` capped at 10,000 giving a 574% share. Each was caught, but only because someone checked.
+The rule that would have prevented all five: **verify the instrument before believing the answer.**
 
 ## Worktrees — anything special
 
-- Both build seats idle and clean. `build` and `build2` still hold their merged branches, so
-  `--delete-branch` fails locally every time — benign, recurring, not worth acting on.
-- **build1 stopped mid-close-out on FRE-1166**: PR open, CI green, handoff unwritten, two scored review
-  findings alive only in its context. A `send-keys` poke recovered it. The machinery cannot see this —
-  a green PR with an unfinished close-out looks *ready* to the watcher.
+- **build1** was wedged ~115 minutes by an orphaned background shell; the orchestrator logged
+  `dispatch_seat_wedged` on 23 consecutive ticks and reached nobody (known v1 limitation, FRE-922).
+  Recovered with `cc-sessions restart cc-1build` — **not** by killing it; the launcher deliberately has
+  no termination code after two incidents (FRE-909, FRE-913), and seat lifecycle belongs to
+  `cc-sessions`.
+- `.claude/worktrees/master-914` still sits on the long-merged `fre-909-seat-rename`. Harmless.
 
 ## Sequence position + drift
 
-No drift; the owner drove the whole day. The console gained one directive — VPS-then-Observability,
-transcribed verbatim. **I attached its retirement condition myself** because the contract refuses a
-directive without one; the owner has not confirmed that it names the right event, and it interacts with
-the existing four-item sequence directive, which they may want collapsed into one line. That is theirs
-to edit, not mine.
+No drift. The console's VPS-then-Observability directive was satisfied — VPS reached its floor
+yesterday — and the whole session ran inside Observability Foundation, which went from 28 unapproved
+tickets to 10. The owner approved the ADR-0129 chain B1–B7 plus FRE-1068 in one batch after being shown
+that the burndown was approval-bound rather than capacity-bound.
 
 ## Answers for the fresh start
 
-- **Why are FRE-1105/1108 Approved but unlabelled?** Offered and declined at 10:05. Parked deliberately;
-  do not dispatch without asking.
-- **Why is FRE-1148 the only open VPS ticket?** It is the ADR-0132 seam, due 2026-09-08, and the due date
-  is a marker not an actuator — it wakes only at my advance-dispatch pass on or after that date. If
-  nothing merges in early September it will sit past its date unnoticed.
-- **Why were FRE-1159/1160/1172 cancelled after being approved or dispatched?** See above — two wrong
-  premises and one owner ruling. Each cancellation carries its reasoning.
-- **`run_confirmed` in `dispatch_state.json` is always False.** It is not a stall signal; both seats show
-  it while demonstrably working. Trust `phase`, the worktree branch and Linear state instead.
-- **Dispatch is not instant after a merge.** The orchestrator clears the slot on one ~5-minute tick and
-  launches on the next, so up to ~10 minutes is normal. The owner asked about this once already.
-- **I leaked a secret into this session's transcript** — a broad `printenv | grep` printed
-  `AGENT_MANAGED_EMBEDDING_TOKEN` in full. Verified **not** in git (no tracked file, no commit in
-  history, `.env` is ignored); two stray on-disk copies shredded. The transcript itself I cannot redact.
-  Rotation is the owner's call and was raised. Check presence, never values, when inspecting env.
+- **Why is FRE-1064 Done when the falsification measurement has not run?** The ticket says explicitly
+  that the measurement is FRE-1073's and that running it is *"a sequencing gate, not a criterion holding
+  this ticket open."* **Master must run the identity-share query before dispatching FRE-1065** and stop
+  the chain if the share has not moved. Pre-deploy baseline captured: **11.57%** over the trailing 7
+  days (57,408 of 496,040), which reproduces the ADR's recorded 11.36% closely enough to trust.
+- **Why does PR #853 carry four empty retrigger commits?** A GitHub outage stopped the CI workflow
+  dispatching for ~6 hours. The watcher correctly told the seat three times that checks were red; I
+  read those pushes as improvisation and told it to stop. The seat was following the machinery and I
+  was wrong.
+- **Why did a merge-ready PR sit unannounced for 4.5 hours?** The watcher treats *absent* required
+  checks as green, fired at 22:27 on an incomplete signal, and burned the `master:{pr}:{sha}` dedup
+  entry — so the genuine green at 22:57 produced no trigger. Deliberately **not ticketed**: the trigger
+  was an external outage, my gate correctly refused the merge throughout, and any later push clears it.
+  File it only if it recurs.
+- **Is the POSTGRES_PASSWORD exposure handled?** Owner decided: let ILM expire the four documents around
+  2026-09-04. No rotation. Verified clean everywhere else — Captain's Log captures, every non-`agent-logs`
+  index, and all 63 text/JSON columns in production Postgres. Also verified: **no real credential appears
+  in any tracked file or in any of the 3,034 commits.**
+- **Two ladder cells are mine, not the owner's.** The `promotes-when`/`demotes-when` on the two rows
+  granted 2026-08-06 were written by me because the record schema demands them. The owner has not
+  confirmed that wording.

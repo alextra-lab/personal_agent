@@ -236,8 +236,11 @@ services:
       - ./config/grafana/dashboards:/etc/grafana/dashboards:ro
       - grafana_data_cloud:/var/lib/grafana
     ports:
-      # Localhost only — use SSH tunnel: ssh -L 3000:localhost:3000 <your-vps-ssh-alias>
-      - "127.0.0.1:3000:3000"
+      # Localhost only — use SSH tunnel: ssh -L 3001:localhost:3001 <your-vps-ssh-alias>
+      # Host port 3001, not 3000: seshat-pwa already binds 127.0.0.1:3000 on this host.
+      # Container port stays 3000 — the Cloudflare Tunnel reaches Grafana on the compose
+      # network at http://grafana:3000, unaffected by this host-side binding.
+      - "127.0.0.1:3001:3000"
     depends_on:
       tempo:
         condition: service_started

@@ -1,0 +1,234 @@
+{
+  "uid": "fre1072-context-window-occupancy",
+  "title": "Context Window Occupancy",
+  "tags": [
+    "fre-1072",
+    "rebuilt-from-kibana"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Context Window Composition \u2014 token sums (percentage not computed)",
+      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 formula(None), math(None). Plots raw per-component token sums (reasoning/memory/tool/total), not the percent-of-window ratio the original formula/math columns computed.]",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"context_budget_applied\"",
+          "metrics": [
+            {
+              "type": "sum",
+              "id": "1",
+              "field": "context_occupancy.reasoning_tokens"
+            },
+            {
+              "type": "count",
+              "id": "2"
+            },
+            {
+              "type": "sum",
+              "id": "3",
+              "field": "context_occupancy.total"
+            },
+            {
+              "type": "sum",
+              "id": "4",
+              "field": "context_occupancy.memory_tokens"
+            },
+            {
+              "type": "sum",
+              "id": "5",
+              "field": "context_occupancy.tool_tokens"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Context Window Occupancy vs Budget Ceiling (ceiling shown as event count)",
+      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 static_value(None). The occupancy line (avg total_tokens) is real; the ceiling series is an event count standing in for the original's fixed configured-ceiling reference value, not the ceiling itself.]",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"context_budget_applied\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            },
+            {
+              "type": "avg",
+              "id": "2",
+              "field": "total_tokens"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "Context Window \u2014 Per-Turn Detail",
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"context_budget_applied\"",
+          "metrics": [
+            {
+              "type": "sum",
+              "id": "1",
+              "field": "context_occupancy.memory_tokens"
+            },
+            {
+              "type": "max",
+              "id": "2",
+              "field": "@timestamp"
+            },
+            {
+              "type": "sum",
+              "id": "3",
+              "field": "context_occupancy.reasoning_tokens"
+            },
+            {
+              "type": "sum",
+              "id": "4",
+              "field": "context_occupancy.tool_tokens"
+            },
+            {
+              "type": "sum",
+              "id": "5",
+              "field": "total_tokens"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "trace_id",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Context Window Usage Trend (detail)",
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"context_budget_applied\"",
+          "metrics": [
+            {
+              "type": "avg",
+              "id": "1",
+              "field": "total_tokens"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}

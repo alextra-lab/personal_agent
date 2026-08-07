@@ -1,0 +1,307 @@
+{
+  "uid": "fre1072-monitors-joinability-slm-health",
+  "title": "Monitors: Joinability & SLM Health",
+  "tags": [
+    "fre-1072",
+    "rebuilt-from-kibana"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Joinability summary",
+      "description": "Run-level outcome counts + avg run duration (FRE-703 C4 redesign). Data view fixed to agent-monitors-joinability-2* -- the original agent-monitors-joinability-* glob silently also matched agent-monitors-joinability-substrate-* daily indices, blending per-substrate walk durations into the run-level avg duration_ms (24.9ms contaminated vs 71.9ms correct, a ~64% understatement).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-monitors-joinability"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-monitors-joinability"
+          },
+          "query": "",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            },
+            {
+              "type": "avg",
+              "id": "2",
+              "field": "duration_ms"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "99",
+              "field": "started_at",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "SLM health summary",
+      "description": "SLM reachable/unreachable counts + avg probe latency (FRE-703 C4 redesign).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-monitors-slm-health"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-monitors-slm-health"
+          },
+          "query": "",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            },
+            {
+              "type": "avg",
+              "id": "2",
+              "field": "probe_latency_ms"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "99",
+              "field": "probed_at",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Joinability outcome over time",
+      "description": "Run outcome mix (green/yellow/red/skipped) per time bucket, stacked (FRE-703 C4 redesign; run-level pattern, excludes substrate contamination).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-monitors-joinability"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-monitors-joinability"
+          },
+          "query": "",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "started_at",
+              "settings": {
+                "interval": "1h"
+              }
+            },
+            {
+              "type": "terms",
+              "id": "2",
+              "field": "outcome",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "SLM reachability over time",
+      "description": "SLM reachable/unreachable mix per time bucket, stacked (FRE-703 C4 redesign).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-monitors-slm-health"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-monitors-slm-health"
+          },
+          "query": "",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "probed_at",
+              "settings": {
+                "interval": "1h"
+              }
+            },
+            {
+              "type": "terms",
+              "id": "2",
+              "field": "reachable",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "barchart",
+      "title": "Per-substrate joinability detail",
+      "description": "Per-substrate check volume, green-status count, red/yellow orphan sums, avg walk duration (FRE-703 C4 redesign; consolidates the old Per-Substrate Check Status / Orphan Counts by Substrate / Per-Substrate Walk Duration histogram panels into one table).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-monitors-joinability-substrate"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-monitors-joinability-substrate"
+          },
+          "query": "",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            },
+            {
+              "type": "sum",
+              "id": "2",
+              "field": "orphan_red_count"
+            },
+            {
+              "type": "avg",
+              "id": "3",
+              "field": "duration_ms"
+            },
+            {
+              "type": "sum",
+              "id": "4",
+              "field": "orphan_yellow_count"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "substrate",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Recent unreachable SLM probes",
+      "description": "Raw document table. Columns in source: status, error, probe_latency_ms, trace_id",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-monitors-slm-health"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-monitors-slm-health"
+          },
+          "query": "reachable:false",
+          "metrics": [
+            {
+              "type": "raw_document",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": []
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}

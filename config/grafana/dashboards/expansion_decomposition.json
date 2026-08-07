@@ -1,0 +1,248 @@
+{
+  "uid": "fre1072-expansion-decomposition",
+  "title": "Expansion & Decomposition",
+  "tags": [
+    "fre-1072",
+    "rebuilt-from-kibana"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "barchart",
+      "title": "Expansion strategy distribution",
+      "description": "Count of gateway_output turns by decomposition strategy (single/hybrid/decompose/delegate), 90d window -- covers the full emission history since strategy telemetry began 2026-04-15. decompose and delegate are rare (2 and 17 all-time) so a narrower window would misrepresent them as zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"gateway_output\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "strategy",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Expansion events over time",
+      "description": "When non-single (hybrid/decompose/delegate) expansion strategies fire, over time (90d, full history). single-strategy turns (the vast majority, 1642/1696) are excluded so the rare expansion events are visible instead of flattened by volume.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"gateway_output\" and strategy: (\"hybrid\" or \"decompose\" or \"delegate\")",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "strategy",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            },
+            {
+              "type": "date_histogram",
+              "id": "2",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Sub-agent spawn rate",
+      "description": "Count of sub_agent_complete events over time (90d, full history -- 98 total).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"sub_agent_complete\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "barchart",
+      "title": "Sub-agent success rate",
+      "description": "Sub-agent completion outcomes (90d, full history -- 98 total, 75 succeeded / 23 failed = 76.5%). See the Sub-agent duration by outcome panel: failures cluster near the 60s timeout (avg 52.2s vs 25.8s for successes) -- most failures are timeouts, not task errors.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"sub_agent_complete\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "success",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "barchart",
+      "title": "Sub-agent duration by outcome",
+      "description": "Sub-agent completion count and average duration by success outcome (90d, full history). Failures average 52.2s vs 25.8s for successes -- most failures cluster near the 60s sub-agent timeout ceiling, i.e. they are timeouts, not task-level errors.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"sub_agent_complete\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            },
+            {
+              "type": "avg",
+              "id": "2",
+              "field": "duration_ms"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "success",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}

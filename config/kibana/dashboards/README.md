@@ -9,13 +9,16 @@ This folder holds Kibana saved objects. Each file contains one dashboard and all
 - **task_analytics.ndjson** — Task Analytics (task outcomes, duration by tool, tool frequency, entity/memory enrichment).
 - **request_timing.ndjson** — Request Timing E2E (E2E duration over time, total request duration).
 - **request_traces.ndjson** — Request Traces (single-trace drilldown, phase averages, trace selector). Per-phase analysis lives here.
-- **reflection_insights.ndjson** — Reflection Insights (proposed changes over time, improvement categories, impact, metrics).
-- **insights_engine.ndjson** — Insights Engine (insight count by type, confidence trend, anomalies).
+- **self_improvement_funnel.ndjson** — Self-Improvement Funnel (produced → promoted → shipped/canceled, promotion throttle events).
 - **extraction_retry_health.ndjson** — Extraction Retry Health (median attempts, fallback rate, denial_reason distribution).
 - **llm_performance.ndjson** — LLM Performance (call count by model, latency, token usage, errors over time).
 - **expansion_decomposition.ndjson** — Expansion & Decomposition (strategy distribution, sub-agent spawn rate/success, context budget).
 - **intent_classification.ndjson** — Intent Classification (task type distribution, confidence scores, signal frequency).
 - **prompt-cost-cache.ndjson** — Prompt Cost & Cache Attribution (per-callsite token/cost, static-prefix-hash erosion). Lens-based (FRE-406).
+- **cost_budget.ndjson** — Cost & Budget (cap utilization, spend over time by role, reserve/commit/refund funnel, top sessions by spend, denials, net settlement delta).
+- **traversal_gate.ndjson** — Traversal Ledger & Gate Decisions (gate decisions/outcomes/activity by tool, route-trace orchestration outcomes).
+- **monitors_joinability_slm.ndjson** — Monitors: Joinability & SLM Health (joinability/SLM summaries and outcome-over-time, per-substrate detail, unreachable-probe detail search).
+- **turn_session_artifact.ndjson** — Turn, Session & Artifact Analytics (session activity, turn complexity mix, turn classification detail, artifact envelope + gate status).
 - **context_occupancy.ndjson** — Context Window Occupancy (memory / tool-definition / reasoning token composition over time, from `context_budget_applied`). Lens stacked-area (FRE-593).
 
 > **Retired (FRE-535):** `request_latency.ndjson` — fully superseded by Request Traces; every panel filtered a never-emitted `request_latency_*` event. See `docs/research/2026-06-08-fre-535-dashboard-triage.md`.

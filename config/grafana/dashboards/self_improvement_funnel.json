@@ -1,0 +1,92 @@
+{
+  "uid": "fre1072-self-improvement-funnel",
+  "title": "Self-Improvement Funnel",
+  "tags": [
+    "fre-1072",
+    "rebuilt-from-kibana"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Self-Improvement Funnel: total reflection count (stage breakdown not reproduced)",
+      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 filters(None). Plots the total reflection-document count, not the Produced/Promoted/Shipped/Canceled stage breakdown the original filters() aggregation computed; that breakdown was not reproduced.]",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-captains-reflections"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-captains-reflections"
+          },
+          "query": "",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "99",
+              "field": "timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Self-Improvement Funnel: Promotion throttle events",
+      "description": "Raw document table. Columns in source: event_type, current_count, threshold. The Kibana original sourced this from agent-captains-funnel-events-*, which carries no live documents in Elasticsearch; re-sourced to es-agent-logs, filtered to event_type:\"throttled_budget\" (src/personal_agent/captains_log/promotion.py::_emit_throttle_event) so this table actually shows throttle events rather than every agent-logs document.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"throttled_budget\"",
+          "metrics": [
+            {
+              "type": "raw_document",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": []
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}

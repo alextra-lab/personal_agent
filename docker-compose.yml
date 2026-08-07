@@ -86,6 +86,49 @@ services:
       timeout: 5s
       retries: 3
 
+  # Tempo 2.10.7 — trace storage/query backend (ADR-0129 D6). OTLP receiver stands ready for the
+  # OTel Collector attaching under FRE-1070; fixture injection targets it directly for now.
+  # No healthcheck: the image is distroless (no shell, no wget, no self-check flag) — Grafana
+  # depends on the container having started, and real readiness is proven by the test suite's
+  # own live polling against Tempo's HTTP API.
+  tempo:
+    image: grafana/tempo:2.10.7
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./docker/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200"   # Tempo HTTP API / query
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+
+  # Grafana 13.1.3 — trace/log visualization UI (ADR-0129 D6). Kibana is retained, not replaced.
+  grafana:
+    image: grafana/grafana:13.1.3
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_AUTH_BASIC_ENABLED=true
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-grafana_dev_password}
+      - GF_SERVER_ROUTER_LOGGING=true
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      tempo:
+        condition: service_started
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # Redis 7 for event bus (ADR-0041)
   redis:
     image: redis:7-alpine
@@ -105,3 +148,5 @@ volumes:
   es_data:
   neo4j_data:
   redis_data:
+  tempo_data:
+  grafana_data:

@@ -1,0 +1,297 @@
+{
+  "uid": "fre1072-traversal-ledger-gate-decisions",
+  "title": "Traversal Ledger & Gate Decisions",
+  "tags": [
+    "fre-1072",
+    "rebuilt-from-kibana"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Gate decisions over time",
+      "description": "Count of tool_loop_gate decisions (allow/warn_consecutive/block_consecutive) over time. Caveat: ~12.6% of tool_loop_gate docs are missing the decision field entirely due to the ES index.mapping.total_fields.limit=300 ceiling silently dropping new fields once a day's mapping is full (affected dates include 2026-06-17, 06-21, 06-26, 06-28, 06-29) -- undercount, not zero-signal.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"tool_loop_gate\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "decision",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            },
+            {
+              "type": "date_histogram",
+              "id": "2",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "barchart",
+      "title": "Gate decision outcomes",
+      "description": "Total tool_loop_gate decisions by outcome (30d). Caveat: ~12.6% of tool_loop_gate docs are missing the decision field entirely due to the ES index.mapping.total_fields.limit=300 ceiling silently dropping new fields once a day's mapping is full (affected dates include 2026-06-17, 06-21, 06-26, 06-28, 06-29) -- verified counts undercount the true total by design, not a computation error.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"tool_loop_gate\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "decision",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "Gate activity by tool",
+      "description": "Count of tool_loop_gate crossings by tool_name (top 25, 30d) -- which tools trigger the traversal gate most often.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"tool_loop_gate\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "tool_name",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "barchart",
+      "title": "Top gate block/warn reasons",
+      "description": "Reason breakdown for warn_consecutive/block_consecutive gate decisions (30d). Uses explicit decision:(warn_consecutive or block_consecutive) inclusion, NOT \"not decision:allow\" -- the negation form also matches docs where decision is entirely missing (dropped by the ES field-ceiling bug, see Gate decision outcomes panel), which contaminates the reason breakdown with false allow-side entries like \"within thresholds\".",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"tool_loop_gate\" and decision: (\"warn_consecutive\" or \"block_consecutive\")",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "reason",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "barchart",
+      "title": "Route-trace stimulus to path label",
+      "description": "Which gateway_label (stimulus-type/expansion-path) route_trace_written records most often (30d, all route-traced turns fall in this window). Caveat: ~33% of route_trace_written docs are missing gateway_label and orchestration_event entirely due to the ES index.mapping.total_fields.limit=300 ceiling silently dropping new fields once a day's mapping is full -- undercount, not zero-signal.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"route_trace_written\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "gateway_label",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Route-trace orchestration outcome over time",
+      "description": "route_trace_written orchestration_event (primary_handled vs delegate_called) over time (30d). Caveat: ~33% of route_trace_written docs are missing orchestration_event and gateway_label entirely due to the ES index.mapping.total_fields.limit=300 ceiling silently dropping new fields once a day's mapping is full -- undercount, not zero-signal.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"route_trace_written\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            },
+            {
+              "type": "terms",
+              "id": "2",
+              "field": "orchestration_event",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}

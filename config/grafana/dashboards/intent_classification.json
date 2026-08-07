@@ -1,0 +1,245 @@
+{
+  "uid": "fre1072-intent-classification",
+  "title": "Intent Classification",
+  "tags": [
+    "fre-1072",
+    "rebuilt-from-kibana"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "barchart",
+      "title": "Task type distribution",
+      "description": "Count of gateway_output turns by classified task_type (90d, full history -- covers the whole 77-day emission span since 2026-04-15). conversational dominates (1188/1696, 70%).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"gateway_output\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "task_type",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Intent classification over time",
+      "description": "gateway_output task_type breakdown over time (90d, full history).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"gateway_output\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "task_type",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            },
+            {
+              "type": "date_histogram",
+              "id": "2",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "Confidence score distribution",
+      "description": "Count of gateway_output turns by exact confidence value (90d, full history). Caveat: confidence is categorical, not continuous -- the classifier emits only 4 discrete values ever (0.7, 0.8, 0.85, 0.9) and never dips below 0.7, so a low-confidence reading cannot be used to flag likely misclassifications. See the Reclassification events panel for the actual (rare) misclassification-correction signal.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"gateway_output\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "confidence",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "barchart",
+      "title": "Signal frequency breakdown",
+      "description": "Count of gateway_output turns by pattern signal fired (90d, full history, top 20). Caveat: the recall-cue detector sometimes writes the raw matched user-text verbatim into the signals array instead of a canonical label (e.g. \"Refresh my memory\", \"Going back to earlier\") -- these are one-off strings, not real signal categories, and inflate the apparent diversity of this breakdown. recall_cue_reclassified (5 occurrences) is the canonical marker for those turns; the echoed-text entries are an instrumentation bug, out of scope to fix here.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"gateway_output\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "signals",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "barchart",
+      "title": "Reclassification events",
+      "description": "This is the only misclassification-correction signal visible in gateway_output telemetry: turns where a memory-recall cue pattern overrode the initial classification (signals contains recall_cue_reclassified), broken down by the corrected task_type. Rare -- 5 of 1696 turns (0.3%) over the full 90d/77-day emission history, all on 2026-05-10, all corrected to memory_recall. A separate recall_controller_skipped event (503 docs, out of scope here) logs the recall controller's decision-not-to-override cases with an original_task_type field, offering a richer decision-log for this subsystem if a deeper investigation is warranted later.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"gateway_output\" and signals: \"recall_cue_reclassified\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "task_type",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}

@@ -1,0 +1,181 @@
+{
+  "uid": "fre1072-request-traces",
+  "title": "Request Traces",
+  "tags": [
+    "fre-1072",
+    "rebuilt-from-kibana"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "barchart",
+      "title": "Slowest traces (top 20)",
+      "description": "Top 20 request_trace events by total_duration_ms (unfiltered -- pick a trace_id here, then edit the query bar in Trace detail table/Trace phase totals to drill into it). STALE SIGNAL, same request_trace family (794 requests, 2026-04-23 to 2026-06-07, silent 24+ days). FINDING: distribution is extremely right-skewed -- top traces run 4.7-18.8 minutes (1,128,878ms / 1,095,568ms / 921,288ms for the top 3), far above the ~29.8s average established in the sibling Request Timing dashboard. Cross-checked directly against ES: the top 3 slow traces (f5684891, 7941bb73, 44a2c00a) have 43/29/25 total_steps vs. ~11 steps for a typical trace, suggesting these are requests with unusually long tool-execution/retry sequences rather than measurement artifacts. An average-only view (like Total duration over time) hides this tail entirely.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"request_trace\"",
+          "metrics": [
+            {
+              "type": "max",
+              "id": "1",
+              "field": "total_duration_ms"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "trace_id",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "barchart",
+      "title": "Trace phase totals",
+      "description": "Step count and total duration per phase, for the same example trace as the Trace detail table panel (trace_id 763278fa-fbac-444b-b689-b79933158909). llm_inference is 2 of 11 steps but 8.5s of the 19.3s total (44%) -- the dominant cost for this specific request. STALE SIGNAL: request_trace_step stopped emitting on 2026-06-07, 24+ days before this build, with no replacement found.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"request_trace_step\" and trace_id: \"763278fa-fbac-444b-b689-b79933158909\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            },
+            {
+              "type": "sum",
+              "id": "2",
+              "field": "duration_ms"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "phase",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "Trace detail table",
+      "description": "Step-by-step breakdown (sequence, phase, step name, duration, offset) for one example trace (trace_id 763278fa-fbac-444b-b689-b79933158909, 11 steps, total 19.3s). To trace a DIFFERENT request, edit the trace_id in this panel's query bar to any other value from the Slowest traces panel. STALE SIGNAL: request_trace_step (9834 docs, 2026-04-23 to 2026-06-07) stopped emitting on 2026-06-07, 24+ days before this build, with no replacement found -- this shows what end-to-end tracing looked like while the instrumentation was live, not a currently-updating tool.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"request_trace_step\" and trace_id: \"763278fa-fbac-444b-b689-b79933158909\"",
+          "metrics": [
+            {
+              "type": "avg",
+              "id": "1",
+              "field": "duration_ms"
+            },
+            {
+              "type": "avg",
+              "id": "2",
+              "field": "offset_ms"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "sequence",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            },
+            {
+              "type": "terms",
+              "id": "2",
+              "field": "phase",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            },
+            {
+              "type": "terms",
+              "id": "3",
+              "field": "name",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}

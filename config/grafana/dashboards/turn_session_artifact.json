@@ -1,0 +1,236 @@
+{
+  "uid": "fre1072-turn-session-artifact-analytics",
+  "title": "Turn, Session & Artifact Analytics",
+  "tags": [
+    "fre-1072",
+    "rebuilt-from-kibana"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "barchart",
+      "title": "Session activity: cost, turns, calls, artifacts",
+      "description": "Per-session rollup: total cost, LLM calls, distinct turns (traces), avg latency, and artifacts produced (FRE-703 C4 redesign).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "session_id: *",
+          "metrics": [
+            {
+              "type": "cardinality",
+              "id": "1",
+              "field": "trace_id"
+            },
+            {
+              "type": "avg",
+              "id": "2",
+              "field": "latency_ms"
+            },
+            {
+              "type": "sum",
+              "id": "3",
+              "field": "cost_usd"
+            },
+            {
+              "type": "count",
+              "id": "4"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "session_id",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Turn complexity mix over time",
+      "description": "Gateway complexity mix (simple/moderate/complex) per time bucket, stacked (FRE-703 C4 redesign).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"gateway_output\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            },
+            {
+              "type": "terms",
+              "id": "2",
+              "field": "complexity",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Turn classification detail",
+      "description": "Raw document table. Columns in source: trace_id, task_type, complexity, strategy, token_count, mode",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"gateway_output\"",
+          "metrics": [
+            {
+              "type": "raw_document",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": []
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Artifact envelope + gate status summary",
+      "description": "Single-row scorecard: artifact_gate_decision outcomes + artifact_envelope_integrity probe outcomes (ADR-0089 D5). Note: agent-logs-2026.06.17 sits near the ES 300-field mapping ceiling -- 1 of 14 gate_decision docs on that day has gate_decision silently dropped from the mapping (see PR #295 delegation_outcomes retire-proposal for the systemic issue); it is counted here under \"Gate: other/missing\" (FRE-703 C4 redesign).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "99",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Artifact envelope detail (join on artifact_id)",
+      "description": "Raw document table. Columns in source: artifact_id, trace_id, session_id, probe_status, envelope_ok, served_mime, http_status, gate_decision",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: (\"artifact_envelope_integrity\" or \"artifact_gate_decision\")",
+          "metrics": [
+            {
+              "type": "raw_document",
+              "id": "1"
+            }
+          ],
+          "bucketAggs": []
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}

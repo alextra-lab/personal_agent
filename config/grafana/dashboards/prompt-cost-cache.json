@@ -1,0 +1,124 @@
+{
+  "uid": "fre1072-prompt-cost-cache-attribution",
+  "title": "Prompt Cost & Cache Attribution",
+  "tags": [
+    "fre-1072",
+    "rebuilt-from-kibana"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "barchart",
+      "title": "Prompt: Total cost by callsite",
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"model_call_completed\"",
+          "metrics": [
+            {
+              "type": "sum",
+              "id": "1",
+              "field": "cost_usd"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "terms",
+              "id": "1",
+              "field": "prompt_callsite",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Prompt: cache reads vs input tokens by callsite (hit rate not computed)",
+      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 formula(None), math(None). Plots cache_read_tokens and input_tokens sums per callsite; the original's cache-hit-rate ratio (cache_read / input) was not reproduced.]",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "query": "event_type: \"model_call_completed\"",
+          "metrics": [
+            {
+              "type": "count",
+              "id": "1"
+            },
+            {
+              "type": "sum",
+              "id": "2",
+              "field": "cache_read_tokens"
+            },
+            {
+              "type": "sum",
+              "id": "3",
+              "field": "input_tokens"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "type": "date_histogram",
+              "id": "1",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "1h"
+              }
+            },
+            {
+              "type": "terms",
+              "id": "2",
+              "field": "prompt_callsite",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "_count"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}

@@ -169,8 +169,18 @@ the design's central dishonesty, so it is stated instead:
 
 | Branch | Condition | Denominator needed | Coverage |
 |---|---|---|---|
-| **Stoppage** | No documents for the family in the window while the system is active | An activity **witness** (binary: was anything happening) | **Every** family |
+| **Stoppage** | No documents for the family in the window while the system is active | An activity **witness** (binary: was anything happening) | Families that **declare an expected emission cadence** — see below |
 | **Shortfall** | Documents per unit of independent activity falls materially | An activity **denominator** correlated with the family's expected volume | Only families that **have** one — declared per family |
+
+**Stoppage does not apply to every family, and assuming it did would manufacture false alarms.** Many
+families are *conditional or rare by design* — an error event, a rollback, a rare branch — and their
+silence is health, not failure. A stoppage rule over them alerts on a working system, which is the
+muting path D4 warns about. **Each family therefore declares one of three dispositions:** *cadence*
+(expected to emit whenever the witness shows activity — stoppage applies), *correlated* (cadence plus a
+denominator — stoppage and shortfall both apply), or *conditional* (emission is event-driven, so
+neither branch applies and the family is explicitly out of scope). The declaration is the committed
+artifact AC-1 reconciles; a family with **no** disposition is the failure, not a family with the
+*conditional* one.
 
 The denominator is weaker and cheaper than FRE-1051's twin-store oracle: it needs a *correlated
 activity measure*, not a per-event twin. For `api_cost_recorded` — the family that actually failed —
@@ -266,8 +276,11 @@ is a saved Discover query, *FRE-1072* iff a new surface must be built for it.
 
 | # | Condition | Class | Catches | Investigation target | Stage |
 |---|---|---|---|---|---|
-| 1 | **Stoppage:** no documents for a family while the system is active (every family). **Shortfall:** documents per unit of independent activity falls materially (declared families only) | absence + shortfall | Stoppage everywhere; the partial 48–83 % loss actually measured in FRE-1051 on `api_cost_recorded`, whose denominator already exists | Minimal purpose-built surface: family volume, its denominator, and the witness on one screen | **now** |
+| 1 | **Stoppage:** no documents for a *cadence* or *correlated* family while the witness shows activity. **Shortfall:** documents per unit of independent activity falls materially (*correlated* families only) | absence + shortfall | Stoppage on every family declaring a cadence; the partial 48–83 % loss measured in FRE-1051 on `api_cost_recorded`, whose denominator already exists | Minimal purpose-built surface: family volume, its denominator, and the witness on one screen | **stoppage now; shortfall now iff the platform can express it, else FRE-1072** (D2a) |
 | 2 | A scheduled probe stops writing its result document | absence | A dead probe — the meta-alert that keeps every other rule honest | Saved Discover query on that probe's result index | **now** (joinability, SLM health only — see prerequisite) |
+
+**Staging for rules 1–2 is decided in D2a and restated there in full; where this column and D2a
+disagree, D2a governs.**
 | 3 | A probe result reports red | threshold | Joinability orphans, delivery breach, SLM health down — data that already exists and nothing reads | The failing probe's detail panel | FRE-1072 |
 | 4 | Spend rate anomaly against the `api_costs` ledger | threshold | Runaway or misattributed cost, on the one substrate with append-only ground truth | Cost surface over Postgres, scoped to the window and model/role | FRE-1072 |
 | 5 | Disk or cluster pressure | threshold | The `~10 GiB` box, with a recorded history of index-count and shard pathologies | Cluster/lifecycle surface | FRE-1072 |
@@ -326,6 +339,14 @@ differently:
   therefore a periodic **outward** ping whose *absence* alarms, evaluated somewhere that shares **no
   failure domain** with this stack. It is the single exception to D2's "no application code," and it is
   small by construction: a heartbeat, not a monitor.
+
+  **The heartbeat is emitted through the same contact point the alerts use**, not out of a side
+  channel. This is deliberate and it is what makes one cheap mechanism cover two failures: a dead stack
+  and a *dead notification path*. An external stack-liveness check that pings independently would stay
+  green while every alert sat trapped behind a broken connector — the "alert is a log line" failure
+  wearing a different hat. Routing the heartbeat through the real path makes its arrival an **end-to-end
+  receipt**: if the owner stops receiving heartbeats, either the stack is down or the thing that would
+  have told them is.
 
   **Three parameters of it are deliberately left to its implementation ticket and must be decided
   there, not defaulted:** the external evaluator, the deadline after which a missed ping alarms, and
@@ -485,8 +506,11 @@ benefit at a fraction of the waste.
 
 ### Positive Consequences
 
-- **The failure class that took six days and was found by accident becomes detectable** — and detectable
-  without an oracle, a twin store or a delivery SLO.
+- **The failure class that took six days and was found by accident becomes detectable** — total
+  stoppage on every family that declares a cadence, needing only an activity witness; and the *partial*
+  loss actually measured on `api_cost_recorded`, using the `api_costs` denominator that already exists.
+  **Not without a denominator** — partial loss on a family that has none stays undetected, and that
+  limit is declared per family rather than implied.
 - **Two instruments acquire an output immediately, and only their *liveness* does** — joinability and
   SLM health are scheduled and persisted, so rule 2 covers them in the Kibana stage. Their *red
   verdicts* are rule 3 and the disk threshold is rule 5, both of which wait for FRE-1072; the
@@ -601,12 +625,23 @@ an undeclared family present in the index is itself a failure.
   what broke. · **Check:** on the test substrate, for each covered family, induce (a) total stoppage and
   (b) — for shortfall-capable families — a **47.6 % shortfall**, the *smallest* loss actually measured
   in FRE-1051, holding the independent denominator constant. Confirm an out-of-band notification for
-  each. Then induce a whole-log-path stoppage and confirm the rule still fires. Finally, reconcile the
-  declaration against the live family list. · *Fails if* any covered family alerts on neither; **if the
+  each. Then induce a whole-log-path stoppage and confirm the rule still fires.
+
+  Three further checks bind the **real** configurations, because a synthetic family proves only that the
+  mechanism works: (i) reconcile the declaration against the live family list; (ii) for each *cadence*
+  and *correlated* family, confirm its configured query, denominator and witness each resolve and return
+  a non-empty series over a recent healthy window — a rule whose denominator query is broken is
+  permanently quiet and otherwise indistinguishable from health; (iii) **backtest the shortfall branch
+  against FRE-1051 itself** — given the recorded per-day counts for 2026-07-23..28 (1303 oracle rows
+  against 899 indexed documents, reproduced by the committed delivery-ratio tests), the configured rule
+  must flag the 23rd, 26th and 27th and **not** flag the 24th, 25th and 28th. · *Fails if* any covered family alerts on neither; **if the
   47.6 % induction passes silently** — a threshold tuned to catch only catastrophic loss misses the real
   incident, and a no-data-only implementation fails here outright; if the notification lands only in an
   index document or server log; if the rule goes quiet because its witness died with the stream it was
-  watching; or if a family present in `agent-logs-*` appears in no declaration row.
+  watching; if a family present in `agent-logs-*` appears in no declaration row; if any real family's
+  denominator or witness query returns nothing over a healthy window; **or if the FRE-1051 backtest
+  misses any of the three bad days or flags any of the three clean ones** — a rule that cannot
+  retrodict the incident it was built for has not been shown to detect it.
 
 - **AC-2** — Every rule's investigation link lands on **the evidence that triggered it**, not merely on
   a page that loads. · **Check:** for each rule, from a firing — natural, or induced on the test
@@ -654,15 +689,21 @@ an undeclared family present in the index is itself a failure.
   a broken or absent shortfall branch pass — the exact defect round 1 of review found in the design
   itself.
 
-- **AC-7** — Over 30 days of live operation, every firing was worth the interruption **and** the one
-  family that can be independently checked was not missed. · **Check:** two halves. (a) Each firing has
-  an owner disposition — acted on, or the rule amended. (b) Run the delivery-ratio probe over the same
-  30 days **for `api_cost_recorded`, the only family with a validated oracle**, and compare against
-  rule 1's firings *at rule 1's own configured threshold*, not the probe's `0.99` floor. Any breach
-  exceeding that threshold with no corresponding firing is a missed incident. · *Fails if* any rule
-  fired repeatedly and was neither acted on nor changed; if the cross-check finds such a miss; **or if
-  no rule fired at all across 30 days** — zero firings is the shape of a dead rule set, and AC-6's
-  induced controls do not substitute, since they exercise rule 1 only.
+- **AC-7** — Over 30 days of live operation, firings were **true** rather than merely handled, and the
+  one family that can be independently checked was not missed. · **Check:** three parts. (a) Each firing
+  is classified **true positive** (a real condition existed) or **false positive** (it did not), with
+  the evidence; a rule whose firings are majority false positives fails, *whether or not* they were
+  attended to — "acted on" records diligence, not correctness. (b) Run the delivery-ratio probe over the
+  same 30 days **for `api_cost_recorded`, the only family with a validated oracle**, and compare against
+  rule 1's firings **at rule 1's own configured threshold**, not the probe's `0.99` floor — the two use
+  different semantics and comparing them directly would reject a correct implementation. Any breach
+  beyond rule 1's threshold with no corresponding firing is a missed incident. (c) If **no** condition
+  occurred naturally in 30 days, that is a pass **only** on evidence the set is live: every rule's
+  recorded positive control (AC-6 phase B for rule 1, each rule's own ticket for 2–6) plus continuous
+  heartbeat receipt across the window. · *Fails if* any rule's firings are majority false positives; if
+  the cross-check finds a miss; **or if the window was quiet and the liveness evidence in (c) is
+  incomplete** — a quiet month is either a healthy system or a dead rule set, and only (c) tells them
+  apart.
 
   **Stated limit, so the verdict is not over-read:** this false-negative check covers **one family and
   one rule**. The probe's three other declared families are unwired for want of a validated join
@@ -802,3 +843,27 @@ cosmetic. The material ones:
   it does *not* cover.
 - Corrected: SLM health has its own `sink.py` (two persisting probes, not one); "three instruments
   acquire an output" overstated what lands in the Kibana stage.
+
+### 2026-08-07 - Revised after Codex review round 3 (final round)
+
+**Changed By:** `adr` session (FRE-1058)
+**Reason:** Six blocking items, all accepted:
+
+- **"Stoppage for every family" would have alerted on healthy silence.** Conditional and rare families
+  — an error event, a rollback — are silent when working. D1 now requires each family to declare
+  *cadence*, *correlated* or *conditional*, and only the first two get a stoppage rule. A family with
+  **no** declaration is the failure; a family declared *conditional* is not.
+- **D2a and D4 disagreed on rule 1's staging.** D4's table now carries the split explicitly (stoppage
+  now; shortfall now only if the platform can express it) and states that D2a governs on conflict.
+- **Residual "without an oracle" claims struck**, including in Positive Consequences, which still
+  advertised what D1 had already retracted.
+- **AC-1 tested only a synthetic family**, so a real family's broken denominator or witness query would
+  pass. It now also reconciles the declaration, requires every real family's queries to return data over
+  a healthy window, and **backtests the shortfall branch against FRE-1051's own recorded counts** — the
+  rule must flag the 23rd/26th/27th and not the 24th/25th/28th.
+- **AC-4 demanded a connector-failure alarm that D5 never provided.** D5 now routes the heartbeat
+  *through the alert contact point*, making its arrival an end-to-end receipt: one mechanism covers a
+  dead stack and a dead notification path.
+- **AC-7 accepted false positives as long as they were handled, and failed a genuinely quiet month.**
+  Firings are now classified true or false positive, and a zero-incident window passes on recorded
+  positive controls plus continuous heartbeat receipt.

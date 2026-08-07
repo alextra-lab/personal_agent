@@ -479,10 +479,12 @@ async def generate_reflection_entry(
                 metrics_count=len(entry.supporting_metrics),
                 component="reflection",
             )
-            # FRE-328 follow-up — emit gap-recognition warnings from the main
-            # loop so ElasticsearchHandler forwards them to agent-logs-*.
+            # FRE-328 follow-up — emit gap-recognition warnings to agent-logs-*.
             # session_id is required by the ≥2-distinct-sessions clustering
             # threshold in InsightsEngine.detect_missing_skill_patterns.
+            # Emitted here on the main loop because that is where the thread
+            # returns to, not because it has to be: FRE-1055 made the ES handler
+            # deliver from any thread.
             if missing_skill_names:
                 from personal_agent.captains_log.reflection_dspy import (
                     emit_missing_skill_warnings,

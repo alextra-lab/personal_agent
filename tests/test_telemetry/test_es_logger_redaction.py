@@ -206,7 +206,7 @@ def test_no_agent_logs_write_bypasses_the_chokepoint() -> None:
                 if index_kwarg is None:
                     continue
                 rendered = ast.unparse(index_kwarg.value)
-                if "_get_index_name" in rendered or rendered == "index_name":
+                if "current_index_name" in rendered or rendered == "index_name":
                     offenders.append(f"{node.name}:{call.lineno}")
 
     assert not offenders, "agent-logs writes bypassing _index_agent_log: " + ", ".join(offenders)

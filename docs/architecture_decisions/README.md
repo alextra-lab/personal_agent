@@ -193,7 +193,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0108](ADR-0108-stored-artifact-vision-reprocessing.md) | Stored-Artifact Vision Re-processing (analyze-to-text, explicit tool) | Proposed |
 | [ADR-0109](ADR-0109-entity-taxonomy-redesign.md) | Entity & Relationship Taxonomy — V1 (inherited) → V2 (first principled derivation) | Accepted |
 
-### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0133)
+### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0134)
 
 | ADR | Title | Status |
 |-----|-------|--------|
@@ -221,6 +221,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0131](ADR-0131-retire-master-plan-owner-console.md) | Retire MASTER_PLAN — an Owner Console with an Explicit Trust Ladder, One Writer per Store | Accepted |
 | [ADR-0132](ADR-0132-outbound-authenticated-egress.md) | Outbound Authenticated Egress — Caddy Terminates the Cloudflare Barrier; Application Credentials Stay in the Application | Accepted |
 | [ADR-0133](ADR-0133-typed-emit-envelope-residual-log-corpus.md) | The Typed Emit Envelope for the Residual Log Corpus — Enforcement by Declared Retired Spelling, and the Field Registry Declined (restores ADR-0128 Tier 1 on the surface ADR-0129 leaves ungoverned; answers ADR-0090's deferred registry question *no*) | Proposed |
+| [ADR-0134](ADR-0134-activity-alerting-absence-as-a-first-class-signal.md) | Activity Alerting — Absence as a First-Class Signal, on Platform-Native Alerting (five instruments, no egress; declines ADR-0090's proposed fourth corner and amends its D6 done-bar instead) | Proposed |
 
 ### Supplementary
 

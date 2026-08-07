@@ -160,6 +160,18 @@ services:
   kibana:
     image: docker.elastic.co/kibana/kibana:8.19.0
     container_name: cloud-sim-kibana
+    # ADR-0134: the saved-objects encryption key (required for alerting/actions APIs)
+    # lives HERE and only here. A separate file from /opt/seshat/.env precisely because
+    # the gateway imports that one wholesale via env_file — a shared file would put an
+    # unrelated secret in the application process for no reason, same problem ADR-0132
+    # D1 solved for the Cloudflare Access pair below. required: false so a host without
+    # the file (a fresh clone, CI running `compose config`, a deployment that hasn't
+    # enabled alerting) still parses. A missing file is not silent: Kibana's own startup
+    # log emits the encryptedSavedObjects/actions/alerting disabled-key warnings, and
+    # the actions API returns HTTP 500 — a visible failure, not a broken compose command.
+    env_file:
+      - path: /opt/seshat/.env.kibana
+        required: false
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
       - TELEMETRY_OPTIN=false

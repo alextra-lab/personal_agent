@@ -167,6 +167,12 @@ docker/mcp/mcp-secrets.env
 # VPS/cloud env override (canonical secrets live in .env; this is a safety net)
 .env.cloud
 
+# Per-service secret files scoped away from the gateway's wholesale .env import
+# (ADR-0132 D1, ADR-0134) — neither matched any existing .env.* pattern above,
+# which was a latent gap for .env.caddy (FRE-1187 found and fixed it).
+.env.caddy
+.env.kibana
+
 # FRE-433/434 cache A/B harness run outputs (regeneratable telemetry)
 telemetry/evaluation/fre433-cache-ab/
 

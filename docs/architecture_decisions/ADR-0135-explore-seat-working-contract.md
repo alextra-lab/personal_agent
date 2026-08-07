@@ -137,19 +137,43 @@ were never reconciled against what was already in flight by anyone.
 **A finding whose verdict is negative — zero, never, does not fire, cannot engage, does not
 compose — is inadmissible unless it carries, on that finding, both:**
 
-1. **Target-identifier provenance (the arm that catches FRE-1131).** The queried identifier — the
-   event name, field, label, node property, column — is shown to be the one the *producer* actually
-   writes: a cited emit site at a stated revision, **or** a raw document / row exhibiting that
-   identifier. A name that appears only in the query is unvalidated, and a zero read off it carries
-   no information.
-2. **Path liveness.** The same query shape, against the same store, returning non-zero for a case
-   known to exist — establishing the path is readable and the filter well-formed.
+1. **Target-identifier provenance, for the queried identifier in the queried store.** Satisfied by
+   either:
+   - **1a — a raw instance.** A quoted document, row or record exhibiting that identifier, drawn from
+     **the same store the finding queries**, within the same window. This settles the question
+     outright and is the preferred form.
+   - **1b — a live producer.** Where no instance exists (the honest case for a mechanism that truly
+     never fires), the emit site cited **at the deployed revision** — not any revision — *plus*
+     evidence its enclosing path executes: a sibling emit from that same code path returning non-zero
+     over the same window. Citing a site alone is not enough; a dead branch emits nothing and looks
+     identical to a wrong name.
+
+   **The store matters as much as the name.** `within_session_compressed` is a real identifier in
+   this repo — it is the event-bus stream `stream:context.within_session_compressed`
+   (`telemetry/within_session_compression.py`). It is simply not an `agent-logs` event, which is
+   where the audit queried it. Provenance against *some* producer is not provenance against the one
+   feeding the store under query.
+
+2. **Path liveness, on the same query with only the identifier varied.** A control returning non-zero
+   using the identical index pattern, time range and filter predicates, changing nothing but the
+   target identifier. Varying anything else lets a wrongly-scoped query (wrong environment, wrong
+   window, wrong service filter) pass while the target fires elsewhere.
 
 Both arms are stated per finding, not once per document.
 
 **Arm 2 alone admits the FRE-1131 error** — the audit supplied exactly such a control, in the same
 table, and the finding was still wrong. Arm 1 is the discriminating one; arm 2 is retained because
-it catches a different failure (an unreachable index, a malformed filter) at negligible cost.
+it catches a different failure (an unreachable index, a malformed filter, a mis-scoped predicate) at
+negligible cost.
+
+**A second, independent instance arrived during this ADR's own review.** The Codex reviewer reported
+as a blocking factual error that "no `_recorded`-suffixed identifier exists anywhere in the repo,"
+having read the erratum's shorthand `…hard_trigger` / `_recorded` literally. The real identifier is
+`within_session_compression_recorded`
+(`telemetry/within_session_compression.py:137`). A negative result, read off a wrong identifier form,
+reported with confidence — the same failure, on the same subject, by a different agent, three days
+later. The class is not specific to the explore seat, which is why the rule is stated as an
+admissibility test rather than as advice to be careful.
 
 A finding whose verdict is **positive** ("this value is 260") needs neither arm: a wrong identifier
 cannot produce a non-zero, so the result is self-validating.
@@ -230,10 +254,19 @@ and the first draft of this ADR was wrong to present it as one.
 
 **What is bounded and what is not, stated plainly.** Adjudication is bounded — at most 10 items, each
 dispositioned from project state. **Master's *read* of the document is not bounded by this ADR**, and
-that cost is accepted: master already read #803 to gate it, and gating a PR without reading it is not
-an option. The claim here is narrower than the first draft's: the expensive half is bounded, the
-cheap half is not, and the `basis` line makes which half master actually paid visible instead of
-assumed.
+that cost is accepted.
+
+The reason it is accepted, rather than merely conceded: **the read is not a cost explore imposes.**
+Master reads every PR it gates — build's and adr's included, and an ADR PR runs longer than most
+research documents. There is no version of the guardian role in which master merges an artifact it
+has not read, so this cost is invariant across every design in the Alternatives section, including
+"leave explore as it is." What *is* variable, and what explore was created to avoid, is master
+holding the study's **reasoning** — re-deriving findings, re-running measurements, carrying the
+substrate map. That is the cost this ADR bounds: capped at ten dispositions, each from project
+state, with the `basis` line recording which half master actually paid.
+
+Stated as a falsifiable claim rather than a reassurance: if AC-4 comes back red, the split failed and
+this paragraph was wrong.
 
 **The failure signal is master re-measuring.** If a disposition requires re-deriving a finding's
 measurement, the split has failed and master is paying the study's cost twice. That is what the
@@ -294,17 +327,21 @@ explicit per-dispatch ask.
 
 ## Contract amendments — the sentences this ADR replaces
 
-FRE-1184 named two. There are **eight**; the extra six are named here so each change is deliberate
-rather than drift. Codex review caught five of them.
+FRE-1184 named two. There are **ten**; the extra eight are named here so each change is deliberate
+rather than drift. Codex review caught seven of them across two rounds — including that
+`prime-explore` mirrors lifecycle-rules' injection and hands-off text, so amending one document
+without the other would have left the two disagreeing (amendments 9 and 10).
 
 | # | File · current sentence | Replacement |
 |---|---|---|
 | 1 | `lifecycle-rules.md` § Explore session: "It exists so deep strategy/methodology deliberation happens **off master's context**, and so discussion can never accidentally actuate." | "It exists so deep strategy/methodology **deliberation** happens **off master's context**, and so discussion can never accidentally actuate. **Adjudication is the deliberate exception**: master dispositions explore's *proposals* at the exit gate (ADR-0135 D6), capped at ten per study and produced from project state, never by re-measuring a finding." |
 | 2 | § Explore session: "…it never merges, deploys, **mutates Linear**, writes the owner console, labels dispatch, rebuilds the gateway, or touches `main`." | "…it never merges, deploys, **mutates the Linear control plane** (beyond moving its own ticket to `In Progress` at pickup, D4's existing delegation), writes the owner console, labels dispatch, rebuilds the gateway, or touches `main`. It **files `Backlog` tickets and comments** (ADR-0135 D5) and **commits its research document to its own branch and opens that PR** (D6)." |
-| 3 | § Explore session: "**Injection is owner-hubbed, never autonomous** — master and explore coordinate through the durable substrate **+ the owner**; they never auto-talk to each other, and a human is always at one end" | Unchanged in substance, extended: "…a human is always at one end. **Explore is an extension of the owner, not of master** (ADR-0135 D1); master supplies project clarity and exigence at the exit, never command. **Ticket dispatch is not injection** — a `stream:explore` ticket reaching the seat is board-routed work the owner approved when they approved the ticket." |
-| 4 | § Explore session: "- **explore → master / adr (owner-gated):** at the owner's request, `send-keys` the result to `cc-master` … Only on the owner's say-so — never on your own initiative." | Unchanged for `send-keys`, plus: "**The research-document PR is not a send-keys injection and needs no owner say-so** (ADR-0135 D6): it is explore's own deliverable on its own branch, and opening it is what triggers master's disposition. The owner-gated rule governs *pushing a conclusion into another seat's context*, which a PR does not do." |
+| 3 | § Explore session: "**Injection is owner-hubbed, never autonomous** — master and explore coordinate through the durable substrate **+ the owner**; they never auto-talk to each other, and a human is always at one end" | "**Injection is owner-hubbed, never autonomous** — master and explore never `send-keys` each other without a human at one end. **Two paths are not injection and are therefore outside this rule**: a `stream:explore` ticket reaching the seat (board-routed work the owner approved when they approved the ticket, ADR-0135 D7), and explore's own research-document PR reaching master's gate (D6). Both coordinate through the durable substrate, which is what the rule was protecting; neither pushes into a live context. **Explore is an extension of the owner, not of master** (D1); master supplies project clarity and exigence at the exit, never command." |
+| 4 | § Explore session: "- **explore → master / adr (owner-gated):** at the owner's request, explore `send-keys` the result to `cc-master` (a decision to execute) or `cc-adrs` (an idea to formalize), tagged `[from explore]`. Only on the owner's say-so — never on your own initiative." | Unchanged for `send-keys`, plus: "**The research-document PR is not a `send-keys` injection and needs no owner say-so** (ADR-0135 D6): it is explore's own deliverable on its own branch, and opening it is what triggers master's disposition. The owner-gated rule governs *pushing a conclusion into another seat's live context*, which a PR does not do — consistent with the two carve-outs above." |
 | 5 | § Explore session: "The watcher/dispatcher never target `cc-explore` (not a worker, not a gate)." | "The **dispatcher** targets `cc-explore` via `stream:explore`, with the same busy guard and priority ordering as any stream (ADR-0135 D7). The **watcher** routes red CI on an `explore-fre-*` PR to `cc-explore`, so explore's own PRs are not left without a safety net; it never treats explore as a master-ready gate." |
-| 6 | § Ticket state: "**`Backlog` is the filing state for a non-actionable finding**: a measurement, an observation, a shape to adopt later, an unticketed defect nobody is proposing to fix now." | "**`Backlog` is the filing state for a finding nobody is currently proposing to act on** — a measurement, an observation, a shape to adopt later, an unticketed defect — **and for an explore proposal that has not yet passed master's feasibility disposition** (ADR-0135 D5). The second case is actionable-in-principle and deliberately parked: it has not met project reality, and promoting it is master's D6 act, performed on the existing ticket rather than by re-filing." |
+| 6 | § Ticket state: "**`Needs Approval` is unchanged for anything actionable** … **`Backlog` is the filing state for a non-actionable finding**: a measurement, an observation, a shape to adopt later, an unticketed defect nobody is proposing to fix now." | "**`Needs Approval` is unchanged for anything actionable that is ready to be proposed.** **`Backlog` is the filing state for a finding nobody is currently proposing to act on** — a measurement, an observation, a shape to adopt later, an unticketed defect — **and for an explore proposal that has not yet passed master's feasibility disposition** (ADR-0135 D5). The second case is actionable-in-principle but **not yet ready to be proposed**: it has not met project reality, so it is not what the New == Needs Approval gate governs. Master's D6 disposition is what makes it ready, and promotion happens on the existing ticket rather than by re-filing." |
+| 9 | `prime-explore` SKILL § Injection protocol: "You and master coordinate through the durable substrate **+ the owner** — you never auto-talk to each other; a human is always at one end." and "- The watcher/dispatcher never target you; you are not a worker and not a gate." | Mirror amendments 3 and 5 exactly, so the two documents cannot drift: the `send-keys` rule keeps its human-at-one-end requirement with the same two carve-outs (ticket dispatch, your own research-document PR); and "the **dispatcher** targets you via `stream:explore` with the same busy guard and priority ordering as any stream; the **watcher** routes red CI on your `explore-fre-*` PR back to you. You are still not a master-ready gate." |
+| 10 | `prime-explore` SKILL: "**The one invariant (hands off):** you NEVER merge, deploy, mutate Linear state, …" | "**The one invariant (hands off):** you NEVER merge, deploy, mutate the Linear **control** plane (beyond moving your own ticket to `In Progress` at pickup), …" — mirroring amendment 2, so `prime-explore` and lifecycle-rules state the same scope. |
 | 7 | § Coordination stores D4 table: "Linear **filing plane** — ticket creation (`Needs Approval` / `Backlog`), comments \| open to every session" | "…\| open to every session — **except `cc-explore`, which files `Backlog` and comments only, and never promotes its own** (ADR-0135 D5)." |
 | 8 | `prime-explore` SKILL: "If a conclusion needs executing, it reaches master **through the owner**, never your own hand. A scratch notebook in your own scratchpad (outside the repo) is fine; anything that lands in the repo or on the board is drafted as text for the owner or master to route." | "If a conclusion needs **executing**, it reaches master through the owner, never your own hand. You do commit your **research document** to your own branch and open its PR (ADR-0135 D6) — `docs/research/<date>-fre-XXXX-<slug>.md` on `explore-fre-XXXX-<slug>`, and nothing else — because proposing is not executing and master's disposition is the gate. You never merge. On the board you file `Backlog` tickets and comments (D5); anything beyond that is drafted as text for the owner or master to route." |
 
@@ -312,30 +349,34 @@ rather than drift. Codex review caught five of them.
 
 ## Obligation → owner mapping
 
-Every obligation the Decision section places on the chain lands on **exactly one** child or on the
-seam. Children carry criteria for their own work; the seam carries the ADR's (ADR-0130 D1/D2).
+Every obligation the Decision section places on the chain lands on **exactly one** owner. The
+partition axis is **ADR-0130 D1/D2's**, and it is not the same as the subject axis: a child owns
+*stating and building* a mechanism; the seam owns *whether that mechanism produced the ADR's
+outcome*. Those are two different obligations that happen to name the same subject, which is exactly
+the distinction D1 draws — so a row appearing in the "built by" column and a criterion naming the
+same D-number is **not** a double assignment. What would be a violation is a *child* carrying one of
+the ADR's criteria, and no child does.
 
-| Obligation | Owner |
-|---|---|
-| D3's two-arm rule stated per finding; UNVERIFIABLE verdict | child: `/explore` skill |
-| D2 evidence shape for **positive** findings (query + actual output) | child: `/explore` skill |
-| D4 read-only scope, live-measurement rule, substrate map | child: `/explore` skill |
-| D5 `Backlog`-only filing, never self-promote | child: `/explore` skill |
-| D6 branch/path write scope, PR mechanics, ≤10 proposals | child: `/explore` skill |
-| Amendments 1–7 (lifecycle-rules) | child: contract-amendment ticket |
-| Amendment 8 (`prime-explore`) | child: contract-amendment ticket |
-| D6 disposition step, three values, `basis` line, promote-not-refile | child: master SKILL ticket |
-| D7 resolver stream, launcher topology, busy-guard pickup, watcher red-CI routing | child: dispatch ticket |
-| D8 launcher refusal without approval, routing-policy row, ladder row surfaced to owner | child: Fable ticket |
-| **That the rule actually rejects wrong negatives** (AC-1, AC-2) | **seam** |
-| **That proposals are dispositioned, and from project state** (AC-3, AC-4) | **seam** |
-| **That a study reaches the seat by dispatch** (AC-5) | **seam** |
-| **That no finding reached `Needs Approval` before disposition** (AC-6) | **seam** |
-| **That Fable cannot be selected unapproved** (AC-7) | **seam** |
+| Obligation (Decision section) | Built by | Outcome adjudicated by |
+|---|---|---|
+| D1 commissions state the attack, never the answer | child: master SKILL ticket (it is a rule about writing commissions) | — (no criterion; see note) |
+| D2 evidence shape for **positive** findings — query + actual output | child: `/explore` skill | seam AC-1 (via the document census) |
+| D3 two-arm rule per finding; UNVERIFIABLE verdict | child: `/explore` skill | seam AC-1, AC-2 |
+| D4 read-only scope, live-measurement rule, substrate map, **fixed deliverable shape** | child: `/explore` skill | — (see note) |
+| D5 `Backlog`-only filing, never self-promote | child: `/explore` skill | seam AC-6 |
+| D6 branch/path write scope, PR mechanics, ≤10 proposals | child: `/explore` skill | seam AC-3 |
+| D6 disposition step, three values, `basis` line, promote-not-refile | child: master SKILL ticket | seam AC-3, AC-4 |
+| D7 resolver stream, launcher topology, busy-guard pickup, watcher red-CI routing, **free-text injection retained** | child: dispatch ticket | seam AC-5 |
+| D8 launcher refusal without approval, routing-policy row, ladder row surfaced to owner | child: Fable ticket | seam AC-7 |
+| Amendments 1–7 (lifecycle-rules) | child: contract-amendment ticket | — (see note) |
+| Amendments 8–10 (`prime-explore`) | child: contract-amendment ticket | — (see note) |
 
-The split is consistent throughout: a child owns *stating and building* the mechanism; the seam owns
-*whether the mechanism produced the outcome*. No obligation appears in both columns and none appears
-in neither.
+**Note on the four rows with no seam criterion.** D1's commission rule, D4's scope/shape, the
+free-text retention, and the amendment transcriptions are **decidable from their own child's
+deliverable when that child is finished** — the text either says it or it does not. By ADR-0130 D1
+they therefore belong to the child's own acceptance criteria, and putting them on the seam would be
+the mirror error to the one D1 forbids. They are listed here so the partition is auditable, and each
+child ticket carries a criterion for its row.
 
 ---
 
@@ -453,7 +494,8 @@ and the erratum class of failure has nothing standing against it.
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| A provenance citation is supplied but stale — the emit site moved since the cited revision | Medium | Arm 1 requires the revision be stated, so staleness is visible; the alternative arm (a raw document exhibiting the identifier) is revision-free |
+| A provenance citation is supplied but stale, or names a dead code path | Medium | Arm 1b requires the **deployed** revision *and* a same-path sibling emit returning non-zero — a dead branch cannot supply one. Arm 1a (a raw instance from the queried store) sidesteps both and is the preferred form |
+| The query is well-formed but wrongly scoped — wrong environment, window or service filter — so the target fires elsewhere | Medium | Arm 2's control must vary **only** the identifier; every other predicate is held identical, so a mis-scoped query returns zero for the control too and the finding is inadmissible |
 | Master rubber-stamps every proposal `owner's call` | Medium | `owner's call` must carry a recommendation (Decision-Support Doctrine); AC-3 checks for one |
 | Master re-measures privately and omits it from the comment | Medium–High | Only partially mitigable: the `basis` line makes the honest case cheap to declare, and AC-4 states its own observability limit rather than pretending to close it |
 | The dispatcher resets a live explore context holding owner deliberation | Medium | The busy guard blocks dispatch while the study is `In Progress` (D7's pickup transition is what makes the guard real) |
@@ -502,23 +544,31 @@ state › Seam tickets) and the seam re-dates with a **fresh window opening at t
 merge**. A historical failure therefore does not poison every later census — which the first draft of
 this section did.
 
-- **AC-1** — Every negative finding in the window carries **both** D3 arms on that finding.
-  · **Check:** in each merged explore document, enumerate findings whose verdict is negative *in
-  substance* (zero / never / does not fire / cannot engage / does not compose, however phrased); for
-  each, confirm (i) a provenance citation naming an emit site with its revision, or a quoted raw
-  instance exhibiting the identifier, **and** (ii) a liveness control with its actual non-zero output.
-  · *Exercised by:* ≥1 negative finding in the window. · *Fails if* any negative finding is missing
-  either arm — **including one carrying only a same-store liveness control, which is exactly the
-  shape that produced the erratum.**
+- **AC-1** — Every negative finding in the window carries **both** D3 arms, on that finding, for
+  **the identifier it actually queried** and **the store it actually queried**. · **Check:** in each
+  merged explore document, enumerate findings whose verdict is negative *in substance* (zero / never
+  / does not fire / cannot engage / does not compose, however phrased); for each, confirm arm 1 —
+  either a raw instance quoted **from the queried store** exhibiting **the queried identifier**, or
+  an emit site cited **at the deployed revision** *plus* a same-path sibling emit returning non-zero
+  over the same window — **and** arm 2, a control varying **only** the identifier, with its actual
+  non-zero output. · *Exercised by:* ≥1 negative finding in the window. · *Fails if* any negative
+  finding is missing either arm, **or** if its arm 1 rests on any of the four evasions this rule was
+  tightened to close: a provenance citation for a *different* identifier than the query used; a
+  producer in a *different* store than the query hit (the `within_session_compressed` case — real as
+  an event-bus stream, absent from `agent-logs`); an emit site on a path with no evidence it
+  executes; or a revision cited that is not the deployed one. **A same-store liveness control alone
+  is a fail** — that is the exact shape that produced the erratum.
 
-- **AC-2** — The rule as written rejects the erratum's finding, and a liveness-only rule does not.
-  · **Check:** apply the `/explore` skill's rule verbatim to FRE-1131 §F1 row B
-  (`within_session_compressed` = 0) as it stood in PR #803. It must be **inadmissible for want of arm
-  1**. Then apply a liveness-only variant to the same row: with row D's `cache_reset_decision` = 94
-  present in the same table and the same index, it must come out **admissible**.
-  · *Exercised by:* the skill landing; no study needed. · *Fails if* the rule admits row B, **or** if
-  the liveness-only variant also rejects it — the second half is the discriminating test, because a
-  rule that rejects everything proves nothing about what makes this one work.
+- **AC-2** — The rule discriminates: it rejects the erratum's finding, and the same rule with arm 1
+  struck does not. · **Check:** apply the `/explore` skill's rule verbatim to FRE-1131 §F1 row B
+  (`within_session_compressed` = 0) as it stood in PR #803 — it must be **inadmissible for want of
+  arm 1**. Then apply **the same skill text with arm 1 deleted and arm 2 retained** — a variant
+  defined by textual deletion, not by an unwritten counterfactual — to the same row: with row D's
+  `cache_reset_decision` = 94 sitting in the same table, same index, same window, it must come out
+  **admissible**. · *Exercised by:* the skill landing; no study needed. · *Fails if* the full rule
+  admits row B, **or** if the arm-1-deleted variant also rejects it. The second half is the
+  discriminating half: a rule that rejects everything proves nothing about *which* arm is doing the
+  work, and arm 1 is the ADR's whole claim.
 
 - **AC-3** — Every recommendation in the window carries a disposition of the required shape.
   · **Check:** for each merged document, enumerate recommendations **wherever they appear**, not only
@@ -528,7 +578,13 @@ this section did.
   `feasible` disposition created a second ticket for a proposal explore had already filed.
   · *Exercised by:* ≥1 recommendation in the window. · *Fails if* any recommendation is
   undispositioned, sits outside the three values, is an `owner's call` with no recommendation, or is
-  a `feasible` that re-filed rather than promoted.
+  a `feasible` that re-filed rather than promoted. **Stated limit:** this criterion adjudicates the
+  *coverage and shape* of the disposition, not the *correctness of master's feasibility judgment*.
+  Whether a proposal really was infeasible is a judgment, and no record this project keeps renders it
+  decidable; a criterion demanding it would be unwritable rather than strict. The nearest available
+  proxy is honest and weak — a `feasible` whose promoted ticket is later `Canceled` as
+  already-in-flight is evidence the judgment failed, and the seam records that where it appears
+  rather than treating it as the test.
 
 - **AC-4** — Master dispositioned from project state, not by re-measuring. · **Check:** every
   disposition comment carries a `basis` line; none declares `re-measured`; and no disposition's text
@@ -563,7 +619,11 @@ this section did.
   dispatch in the window and confirm each names its approval source. · *Exercised by:* the launcher
   test; the census is additional, not the primary proof. · *Fails if* the unapproved invocation
   launches, or the approved one is refused, or any dispatch ran at Fable naming no approval source. A
-  ladder row master wrote itself is not an approval source (ADR-0131 D2).
+  ladder row master wrote itself is not an approval source (ADR-0131 D2). **Stated limit:** the
+  launcher can require an approval source be *named and resolvable*; it cannot verify the owner meant
+  it. The gate makes an unapproved Fable launch impossible **by accident**, which is the whole risk
+  here — the residual failure requires master to fabricate a citation, a different and larger breach
+  that no launcher flag would stop either.
 
 **Seam ticket:** FRE-1195 — *ADR-0135 seam — adjudicate the explore working contract against real
 studies*. Filed parked (`Backlog`), **due 2026-09-15** — the earliest date at which the chain can have
@@ -600,8 +660,17 @@ AC-7 are adjudicable as soon as the chain lands; the rest need the window.
 explore is an extension of the owner, with master supplying project clarity and exigence to verify
 proposals are possible — which located the gate at the exit and left owner-hubbed injection intact.
 FRE-1184's premise was corrected during discussion against the FRE-1131 artifact; a first draft's
-repair (a positive control) was then corrected again at Codex review, which showed the audit's own
-same-index oracle sat in the same table as the bad zero and would have satisfied it. D3 is therefore
-pitched at the target identifier, which is where the failure actually was. `Implemented` awaits the
-seam ticket's adjudication (FRE-1195, due 2026-09-15); the ADR does not reach it on a red or
-unadjudicated criterion.
+repair (a positive control) was then corrected at Codex review round 1, which showed the audit's own
+same-index oracle sat in the same table as the bad zero and would have satisfied it. Round 2 closed
+three further evasions of the rebuilt rule — a dead emit path, a stale cited revision, and a
+wrongly-scoped predicate — giving arm 1 its raw-instance/live-producer split and pinning arm 2 to
+vary only the identifier. D3 is therefore pitched at the target identifier in the queried store,
+which is where the failure actually was. `Implemented` awaits the seam ticket's adjudication
+(FRE-1195, due 2026-09-15); the ADR does not reach it on a red or unadjudicated criterion.
+
+**Two round-2 findings were rejected on the evidence rather than adopted.** Codex reported as
+blocking that no `_recorded`-suffixed identifier exists in the repo;
+`within_session_compression_recorded` is at `telemetry/within_session_compression.py:137`, and the
+report was itself a negative read off a wrong identifier form — recorded in D3 as a second instance
+of the failure class. It also read the obligation table's child/seam split as double assignment; that
+split is ADR-0130 D1/D2's and is now stated explicitly in the table's preamble.

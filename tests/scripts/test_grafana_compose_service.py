@@ -12,7 +12,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 import yaml
@@ -85,6 +84,17 @@ class TestGrafanaComposeServiceSource:
         env = self._grafana_service(compose_file)["environment"]
         password_line = next(e for e in env if "GF_SECURITY_ADMIN_PASSWORD" in str(e))
         assert "${GRAFANA_ADMIN_PASSWORD" in password_line
+
+    def test_cloud_admin_password_is_required_not_silently_blank(self) -> None:
+        """Every sibling secret in this file (POSTGRES_PASSWORD, NEO4J_PASSWORD,
+        SESHAT_APP_PASSWORD) uses the `${VAR:?required}` guard so compose fails fast on an
+        unset var, rather than substituting an empty string and letting Grafana boot with a
+        blank admin password — silently undercutting the admin-API auth ADR-0129 D6 treats as
+        load-bearing (Viewer-role anonymous access already reaches every datasource).
+        """
+        env = self._grafana_service("docker-compose.cloud.yml")["environment"]
+        password_line = next(e for e in env if "GF_SECURITY_ADMIN_PASSWORD" in str(e))
+        assert ":?" in password_line, f"expected a required-var guard, got: {password_line}"
 
     @pytest.mark.parametrize("compose_file", ["docker-compose.yml", "docker-compose.cloud.yml"])
     def test_dashboards_provisioned_from_files_not_ui(self, compose_file: str) -> None:

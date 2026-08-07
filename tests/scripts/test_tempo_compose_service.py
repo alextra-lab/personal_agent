@@ -25,6 +25,7 @@ _RENDER_ENV = {
     "POSTGRES_PASSWORD": "test",
     "SESHAT_APP_PASSWORD": "test",
     "NEO4J_PASSWORD": "test",
+    "GRAFANA_ADMIN_PASSWORD": "test",
 }
 _RENDER_OVERRIDE = "tests/scripts/fixtures/gateway_render_override.yml"
 

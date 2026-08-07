@@ -52,7 +52,8 @@ check 6 a keyword scan. Required fields (unchanged in content, now headered):
 
 - `Backing ADR + acceptance criteria` (the criteria this ticket implements)
 - `AC evidence` (per criterion: named test / probe output / observed behaviour)
-- `Reviews` (code-review effort + findings fixed/deferred; security-review verdict; codex tier + verdict)
+- `Reviews` (diff class self-serve/escalated + owner `/code-review ultra` outcome if escalated;
+  findings fixed/deferred; security-review verdict; codex tier + verdict)
 - `Deploy class` (standing-class name or ask-first)
 - `Post-deploy runbook` (steps, or "none")
 - `Seam ownership` (this child closes the ADR? / who owns the assembled proof)

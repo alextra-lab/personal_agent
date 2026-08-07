@@ -126,14 +126,57 @@ Update docs the change touches (skill docs, READMEs, doc-strings).
 
 **Self-review before the PR (shift-left — you fix your own findings so master never has to bounce
 them).** Run it **once, at this pre-PR gate — NOT on every implementation turn** (a strategic
-checkpoint, not a per-turn tax). Invoke the **code-review** skill on your branch diff, **effort sized to the diff**: `low`
-for a small/localized change, `high` for src / schema / security / cost / memory. Sizing means
-dialing the level, NOT skipping — any real-logic change (a script, a helper, behavioural config)
-gets at least a `low` pass; only pure docs / config-values / test-only diffs skip it. Invoke
-**security-review** too when the diff touches inputs / subprocess / files / auth / secrets / network.
-**Fix every confirmed finding on your branch before opening the PR**, and note in the PR body that
-the review ran and what you addressed. (FRE-847: a `high` review caught 3 confirmed correctness bugs
-in a 146-line script — "it's small" is not grounds to skip.)
+checkpoint, not a per-turn tax).
+
+**Commit first.** Both reviewers below diff the **committed branch against `main`** — uncommitted
+work is invisible to them and reads back as a clean result from an empty diff, which is a
+silent-pass, not a real review (found live 2026-08-06, FRE-1128). Commit locally to this branch
+before invoking either; no PR is required for them to see it.
+
+The bare `code-review` skill is blocked for a working session (`disable-model-invocation`), and
+`code-review:code-review` (the plugin) is PR-shaped — it fetches a diff by PR number and comments
+back on the PR, and at this step no PR exists yet. Use the two reviewers a build session can
+actually invoke unassisted, both scoped explicitly to `git diff origin/main...HEAD` (the merge-base
+diff — matches what the eventual PR diff shows; **`feature-dev:code-reviewer`'s own default is
+unstaged `git diff`, which is empty once you've committed** — say the range in the prompt, don't
+rely on the default):
+- **`feature-dev:code-reviewer`** (Agent tool, `subagent_type: "feature-dev:code-reviewer"`) — reviews
+  the diff against this project's CLAUDE.md standards; reports confirmed bugs/quality issues by
+  severity (Critical / Important).
+- **`security-review`** — invoke when the diff touches inputs / subprocess / files / auth / secrets /
+  network.
+
+**Fix every confirmed finding on your branch before opening the PR.**
+
+**Route the obligation by diff class, not uniformly** — a twenty-line helper otherwise costs the same
+interruption as a sixteen-hundred-line write-path change:
+- **Self-serve (default)** — nothing below applies: docs, config, tests, process/skill wording
+  (including this ticket's own diff), dev/sandbox tooling that never touches production data,
+  read-only code. Run both reviewers yourself; fix confirmed findings on-branch; done.
+- **Escalate — if ANY of these apply, it escalates** (precedence: escalation wins on ambiguity;
+  these cover the *code* path, not process-doc wording — a skill/lifecycle-rules edit stays
+  self-serve unless it changes the trust ladder in `docs/plans/OWNER_CONSOLE.md`, which already has
+  its own gate):
+  1. **Production write path** — issues create/update/delete/merge against Neo4j, Postgres,
+     Elasticsearch, or R2 in the running service, **or sits directly in that write's call chain**
+     (a helper/serializer/validator feeding an existing write) — even if that diff alone looks small.
+  2. **Destructive or deleting** — any code path capable of deleting or evicting data.
+  3. **Schema change** — DB / ES / graph schema, a migration, or a type change.
+  4. **Cost or governance code** — modifies `cost_gate`, budget enforcement, deploy-authorization
+     logic, or model-routing policy code.
+
+  On escalate: self-serve review still runs and still gets fixed on-branch, **and** note in the PR
+  body + ticket handoff "diff class: escalated — flagged for owner `/code-review ultra` before
+  merge" — a flag, not a wait; you still go idle after the PR per § 1.5, master raises it with the
+  owner at the gate.
+  - *Worked:* the FRE-1115 diff (1,600 insertions, a deleting script, a production write path) →
+    escalates on triggers 1+2. A docs-only or small-config diff, or this ticket's own skill-wording
+    diff → self-serves. A small helper that reformats a payload immediately before an existing
+    Postgres write call → escalates on trigger 1, even though the diff itself is tiny — it's in the
+    write's call chain.
+
+(FRE-847: a review pass caught 3 confirmed correctness bugs in a 146-line script — "it's small" is
+grounds to self-serve, never to skip review outright.)
 
 ## 9 — PR + final ticket comment for master — then STOP
 **Sync to latest main FIRST** (prevents a stale-base collision / a DIRTY PR at master's gate when a
@@ -153,9 +196,11 @@ in the PR's pre-merge checklist:
   belong to its seam ticket (ADR-0130 D2). *(Standalone bug: the reproducing test / verification stands
   in for ADR provenance.)*
 - **self-review summary** (the executive input for master's gate — master SKILL Step 2): the
-  code-review effort level run **and** the security-review verdict; what they flagged (confirmed
-  findings, most-severe first) and what you fixed on-branch; call out anything you deliberately did
-  NOT fix and why. "No findings" is a valid summary. A real-logic diff with no summary gets bounced.
+  **diff class** (self-serve / escalated — and, if escalated, whether the owner already ran
+  `/code-review ultra` and its outcome) **and** the security-review verdict; what the reviews
+  flagged (confirmed findings, most-severe first) and what you fixed on-branch; call out anything
+  you deliberately did NOT fix and why. "No findings" is a valid summary. A real-logic diff with no
+  summary gets bounced.
 - the **post-deploy runbook** (exact ES/Kibana/migration/verification steps, in order);
 - any **safety constraints / gotchas** (e.g. "do NOT back-attach existing indices", "register the
   template before first write", "verify the code is generating the logs");

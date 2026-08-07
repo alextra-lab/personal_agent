@@ -139,6 +139,25 @@ acceptance criteria are testable and outcome-level** — could the ADR's **seam 
 the stated check, and would a bad implementation fail it? Treat any mechanism-restatement or
 un-checkable criterion as a blocking finding.
 
+## 3.5 — Code-review obligation when this diff carries executable code
+A session producing executable code — not just the ADR document — carries the same code-review
+obligations as build, regardless of stream (FRE-1128; the FRE-1122 diff shipped 4,258 lines
+including a graph-deleting script with no security verdict, because this contract never asked).
+
+**Executable code, decided by path, not by reading intent:** any diff file **outside**
+`docs/architecture_decisions/**/*.md` that is itself a runnable artifact — a script (`.py`/`.sh`), a
+SQL migration, a CI workflow file, a notebook, or anything under `scripts/`/`sandbox/`/`src/`. A
+fenced code block inside the ADR's own markdown (a design recipe, not a checked-in runnable file)
+does **not** count. Genuinely ambiguous → treat as executable.
+
+If present: commit to the branch first (same commit-first precondition as build — both reviewers
+diff committed-branch-vs-main, so uncommitted work reads back as a clean empty-diff pass). Run
+`feature-dev:code-reviewer` and `security-review` on `git diff origin/main...HEAD`, fix confirmed
+findings on-branch, and route the diff through build SKILL Step 8's same self-serve/escalate
+triggers (production write path, destructive/deleting, schema change, cost/governance code). On
+escalate, flag it the same way build does — PR body + ticket handoff: "diff class: escalated —
+flagged for owner `/code-review ultra` before merge."
+
 ## 4 — PR
 **Sync to latest main FIRST** (a sibling PR may have merged during your session): `git fetch origin &&
 git rebase origin/main` — resolve any conflicts in-session, then `git push --force-with-lease`. Then
@@ -185,6 +204,12 @@ does NOT belong in the ADR PR's pre-merge checklist:
   mapping** from Step 5, listing every Decision-section obligation against the child or the seam that
   owns it, so master can confirm the partition has no unowned row before dispatching the chain;
 - any **doc-drift** master should reconcile (related ADRs, CLAUDE.md, a skill or lifecycle-rules contract);
+- **if this diff carried executable code (§ 3.5)** — the same self-review summary build reports (diff
+  class self-serve/escalated, owner `/code-review ultra` outcome if escalated, findings fixed/deferred,
+  security-review verdict), **plus per-criterion evidence**: for any of the ADR's own stated criteria
+  this diff's code already demonstrates, the observed value — labeled explicitly as **preliminary
+  observed evidence from authoring time, not a substitute for the seam ticket's eventual adjudication**
+  (Step 2's criteria are still asserted in exactly one place — the seam ticket);
 - **your context disposition for the next ADR** — kept or cleared (`/clear`), and why.
 Master reads this comment by default at the gate, so it is the handoff channel. **These fields are the
 handoff contract** master trusts without re-deriving (lifecycle-rules § Signal trust boundary).

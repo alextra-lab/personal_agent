@@ -1,85 +1,83 @@
-# Last session — 2026-08-06 → 07 (the day the gate earned its keep, and the day I kept over-reaching)
+# Last session — 2026-08-07 (the day I kept measuring the adjacent thing)
 
 ## Doing / discussing
 
-The Observability Foundation burndown, driven end to end at the owner's direction. Nothing is in
-flight: every stream is idle, the board has nothing in Awaiting Deploy, In Review or In Progress, and
-build1's next is FRE-1128. The live thread at the reset was the owner cutting my over-built fixes back
-to their real size — twice — and that correction is the most useful thing on this page.
+Observability Foundation, driven hard at the owner's direction, and one instruction that governs
+everything: **we are in a spike — do not bring findings, just run the board.** The owner said plainly
+"i don't care right now. Just keep going. At the end of the Spike - we will start caring." Grafana is
+the priority he set: complete it sooner, because the Kibana retirement decision waits on it. Nothing is
+at the gate except PR #859, which is build1's bounce fix. He is building FRE-1071 himself in the
+slm_server repo and asked that I gate its PR when it comes.
 
 ## What was decided and why
 
-**The gate is the only thing that worked, and green signals are compatible with the deliverable not
-existing.** Five separate silent-empty defects surfaced in one telemetry path (FRE-1108), each passing
-CI green with a clean self-review: a validator with zero call sites, then the same validator made
-"permissive" so it returned silently on every production path, then two validated fields that exist
-nowhere, then `.keyword` stripped from a field that genuinely needed it (a live 400), then a guard
-checking *existence* when the property that matters is *aggregatability*. Six gate rounds. The only
-check that ever caught anything was **running the real path against production** — which is what the
-ticket's own failure clause demanded from the start and what every handoff substituted a mock for.
+**Kibana is retained, not retired, and the ADR was amended to say so.** Owner ruling, now a console
+directive with a decidable retirement condition. Three premises behind the original retirement turned
+out weaker than written, and all three are recorded in ADR-0129's Status Update rather than left to be
+rediscovered. This is the thread most likely to be re-litigated by a fresh session, so: it is settled.
 
-**"One caller" is not "one writer" — and it falsified an ADR four minutes after I merged it.** ADR-0133
-rests its viability on `es_logger.log_event` having a single caller, inferring total coverage. Gating
-FRE-1068 immediately after, four distinct functions were found writing to `agent-logs`, one of them
-live. **ADR-0133 still needs a Status Update correcting both the premise and D2's validator placement**
-— FRE-1068 created the real chokepoint (`_index_agent_log`) that the ADR assumed already existed. That
-is the adr seat's to write and it is the largest outstanding debt.
+**Kibana cannot alert at all under this licence** — FRE-1187 enumerated 29 connectors, only Index and
+Server-log enabled, everything reaching outside needs gold. So ADR-0134's Kibana stage is abandoned
+outright, FRE-1190 and FRE-1192 were re-scoped onto Grafana, and *all* alerting now waits on FRE-1072.
+That makes Grafana-first the only path to being told when something breaks, not merely the faster one.
 
-**Filing is expensive and I kept forgetting.** The owner cancelled one ticket I filed against a GitHub
-outage ("you are reacting to an external problem as if it were local") and cut FRE-1128 from an
-eight-AC draft-PR apparatus — watcher change, bounce state machine — down to a one-line reviewer swap,
-with a single question: *"if the problem is resolved by using code-reviewer, then the problem has been
-resolved with a change of test in the build skill, non?"* Both were the same reflex: finding a true
-pattern repeatedly is not licence to file or build every instance that resembles it.
+**Four instrument failures, mine, in one session — this is the finding that matters.** Each returned a
+clean, well-formed answer to a question *adjacent* to the one being asked. Container RSS read as ES
+health (92% vs 64% heap — the same figure ADR-0129 cites). A regex requiring a terminal date, which
+silently dropped every `-v2` index (140 vs 162). An index age parsed from the name rather than
+`creation_date`, which claimed 21 indices were past retention when the true answer is zero. And a
+Linear read taken at 07:31 and acted on at 08:20, holding FRE-1058 open for four hours on a comment
+posted at 07:32. Two of the four were caught by accident; one by the system refusing to act on it.
+Yesterday's five were *emit* failures; these are *measurement* failures. Different class, same
+invisibility. I proposed making it a standing gate check and the owner has not ruled.
 
-**Code-review was never permission-blocked; it was sequenced wrong.** Three wrong diagnoses from me
-before the seat's own transcript settled it: the bare `code-review` skill *is* blocked, the plugin form
-is *not* but is PR-shaped, and the reviewers diff **committed branch against main** so uncommitted work
-is invisible to them. The stage is not new — FRE-847 moved it from master to build on 2026-07-08, and
-it worked before because master only ever acts on PRs that exist.
+**I was corrected twice by seats and both corrections were right.** The adr seat found I had claimed
+six Caddy blocks each with an allowlist (there are four inbound; one has an allowlist — I'd counted
+outbound `reverse_proxy` targets as site blocks) and that no `monitoring` endpoint existed (it is
+documented at `docker-compose.cloud.yml:155-158`, tunnelling straight to Kibana). Both were in a ticket
+body a build seat would have followed. **The owner's mental model was right and mine was wrong** — he
+named agent, graph, api and monitoring, which is exactly the real set.
 
-**Five of my own instrument failures, all producing confident wrong numbers.** `_cat/indices` (Lucene
-docs, inflated by nested children) instead of `_count`; the FRE-375 *test* substrate queried twice as
-production; a secret sweep filtered on value length rather than key name, reporting 18 false exposures;
-`hits.total` capped at 10,000 giving a 574% share. Each was caught, but only because someone checked.
-The rule that would have prevented all five: **verify the instrument before believing the answer.**
+**An escalation rule that worked twice, still unwritten.** Escalate to ultra only when the diff is in
+the trigger set **and** a defect would be silent with no detector inside a stated window. #856 passed
+the first and failed the second (an identity-format regression surfaces on the next query) — I advised
+against, correctly. #859 passed both — I advised for, and the ultrareview found a real `@timestamp`
+defect nothing would ever have caught. But I justified it on the wrong grounds (base rate) and asserted
+a detector existed without checking; there is none.
 
 ## Worktrees — anything special
 
-- **build1** was wedged ~115 minutes by an orphaned background shell; the orchestrator logged
-  `dispatch_seat_wedged` on 23 consecutive ticks and reached nobody (known v1 limitation, FRE-922).
-  Recovered with `cc-sessions restart cc-1build` — **not** by killing it; the launcher deliberately has
-  no termination code after two incidents (FRE-909, FRE-913), and seat lifecycle belongs to
-  `cc-sessions`.
-- `.claude/worktrees/master-914` still sits on the long-merged `fre-909-seat-rename`. Harmless.
+- **build1** — PR #859 bounced by me on the ultrareview finding; seat has the message, hadn't pushed at
+  reset. Its pane showed "1 shell still running", the same shape as the 2026-08-06 wedge. Not wedged —
+  it went idle cleanly — but check that shell first if it goes quiet. Recovery is `cc-sessions restart
+  cc-1build`, never a kill.
+- **adrs / build2** — clean, on merged branches.
 
 ## Sequence position + drift
 
-No drift. The console's VPS-then-Observability directive was satisfied — VPS reached its floor
-yesterday — and the whole session ran inside Observability Foundation, which went from 28 unapproved
-tickets to 10. The owner approved the ADR-0129 chain B1–B7 plus FRE-1068 in one batch after being shown
-that the burndown was approval-bound rather than capacity-bound.
+No drift. Everything ran inside Observability Foundation under the console's directive. I **removed
+FRE-1072's blockedBy on FRE-1070** — its criteria are self-contained by fixture injection and never
+needed the Collector — which cut Grafana from three hops to one. That is a deliberate deviation from
+ADR-0129's stated build order, made on the owner's "complete it sooner" instruction, and it is recorded
+on FRE-1193.
 
 ## Answers for the fresh start
 
-- **Why is FRE-1064 Done when the falsification measurement has not run?** The ticket says explicitly
-  that the measurement is FRE-1073's and that running it is *"a sequencing gate, not a criterion holding
-  this ticket open."* **Master must run the identity-share query before dispatching FRE-1065** and stop
-  the chain if the share has not moved. Pre-deploy baseline captured: **11.57%** over the trailing 7
-  days (57,408 of 496,040), which reproduces the ADR's recorded 11.36% closely enough to trust.
-- **Why does PR #853 carry four empty retrigger commits?** A GitHub outage stopped the CI workflow
-  dispatching for ~6 hours. The watcher correctly told the seat three times that checks were red; I
-  read those pushes as improvisation and told it to stop. The seat was following the machinery and I
-  was wrong.
-- **Why did a merge-ready PR sit unannounced for 4.5 hours?** The watcher treats *absent* required
-  checks as green, fired at 22:27 on an incomplete signal, and burned the `master:{pr}:{sha}` dedup
-  entry — so the genuine green at 22:57 produced no trigger. Deliberately **not ticketed**: the trigger
-  was an external outage, my gate correctly refused the merge throughout, and any later push clears it.
-  File it only if it recurs.
-- **Is the POSTGRES_PASSWORD exposure handled?** Owner decided: let ILM expire the four documents around
-  2026-09-04. No rotation. Verified clean everywhere else — Captain's Log captures, every non-`agent-logs`
-  index, and all 63 text/JSON columns in production Postgres. Also verified: **no real credential appears
-  in any tracked file or in any of the 3,034 commits.**
-- **Two ladder cells are mine, not the owner's.** The `promotes-when`/`demotes-when` on the two rows
-  granted 2026-08-06 were written by me because the record schema demands them. The owner has not
-  confirmed that wording.
+- **Why is ADR-0134 still `Proposed`?** The adr seat recommended Accepted and deliberately declined to
+  pre-empt the owner, because every decision in it was the owner's in-session. The flip is his word.
+  ADR-0135 by contrast merged **Accepted** — the owner settled its principal question directly.
+- **Why does FRE-1071 have a hold on it and not a blocker?** Its code is buildable now (every AC is
+  provable without a Collector) but its *deploy* removes slm_server's ES writer while no Collector
+  exists — a silent telemetry blackout until FRE-1070. The constraint is on the release, not the PR,
+  and it is written on the ticket.
+- **Why is `slm-requests` still minting daily indices?** Separate repo, FRE-1071's scope. FRE-1194
+  governed the three families that *are* ours; it deleted nothing, because zero were genuinely past 90
+  days.
+- **Did the owner authorize the live Kibana restart in FRE-1187?** The seat says he did, directly, in
+  its session. I recorded it as the owner acting at will and asked him to correct me if wrong; he did
+  not. The ticket text had reserved that step for master.
+- **Two things I own that are unwritten:** the `new_span()` split — it still mints dashed UUIDs while
+  `span_id` returns hex, so `parent_span_id` and `span_id` can never join. Pre-existing, recorded on
+  FRE-1065, no home ticket; FRE-1067 is the natural place. And FRE-1200 needs a **Fable trust-ladder
+  row**, which is owner-voice only — until then every Fable selection is an explicit per-dispatch ask,
+  which is the correct default.

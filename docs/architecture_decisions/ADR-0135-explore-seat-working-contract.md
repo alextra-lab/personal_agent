@@ -16,9 +16,10 @@ and no working skill. Three of the four seats have both: `prime-master` with `ma
 and `adr` with their own. Explore has half a pair.
 
 The consequence is that a study arrives as a ticket with no contract telling the seat how to execute
-it, what shape the deliverable takes, or how results hand back. The three studies that have run —
-FRE-1116, FRE-1131, FRE-1183 as filed — worked because their ticket bodies carried that scaffolding
-by hand, one commission at a time.
+it, what shape the deliverable takes, or how results hand back. Two studies have completed —
+FRE-1116 and FRE-1131 — and both worked because their ticket bodies carried that scaffolding by
+hand, one commission at a time. A third, FRE-1183, was filed 2026-08-07 and has not run: it is
+`Approved` with no stream label, so there is no route from the board to the seat.
 
 The owner's framing, recorded because it is the design intent this ADR serves:
 
@@ -35,37 +36,52 @@ That second answer is load-bearing and it changes the design. Explore is an exte
 owner**. What master supplies is not command but the two things master uniquely holds: **project
 clarity** and **exigence** — and the exigence has a specific target, *are these proposals possible*.
 
-### The premise this ADR had to correct before it could decide anything
+### The premise this ADR had to correct, and then correct again
 
-The commissioning ticket (FRE-1184) states the failure as: explore "emits conclusions where it should
-emit findings plus their measurement, and nothing downstream forces the difference."
+FRE-1184 states the failure as: explore "emits conclusions where it should emit findings plus their
+measurement, and nothing downstream forces the difference."
 
-The artifact does not support that. `docs/research/2026-08-03-fre-1131-context-memory-alignment-audit.md`
-carries a Method appendix (line 245) stating the exact discipline that would have prevented its own
-error:
+The artifact does not support that.
+`docs/research/2026-08-03-fre-1131-context-memory-alignment-audit.md` carries a Method appendix
+(line 245) stating the exact discipline that would have prevented its own error:
 
 > "event/field names resolved against code and one raw document before trusting any zero (**three
 > zeros in this session were name artifacts**)"
 
-It named the trap, applied the discipline three times, and missed a fourth. It queried
-`within_session_compressed` — an event name that has never existed in `agent-logs` — and read the
-honest zero it got back as "the mechanism never fires." The real emits are
+It named the trap, applied the discipline three times, and missed a fourth. It queried the event
+name `within_session_compressed` — which has never existed in `agent-logs` — and read the honest
+zero it got back as "the within-session hard gate never fires." The real emits are
 `within_session_compression_hard_trigger` / `_recorded`, whose true counts are 260 all-time / 2 since
-2026-07-20. The wrong conclusion reached a merged research document (PR #803) and required an erratum
-(PR #804).
+2026-07-20. The wrong conclusion reached a merged research document (PR #803) and required an
+erratum (PR #804).
 
-Every finding in that document carries its query. The verdict that was wrong was **measured**, not
-inferred. And the same discipline is a standing memory rule — *a negative result is probably your
-instrument* — that was already in force.
+So an evidence obligation is the answer that *looks* right: a rule saying "measure, do not infer" is
+satisfied by a real query against a wrong event name. The same discipline was already a standing
+memory rule — *a negative result is probably your instrument* — and it was already in the seat's own
+appendix. Neither is auditable per finding.
 
-**So an evidence obligation is the answer that looks right and would not have caught this.** A rule
-that says "measure, do not infer" is satisfied by a real query against a misspelled index. This ADR
-therefore does not decide *whether* explore owes evidence; it decides **what shape of evidence is
-inadmissible on its own**, which is a different and narrower question with a mechanical answer.
+**The second correction, which the first draft of this ADR got wrong and Codex review caught.** The
+obvious repair is a *positive control*: alongside a zero, show the same query shape returning
+non-zero. That repair does not work here, and the audit itself proves it. The bad zero and a
+same-index control sit **in the same table** (research doc lines 41–47):
+
+| Mechanism | Fire event | Count since 07-23 |
+|---|---|---|
+| B — within-session hard gate (ADR-0061) | `within_session_compressed` | **0** |
+| D's per-turn evaluator (FRE-944) | `cache_reset_decision` | **94** |
+
+The appendix even names the second row as the "same-index oracle." An identical `_count` shape,
+against the identical index, returning 94 — and the finding is still wrong. **A liveness control
+validates the store; the failure was in the target identifier.** Any rule built on store-liveness
+admits this exact error.
+
+The failure class is therefore narrower and more specific than "unevidenced conclusions": it is a
+**negative result read off an unvalidated target identifier**. That is what D3 must catch, and it
+determines the rule's granularity.
 
 ### Two facts that further narrow the problem
 
-**Filing authority is already narrower in practice than the ticket assumes.** FRE-1131's commission
+**Filing authority is already narrower in practice than FRE-1184 assumes.** FRE-1131's commission
 said "a filed ticket for each finding that warrants one." The seat wrote instead: *"Draft tickets
 (for the owner to route — this seat files nothing)"* (line 228). It declined the authority it was
 given.
@@ -97,11 +113,12 @@ Guidance already happens at *commission* time, in the ticket body — master wro
 itself — and that cost is paid once, durably, by whoever files, not by master's live context at
 dispatch. There is no second brief to pay for.
 
-**Commissions state the attack, never the answer.** A thick commission is not automatically an
-anchoring one: FRE-1183 is thick *and* anti-anchoring, because it commissions falsification —
-"attack the method, not confirm it… it fails if it confirms the method." This is the rule that
-resolves the anchoring tension: a commission may specify method, substrate and failure modes at any
-length, and may never specify the expected conclusion.
+**Commissions state the attack, never the answer.** A commission may specify method, substrate and
+candidate failure modes at any length; it may not specify the expected conclusion. FRE-1183 is the
+exemplar: "attack the method, not confirm it… it fails if it confirms the method."
+
+*This is an accepted asymmetry, not a claim of neutrality* — see Consequences, where the anchoring
+cost is stated rather than defined away.
 
 ### D2 — Two obligations, split by object
 
@@ -115,38 +132,52 @@ different checks: a finding can be perfectly evidenced and its proposal still im
 is the case in point — its findings survived the erratum nearly intact, and its seven draft tickets
 were never reconciled against what was already in flight by anyone.
 
-### D3 — The positive-control rule: a negative finding is inadmissible without a control
+### D3 — A negative finding is inadmissible without target-identifier provenance
 
 **A finding whose verdict is negative — zero, never, does not fire, cannot engage, does not
-compose — is inadmissible unless it carries a positive control: the same query shape, against the
-same index or store, returning a non-zero result for a case known to exist.** The control's actual
-output is quoted in the document alongside the finding.
+compose — is inadmissible unless it carries, on that finding, both:**
 
-A finding whose verdict is positive ("this value is 260") is self-evidencing: the query and its
-output are the proof, and a misspelled field cannot produce a non-zero.
+1. **Target-identifier provenance (the arm that catches FRE-1131).** The queried identifier — the
+   event name, field, label, node property, column — is shown to be the one the *producer* actually
+   writes: a cited emit site at a stated revision, **or** a raw document / row exhibiting that
+   identifier. A name that appears only in the query is unvalidated, and a zero read off it carries
+   no information.
+2. **Path liveness.** The same query shape, against the same store, returning non-zero for a case
+   known to exist — establishing the path is readable and the filter well-formed.
 
-This is the one rule that catches the FRE-1131 error, and it is deliberately mechanical rather than
-dispositional. It is also **checkable without re-measuring** — a reviewer asks *does this negative
-finding have a control?*, which is a scan, not a re-derivation. That property is what makes the exit
-gate affordable, and it is why the rule is stated as an admissibility test rather than as a
-discipline to observe.
+Both arms are stated per finding, not once per document.
 
-Where a control genuinely cannot be constructed, the verdict is **UNVERIFIABLE**, which is a
-first-class result and never silently equivalent to a negative.
+**Arm 2 alone admits the FRE-1131 error** — the audit supplied exactly such a control, in the same
+table, and the finding was still wrong. Arm 1 is the discriminating one; arm 2 is retained because
+it catches a different failure (an unreachable index, a malformed filter) at negligible cost.
+
+A finding whose verdict is **positive** ("this value is 260") needs neither arm: a wrong identifier
+cannot produce a non-zero, so the result is self-validating.
+
+Where arm 1 cannot be satisfied — no producer can be located, no raw instance exists — the verdict
+is **UNVERIFIABLE**, a first-class result, never silently equivalent to a negative.
+
+**Why this is a rule and not a restatement of the discipline that already failed.** FRE-1131's
+appendix asserted identifier resolution *globally*, for the document, and the seat believed it had
+complied because it had complied three times. Nothing attached the obligation to the fourth finding,
+so nothing made its absence visible. D3 relocates the obligation from a **global claim** to a
+**per-finding artifact**: row B of that table carries no provenance for `within_session_compressed`,
+and that absence is legible on the row itself, to a reviewer who knows nothing about compaction.
+The change is auditability, not stringency.
 
 ### D4 — An `/explore` working skill, at the same rigor as `build` and `adr`
 
 The skill states, as contract rather than habit:
 
-- **Read-only on everything operational**, unchanged from `prime-explore`: never merges, deploys,
-  mutates the Linear control plane, writes the owner console, labels dispatch, rebuilds the gateway,
-  or touches `main`. The one bounded relaxation is D6's.
+- **Read-only on everything operational**: never merges, deploys, mutates the Linear *control*
+  plane, writes the owner console, labels dispatch, rebuilds the gateway, or touches `main`. Two
+  bounded exceptions, D5's and D6's.
 - **Measure against the live system; never reason from code.** The discipline FRE-1116's ticket
   named becomes contractual.
 - **D3's admissibility rule**, with the UNVERIFIABLE verdict.
-- **A fixed deliverable shape** — per finding: the verdict · the query · its actual output · the
-  positive control where the verdict is negative. Plus a method appendix, and a **Proposals**
-  section that is the single place recommendations appear.
+- **A fixed deliverable shape** — per finding: the verdict · the query · its actual output · and,
+  where the verdict is negative, D3's two arms. Plus a method appendix, and a **Proposals** section
+  (D6) that is the single place recommendations appear.
 - **The durable substrate map lives in the skill, not in any brief** — `_count` not `_cat`; ES counts
   provisional per FRE-1051; per-call series authority is Postgres `api_costs`, not Elasticsearch (the
   ES per-call emit has been dark since 2026-05-10); config read from the running process, not the
@@ -155,17 +186,20 @@ The skill states, as contract rather than habit:
 That last bullet is how briefs stay thin without anyone promising they will be: everything reusable
 is factored out of the brief into a durable artifact that costs master nothing per study.
 
-### D5 — Explore files to `Backlog` only
+### D5 — Explore files to `Backlog` only; master promotes, never re-files
 
 Explore may create `Backlog` tickets and post comments. It may **not** create `Needs Approval`
-tickets. A proposal reaches `Needs Approval` only after master's D6 disposition, filed by master or
-the owner.
+tickets, and may not promote its own. A proposal reaches `Needs Approval` only through master's D6
+disposition.
 
-This codifies what the seat already chose for itself. It preserves ADR-0131 D1's cheap path
-(`Backlog` costs no approval bandwidth, so "file it or drop it" stays a genuine choice) while
-stopping an unreconciled finding from reaching the board already wearing an actionable shape.
-Approval bandwidth is the project's stated scarce resource, and D1's whole point is that explore's
-proposals have not yet met project reality when they are written.
+**When a proposal is dispositioned `feasible`, master promotes the existing `Backlog` ticket in
+place** — it never files a second ticket for the same proposal. A duplicate would put the same
+finding on the board twice under different ids, which is precisely the board-drift this project
+already treats as a defect.
+
+This codifies what the seat already chose for itself, and it preserves ADR-0131 D1's cheap path.
+It does, however, put an *actionable* item in `Backlog`, which the current ticket-state rule reserves
+for non-actionable findings — so that rule is amended explicitly (amendment 6) rather than bent.
 
 ### D6 — Master's exit trigger is the explore research-document PR
 
@@ -173,81 +207,135 @@ Explore commits its research document to its own branch and opens the PR itself 
 relaxation of the drafting rule, scoped to `docs/research/<date>-fre-XXXX-<slug>.md` on a branch
 named `explore-fre-XXXX-<slug>`, and nothing else. It still never merges. This gives explore the
 same shape as `build` and `adr` (the "same exigence as the 3 other skills" the owner asked for) and
-removes master's transcription cost, which under the old drafting rule was pure overhead.
+removes master's transcription cost, which under the old drafting rule bought nothing.
 
-**At that PR, master dispositions every item in the document's Proposals section**, each as exactly
-one of:
+**At that PR, master dispositions every recommendation the document makes**, each as exactly one of:
 
-- **feasible** — possible against current project state; master files or sequences it;
-- **infeasible** — with the stated reason (already in flight, contradicted by a shipped decision,
-  blocked by an unbuilt dependency, out of the project's envelope);
-- **owner's call** — a genuine decision, routed to the owner with a recommendation.
+- **feasible** — possible against current project state; master promotes its `Backlog` ticket;
+- **infeasible** — with a stated reason drawn from project state (already in flight, contradicted by
+  a shipped decision, blocked by an unbuilt dependency, outside the project's envelope). "Too many
+  proposals" is not a reason;
+- **owner's call** — a genuine decision, routed to the owner **with a recommendation**, per the
+  Decision-Support Doctrine's prohibition on false choices.
 
 Silence is not a disposition. The disposition lands as a comment on the commissioning ticket (the
-durable record channel, per lifecycle-rules § Comment channels).
+durable record channel, per lifecycle-rules § Comment channels), and carries a one-line **basis**
+declaring what master read to produce it: *proposals only* · *proposals + named sections* · *full
+document* · *re-measured, naming what*.
 
-**This is where the context-cost tension is answered, and it is answered by the deliverable's shape
-rather than by a promise.** The exigence check is scoped to the Proposals section. FRE-1131 is 286
-lines; its proposals are one section of seven bullets. Master reads the document to gate the PR — the
-cost it already paid for #803 — but *adjudicates* only the proposals, and adjudication is the
-expensive half.
+**A study states at most 10 proposals.** Overflow is inadmissible — the document consolidates before
+it merges. FRE-1131 stated seven, so the cap is calibrated on real work rather than invented. This is
+the actual bound on adjudication cost; "however many explore is willing to recommend" is not a bound
+and the first draft of this ADR was wrong to present it as one.
 
-**What happens when the document is long anyway:** the read cost scales with the document and the
-adjudication cost does not, because proposals are bounded by what explore is willing to recommend,
-not by how much it measured. If a study's proposal list is itself long enough to hurt, that is a
-finding about the study — explore proposed too much — and master dispositions the excess as
-`infeasible` rather than absorbing it. The failure mode this ADR refuses to accept is master
-re-deriving a finding's measurement in order to disposition its proposal; **master dispositions from
-project state, never by re-measuring.** If master finds it must re-measure, the split has failed and
-that is the signal, not a chore to absorb.
+**What is bounded and what is not, stated plainly.** Adjudication is bounded — at most 10 items, each
+dispositioned from project state. **Master's *read* of the document is not bounded by this ADR**, and
+that cost is accepted: master already read #803 to gate it, and gating a PR without reading it is not
+an option. The claim here is narrower than the first draft's: the expensive half is bounded, the
+cheap half is not, and the `basis` line makes which half master actually paid visible instead of
+assumed.
+
+**The failure signal is master re-measuring.** If a disposition requires re-deriving a finding's
+measurement, the split has failed and master is paying the study's cost twice. That is what the
+`basis` line's fourth value records, and what AC-4 adjudicates.
 
 ### D7 — Explore becomes a dispatch stream: `stream:explore`
 
 Explore work is ticket-shaped in practice — FRE-1116, FRE-1131 and FRE-1183 are all tickets, and
 none was a free-text brief. FRE-1183 sits `Approved`, High priority, with no stream label, which
-makes it approved-but-unreachable: there is no route from the board to the seat.
+makes it approved-but-unreachable.
 
 `stream:explore` joins `stream:build1` / `stream:build2` / `stream:adr` in the dispatch resolver and
 the launcher's stream topology, pointing at the explore worktree, the `cc-explore` seat, and an
 `/explore` command. Explore thereby inherits the **busy guard** (one study at a time) and the
-**priority queue** for free — neither of which a free-text task mode provides.
+**priority queue** — neither of which a free-text task mode provides.
+
+**The busy guard requires a pickup transition, and explore performs it.** The guard reads
+`In Progress` / `In Review`, so a stream whose ticket never leaves `Approved` can be re-dispatched
+under itself. Explore therefore exercises lifecycle-rules D4's existing named delegation — *a working
+session moves its own ticket to `In Progress` at pickup* — which already exists for `build` and `adr`
+and needs no new grant, only the statement that explore is a working session for its purposes.
 
 **FRE-977 is re-scoped, not superseded**: its objective (master can dispatch explore without a manual
 reset-prime-paste) is met by the stream entry rather than by a free-text task mode. Free-text
 injection is retained unchanged for master's `[from master, re …]` questions, which is the case it is
 genuinely good at.
 
-**The dispatcher may now target `cc-explore`; the watcher still may not.** The watcher's job is red-CI
-and master-ready poking on a worker's PR. Explore's PR is a docs PR whose failure modes the watcher
-does not serve, so the exclusion is narrowed rather than removed.
+**The dispatcher may now target `cc-explore`. The watcher covers explore's own PR only.** Explore now
+opens PRs, so its PRs can go red, and a red-CI path with no owning seat is the "no safety net"
+failure lifecycle-rules already names for master's own PRs. The watcher therefore routes red CI on an
+`explore-fre-*` PR to `cc-explore`, exactly as it does for a worker branch. It still never gates
+explore as a *worker* in the master-ready sense — a docs PR at master's gate is a disposition, not a
+merge-readiness signal.
 
-### D8 — Fable enters the model-routing vocabulary, `ask-first`
+### D8 — Fable enters the model-routing vocabulary, gated in the launcher
 
 Fable (`claude-fable-5`) is the model both completed explore studies ran on, and it appears nowhere
 in `.claude/MODEL_ROUTING_POLICY.md` (three tiers: Opus / Sonnet / Haiku) or in the launcher's
-validated model vocabulary. It becomes an available option — selectable for a dispatched seat and for
-master itself — and **every selection requires the owner's approval.**
+validated model vocabulary. It becomes an available option, and **every selection requires the
+owner's approval.**
 
-The mechanism exists already: the launcher takes `--model <tier>` and issues `/model <tier>` into the
-seat. What is added is the vocabulary entry, a routing-policy row, and the gate.
+**The gate is a launcher refusal, not an honour system.** The launcher accepts `--model fable` **only
+with an explicit approval argument naming where the owner granted it** (the trust-ladder row, or the
+ticket comment carrying the per-dispatch approval); without it, the launcher refuses and launches
+nothing. A census of past dispatches cannot fail in a useful way — a refusal can, and it can be
+asserted by a test.
 
-**The gate is a trust-ladder row, and the owner writes it** (ADR-0131 D2: master transcribes, never
-authors; D3: a grant exists iff the console records it). The implementation ticket surfaces the row
-for the owner; it does not write it. Until the owner records it, no standing grant exists and every
-Fable selection is an explicit ask.
+Master's own session model is set by the owner typing `/model`, which *is* the approval; master has
+no mechanism to switch itself. The machine-selectable path is the launcher, which is why the gate
+lives there.
 
-### The invariants this ADR amends — with replacement text
+**The trust-ladder row, if the owner wants one, is the owner's to write** (ADR-0131 D2: master
+transcribes, never authors; D3: a grant exists iff the console records it). The implementation ticket
+surfaces the row for the owner and does not write it. Until then, every Fable selection is an
+explicit per-dispatch ask.
 
-The commissioning ticket named two. There are **five**; the extra three are named here so the change
-is deliberate rather than drift.
+---
+
+## Contract amendments — the sentences this ADR replaces
+
+FRE-1184 named two. There are **eight**; the extra six are named here so each change is deliberate
+rather than drift. Codex review caught five of them.
 
 | # | File · current sentence | Replacement |
 |---|---|---|
-| 1 | `lifecycle-rules.md` § Explore session: "It exists so deep strategy/methodology deliberation happens **off master's context**, and so discussion can never accidentally actuate." | "It exists so deep strategy/methodology **deliberation** happens **off master's context**, and so discussion can never accidentally actuate. **Adjudication is the deliberate exception**: master dispositions explore's *proposals* at the exit gate (ADR-0135 D6), scoped to the deliverable's Proposals section and never by re-measuring a finding." |
-| 2 | § Explore session: "**Injection is owner-hubbed, never autonomous** — master and explore coordinate through the durable substrate **+ the owner**; they never auto-talk to each other, and a human is always at one end" | Unchanged in substance, extended: "…a human is always at one end. **Explore is an extension of the owner, not of master** (ADR-0135 D1); master supplies project clarity and exigence at the exit, never command. **Ticket dispatch is not injection** — a `stream:explore` ticket reaching the seat is board-routed work, and the owner approved it when they approved the ticket." |
-| 3 | § Explore session: "The watcher/dispatcher never target `cc-explore` (not a worker, not a gate)." | "The **dispatcher** targets `cc-explore` via `stream:explore`, with the same busy guard and priority ordering as any stream (ADR-0135 D7). The **watcher** still never targets it: explore's deliverable is a docs PR, whose red-CI and master-ready paths the watcher does not serve." |
-| 4 | § Coordination stores D4 table: "Linear **filing plane** — ticket creation (`Needs Approval` / `Backlog`), comments \| open to every session" | "…\| open to every session — **except `cc-explore`, which files `Backlog` and comments only** (ADR-0135 D5). A proposal reaches `Needs Approval` after master's exit disposition, filed by master or the owner." |
-| 5 | `prime-explore` SKILL: "A scratch notebook in your own scratchpad (outside the repo) is fine; anything that lands in the repo or on the board is drafted as text for the owner or master to route." | "You commit your **research document** to your own branch and open its PR (ADR-0135 D6) — `docs/research/<date>-fre-XXXX-<slug>.md` on `explore-fre-XXXX-<slug>`, and nothing else. You never merge. Anything else that would land in the repo, and anything on the board beyond a `Backlog` ticket or a comment, is drafted as text for the owner or master to route." |
+| 1 | `lifecycle-rules.md` § Explore session: "It exists so deep strategy/methodology deliberation happens **off master's context**, and so discussion can never accidentally actuate." | "It exists so deep strategy/methodology **deliberation** happens **off master's context**, and so discussion can never accidentally actuate. **Adjudication is the deliberate exception**: master dispositions explore's *proposals* at the exit gate (ADR-0135 D6), capped at ten per study and produced from project state, never by re-measuring a finding." |
+| 2 | § Explore session: "…it never merges, deploys, **mutates Linear**, writes the owner console, labels dispatch, rebuilds the gateway, or touches `main`." | "…it never merges, deploys, **mutates the Linear control plane** (beyond moving its own ticket to `In Progress` at pickup, D4's existing delegation), writes the owner console, labels dispatch, rebuilds the gateway, or touches `main`. It **files `Backlog` tickets and comments** (ADR-0135 D5) and **commits its research document to its own branch and opens that PR** (D6)." |
+| 3 | § Explore session: "**Injection is owner-hubbed, never autonomous** — master and explore coordinate through the durable substrate **+ the owner**; they never auto-talk to each other, and a human is always at one end" | Unchanged in substance, extended: "…a human is always at one end. **Explore is an extension of the owner, not of master** (ADR-0135 D1); master supplies project clarity and exigence at the exit, never command. **Ticket dispatch is not injection** — a `stream:explore` ticket reaching the seat is board-routed work the owner approved when they approved the ticket." |
+| 4 | § Explore session: "- **explore → master / adr (owner-gated):** at the owner's request, `send-keys` the result to `cc-master` … Only on the owner's say-so — never on your own initiative." | Unchanged for `send-keys`, plus: "**The research-document PR is not a send-keys injection and needs no owner say-so** (ADR-0135 D6): it is explore's own deliverable on its own branch, and opening it is what triggers master's disposition. The owner-gated rule governs *pushing a conclusion into another seat's context*, which a PR does not do." |
+| 5 | § Explore session: "The watcher/dispatcher never target `cc-explore` (not a worker, not a gate)." | "The **dispatcher** targets `cc-explore` via `stream:explore`, with the same busy guard and priority ordering as any stream (ADR-0135 D7). The **watcher** routes red CI on an `explore-fre-*` PR to `cc-explore`, so explore's own PRs are not left without a safety net; it never treats explore as a master-ready gate." |
+| 6 | § Ticket state: "**`Backlog` is the filing state for a non-actionable finding**: a measurement, an observation, a shape to adopt later, an unticketed defect nobody is proposing to fix now." | "**`Backlog` is the filing state for a finding nobody is currently proposing to act on** — a measurement, an observation, a shape to adopt later, an unticketed defect — **and for an explore proposal that has not yet passed master's feasibility disposition** (ADR-0135 D5). The second case is actionable-in-principle and deliberately parked: it has not met project reality, and promoting it is master's D6 act, performed on the existing ticket rather than by re-filing." |
+| 7 | § Coordination stores D4 table: "Linear **filing plane** — ticket creation (`Needs Approval` / `Backlog`), comments \| open to every session" | "…\| open to every session — **except `cc-explore`, which files `Backlog` and comments only, and never promotes its own** (ADR-0135 D5)." |
+| 8 | `prime-explore` SKILL: "If a conclusion needs executing, it reaches master **through the owner**, never your own hand. A scratch notebook in your own scratchpad (outside the repo) is fine; anything that lands in the repo or on the board is drafted as text for the owner or master to route." | "If a conclusion needs **executing**, it reaches master through the owner, never your own hand. You do commit your **research document** to your own branch and open its PR (ADR-0135 D6) — `docs/research/<date>-fre-XXXX-<slug>.md` on `explore-fre-XXXX-<slug>`, and nothing else — because proposing is not executing and master's disposition is the gate. You never merge. On the board you file `Backlog` tickets and comments (D5); anything beyond that is drafted as text for the owner or master to route." |
+
+---
+
+## Obligation → owner mapping
+
+Every obligation the Decision section places on the chain lands on **exactly one** child or on the
+seam. Children carry criteria for their own work; the seam carries the ADR's (ADR-0130 D1/D2).
+
+| Obligation | Owner |
+|---|---|
+| D3's two-arm rule stated per finding; UNVERIFIABLE verdict | child: `/explore` skill |
+| D2 evidence shape for **positive** findings (query + actual output) | child: `/explore` skill |
+| D4 read-only scope, live-measurement rule, substrate map | child: `/explore` skill |
+| D5 `Backlog`-only filing, never self-promote | child: `/explore` skill |
+| D6 branch/path write scope, PR mechanics, ≤10 proposals | child: `/explore` skill |
+| Amendments 1–7 (lifecycle-rules) | child: contract-amendment ticket |
+| Amendment 8 (`prime-explore`) | child: contract-amendment ticket |
+| D6 disposition step, three values, `basis` line, promote-not-refile | child: master SKILL ticket |
+| D7 resolver stream, launcher topology, busy-guard pickup, watcher red-CI routing | child: dispatch ticket |
+| D8 launcher refusal without approval, routing-policy row, ladder row surfaced to owner | child: Fable ticket |
+| **That the rule actually rejects wrong negatives** (AC-1, AC-2) | **seam** |
+| **That proposals are dispositioned, and from project state** (AC-3, AC-4) | **seam** |
+| **That a study reaches the seat by dispatch** (AC-5) | **seam** |
+| **That no finding reached `Needs Approval` before disposition** (AC-6) | **seam** |
+| **That Fable cannot be selected unapproved** (AC-7) | **seam** |
+
+The split is consistent throughout: a child owns *stating and building* the mechanism; the seam owns
+*whether the mechanism produced the outcome*. No obligation appears in both columns and none appears
+in neither.
 
 ---
 
@@ -263,8 +351,7 @@ brief per study, injects it, and reconciles the result.
 - One actor owns the study end to end.
 
 **Cons:**
-- Master pays context twice — the exact cost explore exists to avoid. lifecycle-rules states
-  explore's purpose as deliberation happening off master's context.
+- Master pays context twice — the exact cost explore exists to avoid.
 - Anchors. A brief transmits master's frame, and master's frame is what a fresh study must be able to
   challenge. FRE-1116 reframed the recall programme *because* it was unanchored.
 
@@ -272,24 +359,30 @@ brief per study, injects it, and reconciles the result.
 master's contribution is clarity and exigence, not command. Independently, the brief is redundant:
 guidance already happens in the commissioning ticket body, paid once by whoever files.
 
-### Option 2: Add an evidence obligation; write no working skill
+### Option 2: A stronger evidence obligation, and no working skill
 
-**Description:** The minimum change implied by FRE-1184's framing — require each explore finding to
-carry its measurement, and change nothing else.
+**Description:** Require each explore finding to carry not just its measurement but its
+target-identifier validation — the same substance as D3 arm 1 — expressed as a method obligation in
+the commissioning ticket, and change nothing else.
 
 **Pros:**
-- Smallest possible diff; no new skill to maintain.
-- Preserves every existing invariant untouched.
+- Smallest diff that actually addresses the failure class. Unlike a bare "attach a measurement," this
+  version is *not* refuted by FRE-1131 — it is the obligation FRE-1131's own appendix stated.
+- No new skill to maintain, no invariants amended, no expansion of explore's authority.
 
 **Cons:**
-- **It would not have caught the failure it is proposed for.** The FRE-1131 document already carried
-  a method appendix stating that discipline, applied it three times, and shipped a wrong negative
-  anyway. So did the standing memory rule.
-- Leaves the proposal-feasibility gap — the owner's actual complaint — entirely unaddressed.
-- Leaves FRE-1183 unreachable; leaves the next study's scaffolding to be hand-written again.
+- **It is stated globally and cannot be audited per finding.** This is the whole difference, and it
+  is narrow: FRE-1131's appendix asserted exactly this obligation, the seat believed it had complied
+  because it had complied three times, and nothing made the fourth finding's non-compliance visible.
+  A commissioning ticket can restate the obligation; it cannot attach it to a row.
+- Leaves the proposal-feasibility gap — the owner's actual complaint — entirely unaddressed. Findings
+  and proposals are different objects (D2).
+- Leaves FRE-1183 unreachable and the next study's scaffolding hand-written again.
 
-**Why Rejected:** Falsified by the artifact. A stated discipline is satisfied by a real query against
-a misspelled index; only an admissibility rule with a positive control is not.
+**Why Rejected:** Not because a strong evidence obligation is unworkable — the substance of D3 arm 1
+*is* that obligation. It is rejected because a global claim is unauditable where a per-finding
+artifact is checkable, and because it answers one of the four decisions and none of the other three.
+Stated honestly: this is the closest alternative, and the margin over it is auditability, not rigor.
 
 ### Option 3: Uniform review — route every explore document through `codex:rescue`, as `adr` does
 
@@ -297,17 +390,17 @@ a misspelled index; only an admissibility rule with a positive control is not.
 
 **Pros:**
 - Symmetric with `adr`; adversarial review is genuinely the class of thing that catches a wrong
-  negative.
+  negative — as this ADR's own review demonstrates.
 - No new rule to invent.
 
 **Cons:**
-- An external reviewer without substrate access cannot verify a query result; it would review the
-  *prose*, which is exactly the layer that read fine in FRE-1131.
-- Uniform cost on every study, including the many findings that are self-evidencing positives.
+- An external reviewer without substrate access cannot verify a query result. It can check whether a
+  finding carries provenance — but that is D3, and D3 is cheaper.
+- Uniform cost on every study, including the many findings that are self-validating positives.
 
-**Why Rejected:** Mis-targeted. The FRE-1128 precedent is to route an obligation **by class** rather
-than uniformly, and here the discriminating class is the *negative* finding. D3 puts the burden
-exactly there and nowhere else.
+**Why Rejected:** Mis-targeted as a *replacement*. The FRE-1128 precedent is to route an obligation by
+class rather than uniformly, and the discriminating class here is the negative finding. Adversarial
+review remains available to the seat; it is not made a per-study tax.
 
 ### Option 4: Leave explore as it is; fix only the dispatch gap
 
@@ -316,8 +409,7 @@ exactly there and nowhere else.
 **Pros:** Cheapest; unblocks FRE-1183 immediately.
 
 **Cons:** The seat keeps no stated contract, so the next study's scaffolding is hand-written again,
-and the erratum class of failure has nothing standing against it. Does not address the owner's
-directive at all.
+and the erratum class of failure has nothing standing against it.
 
 **Why Rejected:** It solves the routing problem and none of the stated one.
 
@@ -327,146 +419,173 @@ directive at all.
 
 ### Positive Consequences
 
-- The wrong-negative failure class has a mechanical guard that a reviewer can check **without
-  re-measuring** — the property that makes the exit gate affordable at all.
-- The owner's directive is satisfied without inverting explore's relationship to master, and without
+- The wrong-negative failure class has a guard pitched at the granularity that actually failed — the
+  target identifier — and stated per finding, where its absence is legible.
+- The owner's directive is satisfied without inverting explore's relationship to master and without
   eroding owner-hubbed injection.
 - Explore reaches parity with the other three seats: a working skill, a dispatch stream, a busy
-  guard, and a PR of its own.
+  guard, a PR of its own, and a watcher safety net for that PR.
 - FRE-1183 becomes reachable.
-- The substrate map — hard-won, repeatedly re-derived across three studies — stops living in ticket
-  bodies and becomes durable.
+- The substrate map stops living in ticket bodies and becomes durable.
+- Fable's gate is a refusal a test can assert, not a convention.
 
 ### Negative Consequences
 
-- **Master's context cost is not zero.** Master gates the document PR and dispositions its proposals.
-  This ADR bounds that cost by the deliverable's shape rather than eliminating it, and states the
-  failure signal (master re-measuring) explicitly.
-- **Explore gains repo write access**, narrowly scoped. This is a deliberate expansion of a seat
-  previously restricted to drafting text, accepted because it removes master's transcription cost and
-  because merging — the operational act — stays with master.
-- **A fifth contract document to keep true.** The project already carries drift risk across four; this
-  adds one, and the amendment table above is the mitigation for the initial edit only.
-- **D3 can be gamed by phrasing** — a negative verdict written as a positive statement ("the mechanism
-  is idle") evades a naive reading of the rule. The skill states the test by *semantics*, not by
-  keyword.
+- **Master's read cost is unbounded and accepted.** Only adjudication is capped (D6). The `basis`
+  line makes the split visible; it does not shrink the read.
+- **The anchoring tension is accepted, not dissolved.** "Commission the attack" *is* directional: it
+  names a favoured direction and declares confirmation a failure. The argument for accepting it is an
+  epistemic asymmetry, not neutrality — a commission that says *confirm X* and returns X is
+  uninformative, while one that says *attack X* and fails to break X is informative. A commission can
+  still anchor by choosing which failure modes to enumerate, and this ADR does not fix that. The
+  mitigation is that the seat may return "the enumerated modes were the wrong ones," which
+  FRE-1116 effectively did.
+- **Explore gains repo write access and a self-opened PR**, narrowly scoped. A deliberate expansion of
+  a previously draft-only seat, accepted because merging — the operational act — stays with master.
+- **`Backlog` now holds two different things** (amendment 6): parked non-actionable findings, and
+  actionable-but-undispositioned explore proposals. The state is doing more work than before.
+- **A fifth contract document to keep true**, on a project already carrying drift risk across four.
+- **D3 can be evaded by phrasing** — a negative verdict written as a positive statement ("the
+  mechanism is idle") reads past a keyword scan. The skill states the test by *semantics*, and AC-1's
+  enumeration is by substance, not by wording.
 
 ### Risks and Mitigations
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| Master absorbs the study's full cost anyway, and explore's purpose erodes | High | D6 states the failure signal — a disposition that required re-measuring — and AC-4 adjudicates it directly rather than assuming it away |
-| D3 becomes a box-tick: a control is named but does not actually exercise the same path | Medium | The control must quote its **actual non-zero output** from the same query shape; AC-1 checks the output, not the claim |
-| Filing narrowed to `Backlog` slows real findings into the queue | Medium | `Backlog` costs no approval bandwidth and master's D6 disposition is the promotion path, fired at a PR that already happens; nothing waits on a new event |
-| The dispatcher now resets a live explore context that held owner deliberation | Medium | The busy guard blocks dispatch while a study is `In Progress`; dispatch is board-routed work the owner approved, and the reset is the same CLEAR semantics every stream carries |
-| Fable is selected without approval, silently | Medium | No standing grant exists until the owner writes the ladder row; AC-7 checks every occurred selection against a recorded approval |
+| A provenance citation is supplied but stale — the emit site moved since the cited revision | Medium | Arm 1 requires the revision be stated, so staleness is visible; the alternative arm (a raw document exhibiting the identifier) is revision-free |
+| Master rubber-stamps every proposal `owner's call` | Medium | `owner's call` must carry a recommendation (Decision-Support Doctrine); AC-3 checks for one |
+| Master re-measures privately and omits it from the comment | Medium–High | Only partially mitigable: the `basis` line makes the honest case cheap to declare, and AC-4 states its own observability limit rather than pretending to close it |
+| The dispatcher resets a live explore context holding owner deliberation | Medium | The busy guard blocks dispatch while the study is `In Progress` (D7's pickup transition is what makes the guard real) |
+| Fable is selected without approval | Low | The launcher refuses without an approval argument; AC-7 asserts the refusal by test rather than auditing a census |
 
 ---
 
 ## Implementation Notes
 
 **Files affected:**
-- `.claude/skills/explore/SKILL.md` — new (D2 emit obligation, D3, D4 shape + substrate map, D5, D6
-  PR mechanics)
-- `.claude/skills/lifecycle-rules.md` — amendments 1–4
-- `.claude/skills/prime-explore/SKILL.md` — amendment 5
-- `.claude/skills/master/SKILL.md` — D6 exit disposition at the explore-document PR
-- `scripts/dispatch/launcher.py` — `stream:explore` topology entry; `fable` in the validated model
-  vocabulary
+- `.claude/skills/explore/SKILL.md` — new
+- `.claude/skills/lifecycle-rules.md` — amendments 1–7
+- `.claude/skills/prime-explore/SKILL.md` — amendment 8
+- `.claude/skills/master/SKILL.md` — D6 disposition step
+- `scripts/dispatch/launcher.py` — `explore` topology entry; `fable` in the model vocabulary behind
+  the D8 approval argument
 - `scripts/dispatch/next_resolver.py` — `explore` as a resolvable stream
-- `scripts/dispatch/gating_watcher.py` — keep `cc-explore` excluded from watcher routing while the
-  dispatcher gains it (amendment 3)
+- `scripts/dispatch/gating_watcher.py` — `explore-fre-*` red-CI routing to `cc-explore`
 - `.claude/MODEL_ROUTING_POLICY.md` — Fable row
-- `docs/plans/OWNER_CONSOLE.md` — **owner-written**; the implementation ticket surfaces the Fable
-  ladder row for the owner and never writes it (ADR-0131 D2)
+- `docs/plans/OWNER_CONSOLE.md` — **owner-written**; the Fable ticket surfaces the ladder row for the
+  owner and never writes it (ADR-0131 D2)
 
 **Dependencies:** none external. FRE-977 is re-scoped into this chain rather than run separately.
 
-**Testing strategy:** the dispatch changes carry unit tests in the existing
-`tests/scripts/dispatch/` pattern (stream resolution, topology lookup, model-vocabulary validation).
-The contract changes are process documents and are adjudicated by the seam ticket against real
-studies, not by unit test.
+**Testing strategy:** the dispatch and launcher changes extend the existing flat test modules
+`tests/scripts/test_launcher.py` and `tests/scripts/test_next_resolver.py` (there is no
+`tests/scripts/dispatch/` package). D8's refusal is a unit test: `--model fable` without the approval
+argument must exit non-zero and launch nothing. The contract changes are process documents,
+adjudicated by the seam against real studies.
 
 ---
 
 ## Verification / Acceptance Criteria
 
-These are the **ADR's own** criteria. They are asserted in exactly one place — the seam ticket named
-below — and are never sliced across the implementation chain (ADR-0130 D1).
+These are the **ADR's own** criteria, asserted in exactly one place — the seam ticket named below —
+and never sliced across the chain (ADR-0130 D1).
 
-Unless stated otherwise, "the window" means explore research documents merged to `main` **after** the
-`/explore` skill lands. **If the window contains no merged explore document, the affected criterion is
-`inconclusive`, never green** — the ADR then stays `Accepted` and the seam re-dates.
+**Window.** The window opens when the `/explore` skill lands and closes at adjudication; it must
+contain **at least two merged explore research documents**. Each criterion additionally names what
+must be *exercised* for it to be adjudicable — a study that exercises nothing cannot make a criterion
+green by empty enumeration. If the window is unexercised for a criterion, that criterion is
+**inconclusive**, never green, and ADR-0135 stays `Accepted`.
 
-- **AC-1** — Every negative finding in the window carries a positive control whose **actual non-zero
-  output** is quoted. · **Check:** read each merged `docs/research/` explore document; enumerate
-  findings whose verdict is negative in substance (zero / never / does not fire / cannot engage /
-  does not compose, however phrased); count those lacking a control with a quoted non-zero output.
-  · *Fails if* that count is ≥ 1 — including a control that names a query but quotes no output, or
-  quotes a zero.
+**Window reset.** A red verdict produces a remediation ticket (master, per lifecycle-rules § Ticket
+state › Seam tickets) and the seam re-dates with a **fresh window opening at that remediation's
+merge**. A historical failure therefore does not poison every later census — which the first draft of
+this section did.
 
-- **AC-2** — D3 as written rejects the specific claim that produced the erratum. · **Check:** apply
-  the `/explore` skill's admissibility rule verbatim to FRE-1131 §F1's mechanism-B row and §F3's
-  "fired 0×", as they stood in PR #803. The rule must classify both inadmissible for want of a
-  control. · *Fails if* the rule's text would have admitted either — which is what a rule phrased as
-  a discipline ("state your method") rather than an admissibility test would do. Adjudicable
-  immediately once the skill lands; needs no window.
+- **AC-1** — Every negative finding in the window carries **both** D3 arms on that finding.
+  · **Check:** in each merged explore document, enumerate findings whose verdict is negative *in
+  substance* (zero / never / does not fire / cannot engage / does not compose, however phrased); for
+  each, confirm (i) a provenance citation naming an emit site with its revision, or a quoted raw
+  instance exhibiting the identifier, **and** (ii) a liveness control with its actual non-zero output.
+  · *Exercised by:* ≥1 negative finding in the window. · *Fails if* any negative finding is missing
+  either arm — **including one carrying only a same-store liveness control, which is exactly the
+  shape that produced the erratum.**
 
-- **AC-3** — Every proposal in the window carries a master disposition. · **Check:** for each merged
-  explore document, read the commissioning ticket's comments; every item in the document's Proposals
-  section maps to exactly one of `feasible` / `infeasible` + reason / `owner's call`. · *Fails if* any
-  proposal is undispositioned, or is dispositioned as anything outside those three (a "noted" or an
-  acknowledgement is not a disposition).
+- **AC-2** — The rule as written rejects the erratum's finding, and a liveness-only rule does not.
+  · **Check:** apply the `/explore` skill's rule verbatim to FRE-1131 §F1 row B
+  (`within_session_compressed` = 0) as it stood in PR #803. It must be **inadmissible for want of arm
+  1**. Then apply a liveness-only variant to the same row: with row D's `cache_reset_decision` = 94
+  present in the same table and the same index, it must come out **admissible**.
+  · *Exercised by:* the skill landing; no study needed. · *Fails if* the rule admits row B, **or** if
+  the liveness-only variant also rejects it — the second half is the discriminating test, because a
+  rule that rejects everything proves nothing about what makes this one work.
 
-- **AC-4** — Master dispositioned from project state, not by re-measuring. · **Check:** read each
-  disposition comment; no disposition rests on a measurement master ran against the substrate to
-  re-derive the finding the proposal sits on. Citing the board, an ADR, git, or an in-flight ticket
-  is project state and is expected. · *Fails if* any disposition contains master's own re-derivation
-  of a finding's measurement — that is the split having failed and master paying the study's cost
-  twice, which is the tension this ADR claims to have answered.
+- **AC-3** — Every recommendation in the window carries a disposition of the required shape.
+  · **Check:** for each merged document, enumerate recommendations **wherever they appear**, not only
+  under the Proposals heading; each maps in the commissioning ticket's comments to exactly one of
+  `feasible` (naming the promoted ticket id), `infeasible` (with a project-state reason — "too many"
+  is not one), or `owner's call` (**carrying a recommendation**). Confirm the count is ≤10 and that no
+  `feasible` disposition created a second ticket for a proposal explore had already filed.
+  · *Exercised by:* ≥1 recommendation in the window. · *Fails if* any recommendation is
+  undispositioned, sits outside the three values, is an `owner's call` with no recommendation, or is
+  a `feasible` that re-filed rather than promoted.
 
-- **AC-5** — A study reaches the seat by dispatch, with no manual paste. · **Check:**
+- **AC-4** — Master dispositioned from project state, not by re-measuring. · **Check:** every
+  disposition comment carries a `basis` line; none declares `re-measured`; and no disposition's text
+  contains a measurement master ran to re-derive the finding its proposal rests on (citing the board,
+  an ADR, git or an in-flight ticket is project state and is expected). · *Exercised by:* ≥1
+  disposition in the window. · *Fails if* a `basis` line is absent, or declares `re-measured`, or the
+  text contradicts the declared basis. **Stated limit:** an undeclared private re-measurement is not
+  observable from any record this project keeps. This criterion detects *declared and evidenced*
+  re-derivation only, and the residue is a surfaced design smell, not a closed one — the honest
+  reading of a green AC-4 is "nothing recorded says the split failed," not "the split held."
+
+- **AC-5** — A study reached the seat by dispatch, delivered. · **Check:**
   `python -m scripts.dispatch.next_resolver --stream explore --json` resolves a real `Approved` +
-  `stream:explore` ticket; and at least one study in the window was launched through the launcher's
-  explore topology, evidenced by its dispatch card. · *Fails if* the resolver rejects `explore` as a
-  stream, or if every study in the window still required a manual reset-prime-paste.
+  `stream:explore` ticket; and the orchestrator's `dispatch_execute` record (not the pre-execution
+  `dispatch_plan` card, which is rendered before delivery is attempted) shows a **successful**
+  delivery to the explore topology for ≥1 study in the window, whose ticket then moved to
+  `In Progress`. · *Exercised by:* ≥1 dispatched study. · *Fails if* the resolver rejects `explore`,
+  or no `dispatch_execute` record shows a successful explore delivery, or the ticket never left
+  `Approved` — which would also mean the busy guard was inert.
 
 - **AC-6** — No explore finding reached `Needs Approval` before its disposition. · **Check:** for each
-  merged explore document, list the Linear tickets traceable to its proposals; each was created in
-  `Backlog`, **or** created in `Needs Approval` with a `createdAt` **later than** master's disposition
-  comment on the commissioning ticket. · *Fails if* any `Needs Approval` ticket carrying an explore
-  finding predates that comment.
+  merged document, take the tickets named in master's disposition comment plus any ticket whose body
+  reproduces one of the document's findings; for each, read its **state history** and confirm the
+  transition into `Needs Approval` (not merely its creation state) is later than the disposition
+  comment. · *Exercised by:* ≥1 promoted proposal. · *Fails if* any such ticket entered
+  `Needs Approval` before the disposition — including one created in `Backlog` and promoted moments
+  later, which the first draft's creation-state check would have passed.
 
-- **AC-7** — Fable is selectable, and no selection happened without a recorded owner approval.
-  · **Check:** the launcher accepts `--model fable` and rejects an unknown tier (existing validation
-  test); then enumerate every dispatch that ran at Fable in the window and match each to a recorded
-  owner approval — the trust-ladder row if the owner wrote one, otherwise an explicit per-dispatch
-  approval in the ticket thread. · *Fails if* `--model fable` is rejected, **or** if any Fable
-  dispatch has no recorded approval. A ladder row master wrote itself is a fail, not a pass
-  (ADR-0131 D2).
+- **AC-7** — Fable cannot be selected without a recorded approval. · **Check:** run the launcher with
+  `--model fable` and **no** approval argument: it must exit non-zero and launch nothing (a unit test
+  asserts this). Then run it with the approval argument: it must launch. Then enumerate every Fable
+  dispatch in the window and confirm each names its approval source. · *Exercised by:* the launcher
+  test; the census is additional, not the primary proof. · *Fails if* the unapproved invocation
+  launches, or the approved one is refused, or any dispatch ran at Fable naming no approval source. A
+  ladder row master wrote itself is not an approval source (ADR-0131 D2).
 
 **Seam ticket:** FRE-1195 — *ADR-0135 seam — adjudicate the explore working contract against real
 studies*. Filed parked (`Backlog`), **due 2026-09-15** — the earliest date at which the chain can have
-landed and at least one study can have run end to end through dispatch, emit, PR and disposition.
-AC-2 is adjudicable earlier; the rest need that one study, which is why the seam waits on it rather
-than on the last child's merge.
+landed and two studies can have run end to end through dispatch, emit, PR and disposition. AC-2 and
+AC-7 are adjudicable as soon as the chain lands; the rest need the window.
 
 ---
 
 ## References
 
 - [ADR-0130](ADR-0130-two-tiers-of-acceptance-criteria.md) — Two Tiers of Acceptance Criteria (D1 severs criterion inheritance; D2 mandates the seam ticket this ADR files) — *Accepted*
-- [ADR-0131](ADR-0131-retire-master-plan-owner-console.md) — Owner Console, Trust Ladder, One Writer per Store (D1 the cheap `Backlog` path D5 preserves; D2 why the Fable ladder row is owner-written; D4 the filing-plane row amendment 4 edits) — *Accepted*
+- [ADR-0131](ADR-0131-retire-master-plan-owner-console.md) — Owner Console, Trust Ladder, One Writer per Store (D1 the cheap `Backlog` path D5 preserves; D2 why the Fable ladder row is owner-written; D4 the filing-plane row amendment 7 edits, and the own-ticket pickup delegation D7 relies on) — *Accepted*
 - [ADR-0113](ADR-0113-self-driving-delivery-loop.md) — Self-Driving Delivery Loop (§1: dispatch mechanics live in the external resolver, not in a skill — D7 adds a stream there, not inline) — *Superseded*
 - [ADR-0116](ADR-0116-event-driven-dispatch-actuation.md) — Event-Driven Dispatch Actuation (the actuation path D7's stream entry joins) — *Accepted*
 - [ADR-0117](ADR-0117-pr-gate-signal-collector.md) — Deterministic Signal Collector for the PR Gate (the precedent for a gate check that collects facts and renders no verdict) — *Accepted*
-- `.claude/skills/lifecycle-rules.md` § Explore session, § Coordination stores — the four sentences amended
-- `.claude/skills/prime-explore/SKILL.md` — the fifth sentence amended
-- `docs/research/2026-08-03-fre-1131-context-memory-alignment-audit.md` — the audit, its method appendix (line 245), its "this seat files nothing" (line 228), and the 2026-08-03 correction (line 258); PR #803 and PR #804
+- `.claude/skills/lifecycle-rules.md` § Explore session, § Ticket state, § Coordination stores — amendments 1–7
+- `.claude/skills/prime-explore/SKILL.md` — amendment 8
+- `docs/research/2026-08-03-fre-1131-context-memory-alignment-audit.md` — the audit; its §F1 table (lines 41–47) carrying the bad zero and the same-index oracle side by side, which is the proof a liveness-only control is insufficient; its method appendix (line 245); its "this seat files nothing" (line 228); the 2026-08-03 correction (line 258). PR #803 and PR #804
 - [FRE-1184](https://linear.app/frenchforest/issue/FRE-1184) — this ADR's commissioning ticket
 - [FRE-1116](https://linear.app/frenchforest/issue/FRE-1116) — the unanchored study that reframed the recall programme; source of "measure at the answer, not at the pipeline"
 - [FRE-1131](https://linear.app/frenchforest/issue/FRE-1131) — the alignment audit whose negative finding was wrong
-- [FRE-1183](https://linear.app/frenchforest/issue/FRE-1183) — the study filed 2026-08-07 with no route to the seat; the exemplar of a commission that states the attack
+- [FRE-1183](https://linear.app/frenchforest/issue/FRE-1183) — filed 2026-08-07 with no route to the seat; the exemplar of a commission that states the attack
 - [FRE-977](https://linear.app/frenchforest/issue/FRE-977) — explore dispatch, `Approved`, re-scoped by D7
 - [FRE-1128](https://linear.app/frenchforest/issue/FRE-1128) — the precedent for routing a review obligation by class rather than uniformly
 - [FRE-1051](https://linear.app/frenchforest/issue/FRE-1051) — why ES counts are treated as provisional in D4's substrate map
@@ -480,8 +599,9 @@ than on the last child's merge.
 **Reason:** Decided in session on 2026-08-07. The owner settled the principal question directly —
 explore is an extension of the owner, with master supplying project clarity and exigence to verify
 proposals are possible — which located the gate at the exit and left owner-hubbed injection intact.
-The commissioning ticket's premise was corrected during discussion against the FRE-1131 artifact:
-the failure was not an absent evidence obligation but an admissible wrong negative, which is why D3
-is an admissibility rule rather than a stated discipline. `Implemented` awaits the seam ticket's
-adjudication (FRE-1195, due 2026-09-15); the ADR does not reach it on a red or unadjudicated
-criterion.
+FRE-1184's premise was corrected during discussion against the FRE-1131 artifact; a first draft's
+repair (a positive control) was then corrected again at Codex review, which showed the audit's own
+same-index oracle sat in the same table as the bad zero and would have satisfied it. D3 is therefore
+pitched at the target identifier, which is where the failure actually was. `Implemented` awaits the
+seam ticket's adjudication (FRE-1195, due 2026-09-15); the ADR does not reach it on a red or
+unadjudicated criterion.

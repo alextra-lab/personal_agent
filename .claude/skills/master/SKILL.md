@@ -23,17 +23,24 @@ constraints, prior-deploy evidence) that the PR body often does NOT restate. Sur
 the comments that bears on correctness / scope / acceptance / how to deploy before merging.
 
 ## 2 — Analyze the diff
-- **The code-review + security-review run in the BUILD session before the PR, not here** (shift-left;
-  build fixes its own findings on-branch — see build skill Step 8). Build hands you a **self-review
-  summary** in its handoff comment: the effort level, what the reviews flagged, what it fixed, and
-  anything it left unfixed and why.
+- **The code-review + security-review run in the working session before the PR, not here**
+  (shift-left; the session fixes its own findings on-branch — see build skill Step 8, and adr skill
+  Step 6 for a code-producing adr session). It hands you a **self-review summary** in its handoff
+  comment: the **diff class** (self-serve / escalated — and, if escalated, whether the owner already
+  ran `/code-review ultra` and its outcome), the security-review verdict, what the reviews flagged,
+  what it fixed, and anything it left unfixed and why.
 - **You are the executive: take that summary and decide next steps — don't re-run the work.** Validate
   it (spot-check that the reported findings were real and its on-branch fixes actually address them;
   weigh anything it chose not to fix), then act: **merge** if it holds, **bounce** if the fixes are
-  thin / a finding was waved off / a risky change was under-reviewed, or **run the code-review skill
-  yourself** only when build's summary is absent or looks unreliable on a risky diff. A real-logic diff
-  (src / script / behavioural config) with **no** review summary → **bounce** (same mechanism as the
-  codex backstop below).
+  thin / a finding was waved off / a risky change was under-reviewed, or **re-run
+  `feature-dev:code-reviewer` / `security-review` yourself** only when the summary is absent or looks
+  unreliable on a risky diff. A real-logic diff (src / script / behavioural config) with **no** review
+  summary → **bounce** (same mechanism as the codex backstop below).
+- **Escalated diff, no owner review yet:** if the summary reports `diff class: escalated` and the PR
+  thread shows no `/code-review ultra` result, **ask the owner** to run it before you merge (mirrors
+  the ask-first deploy pattern, Step 6) — do not merge on the self-serve pass alone, and do not run
+  `/code-review ultra` yourself (it's the owner's typed, billed invocation). If it surfaces findings,
+  relay them to the build session via the normal bounce channel.
 - Alongside, a **light spot-review** for what any diff-scoped review misses — scope creep, doc-drift,
   acceptance-criteria adherence — and block merge on real issues.
 Surface findings. Block merge on real issues; relay to the build session.
@@ -41,8 +48,8 @@ Surface findings. Block merge on real issues; relay to the build session.
   *trivial* work (docs / config / test-only / one-liner, no src-logic). If the diff touches `src/`
   logic / schema / security / cost / memory (a *Standard/Complex* change) but the PR body / handoff
   comment shows **no codex plan-review**, the build session mis-tiered it — **bounce it back for
-  review; do not merge on a skipped-but-needed review.** (Code-review + effort-sizing now live in the
-  build skill Step 8; master confirms they ran — see Step 2 above.)
+  review; do not merge on a skipped-but-needed review.** (Code-review + diff-class routing now live
+  in the build skill Step 8; master confirms they ran — see Step 2 above.)
 
 ## 3 — Doc-drift check
 Does this change require updates to `CLAUDE.md`, a skill/lifecycle-rules contract, or an ADR status

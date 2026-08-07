@@ -53,8 +53,7 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -106,8 +105,7 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -159,8 +157,7 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -212,8 +209,7 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     }

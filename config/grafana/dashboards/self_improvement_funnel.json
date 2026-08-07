@@ -12,8 +12,8 @@
     {
       "id": 1,
       "type": "stat",
-      "title": "Self-Improvement Funnel: Produced -> Promoted -> Shipped/Canceled",
-      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 filters(None)]",
+      "title": "Self-Improvement Funnel: total reflection count (stage breakdown not reproduced)",
+      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 filters(None). Plots the total reflection-document count, not the Produced/Promoted/Shipped/Canceled stage breakdown the original filters() aggregation computed; that breakdown was not reproduced.]",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -42,13 +42,12 @@
             {
               "type": "date_histogram",
               "id": "99",
-              "field": "@timestamp",
+              "field": "timestamp",
               "settings": {
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -56,7 +55,7 @@
       "id": 2,
       "type": "table",
       "title": "Self-Improvement Funnel: Promotion throttle events",
-      "description": "Raw document table. Columns in source: event_type, current_count, threshold",
+      "description": "Raw document table. Columns in source: event_type, current_count, threshold. The Kibana original sourced this from agent-captains-funnel-events-*, which carries no live documents in Elasticsearch; re-sourced to es-agent-logs, filtered to event_type:\"throttled_budget\" (src/personal_agent/captains_log/promotion.py::_emit_throttle_event) so this table actually shows throttle events rather than every agent-logs document.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -74,7 +73,7 @@
             "type": "elasticsearch",
             "uid": "es-agent-logs"
           },
-          "query": "",
+          "query": "event_type: \"throttled_budget\"",
           "metrics": [
             {
               "type": "raw_document",

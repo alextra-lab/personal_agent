@@ -47,8 +47,7 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -92,8 +91,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -145,8 +143,7 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -190,8 +187,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -243,8 +239,7 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     }

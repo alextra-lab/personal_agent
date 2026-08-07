@@ -50,16 +50,15 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Prompt: Cache hit rate over time by callsite",
-      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 formula(None), math(None)]",
+      "title": "Prompt: cache reads vs input tokens by callsite (hit rate not computed)",
+      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 formula(None), math(None). Plots cache_read_tokens and input_tokens sums per callsite; the original's cache-hit-rate ratio (cache_read / input) was not reproduced.]",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -113,8 +112,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     }

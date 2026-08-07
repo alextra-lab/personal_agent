@@ -47,13 +47,12 @@
             {
               "type": "date_histogram",
               "id": "99",
-              "field": "@timestamp",
+              "field": "started_at",
               "settings": {
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -95,13 +94,12 @@
             {
               "type": "date_histogram",
               "id": "99",
-              "field": "@timestamp",
+              "field": "probed_at",
               "settings": {
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -153,8 +151,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -206,8 +203,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -266,8 +262,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },

@@ -50,8 +50,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -100,8 +99,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -171,8 +169,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     }

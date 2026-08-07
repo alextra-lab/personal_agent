@@ -12,8 +12,8 @@
     {
       "id": 1,
       "type": "barchart",
-      "title": "Budget cap utilization scorecard",
-      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 last_value(cap_usd), last_value(running_total), last_value(running_total), last_value(utilization_ratio), last_value(utilization_ratio), last_value(cap_usd)]",
+      "title": "Budget: event count by role (utilization scorecard not reproduced)",
+      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 last_value(cap_usd), last_value(running_total), last_value(running_total), last_value(utilization_ratio), last_value(utilization_ratio), last_value(cap_usd). Plots a raw event count per role; none of the original's last_value cap/running-total/utilization-ratio figures were reproduced (Grafana ES top_metrics' settings schema is undocumented \u2014 see plan \u00a70).]",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -49,8 +49,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -103,8 +102,7 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -148,8 +146,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -194,8 +191,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -247,8 +243,7 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -291,8 +286,7 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     }

@@ -12,8 +12,8 @@
     {
       "id": 1,
       "type": "timeseries",
-      "title": "Context Window Composition (% of window)",
-      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 formula(None), math(None)]",
+      "title": "Context Window Composition \u2014 token sums (percentage not computed)",
+      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 formula(None), math(None). Plots raw per-component token sums (reasoning/memory/tool/total), not the percent-of-window ratio the original formula/math columns computed.]",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -67,16 +67,15 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Context Window Occupancy vs Budget Ceiling",
-      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 static_value(None)]",
+      "title": "Context Window Occupancy vs Budget Ceiling (ceiling shown as event count)",
+      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 static_value(None). The occupancy line (avg total_tokens) is real; the ceiling series is an event count standing in for the original's fixed configured-ceiling reference value, not the ceiling itself.]",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -115,8 +114,7 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -181,8 +179,7 @@
                 "orderBy": "_count"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     },
@@ -225,8 +222,7 @@
                 "interval": "1h"
               }
             }
-          ],
-          "timeField": "@timestamp"
+          ]
         }
       ]
     }

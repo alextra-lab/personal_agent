@@ -37,10 +37,18 @@ _RENDER_ENV = {
     "NEO4J_PASSWORD": "test",
 }
 
+# The real gateway service loads secrets from an absolute host path
+# (env_file: /opt/seshat/.env) that exists on the VPS but not on a CI runner
+# or a fresh clone — `docker compose config` refuses to render the whole file
+# if it's missing, even though this test only checks the unrelated kibana
+# service. Same override tests/scripts/test_gateway_depends_on.py and
+# test_filebeat_compose_service.py already use for the identical reason.
+_RENDER_OVERRIDE = "tests/scripts/fixtures/gateway_render_override.yml"
+
 
 def _render_compose() -> dict[str, object]:
     result = subprocess.run(
-        ["docker", "compose", "-f", "docker-compose.cloud.yml", "config"],
+        ["docker", "compose", "-f", "docker-compose.cloud.yml", "-f", _RENDER_OVERRIDE, "config"],
         cwd=repo_root(),
         capture_output=True,
         text=True,

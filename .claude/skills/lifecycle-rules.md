@@ -84,10 +84,10 @@ what a signal already asserts is the failure mode (memory `feedback_master_reads
   Step 6). Unconditional, both streams: per-AC evidence (**the ticket's own** criteria) ·
   self-review summary (diff class self-serve/escalated, + owner `/code-review ultra` outcome if
   escalated + findings fixed/deferred + security-review verdict) · deploy class · post-deploy runbook
-  · context disposition. Conditional, adr only — when the diff carries executable code, not just the
-  ADR document: the self-review summary above, **plus** a per-criterion evidence field (preliminary
-  observed evidence from authoring time, not a substitute for the seam ticket's adjudication) · the
-  **seam ticket** + its obligation → owner mapping.
+  · context disposition; **adr also always names its seam ticket** + obligation → owner mapping,
+  code or no code. Conditional, adr only — when the diff carries executable code, not just the ADR
+  document: the self-review summary above, **plus** a per-criterion evidence field (preliminary
+  observed evidence from authoring time, not a substitute for the seam ticket's adjudication).
   This is the gate's executive input. A real-logic diff whose handoff is **missing per-AC evidence or
   the self-review summary → bounce** (do not reconstruct it by reading the diff).
 

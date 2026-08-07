@@ -25,7 +25,7 @@ the comments that bears on correctness / scope / acceptance / how to deploy befo
 ## 2 — Analyze the diff
 - **The code-review + security-review run in the working session before the PR, not here**
   (shift-left; the session fixes its own findings on-branch — see build skill Step 8, and adr skill
-  Step 6 for a code-producing adr session). It hands you a **self-review summary** in its handoff
+  Step 3.5 for a code-producing adr session). It hands you a **self-review summary** in its handoff
   comment: the **diff class** (self-serve / escalated — and, if escalated, whether the owner already
   ran `/code-review ultra` and its outcome), the security-review verdict, what the reviews flagged,
   what it fixed, and anything it left unfixed and why.

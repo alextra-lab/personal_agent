@@ -401,7 +401,7 @@ class ElasticsearchHandler(logging.Handler):
         with self._submission_lock:
             self._pending_submissions += 1
         try:
-            loop.call_soon_threadsafe(self._enqueue, item)
+            loop.call_soon_threadsafe(self._enqueue_from_thread, item)
         except RuntimeError:
             # Owner loop is closed or closing — nothing can be delivered.
             with self._submission_lock:
@@ -469,11 +469,33 @@ class ElasticsearchHandler(logging.Handler):
             index=self.es_logger.current_index_name(),
         )
 
+    def _enqueue_from_thread(self, item: _QueuedRecord) -> None:
+        """Owner-loop callback for a cross-thread hand-off.
+
+        Exists solely to release the barrier slot that ``emit()`` took before
+        scheduling this callback. Keeping the release here — rather than in
+        :meth:`_enqueue` — is what makes the accounting exactly paired: only the
+        cross-thread path increments, so only the cross-thread path may
+        decrement. A shared release in ``_enqueue`` would let a *synchronous*
+        same-loop emit consume the slot belonging to a hand-off whose callback
+        had not run yet, dropping ``_pending_submissions`` to zero while a
+        record was still in the loop's ready queue — precisely the race the
+        barrier exists to close.
+
+        Args:
+            item: Record to enqueue.
+        """
+        try:
+            self._enqueue(item)
+        finally:
+            with self._submission_lock:
+                self._pending_submissions -= 1
+
     def _enqueue(self, item: _QueuedRecord) -> None:
         """Put one record on the queue, applying the overflow policy.
 
         Runs only on the owner loop — either called directly by ``emit()`` when
-        it is already there, or as a ``call_soon_threadsafe`` callback. It never
+        it is already there, or via :meth:`_enqueue_from_thread`. It never
         awaits, so the ``get_nowait``/``put_nowait`` pair below cannot interleave
         with the consumer.
 
@@ -481,32 +503,25 @@ class ElasticsearchHandler(logging.Handler):
             item: Record to enqueue.
         """
         queue = self._queue
+        if queue is None:
+            self._count("enqueue_errors")
+            return
         try:
-            if queue is None:
-                self._count("enqueue_errors")
-                return
+            queue.put_nowait(item)
+        except asyncio.QueueFull:
+            # OVERFLOW_POLICY = drop-oldest.
+            try:
+                queue.get_nowait()
+                queue.task_done()
+            except asyncio.QueueEmpty:  # pragma: no cover - full then empty
+                pass
+            self._count("dropped_queue_full")
             try:
                 queue.put_nowait(item)
-            except asyncio.QueueFull:
-                # OVERFLOW_POLICY = drop-oldest.
-                try:
-                    queue.get_nowait()
-                    queue.task_done()
-                except asyncio.QueueEmpty:  # pragma: no cover - full then empty
-                    pass
-                self._count("dropped_queue_full")
-                try:
-                    queue.put_nowait(item)
-                except asyncio.QueueFull:  # pragma: no cover - defensive
-                    self._count("enqueue_errors")
-                    return
-            self._count("enqueued")
-        finally:
-            # Only cross-thread hand-offs took a slot on the barrier; the
-            # synchronous path never incremented it.
-            with self._submission_lock:
-                if self._pending_submissions > 0:
-                    self._pending_submissions -= 1
+            except asyncio.QueueFull:  # pragma: no cover - defensive
+                self._count("enqueue_errors")
+                return
+        self._count("enqueued")
 
     # ------------------------------------------------------------------
     # Consumer
@@ -527,6 +542,13 @@ class ElasticsearchHandler(logging.Handler):
             item = await queue.get()
             try:
                 await self._deliver(item)
+            except asyncio.CancelledError:
+                # Shutdown cancelled a write that was already in flight. The
+                # item left the queue at get(), so _stop_consumer's sweep will
+                # never see it — count it here or it vanishes from every
+                # counter and breaks the ESDeliveryStats invariant.
+                self._count("dropped_shutdown")
+                raise
             finally:
                 # In a finally so cancellation mid-write cannot desynchronise
                 # join() accounting and hang a later drain.

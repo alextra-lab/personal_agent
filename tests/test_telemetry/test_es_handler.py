@@ -8,6 +8,7 @@ dropped task references, and an over-broad circuit breaker.
 
 import asyncio
 import logging
+import threading
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -130,6 +131,39 @@ async def test_drain_waits_for_a_cross_thread_handoff_not_yet_queued() -> None:
     assert handler.stats().delivered == 1
 
 
+@pytest.mark.asyncio
+async def test_a_same_loop_emit_cannot_steal_a_pending_handoffs_barrier_slot() -> None:
+    """A synchronous emit must not release another emit's submission slot.
+
+    The barrier is only incremented by the cross-thread path, so only the
+    cross-thread path may decrement it. Sharing the release would let a
+    same-loop emit consume the slot of a hand-off whose callback had not run
+    yet, dropping the count to zero while a record was still in the loop's ready
+    queue — and drain() would then report success over it.
+    """
+    handler = await _connected_handler()
+
+    handed_off = threading.Event()
+
+    def _emit_from_thread() -> None:
+        handler.emit(_record("scheduled_but_not_yet_queued"))
+        handed_off.set()
+
+    thread = threading.Thread(target=_emit_from_thread)
+    thread.start()
+    # Blocking (not awaiting) keeps the owner loop from running the scheduled
+    # callback, so the hand-off is provably still in flight below.
+    handed_off.wait(timeout=2.0)
+    thread.join(timeout=2.0)
+
+    assert handler._pending_submissions == 1
+    handler.emit(_record("same_loop_emit"))
+    assert handler._pending_submissions == 1, "the same-loop emit stole the hand-off's slot"
+
+    assert await handler.drain(timeout=2.0) is True
+    assert handler.stats().delivered == 2
+
+
 # ---------------------------------------------------------------------------
 # AC2 — concurrency burst
 # ---------------------------------------------------------------------------
@@ -212,6 +246,38 @@ async def test_drain_timeout_is_counted_and_leaves_accounting_exact() -> None:
     await handler.disconnect()
     stats = handler.stats()
     assert stats.enqueued == stats.delivered + stats.dropped_shutdown + stats.write_failures
+
+
+@pytest.mark.asyncio
+async def test_a_write_cancelled_mid_flight_is_counted_as_dropped_shutdown() -> None:
+    """A record cancelled mid-write must not vanish from the counters.
+
+    It left the queue at ``get()``, so the shutdown sweep never sees it. Without
+    an explicit count it appears in neither ``delivered``, ``write_failures``
+    nor ``dropped_shutdown``, silently breaking the ESDeliveryStats invariant.
+    """
+    started = asyncio.Event()
+
+    async def _never_completes(*_args: Any, **_kwargs: Any) -> str:
+        started.set()
+        await asyncio.Event().wait()
+        return "unreachable"  # pragma: no cover
+
+    handler = await _connected_handler(log_event=AsyncMock(side_effect=_never_completes))
+
+    handler.emit(_record("cancelled_mid_write"))
+    await started.wait()
+
+    await handler._stop_consumer()
+
+    stats = handler.stats()
+    assert stats.dropped_shutdown == 1
+    assert stats.delivered == 0
+    assert stats.write_failures == 0
+    assert (
+        stats.enqueued
+        == stats.delivered + stats.write_failures + stats.dropped_shutdown + stats.queue_depth
+    )
 
 
 # ---------------------------------------------------------------------------

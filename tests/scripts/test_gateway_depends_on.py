@@ -30,6 +30,7 @@ _RENDER_ENV = {
     "POSTGRES_PASSWORD": "test",
     "SESHAT_APP_PASSWORD": "test",
     "NEO4J_PASSWORD": "test",
+    "GRAFANA_ADMIN_PASSWORD": "test",  # FRE-1072 — now a required var in docker-compose.cloud.yml
 }
 
 

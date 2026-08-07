@@ -1,0 +1,30 @@
+# FRE-1065 AC-7 census instrument — NOT an enforced rule.
+#
+# Deliberately lives in `.ast-grep/census/` rather than `.ast-grep/rules/`:
+# `sgconfig.yml` points `ruleDirs` at `rules/` only, and a project-wide
+# `ast-grep scan` (pre-commit + CI, via scripts/check_egress_bypass_rules.py)
+# runs every rule it finds there. This one matches ~24 legitimate signatures by
+# design, so shipping it as a gate would fail CI on correct code. `rules/` holds
+# things that must not appear; `census/` holds things we count.
+#
+# Run it explicitly:
+#     ast-grep scan -r .ast-grep/census/trace_ctx_census.yml src/
+#
+# Why `kind: typed_parameter` and not the obvious pattern: `ast-grep run -p
+# 'trace_ctx: TraceContext'` silently returns ZERO matches. That text parses as
+# an `assignment` (an annotated variable), not a function parameter, so the
+# naive pattern answers a different question and answers it confidently. This is
+# the wrong-node-kind trap `.claude/CLAUDE.md` §3b warns about; the node kind is
+# what makes the census mean what it says.
+#
+# AC-7 ("this is a bridge, not a flag day") is decided by diffing this rule's
+# output on the branch against its output on origin/main. Baseline at
+# origin/main 6a721464 (2026-08-07): 24 signatures. FRE-1067 and FRE-1069
+# inherit the same do-not-remove constraint and can reuse this instrument.
+id: trace-ctx-param-census
+language: python
+severity: info
+message: Function signature accepting a TraceContext (FRE-1065 AC-7 census)
+rule:
+  kind: typed_parameter
+  regex: '^trace_ctx: TraceContext'

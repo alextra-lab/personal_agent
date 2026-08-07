@@ -1,6 +1,6 @@
 # ADR-0129: OpenTelemetry Instrumentation, with Trace Visibility as the Acceptance Bar
 
-**Status:** Accepted — 2026-07-31 (owner, relayed in session)
+**Status:** Accepted — 2026-07-31 (owner, relayed in session); **D6 amended 2026-08-07** — Kibana's retirement is deferred by owner ruling, not cancelled (see Status Updates)
 **Date:** 2026-07-30
 **Deciders:** Project owner (FRE-1043, owner-directed 2026-07-30)
 **Tags:** telemetry, observability, opentelemetry, tracing, instrumentation, grafana
@@ -70,7 +70,7 @@ tools/executor.py:481           tool_call_failed           latency_ms, span_id  
 
 ### The resource envelope
 
-The VPS has **22 GiB total**, with production containers consuming roughly **4.8 GiB** (Elasticsearch 1.84, Neo4j 0.93, reranker 0.57, Kibana 0.55, gateway 0.50, all others under 0.4 combined). There is real headroom. Kibana's 551 MiB is recovered by this decision.
+The VPS has **22 GiB total**, with production containers consuming roughly **4.8 GiB** (Elasticsearch 1.84, Neo4j 0.93, reranker 0.57, Kibana 0.55, gateway 0.50, all others under 0.4 combined). There is real headroom. This decision originally claimed to recover Kibana's 551 MiB; **that claim is withdrawn** — the retirement is deferred (D6, and the Status Update of 2026-08-07, which records the measurement showing the figure never carried the weight given it).
 
 ---
 
@@ -114,13 +114,24 @@ Two consequences are the reason rather than side effects. First, it is the one p
 
 **The vanilla upstream Collector is used, not a vendor distribution** — not Grafana Alloy, not EDOT, not the Splunk or Datadog distros. All are competent; choosing the neutral one is what keeps the backend a configuration line rather than a commitment, and it is what makes Option 5's deferral real rather than rhetorical.
 
-### D6 — Tempo stores traces; Elasticsearch keeps logs; Grafana correlates and replaces Kibana
+### D6 — Tempo stores traces; Elasticsearch keeps logs; Grafana correlates, and Kibana's retirement is deferred
 
 - **Tempo** receives spans, and its `query_frontend.metrics.max_duration` is configured to at least 14 days (the documented default is 24 hours, which would make AC-8's fortnight-long percentile query unrunnable — a configuration this ADR commits to rather than discovers).
 - **Elasticsearch keeps the logs**, and keeps serving Captain's Log, insights, ratings and the cost gate unchanged. There is no log migration and no historical trace backfill.
-- **Grafana** is the single UI. Its Tempo datasource links span → logs against the Elasticsearch logs datasource on `trace_id`, and back. **Kibana is retired**, recovering 551 MiB; its dashboards are rebuilt in Grafana.
+- **Grafana** is the trace UI, and the intended single UI. Its Tempo datasource links span → logs against the Elasticsearch logs datasource on `trace_id`, and back. Its dashboards are rebuilt from the FRE-533 panel inventory.
+- **Kibana's retirement is deferred, not cancelled** — owner ruling of 2026-08-07, quoted in the Status Update of that date. Both UIs run concurrently until Grafana has demonstrated the functionality this project needs; the decision to retire is then the owner's, taken deliberately rather than arrived at. **This makes the dashboard rebuild more load-bearing, not less:** it is the evidence that decision will rest on. The 551 MiB recovery this decision originally claimed is withdrawn and corrected in that Status Update.
 
-**Why Tempo rather than Elastic's own OTLP path**, which FRE-588 proposed and which the owner previously asked for by name: not capability. Kibana's APM/Traces UI renders distributed traces perfectly well, and any claim otherwise would be false. The reason is capacity and direction. Traces would land on the one component already at 92% of its memory cap with a 602-shard pathology, as data streams that add more indices to the thing under pressure; and Grafana is independently replacing Kibana, so routing traces to a Kibana-only UI builds on a surface being retired. Tempo has no shard model at all. **FRE-588 is superseded by this ADR** and should be closed rather than left as a competing parked plan.
+**How Grafana is exposed** — decided 2026-08-07 with the owner, and recorded here rather than in a ticket because it is a property of "Grafana is the UI" rather than of any one delivery. Grafana is served at **its own Cloudflare-fronted host, `observe`**, referred to by that placeholder only: no literal deployment domain appears in any tracked file. It follows **Kibana's topology rather than Caddy's** — the tunnel routes the hostname straight to the container, bypassing Caddy.
+
+That is deliberate, and the reasoning is worth keeping because the instinct is to reach for Caddy on consistency grounds. Every existing Caddy site block earns its hop by doing routing work: a path split for `agent`, a WebSocket/HTTP protocol split for `graph`, a path allowlist for `es`, header rewriting for `api`. Grafana needs none of them — one container, one port, no split to make, and an allowlist would break an interactive UI. A Caddy hop here would be pure pass-through: an added failure point and config surface earning nothing, and it would not even save a tunnel ingress rule, since a new hostname requires one wherever it points.
+
+**Cloudflare Access is the only gate, and Grafana's own login is disabled.** Grafana ships a login screen where Kibana has none (`docker/kibana/kibana.yml` configures no authentication; Elasticsearch security is off). Behind Access, a second password protects nothing that an attacker who defeated Access has not already bypassed. Grafana therefore runs with anonymous access at the `Viewer` role, retaining an admin account whose password is supplied from the environment for interactive changes. **Its dashboards are provisioned from files in this repository** rather than assembled in the UI — load-bearing independently of authentication, because it is what makes "every Kibana dashboard has a Grafana equivalent" reviewable in a diff instead of verifiable only by logging in.
+
+**The `monitoring` host stays pointed at Kibana.** `docker-compose.cloud.yml` records that the tunnel serves `monitoring` directly from `kibana:5601`, bypassing Caddy; under the deferral that mapping is left untouched. Repointing it belongs to the eventual retirement decision, not to the path toward Grafana — which keeps retention a working state rather than a half-migration.
+
+**Why Tempo rather than Elastic's own OTLP path**, which FRE-588 proposed and which the owner previously asked for by name: not capability. Kibana's APM/Traces UI renders distributed traces perfectly well, and any claim otherwise would be false. The reason is capacity and direction. Traces would land on the one component already at 92% of its memory cap with a 602-shard pathology, as data streams that add more indices to the thing under pressure; and Grafana — not Kibana — is the owner's chosen trace UI, so routing traces into a Kibana-only surface would build the target somewhere the owner has decided not to look. Tempo has no shard model at all. **FRE-588 is superseded by this ADR** and should be closed rather than left as a competing parked plan.
+
+*(The direction argument above was originally worded as "Kibana is being retired… a surface being retired." After the 2026-08-07 deferral there is no scheduled end, so that wording would be false. What carries the rejection is that Grafana is the chosen trace UI, which is the owner's call and is untouched by the deferral.)*
 
 ### D7 — Scope boundary, stated rather than implied
 
@@ -185,9 +196,9 @@ ADR-0128 moves to **Superseded** when this ADR is Accepted.
 **Cons:**
 - Puts trace volume on the single component measured at **92% of its memory cap with 602 shards over 719 MB** — the one under real pressure, and the one Captain's Log and the cost gate depend on.
 - Elastic APM data streams add indices to a cluster whose index count is already the subject of a shard-ceiling deadline (FRE-1036).
-- Ties trace visibility to Kibana, which is being retired in favour of Grafana — building the target on a surface with a scheduled end.
+- Ties trace visibility to Kibana, which is not the owner's chosen trace UI — building the target on a surface the owner has decided not to look at. *(Originally worded "which is being retired… a surface with a scheduled end"; the 2026-08-07 deferral removed the scheduled end, and the Status Update of that date records the correction.)*
 
-**Why Rejected:** On capacity and direction, not capability. It would be the right answer if Elasticsearch were healthy; it is measurably not, and Tempo has no shard model to make worse. The owner's June question was answered correctly for June — Grafana was not yet the intended UI and the shard pathology was not yet measured. **FRE-588 is superseded by this ADR**, not left parked alongside it.
+**Why Rejected:** On capacity and direction, not capability. It would be the right answer if Elasticsearch were healthy; it is measurably not, and Tempo has no shard model to make worse. The owner's June question was answered correctly for June — Grafana was not yet the intended UI and the shard pathology was not yet measured. **FRE-588 is superseded by this ADR**, not left parked alongside it. **Both legs of this rejection have since moved and the movement is recorded rather than absorbed** — see the Status Updates of 2026-07-31 and 2026-08-07: the capacity leg weakened and then recovered, and the direction leg had to be restated once Kibana stopped having a scheduled end.
 
 ### Option 3: Grafana as a Kibana replacement only
 
@@ -246,13 +257,13 @@ ADR-0128 moves to **Superseded** when this ADR is Accepted.
 - **`slm_server` becomes joinable at all.** This requires **one cross-repository release** — the ADR does not pretend otherwise, and AC-6 gates on it — but after that release its spans land inside the calling turn's trace through cross-process propagation, which no field rename could achieve, and subsequent backend changes are Collector configuration rather than another release.
 - **An auditable egress point exists for traces**, bounded as stated in D5 — logs still reach Elasticsearch directly, so this is a partial improvement, not a universal chokepoint.
 - **Two parked decisions resolve.** ADR-0093 D3 un-parks with a committed destination, and ADR-0090's deferred field-registry question is answered by adopting semconv rather than building one.
-- **Kibana's 551 MiB is recovered.**
+- ~~**Kibana's 551 MiB is recovered.**~~ **Withdrawn 2026-08-07** — the retirement is deferred (D6), and the measurement in that day's Status Update shows the figure was never load-bearing.
 
 ### Negative Consequences
 
 - **Two validation guarantees are abandoned, not replaced** (D8): ADR-0128's typed exclusive envelope would have rejected misspelled attributes at development time, and its pipeline provenance would have recorded which normalisation rules still fire. Neither has an equivalent here. A misspelled span attribute will be accepted silently.
 - **Instrumentation touches the call chain.** Bridging `TraceContext` reaches 19 function signatures and the orchestrator step loop, in a codebase with 7,000+ tests. This is the largest risk and is mitigated only by sequencing.
-- **Three more containers to operate** — Collector, Tempo, Grafana — against one retired.
+- **Three more containers to operate** — Collector, Tempo, Grafana — **against none retired**, since the 2026-08-07 deferral keeps Kibana running. This is a real cost the owner accepted explicitly ("I accept maintaining the 2 UI"), and the resource measurement in that Status Update is what makes it affordable rather than merely tolerated.
 - **Observability shares a failure domain with the observed system.** A VPS-level outage takes the trace store with it. Not a regression (Elasticsearch is already on the box), but not fixed; a second VPS remains the eventual answer.
 - **Dashboards are rebuilt.** ADR-0090's reconciliation and FRE-533's panel inventory targeted Kibana; that effort is partly re-spent.
 - **Historical telemetry stays as it is** — a permanent discontinuity at cutover, with pre-cutover data unable to answer trace-shaped questions.
@@ -290,14 +301,15 @@ ADR-0128 moves to **Superseded** when this ADR is Accepted.
 - `src/personal_agent/tools/executor.py:462,481` — tool spans become children of the step span.
 - `src/personal_agent/llm_client/` — model-call spans carry `gen_ai.*` attributes.
 - `src/personal_agent/brainstem/scheduler.py` and the monitor entrypoints — root spans per D3.
-- `docker-compose.yml` — Collector, Tempo, Grafana; Kibana removed.
+- `docker-compose.yml` / `docker-compose.cloud.yml` — Collector, Tempo, Grafana added; **Kibana retained** (D6, deferred 2026-08-07). Grafana carries the tunnel-target comment in the style `docker-compose.cloud.yml` already uses for Kibana, naming `observe` as a placeholder and never a literal domain.
 - `config/otel/` — Collector configuration including redaction processors; Tempo `query_frontend.metrics.max_duration`.
+- `config/grafana/` — datasource and **dashboard provisioning files** (D6): dashboards are defined here rather than assembled in the UI, which is what makes their equivalence to the Kibana inventory reviewable in a diff.
 - `src/personal_agent/tools/executor.py` — the `tool_call_started` / `tool_call_completed` / `tool_call_failed` log records are **retained** through verification (D3) and retired only once AC-5 has passed; they supply AC-5's expected tool count per turn.
 - **`scripts/audit/adr0129_trace_verifier.py`** — new, committed with the implementation. The acceptance criteria are population-level and cross-store (Postgres → Tempo → Elasticsearch); this is the artifact that runs them, so each criterion is executable rather than aspirational. It follows the precedent of `scripts/audit/fre1038_naming_census.py`. It also **writes and reads a baseline file** holding the measured delivery loss over the first 48 hours after cutover (bounded by rule 2's 0.5% ceiling) and each stratum's pre-cutover population size for rule 4's non-vacuity guard. Clock skew is deliberately *not* a recorded quantity: AC-4 compares span **duration** against `api_costs.latency_ms` rather than comparing timestamps across hosts, so skew never enters the comparison.
 
 **Files affected (`slm_server`, separate repository, separate ticket):** OTLP export to the Collector endpoint, replacing the client-formatted index URL at `src/slm_server/telemetry.py:38`, across all four emit paths (chat, responses, rerank, streaming); plus a **machine-readable effective-configuration endpoint or artifact** the verifier can read, since AC-7 must inspect a host it cannot otherwise reach.
 
-**Sequence:** SDK bootstrap + request-boundary root span + structlog processor (measure identity share before/after) → `TraceContext` bridge → step/model/tool spans → background root spans → Collector → Tempo + Grafana → Kibana retirement → `slm_server` OTLP.
+**Sequence:** SDK bootstrap + request-boundary root span + structlog processor (measure identity share before/after) → `TraceContext` bridge → step/model/tool spans → background root spans → Collector → Tempo + Grafana (exposed at `observe`) → `slm_server` OTLP. **Kibana retirement is no longer a step in this sequence** — it is a deferred owner decision taken after Grafana has delivered value (D6), and nothing downstream waits on it.
 
 **Dependencies:** FRE-583 (ADR-0093 D1/D2 — absorbed by D2 here) · FRE-588 (ADR-0093 D3 un-park — **superseded**, close it) · FRE-1036 (index consolidation — **independent and still on its own deadline**; logs remain in Elasticsearch) · FRE-1037 (role-enum widening, supplying the vocabulary `gen_ai.operation.name` adopts).
 
@@ -334,7 +346,9 @@ ADR-0128 moves to **Superseded** when this ADR is Accepted.
 
 - **AC-9 — The `TraceContext` bridge preserved every field it retained.** · **Check:** one behavioural assertion per retained field, against existing suites plus a live request pair: `authenticated` — an authenticated recall request returns `group`-visibility memory and an unauthenticated one does not (FRE-229/FRE-673); `user_id` — a request as user A never returns user B's scoped rows (ADR-0064); `session_id` — session-scoped history stays isolated across two concurrent sessions; `eval_mode` — an evaluation-mode request does not write to production substrate (FRE-375); `kind` — a scheduler-originated trace is distinguishable from a user-originated one. · *Fails if* any assertion changes behaviour from pre-migration. D1 commits to retaining all five; a bridge that works for tracing while silently dropping one would be invisible to every other criterion here, and in the `authenticated` case would widen data access.
 
-**Seam owner:** the **`/adr` session that authored this ADR** owns the assembled-intent criteria. **AC-1, AC-2, AC-3, AC-5, AC-6 and AC-8** hold only once *every* child ticket has landed — no individual child can prove them — so this ADR does not close when its last child merges. Master's acceptance gate asserts those six before ADR-0129 moves to Implemented.
+- **AC-10 — The owner can reach Grafana at its own gated host, and an unauthenticated request cannot.** · **Check:** (a) a request to the `observe` host carrying a valid Cloudflare Access session returns the Grafana UI, and a provisioned dashboard renders; (b) the same request **without** a valid Access session is rejected at the edge and **never reaches the container** — confirmed from Grafana's own access log showing no corresponding request, not from the browser's view of the response; (c) Grafana's own login screen is never presented, confirming the anonymous-`Viewer` configuration of D6 is serving the page rather than a second credential; (d) `docker-compose.cloud.yml`'s `monitoring` mapping still resolves to Kibana. · *Fails if* the unauthenticated request reaches the container, a Grafana login is presented, no dashboard renders, or `monitoring` was repointed. **(b) is the discriminator, and it reads the container's log rather than the response for a reason:** a page that merely *looks* blocked is also what an edge misconfiguration produces, so the browser's view cannot distinguish a working gate from a broken one. This criterion requires an owner action — the tunnel ingress rule and the Access policy live in the Cloudflare dashboard, outside this repository and outside CI — which is permitted of an ADR's *own* criteria (ADR-0130 D1) and is precisely why it is not decidable from any implementation ticket's deliverable.
+
+**Seam ticket:** **FRE-1073**, designated by FRE-1080 under ADR-0130 D2, is the single place **all ten** criteria above are asserted. No implementation ticket carries, quotes, restates or discharges any part of them (ADR-0130 D1); each child instead carries criteria written for its own deliverable, and what this ADR gates at a child's merge is **design adherence** (ADR-0130 D3). **AC-1, AC-2, AC-3, AC-5, AC-6 and AC-8** hold only once *every* child has landed, and **AC-10** additionally requires an owner action outside this repository — so none is provable by any single child, and this ADR does not close when its last child merges. An `adr` session adjudicates FRE-1073, producing one verdict per criterion — green, red or inconclusive, with the evidence and its actual output — recorded into the Status Updates below. **ADR-0129 reaches `Implemented` only if every verdict is green; otherwise it stays `Accepted`.**
 
 ---
 
@@ -352,6 +366,11 @@ ADR-0128 moves to **Superseded** when this ADR is Accepted.
 - `src/personal_agent/telemetry/request_timer.py:88,110,119` — `RequestTimer.start_span` / `end_span`, the hand-rolled tracing this decision retires
 - `src/personal_agent/orchestrator/executor.py:5373` — `tool_execution_completed`, the parent that emits no `span_id`
 - `src/personal_agent/tools/executor.py:462,481` — `tool_call_completed` / `tool_call_failed`, the children whose parent edge is lost
+- ADR-0130 — the two-tier acceptance-criteria rule: D1 severs criterion inheritance (an ADR's criteria are its seam ticket's alone), D2 requires exactly one seam ticket per ADR, D3 keeps design adherence gating at every child merge, D6 requires an implementation ticket's criteria to be decidable from its own deliverable — the reason AC-10 belongs here and not on FRE-1072
+- ADR-0132 — the Caddy egress blocks (`:8600`, `:8601`); relevant to D6 only as the reason the Caddyfile's listeners are not all inbound site blocks, which is what makes `graph` rather than "all six" the comparison Grafana was weighed against
+- `config/cloud-sim/Caddyfile` — the four inbound host blocks (`agent`, `graph`, `es`, `api`), each earning its hop with routing work Grafana does not need; D6's reason for bypassing it
+- `docker-compose.cloud.yml` — the Kibana service comment recording that the tunnel serves `monitoring` directly from `kibana:5601`, bypassing Caddy: both the topology Grafana follows and the mapping D6 leaves untouched
+- `docker/kibana/kibana.yml` — configures no authentication, with Elasticsearch security off; the reason Cloudflare Access is today's only gate and the baseline D6 holds Grafana to
 - `docker/elasticsearch/index-template.json` — the `free_text` dynamic template auto-indexing `stdout`, `stderr` and `raw_*` without declaration; explicitly out of scope (D7, AC-7) and filed separately
 - `docker/postgres/init.sql` (`api_costs`) and `src/personal_agent/llm_client/cost_tracker.py` — the durable per-call billing ledger every criterion enumerates from, chosen because it carries `trace_id UUID NOT NULL`, `provider`, `purpose` and `latency_ms`, does not traverse the telemetry path under test, and has no cleanup task
 - `src/personal_agent/config/settings.py:121` (`ws_event_ttl_hours`, default 24) and `src/personal_agent/transport/agui/event_buffer.py:160` — why `session_events` is **not** the enumeration source: it is the AG-UI transport buffer and is purged daily
@@ -370,6 +389,67 @@ ADR-0128 moves to **Superseded** when this ADR is Accepted.
 ---
 
 ## Status Updates
+
+### 2026-08-07 — D6 amended: Kibana's retirement is deferred, not cancelled
+**Changed By:** `/adr` session (FRE-1193), recording the owner's ruling relayed in session.
+**Reason:** D6 as written stated that Kibana is retired. The owner ruled otherwise, and an Accepted
+ADR may not stand in contradiction to a live owner decision.
+
+**The ruling, quoted rather than paraphrased**, across three messages on 2026-08-07:
+
+> "I accept maintaining the 2 UI until Grafana has shown its superior functionality needed for this project."
+
+> "We will probably retire Kibana - but not yet, and I accept the cost. We will revisit Kibana once Grafana is online and providing value. For now, it is an idea not yet manifested."
+
+> "Keep Kibana, allow limited dev. We will gate at each Kibana ticket whether we want to proceed or not. It all depends on your grafana sequencing. Complete it sooner, the sooner we can make a decision about Kibana's retirement."
+
+**Deferred, not cancelled.** The owner's own words are that retirement will *probably* happen; what
+changed is that it is now a decision to be taken later, on evidence, rather than a consequence this
+ADR discharges. Nothing else in D6 moves: Grafana remains the trace UI, Tempo remains the trace
+store, and the reasoning for both is untouched.
+
+**The 551 MiB premise is corrected in place.** D6 justified the retirement partly by recovering
+551 MiB. Measured on the VPS 2026-08-07 at 09:40Z:
+
+| | Measured |
+|---|---|
+| VPS memory | 22 GiB total, **6.0 GiB available** |
+| `cloud-sim-kibana` | **562.6 MiB** against a 1 GiB cap (54.9%) |
+
+Running both UIs is affordable, and the memory argument never carried the weight the ADR gave it.
+The figure is withdrawn from Context and from Positive Consequences rather than left standing beside
+its own correction.
+
+**A second measurement, recorded because it moves an argument in the opposite direction.**
+`cloud-sim-elasticsearch` measured **1.829 GiB of its 2 GiB cap — 91.5%** — the same reading as the
+2026-07-30 Context, and **above** the 85.8% the 2026-07-31 update recorded after FRE-1036's first
+five families migrated. The capacity leg of Option 2's rejection, which that update reported as
+"materially weaker", has **recovered**. This is recorded unprompted because an update that logged
+only the weakening would leave the file misleading in the other direction.
+
+**Option 2's direction leg had to be restated.** It read that Kibana "is being retired… a surface
+with a scheduled end." After this ruling there is no scheduled end, so that wording became false.
+What carries the rejection is that **Grafana is the owner's chosen trace UI** — a call the deferral
+does not touch. D6 and Option 2 are both reworded; the rejection itself stands.
+
+**Grafana's exposure was decided in the same session** and is recorded in D6: its own
+Cloudflare-fronted host `observe` (placeholder only — no literal domain in any tracked file),
+following Kibana's tunnel-to-container topology rather than Caddy's, with Cloudflare Access as the
+sole gate, Grafana's own login disabled in favour of anonymous `Viewer`, and dashboards provisioned
+from files in this repository. **AC-10 was added** to assert that outcome, and `monitoring` stays
+pointed at Kibana — repointing it belongs to the eventual retirement decision, not to this sequence.
+
+**Consequences for the chain.** FRE-1072's AC-5 is re-scoped from "Kibana is gone" to two separable
+checks — Grafana online, Kibana deliberately retained — and gains a criterion for Grafana's health
+on the compose network; its title drops "and the retirement of Kibana". **AC-6 is untouched and is
+now more load-bearing, not less**: dashboard equivalence is the evidence the owner's eventual
+decision will rest on. AC-9's ADR-0134 rule-port obligation is untouched and still reads correctly
+under either FRE-1187 outcome. **This amendment changes none of AC-1 through AC-9**, so seam ticket
+FRE-1073's existing scope is unaffected — it gains only AC-10.
+
+**Also corrected here:** the seam-owner paragraph predated ADR-0130 and assigned the assembled
+criteria to the authoring `/adr` session with master's gate asserting them. Under ADR-0130 D2 and
+FRE-1080 that is seam ticket **FRE-1073**, adjudicated by an `adr` session. Corrected in place.
 
 ### 2026-07-31 — Accepted
 **Changed By:** master, transcribing the owner's decision relayed in session.

@@ -27,7 +27,8 @@ Verified against this branch, 2026-08-07:
 
 - Five instruments are built and committed, but they are **not equivalent**, and the difference matters
   to D4: the **joinability probe** and the **SLM health probe** are scheduled by `BrainstemScheduler`
-  and persist result documents (`observability/joinability/sink.py`); the **disk-usage threshold** runs
+  and persist result documents (`observability/joinability/sink.py`, `observability/slm_health/sink.py`);
+  the **disk-usage threshold** runs
   inside the lifecycle manager; and the **cache-erosion monitor** and the **delivery-ratio probe** are
   **manual CLIs that persist no result document at all**. The instrument FRE-1051 built to detect
   telemetry loss is neither scheduled nor persisted, so nothing could alert on *its* absence either.
@@ -155,11 +156,27 @@ no-data behaviour has decided it by default, and the default is silence.**
 
 **Absence alone is not enough, and this correction is load-bearing.** The incident that motivates this
 ADR was *not* a total stoppage. On the three bad days the family still flowed — at 17.4 %, 52.2 % and
-47.6 % of the oracle. A pure no-data rule **would not have fired on FRE-1051.** Any claim that
-absence detection catches the measured failure is false unless the condition also covers **shortfall
-against the family's own trailing baseline**. D4 rule 1 is therefore specified as *volume falls
-materially below its own recent baseline, including to zero* — one condition spanning both, needing no
-oracle and no twin store, because the baseline is the family's own history.
+47.6 % of the oracle. A pure no-data rule **would not have fired on FRE-1051.**
+
+**And shortfall cannot be detected from the family's own history alone.** A family's volume tracks
+traffic, so "half as many `api_cost_recorded` documents as yesterday" is equally consistent with *half
+the events were lost* and *half as many requests arrived*. Distinguishing them requires relating the
+family's volume to an **independent measure of the activity that should have produced it** — which is a
+ratio against a denominator, i.e. the oracle relationship in weaker form. Claiming otherwise would be
+the design's central dishonesty, so it is stated instead:
+
+**Rule 1 therefore has two branches with honestly different coverage:**
+
+| Branch | Condition | Denominator needed | Coverage |
+|---|---|---|---|
+| **Stoppage** | No documents for the family in the window while the system is active | An activity **witness** (binary: was anything happening) | **Every** family |
+| **Shortfall** | Documents per unit of independent activity falls materially | An activity **denominator** correlated with the family's expected volume | Only families that **have** one — declared per family |
+
+The denominator is weaker and cheaper than FRE-1051's twin-store oracle: it needs a *correlated
+activity measure*, not a per-event twin. For `api_cost_recorded` — the family that actually failed —
+the denominator is the `api_costs` row rate that already exists. For families with no such measure,
+**only the stoppage branch applies, and that limit is declared per family rather than left implied.**
+This is less than the first draft claimed and it is what the evidence supports.
 
 This generalises FRE-1051's own rule — `UNVERIFIABLE` is a verdict, never a silent pass — from one
 probe's output to the alerting layer as a whole.
@@ -190,21 +207,23 @@ failure it is meant to catch has already run for six days undetected once.
 The contract lands now; the rules land in two stages, and **the criterion for which stage a rule falls
 into is whether it requires a new investigation surface** (D3):
 
-- **Now, on Kibana** — rules whose investigation target needs **no new dashboard**: the data view and
-  the underlying data already exist, so the target is a **saved Discover query**, authorable in
-  minutes and discarded without loss. Rules 1 and 2 qualify, and they are the two that bear on
-  FRE-1051's failure.
-- **On Grafana, with FRE-1072** — the full set, including every rule that needs a **new dashboard**
-  built to satisfy D3.
+**The staging predicate is the cost of the rule's investigation target**, and it is applied
+consistently below — not "does the target already exist," which is false for every rule (see D3).
 
-**This does not weaken D3, and the distinction is exact.** D3 forbids a rule shipping without a
-resolvable investigation target; it does not require that target to pre-exist the ticket. The saved
-Discover queries for rules 1 and 2 do **not** exist today — the only committed monitor saved search is
-probe-specific — so authoring them is **part of** each rule's own delivery, and D3 is satisfied because
-the rule and its target ship together. What D2a stages on is the **cost and durability of the target**:
-a saved query is minutes and disposable, a dashboard is the expensive artifact, and **no dashboard is
-built twice.** The contract itself (D1, D3, D4, D5) names conditions, disciplines and targets — never a
-rule syntax — so it survives the migration untouched.
+- **Now, on Kibana** — rule 2, whose target is a **saved Discover query** on a probe's result index:
+  minutes to author, discarded without loss. And rule 1, which is the exception and is named as one: it
+  needs a **minimal purpose-built surface** (family volume, its denominator, the witness) because a
+  single Discover query cannot show the evidence AC-2 demands. **That surface is the one artifact this
+  ADR knowingly builds twice**, accepted because rule 1 is the only rule that addresses the motivating
+  incident and deferring it defeats the point of staging at all.
+- **On Grafana, with FRE-1072** — rules 3–6, each of which needs a full new dashboard.
+
+**This does not weaken D3, and the distinction is exact.** D3 forbids a rule *shipping* without a
+resolvable investigation target; it does not require the target to pre-date the ticket. **No target for
+rules 1 or 2 exists today** — the only committed monitor saved search is probe-specific — so authoring
+each is **part of that rule's own delivery**, and D3 is satisfied because rule and target ship
+together. The contract itself (D1, D3, D4, D5) names conditions, disciplines and targets — never a rule
+syntax — so it survives the migration untouched.
 
 **One open question, now measurable rather than assumed, with a single stated contingency.** If the
 `basic` connector set proves to contain nothing that leaves the box — index and server-log connectors
@@ -213,6 +232,12 @@ stage is abandoned outright: rules 1 and 2 wait for FRE-1072 with the rest.** No
 notification routed to a platform that does not exist yet. **Establishing which connectors this licence
 exposes is therefore the first implementation ticket and gates the whole Kibana stage.** It is small:
 set the key, restart, enumerate.
+
+**That ticket must answer two questions, not one.** Connector availability proves Kibana can *notify*;
+it does not prove Kibana can *express* rule 1 — a dynamic trailing baseline combined with a separately
+sourced activity denominator is a more demanding rule than a static threshold. If the available
+`basic`-tier rule types cannot express it, rule 1's **shortfall branch** moves to Grafana while its
+**stoppage branch** — a plain no-data condition any rule type can express — still lands now.
 
 Until that verdict is in, no conclusion drawn from log counts is entitled to assume completeness. The
 partial mitigation meanwhile is that FRE-1055/1056 remove the known failure's *cause* while its
@@ -241,7 +266,7 @@ is a saved Discover query, *FRE-1072* iff a new surface must be built for it.
 
 | # | Condition | Class | Catches | Investigation target | Stage |
 |---|---|---|---|---|---|
-| 1 | An `agent-logs` family's volume falls materially below its own trailing baseline, **including to zero**, while the system is active | absence + shortfall | Both total stoppage *and* the partial 48–83 % loss actually measured in FRE-1051 — with no oracle, no twin store and no delivery floor | Saved Discover query on the family, scoped to the affected window | **now** |
+| 1 | **Stoppage:** no documents for a family while the system is active (every family). **Shortfall:** documents per unit of independent activity falls materially (declared families only) | absence + shortfall | Stoppage everywhere; the partial 48–83 % loss actually measured in FRE-1051 on `api_cost_recorded`, whose denominator already exists | Minimal purpose-built surface: family volume, its denominator, and the witness on one screen | **now** |
 | 2 | A scheduled probe stops writing its result document | absence | A dead probe — the meta-alert that keeps every other rule honest | Saved Discover query on that probe's result index | **now** (joinability, SLM health only — see prerequisite) |
 | 3 | A probe result reports red | threshold | Joinability orphans, delivery breach, SLM health down — data that already exists and nothing reads | The failing probe's detail panel | FRE-1072 |
 | 4 | Spend rate anomaly against the `api_costs` ledger | threshold | Runaway or misattributed cost, on the one substrate with append-only ground truth | Cost surface over Postgres, scoped to the window and model/role | FRE-1072 |
@@ -250,26 +275,35 @@ is a saved Discover query, *FRE-1072* iff a new surface must be built for it.
 
 **Thresholds, windows and baselines are not set here.** Each rule's implementation ticket defines its
 own, and they are that ticket's acceptance criteria. This ADR fixes the *conditions* and the
-disciplines; a rule tuned so weakly that it can never fire fails AC-6's positive control, which is
-where that is caught.
+disciplines. **Every rule's ticket carries a positive control** — a stated induction of its condition
+that must produce a firing — because a rule tuned so weakly it can never fire is otherwise
+indistinguishable from a rule that is simply quiet. AC-6 asserts this for rule 1, which is the only
+rule whose *quiet* behaviour is also load-bearing; for rules 2–6 the control lives on their own
+tickets, where the threshold it tests is also defined.
 
 **Two failure modes rule 1 must survive, both of which would otherwise defeat it silently.**
 
 - **The false-alarm mode.** Without the "*while the system is active*" qualifier it fires every quiet
   night, and a rule that cries wolf nightly gets muted — leaving the system *worse* than with no rule,
   because the mute looks like coverage.
-- **The false-negative mode, and it is the subtler one.** *The activity witness must be drawn from a
-  substrate other than the one being watched.* If "the system is active" is inferred from `agent-logs`
-  itself, then the missing sink that silences the family silences its activity witness at the same
-  instant — the rule concludes the system was idle and stays quiet **exactly when it is needed**.
-  Acceptable witnesses are independent of the log path: the `api_costs` row rate in Postgres, or the
-  request rate in the Caddy access logs Filebeat already ships. This is the same independence property
-  that makes an oracle an oracle, applied to the qualifier rather than the measurement.
+- **The false-negative mode, and it is the subtler one.** *The witness and the denominator must reach
+  the index by an **emission path independent of the one being watched** — independence of path, not of
+  storage.* If "the system is active" is inferred from a family shipped by the in-process Elasticsearch
+  handler, the missing sink that silences the family silences its witness at the same instant, the rule
+  concludes the system was idle, and it stays quiet **exactly when it is needed**.
+
+  Two witnesses satisfy this and are reachable **from a Kibana rule**, which matters for the staging in
+  D2a: the **Caddy access-log request rate**, which reaches Elasticsearch through Filebeat's own
+  tailing-and-registry path and so cannot be silenced by an unbound in-process handler; and, for the
+  `api_cost_recorded` denominator, the `api_costs` row rate — noting Kibana queries only Elasticsearch,
+  so using it from the Kibana stage requires that rate to be present in Elasticsearch by an independent
+  path, and **if it is not, the shortfall branch waits for Grafana while the stoppage branch still
+  lands.** Same-storage is fine; same-path is not.
 
 **Prerequisite for rule 2, stated because it is a real gap and not a detail.** Rule 2 presumes a probe
 writes a result document on a known interval. Only **two of four do**: joinability persists via
-`observability/joinability/sink.py` and SLM health has its own family, and the `BrainstemScheduler`
-runs only those two (`brainstem/scheduler.py:1075`, `:1102`). **The cache-erosion monitor and the
+`observability/joinability/sink.py` and SLM health via `observability/slm_health/sink.py`, and the
+`BrainstemScheduler` runs only those two (`brainstem/scheduler.py:1075`, `:1102`). **The cache-erosion monitor and the
 delivery-ratio probe are manual CLIs that write no result document at all** — so nothing can alert on
 their absence, and the instrument FRE-1051 built to detect telemetry loss is itself neither scheduled
 nor persisted. Bringing those two under rule 2 requires scheduling them *and* giving them a result
@@ -299,9 +333,11 @@ differently:
   unconfigured evaluator is silent in exactly the way the mechanism exists to prevent, so its ticket
   carries a **positive-control** criterion: a deliberately withheld ping must produce an alarm.
 
-### D6 — ADR-0090 gains one done-bar clause and loses one stale open decision
+### D6 — ADR-0090 is to be amended: one done-bar clause added, one stale open decision struck
 
-Three edits to ADR-0090, and no fourth corner:
+**These are edits ADR-0090 has not yet received.** They are decided here and applied by their own
+implementation ticket; until that ticket merges, ADR-0090's D6 is unchanged and AC-5 is not yet
+adjudicable. Three edits, and no fourth corner:
 
 1. **D6 done-bar gains one clause, stated at ADR-0090's own grain.** ADR-0090's D6 binds a new or
    changed **field, family, or dashboard**, so the clause must bind at that grain too — a family-level
@@ -309,10 +345,14 @@ Three edits to ADR-0090, and no fourth corner:
    dashboard-only change, **recreating the very grain mismatch used to decline the fourth corner.** The
    clause is therefore:
 
-   > For a new or changed **field or family**: a document carrying **that field**, emitted by **the
-   > changed code path**, is shown to have landed in the index with the expected type — verified once,
-   > at delivery, by whoever ships it. For a **dashboard-only** change the clause does not apply; the
-   > existing mapping↔dashboard reconciliation (ADR-0090 D5) already covers it.
+   > For a new or changed field or family: **for each changed field, and from each changed emit path**,
+   > a document carrying that field is shown to have landed in the index with the expected type —
+   > verified once, at delivery, by whoever ships it. For a **dashboard-only** change the clause does
+   > not apply; the existing mapping↔dashboard reconciliation (ADR-0090 D5) already covers it.
+
+   The per-field, per-path quantifier is deliberate: "a document carrying the field" in the singular
+   lets a new family pass on one landed field while its siblings never arrive, and lets one working
+   producer vouch for a second that binds no sink.
 
    Not a ratio, not an oracle, not a floor, not a standing job. This is the "verify shape and context
    when the functionality is delivered" half.
@@ -447,10 +487,11 @@ benefit at a fraction of the waste.
 
 - **The failure class that took six days and was found by accident becomes detectable** — and detectable
   without an oracle, a twin store or a delivery SLO.
-- **Three existing instruments acquire an output immediately** — the joinability probe, SLM health probe
-  and disk threshold, which already run and already produce a verdict nothing reads. The cache-erosion
-  monitor and delivery-ratio probe need scheduling and a result document first (rule 2's prerequisite),
-  so their coverage is a consequence of that follow-on ticket, not of this ADR alone.
+- **Two instruments acquire an output immediately, and only their *liveness* does** — joinability and
+  SLM health are scheduled and persisted, so rule 2 covers them in the Kibana stage. Their *red
+  verdicts* are rule 3 and the disk threshold is rule 5, both of which wait for FRE-1072; the
+  cache-erosion monitor and delivery-ratio probe need scheduling and a result document first. Stated
+  precisely because "five instruments acquire an output" would overstate what this ADR delivers when.
 - **The circularity is broken** — findings about telemetry loss stop being filed exclusively into the
   telemetry system whose completeness is in question.
 - **No new application subsystem.** D2 keeps the transport where it is already solved; the only code
@@ -498,7 +539,9 @@ benefit at a fraction of the waste.
 |------|----------|------------|
 | Rule 1 false-alarms on idle periods and gets muted; the mute then reads as coverage | High | The activity qualifier is rule 1's core deliverable, not a detail; its ticket's criteria assert quiet-period behaviour explicitly |
 | The `basic` connector set turns out to deliver nothing out-of-box, reproducing "the alert is a log line" | Medium | Established as the **first** implementation step, before any rule is authored; if confirmed, D2a's single contingency applies — the Kibana stage is abandoned and rules 1–2 wait for FRE-1072 with the rest |
-| Rule 1's activity witness is read from `agent-logs`, so a missing sink silences the witness and the family together and the rule stays quiet | High | D4 requires the witness to come from an independent substrate (`api_costs` rows, Caddy request rate); AC-1's check induces exactly this condition |
+| Rule 1's activity witness reaches the index by the same emission path it is watching, so a missing sink silences witness and family together and the rule stays quiet | High | D4 requires an independent **emission path** (Caddy-via-Filebeat, not the in-process handler); AC-1 induces exactly this condition |
+| Rule 1's shortfall branch false-alarms on ordinary traffic change — deployment, weekday/weekend, request-mix shift — because a binary "active" witness does not normalize volume | High | The shortfall branch requires a *correlated denominator*, not a binary witness (D1); families without one get the stoppage branch only, declared. AC-6 phase A tests quiet behaviour, but tuning against traffic seasonality is rule 1's ticket's own work |
+| Rule 1 is blind to a loss that persists long enough to become its own baseline, and during warm-up | Medium | Accepted and stated; the delivery-ratio probe remains the on-suspicion instrument for absolute completeness on the one family with an oracle |
 | Rules 1 and 2 are authored on Kibana and thrown away at FRE-1072 | Low | Bounded by D2a's split: only rules needing *no new surface* land early, so no dashboard is built twice |
 | The Kibana stage is forgotten at migration, leaving rules 1–2 behind on a retired platform | Medium | FRE-1072's own ticket carries the port as an explicit obligation; the seam ticket's AC-2 walk would catch an unresolvable link |
 | Partial loss in an oracle-less family stays invisible (absence ≠ completeness) | Medium | Stated as a known limit in Consequences; the FRE-1051 probe remains available as an on-suspicion diagnostic |
@@ -516,7 +559,9 @@ benefit at a fraction of the waste.
   committed config (the config-guard pre-commit hook enforces this) — and the restart is a live-service
   change, so it is master's to authorize.
 - **Staged against FRE-1072** (D2a). Rules 1 and 2 land on Kibana now because their investigation
-  targets already exist; the rest land on Grafana with FRE-1072, along with the surfaces D3 requires.
+  targets are cheap — a saved query for rule 2, a minimal three-series surface for rule 1, the one
+  artifact knowingly built twice. Rules 3-6 land on Grafana with FRE-1072 along with their dashboards.
+  No target for rules 1-2 exists today; each is authored as part of its own rule's delivery (D3).
   D1/D3/D4/D5 carry over unchanged because none of them names a rule syntax.
 - **FRE-1072's ticket must carry the port of rules 1–2** as an explicit obligation, or the Kibana stage
   is orphaned on a retired platform.
@@ -527,7 +572,7 @@ benefit at a fraction of the waste.
 - **Prerequisite ticket for rule 2's full coverage:** schedule the cache-erosion monitor and the
   delivery-ratio probe, and give each a persisted result document. Today neither is scheduled
   (`brainstem/scheduler.py` runs joinability and SLM health only) and neither writes a result doc —
-  only `observability/joinability/sink.py` does. AC-7's false-negative cross-check depends on the
+  only joinability and SLM health do, via their own `sink.py` modules. AC-7's false-negative cross-check depends on the
   delivery-ratio half of this, so it is load-bearing rather than housekeeping.
 - **Existing instruments to wire, not rebuild:** `scripts/monitors/joinability_probe.py`,
   `scripts/monitors/cache_erosion_monitor.py`, `scripts/monitors/delivery_ratio_monitor.py`,
@@ -544,59 +589,85 @@ benefit at a fraction of the waste.
 
 **How will we know this decision actually delivered — not just merged?**
 
-- **AC-1** — **Every** family in the committed covered set alerts out-of-band on **both** total stoppage
-  **and** material shortfall, and does so even when the log path itself is the thing that broke.
-  · **Check:** for each covered family, in a live window with the system active, induce (a) total
-  stoppage and (b) a ~50 % shortfall against baseline, by unbinding or throttling its producer; confirm
-  a notification arrives out-of-band for each. Then induce a whole-log-path stoppage — the condition
-  under which an `agent-logs`-derived activity witness would itself go silent — and confirm the rule
-  still fires. · *Fails if* any covered family alerts on neither; **if a ~50 % shortfall passes silently
-  while only total stoppage alerts** (that is the FRE-1051 case, and a no-data-only rule fails here);
-  if the notification lands only in an index document or server log; if the rule goes quiet because its
-  activity witness died with the stream it was watching; or if the covered set was made passable by
-  shrinking it rather than by alerting.
+**How the destructive checks are run, once, for all of them.** Inductions are performed on the
+**isolated test substrate** (FRE-375: ES `:9201`, Postgres `:5433`) against a **dedicated synthetic
+family** with a controllable producer, never by sabotaging production. Where a criterion names the
+*covered set*, that set is the **committed per-family declaration** required by D1's shortfall table —
+reconciled against the families actually present in `agent-logs-*`, so it cannot be quietly narrowed;
+an undeclared family present in the index is itself a failure.
+
+- **AC-1** — **Every** family in the declared covered set alerts out-of-band on stoppage, **every family
+  declared shortfall-capable** also alerts on shortfall, and neither goes quiet when the log path is
+  what broke. · **Check:** on the test substrate, for each covered family, induce (a) total stoppage and
+  (b) — for shortfall-capable families — a **47.6 % shortfall**, the *smallest* loss actually measured
+  in FRE-1051, holding the independent denominator constant. Confirm an out-of-band notification for
+  each. Then induce a whole-log-path stoppage and confirm the rule still fires. Finally, reconcile the
+  declaration against the live family list. · *Fails if* any covered family alerts on neither; **if the
+  47.6 % induction passes silently** — a threshold tuned to catch only catastrophic loss misses the real
+  incident, and a no-data-only implementation fails here outright; if the notification lands only in an
+  index document or server log; if the rule goes quiet because its witness died with the stream it was
+  watching; or if a family present in `agent-logs-*` appears in no declaration row.
 
 - **AC-2** — Every rule's investigation link lands on **the evidence that triggered it**, not merely on
-  a page that loads. · **Check:** from an *actual* firing of each rule, follow the link; the surface
-  must show the documents — or the documented absence — that satisfied that rule's condition, for the
-  triggering window and entity. · *Fails if* the link resolves but is scoped to a different window or
-  entity, shows nothing bearing on the condition, or is an unscoped home dashboard. **HTTP 200 is not a
-  pass.**
+  a page that loads. · **Check:** for each rule, from a firing — natural, or induced on the test
+  substrate — follow the link; the surface must show the data that satisfied that rule's condition for
+  the triggering window and entity. For rule 1 that means **all three series**: family volume, its
+  denominator, and the witness. · *Fails if* the link resolves but is scoped to a different window or
+  entity, omits any series the condition depends on, or is an unscoped home dashboard. **HTTP 200 is not
+  a pass**, and a single-series view of a ratio-based rule is not a pass.
 
-- **AC-3** — **Every** scheduled, result-persisting probe is covered by liveness detection.
-  · **Check:** enumerate the probes that are scheduled *and* write a result document; stop each in turn
-  and wait its interval plus margin; confirm one alert per probe. · *Fails if* any such probe can stop
-  without an alert, **or if coverage was achieved by shrinking the denominator** — leaving a probe
-  unscheduled or unpersisted so it falls outside the set rather than alerting on it.
+- **AC-3** — **Every** probe in the committed probe inventory is covered by liveness detection, and the
+  inventory accounts for all five. · **Check:** the inventory names all five instruments — joinability,
+  SLM health, cache erosion, delivery ratio, disk usage — each marked *covered* or *not covered with a
+  stated reason*. For each covered probe, stop it and confirm an alert **within its own declared
+  interval plus its own declared margin**, both of which the inventory states. · *Fails if* any covered
+  probe can stop without an alert; if an alert arrives later than the declared bound; if any of the five
+  is absent from the inventory; **or if a probe is marked "not covered" for no reason other than that it
+  was left unscheduled** — that is shrinking the denominator rather than closing the gap, and the
+  delivery-ratio probe is the specific case at risk, since AC-7 depends on it running.
 
-- **AC-4** — Loss of the alerting path is reported from outside that path. · **Check:** in controlled
-  windows, three separate inductions — stop Elasticsearch; stop the rule-evaluating platform
-  (Kibana/Grafana); and withhold the heartbeat while everything else stays up. · *Fails if* **any** of
-  the three produces no alarm, or if the evaluator, deadline and recipient are unconfigured — an
-  unconfigured dead-man's switch is silent in exactly the way the mechanism exists to prevent, so its
-  silence proves nothing.
+- **AC-4** — Loss of the alerting path is reported from outside that path — **including loss of the
+  notification path itself.** · **Check:** on the test substrate, four separate inductions — stop
+  Elasticsearch; stop the rule-evaluating platform; break the outbound connector/contact point while
+  rules keep firing; and withhold the heartbeat while everything else stays up. · *Fails if* **any** of
+  the four produces no alarm. The third is the one an external stack-liveness check passes while every
+  application alert stays trapped in-platform, which is the "alert is a log line" failure wearing a
+  different hat. Also *fails if* the evaluator, deadline and recipient are unconfigured — an
+  unconfigured dead-man's switch is silent in exactly the way the mechanism exists to prevent.
 
 - **AC-5** — ADR-0090's amended done-bar discriminates a landing path from a non-landing one, at field
-  grain. · **Check:** a matched pair. Introduce a new field on an existing family from a process that
-  binds no sink and run the ship-time check; then introduce the same field from the service path and
-  run it again. · *Fails if* the first **passes** — whether because the emit call exists in source, or
-  because other documents of the same family landed while the changed field never did — or if the
-  second **fails**. A check that cannot tell the two apart verifies nothing.
+  grain. · **Check:** first, ADR-0090 must actually carry the D6 clause — *this ADR does not amend it;
+  its own ticket does*, and until that merges AC-5 is inconclusive, never green. Then a matched pair on
+  the test substrate: add a field to the synthetic family from a producer that binds **no** sink and
+  apply the amended done-bar as written; then add the same field from a producer that **does** bind one
+  and apply it again. Record both outcomes. · *Fails if* the first **passes** — whether because the emit
+  call exists in source, or because *other* documents of the same family landed while the changed field
+  never did — or if the second **fails**. A check that cannot tell the two apart verifies nothing, and
+  a criterion adjudicated against an unamended ADR-0090 verifies nothing either.
 
-- **AC-6** — Rule 1 is quiet through genuine idle **and** fires when the condition is genuinely present.
-  · **Check:** over a stated multi-night no-traffic window, count rule-1 firings (expect zero); within
-  the same period, induce the condition once and confirm it fires. · *Fails if* it fires on ordinary
-  quiet hours, **or if it does not fire on the induced condition** — the paired positive control is
-  what excludes a disabled, mis-tuned or never-evaluated rule, which would otherwise pass the quiet
-  half trivially.
+- **AC-6** — Rule 1 is quiet through genuine idle **and** both its branches fire when their conditions
+  are genuinely present. · **Check:** two clearly separated phases, recorded as such. *Phase A* — a
+  stated multi-night no-traffic window with no induction; count rule-1 firings (expect zero).
+  *Phase B* — on the test substrate, induce **stoppage** and, separately, **shortfall**, naming the
+  family used; confirm a firing for each. · *Fails if* it fires during phase A, **or if either phase-B
+  branch does not fire.** Testing only the stoppage branch would let a no-data-only implementation with
+  a broken or absent shortfall branch pass — the exact defect round 1 of review found in the design
+  itself.
 
-- **AC-7** — Over 30 days of live operation, every firing was worth the interruption **and** nothing
-  that should have fired stayed silent. · **Check:** two halves. (a) Each firing has an owner
-  disposition — acted on, or the rule amended. (b) Run the delivery-ratio probe over the same 30 days
-  and cross-check: any family it reports as breaching that produced **no** corresponding rule-1 firing
-  is a missed incident. · *Fails if* any rule fired repeatedly and was neither acted on nor changed; if
-  the probe finds a breach the alert set missed; **or if no rule fired at all and no induced control was
-  recorded** — zero firings is not evidence of health, it is the shape of a dead rule set.
+- **AC-7** — Over 30 days of live operation, every firing was worth the interruption **and** the one
+  family that can be independently checked was not missed. · **Check:** two halves. (a) Each firing has
+  an owner disposition — acted on, or the rule amended. (b) Run the delivery-ratio probe over the same
+  30 days **for `api_cost_recorded`, the only family with a validated oracle**, and compare against
+  rule 1's firings *at rule 1's own configured threshold*, not the probe's `0.99` floor. Any breach
+  exceeding that threshold with no corresponding firing is a missed incident. · *Fails if* any rule
+  fired repeatedly and was neither acted on nor changed; if the cross-check finds such a miss; **or if
+  no rule fired at all across 30 days** — zero firings is the shape of a dead rule set, and AC-6's
+  induced controls do not substitute, since they exercise rule 1 only.
+
+  **Stated limit, so the verdict is not over-read:** this false-negative check covers **one family and
+  one rule**. The probe's three other declared families are unwired for want of a validated join
+  (`observability/delivery_ratio/collect.py:56`), and rules 2–6 have no independent ground truth at all.
+  A green AC-7 means *the one thing that can be checked was not missed* — not that nothing was missed.
   *(Assembled, long-horizon and owner-involving — permitted for an ADR's own criteria under ADR-0130 D1.)*
 
 **Seam ticket:** **FRE-1185** — *ADR-0134 SEAM — adjudicate the activity-alerting criteria*.
@@ -637,7 +708,7 @@ merged.
 - Code: `src/personal_agent/config/settings.py:1537` — `disk_usage_alert_percent`, the only alert threshold.
 - Code: `src/personal_agent/service/app.py:754` — the single conditional `add_elasticsearch_handler` call site.
 - Code: `src/personal_agent/telemetry/logger.py:252-254` — the unconditional `RotatingFileHandler` attachment inside `configure_logging` (`:217`), referenced in Option 2.
-- Code: `src/personal_agent/observability/joinability/sink.py` — the only probe result-document writer; `src/personal_agent/brainstem/scheduler.py:1075,1102` — the only two scheduled probes (rule 2's prerequisite).
+- Code: `src/personal_agent/observability/joinability/sink.py` and `src/personal_agent/observability/slm_health/sink.py` — the only two probe result-document writers; `src/personal_agent/brainstem/scheduler.py:1075,1102` — the only two scheduled probes (rule 2's prerequisite).
 - Code: `src/personal_agent/transport/agui/transport.py:596` — the connected-client event push, which is not an out-of-band alert transport.
 - Code: `src/personal_agent/observability/delivery_ratio/` + `scripts/monitors/delivery_ratio_monitor.py` — FRE-1051's probe, demoted to on-suspicion diagnostic by D6.
 - Config: `docker-compose.cloud.yml:160` — the Kibana service, with no `xpack.encryptedSavedObjects.encryptionKey` set; `docker/kibana/kibana.yml` is the mounted config it would go in.
@@ -701,3 +772,33 @@ ones, and what changed:
   AC-7 a false-negative cross-check against the delivery-ratio probe.
 - **The seam's due date rationale was false** — it claimed no platform dependency while four rules need
   FRE-1072. Moved to 2026-11-30 with the dependency stated.
+
+### 2026-08-07 - Revised after Codex review round 2
+
+**Changed By:** `adr` session (FRE-1058)
+**Reason:** Round 2 found that round 1's central fix did not hold, plus several fixes that were
+cosmetic. The material ones:
+
+- **Shortfall cannot be detected from a family's own history.** Volume tracks traffic, so "half as many
+  documents" is equally consistent with *half the events were lost* and *half as many requests
+  arrived*. Telling them apart needs an independent denominator — the oracle relationship in weaker
+  form, which round 1 claimed to avoid. **D1 now states two branches with honestly different coverage:**
+  stoppage for every family, shortfall only for families with a declared correlated denominator. This is
+  less than the previous draft promised.
+- **"Independent substrate" was the wrong requirement** and made the Kibana stage infeasible — Kibana
+  queries only Elasticsearch. What independence actually requires is a different **emission path**;
+  Caddy-via-Filebeat qualifies and is Kibana-reachable.
+- **ADR-0090 was never actually amended.** D6 said it "gains" the clause while the commit touched only
+  this ADR, leaving AC-5 with nothing authoritative to adjudicate. D6 now states the edits are applied
+  by their own ticket, and AC-5 is inconclusive until it merges.
+- **Rule 1's investigation target cannot be a saved Discover query** — AC-2 demands volume, denominator
+  and witness together. Rule 1 gets a minimal three-series surface, named as the one artifact knowingly
+  built twice, rather than pretending the staging is free.
+- **The criteria demanded production sabotage.** All inductions now run on the FRE-375 test substrate
+  against a synthetic family. AC-1's shortfall induction is pinned to **47.6 %** — the smallest loss
+  actually measured — so a threshold tuned to catch only catastrophic loss fails.
+- **AC-7's cross-check was narrower than claimed**: the probe has a validated oracle for one family, and
+  its breach semantics (`0.99`) differ from rule 1's threshold. Both stated; the criterion now says what
+  it does *not* cover.
+- Corrected: SLM health has its own `sink.py` (two persisting probes, not one); "three instruments
+  acquire an output" overstated what lands in the Kibana stage.

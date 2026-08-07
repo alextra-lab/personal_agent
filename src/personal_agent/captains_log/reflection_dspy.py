@@ -223,12 +223,15 @@ def parse_missing_skill_names(raw: str, trace_id: str = "") -> list[str]:
     ``_MISSING_SKILL_MAX`` names.
 
     Emission of the ``missing_skill_requested`` warning event is deliberately
-    NOT done here — it must happen on the main asyncio event loop so the
-    ``ElasticsearchHandler`` can forward it.  DSPy reflection runs via
-    ``asyncio.to_thread``, where ``loop.is_running()`` is False and ES emission
-    is silently skipped (see ``telemetry/es_handler.py``).  Callers should
-    invoke ``emit_missing_skill_warnings`` on the main loop after the thread
-    returns.
+    NOT done here: this function is pure validation, and the caller owns when
+    the warnings are emitted.  Callers invoke ``emit_missing_skill_warnings``
+    after the thread returns.
+
+    Historical note (FRE-1055): this split used to be *load-bearing* — DSPy
+    reflection runs via ``asyncio.to_thread``, and ``ElasticsearchHandler``
+    silently skipped any record emitted without a running loop, so emitting
+    here would have lost the event.  The handler now enqueues from any thread,
+    so the split is a structural preference rather than a workaround.
 
     Args:
         raw: The DSPy ``missing_skill_names`` output (comma-separated names).
@@ -263,11 +266,15 @@ def parse_missing_skill_names(raw: str, trace_id: str = "") -> list[str]:
 def emit_missing_skill_warnings(
     names: list[str], trace_id: str, session_id: str | None = None
 ) -> None:
-    """Emit one ``missing_skill_requested`` warning per name (main-loop only).
+    """Emit one ``missing_skill_requested`` warning per name.
 
-    Must be called from a coroutine running on the main asyncio event loop so
-    the ``ElasticsearchHandler`` forwards the events to agent-logs-* — that is
-    the index ``InsightsEngine.detect_missing_skill_patterns`` aggregates over.
+    The events land in agent-logs-* — the index
+    ``InsightsEngine.detect_missing_skill_patterns`` aggregates over.
+
+    No longer main-loop-only (FRE-1055): ``ElasticsearchHandler`` used to skip
+    any record emitted off the loop, which is why the existing call site hops
+    back to the main loop before calling this.  That call site is still correct;
+    it is simply no longer the thing keeping the event alive.
 
     Args:
         names: Validated names from ``parse_missing_skill_names``.

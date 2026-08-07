@@ -62,8 +62,17 @@ class ElasticsearchLogger:
             await self.client.close()
             self.client = None
 
-    def _get_index_name(self) -> str:
-        """Get index name with month suffix (monthly rotation, FRE-1036)."""
+    def current_index_name(self) -> str:
+        """Return the index name for *now*, with month suffix (FRE-1036).
+
+        Public because delivery is queued (FRE-1055): the handler resolves the
+        destination when the record is emitted, not when it is finally written,
+        so a backlog draining across a month boundary still lands in the month
+        the events belong to.
+
+        Returns:
+            Index name, e.g. ``agent-logs-2026-08``.
+        """
         month_str = datetime.utcnow().strftime("%Y-%m")
         return f"{self.index_prefix}-{month_str}"
 
@@ -72,6 +81,7 @@ class ElasticsearchLogger:
         document: dict[str, Any],
         *,
         id: str | None = None,
+        index: str | None = None,
     ) -> str | None:
         """Index one document into the agent-logs family, redacting it first.
 
@@ -92,6 +102,11 @@ class ElasticsearchLogger:
         Args:
             document: Document to index; redacted in place of the original.
             id: Optional document ID for idempotent upsert.
+            index: Destination index; defaults to :meth:`current_index_name`.
+                Passed explicitly by the queued delivery path (FRE-1055), which
+                resolves the destination at emission time. It stays inside this
+                seam — every write still redacts — so it does not widen the
+                FRE-1068 chokepoint, only the choice of month within the family.
 
         Returns:
             Document ID if the write succeeded, None if no client is attached.
@@ -105,7 +120,7 @@ class ElasticsearchLogger:
         if not self.client:
             return None
         kwargs: dict[str, Any] = {
-            "index": self._get_index_name(),
+            "index": index if index is not None else self.current_index_name(),
             "document": redact_mapping(document),
         }
         if id is not None:
@@ -189,6 +204,7 @@ class ElasticsearchLogger:
         data: dict[str, Any],
         trace_id: UUID | str | None = None,
         span_id: str | None = None,
+        index: str | None = None,
     ) -> str | None:
         """Log a structured event to Elasticsearch.
 
@@ -197,6 +213,9 @@ class ElasticsearchLogger:
             data: Event data (will be indexed)
             trace_id: Optional trace ID for correlation
             span_id: Optional span ID
+            index: Destination index; defaults to the current month's. The
+                queued delivery path (FRE-1055) passes the index it resolved at
+                emission time so a drained backlog is not misfiled.
 
         Returns:
             Document ID if successful, None if failed
@@ -218,7 +237,7 @@ class ElasticsearchLogger:
         }
 
         try:
-            return await self._index_agent_log(doc)
+            return await self._index_agent_log(doc, index=index)
         except Exception as e:
             log.error(
                 "elasticsearch_log_failed",
@@ -242,7 +261,7 @@ class ElasticsearchLogger:
 
         from elasticsearch.helpers import async_bulk
 
-        index_name = self._get_index_name()
+        index_name = self.current_index_name()
         actions = [
             {
                 "_index": index_name,
@@ -404,7 +423,7 @@ class ElasticsearchLogger:
         if total_duration_ms is None:
             total_duration_ms = 0.0
         ts = datetime.utcnow().isoformat()
-        index_name = self._get_index_name()
+        index_name = self.current_index_name()
         user_id_str = str(user_id) if user_id else None
 
         trace_doc: dict[str, Any] = {
@@ -531,7 +550,7 @@ class ElasticsearchLogger:
             "phases": phases_payload,
         }
 
-        index_name = self._get_index_name()
+        index_name = self.current_index_name()
         try:
             written = await self._index_agent_log(doc, id=trace_id)
             if written is None:

@@ -43,6 +43,21 @@ class UnknownSessionError(ValueError):
     """
 
 
+class ESHandlerLoopError(RuntimeError):
+    """Raised when the Elasticsearch log handler is driven from a foreign loop.
+
+    FRE-1055 binds the handler's queue, consumer task and Elasticsearch client
+    to a single owner event loop captured at ``connect()``. Lifecycle calls
+    (``drain``, ``disconnect``) touch all three, so running one on a different
+    loop would mutate structures another loop owns. Raised rather than tolerated
+    because the silent version of this bug — work scheduled onto the wrong loop
+    and never run — is exactly the class of loss this ticket exists to remove.
+
+    ``emit()`` deliberately does not raise this: it must remain callable from
+    any thread or loop, and hands off via ``call_soon_threadsafe`` instead.
+    """
+
+
 class AttachmentUnsupportedError(ValueError):
     """Raised when a turn's attachment cannot be delivered to the model.
 

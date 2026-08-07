@@ -9,6 +9,7 @@ dropped task references, and an over-broad circuit breaker.
 import asyncio
 import logging
 import threading
+from datetime import datetime, timezone
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -56,6 +57,44 @@ def _record_writes(handler: ElasticsearchHandler) -> list[Any]:
         call
         for call in handler.es_logger.log_event.call_args_list
         if not (call.args and call.args[0] == "es_delivery_counters")
+    ]
+
+
+async def _handler_with_real_logger() -> tuple[ElasticsearchHandler, AsyncMock]:
+    """Build a connected handler whose ElasticsearchLogger is real.
+
+    Only the Elasticsearch client itself is faked, so assertions can be made on
+    the document actually submitted rather than on the arguments handed to a
+    mocked ``log_event``. Anything owned by ``log_event`` — ``@timestamp``,
+    ``event_type``, redaction — is invisible to a test that mocks it away.
+
+    Returns:
+        The connected handler and the fake client recording its writes.
+    """
+    handler = ElasticsearchHandler(queue_maxsize=100)
+    client = AsyncMock()
+    client.index = AsyncMock(return_value={"_id": "doc-1"})
+    es = cast(Any, handler.es_logger)
+    es.connect = AsyncMock(return_value=True)
+    es.disconnect = AsyncMock(return_value=None)
+    assert await handler.connect() is True
+    handler.es_logger.client = client
+    return handler, client
+
+
+def _indexed_record_documents(client: AsyncMock) -> list[dict[str, Any]]:
+    """Return documents submitted to Elasticsearch, minus counter exports.
+
+    Args:
+        client: The fake Elasticsearch client.
+
+    Returns:
+        Each indexed document that is not an ``es_delivery_counters`` snapshot.
+    """
+    return [
+        call.kwargs["document"]
+        for call in client.index.call_args_list
+        if call.kwargs.get("document", {}).get("event_type") != "es_delivery_counters"
     ]
 
 
@@ -512,6 +551,76 @@ async def test_destination_index_is_captured_at_emission_time() -> None:
 
     _, kwargs = _record_writes(handler)[0]
     assert kwargs["index"] == emit_time_index
+
+
+@pytest.mark.asyncio
+async def test_timestamp_is_captured_at_emission_time_not_delivery_time() -> None:
+    """A backlog drained later is stamped when it happened, not when it drained.
+
+    The symmetric case to the index test above, and the sharper one: a
+    write-time stamp lands an entire backlog at drain-end, so a dashboard reads
+    as a flat line through the incident and a spike at recovery. Nothing is
+    lost, so no delivery-ratio check can see it.
+
+    Asserted on the **document handed to Elasticsearch**, not on the arguments
+    handed to a mocked ``log_event``: mocking the seam that owns ``@timestamp``
+    would assert the wiring and pass whether or not the stamp is actually used.
+    """
+    handler, client = await _handler_with_real_logger()
+
+    release = asyncio.Event()
+    real_index = client.index
+
+    async def _blocked_index(**kwargs: Any) -> dict[str, str]:
+        await release.wait()
+        return await real_index(**kwargs)
+
+    client.index = AsyncMock(side_effect=_blocked_index)
+
+    record = _record("emitted_long_before_it_drains")
+    handler.emit(record)
+    emitted_at = (
+        datetime.fromtimestamp(record.created, tz=timezone.utc).replace(tzinfo=None).isoformat()
+    )
+
+    # The drain happens "later" — the point is that nothing about the write
+    # moment may reach the document.
+    await asyncio.sleep(0.05)
+    release.set()
+    assert await handler.drain(timeout=2.0) is True
+
+    doc = _indexed_record_documents(client)[0]
+    assert doc["@timestamp"] == emitted_at
+
+
+@pytest.mark.asyncio
+async def test_structlog_timestamp_is_preferred_over_the_record_clock() -> None:
+    """When structlog already stamped the event, that stamp reaches the document."""
+    handler, client = await _handler_with_real_logger()
+
+    handler.emit(_record("already_stamped", timestamp="2026-01-02T03:04:05.678901Z"))
+    assert await handler.drain(timeout=2.0) is True
+
+    doc = _indexed_record_documents(client)[0]
+    assert doc["@timestamp"] == "2026-01-02T03:04:05.678901Z"
+
+
+@pytest.mark.asyncio
+async def test_destination_index_reaches_the_elasticsearch_call() -> None:
+    """The emit-time index is what the client is actually asked to write to.
+
+    Companion to the mocked-``log_event`` test above, for the same reason: that
+    one proves the handler passes the index, this one proves it survives to the
+    Elasticsearch call.
+    """
+    handler, client = await _handler_with_real_logger()
+    emit_time_index = handler.es_logger.current_index_name()
+
+    handler.emit(_record("index_reaches_the_client"))
+    assert await handler.drain(timeout=2.0) is True
+
+    calls = [c for c in client.index.call_args_list if "es_delivery_counters" not in str(c)]
+    assert calls[0].kwargs["index"] == emit_time_index
 
 
 @pytest.mark.asyncio

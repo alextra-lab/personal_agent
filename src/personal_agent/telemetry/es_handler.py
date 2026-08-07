@@ -35,6 +35,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from personal_agent.exceptions import ESHandlerLoopError
@@ -142,10 +143,21 @@ _RECORD_ATTRS_TO_SKIP = frozenset(
 class ESDeliveryStats:
     """Point-in-time snapshot of the handler's delivery counters.
 
-    Every field is monotonic since process start except ``queue_depth``. The
-    invariant worth reading is ``enqueued == delivered + write_failures +
-    dropped_shutdown + queue_depth`` once a drain has settled; a gap means a
-    record left through a path that forgot to count itself.
+    Every field is monotonic since process start except ``queue_depth``.
+
+    **No exact identity is expressible from these counters, and a gap is not
+    evidence of a lost record.** Two reasons, both deliberate. ``enqueued``
+    counts a record that drop-oldest later evicts, so one surviving record can
+    have incremented it twice. And ``dropped_not_connected`` /
+    ``dropped_circuit_open`` are incremented on *both* sides of the queue —
+    at emit, before a record was ever enqueued, and at delivery, after it was —
+    so neither side can be attributed from the exposed totals.
+
+    What does hold, once a drain has settled, is the inequality
+    ``delivered + write_failures + dropped_shutdown + queue_depth <= enqueued``,
+    with the difference absorbed by the drop counters above. Read the drop
+    counters as the diagnostic; they are named by cause precisely because the
+    aggregate cannot be balanced.
 
     Attributes:
         enqueued: Records accepted onto the queue.
@@ -175,13 +187,21 @@ class ESDeliveryStats:
 
 @dataclass(frozen=True)
 class _QueuedRecord:
-    """One record awaiting delivery, with its destination already resolved."""
+    """One record awaiting delivery, with destination and time already resolved.
+
+    Both ``index`` and ``timestamp`` are captured when the record is *emitted*,
+    never when it is finally written. Queueing deliberately widens the gap
+    between the two — a serial consumer, a 30s request timeout with two
+    retries — so anything resolved at write time describes the drain, not the
+    event.
+    """
 
     event_type: str
     data: dict[str, Any]
     trace_id: str | None
     span_id: str | None
     index: str
+    timestamp: str
 
 
 class ElasticsearchHandler(logging.Handler):
@@ -259,7 +279,11 @@ class ElasticsearchHandler(logging.Handler):
         Returns:
             Immutable snapshot including current queue depth.
         """
-        depth = self._queue.qsize() if self._queue is not None else 0
+        # Bound once: reading self._queue twice would let a concurrent
+        # disconnect() null it between the check and the qsize() call, raising
+        # AttributeError from a method that promises to be thread-safe.
+        queue = self._queue
+        depth = queue.qsize() if queue is not None else 0
         with self._counters_lock:
             counters = dict(self._counters)
         return ESDeliveryStats(queue_depth=depth, **counters)
@@ -294,6 +318,10 @@ class ElasticsearchHandler(logging.Handler):
             return
         self._last_stats_export = now
         self._last_exported_counters = snapshot
+        # Bound once, same idiom as stats(): owner-loop only here, so there is
+        # no race to lose — written this way so the pattern is not copied from
+        # here into somewhere that does have one.
+        queue = self._queue
         try:
             await asyncio.wait_for(
                 self.es_logger.log_event(
@@ -302,7 +330,7 @@ class ElasticsearchHandler(logging.Handler):
                         "component": "es_handler",
                         "overflow_policy": OVERFLOW_POLICY,
                         "queue_maxsize": self._queue_maxsize,
-                        "queue_depth": self._queue.qsize() if self._queue is not None else 0,
+                        "queue_depth": queue.qsize() if queue is not None else 0,
                         **snapshot,
                     },
                     None,
@@ -409,11 +437,17 @@ class ElasticsearchHandler(logging.Handler):
             self._count("enqueue_errors")
 
     def _build_item(self, record: logging.LogRecord) -> _QueuedRecord:
-        """Flatten a log record into a queued item with its index resolved.
+        """Flatten a log record into a queued item, resolving index and time.
 
-        The destination index is resolved **here**, at emission time, not when
-        the consumer finally writes: a backlog draining across a month boundary
-        would otherwise be misfiled into the following month's index.
+        Both are resolved **here**, at emission time, not when the consumer
+        finally writes. The index because a backlog draining across a month
+        boundary would otherwise be misfiled into the following month. The
+        timestamp for the same reason and a sharper one: under the slow-ES burst
+        this queue exists to survive, a write-time stamp lands the whole backlog
+        at drain-end, so a dashboard shows a flat line through the incident and
+        a spike at recovery. Every record still arrives, in the right index, at
+        the wrong minute — which no delivery-ratio check can detect, because
+        nothing was lost.
 
         Args:
             record: Log record to flatten.
@@ -461,12 +495,25 @@ class ElasticsearchHandler(logging.Handler):
             except (TypeError, ValueError):
                 event_data[key] = str(value)
 
+        # structlog stamps the event dict in its own processor chain, which is
+        # the truest emit time available. Non-structlog records fall back to
+        # record.created — set by logging at the call site, not here — so the
+        # fallback is still emit time and not queue time.
+        emitted_at = event_dict.get("timestamp")
+        if not isinstance(emitted_at, str):
+            emitted_at = (
+                datetime.fromtimestamp(record.created, tz=timezone.utc)
+                .replace(tzinfo=None)
+                .isoformat()
+            )
+
         return _QueuedRecord(
             event_type=event_type,
             data=event_data,
             trace_id=trace_id,
             span_id=span_id,
             index=self.es_logger.current_index_name(),
+            timestamp=emitted_at,
         )
 
     def _enqueue_from_thread(self, item: _QueuedRecord) -> None:
@@ -581,6 +628,7 @@ class ElasticsearchHandler(logging.Handler):
                 item.trace_id,
                 item.span_id,
                 index=item.index,
+                timestamp=item.timestamp,
             )
         except Exception:  # noqa: BLE001 - delivery must not break logging
             self._count("write_failures")
@@ -626,14 +674,29 @@ class ElasticsearchHandler(logging.Handler):
         """Connect to Elasticsearch and take ownership of the running loop.
 
         Calling this on an already-connected handler is a defined transition,
-        not undefined behaviour: the previous consumer is drained and cancelled
-        before ownership moves, so a reconnect onto a new loop cannot leave a
-        task attached to the old one.
+        not undefined behaviour: the previous consumer is stopped before
+        ownership moves, so a reconnect cannot leave a task attached to the old
+        loop.
+
+        **What happens to records still queued depends on where you call from,
+        and the difference is stated because it is not free.** Reconnecting from
+        the loop that already owns the handler drains them first, exactly as
+        :meth:`disconnect` does. Reconnecting from anywhere else cannot drain —
+        the queue and consumer belong to a loop this caller is not running on —
+        so those records are abandoned and counted as ``dropped_shutdown``. The
+        drain is not attempted-and-suppressed in that case: it would raise
+        :class:`ESHandlerLoopError` and take the reconnect down with it.
 
         Returns:
             True if connected successfully.
         """
         if self._consumer is not None:
+            try:
+                on_owner_loop = asyncio.get_running_loop() is self._owner_loop
+            except RuntimeError:  # pragma: no cover - connect() needs a loop
+                on_owner_loop = False
+            if on_owner_loop:
+                await self.drain()
             await self._stop_consumer()
 
         self._connect_attempted = True

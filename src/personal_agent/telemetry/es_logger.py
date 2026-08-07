@@ -205,6 +205,7 @@ class ElasticsearchLogger:
         trace_id: UUID | str | None = None,
         span_id: str | None = None,
         index: str | None = None,
+        timestamp: str | None = None,
     ) -> str | None:
         """Log a structured event to Elasticsearch.
 
@@ -216,6 +217,10 @@ class ElasticsearchLogger:
             index: Destination index; defaults to the current month's. The
                 queued delivery path (FRE-1055) passes the index it resolved at
                 emission time so a drained backlog is not misfiled.
+            timestamp: ``@timestamp`` for the document; defaults to now. Passed
+                by the queued delivery path for the same reason as ``index``:
+                stamping at write time would date a drained backlog to the
+                drain rather than to when the events happened.
 
         Returns:
             Document ID if successful, None if failed
@@ -229,7 +234,7 @@ class ElasticsearchLogger:
             return None
 
         doc = {
-            "@timestamp": datetime.utcnow().isoformat(),
+            "@timestamp": timestamp if timestamp is not None else datetime.utcnow().isoformat(),
             "event_type": event_type,
             "trace_id": str(trace_id) if trace_id else None,
             "span_id": span_id,

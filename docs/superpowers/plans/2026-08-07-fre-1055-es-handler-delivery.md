@@ -32,9 +32,10 @@ one explicitly captured owner loop**.
 | Requirement (ticket) | How |
 |---|---|
 | Remove the semaphore | Serial consumer makes it redundant; it is itself a cross-loop hazard (an `asyncio.Semaphore` created in `__init__` binds to whatever loop first awaits it). |
-| Only the owner loop touches queue/client/consumer/drain | `connect()` captures `asyncio.get_running_loop()` → `_owner_loop` and starts `_consumer`. `drain()` / `disconnect()` raise `ESHandlerLoopError` when called from any other loop. `connect()` on an already-connected handler drains and cancels the previous consumer first, so re-connect (ownership moving to a new loop) is a defined transition rather than an undefined one. |
+| Only the owner loop touches queue/client/consumer/drain | `connect()` captures `asyncio.get_running_loop()` → `_owner_loop` and starts `_consumer`. `drain()` / `disconnect()` raise `ESHandlerLoopError` when called from any other loop. `connect()` on an already-connected handler stops the previous consumer first, so re-connect is a defined transition rather than an undefined one. It drains first **only when called from the loop that already owns the handler**; from anywhere else it cannot (the drain would raise and take the reconnect with it), so queued records are abandoned and counted `dropped_shutdown`. Stated in both directions because the first draft's docstring claimed an unconditional drain the code never performed — caught at master's gate. |
 | Enqueue from any thread | `emit()` enqueues **synchronously when it is already on the owner loop**, and via `_owner_loop.call_soon_threadsafe(self._enqueue, item)` from any other thread or loop. Two paths, because one is not enough — see "The drain barrier" below. |
 | Capture destination index at emission time | `emit()` resolves the index name once and carries it on the queued item; the consumer passes it to `log_event(..., index=...)`. Prevents a backlog crossing a **month** boundary (indices are monthly since FRE-1036 — the ticket says "midnight", written when they were daily) from landing in the next month's index. |
+| Capture `@timestamp` at emission time | Same treatment, same reason, **added after master's gate caught the asymmetry**: the ticket names only the index, but `log_event` stamped `@timestamp` at write time, so a backlog drained many seconds behind emit landed stamped at drain-end. `_QueuedRecord` carries `timestamp`, resolved from structlog's own stamp when present and from `record.created` otherwise; `log_event` takes it as an override. Sharper than the index case: every record still arrives, in the right index, at the wrong minute — so no delivery-ratio check can detect it. |
 | Exclude the handler's own internal diagnostics | Add `personal_agent.telemetry.es_handler` and `personal_agent.telemetry.es_logger` to the existing logger-name exclusion tuple. `es_logger` logs its own indexing failures through this same pipeline — a failure loop that ends at queue overflow. |
 | Declare the overflow policy explicitly | **drop-oldest**, as a documented module constant. On `QueueFull` the oldest queued item is discarded (`get_nowait()` + `task_done()`) and the incoming one takes its place. Safe without locking because `_enqueue` runs only on the owner loop and never awaits. |
 | Count drops rather than losing them silently | One counter per drop reason (see `ESDeliveryStats` below). |
@@ -111,6 +112,13 @@ unbounded drain against a dead ES would hang shutdown for `request_timeout` × q
 
 `enqueued` · `delivered` · `write_failures` · `dropped_queue_full` · `dropped_circuit_open` ·
 `dropped_not_connected` · `dropped_shutdown` · `enqueue_errors` · `drain_timeouts` · `queue_depth`
+
+**No exact identity balances these**, and the docstring says so rather than implying otherwise (master's
+gate caught the first draft claiming one). `enqueued` counts a record drop-oldest later evicts, and
+`dropped_not_connected` / `dropped_circuit_open` are incremented on both sides of the queue under one
+name. Only the inequality `delivered + write_failures + dropped_shutdown + queue_depth <= enqueued`
+holds. This matters because a docstring promising an identity turns a genuine counter-loss bug into
+expected noise.
 
 ### Fold-in: `close()` removes the handler from the root logger
 

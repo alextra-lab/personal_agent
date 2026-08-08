@@ -21,6 +21,13 @@ from personal_agent.telemetry.trace import SystemTraceContext
 SESSION_ID = "11111111-1111-1111-1111-111111111111"
 TRACE_A = "22222222-2222-2222-2222-222222222222"
 TRACE_B = "33333333-3333-3333-3333-333333333333"
+# ES and Neo4j store trace_id as 32 lowercase hex chars, no dashes (ADR-0093 D1,
+# telemetry/logger.py's format(trace_id, "032x")) — Postgres round-trips UUID
+# columns to dashed form on read (TRACE_A/TRACE_B above model that). Fixtures
+# below must use the *_HEX form wherever they stand in for ES/Neo4j data, or
+# they mask the exact cross-substrate mismatch this file's tests exist to catch.
+TRACE_A_HEX = uuid.UUID(TRACE_A).hex
+TRACE_B_HEX = uuid.UUID(TRACE_B).hex
 ANCHOR_USER_ID = "55555555-5555-5555-5555-555555555555"
 OTHER_USER_ID = "66666666-6666-6666-6666-666666666666"
 
@@ -148,7 +155,7 @@ def _green_es() -> Any:
             "hits": {"total": {"value": 8}},
             "aggregations": {
                 "by_trace": {
-                    "buckets": [{"key": TRACE_A}, {"key": TRACE_B}],
+                    "buckets": [{"key": TRACE_A_HEX}, {"key": TRACE_B_HEX}],
                 },
                 "no_trace_id": {"doc_count": 0},
             },
@@ -158,13 +165,13 @@ def _green_es() -> Any:
 
 
 def _green_neo4j() -> Any:
-    """Stub a neo4j async driver with one Turn matching TRACE_A."""
+    """Stub a neo4j async driver with one Turn matching TRACE_A (hex form)."""
 
     async def aiter() -> Any:
         for r in [
             {
                 "turn_id": "t-1",
-                "otrace": TRACE_A,
+                "otrace": TRACE_A_HEX,
                 "osid": SESSION_ID,
             }
         ]:
@@ -261,7 +268,7 @@ def _es_with_user_id(
         return {
             "hits": {"total": {"value": 8}},
             "aggregations": {
-                "by_trace": {"buckets": [{"key": TRACE_A}]},
+                "by_trace": {"buckets": [{"key": TRACE_A_HEX}]},
                 "no_trace_id": {"doc_count": 0},
             },
         }
@@ -284,7 +291,7 @@ def _neo4j_with_claim_user_id(claim_user_ids: list[str] | None) -> Any:
             yield _MockRecord({"user_id": uid})
 
     async def _aiter_turns() -> Any:
-        yield _MockRecord({"turn_id": "t-1", "otrace": TRACE_A, "osid": SESSION_ID})
+        yield _MockRecord({"turn_id": "t-1", "otrace": TRACE_A_HEX, "osid": SESSION_ID})
 
     class _RunResult:
         def __init__(self, is_claim_query: bool) -> None:
@@ -330,7 +337,7 @@ async def test_green_path(ctx: Any) -> None:
     doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=42)
     assert doc.outcome == "green", doc.orphans
     assert doc.sampled_session_id == SESSION_ID
-    assert set(doc.sampled_trace_ids) == {TRACE_A, TRACE_B}
+    assert set(doc.sampled_trace_ids) == {TRACE_A_HEX, TRACE_B_HEX}
     # Every check should be either green or skipped (absent_ok empties).
     bad = [c for c in doc.substrate_checks if c.status not in ("green", "skipped")]
     assert bad == [], bad
@@ -498,7 +505,7 @@ async def test_red_when_es_events_missing_trace_id(ctx: Any) -> None:
         return_value={
             "hits": {"total": {"value": 5}},
             "aggregations": {
-                "by_trace": {"buckets": [{"key": TRACE_A}]},
+                "by_trace": {"buckets": [{"key": TRACE_A_HEX}]},
                 "no_trace_id": {"doc_count": 3},
             },
         }
@@ -524,7 +531,7 @@ async def test_green_with_informational_es_extra_trace_ids(ctx: Any) -> None:
     # System spans (HTTP request traces, background-task traces) appear in ES
     # but have no api_costs row. The orphan is recorded for diagnostics but
     # must not prevent the probe from returning green.
-    ghost_trace = "44444444-4444-4444-4444-444444444444"
+    ghost_trace = uuid.uuid4().hex
     es = MagicMock()
     es.search = AsyncMock(
         return_value={
@@ -532,8 +539,8 @@ async def test_green_with_informational_es_extra_trace_ids(ctx: Any) -> None:
             "aggregations": {
                 "by_trace": {
                     "buckets": [
-                        {"key": TRACE_A},
-                        {"key": TRACE_B},
+                        {"key": TRACE_A_HEX},
+                        {"key": TRACE_B_HEX},
                         {"key": ghost_trace},
                     ]
                 },
@@ -545,7 +552,70 @@ async def test_green_with_informational_es_extra_trace_ids(ctx: Any) -> None:
     doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
     assert doc.outcome == "green"
     drift = next(o for o in doc.orphans if o.kind == "three_way_mismatch")
-    assert ghost_trace in drift.detail["trace_ids_only_in_es"]
+    assert drift.detail["trace_ids_only_in_es"] == [ghost_trace], (
+        "TRACE_A/TRACE_B are real, api_costs-recorded traces (dashed PG form vs. "
+        "hex ES form) — they must NOT show up as ES-only orphans once trace_id "
+        "representations are normalized at the comparison boundary."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests — FRE-1186 cross-substrate trace_id representation normalization
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("22222222-2222-2222-2222-222222222222", "22222222222222222222222222222222"),
+        ("22222222222222222222222222222222", "22222222222222222222222222222222"),
+        ("22222222-2222-2222-2222-222222222222".upper(), "22222222222222222222222222222222"),
+        ("22222222222222222222222222222222".upper(), "22222222222222222222222222222222"),
+    ],
+    ids=["dashed-lower", "undashed-lower", "dashed-upper", "undashed-upper"],
+)
+def test_normalize_trace_id_collapses_to_one_canonical_shape(raw: str, expected: str) -> None:
+    from personal_agent.observability.joinability.walk import _normalize_trace_id
+
+    assert _normalize_trace_id(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_green_path_records_no_neo4j_three_way_mismatch(ctx: Any) -> None:
+    """A Neo4j turn whose hex otrace matches a dashed-PG trace must not orphan.
+
+    Pre-fix, ``trace_ids`` stayed dashed while ``otrace`` was hex, so
+    ``otrace not in trace_ids`` was always true for a real match — every green
+    session picked up a spurious ``neo4j.turn`` three_way_mismatch orphan.
+    """
+    walk = _build_walk(pg_pool=_green_pg(), es=_green_es(), neo4j=_green_neo4j(), ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "green"
+    assert not any(
+        o.substrate == "neo4j.turn" and o.kind == "three_way_mismatch" for o in doc.orphans
+    ), doc.orphans
+
+
+@pytest.mark.asyncio
+async def test_es_captures_and_reflections_query_use_normalized_trace_ids(ctx: Any) -> None:
+    """The captures/reflections ``terms`` queries must send hex, not dashed, ids.
+
+    ES stores trace_id as undashed hex; a dashed ``terms`` filter never
+    matches a real document, silently undercounting ``observed_count`` to 0.
+    """
+    es = _green_es()
+    walk = _build_walk(pg_pool=_green_pg(), es=es, neo4j=_green_neo4j(), ctx=ctx)
+    await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+
+    for index_fragment in ("agent-captains-test-captures", "agent-captains-test-reflections"):
+        call = next(
+            c for c in es.search.call_args_list if index_fragment in str(c.kwargs.get("index", ""))
+        )
+        queried_trace_ids = call.kwargs.get("query", {}).get("terms", {}).get("trace_id", [])
+        assert set(queried_trace_ids) == {TRACE_A_HEX, TRACE_B_HEX}, (
+            f"{index_fragment} terms query sent {queried_trace_ids!r} — must be the hex "
+            "form ES documents are actually indexed under, not the dashed PG form."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -610,7 +680,7 @@ async def test_es_query_excludes_transport_logger(ctx: Any) -> None:
         return_value={
             "hits": {"total": {"value": 8}},
             "aggregations": {
-                "by_trace": {"buckets": [{"key": TRACE_A}, {"key": TRACE_B}]},
+                "by_trace": {"buckets": [{"key": TRACE_A_HEX}, {"key": TRACE_B_HEX}]},
                 "no_trace_id": {"doc_count": 0},
             },
         }

@@ -67,6 +67,19 @@ def _as_str(value: Any) -> str:
     return str(value)
 
 
+def _normalize_trace_id(value: str) -> str:
+    """Canonicalize a trace id to 32 lowercase hex chars, no dashes (ADR-0093 D1).
+
+    Postgres UUID columns round-trip to dashed form on read regardless of how
+    the value was written; Elasticsearch and Neo4j store the OTel-canonical
+    undashed hex form (telemetry/logger.py's ``format(trace_id, "032x")``).
+    Comparing a Postgres-sourced trace id against either substrate requires
+    collapsing both to the same shape first — ``uuid.UUID()`` still parses
+    this form for the Postgres-bound queries downstream (FRE-1186).
+    """
+    return value.replace("-", "").lower()
+
+
 # ---------------------------------------------------------------------------
 # JoinabilityWalk
 # ---------------------------------------------------------------------------
@@ -345,7 +358,7 @@ class JoinabilityWalk:
                     )
                 )
                 continue
-            trace_ids.add(_as_str(r["trace_id"]))
+            trace_ids.add(_normalize_trace_id(_as_str(r["trace_id"])))
         checks.append(
             SubstrateCheck(
                 substrate=substrate,

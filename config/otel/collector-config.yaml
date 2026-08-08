@@ -1,0 +1,42 @@
+# OTel Collector configuration — the single egress point for trace telemetry (ADR-0129 D5,
+# FRE-1070). Vanilla upstream core distribution (otel/opentelemetry-collector) — no vendor
+# distro, no contrib components.
+#
+# Redaction: `attributes/redaction` deletes exactly one declared key
+# (`fre1070.fixture.blocked`) if present on a span. This is a narrow first rule proving the
+# mechanism (FRE-1070 AC-1); it is not a comprehensive PII policy and does not name any real
+# span attribute this project emits — extending it to real sensitive keys is a follow-on,
+# not required by this ticket.
+#
+# Egress: every exporter below addresses either the compose-internal `tempo` service name or
+# stdout (`debug`) — nothing off-box (FRE-1070 AC-4).
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+  attributes/redaction:
+    actions:
+      - key: fre1070.fixture.blocked
+        action: delete
+
+exporters:
+  otlp_grpc/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [attributes/redaction, batch]
+      exporters: [otlp_grpc/tempo, debug]

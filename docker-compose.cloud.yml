@@ -214,6 +214,22 @@ services:
       - cloud-sim
     restart: unless-stopped
 
+  # OTel Collector — the single trace egress point (ADR-0129 D5, FRE-1070). Vanilla upstream
+  # core distribution. Internal only, no tunnel host and no host port — nothing outside the
+  # compose network needs to reach it; seshat-gateway addresses it by service name below.
+  # Resource limit: 512MB RAM, 0.5 CPU
+  otel-collector:
+    image: otel/opentelemetry-collector:0.158.0
+    container_name: cloud-sim-otel-collector
+    volumes:
+      - ./config/otel/collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - cloud-sim
+    restart: unless-stopped
+
   # Grafana 13.1.3 — trace/log visualization UI behind an observe Cloudflare Tunnel host
   # Purpose: Dashboard UI for Tempo traces + Elasticsearch logs (ADR-0129 D6). Kibana is
   # retained, not replaced — see the kibana block above and ADR-0129 D6's 2026-08-07 amendment.
@@ -340,6 +356,7 @@ services:
       AGENT_ELASTICSEARCH_URL: http://elasticsearch:9200
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
+      AGENT_OTEL_EXPORTER_ENDPOINT: otel-collector:4317
       # ── Docker-specific paths and hardcoded production values ─────────────────
       AGENT_MCP_GATEWAY_COMMAND: '["/app/docker/mcp/run-gateway.sh"]'
       AGENT_DEPLOYMENT_PROFILE: cloud
@@ -372,6 +389,8 @@ services:
         condition: service_healthy
       searxng:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     volumes:
       # Docker socket — allows run-gateway.sh to spawn docker/mcp-gateway container
       - /var/run/docker.sock:/var/run/docker.sock

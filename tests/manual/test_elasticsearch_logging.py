@@ -90,7 +90,6 @@ async def test_logging():
         query_type="entity_search",
         entity_names=["Python", "Django", "FastAPI"],
         conversations_found=5,
-        duration_ms=42.3,
         relevance_score_avg=0.87,
     )
 
@@ -125,7 +124,6 @@ async def test_logging():
         session_id="session-789",
         user_message="Test user query",
         tools_used=["llm_client", "memory_service", "code_executor"],
-        duration_ms=1234.5,
         outcome="SUCCESS",
         memory_context_used=True,
         conversations_retrieved=3,

@@ -12,6 +12,7 @@ else:
 
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.redaction import redact_mapping
+from personal_agent.telemetry.vocabulary import validate_document
 
 log = get_logger(__name__)
 
@@ -224,15 +225,12 @@ class ElasticsearchLogger:
 
         Returns:
             Document ID if successful, None if failed
-        """
-        if not self.client:
-            log.warning(
-                "elasticsearch_not_connected",
-                event=event_type,
-                trace_id=str(trace_id) if trace_id else None,
-            )
-            return None
 
+        Raises:
+            VocabularyViolationError: The assembled document violates the
+                governed telemetry vocabulary (ADR-0133 D2). Raised
+                regardless of Elasticsearch connectivity.
+        """
         doc = {
             "@timestamp": timestamp if timestamp is not None else datetime.utcnow().isoformat(),
             "event_type": event_type,
@@ -240,6 +238,25 @@ class ElasticsearchLogger:
             "span_id": span_id,
             **data,
         }
+
+        # ADR-0133 D2: validated here, not in a structlog processor or in
+        # es_handler — this is the only point that sees both of emit()'s
+        # branches and the document actually assembled for the write. Ahead
+        # of the client check so a disconnected Elasticsearch can never hide
+        # a violation, and outside the try/except below deliberately: that
+        # block exists to report an Elasticsearch write failure, and a
+        # violation caught by it would silently become
+        # "elasticsearch_log_failed" instead of raising (ADR-0133 D4's
+        # development-time guarantee, restored by FRE-1178 for production).
+        validate_document(doc)
+
+        if not self.client:
+            log.warning(
+                "elasticsearch_not_connected",
+                event=event_type,
+                trace_id=str(trace_id) if trace_id else None,
+            )
+            return None
 
         try:
             return await self._index_agent_log(doc, index=index)

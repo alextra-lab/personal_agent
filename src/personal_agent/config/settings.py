@@ -1193,6 +1193,12 @@ class AppConfig(BaseSettings):
     elasticsearch_index_prefix: str = Field(
         default="agent-logs", description="Elasticsearch index prefix"
     )
+
+    # OpenTelemetry trace egress (ADR-0129 D5, FRE-1070)
+    otel_exporter_endpoint: str = Field(
+        default="localhost:4319",
+        description="OTLP gRPC endpoint of the OTel Collector, the single egress point for traces",
+    )
     captains_log_index_prefix: str = Field(
         default="agent-captains",
         description=(

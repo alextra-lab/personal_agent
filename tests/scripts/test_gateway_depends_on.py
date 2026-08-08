@@ -61,7 +61,15 @@ class TestGatewayDependsOn:
     def test_gateway_other_dependencies_unchanged(self) -> None:
         compose = _render_compose()
         depends_on = compose["services"]["seshat-gateway"]["depends_on"]
-        assert set(depends_on) == {"postgres", "neo4j", "elasticsearch", "redis", "searxng"}
+        # otel-collector added under FRE-1070 (ADR-0129 D5) — the gateway exports traces to it.
+        assert set(depends_on) == {
+            "postgres",
+            "neo4j",
+            "elasticsearch",
+            "redis",
+            "searxng",
+            "otel-collector",
+        }
 
     def test_embeddings_and_reranker_service_definitions_removed(self) -> None:
         compose = _render_compose()

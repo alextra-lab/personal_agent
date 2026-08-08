@@ -659,13 +659,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
     log.info("service_starting")
 
-    # OTel tracer provider bootstrap (ADR-0129 D4): registers the process-wide
-    # tracer provider with no span processor attached — export to a backend is
-    # separately scoped work (FRE-1070). Must run before the first request, so
-    # the root-span middleware below has a real provider to draw tracers from.
+    # OTel tracer provider bootstrap (ADR-0129 D4/D5): registers the process-wide
+    # tracer provider and attaches the Collector exporter (FRE-1070). Must run
+    # before the first request, so the root-span middleware below has a real
+    # provider to draw tracers from.
     from personal_agent.telemetry.otel_bootstrap import configure_tracing
 
-    configure_tracing(service_name=settings.agent_id or "personal-agent")
+    configure_tracing(
+        service_name=settings.agent_id or "personal-agent",
+        otlp_endpoint=settings.otel_exporter_endpoint,
+    )
 
     # Vision-capability drift guard (ADR-0101 §5; FRE-734): log which roles are
     # vision-capable in the active config and warn if an expected production role
@@ -1485,6 +1488,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             _set_default_gate(None)
             await cost_gate.disconnect()
             cost_gate = None
+
+        # Flush the OTel BatchSpanProcessor (ADR-0129 D5, FRE-1070) so spans
+        # from this shutdown sequence aren't lost to process-exit timing. The
+        # API-level TracerProvider has no shutdown() — only the SDK one does,
+        # and the global provider is a no-op SDK-less stub when tracing was
+        # never bootstrapped (e.g. some test apps) — guard with isinstance.
+        from opentelemetry import trace as otel_trace
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
+        _tracer_provider = otel_trace.get_tracer_provider()
+        if isinstance(_tracer_provider, SDKTracerProvider):
+            _tracer_provider.shutdown()
 
         log.info("service_stopped")
     finally:

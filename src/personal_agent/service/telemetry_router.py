@@ -21,12 +21,31 @@ import structlog
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from personal_agent.config import settings
 from personal_agent.service.auth import RequestUser, get_request_user
 from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["telemetry"])
+
+
+@router.get("/telemetry/effective-config")
+async def get_effective_config() -> dict[str, str | bool]:
+    """Machine-readable effective trace-export config (ADR-0129 D5, FRE-1070 AC-3).
+
+    Computed from ``settings`` at request time — never hand-written — so it
+    reflects what this process is actually configured to do, not what a
+    document claims. No auth requirement, matching ``/health``'s posture:
+    informational only, and the internal hostname it names is already public
+    in this repository's checked-in ``docker-compose.yml``.
+    """
+    return {
+        "service_name": settings.agent_id or "personal-agent",
+        "otlp_endpoint": settings.otel_exporter_endpoint,
+        "otlp_protocol": "grpc",
+        "insecure": True,
+    }
 
 
 class CardClickEvent(BaseModel):

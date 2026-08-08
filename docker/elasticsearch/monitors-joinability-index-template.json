@@ -23,6 +23,8 @@
         "outcome":            { "type": "keyword" },
         "trace_id":           { "type": "keyword" },
         "kind":               { "type": "keyword" },
+        "vocabulary_validated":  { "type": "long" },
+        "vocabulary_violations": { "type": "long" },
         "substrate_checks": {
           "type": "nested",
           "properties": {

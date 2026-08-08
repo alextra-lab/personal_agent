@@ -362,6 +362,33 @@ async def test_missing_anchor_reds_with_missing_anchor_orphan(ctx: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
+# FRE-1178 AC-4: the joinability monitor's output carries both numbers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_result_doc_carries_vocabulary_validated_and_violation_counts(ctx: Any) -> None:
+    """After a batch with at least one violation, the published doc carries both.
+
+    ``pg_pool=None`` short-circuits the walk (no anchor), which is enough to
+    exercise ``_build`` — the point this ticket wires the snapshot into.
+    """
+    from personal_agent.exceptions import VocabularyViolationError
+    from personal_agent.telemetry.vocabulary import reset_counts, validate_document
+
+    reset_counts()
+    with pytest.raises(VocabularyViolationError):
+        validate_document({"duration_ms": 1})  # a violation
+    validate_document({"queue_depth": 1})  # a clean record
+
+    walk = _build_walk(ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+
+    assert doc.vocabulary_validated == 2
+    assert doc.vocabulary_violations == 1
+
+
+# ---------------------------------------------------------------------------
 # Tests — red path: api_costs with NULL session_id
 # ---------------------------------------------------------------------------
 

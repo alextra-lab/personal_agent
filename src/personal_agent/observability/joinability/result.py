@@ -93,6 +93,12 @@ class ResultDoc(BaseModel):
         trace_id: The probe's own ``SystemTraceContext`` trace id — the probe
             is itself joinable. Filtered out of future sampling pools.
         kind: ``"system:joinability_probe"`` (the ``SystemTraceContext.kind``).
+        vocabulary_validated: ADR-0133 D4 / FRE-1178 — the governed telemetry
+            vocabulary's process-lifetime ``validated`` counter, snapshotted
+            when this doc was built. The denominator: records the vocabulary
+            validator actually ran against.
+        vocabulary_violations: The same snapshot's ``violations`` counter —
+            of ``vocabulary_validated``, how many carried a violation.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -110,6 +116,8 @@ class ResultDoc(BaseModel):
     outcome: Literal["green", "yellow", "red", "skipped"]
     trace_id: str
     kind: str = "system:joinability_probe"
+    vocabulary_validated: int = 0
+    vocabulary_violations: int = 0
 
 
 class SubstrateResultDoc(BaseModel):

@@ -1,15 +1,22 @@
-"""Tests for the ADR-0133 governed telemetry vocabulary (FRE-1177)."""
+"""Tests for the ADR-0133 governed telemetry vocabulary (FRE-1177, FRE-1178)."""
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
+from personal_agent.config.env_loader import Environment
 from personal_agent.exceptions import VocabularyViolationError
+from personal_agent.telemetry import vocabulary
 from personal_agent.telemetry.vocabulary import (
     DECLARED_TYPES,
     NEAR_MISS_EXCEPTIONS,
     NEAR_MISS_THRESHOLD,
     RETIRED_SPELLINGS,
+    VocabularyCounts,
+    reset_counts,
+    snapshot_counts,
     validate_document,
 )
 
@@ -112,3 +119,84 @@ def test_a_clean_document_with_every_governed_field_passes() -> None:
             "output_tokens": 20,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# FRE-1178: production behaviour — never drop, publish violations against a
+# validated denominator (ADR-0133 D4)
+# ---------------------------------------------------------------------------
+
+
+def _production_settings() -> MagicMock:
+    mock = MagicMock()
+    mock.environment = Environment.PRODUCTION
+    return mock
+
+
+def test_ac2_denominator_and_numerator_match_a_mixed_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-2: N records emitted, M violating — validated == N, violations == M.
+
+    M is strictly between 0 and N (2 of 5), which is what distinguishes the
+    two counters — N == M or M == 0 would not.
+    """
+    monkeypatch.setattr(vocabulary, "settings", _production_settings())
+    reset_counts()
+
+    docs = [
+        {"queue_depth": 1},  # clean
+        {"duration_ms": 1},  # violation: retired spelling
+        {"session_id": "s1"},  # clean
+        {"input_tokens": "not-an-int"},  # violation: declared type
+        {"component": "es_handler"},  # clean (Rule 2 exception)
+    ]
+    for doc in docs:
+        validate_document(doc)  # production mode: never raises
+
+    assert snapshot_counts() == VocabularyCounts(validated=5, violations=2)
+
+
+def test_ac3_a_rule_evaluation_failure_increments_neither_counter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-3: rule evaluation failing internally counts neither validated nor violations.
+
+    Simulated by making ``_check_rules`` itself raise something that is not
+    ``VocabularyViolationError`` — a bug in the validator, not a governed-
+    vocabulary violation. The record's rules never ran, so it must not
+    present as coverage either way.
+    """
+    reset_counts()
+
+    def _broken_check_rules(doc: object) -> None:
+        raise RuntimeError("rule evaluation blew up")
+
+    monkeypatch.setattr(vocabulary, "_check_rules", _broken_check_rules)
+
+    with pytest.raises(RuntimeError):
+        validate_document({"session_id": "s1"})
+
+    assert snapshot_counts() == VocabularyCounts(validated=0, violations=0)
+
+
+def test_ac1_production_mode_never_raises_but_still_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1 (validator level): a violation is counted, not raised, in production."""
+    monkeypatch.setattr(vocabulary, "settings", _production_settings())
+    reset_counts()
+
+    validate_document({"duration_ms": 12})  # must not raise
+
+    assert snapshot_counts() == VocabularyCounts(validated=1, violations=1)
+
+
+def test_outside_production_a_violation_still_raises_after_counting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-0133 D4: the development-time guarantee is unaffected by the new counters."""
+    reset_counts()
+
+    with pytest.raises(VocabularyViolationError):
+        validate_document({"duration_ms": 12})
+
+    assert snapshot_counts() == VocabularyCounts(validated=1, violations=1)

@@ -29,6 +29,7 @@ from personal_agent.observability.joinability.sink import (
 from personal_agent.observability.joinability.walk import JoinabilityWalk
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.trace import SystemTraceContext
+from personal_agent.telemetry.vocabulary import snapshot_counts
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
@@ -79,6 +80,10 @@ async def run_scheduled_probe(*, es_client: "AsyncElasticsearch | None") -> Resu
             captures_prefix=settings.captains_log_index_prefix,
         )
         if session_id is None:
+            # ADR-0133 D4 / FRE-1178: snapshot here too, so a skipped run
+            # (no eligible session) still publishes both numbers rather than
+            # only the runs that reach JoinabilityWalk._build.
+            vocab_counts = snapshot_counts()
             doc = ResultDoc(
                 run_id=str(uuid.uuid4()),
                 started_at=started_at,
@@ -89,6 +94,8 @@ async def run_scheduled_probe(*, es_client: "AsyncElasticsearch | None") -> Resu
                 sampled_session_id=None,
                 outcome="skipped",
                 trace_id=ctx.trace_id,
+                vocabulary_validated=vocab_counts.validated,
+                vocabulary_violations=vocab_counts.violations,
             )
         else:
             doc = await walk.run(

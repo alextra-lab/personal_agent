@@ -641,14 +641,18 @@ class ElasticsearchHandler(logging.Handler):
                 timestamp=item.timestamp,
             )
         except VocabularyViolationError as e:
-            # Counted and logged distinctly from write_failures, not raised:
+            # log_event/validate_document never raises this in production
+            # (ADR-0133 D4, FRE-1178) — this branch is a safety net for
+            # non-production environments only, where validate_document
+            # still raises so the development-time guarantee holds. Counted
+            # and logged distinctly from write_failures rather than raised:
             # the existing corpus already carries retired spellings at
             # several live call sites (duration_ms/latency_ms), so letting
             # this propagate out of the background consumer would kill
-            # delivery on the very first one. FRE-1178 owns wiring this
-            # counter into the joinability monitor for real production
-            # observability; this only keeps a violation from being
-            # indistinguishable from a transient ES error.
+            # delivery on the very first one. The governing violation/
+            # validated counters the joinability monitor publishes live in
+            # vocabulary.py, not here — this counter is this handler's own
+            # delivery-pipeline diagnostic.
             log.error(
                 "vocabulary_violation",
                 event_type=item.event_type,

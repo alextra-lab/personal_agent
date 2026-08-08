@@ -239,13 +239,13 @@ into is whether it requires a new investigation surface** (D3):
 **The staging predicate is the cost of the rule's investigation target**, and it is applied
 consistently below — not "does the target already exist," which is false for every rule (see D3).
 
-- **Now, on Kibana** — rule 2, whose target is a **saved Discover query** on a probe's result index:
+- ~~**Now, on Kibana**~~ **— this branch was never entered (2026-08-08); both rules land on Grafana.** As written it was rule 2, whose target is a **saved Discover query** on a probe's result index:
   minutes to author, discarded without loss. And rule 1, which is the exception and is named as one: it
   needs a **minimal purpose-built surface** (family volume, its denominator, the witness) because a
   single Discover query cannot show the evidence AC-2 demands. **That surface is the one artifact this
   ADR knowingly builds twice**, accepted because rule 1 is the only rule that addresses the motivating
   incident and deferring it defeats the point of staging at all.
-- **On Grafana, with FRE-1072** — rules 3–6, each of which needs a full new dashboard.
+- **On Grafana, with FRE-1072** — rules 3–6, each of which needs a full new dashboard. **Since 2026-08-08 this is the only branch: rules 1–6, all of them.**
 
 **This does not weaken D3, and the distinction is exact.** D3 forbids a rule *shipping* without a
 resolvable investigation target; it does not require the target to pre-date the ticket. **No target for
@@ -254,13 +254,20 @@ each is **part of that rule's own delivery**, and D3 is satisfied because rule a
 together. The contract itself (D1, D3, D4, D5) names conditions, disciplines and targets — never a rule
 syntax — so it survives the migration untouched.
 
-**One open question, now measurable rather than assumed, with a single stated contingency.** If the
-`basic` connector set proves to contain nothing that leaves the box — index and server-log connectors
-only — then a Kibana alert is a log line, which is the failure this ADR exists to end, and **the Kibana
-stage is abandoned outright: rules 1 and 2 wait for FRE-1072 with the rest.** No half-measure, no
-notification routed to a platform that does not exist yet. **Establishing which connectors this licence
-exposes is therefore the first implementation ticket and gates the whole Kibana stage.** It is small:
-set the key, restart, enumerate.
+**One open question, now measurable rather than assumed, with a single stated contingency — ANSWERED
+2026-08-07, and the contingency fired.** If the `basic` connector set proves to contain nothing that
+leaves the box — index and server-log connectors only — then a Kibana alert is a log line, which is the
+failure this ADR exists to end, and **the Kibana stage is abandoned outright: rules 1 and 2 wait for
+FRE-1072 with the rest.** No half-measure, no notification routed to a platform that does not exist
+yet. **Establishing which connectors this licence exposes is therefore the first implementation ticket
+and gates the whole Kibana stage.** It is small: set the key, restart, enumerate.
+
+> **The measurement (FRE-1187): exactly the antecedent above.** 29 connector types enumerated; only
+> `.index` and `.server-log` enabled under this `basic` licence; every connector that leaves the box
+> requires at least gold. **So the consequent holds: the Kibana stage is abandoned outright.** The
+> paragraph above is retained in its conditional form on purpose — it is the clause the decision was
+> made against, and a reader must be able to check that the antecedent measured is the one that was
+> written. Nothing below this point that describes work "on Kibana" was ever performed.
 
 **That ticket must answer two questions, not one.** Connector availability proves Kibana can *notify*;
 it does not prove Kibana can *express* rule 1 — a dynamic trailing baseline combined with a separately
@@ -295,17 +302,20 @@ is a saved Discover query, *FRE-1072* iff a new surface must be built for it.
 
 | # | Condition | Class | Catches | Investigation target | Stage |
 |---|---|---|---|---|---|
-| 1 | **Stoppage:** no documents for a *cadence* or *correlated* family while the witness shows activity. **Shortfall:** documents per unit of independent activity falls materially (*correlated* families only) | absence + shortfall | Stoppage on every family declaring a cadence; the partial 48–83 % loss measured in FRE-1051 on `api_cost_recorded`, whose denominator already exists | Minimal purpose-built surface: family volume, its denominator, and the witness on one screen | **stoppage now; shortfall now iff the platform can express it, else FRE-1072** (D2a) |
-| 2 | A scheduled probe stops writing its result document | absence | A dead probe — the meta-alert that keeps every other rule honest | Saved Discover query on that probe's result index | **now** (joinability, SLM health only — see prerequisite) |
+| 1 | **Stoppage:** no documents for a *cadence* or *correlated* family while the witness shows activity. **Shortfall:** documents per unit of independent activity falls materially (*correlated* families only) | absence + shortfall | Stoppage on every family declaring a cadence; the partial 48–83 % loss measured in FRE-1051 on `api_cost_recorded`, whose denominator already exists | Minimal purpose-built surface: family volume, its denominator, and the witness on one screen | ~~stoppage now; shortfall now iff the platform can express it, else FRE-1072~~ → **both branches on Grafana** (the condition resolved against Kibana, 2026-08-08 — D2a) |
+| 2 | A scheduled probe stops writing its result document | absence | A dead probe — the meta-alert that keeps every other rule honest | Saved query on that probe's result index | ~~now~~ **Grafana** (joinability, SLM health only — see prerequisite) |
+| 3 | A probe result reports red | threshold | Joinability orphans, delivery breach, SLM health down — data that already exists and nothing reads | The failing probe's detail panel | Grafana (FRE-1072) |
+| 4 | Spend rate anomaly against the `api_costs` ledger | threshold | Runaway or misattributed cost, on the one substrate with append-only ground truth | Cost surface over Postgres, scoped to the window and model/role | Grafana (FRE-1072) |
+| 5 | Disk or cluster pressure | threshold | The `~10 GiB` box, with a recorded history of index-count and shard pathologies | Cluster/lifecycle surface | Grafana (FRE-1072) |
+| 6 | User-facing turn-failure rate | threshold | Breakage the owner would otherwise discover by hitting it | Turn/error surface, scoped to the window | Grafana (FRE-1072) |
 
-**Staging for rules 1–2 is decided in D2a and restated there in full; where this column and D2a
-disagree, D2a governs.** **Since 2026-08-08 the Stage column has one value throughout: Grafana.**
-D2a's contingency fired, so rules 1 and 2 join 3–6 there; every *"now, on Kibana"* in this table and
-the paragraphs around it describes a stage that was never entered.
-| 3 | A probe result reports red | threshold | Joinability orphans, delivery breach, SLM health down — data that already exists and nothing reads | The failing probe's detail panel | FRE-1072 |
-| 4 | Spend rate anomaly against the `api_costs` ledger | threshold | Runaway or misattributed cost, on the one substrate with append-only ground truth | Cost surface over Postgres, scoped to the window and model/role | FRE-1072 |
-| 5 | Disk or cluster pressure | threshold | The `~10 GiB` box, with a recorded history of index-count and shard pathologies | Cluster/lifecycle surface | FRE-1072 |
-| 6 | User-facing turn-failure rate | threshold | Breakage the owner would otherwise discover by hitting it | Turn/error surface, scoped to the window | FRE-1072 |
+**Stage, amended 2026-08-08: the column has one value throughout — Grafana.** D2a's contingency fired
+on FRE-1187's measurement, so rules 1 and 2 join 3–6 there and **no rule lands on Kibana**. Rule 1's
+row still reads *"stoppage now; shortfall now iff the platform can express it"* because that is the
+conditional the staging decision actually carried; the condition resolved against Kibana, so **both
+branches go to Grafana** — where, per the Implementation Notes, the `api_costs` denominator is reachable
+directly and the shortfall branch stops being conditional at all. *(Staging for rules 1–2 is decided in
+D2a and restated there in full; where this column and D2a disagree, D2a governs.)*
 
 **Thresholds, windows and baselines are not set here.** Each rule's implementation ticket defines its
 own, and they are that ticket's acceptance criteria. This ADR fixes the *conditions* and the
@@ -863,6 +873,15 @@ amendment and delivered separately by FRE-1214 under the FRE-1203 Grafana migrat
 Corrected in all three places. **The Context paragraph's distance-to-Grafana reasoning is left as
 written** — it is what the staging decision rested on at authoring time, and rewriting the reasoning
 to match its outcome would destroy the record of why the measurement was commissioned at all.
+
+**Revised after adversarial review (Codex, round 1).** The first draft of this amendment banner-marked
+D2a as abandoned while leaving the operative text below it in the imperative — the staging bullets, the
+open-question paragraph and D4's Stage column all still read as live instruction to build on Kibana, and
+inserted prose had split D4's table mid-body. A reader following the Decision section would have been
+told to do the thing the banner said was void. Fixed: each operative statement now carries its own
+resolution, the table is intact, and the conditional paragraphs are retained in conditional form with
+the measured antecedent recorded beside them — so the decision remains checkable against the evidence
+rather than merely asserted.
 
 **What this does not change.** The seam ticket (FRE-1185) and its 2026-11-30 due date stand; the date
 was already gated by FRE-1072 plus AC-7's 30-day window. Its rationale is *strengthened* — where four

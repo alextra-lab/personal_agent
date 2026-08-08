@@ -202,7 +202,7 @@ CaptainLogEntry(
             "threshold is too close to normal operating range."
         ),
         how=(
-            "1) Review agent-logs-* MODE_TRANSITION entries over the last 10 min in Kibana.\n"
+            "1) Review agent-logs-* MODE_TRANSITION entries over the last 10 min in Grafana.\n"
             "2) Correlate with stream:metrics.sampled values at each transition point.\n"
             "3) Decide between widening the window (duration_seconds), raising the threshold, "
             "or adding a hysteresis guard. Update config/governance/modes.yaml accordingly."
@@ -408,7 +408,7 @@ Out of scope:
 | 6 | `service/app.py` lifespan — subscribe `cg:mode-controller` to both streams; replace 4 `Mode.NORMAL` literals with `get_current_mode()` | Integration | Tier-2: Sonnet |
 | 7 | Config settings: `mode_controller_enabled` (default False for MVP, flipped after soak), `mode_window_size` (12), `mode_evaluation_interval_seconds` (30), `mode_calibration_anomaly_threshold` (3), `metrics_sampled_stream_maxlen` (720) | Safe rollout | Tier-3: Haiku |
 | 8 | Unit tests — window aggregation, throttle, cadence counter, fingerprint stability, `NoOpBus` fallback | Quality gate | Tier-2: Sonnet |
-| 9 | Kibana panels on "Agent Reliability" — transitions timeline + edge cadence top-N | Visualisation | Tier-3: Haiku |
+| 9 | **Grafana** panels on "Agent Reliability" — transitions timeline + edge cadence top-N | Visualisation | Tier-3: Haiku |
 | 10 | Linear project "System Health & Homeostasis" — confirm labels/priority mapping per ADR-0040 | Operational | Tier-3: Haiku |
 
 Steps 1–6 constitute the MVP (produce, consume, transition, live mode reaches gateway). Steps 7–10 add the feedback loop, visualisation, and operational polish.
@@ -498,7 +498,7 @@ Body:
   Either widen the detection window (`duration_seconds` on the condition),
   raise the threshold (e.g. 0.85 → 0.90), or introduce a hysteresis guard
   to avoid rapid re-triggering. See stream:metrics.sampled in Redis and
-  MODE_TRANSITION events in Kibana for the full sample record.
+  MODE_TRANSITION events in Grafana for the full sample record.
 
   ## Evidence
     mean(cpu_load) across 6 transitions:   0.87
@@ -541,7 +541,7 @@ Human action required: none during the dark period. Flip the flag after verifyin
 
 | What exists | What is automated | What is visible |
 |-------------|-------------------|-----------------|
-| `stream:metrics.sampled` receives one `MetricsSampledEvent` every 5 s | `cg:mode-controller` aggregates 60 s windows and calls `evaluate_transitions()` every 30 s | Kibana panels on "Agent Reliability" show mode transitions over time + edge cadence |
+| `stream:metrics.sampled` receives one `MetricsSampledEvent` every 5 s | `cg:mode-controller` aggregates 60 s windows and calls `evaluate_transitions()` every 30 s | **Grafana** panels on "Agent Reliability" show mode transitions over time + edge cadence |
 | `stream:mode.transition` receives a `ModeTransitionEvent` per FSM edge | Transitions dual-write: structlog (existing) + bus event (new) | `redis-cli XREAD STREAMS stream:mode.transition $` streams live transitions |
 | `get_current_mode()` returns the live FSM state | Calibration proposals flow through ADR-0030 dedup → promotion → Linear | Linear "System Health & Homeostasis" issues appear when an edge trips ≥ 3 times in 10 min |
 
@@ -551,7 +551,7 @@ Human action required: review and label Linear issues in "System Health & Homeos
 
 | What exists | What is automated | What is visible |
 |-------------|-------------------|-----------------|
-| Per-rule sample queues honouring `TransitionCondition.duration_seconds` | Rules that require "N seconds of sustained breach" fire only when the sustained breach is real | Fewer spurious transitions in Kibana; calibration-proposal cadence drops |
+| Per-rule sample queues honouring `TransitionCondition.duration_seconds` | Rules that require "N seconds of sustained breach" fire only when the sustained breach is real | Fewer spurious transitions on the dashboard; calibration-proposal cadence drops |
 | `DEGRADED → NORMAL` path decision (allowed / deliberately not allowed) | Recovery either auto-completes the cycle or explicitly requires operator action | Recovery-path metric on the dashboard; `MODE_TRANSITION` distribution includes `DEGRADED→NORMAL` edge (if allowed) |
 | Multi-host metric stream topology | Out-of-process producers publish to `stream:metrics.sampled` with `host_id` field | Mode decisions aggregate across hosts |
 

@@ -156,9 +156,11 @@ over a metric that has stopped arriving does not fire, because it has nothing le
 Silence and health produce identical evidence.
 
 Absence is therefore configured **explicitly**, as a rule whose no-data outcome is a *firing* state
-rather than a quiet one. Where the platform offers this natively — Grafana's `No Data` state, or a
-Kibana rule with an explicit no-data action — it is used rather than reconstructed as a
-threshold-of-zero, which is fragile and inverts the same way. **A rule authored without deciding its
+rather than a quiet one. Where the platform offers this natively — **Grafana's `No Data` state** — it
+is used rather than reconstructed as a threshold-of-zero, which is fragile and inverts the same way.
+*(Amended 2026-08-08: this also offered "a Kibana rule with an explicit no-data action" as the
+alternative realization. Removed — not because the statement was wrong, but because it is now the only
+kind of Kibana mention that could still be read as an instruction rather than as history.)* **A rule authored without deciding its
 no-data behaviour has decided it by default, and the default is silence.**
 
 **Absence alone is not enough, and this correction is load-bearing.** The incident that motivates this
@@ -275,6 +277,16 @@ sourced activity denominator is a more demanding rule than a static threshold. I
 `basic`-tier rule types cannot express it, rule 1's **shortfall branch** moves to Grafana while its
 **stoppage branch** — a plain no-data condition any rule type can express — still lands now.
 
+> **Both questions were answered (FRE-1187), and the branch split does not happen.** *Notify:* no —
+> only `.index` and `.server-log` are enabled, so the first question alone fired D2a's contingency.
+> *Express:* qualified yes — the Elasticsearch query rule type is available under `basic` and can carry
+> a trailing baseline via pipeline aggregations, **but the `api_costs` denominator was confirmed live to
+> have no path into Elasticsearch at all**, so the rule was expressible in form and unfeedable in
+> practice. Both branches therefore go to Grafana together, where the Postgres datasource reads
+> `api_costs` directly. **Asking the expressiveness question second was still right**: it is what
+> established that the denominator gap is a data-path problem rather than a rule-syntax one, which is
+> why it dissolves on the new platform instead of following the rule there.
+
 Until that verdict is in, no conclusion drawn from log counts is entitled to assume completeness. The
 partial mitigation meanwhile is that FRE-1055/1056 remove the known failure's *cause* while its
 *detection* is being built — a mitigation, not coverage.
@@ -336,13 +348,20 @@ tickets, where the threshold it tests is also defined.
   handler, the missing sink that silences the family silences its witness at the same instant, the rule
   concludes the system was idle, and it stays quiet **exactly when it is needed**.
 
-  Two witnesses satisfy this and are reachable **from a Kibana rule**, which matters for the staging in
-  D2a: the **Caddy access-log request rate**, which reaches Elasticsearch through Filebeat's own
-  tailing-and-registry path and so cannot be silenced by an unbound in-process handler; and, for the
-  `api_cost_recorded` denominator, the `api_costs` row rate — noting Kibana queries only Elasticsearch,
-  so using it from the Kibana stage requires that rate to be present in Elasticsearch by an independent
-  path, and **if it is not, the shortfall branch waits for Grafana while the stoppage branch still
-  lands.** Same-storage is fine; same-path is not.
+  Two witnesses satisfy this: the **Caddy access-log request rate**, which reaches Elasticsearch
+  through Filebeat's own tailing-and-registry path and so cannot be silenced by an unbound in-process
+  handler; and, for the `api_cost_recorded` denominator, the **`api_costs` row rate**. Same-storage is
+  fine; same-path is not — that is the whole requirement.
+
+  > **Amended 2026-08-08: the branch-splitting caveat attached to this is void.** As written, this
+  > paragraph added that both witnesses had to be reachable *from a Kibana rule*, that Kibana queries
+  > only Elasticsearch, and therefore that **"if [the `api_costs` row rate] is not [in Elasticsearch],
+  > the shortfall branch waits for Grafana while the stoppage branch still lands."** FRE-1187 confirmed
+  > live that the denominator has **no** path into Elasticsearch — so on Kibana that split would have
+  > fired. **It is moot: D2a's contingency abandoned the Kibana stage entirely, and on Grafana the
+  > Postgres datasource reads `api_costs` directly.** Rule 1 therefore lands with **both branches
+  > together**, and an implementer must not split them. The independence requirement above is
+  > unchanged and is the part that still binds.
 
 **Prerequisite for rule 2, stated because it is a real gap and not a detail.** Rule 2 presumes a probe
 writes a result document on a known interval. Only **two of four do**: joinability persists via

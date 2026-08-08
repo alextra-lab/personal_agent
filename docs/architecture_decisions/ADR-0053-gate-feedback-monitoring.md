@@ -338,7 +338,7 @@ This ADR covers the **six active stages of the pre-LLM gateway** (Stages 3–7, 
 |--------|-------------|---------|
 | A. Kibana dashboards only | Surface gateway health through existing Kibana; no programmatic access | Rejected as sole channel — Kibana is for humans; programmatic access (`TelemetryQueries`) is required for the agent to self-report and for `cg:gateway-monitor` to evaluate thresholds |
 | B. New UI panel | Dedicated gateway health panel in the PWA (ADR-0048) | Rejected for Phase 1 — introduces frontend scope; Kibana serves this need at zero cost |
-| **C. Kibana + Captain's Log + TelemetryQueries** | Three-tier surfacing: visual (Kibana), narrative (Captain's Log), programmatic (TelemetryQueries) | **Selected** — each tier serves a different consumer: operators see Kibana, the agent surfaces Captain's Log proposals, and the `cg:gateway-monitor` consumer uses TelemetryQueries for threshold evaluation |
+| **C. Dashboard + Captain's Log + TelemetryQueries** *(named "Kibana + …" when selected 2026-04-22; visual tier amended to **Grafana** 2026-08-08)* | Three-tier surfacing: visual (the dashboard platform), narrative (Captain's Log), programmatic (TelemetryQueries) | **Selected** — each tier serves a different consumer: the operator reads the dashboard, the agent surfaces Captain's Log proposals, and the `cg:gateway-monitor` consumer uses TelemetryQueries for threshold evaluation. **The three-tier structure is the decision; which tool renders the visual tier is not**, which is why the 2026-08-08 platform change amends this row without reopening the choice |
 
 ---
 

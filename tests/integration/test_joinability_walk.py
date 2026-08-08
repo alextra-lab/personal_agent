@@ -157,4 +157,6 @@ async def test_walk_returns_green_for_seeded_session(pool: Any) -> None:
     bad = [c for c in pg_checks if c.status != "green"]
     assert not bad, f"non-green postgres checks: {bad}"
     assert doc.sampled_session_id == str(SESSION_ID)
-    assert {str(TRACE_A), str(TRACE_B)} == set(doc.sampled_trace_ids)
+    # sampled_trace_ids is normalized to hex (ADR-0093 D1 canonical form,
+    # FRE-1186) even though Postgres round-trips the UUID column to dashed.
+    assert {TRACE_A.hex, TRACE_B.hex} == set(doc.sampled_trace_ids)

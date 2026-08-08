@@ -21,6 +21,13 @@ from personal_agent.telemetry.trace import SystemTraceContext
 SESSION_ID = "11111111-1111-1111-1111-111111111111"
 TRACE_A = "22222222-2222-2222-2222-222222222222"
 TRACE_B = "33333333-3333-3333-3333-333333333333"
+# ES and Neo4j store trace_id as 32 lowercase hex chars, no dashes (ADR-0093 D1,
+# telemetry/logger.py's format(trace_id, "032x")) — Postgres round-trips UUID
+# columns to dashed form on read (TRACE_A/TRACE_B above model that). Fixtures
+# below must use the *_HEX form wherever they stand in for ES/Neo4j data, or
+# they mask the exact cross-substrate mismatch this file's tests exist to catch.
+TRACE_A_HEX = uuid.UUID(TRACE_A).hex
+TRACE_B_HEX = uuid.UUID(TRACE_B).hex
 ANCHOR_USER_ID = "55555555-5555-5555-5555-555555555555"
 OTHER_USER_ID = "66666666-6666-6666-6666-666666666666"
 
@@ -148,7 +155,7 @@ def _green_es() -> Any:
             "hits": {"total": {"value": 8}},
             "aggregations": {
                 "by_trace": {
-                    "buckets": [{"key": TRACE_A}, {"key": TRACE_B}],
+                    "buckets": [{"key": TRACE_A_HEX}, {"key": TRACE_B_HEX}],
                 },
                 "no_trace_id": {"doc_count": 0},
             },
@@ -158,13 +165,13 @@ def _green_es() -> Any:
 
 
 def _green_neo4j() -> Any:
-    """Stub a neo4j async driver with one Turn matching TRACE_A."""
+    """Stub a neo4j async driver with one Turn matching TRACE_A (hex form)."""
 
     async def aiter() -> Any:
         for r in [
             {
                 "turn_id": "t-1",
-                "otrace": TRACE_A,
+                "otrace": TRACE_A_HEX,
                 "osid": SESSION_ID,
             }
         ]:
@@ -261,7 +268,7 @@ def _es_with_user_id(
         return {
             "hits": {"total": {"value": 8}},
             "aggregations": {
-                "by_trace": {"buckets": [{"key": TRACE_A}]},
+                "by_trace": {"buckets": [{"key": TRACE_A_HEX}]},
                 "no_trace_id": {"doc_count": 0},
             },
         }
@@ -284,7 +291,7 @@ def _neo4j_with_claim_user_id(claim_user_ids: list[str] | None) -> Any:
             yield _MockRecord({"user_id": uid})
 
     async def _aiter_turns() -> Any:
-        yield _MockRecord({"turn_id": "t-1", "otrace": TRACE_A, "osid": SESSION_ID})
+        yield _MockRecord({"turn_id": "t-1", "otrace": TRACE_A_HEX, "osid": SESSION_ID})
 
     class _RunResult:
         def __init__(self, is_claim_query: bool) -> None:
@@ -330,7 +337,7 @@ async def test_green_path(ctx: Any) -> None:
     doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=42)
     assert doc.outcome == "green", doc.orphans
     assert doc.sampled_session_id == SESSION_ID
-    assert set(doc.sampled_trace_ids) == {TRACE_A, TRACE_B}
+    assert set(doc.sampled_trace_ids) == {TRACE_A_HEX, TRACE_B_HEX}
     # Every check should be either green or skipped (absent_ok empties).
     bad = [c for c in doc.substrate_checks if c.status not in ("green", "skipped")]
     assert bad == [], bad
@@ -498,7 +505,7 @@ async def test_red_when_es_events_missing_trace_id(ctx: Any) -> None:
         return_value={
             "hits": {"total": {"value": 5}},
             "aggregations": {
-                "by_trace": {"buckets": [{"key": TRACE_A}]},
+                "by_trace": {"buckets": [{"key": TRACE_A_HEX}]},
                 "no_trace_id": {"doc_count": 3},
             },
         }
@@ -524,7 +531,7 @@ async def test_green_with_informational_es_extra_trace_ids(ctx: Any) -> None:
     # System spans (HTTP request traces, background-task traces) appear in ES
     # but have no api_costs row. The orphan is recorded for diagnostics but
     # must not prevent the probe from returning green.
-    ghost_trace = "44444444-4444-4444-4444-444444444444"
+    ghost_trace = uuid.uuid4().hex
     es = MagicMock()
     es.search = AsyncMock(
         return_value={
@@ -532,8 +539,8 @@ async def test_green_with_informational_es_extra_trace_ids(ctx: Any) -> None:
             "aggregations": {
                 "by_trace": {
                     "buckets": [
-                        {"key": TRACE_A},
-                        {"key": TRACE_B},
+                        {"key": TRACE_A_HEX},
+                        {"key": TRACE_B_HEX},
                         {"key": ghost_trace},
                     ]
                 },
@@ -545,7 +552,219 @@ async def test_green_with_informational_es_extra_trace_ids(ctx: Any) -> None:
     doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
     assert doc.outcome == "green"
     drift = next(o for o in doc.orphans if o.kind == "three_way_mismatch")
-    assert ghost_trace in drift.detail["trace_ids_only_in_es"]
+    assert drift.detail["trace_ids_only_in_es"] == [ghost_trace], (
+        "TRACE_A/TRACE_B are real, api_costs-recorded traces (dashed PG form vs. "
+        "hex ES form) — they must NOT show up as ES-only orphans once trace_id "
+        "representations are normalized at the comparison boundary."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests — FRE-1186 cross-substrate trace_id representation normalization
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("22222222-2222-2222-2222-222222222222", "22222222222222222222222222222222"),
+        ("22222222222222222222222222222222", "22222222222222222222222222222222"),
+        ("22222222-2222-2222-2222-222222222222".upper(), "22222222222222222222222222222222"),
+        ("22222222222222222222222222222222".upper(), "22222222222222222222222222222222"),
+    ],
+    ids=["dashed-lower", "undashed-lower", "dashed-upper", "undashed-upper"],
+)
+def test_normalize_trace_id_collapses_to_one_canonical_shape(raw: str, expected: str) -> None:
+    from personal_agent.observability.joinability.walk import _normalize_trace_id
+
+    assert _normalize_trace_id(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_green_path_records_no_neo4j_three_way_mismatch(ctx: Any) -> None:
+    """A Neo4j turn whose hex otrace matches a dashed-PG trace must not orphan.
+
+    Pre-fix, ``trace_ids`` stayed dashed while ``otrace`` was hex, so
+    ``otrace not in trace_ids`` was always true for a real match — every green
+    session picked up a spurious ``neo4j.turn`` three_way_mismatch orphan.
+    """
+    walk = _build_walk(pg_pool=_green_pg(), es=_green_es(), neo4j=_green_neo4j(), ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "green"
+    assert not any(
+        o.substrate == "neo4j.turn" and o.kind == "three_way_mismatch" for o in doc.orphans
+    ), doc.orphans
+
+
+@pytest.mark.asyncio
+async def test_es_captures_and_reflections_query_use_normalized_trace_ids(ctx: Any) -> None:
+    """The captures/reflections ``terms`` queries must send hex, not dashed, ids.
+
+    ES stores trace_id as undashed hex; a dashed ``terms`` filter never
+    matches a real document, silently undercounting ``observed_count`` to 0.
+    """
+    es = _green_es()
+    walk = _build_walk(pg_pool=_green_pg(), es=es, neo4j=_green_neo4j(), ctx=ctx)
+    await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+
+    for index_fragment in ("agent-captains-test-captures", "agent-captains-test-reflections"):
+        call = next(
+            c for c in es.search.call_args_list if index_fragment in str(c.kwargs.get("index", ""))
+        )
+        queried_trace_ids = call.kwargs.get("query", {}).get("terms", {}).get("trace_id", [])
+        assert set(queried_trace_ids) == {TRACE_A_HEX, TRACE_B_HEX}, (
+            f"{index_fragment} terms query sent {queried_trace_ids!r} — must be the hex "
+            "form ES documents are actually indexed under, not the dashed PG form."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests — FRE-1186 remedy 3: escalate a genuine correlation failure, not a
+# benign system span (master gate bounce, 2026-08-08)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_red_when_es_trace_billed_but_has_no_api_costs_row(ctx: Any) -> None:
+    """A trace that billed (cost_usd > 0 on model_call_completed) and never
+    landed an api_costs row is a genuine correlation failure — this is the
+    class remedy 3 exists to catch, e.g. litellm_client.py's non-fatal
+    ``cost_record_failed`` swallowing the INSERT error.
+    """
+    billed_orphan_trace = uuid.uuid4().hex
+
+    async def _search(*_a: Any, **kw: Any) -> Any:
+        index = str(kw.get("index", ""))
+        if "agent-logs" in index:
+            return {
+                "hits": {"total": {"value": 9}},
+                "aggregations": {
+                    "by_trace": {
+                        "buckets": [
+                            {"key": TRACE_A_HEX},
+                            {"key": TRACE_B_HEX},
+                            {"key": billed_orphan_trace},
+                        ]
+                    },
+                    "no_trace_id": {"doc_count": 0},
+                    "cost_bearing_trace": {"by_trace": {"buckets": [{"key": billed_orphan_trace}]}},
+                },
+            }
+        return {
+            "hits": {"total": {"value": 8}},
+            "aggregations": {
+                "by_trace": {"buckets": [{"key": TRACE_A_HEX}, {"key": TRACE_B_HEX}]},
+                "no_trace_id": {"doc_count": 0},
+            },
+        }
+
+    es = MagicMock()
+    es.search = AsyncMock(side_effect=_search)
+    walk = _build_walk(pg_pool=_green_pg(), es=es, neo4j=_green_neo4j(), ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+
+    assert doc.outcome == "red"
+    mismatch = next(
+        o
+        for o in doc.orphans
+        if o.substrate == "elasticsearch.agent_logs" and o.kind == "es_pg_mismatch"
+    )
+    assert mismatch.severity == "red"
+    assert mismatch.detail["trace_ids_billed_but_missing_api_costs_row"] == [billed_orphan_trace]
+    # The two real, correctly-joined traces must not be swept into the red orphan.
+    assert TRACE_A_HEX not in mismatch.detail["trace_ids_billed_but_missing_api_costs_row"]
+    assert TRACE_B_HEX not in mismatch.detail["trace_ids_billed_but_missing_api_costs_row"]
+    # And no benign yellow orphan should fire for a trace that IS the red case.
+    assert not any(
+        o.kind == "three_way_mismatch"
+        and billed_orphan_trace in o.detail.get("trace_ids_only_in_es", [])
+        for o in doc.orphans
+    )
+
+
+@pytest.mark.asyncio
+async def test_cost_bearing_trace_agg_filters_on_event_type_field(ctx: Any) -> None:
+    """The cost-bearing filter must query ``event_type``, not ``event``.
+
+    ``agent-logs-*`` documents carry the event name under ``event_type``
+    (``es_logger.py``'s ``log_event``: ``doc = {..., "event_type": event_type,
+    **data}`` — structlog's own ``event`` key is reserved and dropped before
+    the doc is built, per ``es_handler.py``'s ``_RESERVED_EVENT_KEYS``). A
+    query against ``event`` is syntactically valid but matches nothing,
+    silently making remedy 3 never escalate — this test pins the field name
+    against exactly that regression.
+    """
+    walk = _build_walk(pg_pool=_green_pg(), es=_green_es(), neo4j=_green_neo4j(), ctx=ctx)
+    await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+
+    agent_log_call = next(
+        c
+        for c in walk.es.search.call_args_list  # type: ignore[union-attr]
+        if "agent-logs" in str(c.kwargs.get("index", ""))
+    )
+    cost_bearing_filter = (
+        agent_log_call.kwargs.get("aggs", {})
+        .get("cost_bearing_trace", {})
+        .get("filter", {})
+        .get("bool", {})
+        .get("filter", [])
+    )
+    assert {"term": {"event_type": "model_call_completed"}} in cost_bearing_filter, (
+        f"cost_bearing_trace agg filter was {cost_bearing_filter!r} — must term-match "
+        "event_type (the field agent-logs-* documents actually carry the event name "
+        "under), not event (never indexed as a top-level field on these docs)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_yellow_when_unknown_es_trace_never_billed(ctx: Any) -> None:
+    """An unknown ES trace with NO cost-bearing model_call_completed stays the
+    existing informational yellow orphan — the benign-system-span case remedy
+    3 must not false-red (consolidation, brainstem ticks, HTTP/WS lifecycle).
+    """
+    unbilled_trace = uuid.uuid4().hex
+
+    async def _search(*_a: Any, **kw: Any) -> Any:
+        index = str(kw.get("index", ""))
+        if "agent-logs" in index:
+            return {
+                "hits": {"total": {"value": 9}},
+                "aggregations": {
+                    "by_trace": {
+                        "buckets": [
+                            {"key": TRACE_A_HEX},
+                            {"key": TRACE_B_HEX},
+                            {"key": unbilled_trace},
+                        ]
+                    },
+                    "no_trace_id": {"doc_count": 0},
+                    # cost_bearing_trace present but does NOT name unbilled_trace —
+                    # it ran, but never billed (e.g. a system-spawned task).
+                    "cost_bearing_trace": {"by_trace": {"buckets": []}},
+                },
+            }
+        return {
+            "hits": {"total": {"value": 8}},
+            "aggregations": {
+                "by_trace": {"buckets": [{"key": TRACE_A_HEX}, {"key": TRACE_B_HEX}]},
+                "no_trace_id": {"doc_count": 0},
+            },
+        }
+
+    es = MagicMock()
+    es.search = AsyncMock(side_effect=_search)
+    walk = _build_walk(pg_pool=_green_pg(), es=es, neo4j=_green_neo4j(), ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+
+    assert doc.outcome == "green"
+    assert not any(o.kind == "es_pg_mismatch" for o in doc.orphans)
+    benign = next(
+        o
+        for o in doc.orphans
+        if o.substrate == "elasticsearch.agent_logs" and o.kind == "three_way_mismatch"
+    )
+    assert benign.severity == "yellow"
+    assert benign.detail["trace_ids_only_in_es"] == [unbilled_trace]
 
 
 # ---------------------------------------------------------------------------
@@ -610,7 +829,7 @@ async def test_es_query_excludes_transport_logger(ctx: Any) -> None:
         return_value={
             "hits": {"total": {"value": 8}},
             "aggregations": {
-                "by_trace": {"buckets": [{"key": TRACE_A}, {"key": TRACE_B}]},
+                "by_trace": {"buckets": [{"key": TRACE_A_HEX}, {"key": TRACE_B_HEX}]},
                 "no_trace_id": {"doc_count": 0},
             },
         }

@@ -12,6 +12,7 @@ else:
 
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.redaction import redact_mapping
+from personal_agent.telemetry.vocabulary import validate_document
 
 log = get_logger(__name__)
 
@@ -240,6 +241,16 @@ class ElasticsearchLogger:
             "span_id": span_id,
             **data,
         }
+
+        # ADR-0133 D2: validated here, not in a structlog processor or in
+        # es_handler — this is the only point that sees both of emit()'s
+        # branches and the document actually assembled for the write. Kept
+        # outside the try/except below deliberately: that block exists to
+        # report an Elasticsearch write failure, and a violation caught by it
+        # would silently become "elasticsearch_log_failed" instead of raising
+        # (ADR-0133 D4's development-time guarantee, restored by FRE-1178 for
+        # production).
+        validate_document(doc)
 
         try:
             return await self._index_agent_log(doc, index=index)

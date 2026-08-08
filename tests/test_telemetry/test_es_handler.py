@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from personal_agent.exceptions import ESHandlerLoopError
+from personal_agent.exceptions import ESHandlerLoopError, VocabularyViolationError
 from personal_agent.telemetry.es_handler import OVERFLOW_POLICY, ElasticsearchHandler
 
 
@@ -669,6 +669,47 @@ async def test_counters_are_exported_to_elasticsearch_on_drain() -> None:
     assert payload["enqueued"] == 1
     assert payload["delivered"] == 1
     assert payload["overflow_policy"] == OVERFLOW_POLICY
+
+
+# ---------------------------------------------------------------------------
+# ADR-0133: the validator sees the plain-logging fallback branch too
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_plain_logging_fallback_record_still_reaches_the_validator() -> None:
+    """ADR-0133 AC-5: a violation on the non-structlog fallback branch is still detected.
+
+    Built via the real ``_build_item`` on a standard ``logging.LogRecord`` whose
+    ``msg`` is a plain string — never touched structlog. Proves the validator
+    lives where every write actually converges (``log_event``) rather than in a
+    structlog processor, which would only ever see the dict-``msg`` branch.
+    """
+    handler, _ = await _handler_with_real_logger()
+
+    record = logging.LogRecord(
+        name="personal_agent.tests.plain_logging",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="a plain string log message that never touched structlog",
+        args=(),
+        exc_info=None,
+    )
+    record.duration_ms = 42  # retired spelling (ADR-0133 Rule 1), as an extra field
+
+    item = handler._build_item(record)
+    assert item.data["duration_ms"] == 42  # precondition: the fallback branch carried it through
+
+    with pytest.raises(VocabularyViolationError):
+        await handler.es_logger.log_event(
+            item.event_type,
+            item.data,
+            item.trace_id,
+            item.span_id,
+            index=item.index,
+            timestamp=item.timestamp,
+        )
 
 
 # ---------------------------------------------------------------------------

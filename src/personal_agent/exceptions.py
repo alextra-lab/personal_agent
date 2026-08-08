@@ -58,6 +58,31 @@ class ESHandlerLoopError(RuntimeError):
     """
 
 
+class VocabularyViolationError(ValueError):
+    """Raised when a telemetry document violates the governed field vocabulary.
+
+    ADR-0133 D2/D3: :func:`personal_agent.telemetry.vocabulary.validate_document`
+    checks the ``agent-logs`` document assembled by
+    ``ElasticsearchLogger.log_event`` against three rules — a declared retired
+    spelling, a near-miss of a governed name, or a governed name carrying the
+    wrong declared type — and raises this rather than a bare ``ValueError`` so
+    the violated field and rule are always attached to the failure.
+    """
+
+    def __init__(self, message: str, *, field: str, rule: str) -> None:
+        """Initialize with the offending field and the rule it violated.
+
+        Args:
+            message: Human-readable description of the violation.
+            field: The document key that violated the vocabulary.
+            rule: Which rule was violated — ``"retired_spelling"``,
+                ``"near_miss"``, or ``"declared_type"``.
+        """
+        self.field = field
+        self.rule = rule
+        super().__init__(message)
+
+
 class AttachmentUnsupportedError(ValueError):
     """Raised when a turn's attachment cannot be delivered to the model.
 

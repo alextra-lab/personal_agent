@@ -141,17 +141,31 @@ async def _gateway_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # -----------------------------------------------------------------------
     # Elasticsearch — observation queries
     # -----------------------------------------------------------------------
+    # The handler is attached to the root logger, not merely harvested for its
+    # client: until FRE-1056 this process shipped no logs to Elasticsearch at
+    # all, because add_elasticsearch_handler had exactly one call site and it
+    # was in the execution service's lifespan.
     app.state.es_client = None
+    app.state.es_handler = None
     try:
+        from personal_agent.telemetry import add_elasticsearch_handler, detach_elasticsearch_handler
         from personal_agent.telemetry.es_handler import ElasticsearchHandler
 
         es_handler = ElasticsearchHandler(
             settings.elasticsearch_url, index_prefix=settings.elasticsearch_index_prefix
         )
         if await es_handler.connect() and es_handler.es_logger.client is not None:
+            add_elasticsearch_handler(es_handler)
+            app.state.es_handler = es_handler
             app.state.es_client = es_handler.es_logger.client
             log.info("gateway_elasticsearch_connected")
         else:
+            # Tear the handler down rather than dropping the reference. Two
+            # distinct leaks live here: ElasticsearchLogger.connect assigns its
+            # client *before* the handshake and does not clear it when the
+            # handshake fails, and ElasticsearchHandler.connect starts a
+            # delivery consumer whenever that inner call returns true.
+            await detach_elasticsearch_handler(es_handler)
             log.warning("gateway_elasticsearch_unavailable")
     except Exception as exc:
         log.warning("gateway_elasticsearch_connect_failed", error=str(exc))
@@ -196,11 +210,21 @@ async def _gateway_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await app.state.knowledge_graph._service.disconnect()
         except Exception:
             pass
-    if app.state.es_client is not None:
+    # Elasticsearch last, so every teardown step above still ships its records.
+    # The handler owns the client — closing app.state.es_client separately would
+    # be a double close, since ElasticsearchLogger.disconnect already closes it.
+    # Only gateway_stopped below reaches file/console alone.
+    if app.state.es_handler is not None:
+        from personal_agent.telemetry import detach_elasticsearch_handler
+
         try:
-            await app.state.es_client.close()
-        except Exception:
-            pass
+            await detach_elasticsearch_handler(app.state.es_handler)
+        except Exception as exc:
+            log.warning("gateway_elasticsearch_shutdown_failed", error=str(exc))
+        app.state.es_handler = None
+        # Nulled because gateway endpoints resolve this from app.state at
+        # request time; leaving it pointing at a closed client is stale state.
+        app.state.es_client = None
     log.info("gateway_stopped")
 
 

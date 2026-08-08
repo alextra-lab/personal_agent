@@ -13,10 +13,15 @@ import logging.handlers
 import pathlib
 import sys
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from opentelemetry import trace
+
+if TYPE_CHECKING:
+    # Import-time only: es_handler imports es_logger, which imports this module
+    # for get_logger, so a runtime import here would close a cycle.
+    from personal_agent.telemetry.es_handler import ElasticsearchHandler
 
 
 def _get_log_level() -> str:
@@ -289,14 +294,53 @@ def configure_logging() -> None:
 def add_elasticsearch_handler(handler: logging.Handler) -> None:
     """Add an Elasticsearch handler to the logging system.
 
-    This should be called after the service has connected to Elasticsearch
+    This should be called after the process has connected to Elasticsearch
     to enable automatic forwarding of all logs.
 
+    Idempotent: attaching a handler that is already on the root logger is a
+    no-op. This was safe to omit while the function had exactly one call site,
+    but FRE-1056 adds a second (the standalone gateway lifespan), and a double
+    attach would index every log record twice — a duplication that reads as
+    genuine traffic in every aggregation built on ``agent-logs-*``.
+
     Args:
-        handler: Elasticsearch logging handler (already connected)
+        handler: Elasticsearch logging handler (already connected).
     """
     root_logger = logging.getLogger()
+    if handler in root_logger.handlers:
+        return
     root_logger.addHandler(handler)
+
+
+async def detach_elasticsearch_handler(handler: "ElasticsearchHandler") -> None:
+    """Drain an Elasticsearch handler, then remove it from the root logger.
+
+    The async counterpart to :func:`add_elasticsearch_handler`, and the single
+    place the teardown *order* is stated. It matters: ``disconnect`` drains the
+    delivery queue and only then closes the client, whereas ``close`` marks the
+    handler disconnected immediately. Detaching first would leave every record
+    still queued to be consumed as ``dropped_not_connected`` — delivered
+    nowhere, on a graceful shutdown that had time to deliver them.
+
+    Detachment runs in a ``finally`` because ``disconnect`` can raise — a loop
+    ownership error, or a failure closing the client — and a handler left
+    attached to the root logger with a dead client behind it would charge every
+    subsequent log record against a pipeline that can no longer deliver. The
+    original exception still propagates.
+
+    Args:
+        handler: The connected handler to drain and detach.
+
+    Raises:
+        ESHandlerLoopError: If ``disconnect`` is called from a loop other than
+            the one that owns the handler. Propagated deliberately — the handler
+            is detached first, so the caller learns of a real ownership bug
+            rather than inheriting a silently half-torn-down pipeline.
+    """
+    try:
+        await handler.disconnect()
+    finally:
+        handler.close()
 
 
 def get_logger(name: str) -> Any:  # Returns structlog.stdlib.BoundLogger

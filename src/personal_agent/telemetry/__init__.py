@@ -45,7 +45,12 @@ from personal_agent.telemetry.events import (
     TOOL_SCHEMA_VALIDATION_FAILED,
     UNKNOWN_STATE,
 )
-from personal_agent.telemetry.logger import add_elasticsearch_handler, configure_logging, get_logger
+from personal_agent.telemetry.logger import (
+    add_elasticsearch_handler,
+    configure_logging,
+    detach_elasticsearch_handler,
+    get_logger,
+)
 from personal_agent.telemetry.metrics import (
     get_recent_cpu_load,
     get_recent_event_count,
@@ -70,6 +75,7 @@ __all__ = [
     "get_logger",
     "configure_logging",
     "add_elasticsearch_handler",
+    "detach_elasticsearch_handler",
     # Metrics and queries
     "get_recent_event_count",
     "get_recent_cpu_load",

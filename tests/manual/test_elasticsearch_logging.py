@@ -25,7 +25,11 @@ sys.path.insert(0, str(project_root / "src"))
 
 from personal_agent.config import settings  # noqa: E402
 from personal_agent.config._substrate_fingerprint import is_prod_elasticsearch_url  # noqa: E402
-from personal_agent.telemetry import add_elasticsearch_handler, get_logger  # noqa: E402
+from personal_agent.telemetry import (  # noqa: E402
+    add_elasticsearch_handler,
+    detach_elasticsearch_handler,
+    get_logger,
+)
 from personal_agent.telemetry.es_handler import ElasticsearchHandler  # noqa: E402
 
 
@@ -131,8 +135,11 @@ async def test_logging():
     print("\n⏳ Waiting for Elasticsearch to index (2 seconds)...")
     await asyncio.sleep(2)
 
-    # Disconnect
-    await es_handler.disconnect()
+    # Disconnect AND detach. A bare disconnect leaves the handler attached to
+    # the root logger for the rest of the pytest process, so every later test's
+    # log records are charged against a torn-down pipeline — and any test that
+    # counts attached ES handlers sees this one too (FRE-1056).
+    await detach_elasticsearch_handler(es_handler)
     print("✅ Disconnected from Elasticsearch")
 
     print("\n" + "=" * 60)

@@ -627,6 +627,35 @@ async def _preflight_check_tcp(service: str, host: str, port: int) -> None:
         ) from e
 
 
+async def _shutdown_es_delivery(handler: ElasticsearchHandler) -> None:
+    """Deregister Elasticsearch producers, then drain and detach the handler.
+
+    The service's own Elasticsearch teardown seam, called last in the lifespan's
+    shutdown (FRE-1056). Producers are deregistered first so nothing new is
+    scheduled, then ``detach_elasticsearch_handler`` drains whatever is already
+    queued before the client closes — the guarantee FRE-1055 built the drain
+    for, which this lifespan previously did not use.
+
+    Deregistering here rather than earlier in shutdown is deliberate: a
+    Captain's Log write issued during teardown is queued and drained rather than
+    dropped, and one function means one seam to prove rather than an ordering
+    spread across sixty lines.
+
+    Args:
+        handler: The connected Elasticsearch handler owned by the lifespan.
+    """
+    from personal_agent.captains_log.capture import (
+        set_default_es_handler as set_capture_es_handler,
+    )
+    from personal_agent.captains_log.manager import CaptainLogManager
+    from personal_agent.telemetry import detach_elasticsearch_handler
+
+    set_capture_es_handler(None)
+    CaptainLogManager.set_default_es_handler(None)
+    set_es_indexer(None)
+    await detach_elasticsearch_handler(handler)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan management."""
@@ -1424,68 +1453,70 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             log.error("mcp_gateway_shutdown_error", error=sanitize_error_message(e), exc_info=True)
 
-    if es_handler:
-        from personal_agent.captains_log.capture import (
-            set_default_es_handler as set_capture_es_handler,
-        )
-        from personal_agent.captains_log.manager import CaptainLogManager
+    # Elasticsearch delivery is torn down in the `finally` below, after every
+    # step here — each of them logs (neo4j_disconnected, sysgraph_disconnected,
+    # route_trace_ledger_disconnected, cost_tracker_disconnected,
+    # cost_gate_disconnected, service_stopped), and those records are precisely
+    # what a shutdown investigation needs. Tearing ES down first, as this
+    # lifespan used to, meant every one of them hit a disconnected handler.
+    try:
+        if memory_service:
+            await memory_service.disconnect()
 
-        set_capture_es_handler(None)
-        CaptainLogManager.set_default_es_handler(None)
-        set_es_indexer(None)
-        await es_handler.disconnect()
+        # Sysgraph shared repo teardown (ADR-0105 D9/FRE-721)
+        from personal_agent.sysgraph import get_default_sysgraph_repo
 
-    if memory_service:
-        await memory_service.disconnect()
+        shared_sysgraph_repo = get_default_sysgraph_repo()
+        if shared_sysgraph_repo is not None:
+            await shared_sysgraph_repo.disconnect()
+            set_default_sysgraph_repo(None)
 
-    # Sysgraph shared repo teardown (ADR-0105 D9/FRE-721)
-    from personal_agent.sysgraph import get_default_sysgraph_repo
+        # Route-trace ledger teardown (FRE-452)
+        from personal_agent.observability.route_trace import get_route_trace_ledger
 
-    shared_sysgraph_repo = get_default_sysgraph_repo()
-    if shared_sysgraph_repo is not None:
-        await shared_sysgraph_repo.disconnect()
-        set_default_sysgraph_repo(None)
+        await get_route_trace_ledger().disconnect()
 
-    # Route-trace ledger teardown (FRE-452)
-    from personal_agent.observability.route_trace import get_route_trace_ledger
+        # Cost tracker singleton teardown (FRE-988)
+        from personal_agent.llm_client.cost_tracker import get_cost_tracker_service
 
-    await get_route_trace_ledger().disconnect()
+        await get_cost_tracker_service().disconnect()
 
-    # Cost tracker singleton teardown (FRE-988)
-    from personal_agent.llm_client.cost_tracker import get_cost_tracker_service
+        # Cost Check Gate teardown (FRE-305)
+        if cost_gate_reaper_task is not None:
+            cost_gate_reaper_task.cancel()
+            try:
+                await cost_gate_reaper_task
+            except asyncio.CancelledError:
+                pass
+            cost_gate_reaper_task = None
+        if cost_gate_snapshotter_task is not None:
+            cost_gate_snapshotter_task.cancel()
+            try:
+                await cost_gate_snapshotter_task
+            except asyncio.CancelledError:
+                pass
+            cost_gate_snapshotter_task = None
+        if cost_gate_silence_monitor_task is not None:
+            cost_gate_silence_monitor_task.cancel()
+            try:
+                await cost_gate_silence_monitor_task
+            except asyncio.CancelledError:
+                pass
+            cost_gate_silence_monitor_task = None
+        if cost_gate is not None:
+            from personal_agent.cost_gate import set_default_gate as _set_default_gate
 
-    await get_cost_tracker_service().disconnect()
+            _set_default_gate(None)
+            await cost_gate.disconnect()
+            cost_gate = None
 
-    # Cost Check Gate teardown (FRE-305)
-    if cost_gate_reaper_task is not None:
-        cost_gate_reaper_task.cancel()
-        try:
-            await cost_gate_reaper_task
-        except asyncio.CancelledError:
-            pass
-        cost_gate_reaper_task = None
-    if cost_gate_snapshotter_task is not None:
-        cost_gate_snapshotter_task.cancel()
-        try:
-            await cost_gate_snapshotter_task
-        except asyncio.CancelledError:
-            pass
-        cost_gate_snapshotter_task = None
-    if cost_gate_silence_monitor_task is not None:
-        cost_gate_silence_monitor_task.cancel()
-        try:
-            await cost_gate_silence_monitor_task
-        except asyncio.CancelledError:
-            pass
-        cost_gate_silence_monitor_task = None
-    if cost_gate is not None:
-        from personal_agent.cost_gate import set_default_gate as _set_default_gate
-
-        _set_default_gate(None)
-        await cost_gate.disconnect()
-        cost_gate = None
-
-    log.info("service_stopped")
+        log.info("service_stopped")
+    finally:
+        # In a finally so a failure in any teardown above cannot strand the
+        # handler attached to the root logger with a dead client behind it.
+        if es_handler is not None:
+            await _shutdown_es_delivery(es_handler)
+            es_handler = None
 
 
 app = FastAPI(

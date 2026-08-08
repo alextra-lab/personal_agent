@@ -36,7 +36,7 @@ from personal_agent.llm_client.history_sanitiser import sanitise_messages
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition
 from personal_agent.llm_client.prompt_identity import (
     PromptIdentity,
-    derive_prompt_identity,
+    derive_fallback_prompt_identity,
 )
 from personal_agent.llm_client.telemetry import (
     emit_model_call_completed,
@@ -560,10 +560,13 @@ class LocalLLMClient:
                         # ``None`` (FRE-405 follow-up; verified live against llama-server 2026-05-29).
                         _ptd = _usage.get("prompt_tokens_details") or {}
                         _cached = _ptd.get("cached_tokens") or 0
-                        _identity = prompt_identity or derive_prompt_identity(
+                        # FRE-1008: hashes the actual request_messages/tools sent
+                        # below, not system_prompt twice — see prompt_identity.py.
+                        _identity = prompt_identity or derive_fallback_prompt_identity(
                             f"role.{role.value}",
-                            static_prefix=system_prompt or "",
-                            full_prompt=system_prompt or "",
+                            system_prompt=system_prompt,
+                            request_messages=request_messages,
+                            tools=tools,
                         )
                         _model_span.set_attribute(gen_ai.GEN_AI_USAGE_INPUT_TOKENS, _pt)
                         _model_span.set_attribute(gen_ai.GEN_AI_USAGE_OUTPUT_TOKENS, _ct)

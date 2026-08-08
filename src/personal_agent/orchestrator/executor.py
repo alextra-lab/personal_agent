@@ -4725,7 +4725,7 @@ async def step_llm_call(
             ],
         )
         from personal_agent.llm_client.concurrency import InferencePriority
-        from personal_agent.llm_client.prompt_identity import derive_prompt_identity
+        from personal_agent.llm_client.prompt_identity import derive_orchestrator_prompt_identity
 
         # Build the orchestrator.primary PromptIdentity (ADR-0078 D1/D4, FRE-405).
         # After ADR-0081 D1, inner_system_before_memory IS the full cacheable prefix:
@@ -4753,6 +4753,10 @@ async def step_llm_call(
             # named but not present is the same class of false negative the ticket exists
             # to close. Safe: component_ids feeds neither hash in derive_prompt_identity.
             _component_ids.append("memory_section")
+        if ctx.salient_highlights:
+            # FRE-1008: contributes bytes to _volatile_block (line ~4679) same as the
+            # other VOLATILE markers above; was missing from the audit trail entirely.
+            _component_ids.append("salient_highlights")
         if ctx.artifact_builder_planning_note:
             # ADR-0122 §5/T6: distinct VOLATILE marker — turn-scoped, never enters
             # static_prefix_hash.
@@ -4761,10 +4765,15 @@ async def step_llm_call(
             _component_ids.append("tool_use_rules")
         if _decomposition_added:
             _component_ids.append("decomposition_instructions")
-        _prompt_identity = derive_prompt_identity(
-            "orchestrator.primary",
+        # FRE-1008: dynamic_hash must cover what is actually sent — request_messages
+        # (which carries the ADR-0081 volatile tail inlined into the current user
+        # turn) and tools — not a precomputed candidate string, since the inline step
+        # can no-op and diverge from it. Same request_messages/tools values passed to
+        # llm_client.respond() below.
+        _prompt_identity = derive_orchestrator_prompt_identity(
             static_prefix=_static_prefix,
-            full_prompt=system_prompt or "",
+            request_messages=request_messages,
+            tools=tools,
             component_ids=tuple(_component_ids),
         )
 

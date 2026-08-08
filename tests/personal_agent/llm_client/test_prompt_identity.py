@@ -1,13 +1,17 @@
-"""Tests for the prompt identity primitive (ADR-0078 D1/D4, FRE-405)."""
+"""Tests for the prompt identity primitive (ADR-0078 D1/D4, FRE-405, FRE-1008)."""
 
 from __future__ import annotations
 
 import dataclasses
 
 import pytest
+
 from personal_agent.llm_client.prompt_identity import (
     PromptIdentity,
+    _serialize_dynamic_content,
     _short_hash,
+    derive_fallback_prompt_identity,
+    derive_orchestrator_prompt_identity,
     derive_prompt_identity,
 )
 
@@ -77,3 +81,138 @@ class TestDeriveIdentity:
         ident = derive_prompt_identity("c", static_prefix="s", full_prompt="s")
         assert ident.component_ids == ()
         assert isinstance(ident, PromptIdentity)
+
+
+class TestSerializeDynamicContent:
+    """FRE-1008: structure-preserving serialization, not a naive text join."""
+
+    def test_distinguishes_structure_not_just_text(self) -> None:
+        one_message = [{"role": "user", "content": "ab"}]
+        two_messages = [
+            {"role": "user", "content": "a"},
+            {"role": "user", "content": "b"},
+        ]
+        assert _serialize_dynamic_content(one_message) != _serialize_dynamic_content(two_messages)
+
+    def test_distinguishes_roles(self) -> None:
+        as_user = [{"role": "user", "content": "hello"}]
+        as_assistant = [{"role": "assistant", "content": "hello"}]
+        assert _serialize_dynamic_content(as_user) != _serialize_dynamic_content(as_assistant)
+
+    def test_covers_tools(self) -> None:
+        messages = [{"role": "user", "content": "hi"}]
+        tools_a = [{"name": "digest", "parameters": {"a": 1}}]
+        tools_b = [{"name": "digest", "parameters": {"a": 2}}]
+        assert _serialize_dynamic_content(messages, tools_a) != _serialize_dynamic_content(
+            messages, tools_b
+        )
+
+    def test_stable_across_none_and_empty_tools(self) -> None:
+        messages = [{"role": "user", "content": "hi"}]
+        assert _serialize_dynamic_content(messages, None) == _serialize_dynamic_content(
+            messages, []
+        )
+
+    def test_deterministic(self) -> None:
+        messages = [{"role": "user", "content": "hi"}]
+        assert _serialize_dynamic_content(messages) == _serialize_dynamic_content(messages)
+
+
+class TestDeriveOrchestratorPromptIdentity:
+    """FRE-1008: dynamic_hash must cover request_messages/tools, not collapse to static_prefix."""
+
+    def test_dynamic_hash_covers_request_messages(self) -> None:
+        static_prefix = "tool_awareness\n\noperator+skill blocks"
+        a = derive_orchestrator_prompt_identity(
+            static_prefix=static_prefix,
+            request_messages=[{"role": "user", "content": "recall set ONE"}],
+        )
+        b = derive_orchestrator_prompt_identity(
+            static_prefix=static_prefix,
+            request_messages=[{"role": "user", "content": "recall set TWO"}],
+        )
+        assert a.static_prefix_hash == b.static_prefix_hash
+        assert a.dynamic_hash != b.dynamic_hash
+
+    def test_dynamic_hash_covers_tools(self) -> None:
+        static_prefix = "static"
+        messages = [{"role": "user", "content": "hi"}]
+        a = derive_orchestrator_prompt_identity(
+            static_prefix=static_prefix,
+            request_messages=messages,
+            tools=[{"name": "search"}],
+        )
+        b = derive_orchestrator_prompt_identity(
+            static_prefix=static_prefix,
+            request_messages=messages,
+            tools=[{"name": "browse"}],
+        )
+        assert a.static_prefix_hash == b.static_prefix_hash
+        assert a.dynamic_hash != b.dynamic_hash
+
+    def test_callsite_and_component_ids(self) -> None:
+        ident = derive_orchestrator_prompt_identity(
+            static_prefix="s",
+            request_messages=[{"role": "user", "content": "hi"}],
+            component_ids=("tool_awareness", "memory_section"),
+        )
+        assert ident.callsite == "orchestrator.primary"
+        assert ident.component_ids == ("tool_awareness", "memory_section")
+
+    def test_regression_old_inline_call_collapses_to_same_hash(self) -> None:
+        """Documents the FRE-1008 defect: hashing static_prefix as full_prompt
+        (the old executor.py behavior) always collapses both hashes — this is
+        what derive_orchestrator_prompt_identity replaces.
+        """
+        static_prefix = "same string"
+        old_broken = derive_prompt_identity(
+            "orchestrator.primary", static_prefix=static_prefix, full_prompt=static_prefix
+        )
+        assert old_broken.static_prefix_hash == old_broken.dynamic_hash
+
+
+class TestDeriveFallbackPromptIdentity:
+    """FRE-1008: fixes the empty-string collapse and gives leaf callsites a real split."""
+
+    def test_no_system_prompt_uses_embedded_system_message(self) -> None:
+        ident = derive_fallback_prompt_identity(
+            "role.entity_extraction",
+            system_prompt=None,
+            request_messages=[
+                {"role": "system", "content": "Extract entities."},
+                {"role": "user", "content": "Some transcript text."},
+            ],
+        )
+        assert ident.static_prefix_hash == _short_hash("Extract entities.")
+        assert ident.static_prefix_hash != _short_hash("")
+        assert ident.dynamic_hash != _short_hash("")
+
+    def test_dynamic_hash_covers_message_tail(self) -> None:
+        system_prompt = "You are a helpful assistant."
+        a = derive_fallback_prompt_identity(
+            "role.sub_agent",
+            system_prompt=system_prompt,
+            request_messages=[{"role": "user", "content": "query A"}],
+        )
+        b = derive_fallback_prompt_identity(
+            "role.sub_agent",
+            system_prompt=system_prompt,
+            request_messages=[{"role": "user", "content": "query B"}],
+        )
+        assert a.static_prefix_hash == b.static_prefix_hash
+        assert a.dynamic_hash != b.dynamic_hash
+
+    def test_truly_empty_is_still_hashable(self) -> None:
+        ident = derive_fallback_prompt_identity(
+            "role.primary", system_prompt=None, request_messages=[]
+        )
+        assert ident.static_prefix_hash == _short_hash("")
+        assert len(ident.dynamic_hash) == 16
+
+    def test_system_prompt_param_takes_precedence_over_embedded_message(self) -> None:
+        ident = derive_fallback_prompt_identity(
+            "role.primary",
+            system_prompt="explicit system prompt",
+            request_messages=[{"role": "system", "content": "should be ignored"}],
+        )
+        assert ident.static_prefix_hash == _short_hash("explicit system prompt")

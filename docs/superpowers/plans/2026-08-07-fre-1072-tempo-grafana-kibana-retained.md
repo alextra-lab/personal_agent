@@ -16,6 +16,17 @@ verdict, resolves AC-9) · FRE-1070 (OTel Collector, NOT in scope here — see F
 > was reading ADR prose without visibility into Linear's ticket graph, where the work already has its
 > own separate ticket.
 
+> **Revision 3 (2026-08-07)** — post-deploy incident, caught by master after merge, not by CI: the
+> cloud compose snippet below (§3.3) shows Grafana bound to host port `127.0.0.1:3000`, which
+> collides with `seshat-pwa`'s own pre-existing `127.0.0.1:3000` binding on the same host — invisible
+> to `docker compose config` (which only validates the compose *file*, not runtime port availability
+> against sibling services), so it only surfaces when the container actually tries to start. Grafana's
+> **host** port moved to `3001` (container port unchanged at `3000` — the Cloudflare Tunnel reaches
+> Grafana over the compose network at `http://grafana:3000`, never through this host binding, so the
+> tunnel ingress target is unaffected). The snippet below is left as Revision 2 originally wrote it,
+> for the historical record of what was actually deployed and bounced back — see the shipped
+> `docker-compose.cloud.yml` for the corrected port and comment.
+
 ---
 
 ## 0. Codex plan-review outcome (verified, not taken on faith)

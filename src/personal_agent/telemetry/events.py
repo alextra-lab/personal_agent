@@ -46,40 +46,6 @@ HISTORY_SANITISED = "history_sanitised"
 STEP_PLANNING_STARTED = "step_planning_started"
 STEP_PLANNING_COMPLETED = "step_planning_completed"
 
-# ADR-0074 / FRE-376 Phase 2 (I2): both LocalLLMClient and LiteLLMClient emit
-# the canonical `model_call_started` / `model_call_completed` events with the
-# field sets below. These frozensets are imported by the parity test as the
-# single source of truth — adding a required field here forces both clients
-# (and any future model client) to emit it.
-CANONICAL_MODEL_CALL_STARTED_FIELDS: frozenset[str] = frozenset(
-    {
-        "model",
-        "provider",
-        "role",
-        "endpoint",
-        "trace_id",
-        "session_id",
-        "span_id",
-        "parent_span_id",
-    }
-)
-CANONICAL_MODEL_CALL_COMPLETED_FIELDS: frozenset[str] = (
-    CANONICAL_MODEL_CALL_STARTED_FIELDS
-    | frozenset(
-        {
-            "latency_ms",
-            "input_tokens",
-            "output_tokens",
-            "total_tokens",
-            # Prompt identity (ADR-0078 D1/D4, FRE-405). Stamped on every call so
-            # cost/cache/quality are attributable to a named prompt composition.
-            "prompt_callsite",
-            "prompt_component_ids",
-            "prompt_static_prefix_hash",
-            "prompt_dynamic_hash",
-        }
-    )
-)
 
 # Orchestrator step events (distinct from LLM client events above)
 # FRE-352: step-level emit uses llm_step_completed to avoid conflating with
@@ -124,9 +90,6 @@ MCP_GATEWAY_STOPPED = "mcp_gateway_stopped"
 MCP_GATEWAY_INIT_FAILED = "mcp_gateway_init_failed"
 MCP_TOOL_DISCOVERED = "mcp_tool_discovered"
 MCP_TOOL_GOVERNANCE_ADDED = "mcp_tool_governance_added"
-
-# Request timing events (FRE-37)
-REQUEST_TIMING = "request_timing"
 
 # Data lifecycle events (Phase 2.3)
 LIFECYCLE_DISK_CHECK = "lifecycle_disk_check"

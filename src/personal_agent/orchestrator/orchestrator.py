@@ -15,7 +15,6 @@ from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import AttachmentRef, ExecutionContext, OrchestratorResult
 from personal_agent.request_gateway.types import GatewayOutput
 from personal_agent.telemetry import get_logger
-from personal_agent.telemetry.request_timer import RequestTimer
 from personal_agent.telemetry.trace import TraceContext
 
 log = get_logger(__name__)
@@ -43,7 +42,6 @@ class Orchestrator:
         mode: Mode | None = None,
         channel: Channel | None = None,
         trace_id: str | None = None,
-        request_timer: RequestTimer | None = None,
         gateway_output: GatewayOutput | None = None,
         user_id: UUID | None = None,
         user_email: str | None = None,
@@ -65,8 +63,6 @@ class Orchestrator:
             channel: Optional communication channel. If None, defaults to CHAT.
             trace_id: Optional trace ID from the entry point (e.g. service/CLI).
                 If provided, used for request-to-reply latency tracing.
-            request_timer: Optional RequestTimer for inline span-based timing.
-                If provided, the orchestrator records timing spans for each phase.
             gateway_output: Optional GatewayOutput from the request gateway pipeline.
                 When present, executor skips inline routing and uses pre-assembled context.
             user_id: Authenticated user UUID — passed through to TaskCapture for
@@ -114,14 +110,13 @@ class Orchestrator:
         else:
             trace_ctx = TraceContext.new_trace(user_id=user_id, session_id=session_id)
 
-        # Create execution context with timer
+        # Create execution context
         ctx = ExecutionContext(
             session_id=session_id,
             trace_id=trace_ctx.trace_id,
             user_message=user_message,
             mode=mode,
             channel=channel,
-            request_timer=request_timer,
             gateway_output=gateway_output,
             user_id=user_id,
             user_email=user_email,

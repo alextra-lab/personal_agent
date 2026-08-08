@@ -26,7 +26,6 @@ from personal_agent.telemetry.events import (
     POLICY_VIOLATION,
     REPLY_READY,
     REQUEST_RECEIVED,
-    REQUEST_TIMING,
     SENSOR_POLL,
     SESSION_CLOSED,
     SESSION_CREATED,
@@ -64,14 +63,12 @@ from personal_agent.telemetry.queries import (
     TaskPatternReport,
     TelemetryQueries,
 )
-from personal_agent.telemetry.request_timer import RequestTimer
 from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 
 __all__ = [
     # Core exports
     "TraceContext",
     "SystemTraceContext",
-    "RequestTimer",
     "get_logger",
     "configure_logging",
     "add_elasticsearch_handler",
@@ -88,7 +85,6 @@ __all__ = [
     "TaskPatternReport",
     # Event constants
     "REQUEST_RECEIVED",
-    "REQUEST_TIMING",
     "REPLY_READY",
     "TASK_STARTED",
     "TASK_COMPLETED",

@@ -64,6 +64,7 @@ dependencies = [
   "pillow>=12.2.0",
   "opentelemetry-sdk>=1.44.0",
   "opentelemetry-exporter-otlp>=1.44.0",
+  "opentelemetry-semantic-conventions==0.65b0",
 ]
 
 [project.scripts]

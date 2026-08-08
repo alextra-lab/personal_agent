@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opentelemetry.trace import StatusCode
 
 from personal_agent.brainstem.mode_manager import ModeManager
 from personal_agent.config.governance_loader import load_governance_config
@@ -125,6 +126,49 @@ async def test_execute_tool_executor_exception(execution_layer, trace_ctx) -> No
     assert result.error is not None
     assert "test error" in result.error.lower()
     assert result.latency_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_marks_span_error_status_on_executor_exception(
+    execution_layer, trace_ctx
+) -> None:
+    """ADR-0129 D3 / FRE-1067: a failed tool call's span records the exception
+    and gets ERROR status — the dispatcher catches the exception and returns
+    a ToolResult rather than re-raising, so the span's failure marking must
+    happen explicitly inside the except block, not rely on start_as_current_span's
+    own automatic exception handling (which only fires when an exception
+    actually propagates out of the `with` block).
+    """
+
+    def failing_executor() -> dict:
+        raise ValueError("boom")
+
+    failing_tool = ToolDefinition(
+        name="failing_tool_2",
+        description="Failing tool",
+        category="read_only",
+        parameters=[],
+        risk_level="low",
+        allowed_modes=["NORMAL"],
+    )
+    execution_layer.registry.register(failing_tool, failing_executor)
+
+    mock_span = MagicMock()
+    mock_span.get_span_context.return_value.span_id = 0xABCDEF
+    mock_cm = MagicMock()
+    mock_cm.__enter__ = MagicMock(return_value=mock_span)
+    mock_cm.__exit__ = MagicMock(return_value=False)
+
+    with patch("personal_agent.tools.executor.tool_call_span", return_value=mock_cm):
+        result = await execution_layer.execute_tool("failing_tool_2", {}, trace_ctx)
+
+    assert result.success is False
+    mock_span.record_exception.assert_called_once()
+    (recorded_exc,) = mock_span.record_exception.call_args.args
+    assert isinstance(recorded_exc, ValueError)
+    mock_span.set_status.assert_called_once()
+    (status_arg,) = mock_span.set_status.call_args.args
+    assert status_arg.status_code == StatusCode.ERROR
 
 
 # FRE-552: assert error-path session_id threading by patching the module

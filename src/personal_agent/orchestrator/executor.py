@@ -9,10 +9,14 @@ import json
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextvars import Token
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
+
+from opentelemetry.context.context import Context
+from opentelemetry.trace import Span
 
 from personal_agent.captains_log.turn_evidence import (
     CandidatePopulation,
@@ -68,6 +72,7 @@ from personal_agent.telemetry import (
     UNKNOWN_STATE,
     get_logger,
 )
+from personal_agent.telemetry.spans import close_step_span, open_step_span
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools import ToolExecutionLayer, get_default_registry
 from personal_agent.tools.registry import ToolRegistry
@@ -2710,6 +2715,15 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
     _disclosure_carrier_token = start_decision_disclosures()
 
     previous_state: TaskState | None = None
+    # ADR-0129 D3 (FRE-1067): the step span. Opened on entry into LLM_CALL and
+    # stays open across the following TOOL_EXECUTION call, if any — model-call
+    # and tool-call spans created inside those two step functions parent onto
+    # it automatically (attaching it makes it the "current" OTel span). Closed
+    # by the try/finally below on every exit that does not continue into
+    # TOOL_EXECUTION, and backstopped by the turn-scoped finally further down
+    # in case an exception escapes this loop entirely.
+    current_step_span: Span | None = None
+    current_step_span_token: Token[Context] | None = None
     async with observe_topology(ctx):
         try:
             while state not in {TaskState.COMPLETED, TaskState.FAILED}:
@@ -2736,8 +2750,28 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     state = TaskState.FAILED
                     break
 
+                if state == TaskState.LLM_CALL and current_step_span is None:
+                    current_step_span, current_step_span_token = open_step_span(
+                        iteration=ctx.tool_iteration_count
+                    )
+                    # A fresh step starts with zero tools dispatched — without this,
+                    # a step_llm_call failure that never reaches step_tool_execution
+                    # would close this step's span carrying a stale count left over
+                    # from a previous round's successful dispatch.
+                    ctx.last_tool_execution_count = 0
+
                 # Execute step function
-                state = await step_func(ctx, session_manager, trace_ctx)
+                try:
+                    state = await step_func(ctx, session_manager, trace_ctx)
+                finally:
+                    if current_step_span is not None and state != TaskState.TOOL_EXECUTION:
+                        assert current_step_span_token is not None  # set together with the span
+                        close_step_span(
+                            current_step_span,
+                            current_step_span_token,
+                            tool_count=ctx.last_tool_execution_count,
+                        )
+                        current_step_span, current_step_span_token = None, None
 
             ctx.state = state
 
@@ -2979,6 +3013,15 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                         component="executor",
                     )
         finally:
+            # ADR-0129 D3 (FRE-1067): backstop — guarantee no step span survives
+            # the turn even if an exception escaped the per-iteration try/finally
+            # above (e.g. raised while `state == TaskState.TOOL_EXECUTION`, which
+            # that finally deliberately leaves open so the exception still
+            # propagates to the outer handler above this block).
+            if current_step_span is not None:
+                assert current_step_span_token is not None  # set together with the span
+                close_step_span(current_step_span, current_step_span_token, tool_count=0)
+
             # ADR-0122 §4 (FRE-930): drop the turn-scoped artifact-builder carrier so
             # no resolution outlives this turn into a later async context (AC-10c).
             reset_artifact_builder_resolution(_builder_carrier_token)
@@ -3361,20 +3404,12 @@ async def step_init(
     Returns:
         Next state (PLANNING or LLM_CALL).
     """
-    timer = ctx.request_timer
-
     # Load session and build message history
     session_message_count = 0
-    if timer:
-        timer.start_span("session_history_load")
-    try:
-        session = session_manager.get_session(ctx.session_id)
-        if session:
-            ctx.messages = list(session.messages)
-            session_message_count = len(ctx.messages)
-    finally:
-        if timer:
-            timer.end_span("session_history_load", message_count=session_message_count)
+    session = session_manager.get_session(ctx.session_id)
+    if session:
+        ctx.messages = list(session.messages)
+        session_message_count = len(ctx.messages)
 
     # FRE-749: Check for pending cloud-attachment confirmation from a previous paused turn
     # and re-inject attachments if the user's message is affirmative.
@@ -3768,42 +3803,31 @@ async def step_init(
     # Apply context window controls before LLM usage to prevent overflow.
     input_messages_count = len(ctx.messages)
     estimated_tokens = 0
-    if timer:
-        timer.start_span("context_window")
-    try:
-        # ADR-0081 §D3 Decision 4: under the frozen append-only layout the transient
-        # re-derivation (re-inserting a popped summary at a fixed index every turn)
-        # is a cache-buster, so it is gone — compaction is the scheduled reset below
-        # and apply_context_window keeps only its pure truncation role. (The legacy
-        # pre-ADR-0081 compression_manager summary path was retired with the
-        # cache_frozen_layout_enabled flag — FRE-941.)
-        ctx.messages = apply_context_window(
-            ctx.messages,
-            # FRE-972: the session's selected-model window, not the static
-            # local-Qwen budget — a larger-window cloud primary must not be
-            # truncated as if it only had settings.context_window_max_tokens.
-            max_tokens=_resolve_context_max(),
-            strategy=settings.conversation_context_strategy,
-            trace_id=ctx.trace_id,
-            session_id=ctx.session_id,
-            compressed_summary=None,
-        )
+    # ADR-0081 §D3 Decision 4: under the frozen append-only layout the transient
+    # re-derivation (re-inserting a popped summary at a fixed index every turn)
+    # is a cache-buster, so it is gone — compaction is the scheduled reset below
+    # and apply_context_window keeps only its pure truncation role. (The legacy
+    # pre-ADR-0081 compression_manager summary path was retired with the
+    # cache_frozen_layout_enabled flag — FRE-941.)
+    ctx.messages = apply_context_window(
+        ctx.messages,
+        # FRE-972: the session's selected-model window, not the static
+        # local-Qwen budget — a larger-window cloud primary must not be
+        # truncated as if it only had settings.context_window_max_tokens.
+        max_tokens=_resolve_context_max(),
+        strategy=settings.conversation_context_strategy,
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        compressed_summary=None,
+    )
 
-        # ADR-0081 §D3: cache-aware compaction scheduler. When the run reaches the
-        # cost/quality optimum (or the token ceiling), compact to a frozen reset
-        # that re-establishes a reusable prefix; otherwise hold (history stays a
-        # strict forward extension). No-op when the flag is off.
-        await _maybe_frozen_reset(ctx)
+    # ADR-0081 §D3: cache-aware compaction scheduler. When the run reaches the
+    # cost/quality optimum (or the token ceiling), compact to a frozen reset
+    # that re-establishes a reusable prefix; otherwise hold (history stays a
+    # strict forward extension). No-op when the flag is off.
+    await _maybe_frozen_reset(ctx)
 
-        estimated_tokens = estimate_messages_tokens(ctx.messages)
-    finally:
-        if timer:
-            timer.end_span(
-                "context_window",
-                messages_in=input_messages_count,
-                messages_out=len(ctx.messages),
-                estimated_tokens=estimated_tokens,
-            )
+    estimated_tokens = estimate_messages_tokens(ctx.messages)
 
     _emit_conversation_context_loaded(
         ctx,
@@ -3815,8 +3839,6 @@ async def step_init(
 
     # Query memory graph for relevant context (Phase 2.2)
     if settings.enable_memory_graph:
-        if timer:
-            timer.start_span("memory_query")
         try:
             from personal_agent.memory.models import MemoryQuery
             from personal_agent.memory.service import MemoryService
@@ -3998,12 +4020,6 @@ async def step_init(
                 if memory_service != global_memory_service:
                     await memory_service.disconnect()
 
-                if timer:
-                    timer.end_span(
-                        "memory_query",
-                        entities_searched=len(potential_entities) if potential_entities else 0,
-                        conversations_found=conversations_found,
-                    )
             elif is_memory_recall_query(ctx.user_message):
                 # Broad recall intent without a connected MemoryService (e.g. Neo4j
                 # used only by second_brain). Still emit telemetry so eval/harness
@@ -4015,24 +4031,10 @@ async def step_init(
                     entities_found=0,
                     skipped_reason="memory_service_unavailable",
                 )
-                if timer:
-                    timer.end_span(
-                        "memory_query",
-                        entities_searched=0,
-                        conversations_found=0,
-                    )
             else:
                 # Memory graph enabled but service not connected and not a recall-only path.
-                if timer:
-                    timer.end_span(
-                        "memory_query",
-                        entities_searched=0,
-                        conversations_found=0,
-                        skipped_reason="memory_service_unavailable",
-                    )
+                pass
         except Exception as e:
-            if timer:
-                timer.end_span("memory_query", error=str(e))
             log.warning(
                 "memory_enrichment_failed",
                 trace_id=ctx.trace_id,
@@ -4086,9 +4088,6 @@ async def step_llm_call(
     Returns:
         Next state (TOOL_EXECUTION, SYNTHESIS, or FAILED).
     """
-    timer = ctx.request_timer
-    llm_span_name: str | None = None  # set once span is started; used to close span on exception
-
     # ADR-0061 — within-session hard trigger.  Fires synchronously when the
     # working messages list crosses the hard threshold (default 0.85 of the
     # context window).  Layers above Stage 7 (which runs at request entry);
@@ -4725,11 +4724,6 @@ async def step_llm_call(
                 for msg in request_messages
             ],
         )
-        # Timer span
-        llm_span_name = f"llm_call:{model_role.value}"
-        if timer:
-            timer.start_span(llm_span_name)
-
         from personal_agent.llm_client.concurrency import InferencePriority
         from personal_agent.llm_client.prompt_identity import derive_prompt_identity
 
@@ -4806,8 +4800,6 @@ async def step_llm_call(
                 span_id=span_id,
                 budget_seconds=settings.orchestrator_task_timeout_seconds,
             )
-            if timer and llm_span_name:
-                timer.end_span(llm_span_name, reason="deadline_exceeded_before_call")
             _stop_turn_for_deadline(ctx)
             # ADR-0074 §I3: pair the STEP_PLANNING_STARTED emitted above this try
             # with a completion, matching the success/error exits below.
@@ -4871,8 +4863,6 @@ async def step_llm_call(
                 span_id=span_id,
                 budget_seconds=settings.orchestrator_task_timeout_seconds,
             )
-            if timer and llm_span_name:
-                timer.end_span(llm_span_name, reason="deadline_exceeded_mid_call")
             _stop_turn_for_deadline(ctx)
             # ADR-0074 §I3: pair the STEP_PLANNING_STARTED emitted above this try
             # with a completion, matching the success/error exits below.
@@ -4908,15 +4898,6 @@ async def step_llm_call(
         # turn.model_call_completed events. Report progress so tool/context refresh.
         ctx.turn_cost_usd += float(response.get("cost_usd") or 0.0)
         await _report_turn_progress(ctx)
-
-        if timer:
-            timer.end_span(
-                llm_span_name,
-                model_role=model_role.value,
-                tokens=total_tokens,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-            )
 
         log.info(
             LLM_STEP_COMPLETED,
@@ -5092,13 +5073,6 @@ async def step_llm_call(
 
     except Exception as e:
         duration_ms = int((time.time() - step_start_time) * 1000)
-        if timer and llm_span_name:
-            timer.end_span(
-                llm_span_name,
-                model_role=model_role.value,
-                error=str(e),
-                error_type=type(e).__name__,
-            )
         log.error(
             MODEL_CALL_ERROR,
             trace_id=ctx.trace_id,
@@ -5208,8 +5182,12 @@ async def step_tool_execution(
     Returns:
         Next state (LLM_CALL for synthesis, or FAILED on error).
     """
-    timer = ctx.request_timer
-    step_start_time = time.time()
+    # Reset before any early-return path — the driver loop's step-span closure
+    # reads this back once this function returns something other than
+    # TOOL_EXECUTION, and a stale nonzero value from a *previous* round's
+    # successful dispatch must not survive onto this round's (possibly
+    # zero-tool) exit.
+    ctx.last_tool_execution_count = 0
 
     # ADR-0076: Stop button checkpoint — if the user cancelled mid-turn,
     # synthesize from results gathered so far instead of running more tools.
@@ -5217,11 +5195,6 @@ async def step_tool_execution(
         await _emit_turn_cancelled(session_id=ctx.session_id, trace_id=ctx.trace_id)
         ctx.force_synthesis_from_limit = True
         return TaskState.LLM_CALL
-
-    tool_span_name: str | None = None
-    if timer:
-        tool_span_name = f"tool_execution:{ctx.tool_iteration_count + 1}"
-        timer.start_span(tool_span_name)
 
     # Loop governance: prevent infinite tool execution cycles
     ctx.tool_iteration_count += 1
@@ -5268,12 +5241,6 @@ async def step_tool_execution(
             )
             # Fall through to execute the pending tool calls under the raised limit.
         else:
-            if timer and tool_span_name:
-                timer.end_span(
-                    tool_span_name,
-                    reason="iteration_limit",
-                    iteration=ctx.tool_iteration_count,
-                )
             ctx.steps.append(
                 {
                     "type": "warning",
@@ -5290,17 +5257,10 @@ async def step_tool_execution(
             return TaskState.LLM_CALL
 
     # Get tool execution layer
-    try:
-        tool_layer = _get_tool_execution_layer()
-    except Exception as e:
-        if timer and tool_span_name:
-            timer.end_span(tool_span_name, error=str(e), error_type=type(e).__name__)
-        raise
+    tool_layer = _get_tool_execution_layer()
 
     # Extract tool calls from the last assistant message
     if not ctx.messages:
-        if timer and tool_span_name:
-            timer.end_span(tool_span_name, error="no_messages_for_tool_execution")
         log.error(
             "no_messages_for_tool_execution",
             trace_id=ctx.trace_id,
@@ -5311,8 +5271,6 @@ async def step_tool_execution(
 
     last_message = ctx.messages[-1]
     if last_message.get("role") != "assistant":
-        if timer and tool_span_name:
-            timer.end_span(tool_span_name, error="last_message_not_assistant")
         log.error(
             "last_message_not_assistant",
             trace_id=ctx.trace_id,
@@ -5324,8 +5282,6 @@ async def step_tool_execution(
     # Extract tool calls (OpenAI format)
     tool_calls = last_message.get("tool_calls", [])
     if not tool_calls:
-        if timer and tool_span_name:
-            timer.end_span(tool_span_name, reason="no_tool_calls_in_message")
         log.warning(
             "no_tool_calls_in_message",
             trace_id=ctx.trace_id,
@@ -5625,22 +5581,11 @@ async def step_tool_execution(
     # Append all tool results to messages (digested in place above when enabled).
     ctx.messages.extend(tool_results)
 
-    duration_ms = int((time.time() - step_start_time) * 1000)
-
-    tool_names = [tc.get("function", {}).get("name", "unknown") for tc in tool_calls]
-    if timer and tool_span_name:
-        timer.end_span(
-            tool_span_name,
-            tool_count=len(tool_calls),
-            tool_names=tool_names,
-        )
-
-    log.info(
-        "tool_execution_completed",
-        trace_id=ctx.trace_id,
-        tool_count=len(tool_calls),
-        duration_ms=duration_ms,
-    )
+    # ADR-0129 D3 / AC-5: this step's tool count moves onto the step span as an
+    # attribute (set by the driver loop's close_step_span call) instead of a
+    # separate "tool_execution_completed" log record — the parent-with-no-span_id
+    # duplication D3 collapses. See ExecutionContext.last_tool_execution_count.
+    ctx.last_tool_execution_count = len(tool_calls)
 
     # FRE-402: a tool declared a non-recoverable (terminal) failure — short-circuit
     # the reasoning loop instead of routing the error back through the model (which
@@ -5699,40 +5644,25 @@ async def step_synthesis(
     Returns:
         Terminal state (COMPLETED).
     """
-    timer = ctx.request_timer
-    if timer:
-        timer.start_span("synthesis")
+    # Ensure final reply is set (should already be set from LLM call)
+    if not ctx.final_reply:
+        ctx.final_reply = "Task completed"  # Fallback
 
-    try:
-        # Ensure final reply is set (should already be set from LLM call)
-        if not ctx.final_reply:
-            ctx.final_reply = "Task completed"  # Fallback
+    # ADR-0101 §6 / FRE-690: guardrail alterations (downscale/drop) are disclosed
+    # in the response, deterministically — never left to the model to relay.
+    # FRE-928 AC-3 extends the same rule to a constraint default applied without a
+    # user decision: silence is what made the first occurrence invisible.
+    from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
+        get_decision_disclosures,
+    )
 
-        # ADR-0101 §6 / FRE-690: guardrail alterations (downscale/drop) are disclosed
-        # in the response, deterministically — never left to the model to relay.
-        # FRE-928 AC-3 extends the same rule to a constraint default applied without a
-        # user decision: silence is what made the first occurrence invisible.
-        from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
-            get_decision_disclosures,
-        )
+    all_disclosures = list(ctx.attachment_disclosures) + get_decision_disclosures()
+    if all_disclosures:
+        disclosure_text = "\n\n".join(f"Note: {d}" for d in all_disclosures)
+        ctx.final_reply = f"{ctx.final_reply}\n\n{disclosure_text}"
 
-        all_disclosures = list(ctx.attachment_disclosures) + get_decision_disclosures()
-        if all_disclosures:
-            disclosure_text = "\n\n".join(f"Note: {d}" for d in all_disclosures)
-            ctx.final_reply = f"{ctx.final_reply}\n\n{disclosure_text}"
-
-        # Update session with new messages
-        if timer:
-            timer.start_span("session_update")
-        try:
-            session_manager.update_session(ctx.session_id, messages=ctx.messages)
-        finally:
-            if timer:
-                timer.end_span("session_update")
-    finally:
-        if timer:
-            reply = ctx.final_reply or ""
-            timer.end_span("synthesis", reply_length=len(reply))
+    # Update session with new messages
+    session_manager.update_session(ctx.session_id, messages=ctx.messages)
 
     return TaskState.COMPLETED
 

@@ -13,30 +13,8 @@ from personal_agent.security import sanitize_error_message
 from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.telemetry import get_logger
-from personal_agent.telemetry.es_handler import ElasticsearchHandler
 
 log = get_logger(__name__)
-
-
-def build_request_trace_es_handler(es_handler: ElasticsearchHandler | None) -> Any:
-    """Build handler that indexes request trace from ``RequestCompletedEvent``."""
-
-    async def handler(event: EventBase) -> None:
-        if not isinstance(event, RequestCompletedEvent):
-            return
-        if event.eval_mode:
-            return
-        if not es_handler or not getattr(es_handler, "_connected", False):
-            return
-        await es_handler.es_logger.index_request_trace_from_snapshot(
-            trace_id=event.trace_id,
-            trace_summary=event.trace_summary,
-            trace_breakdown=event.trace_breakdown,
-            session_id=event.session_id,
-            user_id=event.user_id,
-        )
-
-    return handler
 
 
 def build_session_writer_handler() -> Any:

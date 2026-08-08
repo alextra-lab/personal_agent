@@ -19,7 +19,6 @@ from personal_agent.observability.route_trace.assembler import (
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult
 from personal_agent.request_gateway.types import Complexity, DecompositionStrategy, TaskType
-from personal_agent.telemetry.request_timer import RequestTimer
 
 
 def _gateway_output() -> SimpleNamespace:
@@ -38,8 +37,6 @@ def _gateway_output() -> SimpleNamespace:
 
 def _base_ctx(**overrides: object) -> SimpleNamespace:
     """Build a populated ctx stand-in; override individual attributes per test."""
-    timer = RequestTimer(trace_id="t")
-    timer.record_instant("llm_call:primary")
     defaults: dict[str, object] = dict(
         trace_id=str(uuid4()),
         session_id=str(uuid4()),
@@ -56,7 +53,6 @@ def _base_ctx(**overrides: object) -> SimpleNamespace:
         expansion_phase_results=[],
         expansion_strategy=None,
         final_reply="Here is what you said.",
-        request_timer=timer,
         turn_cost_usd=0.01,
         error=None,
         classified_error=None,
@@ -93,8 +89,10 @@ def test_full_population_maps_fields() -> None:
     assert row.orchestration_event == "primary_handled"
     assert row.fallback_triggered is False
     assert row.final_reply_chars == len("Here is what you said.")
-    assert row.latency_total_ms is not None
-    assert row.latency_breakdown is not None
+    # ADR-0129 D3 / FRE-1067: RequestTimer is retired — these two fields have
+    # no source and are always None going forward (Postgres schema unchanged).
+    assert row.latency_total_ms is None
+    assert row.latency_breakdown is None
     assert row.pedagogical_outcomes is None
 
 
@@ -129,12 +127,6 @@ def test_none_gateway_output_yields_unknown_label() -> None:
     assert row.decomposition_strategy is None
     assert row.gateway_label == "unknown/unknown"
     assert row.orchestration_event == "primary_handled"  # no subs → still classifiable
-
-
-def test_none_request_timer_yields_no_latency() -> None:
-    row = _assemble(_base_ctx(request_timer=None))
-    assert row.latency_total_ms is None
-    assert row.latency_breakdown is None
 
 
 def test_none_model_role_pre_llm() -> None:

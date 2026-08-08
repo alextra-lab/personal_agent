@@ -20,6 +20,7 @@ from uuid import UUID, uuid4
 
 import litellm
 import structlog
+from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as gen_ai
 
 from personal_agent.llm_client.prompt_identity import (
     PromptIdentity,
@@ -29,6 +30,7 @@ from personal_agent.llm_client.telemetry import (
     emit_model_call_completed,
     emit_model_call_started,
 )
+from personal_agent.telemetry.spans import model_call_span
 
 if TYPE_CHECKING:
     from personal_agent.llm_client.types import LLMResponse, ModelRole, ToolCall
@@ -544,128 +546,146 @@ class LiteLLMClient:
 
         start_time = time.monotonic()
 
-        # ADR-0074 §I2: canonical model_call_started emission (parity with
-        # LocalLLMClient). Mint the model-call span here so a single span_id
-        # threads through started → completed for joinability.
-        _span_ctx, span_id = trace_ctx.new_span()
-        emit_model_call_started(
-            log=log,
-            role=role.value,
-            model=self._litellm_model,
-            endpoint=self.provider,
-            provider=self.provider,
-            trace_ctx=trace_ctx,
-            span_id=span_id,
-            extra={
-                "budget_role": self.budget_role,
-                "reservation_amount_usd": float(reservation_amount),
-                "max_tokens": effective_max_tokens,
-            },
-        )
-        try:
-            response = await litellm.acompletion(**litellm_kwargs)
-        except asyncio.CancelledError:
-            # FRE-973: a turn-level wall-clock deadline (asyncio.wait_for in the
-            # executor's step_llm_call) cancels this call directly. CancelledError
-            # is a BaseException, not an Exception, so it would otherwise skip the
-            # except Exception below entirely and leak this reservation until the
-            # cost-gate reaper sweeps it at TTL. Resolve it the same as any other
-            # failed exit, then propagate the cancellation — never swallow it.
-            try:
-                await gate.refund(reservation_id, trace_id=trace_id)
-            except Exception as refund_exc:  # noqa: BLE001
-                log.error(
-                    "litellm_refund_after_cancel_failed",
-                    trace_id=trace_id,
-                    session_id=trace_ctx.session_id,
-                    reservation_id=str(reservation_id),
-                    error=str(refund_exc),
-                )
-            raise
-        except Exception as e:
-            # Refund the reservation so the counter doesn't leak headroom.
-            try:
-                await gate.refund(reservation_id, trace_id=trace_id)
-            except Exception as refund_exc:  # noqa: BLE001
-                log.error(
-                    "litellm_refund_after_failure_failed",
-                    trace_id=trace_id,
-                    session_id=trace_ctx.session_id,
-                    reservation_id=str(reservation_id),
-                    error=str(refund_exc),
-                )
-            log.error(
-                "litellm_request_failed",
+        # ADR-0129 D3 / FRE-1067: the model-call span wraps ONLY the provider
+        # call + response parsing (through usage extraction) — deliberately
+        # narrower than the full function, matching the pre-existing
+        # start_time/elapsed stopwatch boundary exactly. Budget-gate
+        # settlement and the durable cost_tracker write below are real I/O
+        # unrelated to model-call duration; including them would make the
+        # span's duration diverge from api_costs.latency_ms beyond ADR-0129
+        # AC-4's 10% reconciliation tolerance. span_id is captured before the
+        # `with` exits so emit_model_call_completed can use it further down.
+        with model_call_span(
+            role=role.value, model=self._litellm_model, provider=self.provider
+        ) as _model_span:
+            span_id = format(_model_span.get_span_context().span_id, "016x")
+            # ADR-0074 §I2: canonical model_call_started emission (parity with
+            # LocalLLMClient).
+            emit_model_call_started(
+                log=log,
+                role=role.value,
                 model=self._litellm_model,
-                trace_id=trace_id,
-                session_id=trace_ctx.session_id,
-                error=str(e),
-                exc_info=True,
+                endpoint=self.provider,
+                provider=self.provider,
+                trace_ctx=trace_ctx,
+                span_id=span_id,
+                extra={
+                    "budget_role": self.budget_role,
+                    "reservation_amount_usd": float(reservation_amount),
+                    "max_tokens": effective_max_tokens,
+                },
             )
-            raise LLMClientError(f"LiteLLM call failed: {e}") from e
-
-        elapsed = time.monotonic() - start_time
-        latency_ms = int(elapsed * 1000)
-
-        # Extract response data (litellm returns OpenAI-format ModelResponse)
-        choice = response.choices[0]
-        message = choice.message
-        content: str = message.content or ""
-
-        # Parse tool calls
-        tool_calls: list[ToolCall] = []
-        if message.tool_calls:
-            for tc in message.tool_calls:
-                tool_calls.append(
-                    ToolCallType(
-                        id=tc.id or str(uuid4()),
-                        name=tc.function.name,
-                        arguments=tc.function.arguments,
+            try:
+                response = await litellm.acompletion(**litellm_kwargs)
+            except asyncio.CancelledError:
+                # FRE-973: a turn-level wall-clock deadline (asyncio.wait_for in the
+                # executor's step_llm_call) cancels this call directly. CancelledError
+                # is a BaseException, not an Exception, so it would otherwise skip the
+                # except Exception below entirely and leak this reservation until the
+                # cost-gate reaper sweeps it at TTL. Resolve it the same as any other
+                # failed exit, then propagate the cancellation — never swallow it.
+                try:
+                    await gate.refund(reservation_id, trace_id=trace_id)
+                except Exception as refund_exc:  # noqa: BLE001
+                    log.error(
+                        "litellm_refund_after_cancel_failed",
+                        trace_id=trace_id,
+                        session_id=trace_ctx.session_id,
+                        reservation_id=str(reservation_id),
+                        error=str(refund_exc),
                     )
+                raise
+            except Exception as e:
+                # Refund the reservation so the counter doesn't leak headroom.
+                try:
+                    await gate.refund(reservation_id, trace_id=trace_id)
+                except Exception as refund_exc:  # noqa: BLE001
+                    log.error(
+                        "litellm_refund_after_failure_failed",
+                        trace_id=trace_id,
+                        session_id=trace_ctx.session_id,
+                        reservation_id=str(reservation_id),
+                        error=str(refund_exc),
+                    )
+                log.error(
+                    "litellm_request_failed",
+                    model=self._litellm_model,
+                    trace_id=trace_id,
+                    session_id=trace_ctx.session_id,
+                    error=str(e),
+                    exc_info=True,
                 )
+                raise LLMClientError(f"LiteLLM call failed: {e}") from e
 
-        # Usage — extract base tokens plus provider-specific cache fields
-        usage: dict[str, Any] = {}
-        if response.usage:
-            usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            }
+            elapsed = time.monotonic() - start_time
+            latency_ms = int(elapsed * 1000)
 
-            # Anthropic: explicit cache_control headers → cache_creation / cache_read fields
-            cache_read = getattr(response.usage, "cache_read_input_tokens", None)
-            cache_write = getattr(response.usage, "cache_creation_input_tokens", None)
-            if cache_read is not None:
-                usage["cache_read_input_tokens"] = cache_read
-            if cache_write is not None:
-                usage["cache_creation_input_tokens"] = cache_write
+            # Extract response data (litellm returns OpenAI-format ModelResponse)
+            choice = response.choices[0]
+            message = choice.message
+            content: str = message.content or ""
 
-            # OpenAI: automatic server-side caching → prompt_tokens_details.cached_tokens
-            # (gpt-4o, gpt-4o-mini, o1, and newer models; no client headers needed)
-            prompt_details = getattr(response.usage, "prompt_tokens_details", None)
-            if prompt_details is not None:
-                openai_cached = getattr(prompt_details, "cached_tokens", None)
-                if openai_cached is not None and openai_cached > 0:
-                    # Use the same field so the log line is uniform across providers
-                    usage["cache_read_input_tokens"] = (
-                        usage.get("cache_read_input_tokens", 0) + openai_cached
+            # Parse tool calls
+            tool_calls: list[ToolCall] = []
+            if message.tool_calls:
+                for tc in message.tool_calls:
+                    tool_calls.append(
+                        ToolCallType(
+                            id=tc.id or str(uuid4()),
+                            name=tc.function.name,
+                            arguments=tc.function.arguments,
+                        )
                     )
 
-            # FRE-766: reasoning-token count from the reasoning models (GPT-5 family
-            # via litellm). Defensive across shapes — completion_tokens_details may be a
-            # provider object (attribute) or a dict; left absent (never 0/None-forced)
-            # when the provider omits it (e.g. Claude adaptive thinking) so the eval
-            # never treats "missing" as "zero reasoning".
-            completion_details = getattr(response.usage, "completion_tokens_details", None)
-            if completion_details is not None:
-                reasoning_tokens = (
-                    completion_details.get("reasoning_tokens")
-                    if isinstance(completion_details, dict)
-                    else getattr(completion_details, "reasoning_tokens", None)
-                )
-                if reasoning_tokens is not None:
-                    usage["reasoning_tokens"] = reasoning_tokens
+            # Usage — extract base tokens plus provider-specific cache fields
+            usage: dict[str, Any] = {}
+            if response.usage:
+                usage = {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                }
+
+                # Anthropic: explicit cache_control headers → cache_creation / cache_read fields
+                cache_read = getattr(response.usage, "cache_read_input_tokens", None)
+                cache_write = getattr(response.usage, "cache_creation_input_tokens", None)
+                if cache_read is not None:
+                    usage["cache_read_input_tokens"] = cache_read
+                if cache_write is not None:
+                    usage["cache_creation_input_tokens"] = cache_write
+
+                # OpenAI: automatic server-side caching → prompt_tokens_details.cached_tokens
+                # (gpt-4o, gpt-4o-mini, o1, and newer models; no client headers needed)
+                prompt_details = getattr(response.usage, "prompt_tokens_details", None)
+                if prompt_details is not None:
+                    openai_cached = getattr(prompt_details, "cached_tokens", None)
+                    if openai_cached is not None and openai_cached > 0:
+                        # Use the same field so the log line is uniform across providers
+                        usage["cache_read_input_tokens"] = (
+                            usage.get("cache_read_input_tokens", 0) + openai_cached
+                        )
+
+                # FRE-766: reasoning-token count from the reasoning models (GPT-5 family
+                # via litellm). Defensive across shapes — completion_tokens_details may be a
+                # provider object (attribute) or a dict; left absent (never 0/None-forced)
+                # when the provider omits it (e.g. Claude adaptive thinking) so the eval
+                # never treats "missing" as "zero reasoning".
+                completion_details = getattr(response.usage, "completion_tokens_details", None)
+                if completion_details is not None:
+                    reasoning_tokens = (
+                        completion_details.get("reasoning_tokens")
+                        if isinstance(completion_details, dict)
+                        else getattr(completion_details, "reasoning_tokens", None)
+                    )
+                    if reasoning_tokens is not None:
+                        usage["reasoning_tokens"] = reasoning_tokens
+
+            _model_span.set_attribute(
+                gen_ai.GEN_AI_USAGE_INPUT_TOKENS, usage.get("prompt_tokens", 0)
+            )
+            _model_span.set_attribute(
+                gen_ai.GEN_AI_USAGE_OUTPUT_TOKENS, usage.get("completion_tokens", 0)
+            )
 
         # Cost tracking — reconcile via litellm.completion_cost(), guarded so an
         # unmapped dated response id can't silently commit $0 (ADR-0101 §8b AC-11).
@@ -773,7 +793,6 @@ class LiteLLMClient:
             provider=self.provider,
             trace_ctx=trace_ctx,
             span_id=span_id,
-            latency_ms=latency_ms,
             input_tokens=_input_tokens,
             output_tokens=_output_tokens,
             prompt_identity=_identity,

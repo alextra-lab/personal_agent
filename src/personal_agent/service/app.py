@@ -1494,12 +1494,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # API-level TracerProvider has no shutdown() — only the SDK one does,
         # and the global provider is a no-op SDK-less stub when tracing was
         # never bootstrapped (e.g. some test apps) — guard with isinstance.
+        # shutdown() blocks synchronously on the network export (up to
+        # OTEL_BSP_EXPORT_TIMEOUT, default 30s) — dispatch via to_thread so a
+        # slow/unreachable Collector cannot stall the event loop and delay the
+        # ES drain below.
         from opentelemetry import trace as otel_trace
         from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
 
         _tracer_provider = otel_trace.get_tracer_provider()
         if isinstance(_tracer_provider, SDKTracerProvider):
-            _tracer_provider.shutdown()
+            await asyncio.to_thread(_tracer_provider.shutdown)
 
         log.info("service_stopped")
     finally:

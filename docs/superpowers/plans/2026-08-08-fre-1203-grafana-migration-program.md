@@ -134,24 +134,53 @@ never going to have, and nothing distinguishes "no data" from "wrong field."
 |---|---|
 | `metrics` table | **No live write path.** `MetricsRepository` is never instantiated outside its own module (`docs/reference/POSTGRES_SCHEMA_DEBT_AUDIT.md`). A panel on it renders empty forever and looks like a query bug. |
 | `session_events` table | Purged at 24h (`ws_event_ttl_hours`). Cannot back anything long-horizon; invalid as a denominator. |
-| `sysgraph.*` schema | **Isolated by ADR-0105 AC-2** — `seshat_app` and `recall_role` are both explicitly denied `USAGE`, and the isolation is *proven* by a permission-denied test. See §3.2. |
+| ~~`sysgraph.*` schema~~ | **No longer forbidden — owner ruled 2026-08-08 to expose it read-only.** `grafana_ro` gets `USAGE` + `SELECT`; `seshat_app` and `recall_role` stay denied and their permission-denied proof is untouched. See §3.2. |
 | ES cost events for **aggregate** cost | Carries neither purpose nor token counts; up to 83% loss. Use `api_costs`. |
 | `request_trace` / `request_trace_step` | Dead since 2026-06-07. 6 panels currently query it. |
 
-### 3.2 Open decision for the owner — sysgraph exposure
+### 3.2 sysgraph exposure — owner ruled 2026-08-08: **expose it**
 
-Earlier in session I proposed a single "proposals detected vs promoted" panel. **That would breach
-ADR-0105 AC-2's isolation posture.** Three options, and this plan does not pick one:
+The question was whether `grafana_ro` may read `sysgraph.*`, given ADR-0105 AC-2's isolation posture.
 
-- **(a) Leave sysgraph unexposed.** `grafana_ro` gets nothing on the schema; the panel isn't built.
-  Zero risk, keeps the proven boundary intact. **Recommended** — the signal is low-volume and can be
-  read by hand.
-- **(b) Grant `grafana_ro` SELECT on `sysgraph.stat` and `sysgraph.proposal` only.** Needs an ADR-0105
-  amendment saying the isolation is against *the app path*, not against a read-only BI role.
-- **(c) Project the two counts into a `public` table** via the same job as T6. No grant needed, no
-  amendment; costs a little machinery.
+**Owner ruling:** *"Yes. I am the only person who uses the platform. It is secured by Cloudflare."*
 
-**T5 assumes (a) until the owner rules.**
+**The premise was verified rather than taken on trust** (2026-08-08, on the VPS):
+
+```
+cloud-sim-grafana   127.0.0.1:3003->3000/tcp
+cloud-sim-kibana    127.0.0.1:5601->5601/tcp
+elasticsearch       127.0.0.1:9200
+```
+
+Every substrate and UI is **loopback-bound**; the only `0.0.0.0` listeners are the PWA's next-server on
+3001/3002. Grafana is reachable exactly two ways — the `observe` Cloudflare tunnel behind a Zero Trust
+Access policy scoped to the owner, or an SSH tunnel. **The anonymous-`Viewer` exposure concern was
+always "who can reach Grafana at all," and the answer is: the owner, authenticated.**
+
+**What this does and does not change about ADR-0105.** AC-2's isolation exists to stop the *application
+path* conflating the System graph with the user KG (the ADR-0106 boundary). A read-only observer is not
+the application path. So:
+
+- **`seshat_app` and `recall_role` stay denied.** The existing permission-denied proof is untouched —
+  granting a *different* role changes nothing about what those two can reach, and **no existing test
+  breaks.** This is worth stating explicitly because it is the reason the grant is safe.
+- **`grafana_ro` gets `USAGE ON SCHEMA sysgraph` + `SELECT` on its tables**, and nothing else. Read-only,
+  by a role with no write privilege anywhere.
+- **ADR-0105 needs an amendment** stating the boundary precisely: isolation is against the *write/recall
+  path*, not against a read-only observer. Folded into T8b (FRE-1213), which is already amending ADRs.
+
+**What it unlocks** — the panels §3.2 previously ruled out, added to T6:
+
+- **Proposals detected vs promoted.** `sysgraph.proposal` holds 26 proposals since 2026-07-07, one
+  (`statistical_detector` / `performance`) with `seen_count` **167** — the same problem re-detected 167
+  times. A panel showing detected-vs-promoted with recurrence would have read this months ago.
+- **The provenance gap.** `derives_from`, `promoted_to`, `produced`, `correlates_with`, `influence` and
+  `signal` are **0 rows each**, though `proposal` (26) and `stat` (1,302) both have data — not one
+  proposal links to the statistic that produced it. A single "proposals with provenance" panel makes
+  that visible continuously instead of on audit.
+
+*(Correction carried forward from session: `sysgraph.ticket` being 0 is Linear-side suppression, not a
+dead pipeline. The provenance gap is the real finding and is what the panel should show.)*
 
 ---
 
@@ -288,9 +317,19 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro;
 ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public
     GRANT SELECT ON TABLES TO grafana_ro;
 
--- Intentionally NO grant on schema sysgraph — ADR-0105 AC-2 isolation holds against
--- this role exactly as it does against seshat_app and recall_role.
+-- sysgraph: read-only observation, owner ruling 2026-08-08 (see §3.2). ADR-0105 AC-2's
+-- isolation is against the application write/recall path, NOT against a read-only
+-- observer -- seshat_app and recall_role remain denied and their permission-denied
+-- proof is untouched by this grant.
+GRANT USAGE ON SCHEMA sysgraph TO grafana_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA sysgraph TO grafana_ro;
+ALTER DEFAULT PRIVILEGES FOR ROLE sysgraph_role IN SCHEMA sysgraph
+    GRANT SELECT ON TABLES TO grafana_ro;
 ```
+
+**Note the second `ALTER DEFAULT PRIVILEGES` names `sysgraph_role`, not `agent`.** `sysgraph` objects are
+created under `SET ROLE sysgraph_role` (migration `0014`'s stated convention), so a default-privileges
+grant `FOR ROLE agent` would silently miss every future table there.
 
 Mirror the same block into `docker/postgres/init.sql` (fresh installs only run init.sql).
 Apply: `psql $AGENT_DATABASE_ADMIN_URL -f docker/postgres/migrations/0025_grafana_readonly_role.sql`
@@ -589,6 +628,13 @@ Ten panels on `pg-ledger`, tagged `grafana-native`:
 8. Duplicate-group and type-disagreement counts.
 9. Turns-without-entities rate.
 10. Growth per active day.
+11. **Proposals detected vs promoted, with recurrence** — direct from `sysgraph.proposal` (owner ruling
+    §3.2 makes this reachable). 26 proposals since 2026-07-07, one with `seen_count` 167. This panel
+    would have read the recurrence months ago.
+12. **Proposals with provenance** — the count of `sysgraph.proposal` rows having any `derives_from` edge.
+    **It reads 0 of 26 today**: `derives_from`, `promoted_to`, `produced`, `correlates_with`, `influence`
+    and `signal` are all empty despite `proposal` (26) and `stat` (1,302) both holding data. Not one
+    proposal links to the statistic that produced it.
 
 **Two limits to state honestly on the dashboard, not paper over:**
 - **Access-over-time (day × hour) is impossible.** Only the *last* access survives; every prior one is
@@ -659,8 +705,10 @@ D6 currently records the owner's 2026-08-07 ruling verbatim (*"I accept maintain
 Grafana has shown its superior functionality"*) and states retirement is **deferred**. The 2026-08-08
 directive supersedes it. A **Status Update** records the new ruling in the owner's words, exactly as
 FRE-1193 did in the other direction. Also:
-- `:140` — *"The `monitoring` host stays pointed at Kibana"* inverts.
-- **AC-10(e) becomes false** if `monitoring` is repointed and must be rewritten.
+- `:140` — *"The `monitoring` host stays pointed at Kibana"* inverts, as a **statement of record only**.
+  The repoint itself is the owner's, outside this program (T9 step 8).
+- **AC-10(e)** reads the *live* `monitoring` route. Once Kibana is gone that criterion has no subject, so
+  **retire it** rather than rewriting it to describe a route this program does not own.
 - **Do not resurrect the 551 MiB argument.** It was withdrawn and corrected in place: Kibana measures
   562.6 MiB against a 1 GiB cap with 6.0 GiB available. Running both was affordable; the retirement
   rests on Grafana's demonstrated superiority, which is what T3–T6 establish.
@@ -714,9 +762,10 @@ Ordered by risk, from the full inventory:
    `scripts/eval/recovery_survey.py:435`.
 7. **Docs**: `README.md`, the three `docs/guides/KIBANA_*.md`, `docs/reference/*`,
    `docs/skills/query-elasticsearch.md`. Leave dated research/plan records alone — they are history.
-8. **Runbook, not diff** — repoint or retire the `monitoring` Cloudflare hostname and its Access
-   policy. Ingress is **remotely managed by Cloudflare**; the repo holds only a comment. Grafana already
-   has its own `observe` host. **This is an owner action.**
+8. **The `monitoring` Cloudflare hostname is out of scope — the owner handles it** (ruling 2026-08-08).
+   Ingress is remotely managed by Cloudflare and the repo holds only a comment, so there was never a
+   diff to make. Grafana already has its own `observe` host. **No ticket tracks this and no acceptance
+   criterion depends on it.** The PR updates the stale compose comments and stops there.
 
 **Deliberately untouched:** the `rebuilt-from-kibana` tags on any dashboard not yet rebuilt (a live test
 filters on them — see T4's tag discipline); the frozen eval corpora under
@@ -736,9 +785,12 @@ alongside `kibana` rather than removing it**, so a user saying either word still
 
 ---
 
-## 5. Defects found while planning — file separately, do not fold in
+## 5. Defects found while planning — filed as FRE-1216
 
-Each is independently verified and none is this program's work.
+Each is independently verified and none is this program's work. **Filed as a single ticket
+(FRE-1216) by owner instruction**, not nine — they share a discovery context and a triage pass, though
+they are emphatically not one fix. FRE-1210 panel 12 instruments the last row continuously, whether or
+not FRE-1216 fixes it.
 
 | Finding | Evidence |
 |---|---|

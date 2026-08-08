@@ -1514,8 +1514,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     finally:
         # In a finally so a failure in any teardown above cannot strand the
         # handler attached to the root logger with a dead client behind it.
+        #
+        # Its own failure is logged rather than raised, because raising from a
+        # finally *replaces* an exception still propagating from the try body,
+        # demoting the original to __context__. Before this block existed the ES
+        # teardown ran first and could not mask anything; swallowing only this
+        # call restores that property. A teardown failure on a process that is
+        # already exiting is a thing to record, not a thing to escalate.
         if es_handler is not None:
-            await _shutdown_es_delivery(es_handler)
+            try:
+                await _shutdown_es_delivery(es_handler)
+            except Exception as e:
+                log.error(
+                    "elasticsearch_shutdown_failed",
+                    error=sanitize_error_message(e),
+                    exc_info=True,
+                )
             es_handler = None
 
 

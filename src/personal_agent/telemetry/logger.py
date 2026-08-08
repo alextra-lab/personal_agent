@@ -330,6 +330,12 @@ async def detach_elasticsearch_handler(handler: "ElasticsearchHandler") -> None:
 
     Args:
         handler: The connected handler to drain and detach.
+
+    Raises:
+        ESHandlerLoopError: If ``disconnect`` is called from a loop other than
+            the one that owns the handler. Propagated deliberately — the handler
+            is detached first, so the caller learns of a real ownership bug
+            rather than inheriting a silently half-torn-down pipeline.
     """
     try:
         await handler.disconnect()

@@ -32,14 +32,23 @@ _TEST_LOGGER = "personal_agent.tests.gateway_lifespan"
 class _FakeESClient:
     """Minimal AsyncElasticsearch stand-in that records what it was asked to do."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, handshake_fails: bool = False) -> None:
         self.documents: list[dict[str, Any]] = []
         self.calls: list[str] = []
         self.block_writes = asyncio.Event()
         self.block_writes.set()
+        self._handshake_fails = handshake_fails
 
     async def info(self) -> dict[str, Any]:
-        """Report a version, as the real client's handshake does."""
+        """Report a version, as the real client's handshake does.
+
+        Raises:
+            ConnectionError: When built with ``handshake_fails``, reproducing an
+                Elasticsearch that accepts the client construction and then
+                fails the handshake.
+        """
+        if self._handshake_fails:
+            raise ConnectionError("elasticsearch handshake refused")
         return {"version": {"number": "8.13.0"}}
 
     async def index(self, **kwargs: Any) -> dict[str, str]:
@@ -187,6 +196,31 @@ async def test_gateway_lifespan_drains_a_record_still_in_flight_at_shutdown(
 
     delivered = [d["event_type"] for d in client.record_documents()]
     assert "gateway_record_in_flight" in delivered
+
+
+@pytest.mark.asyncio
+async def test_gateway_lifespan_closes_the_client_when_the_handshake_fails(
+    isolated_root_logger: None,
+) -> None:
+    """A handler that never became usable is still torn down, not dropped.
+
+    ``ElasticsearchLogger.connect`` assigns ``self.client`` *before* the
+    handshake and does not clear it when the handshake raises, so dropping the
+    reference — which this lifespan used to do — leaks an open client. Nothing
+    else in the suite covers this branch, and it is the one the leak fix lives
+    on, so without this test the property could regress silently.
+    """
+    app = FastAPI()
+    client = _FakeESClient(handshake_fails=True)
+    before = _attached_es_handlers()
+
+    async for _ in _run_lifespan(app, client):
+        # An unusable Elasticsearch must not attach a handler at all.
+        assert _es_handlers_added_since(before) == []
+        assert app.state.es_handler is None
+        assert app.state.es_client is None
+
+    assert "close" in client.calls, "the dangling client from the failed handshake was not closed"
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 # ADR-0053: Deterministic Gate Feedback-Loop Monitoring Framework
 
-**Status**: Parked (scheduled) — 2026-06-21 (FRE-582; owner ruling "park but schedule — it must be in the planning"). Revisit via FRE-589 (planning + design) after FRE-583 (OTel attribute map) and FRE-585 (joinability value-coherence) land. Originally Proposed 2026-04-22. Decision log: `docs/research/2026-06-21-fre-582-feedback-loops-proposal-analysis.md`.
+**Status**: Parked (scheduled) — 2026-06-21 (FRE-582; owner ruling "park but schedule — it must be in the planning"). Revisit via FRE-589 (planning + design) after FRE-583 (OTel attribute map) and FRE-585 (joinability value-coherence) land. Originally Proposed 2026-04-22. Decision log: `docs/research/2026-06-21-fre-582-feedback-loops-proposal-analysis.md`. **D4 amended 2026-08-08 (FRE-1213)** — the visual tier is Grafana, not Kibana; option C's structure is unchanged.
 **Date**: 2026-04-22
 **Deciders**: Project owner
 **Depends on**: ADR-0041 (Event Bus — Redis Streams), ADR-0043 (Three-Layer Separation)
@@ -236,7 +236,18 @@ Extend `TelemetryQueries` with six new methods operating on the `trace_summary.g
 
 ### D4: Surfacing Channel
 
-**Primary: Kibana.** The `trace_summary.gateway.*` fields indexed by the ES indexer are immediately queryable in Kibana. The Kibana dashboard extended for this ADR adds a **"Gateway Health" panel** with:
+> **Amended 2026-08-08 (FRE-1213): the visual tier is Grafana, not Kibana.** Kibana's retirement is
+> directed by ADR-0129 D6 and delivered by FRE-1214. This ADR is `Parked (scheduled)` and unbuilt, so
+> nothing here has shipped on Kibana — but D4 *selects* a Kibana panel, and a session picking this up
+> from FRE-589 would build one. **Only the platform changes.** Option C's three-tier structure — visual,
+> narrative (Captain's Log), programmatic (`TelemetryQueries`) — is the decision, and it stands; so does
+> the reasoning that rejected Kibana-only (option A) and a bespoke PWA panel (option B), since option B
+> was rejected on cost and the platform swap does not make a PWA panel cheaper. **The operative
+> statements — D4's panel, the deliverables row and the end-state row — are amended in place to name
+> Grafana; the remaining "Kibana" mentions below are all rejected-option rationale, retained as the
+> historical reasoning that produced option C.** The panel content is unchanged.
+
+**Primary: the dashboard platform (Grafana since 2026-08-08; read as Kibana before that date).** The `trace_summary.gateway.*` fields indexed by the ES indexer are immediately queryable there. The dashboard extended for this ADR adds a **"Gateway Health" panel** with:
 - Intent distribution pie chart (7 TaskTypes over trailing 7 days)
 - Strategy distribution (4 DecompositionStrategies over trailing 7 days)
 - Confidence histogram (p50/p75/p90 over trailing 7 days)
@@ -327,7 +338,7 @@ This ADR covers the **six active stages of the pre-LLM gateway** (Stages 3–7, 
 |--------|-------------|---------|
 | A. Kibana dashboards only | Surface gateway health through existing Kibana; no programmatic access | Rejected as sole channel — Kibana is for humans; programmatic access (`TelemetryQueries`) is required for the agent to self-report and for `cg:gateway-monitor` to evaluate thresholds |
 | B. New UI panel | Dedicated gateway health panel in the PWA (ADR-0048) | Rejected for Phase 1 — introduces frontend scope; Kibana serves this need at zero cost |
-| **C. Kibana + Captain's Log + TelemetryQueries** | Three-tier surfacing: visual (Kibana), narrative (Captain's Log), programmatic (TelemetryQueries) | **Selected** — each tier serves a different consumer: operators see Kibana, the agent surfaces Captain's Log proposals, and the `cg:gateway-monitor` consumer uses TelemetryQueries for threshold evaluation |
+| **C. Dashboard + Captain's Log + TelemetryQueries** *(named "Kibana + …" when selected 2026-04-22; visual tier amended to **Grafana** 2026-08-08)* | Three-tier surfacing: visual (the dashboard platform), narrative (Captain's Log), programmatic (TelemetryQueries) | **Selected** — each tier serves a different consumer: the operator reads the dashboard, the agent surfaces Captain's Log proposals, and the `cg:gateway-monitor` consumer uses TelemetryQueries for threshold evaluation. **The three-tier structure is the decision; which tool renders the visual tier is not**, which is why the 2026-08-08 platform change amends this row without reopening the choice |
 
 ---
 
@@ -373,7 +384,7 @@ This ADR covers the **six active stages of the pre-LLM gateway** (Stages 3–7, 
 | 6 | Unit tests: `GateMonitor.record_gate()`, `GateSummary.to_gateway_summary_dict()` | Quality gate | Tier-2: Sonnet |
 | 7 | `TelemetryQueries` gateway aggregation methods (Layer C) | Analytics; unblocks FRE-234 | Tier-2: Sonnet |
 | 8 | `cg:gateway-monitor` consumer + anomaly detection + Captain's Log emission | Observation Layer feedback loop | Tier-2: Sonnet |
-| 9 | Kibana "Gateway Health" dashboard panel | Visualization | Tier-3: Haiku |
+| 9 | **Grafana** "Gateway Health" dashboard panel | Visualization | Tier-3: Haiku |
 | 10 | Native tool `query_gateway_health` backed by `TelemetryQueries` | Agent self-reporting | Tier-2: Sonnet |
 
 Steps 1–6 constitute the MVP: monitoring data flows, is time-accurate, and is indexed to ES. Steps 7–10 add the analytics, feedback, and surfacing layers.
@@ -555,7 +566,7 @@ This section traces the complete loop from gate execution to human review and ba
 | What exists | What is automated | What is visible |
 |-------------|------------------|-----------------|
 | `GateSpan`, `GateSummary`, `GateMonitor` types in `request_gateway/monitoring.py` | `GateMonitor.record_gate()` called after every stage on every request | `gateway_output` structlog event (already indexed to ES) |
-| `GatewayOutput.monitoring: GateSummary \| None` field | `gateway` key assembled and embedded in `RequestCompletedEvent.trace_summary` | `trace_summary.gateway.*` fields queryable in Kibana via existing log index |
+| `GatewayOutput.monitoring: GateSummary \| None` field | `gateway` key assembled and embedded in `RequestCompletedEvent.trace_summary` | `trace_summary.gateway.*` fields queryable from the dashboard platform via the existing log index |
 | Feature flag `AGENT_GATE_MONITORING_ENABLED` (default `True`) | ES indexer writes `gateway.*` fields with zero new code | Per-request gate timing visible in raw ES logs |
 | Unit tests for `GateMonitor` and `GateSummary` | — | — |
 
@@ -565,7 +576,7 @@ Human action required: none. No new infrastructure. No new dashboards. Gate data
 
 | What exists | What is automated | What is visible |
 |-------------|------------------|-----------------|
-| `TelemetryQueries` gateway aggregation methods (6 new methods) | `cg:gateway-monitor` runs on every `request.completed` event | Kibana "Gateway Health" panel: intent distribution, strategy distribution, confidence histogram, per-gate p90 latency, degradation rate, trimming rate |
+| `TelemetryQueries` gateway aggregation methods (6 new methods) | `cg:gateway-monitor` runs on every `request.completed` event | **Grafana** "Gateway Health" panel: intent distribution, strategy distribution, confidence histogram, per-gate p90 latency, degradation rate, trimming rate |
 | `GatewayHealthReport` dataclass | Rolling window threshold evaluation every 100 requests | Captain's Log entries with `category=observability` visible in ES and `telemetry/captains_log/` |
 | `cg:gateway-monitor` consumer in `events/gateway_monitor.py` | Captain's Log anomaly entries generated when thresholds sustained | Linear "Gate Health Monitoring" project with actionable issues |
 | Captain's Log anomaly handler | PromotionPipeline promotes after `seen_count ≥ 3`, `age ≥ 7 days` | `query_gateway_health` native tool — agent can answer "how are your routing decisions?" in conversation |

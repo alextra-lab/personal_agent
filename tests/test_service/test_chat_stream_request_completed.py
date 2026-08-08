@@ -62,22 +62,14 @@ def mock_redis() -> AsyncMock:
     return client
 
 
-def _mock_orchestrator_recording_a_span() -> MagicMock:
-    """An Orchestrator whose handle_user_request touches the passed RequestTimer.
-
-    Without this, `RequestTimer.to_breakdown()` still returns a non-empty list
-    (it always appends a `{"phase": "total", ...}` entry) even if nothing ever
-    records a real span -- a false-positive that would let a broken orchestrator
-    integration through undetected. Recording a real span here closes that gap.
-    """
+def _mock_orchestrator() -> MagicMock:
+    """An Orchestrator stand-in whose handle_user_request returns a fixed reply."""
     session_manager = MagicMock()
     session_manager.get_session.return_value = None
     orchestrator = MagicMock()
     orchestrator.session_manager = session_manager
 
-    async def _handle_user_request(*, request_timer: object, **_kwargs: object) -> dict[str, str]:
-        request_timer.start_span("llm_call:test")  # type: ignore[attr-defined]
-        request_timer.end_span("llm_call:test")  # type: ignore[attr-defined]
+    async def _handle_user_request(**_kwargs: object) -> dict[str, str]:
         return {"reply": "hi there", "trace_id": "trace-1"}
 
     orchestrator.handle_user_request = AsyncMock(side_effect=_handle_user_request)
@@ -100,7 +92,7 @@ async def test_redis_branch_publishes_instead_of_double_appending(
     mock_validate_attachments: AsyncMock,
     mock_redis: AsyncMock,
 ) -> None:
-    """Redis bus active: publish once with a real breakdown + user_id; no direct assistant append."""
+    """Redis bus active: publish once with user_id; no direct assistant append."""
     session_id = uuid4()
     session = SimpleNamespace(session_id=session_id, messages=[], execution_profile="local")
     mock_repo = MagicMock()
@@ -109,7 +101,7 @@ async def test_redis_branch_publishes_instead_of_double_appending(
     mock_repo_cls.return_value = mock_repo
     mock_session_local.side_effect = lambda: _fake_db_session(MagicMock())
     mock_validate_attachments.return_value = []
-    mock_orchestrator_cls.return_value = _mock_orchestrator_recording_a_span()
+    mock_orchestrator_cls.return_value = _mock_orchestrator()
 
     set_global_event_bus(RedisStreamBus(mock_redis))
 
@@ -127,13 +119,10 @@ async def test_redis_branch_publishes_instead_of_double_appending(
     payload = orjson.loads(fields["data"])
     assert payload["user_id"] == str(_TEST_USER_ID)
     assert payload["source_component"] == "service.app"
-    breakdown = payload["trace_breakdown"]
-    assert breakdown, "trace_breakdown must be non-empty"
-    assert any(entry.get("phase") != "total" for entry in breakdown), (
-        "a breakdown containing only the always-present 'total' entry is a "
-        "false positive -- the timer must carry a real recorded span"
-    )
-    assert payload["trace_summary"]["total_steps"] >= 1
+    # ADR-0129 D3 / FRE-1067: RequestTimer is retired — the event carries no
+    # timing payload; span timing now lives in the OTel span tree.
+    assert "trace_summary" not in payload
+    assert "trace_breakdown" not in payload
 
     # Only the user-message append happened synchronously; the assistant append
     # is the session-writer consumer's job now, not this function's.
@@ -172,7 +161,7 @@ async def test_noop_branch_still_appends_directly(
     mock_repo_cls.return_value = mock_repo
     mock_session_local.side_effect = lambda: _fake_db_session(MagicMock())
     mock_validate_attachments.return_value = []
-    mock_orchestrator_cls.return_value = _mock_orchestrator_recording_a_span()
+    mock_orchestrator_cls.return_value = _mock_orchestrator()
 
     set_global_event_bus(NoOpBus())
 
@@ -217,7 +206,7 @@ async def test_publish_failure_falls_back_to_direct_append_and_releases_waiter(
     mock_repo_cls.return_value = mock_repo
     mock_session_local.side_effect = lambda: _fake_db_session(MagicMock())
     mock_validate_attachments.return_value = []
-    mock_orchestrator_cls.return_value = _mock_orchestrator_recording_a_span()
+    mock_orchestrator_cls.return_value = _mock_orchestrator()
 
     mock_redis.xadd = AsyncMock(side_effect=ConnectionError("redis down"))
     set_global_event_bus(RedisStreamBus(mock_redis))
@@ -265,7 +254,7 @@ async def test_cancellation_after_waiter_registered_releases_it(
     mock_repo_cls.return_value = mock_repo
     mock_session_local.side_effect = lambda: _fake_db_session(MagicMock())
     mock_validate_attachments.return_value = []
-    mock_orchestrator_cls.return_value = _mock_orchestrator_recording_a_span()
+    mock_orchestrator_cls.return_value = _mock_orchestrator()
 
     publish_started = asyncio.Event()
 

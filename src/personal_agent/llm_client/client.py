@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from opentelemetry.propagate import inject
+from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as gen_ai
 
 from personal_agent.config import settings
 
@@ -55,6 +57,7 @@ from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.events import (
     MODEL_CALL_ERROR,
 )
+from personal_agent.telemetry.spans import model_call_span
 from personal_agent.telemetry.trace import TraceContext
 
 log = get_logger(__name__)
@@ -361,307 +364,320 @@ class LocalLLMClient:
         # Note: reasoning_effort is ignored for /v1/chat/completions (it's LM Studio /v1/responses specific)
         # We keep the parameter for API compatibility but don't use it
 
-        # Emit telemetry: call started (ADR-0074 §I2 canonical shape)
+        # Emit telemetry: call started (ADR-0074 §I2 canonical shape). The
+        # model-call span (ADR-0129 D3 / FRE-1067) wraps the whole retry loop
+        # below — one span per client-perceived call, matching the existing
+        # start_time/duration_ms stopwatch boundary exactly.
         start_time = time.time()
-        span_ctx, span_id = trace_ctx.new_span()
-        emit_model_call_started(
-            log=log,
-            role=role.value,
-            model=model_id,
-            endpoint=current_endpoint,
-            provider=model_config.provider or "unknown",
-            trace_ctx=trace_ctx,
-            span_id=span_id,
-        )
+        with model_call_span(
+            role=role.value, model=model_id, provider=model_config.provider or "unknown"
+        ) as _model_span:
+            span_id = format(_model_span.get_span_context().span_id, "016x")
+            emit_model_call_started(
+                log=log,
+                role=role.value,
+                model=model_id,
+                endpoint=current_endpoint,
+                provider=model_config.provider or "unknown",
+                trace_ctx=trace_ctx,
+                span_id=span_id,
+            )
 
-        last_error: Exception | None = None
-        attempt = 0
-        while attempt <= effective_max_retries:
-            try:
-                # Build payload using standard OpenAI chat/completions format
-                payload = build_chat_completions_request(
-                    messages=request_messages,
-                    model=model_id,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    max_tokens=max_tokens,
-                    temperature=effective_temperature,
-                    response_format=response_format,
-                    previous_response_id=previous_response_id,
-                    reasoning_effort=reasoning_effort,
-                    top_p=model_config.top_p,
-                    top_k=model_config.top_k,
-                    presence_penalty=model_config.presence_penalty,
-                    min_p=model_config.min_p,
-                    repetition_penalty=model_config.repetition_penalty,
-                    disable_thinking=model_config.disable_thinking,
-                    thinking_budget_tokens=model_config.thinking_budget_tokens,
-                    parallel_tool_calls=model_config.parallel_tool_calls,
-                )
-
-                # Debug: Log payload structure
-                payload_messages = payload.get("messages", [])
-                assistant_with_tool_calls = [
-                    i
-                    for i, msg in enumerate(payload_messages)
-                    if msg.get("role") == "assistant" and msg.get("tool_calls")
-                ]
-                log.debug(
-                    "chat_completions_payload",
-                    endpoint=current_endpoint,
-                    message_count=len(payload_messages),
-                    assistant_with_tool_calls_indices=assistant_with_tool_calls,
-                    has_tools="tools" in payload,
-                    tools_count=len(payload.get("tools", [])),
-                    trace_id=trace_ctx.trace_id,
-                )
-
-                # Configure httpx timeout - use longer timeout for read (model generation)
-                timeout_config = httpx.Timeout(
-                    connect=10.0,  # Connection timeout
-                    read=timeout_s,  # Read timeout (model generation)
-                    write=10.0,  # Write timeout
-                    pool=10.0,  # Pool timeout
-                )
-                # Disable SSL verification for localhost (local LLM servers don't need it)
-                # This also avoids macOS sandbox issues with certificate loading
-                verify_ssl = not (
-                    current_endpoint.startswith("http://localhost")
-                    or current_endpoint.startswith("http://127.0.0.1")
-                )
-                request_headers: dict[str, str] = {
-                    "X-Trace-Id": str(trace_ctx.trace_id),
-                    "X-Span-Id": span_id,
-                }
-                if trace_ctx.session_id:
-                    request_headers["X-Session-Id"] = trace_ctx.session_id
-                # No Cloudflare Access headers are constructed here (ADR-0132 D1).
-                # On deployments behind Cloudflare the endpoint resolves to an
-                # internal Caddy egress block which injects the service token, so
-                # the application holds no outbound CF credential at all.
-
-                # Stream the chat/completions response. Streaming keeps the
-                # connection alive byte-by-byte, eliminating Cloudflare 524
-                # timeouts on long-running local-model generations (the model
-                # would otherwise generate silently for tens of seconds while
-                # the proxy gave up). The aggregated dict matches the
-                # non-streaming shape consumed by `adapt_chat_completions_response`.
-                payload["stream"] = True
-                # Ask for usage in the final chunk (vLLM / llama-server emit it
-                # only when this option is set; OpenAI ignores unknown keys).
-                payload["stream_options"] = {"include_usage": True}
-
-                async with create_guarded_http_client(
-                    timeout=timeout_config, verify=verify_ssl
-                ) as client:
-                    chunks: list[dict[str, Any]] = []
-                    async with client.stream(
-                        "POST",
-                        current_endpoint,
-                        json=payload,
-                        headers=request_headers,
-                    ) as response:
-                        response.raise_for_status()
-                        async for line in response.aiter_lines():
-                            if not line:
-                                continue
-                            if line.startswith(":"):
-                                # SSE comment / keep-alive
-                                continue
-                            if not line.startswith("data:"):
-                                continue
-                            data = line[5:].lstrip()
-                            if data == "[DONE]":
-                                break
-                            try:
-                                chunks.append(json.loads(data))
-                            except json.JSONDecodeError as exc:
-                                log.warning(
-                                    "stream_chunk_parse_failed",
-                                    preview=data[:120],
-                                    error=str(exc),
-                                    trace_id=trace_ctx.trace_id,
-                                )
-                    response_data = _aggregate_streaming_chunks(chunks)
-
-                    # Log raw response for debugging
-                    output_items = response_data.get("output", [])
-                    output_types = (
-                        [item.get("type") for item in output_items if isinstance(item, dict)]
-                        if isinstance(output_items, list)
-                        else []
+            last_error: Exception | None = None
+            attempt = 0
+            while attempt <= effective_max_retries:
+                try:
+                    # Build payload using standard OpenAI chat/completions format
+                    payload = build_chat_completions_request(
+                        messages=request_messages,
+                        model=model_id,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        max_tokens=max_tokens,
+                        temperature=effective_temperature,
+                        response_format=response_format,
+                        previous_response_id=previous_response_id,
+                        reasoning_effort=reasoning_effort,
+                        top_p=model_config.top_p,
+                        top_k=model_config.top_k,
+                        presence_penalty=model_config.presence_penalty,
+                        min_p=model_config.min_p,
+                        repetition_penalty=model_config.repetition_penalty,
+                        disable_thinking=model_config.disable_thinking,
+                        thinking_budget_tokens=model_config.thinking_budget_tokens,
+                        parallel_tool_calls=model_config.parallel_tool_calls,
                     )
+
+                    # Debug: Log payload structure
+                    payload_messages = payload.get("messages", [])
+                    assistant_with_tool_calls = [
+                        i
+                        for i, msg in enumerate(payload_messages)
+                        if msg.get("role") == "assistant" and msg.get("tool_calls")
+                    ]
                     log.debug(
-                        "raw_llm_response",
-                        api_type=current_api_type,
-                        status_code=response.status_code,
-                        has_output=("output" in response_data),
-                        has_error=("error" in response_data),
-                        output_items_count=len(output_items)
-                        if isinstance(output_items, list)
-                        else 0,
-                        output_types=output_types,
-                        response_preview=str(response_data)[:200],
+                        "chat_completions_payload",
+                        endpoint=current_endpoint,
+                        message_count=len(payload_messages),
+                        assistant_with_tool_calls_indices=assistant_with_tool_calls,
+                        has_tools="tools" in payload,
+                        tools_count=len(payload.get("tools", [])),
                         trace_id=trace_ctx.trace_id,
                     )
 
-                    # Check for error in response body (LM Studio returns 200 with error object)
-                    if "error" in response_data and response_data["error"] is not None:
-                        error_obj = response_data["error"]
-                        error_msg = (
-                            error_obj.get("message", str(error_obj))
-                            if isinstance(error_obj, dict)
-                            else str(error_obj)
+                    # Configure httpx timeout - use longer timeout for read (model generation)
+                    timeout_config = httpx.Timeout(
+                        connect=10.0,  # Connection timeout
+                        read=timeout_s,  # Read timeout (model generation)
+                        write=10.0,  # Write timeout
+                        pool=10.0,  # Pool timeout
+                    )
+                    # Disable SSL verification for localhost (local LLM servers don't need it)
+                    # This also avoids macOS sandbox issues with certificate loading
+                    verify_ssl = not (
+                        current_endpoint.startswith("http://localhost")
+                        or current_endpoint.startswith("http://127.0.0.1")
+                    )
+                    # AC-14 (ADR-0129 D3 / FRE-1067): W3C traceparent alongside the
+                    # legacy X-Trace-Id/X-Span-Id headers slm_server still reads.
+                    # inject() reads the active context — the model-call span above.
+                    _propagation_carrier: dict[str, str] = {}
+                    inject(_propagation_carrier)
+                    request_headers: dict[str, str] = {
+                        "X-Trace-Id": str(trace_ctx.trace_id),
+                        "X-Span-Id": span_id,
+                        **_propagation_carrier,
+                    }
+                    if trace_ctx.session_id:
+                        request_headers["X-Session-Id"] = trace_ctx.session_id
+                    # No Cloudflare Access headers are constructed here (ADR-0132 D1).
+                    # On deployments behind Cloudflare the endpoint resolves to an
+                    # internal Caddy egress block which injects the service token, so
+                    # the application holds no outbound CF credential at all.
+
+                    # Stream the chat/completions response. Streaming keeps the
+                    # connection alive byte-by-byte, eliminating Cloudflare 524
+                    # timeouts on long-running local-model generations (the model
+                    # would otherwise generate silently for tens of seconds while
+                    # the proxy gave up). The aggregated dict matches the
+                    # non-streaming shape consumed by `adapt_chat_completions_response`.
+                    payload["stream"] = True
+                    # Ask for usage in the final chunk (vLLM / llama-server emit it
+                    # only when this option is set; OpenAI ignores unknown keys).
+                    payload["stream_options"] = {"include_usage": True}
+
+                    async with create_guarded_http_client(
+                        timeout=timeout_config, verify=verify_ssl
+                    ) as client:
+                        chunks: list[dict[str, Any]] = []
+                        async with client.stream(
+                            "POST",
+                            current_endpoint,
+                            json=payload,
+                            headers=request_headers,
+                        ) as response:
+                            response.raise_for_status()
+                            async for line in response.aiter_lines():
+                                if not line:
+                                    continue
+                                if line.startswith(":"):
+                                    # SSE comment / keep-alive
+                                    continue
+                                if not line.startswith("data:"):
+                                    continue
+                                data = line[5:].lstrip()
+                                if data == "[DONE]":
+                                    break
+                                try:
+                                    chunks.append(json.loads(data))
+                                except json.JSONDecodeError as exc:
+                                    log.warning(
+                                        "stream_chunk_parse_failed",
+                                        preview=data[:120],
+                                        error=str(exc),
+                                        trace_id=trace_ctx.trace_id,
+                                    )
+                        response_data = _aggregate_streaming_chunks(chunks)
+
+                        # Log raw response for debugging
+                        output_items = response_data.get("output", [])
+                        output_types = (
+                            [item.get("type") for item in output_items if isinstance(item, dict)]
+                            if isinstance(output_items, list)
+                            else []
                         )
-                        error_param = (
-                            error_obj.get("param", "") if isinstance(error_obj, dict) else ""
-                        )
-                        error_type = (
-                            error_obj.get("type", "") if isinstance(error_obj, dict) else ""
-                        )
-                        log.error(
-                            "llm_api_error",
+                        log.debug(
+                            "raw_llm_response",
                             api_type=current_api_type,
-                            endpoint=current_endpoint,
-                            error_message=error_msg,
-                            error_param=error_param,
-                            error_type=error_type,
+                            status_code=response.status_code,
+                            has_output=("output" in response_data),
+                            has_error=("error" in response_data),
+                            output_items_count=len(output_items)
+                            if isinstance(output_items, list)
+                            else 0,
+                            output_types=output_types,
+                            response_preview=str(response_data)[:200],
                             trace_id=trace_ctx.trace_id,
                         )
-                        raise LLMClientError(f"API returned error: {error_msg}")
 
-                    # Adapt response to LLMResponse format (always chat/completions format)
-                    llm_response = adapt_chat_completions_response(response_data)
+                        # Check for error in response body (LM Studio returns 200 with error object)
+                        if "error" in response_data and response_data["error"] is not None:
+                            error_obj = response_data["error"]
+                            error_msg = (
+                                error_obj.get("message", str(error_obj))
+                                if isinstance(error_obj, dict)
+                                else str(error_obj)
+                            )
+                            error_param = (
+                                error_obj.get("param", "") if isinstance(error_obj, dict) else ""
+                            )
+                            error_type = (
+                                error_obj.get("type", "") if isinstance(error_obj, dict) else ""
+                            )
+                            log.error(
+                                "llm_api_error",
+                                api_type=current_api_type,
+                                endpoint=current_endpoint,
+                                error_message=error_msg,
+                                error_param=error_param,
+                                error_type=error_type,
+                                trace_id=trace_ctx.trace_id,
+                            )
+                            raise LLMClientError(f"API returned error: {error_msg}")
 
-                    # Emit telemetry: call completed
-                    duration_ms = int((time.time() - start_time) * 1000)
-                    _usage = llm_response["usage"]
-                    _pt = _usage.get("prompt_tokens", 0)
-                    _ct = _usage.get("completion_tokens", 0)
-                    # KV-cache reuse via the OpenAI-standard
-                    # ``usage.prompt_tokens_details.cached_tokens`` (== llama-server's
-                    # ``timings.cache_n``). It survives streaming aggregation because the
-                    # ``usage`` block is preserved whole. The previous ``timings.tokens_cached``
-                    # read targeted a field llama-server never emits, so this was always
-                    # ``None`` (FRE-405 follow-up; verified live against llama-server 2026-05-29).
-                    _ptd = _usage.get("prompt_tokens_details") or {}
-                    _cached = _ptd.get("cached_tokens") or 0
-                    _identity = prompt_identity or derive_prompt_identity(
-                        f"role.{role.value}",
-                        static_prefix=system_prompt or "",
-                        full_prompt=system_prompt or "",
+                        # Adapt response to LLMResponse format (always chat/completions format)
+                        llm_response = adapt_chat_completions_response(response_data)
+
+                        # Emit telemetry: call completed
+                        duration_ms = int((time.time() - start_time) * 1000)
+                        _usage = llm_response["usage"]
+                        _pt = _usage.get("prompt_tokens", 0)
+                        _ct = _usage.get("completion_tokens", 0)
+                        # KV-cache reuse via the OpenAI-standard
+                        # ``usage.prompt_tokens_details.cached_tokens`` (== llama-server's
+                        # ``timings.cache_n``). It survives streaming aggregation because the
+                        # ``usage`` block is preserved whole. The previous ``timings.tokens_cached``
+                        # read targeted a field llama-server never emits, so this was always
+                        # ``None`` (FRE-405 follow-up; verified live against llama-server 2026-05-29).
+                        _ptd = _usage.get("prompt_tokens_details") or {}
+                        _cached = _ptd.get("cached_tokens") or 0
+                        _identity = prompt_identity or derive_prompt_identity(
+                            f"role.{role.value}",
+                            static_prefix=system_prompt or "",
+                            full_prompt=system_prompt or "",
+                        )
+                        _model_span.set_attribute(gen_ai.GEN_AI_USAGE_INPUT_TOKENS, _pt)
+                        _model_span.set_attribute(gen_ai.GEN_AI_USAGE_OUTPUT_TOKENS, _ct)
+                        emit_model_call_completed(
+                            log=log,
+                            role=role.value,
+                            model=model_id,
+                            endpoint=current_endpoint,
+                            provider=model_config.provider or "unknown",
+                            trace_ctx=trace_ctx,
+                            span_id=span_id,
+                            input_tokens=_pt,
+                            output_tokens=_ct,
+                            prompt_identity=_identity,
+                            total_tokens=_usage.get("total_tokens") or (_pt + _ct),
+                            cache_read_tokens=_cached if _cached > 0 else None,
+                            extra={
+                                "api_type": current_api_type,
+                                "fallback_used": tried_fallback,
+                            },
+                        )
+
+                        return llm_response
+
+                except httpx.TimeoutException:
+                    last_error = LLMTimeout(
+                        f"Request to {current_endpoint} timed out after {timeout_s}s"
                     )
-                    emit_model_call_completed(
-                        log=log,
-                        role=role.value,
-                        model=model_id,
-                        endpoint=current_endpoint,
-                        provider=model_config.provider or "unknown",
-                        trace_ctx=trace_ctx,
-                        span_id=span_id,
-                        latency_ms=duration_ms,
-                        input_tokens=_pt,
-                        output_tokens=_ct,
-                        prompt_identity=_identity,
-                        total_tokens=_usage.get("total_tokens") or (_pt + _ct),
-                        cache_read_tokens=_cached if _cached > 0 else None,
-                        extra={
-                            "api_type": current_api_type,
-                            "fallback_used": tried_fallback,
-                        },
-                    )
+                    # Retry if we haven't exhausted retries
+                    if attempt < effective_max_retries:
+                        wait_time = 2**attempt
+                        log.warning(
+                            "model_call_retry",
+                            attempt=attempt + 1,
+                            wait_time=wait_time,
+                            trace_id=trace_ctx.trace_id,
+                        )
+                        await asyncio.sleep(wait_time)
+                        attempt += 1
+                        continue
+                    break
 
-                    return llm_response
+                except httpx.ConnectError as e:
+                    last_error = LLMConnectionError(f"Failed to connect to {current_endpoint}: {e}")
+                    # Don't retry connection errors (server is likely down)
+                    break
 
-            except httpx.TimeoutException:
-                last_error = LLMTimeout(
-                    f"Request to {current_endpoint} timed out after {timeout_s}s"
-                )
-                # Retry if we haven't exhausted retries
-                if attempt < effective_max_retries:
-                    wait_time = 2**attempt
-                    log.warning(
-                        "model_call_retry",
-                        attempt=attempt + 1,
-                        wait_time=wait_time,
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 429:
+                        last_error = LLMRateLimit(f"Rate limit exceeded: {e}")
+                        if attempt < effective_max_retries:
+                            wait_time = 2**attempt
+                            await asyncio.sleep(wait_time)
+                            attempt += 1
+                            continue
+                    elif e.response.status_code >= 500:
+                        last_error = LLMServerError(f"Server error {e.response.status_code}: {e}")
+                        if attempt < effective_max_retries:
+                            wait_time = 2**attempt
+                            await asyncio.sleep(wait_time)
+                            attempt += 1
+                            continue
+                    else:
+                        last_error = LLMClientError(f"HTTP error {e.response.status_code}: {e}")
+                    break
+
+                except httpx.RequestError as e:
+                    last_error = LLMConnectionError(f"Request error: {e}")
+                    break
+
+                except LLMInvalidResponse as e:
+                    # Re-raise LLMInvalidResponse from adapter
+                    last_error = e
+                    break
+
+                except (ValueError, KeyError, TypeError) as e:
+                    last_error = LLMInvalidResponse(f"Invalid response format: {e}")
+                    break
+
+                except Exception as e:
+                    # Log the actual exception type and traceback for debugging
+                    import traceback as tb
+
+                    log.error(
+                        "unexpected_exception_in_respond",
+                        exception_type=type(e).__name__,
+                        exception_message=str(e),
+                        traceback=tb.format_exc(),
                         trace_id=trace_ctx.trace_id,
+                        session_id=trace_ctx.session_id,
                     )
-                    await asyncio.sleep(wait_time)
-                    attempt += 1
-                    continue
-                break
+                    last_error = LLMClientError(f"Unexpected error: {e}")
+                    break
 
-            except httpx.ConnectError as e:
-                last_error = LLMConnectionError(f"Failed to connect to {current_endpoint}: {e}")
-                # Don't retry connection errors (server is likely down)
-                break
+            # Emit telemetry: call error
+            duration_ms = int((time.time() - start_time) * 1000)
+            error_type = type(last_error).__name__ if last_error else "UnknownError"
+            log.error(
+                MODEL_CALL_ERROR,
+                role=role.value,
+                model=model_id,
+                endpoint=current_endpoint,
+                error_type=error_type,
+                error=str(last_error) if last_error else "Unknown error",
+                latency_ms=duration_ms,
+                trace_id=trace_ctx.trace_id,
+                session_id=trace_ctx.session_id,
+                span_id=span_id,
+            )
 
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 429:
-                    last_error = LLMRateLimit(f"Rate limit exceeded: {e}")
-                    if attempt < effective_max_retries:
-                        wait_time = 2**attempt
-                        await asyncio.sleep(wait_time)
-                        attempt += 1
-                        continue
-                elif e.response.status_code >= 500:
-                    last_error = LLMServerError(f"Server error {e.response.status_code}: {e}")
-                    if attempt < effective_max_retries:
-                        wait_time = 2**attempt
-                        await asyncio.sleep(wait_time)
-                        attempt += 1
-                        continue
-                else:
-                    last_error = LLMClientError(f"HTTP error {e.response.status_code}: {e}")
-                break
-
-            except httpx.RequestError as e:
-                last_error = LLMConnectionError(f"Request error: {e}")
-                break
-
-            except LLMInvalidResponse as e:
-                # Re-raise LLMInvalidResponse from adapter
-                last_error = e
-                break
-
-            except (ValueError, KeyError, TypeError) as e:
-                last_error = LLMInvalidResponse(f"Invalid response format: {e}")
-                break
-
-            except Exception as e:
-                # Log the actual exception type and traceback for debugging
-                import traceback as tb
-
-                log.error(
-                    "unexpected_exception_in_respond",
-                    exception_type=type(e).__name__,
-                    exception_message=str(e),
-                    traceback=tb.format_exc(),
-                    trace_id=trace_ctx.trace_id,
-                    session_id=trace_ctx.session_id,
-                )
-                last_error = LLMClientError(f"Unexpected error: {e}")
-                break
-
-        # Emit telemetry: call error
-        duration_ms = int((time.time() - start_time) * 1000)
-        error_type = type(last_error).__name__ if last_error else "UnknownError"
-        log.error(
-            MODEL_CALL_ERROR,
-            role=role.value,
-            model=model_id,
-            endpoint=current_endpoint,
-            error_type=error_type,
-            error=str(last_error) if last_error else "Unknown error",
-            latency_ms=duration_ms,
-            trace_id=trace_ctx.trace_id,
-            session_id=trace_ctx.session_id,
-            span_id=span_id,
-        )
-
-        if last_error:
-            raise last_error
-        raise LLMClientError("Request failed with unknown error")
+            if last_error:
+                raise last_error
+            raise LLMClientError("Request failed with unknown error")
 
     def get_dspy_lm(self, role: ModelRole) -> Any:
         """Get a configured DSPy LM instance for the specified role.

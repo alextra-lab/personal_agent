@@ -16,7 +16,6 @@ import pytest
 from personal_agent.events.consumers.error_monitor import ErrorMonitorConsumer
 from personal_agent.events.models import ConsolidationCompletedEvent, RequestCompletedEvent
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -62,8 +61,6 @@ async def test_other_event_types_are_ignored() -> None:
         trace_id="tid-1",
         session_id="sid-1",
         assistant_response="hello",
-        trace_summary={},
-        trace_breakdown=[],
     )
 
     await consumer.handle(other_event)

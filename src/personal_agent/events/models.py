@@ -237,28 +237,23 @@ class RequestCapturedEvent(EventBase):
 class RequestCompletedEvent(EventBase):
     """Published when a chat request finishes (response ready).
 
-    Consumers: ``cg:es-indexer`` (telemetry), ``cg:session-writer`` (DB append).
-    Carries a timer snapshot for ES; identifiers only otherwise (ADR-0041).
+    Consumer: ``cg:session-writer`` (DB append). Identifiers plus the
+    assistant reply; carries no timing payload (ADR-0129 D3 / FRE-1067
+    retired the ``RequestTimer``-backed ``trace_summary``/``trace_breakdown``
+    fields and the ``cg:es-indexer`` consumer that read them — span timing
+    now lives in the OTel span tree, not this event).
 
     Attributes:
         trace_id: Request trace identifier.
         session_id: Session that originated the request.
         assistant_response: Assistant reply text to persist.
-        trace_summary: Output of ``RequestTimer.to_trace_summary()`` at publish time.
-        trace_breakdown: Output of ``RequestTimer.to_breakdown()`` at publish time.
-        user_id: Authenticated user UUID for the request (ADR-0107 D5). The
-            ``cg:es-indexer`` consumer runs in its own long-lived task, not the
-            originating request's, so it cannot inherit a ``structlog.contextvars``
-            binding — this field is how ``user_id`` reaches the request_trace
-            docs it indexes.
+        user_id: Authenticated user UUID for the request (ADR-0107 D5).
     """
 
     event_type: Literal["request.completed"] = "request.completed"
     trace_id: str
     session_id: str
     assistant_response: str
-    trace_summary: dict[str, Any]
-    trace_breakdown: list[dict[str, Any]]
     eval_mode: bool = False
     user_id: UUID | None = None
 

@@ -2,8 +2,12 @@
 
 The audit's finding was that ``log_event`` is one of five write paths into
 ``agent-logs-*``; the other four bypassed it. These tests assert the guarantee
-holds at each path, and the structural test asserts a sixth path cannot be
-added without routing through the chokepoint.
+holds at each path, and the structural test asserts a new one cannot be added
+without routing through the chokepoint.
+
+ADR-0129 D3 / FRE-1067 retired ``index_request_trace_from_snapshot`` (the
+``RequestTimer``-backed request_trace path) along with ``RequestTimer``
+itself — four write paths remain, not five.
 
 Every secret-shaped value below is synthetic.
 """
@@ -40,7 +44,7 @@ def _indexed_documents(client: AsyncMock) -> list[dict[str, Any]]:
 
 @pytest.mark.asyncio
 async def test_log_event_redacts_before_indexing() -> None:
-    """Path 1 of 5: the structlog handler path."""
+    """Path 1 of 4: the structlog handler path."""
     logger, client = _logger_with_mock_client()
 
     await logger.log_event("bash_started", {"command": PLANTED_SECRET}, trace_id="t1")
@@ -52,7 +56,7 @@ async def test_log_event_redacts_before_indexing() -> None:
 
 @pytest.mark.asyncio
 async def test_log_batch_redacts_every_action_source() -> None:
-    """Path 2 of 5: the bulk path, which never touched log_event."""
+    """Path 2 of 4: the bulk path, which never touched log_event."""
     logger = ElasticsearchLogger()
     logger.client = AsyncMock()
     captured: list[dict[str, Any]] = []
@@ -75,39 +79,8 @@ async def test_log_batch_redacts_every_action_source() -> None:
 
 
 @pytest.mark.asyncio
-async def test_request_trace_snapshot_redacts_summary_and_step_docs() -> None:
-    """Path 3 of 5: request_trace summary plus its per-step documents.
-
-    Step metadata is merged in wholesale, so it carries arbitrary caller keys.
-    """
-    logger, client = _logger_with_mock_client()
-
-    await logger.index_request_trace_from_snapshot(
-        trace_id="t2",
-        trace_summary={"total_duration_ms": 5.0, "total_steps": 1, "phases_summary": {}},
-        trace_breakdown=[
-            {
-                "name": "bash",
-                "sequence": 1,
-                "phase": "tool_execution",
-                "offset_ms": 0.0,
-                "duration_ms": 1.0,
-                "metadata": {"command": PLANTED_SECRET},
-            }
-        ],
-        session_id="s1",
-    )
-
-    docs = _indexed_documents(client)
-    assert len(docs) == 2, "expected a summary doc and one step doc"
-    step = docs[1]
-    assert PLANTED_LITERAL not in step["command"]
-    assert "[REDACTED:" in step["command"]
-
-
-@pytest.mark.asyncio
 async def test_latency_breakdown_redacts_summary_and_phase_docs() -> None:
-    """Path 4 and 5 of 5: latency summary plus its flat per-phase documents."""
+    """Path 3 and 4 of 4: latency summary plus its flat per-phase documents."""
     logger, client = _logger_with_mock_client()
 
     await logger.index_latency_breakdown(

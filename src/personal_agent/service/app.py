@@ -48,7 +48,6 @@ from personal_agent.service.repositories.session_repository import SessionReposi
 from personal_agent.sysgraph import SysgraphRepository, set_default_sysgraph_repo
 from personal_agent.telemetry import add_elasticsearch_handler, get_logger
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
-from personal_agent.telemetry.request_timer import RequestTimer
 from personal_agent.telemetry.trace import SystemTraceContext
 from personal_agent.transport.events import TextDeltaEvent
 
@@ -406,9 +405,6 @@ async def _process_chat_stream_background(
         # ── Orchestrator ─────────────────────────────────────────────────
         response_content = ""
         request_started = False
-        # FRE-1033: captured so trace_summary/trace_breakdown are available
-        # after the call, for the request.completed publish below.
-        timer = RequestTimer(trace_id=trace_id)
         try:
             from personal_agent.orchestrator import Orchestrator
             from personal_agent.orchestrator.channels import Channel
@@ -431,7 +427,6 @@ async def _process_chat_stream_background(
                 mode=None,
                 channel=None,
                 trace_id=trace_id,
-                request_timer=timer,
                 gateway_output=gateway_output,
                 user_id=user_id,
                 user_email=user_email,
@@ -510,8 +505,6 @@ async def _process_chat_stream_background(
                         trace_id=trace_id,
                         session_id=session_id,
                         assistant_response=response_content,
-                        trace_summary=timer.to_trace_summary(),
-                        trace_breakdown=timer.to_breakdown(),
                         source_component="service.app",
                         user_id=user_id,
                     ),
@@ -536,15 +529,6 @@ async def _process_chat_stream_background(
                 await _append_assistant_directly()
         else:
             await _append_assistant_directly()
-            if es_handler and getattr(es_handler, "_connected", False):
-                asyncio.create_task(
-                    es_handler.es_logger.index_request_trace(
-                        trace_id=trace_id,
-                        timer=timer,
-                        session_id=session_id,
-                        user_id=user_id,
-                    )
-                )
 
     except Exception as e:
         bg_error_id = str(uuid4())[:8]
@@ -1027,7 +1011,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         CG_CAPTAIN_LOG,
         CG_CONSOLIDATOR,
         CG_ERROR_MONITOR,
-        CG_ES_INDEXER,
         CG_FEEDBACK,
         CG_FRESHNESS,
         CG_INSIGHTS,
@@ -1060,7 +1043,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     from personal_agent.events.redis_backend import RedisStreamBus
     from personal_agent.events.request_completed_handlers import (
-        build_request_trace_es_handler,
         build_session_writer_handler,
     )
 
@@ -1084,12 +1066,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
 
         # Phase 2 — request.completed consumers
-        await active_bus.subscribe(
-            stream=STREAM_REQUEST_COMPLETED,
-            group=CG_ES_INDEXER,
-            consumer_name="es-indexer-0",
-            handler=build_request_trace_es_handler(es_handler),
-        )
         await active_bus.subscribe(
             stream=STREAM_REQUEST_COMPLETED,
             group=CG_SESSION_WRITER,
@@ -2024,9 +2000,7 @@ async def _chat_impl(
     Returns:
         Response with assistant message and session_id
     """
-    from personal_agent.telemetry.events import REQUEST_RECEIVED, REQUEST_TIMING
-
-    timer = RequestTimer(trace_id=trace_id)
+    from personal_agent.telemetry.events import REQUEST_RECEIVED
 
     log.info(
         REQUEST_RECEIVED,
@@ -2052,27 +2026,24 @@ async def _chat_impl(
     repo = SessionRepository(db)
 
     # --- Phase: session_db_lookup ---
-    with timer.span("session_db_lookup"):
-        if session_id:
-            try:
-                parsed_session_id = UUID(session_id)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=422, detail="session_id must be a valid UUID"
-                ) from exc
-            session = await repo.get(parsed_session_id, user_id=request_user.user_id)
-            if not session:
-                raise HTTPException(status_code=404, detail="Session not found")
-        else:
-            primary_model_id, config_path_str = _resolve_active_model_attribution(
-                trace_id=trace_id,
-            )
-            session = await repo.create(
-                SessionCreate(),
-                user_id=request_user.user_id,
-                primary_model_at_creation=primary_model_id,
-                model_config_path=config_path_str,
-            )
+    if session_id:
+        try:
+            parsed_session_id = UUID(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="session_id must be a valid UUID") from exc
+        session = await repo.get(parsed_session_id, user_id=request_user.user_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+    else:
+        primary_model_id, config_path_str = _resolve_active_model_attribution(
+            trace_id=trace_id,
+        )
+        session = await repo.create(
+            SessionCreate(),
+            user_id=request_user.user_id,
+            primary_model_at_creation=primary_model_id,
+            model_config_path=config_path_str,
+        )
 
     # FRE-51: await prior turn's assistant append (NoOp: background task; Redis: session-writer).
     sid = str(cast(UUID, session.session_id))
@@ -2090,23 +2061,21 @@ async def _chat_impl(
         await _pending_append_tasks.pop(sid)
 
     # --- Phase: session_hydration ---
-    with timer.span("session_hydration"):
-        db_messages = list(session.messages or [])
-        max_history = settings.conversation_max_history_messages
-        prior_messages = db_messages[-max_history:] if max_history > 0 else db_messages
+    db_messages = list(session.messages or [])
+    max_history = settings.conversation_max_history_messages
+    prior_messages = db_messages[-max_history:] if max_history > 0 else db_messages
 
     # --- Phase: db_append_user_message ---
-    with timer.span("db_append_user_message"):
-        await repo.append_message(
-            cast(UUID, session.session_id),
-            {
-                "role": "user",
-                "content": message,
-                "trace_id": trace_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "metadata": {"source": "service.app"},
-            },
-        )
+    await repo.append_message(
+        cast(UUID, session.session_id),
+        {
+            "role": "user",
+            "content": message,
+            "trace_id": trace_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"source": "service.app"},
+        },
+    )
 
     # Resolve the primary model selection for this turn (ADR-0121 §4).
     # An explicit `model` is a direct instruction (not the PWA's stale-reload
@@ -2183,24 +2152,23 @@ async def _chat_impl(
 
     gateway_output = None
     try:
-        with timer.span("gateway_pipeline"):
-            memory_adapter = (
-                MemoryServiceAdapter(service=memory_service)
-                if memory_service and memory_service.driver
-                else None
-            )
-            gateway_output = await run_gateway_pipeline(
-                user_message=message,
-                session_id=str(session.session_id),
-                session_messages=prior_messages,
-                trace_id=trace_id,
-                mode=get_current_mode(),
-                memory_adapter=memory_adapter,
-                expansion_budget=expansion_budget,
-                full_session_messages=db_messages,
-                user_id=request_user.user_id,
-                authenticated=True,
-            )
+        memory_adapter = (
+            MemoryServiceAdapter(service=memory_service)
+            if memory_service and memory_service.driver
+            else None
+        )
+        gateway_output = await run_gateway_pipeline(
+            user_message=message,
+            session_id=str(session.session_id),
+            session_messages=prior_messages,
+            trace_id=trace_id,
+            mode=get_current_mode(),
+            memory_adapter=memory_adapter,
+            expansion_budget=expansion_budget,
+            full_session_messages=db_messages,
+            user_id=request_user.user_id,
+            authenticated=True,
+        )
     except Exception as e:
         log.warning(
             "gateway_pipeline_failed",
@@ -2218,20 +2186,19 @@ async def _chat_impl(
     try:
         from personal_agent.orchestrator import Orchestrator
 
-        with timer.span("orchestrator_setup"):
-            orchestrator = Orchestrator()
-            session_manager = orchestrator.session_manager
+        orchestrator = Orchestrator()
+        session_manager = orchestrator.session_manager
 
-            orchestrator_session = session_manager.get_session(str(session.session_id))
-            if not orchestrator_session:
-                from personal_agent.orchestrator.channels import Channel
+        orchestrator_session = session_manager.get_session(str(session.session_id))
+        if not orchestrator_session:
+            from personal_agent.orchestrator.channels import Channel
 
-                session_manager.create_session(
-                    get_current_mode(), Channel.CHAT, session_id=str(session.session_id)
-                )
+            session_manager.create_session(
+                get_current_mode(), Channel.CHAT, session_id=str(session.session_id)
+            )
 
-            if prior_messages:
-                session_manager.update_session(str(session.session_id), messages=prior_messages)
+        if prior_messages:
+            session_manager.update_session(str(session.session_id), messages=prior_messages)
 
         if scheduler:
             scheduler.notify_request_start()
@@ -2243,7 +2210,6 @@ async def _chat_impl(
             mode=None,
             channel=None,
             trace_id=trace_id,
-            request_timer=timer,
             gateway_output=gateway_output,
             user_id=request_user.user_id,
             user_email=request_user.email,
@@ -2274,21 +2240,6 @@ async def _chat_impl(
         if session_id:
             get_deduplicator().release(session_id, message)
 
-    # --- Emit timing breakdown (before response so timer reflects time-to-reply) ---
-    breakdown = timer.to_breakdown()
-    total_ms = timer.get_total_ms()
-
-    log.info(
-        REQUEST_TIMING,
-        trace_id=trace_id,
-        session_id=str(session.session_id),
-        total_ms=total_ms,
-        phases=[
-            {"phase": s["phase"], "duration_ms": s["duration_ms"], "offset_ms": s["offset_ms"]}
-            for s in breakdown
-        ],
-    )
-
     # Durable side effects: Redis Streams (FRE-158) or legacy fire-and-forget (NoOp bus).
     bus = get_event_bus()
     if isinstance(bus, RedisStreamBus):
@@ -2298,7 +2249,6 @@ async def _chat_impl(
             release_session_write_wait,
         )
 
-        # Published after response timing is finalized (full RequestTimer spans in event).
         register_session_write_waiter(sid)
         try:
             await bus.publish(
@@ -2307,8 +2257,6 @@ async def _chat_impl(
                     trace_id=trace_id,
                     session_id=sid,
                     assistant_response=response_content,
-                    trace_summary=timer.to_trace_summary(),
-                    trace_breakdown=timer.to_breakdown(),
                     source_component="service.app",
                     eval_mode=(channel.upper() == "EVAL"),
                     user_id=request_user.user_id,
@@ -2318,15 +2266,6 @@ async def _chat_impl(
             release_session_write_wait(sid)
             raise
     else:
-        if es_handler and getattr(es_handler, "_connected", False):
-            asyncio.create_task(
-                es_handler.es_logger.index_request_trace(
-                    trace_id=trace_id,
-                    timer=timer,
-                    session_id=str(session.session_id),
-                    user_id=request_user.user_id,
-                )
-            )
         session_uuid = cast(UUID, session.session_id)
         task = asyncio.create_task(
             _append_assistant_message_background(session_uuid, response_content, trace_id)

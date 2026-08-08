@@ -10,6 +10,8 @@ from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from opentelemetry.trace import Status, StatusCode
+
 from personal_agent.brainstem import ModeManager, get_mode_manager
 from personal_agent.config import load_governance_config, settings
 from personal_agent.governance.models import GovernanceConfig, Mode
@@ -22,6 +24,7 @@ from personal_agent.telemetry import (
     get_logger,
 )
 from personal_agent.telemetry.events import TOOL_SCHEMA_VALIDATION_FAILED
+from personal_agent.telemetry.spans import tool_call_span
 from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.types import ToolResult
 
@@ -424,86 +427,91 @@ class ToolExecutionLayer:
                 latency_ms=0.0,
             )
 
-        # 4. Emit telemetry (start)
-        span_ctx, span_id = trace_ctx.new_span()
-        log.info(
-            TOOL_CALL_STARTED,
-            tool_name=tool_name,
-            arguments=filtered_arguments,  # Log filtered arguments
-            trace_id=trace_ctx.trace_id,
-            span_id=span_id,
-        )
-
-        # 5. Execute (with timeout handling)
-        start_time = time.time()
-
-        try:
-            # Execute tool (async or sync executor). Pass ctx to executors that accept it.
-            import inspect
-
-            sig = inspect.signature(executor)
-            pass_ctx = "ctx" in sig.parameters
-            if pass_ctx:
-                filtered_arguments = {**filtered_arguments, "ctx": trace_ctx}
-
-            if inspect.iscoroutinefunction(executor):
-                result = await executor(**filtered_arguments)
-            else:
-                # Sync executor - run in thread pool to avoid blocking
-                import asyncio
-
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(None, lambda: executor(**filtered_arguments))
-
-            latency_ms = (time.time() - start_time) * 1000
-
-            # 6. Emit telemetry (complete)
+        # 4. Emit telemetry (start) — ADR-0129 D3 / FRE-1067: a real OTel span,
+        # child of the currently open step span. span_id used in the retained
+        # log records below (D3, AC-11) is the span's own id, not a hand-minted one.
+        with tool_call_span(tool_name=tool_name) as span:
+            span_id = format(span.get_span_context().span_id, "016x")
             log.info(
-                TOOL_CALL_COMPLETED,
+                TOOL_CALL_STARTED,
                 tool_name=tool_name,
-                success=True,
-                latency_ms=latency_ms,
+                arguments=filtered_arguments,  # Log filtered arguments
                 trace_id=trace_ctx.trace_id,
                 span_id=span_id,
             )
 
-            return ToolResult(
-                tool_name=tool_name,
-                success=True,
-                output=result,
-                error=None,
-                latency_ms=latency_ms,
-            )
+            # 5. Execute (with timeout handling)
+            start_time = time.time()
 
-        except Exception as e:
-            latency_ms = (time.time() - start_time) * 1000
+            try:
+                # Execute tool (async or sync executor). Pass ctx to executors that accept it.
+                import inspect
 
-            log.error(
-                TOOL_CALL_FAILED,
-                tool_name=tool_name,
-                error=str(e),
-                latency_ms=latency_ms,
-                trace_id=trace_ctx.trace_id,
-                session_id=session_id,
-                span_id=span_id,
-                exc_info=True,
-            )
+                sig = inspect.signature(executor)
+                pass_ctx = "ctx" in sig.parameters
+                if pass_ctx:
+                    filtered_arguments = {**filtered_arguments, "ctx": trace_ctx}
 
-            # FRE-402: preserve terminality (and its user-facing guidance) through
-            # the flatten so the orchestrator can short-circuit the reasoning loop.
-            metadata: dict[str, Any] = {}
-            if isinstance(e, TerminalToolError):
-                metadata = {
-                    "terminal": True,
-                    "terminal_reason": e.reason,
-                    "terminal_next_step": e.next_step,
-                }
+                if inspect.iscoroutinefunction(executor):
+                    result = await executor(**filtered_arguments)
+                else:
+                    # Sync executor - run in thread pool to avoid blocking
+                    import asyncio
 
-            return ToolResult(
-                tool_name=tool_name,
-                success=False,
-                output={},
-                error=str(e),
-                latency_ms=latency_ms,
-                metadata=metadata,
-            )
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(
+                        None, lambda: executor(**filtered_arguments)
+                    )
+
+                latency_ms = (time.time() - start_time) * 1000
+
+                # 6. Emit telemetry (complete)
+                log.info(
+                    TOOL_CALL_COMPLETED,
+                    tool_name=tool_name,
+                    success=True,
+                    trace_id=trace_ctx.trace_id,
+                    span_id=span_id,
+                )
+
+                return ToolResult(
+                    tool_name=tool_name,
+                    success=True,
+                    output=result,
+                    error=None,
+                    latency_ms=latency_ms,
+                )
+
+            except Exception as e:
+                latency_ms = (time.time() - start_time) * 1000
+                span.record_exception(e)
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+
+                log.error(
+                    TOOL_CALL_FAILED,
+                    tool_name=tool_name,
+                    error=str(e),
+                    trace_id=trace_ctx.trace_id,
+                    session_id=session_id,
+                    span_id=span_id,
+                    exc_info=True,
+                )
+
+                # FRE-402: preserve terminality (and its user-facing guidance) through
+                # the flatten so the orchestrator can short-circuit the reasoning loop.
+                metadata: dict[str, Any] = {}
+                if isinstance(e, TerminalToolError):
+                    metadata = {
+                        "terminal": True,
+                        "terminal_reason": e.reason,
+                        "terminal_next_step": e.next_step,
+                    }
+
+                return ToolResult(
+                    tool_name=tool_name,
+                    success=False,
+                    output={},
+                    error=str(e),
+                    latency_ms=latency_ms,
+                    metadata=metadata,
+                )

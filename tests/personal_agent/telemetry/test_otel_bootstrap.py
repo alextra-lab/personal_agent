@@ -6,7 +6,9 @@ no OTLP or network span exporter.
 
 from __future__ import annotations
 
+from opentelemetry.propagate import get_global_textmap
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from personal_agent.telemetry.otel_bootstrap import configure_tracing
 
@@ -31,3 +33,13 @@ def test_configure_tracing_resource_carries_service_name() -> None:
     provider = configure_tracing(service_name="test-service")
 
     assert provider.resource.attributes.get("service.name") == "test-service"
+
+
+def test_configure_tracing_sets_explicit_w3c_propagator() -> None:
+    """AC-14 depends on ``opentelemetry.propagate.inject`` using W3C traceparent —
+    set explicitly at bootstrap rather than relying on the SDK's default
+    (ADR-0129 D1: explicit propagation over implicit convention).
+    """
+    configure_tracing(service_name="test-service")
+
+    assert isinstance(get_global_textmap(), TraceContextTextMapPropagator)

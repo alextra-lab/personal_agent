@@ -261,12 +261,11 @@ def assemble_route_trace(
         getattr(s, "success", False) and (getattr(s, "summary", "") or "") for s in subs
     )
 
-    request_timer = getattr(ctx, "request_timer", None)
+    # ADR-0129 D3 (FRE-1067): RequestTimer is retired — these two fields have
+    # no source going forward. RouteTraceRow keeps both columns (Postgres
+    # schema change is out of scope); rows assembled from here on carry None.
     latency_total_ms: float | None = None
     latency_breakdown: dict[str, Any] | None = None
-    if request_timer is not None:
-        latency_total_ms = request_timer.get_total_ms()
-        latency_breakdown = request_timer.to_trace_summary()
 
     error = getattr(ctx, "error", None)
     classified = getattr(ctx, "classified_error", None)

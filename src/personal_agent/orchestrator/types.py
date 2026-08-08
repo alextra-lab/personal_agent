@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     from personal_agent.orchestrator.constraint_options import ConstraintDecision
     from personal_agent.orchestrator.expansion_types import ExpansionPlan, PhaseResult
     from personal_agent.orchestrator.sub_agent_types import SubAgentResult
-    from personal_agent.telemetry.request_timer import RequestTimer
 
 
 class TaskState(str, Enum):
@@ -333,8 +332,12 @@ class ExecutionContext:
     recall_candidates: tuple["RecallCandidateRecord", ...] = ()
     turn_evidence: "TurnEvidence | None" = None
 
-    # Request timing (FRE-37): inline span-based instrumentation
-    request_timer: "RequestTimer | None" = None
+    # ADR-0129 D3 (FRE-1067): set by step_tool_execution just before it returns,
+    # reset to 0 at its own entry — the driver loop's step-span closure reads
+    # this back as the step span's "tool_count" attribute once the step
+    # function returns something other than TOOL_EXECUTION. Not a durable
+    # count; a single-use handoff channel for the step currently in flight.
+    last_tool_execution_count: int = 0
 
     # Gateway output (Cognitive Architecture Redesign v2)
     gateway_output: GatewayOutput | None = None  # From request_gateway pipeline

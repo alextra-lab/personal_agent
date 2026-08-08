@@ -154,8 +154,6 @@ class TestRequestCompletedEvent:
             trace_id="t1",
             session_id="s1",
             assistant_response="hi",
-            trace_summary={"total_duration_ms": 1.0, "total_steps": 0, "phases_summary": {}},
-            trace_breakdown=[],
             source_component="test",
         )
         assert event.event_type == "request.completed"
@@ -165,8 +163,6 @@ class TestRequestCompletedEvent:
             trace_id="t1",
             session_id="s1",
             assistant_response="reply",
-            trace_summary={"total_duration_ms": 2.5, "total_steps": 1, "phases_summary": {"a": 1}},
-            trace_breakdown=[{"phase": "setup", "name": "n", "sequence": 1}],
             source_component="test",
         )
         data = event.model_dump(mode="json")
@@ -175,16 +171,14 @@ class TestRequestCompletedEvent:
 
     def test_user_id_roundtrips_through_redis_serialization(self) -> None:
         """ADR-0107 D5: user_id must survive the Redis Streams JSON round-trip
-        so the cg:es-indexer consumer (a separate task from the originating
-        request) can thread it into the request_trace ES doc.
+        so a consumer running in its own long-lived task (a separate task from
+        the originating request) still has it.
         """
         user_id = uuid.uuid4()
         event = RequestCompletedEvent(
             trace_id="t1",
             session_id="s1",
             assistant_response="reply",
-            trace_summary={},
-            trace_breakdown=[],
             source_component="test",
             user_id=user_id,
         )
@@ -198,8 +192,6 @@ class TestRequestCompletedEvent:
             trace_id="t1",
             session_id="s1",
             assistant_response="reply",
-            trace_summary={},
-            trace_breakdown=[],
             source_component="test",
         )
         assert event.user_id is None
@@ -221,8 +213,6 @@ class TestParseStreamEvent:
             trace_id="t",
             session_id="s",
             assistant_response="x",
-            trace_summary={},
-            trace_breakdown=[],
             source_component="test",
         )
         parsed = parse_stream_event(event.model_dump(mode="json"))

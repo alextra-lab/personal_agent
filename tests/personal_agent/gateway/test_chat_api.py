@@ -299,7 +299,7 @@ def test_gateway_emits_model_call_completed_with_identity() -> None:
         _emit_gateway_model_call_completed(
             trace_id="trace-xyz",
             session_id="11111111-1111-1111-1111-111111111111",
-            latency_ms=987,
+            span_id="0123456789abcdef",
             final_message=final_message,
         )
 
@@ -322,7 +322,7 @@ def test_gateway_emit_tolerates_missing_usage() -> None:
         _emit_gateway_model_call_completed(
             trace_id="t",
             session_id="s",
-            latency_ms=10,
+            span_id="fedcba9876543210",
             final_message=None,
         )
 
@@ -339,9 +339,7 @@ def test_gateway_emit_tolerates_missing_usage() -> None:
 #
 # This publish site is confirmed unreachable in production today (the
 # "seshat-gateway" container actually runs personal_agent.service.app:app, not
-# gateway.app:gateway_app — the only place chat_router is mounted). Fixed
-# anyway per the ticket's explicit ask, so a real deployment of this process
-# would not produce degraded request_trace documents.
+# gateway.app:gateway_app — the only place chat_router is mounted).
 
 
 class _FakeAnthropicStream:
@@ -366,11 +364,13 @@ class _FakeAnthropicStream:
         return self._final_message
 
 
-def test_stream_to_queue_publishes_real_trace_summary_and_user_id() -> None:
-    """Redis branch publishes a real trace_summary/breakdown shape plus user_id.
+def test_stream_to_queue_publishes_user_id_and_no_timer_fields() -> None:
+    """Redis branch publishes identity fields; carries no RequestTimer payload.
 
-    Not the old hard-coded model/steps_count/final_state dict with an empty
-    breakdown and no identity.
+    ADR-0129 D3 / FRE-1067 retired RequestTimer and the
+    trace_summary/trace_breakdown fields it fed — span timing now lives in
+    the OTel span tree (the model-call span this function opens), not this
+    event.
     """
     import asyncio
 
@@ -424,8 +424,6 @@ def test_stream_to_queue_publishes_real_trace_summary_and_user_id() -> None:
     payload = orjson.loads(fields["data"])
     assert payload["user_id"] == str(user_id)
     assert payload["source_component"] == "gateway.chat_api"
-    breakdown = payload["trace_breakdown"]
-    assert any(entry.get("name") == "llm_call:anthropic_stream" for entry in breakdown), breakdown
-    summary = payload["trace_summary"]
-    assert set(summary.keys()) == {"total_duration_ms", "total_steps", "phases_summary"}
-    assert summary["total_steps"] >= 1
+    assert payload["assistant_response"] == "Hello world"
+    assert "trace_summary" not in payload
+    assert "trace_breakdown" not in payload

@@ -33,7 +33,7 @@ from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.service.models import SessionModel
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.telemetry import get_logger
-from personal_agent.telemetry.request_timer import RequestTimer
+from personal_agent.telemetry.spans import model_call_span
 from personal_agent.transport.agui.transport import _push_event
 from personal_agent.transport.events import TextDeltaEvent
 
@@ -92,17 +92,17 @@ async def _stream_to_queue(
     """
     session_id_str = str(session_uuid)
     start_time = time.time()
-    # FRE-1033: separate from `start_time` above, which feeds unrelated
-    # cost/latency telemetry (FRE-989) — this timer is only for the
-    # request.completed trace_summary/trace_breakdown.
-    timer = RequestTimer(trace_id=trace_id)
 
     # --- Stream from Anthropic --------------------------------------------
     full_text = ""
     final_message: Any = None
+    _model_call_span_id: str | None = None
     try:
         client = anthropic.AsyncAnthropic(api_key=api_key, http_client=create_guarded_http_client())
-        with timer.span("llm_call:anthropic_stream"):
+        with model_call_span(
+            role="primary", model=f"anthropic/{_CLOUD_MODEL}", provider="anthropic"
+        ) as _call_span:
+            _model_call_span_id = format(_call_span.get_span_context().span_id, "016x")
             async with client.messages.stream(
                 model=_CLOUD_MODEL,
                 max_tokens=_MAX_TOKENS,
@@ -138,8 +138,6 @@ async def _stream_to_queue(
                         trace_id=trace_id,
                         session_id=session_id_str,
                         assistant_response=full_text,
-                        trace_summary=timer.to_trace_summary(),
-                        trace_breakdown=timer.to_breakdown(),
                         source_component="gateway.chat_api",
                         user_id=user_id,
                     ),
@@ -212,7 +210,7 @@ async def _stream_to_queue(
         _emit_gateway_model_call_completed(
             trace_id=trace_id,
             session_id=session_id_str,
-            latency_ms=_latency_ms,
+            span_id=_model_call_span_id or uuid4().hex,
             final_message=final_message,
         )
         # FRE-989 finding seven: telemetry alone is not the ledger. Write the
@@ -383,7 +381,7 @@ def _emit_gateway_model_call_completed(
     *,
     trace_id: str,
     session_id: str,
-    latency_ms: int,
+    span_id: str,
     final_message: Any,
 ) -> None:
     """Emit the canonical ``model_call_completed`` for the gateway chat path.
@@ -398,7 +396,8 @@ def _emit_gateway_model_call_completed(
     Args:
         trace_id: Correlation id for the request.
         session_id: Session id string for identity threading.
-        latency_ms: Wall-clock latency of the streamed call.
+        span_id: Real OTel span id of the model-call span this turn opened
+            (ADR-0129 D3 / FRE-1067), rendered as 16 lowercase hex chars.
         final_message: Anthropic final message (carries ``usage``), or None.
     """
     try:
@@ -428,8 +427,7 @@ def _emit_gateway_model_call_completed(
             endpoint="anthropic",
             provider="anthropic",
             trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
-            span_id=uuid4().hex,
-            latency_ms=latency_ms,
+            span_id=span_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             prompt_identity=identity,

@@ -3,9 +3,11 @@
 After FRE-376 Phase 3 removed the ``litellm_request_complete`` event and its
 legacy field aliases (``prompt_tokens``, ``completion_tokens``, ``tokens``,
 ``cache_write_tokens``), these tests assert the canonical
-``model_call_completed`` event payload includes ``latency_ms``,
-``input_tokens``, ``output_tokens``, ``total_tokens``, ``endpoint``, and
-``cache_creation_input_tokens``.
+``model_call_completed`` event payload includes ``input_tokens``,
+``output_tokens``, ``total_tokens``, ``endpoint``, and
+``cache_creation_input_tokens``. ADR-0129 D3 / FRE-1067 additionally retired
+``latency_ms`` from this payload — span duration is intrinsic to the
+model-call span now, so there is no elapsed-time field left to assert here.
 
 The Phase 2 contract (canonical-field frozenset) is enforced in
 ``test_telemetry_parity.py``; this file complements it with a runtime
@@ -150,12 +152,15 @@ async def test_model_call_completed_includes_input_tokens() -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_call_completed_includes_latency_ms() -> None:
+async def test_model_call_completed_excludes_latency_ms() -> None:
+    """ADR-0129 D3 / FRE-1067 AC-9: span duration is intrinsic — no second
+    elapsed-time field survives on the converted model-call path.
+    """
     calls: list[tuple] = []
     await _call_respond(calls)
     kwargs = _get_completed_event(calls)
-    assert "latency_ms" in kwargs
-    assert isinstance(kwargs["latency_ms"], int)
+    assert "latency_ms" not in kwargs
+    assert "duration_ms" not in kwargs
 
 
 @pytest.mark.asyncio

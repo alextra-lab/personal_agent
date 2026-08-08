@@ -16,10 +16,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from personal_agent.events.models import RequestCompletedEvent
-from personal_agent.events.request_completed_handlers import (
-    build_request_trace_es_handler,
-    build_session_writer_handler,
-)
+from personal_agent.events.request_completed_handlers import build_session_writer_handler
 from personal_agent.governance.models import Mode
 from personal_agent.orchestrator import Channel
 from personal_agent.orchestrator.executor import (
@@ -200,57 +197,6 @@ async def test_reflection_runs_when_eval_mode_false() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ES trace handler gate
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_es_trace_handler_skips_events_with_eval_mode() -> None:
-    """ES trace handler must skip RequestCompletedEvent when eval_mode=True."""
-    mock_es_handler = MagicMock()
-    mock_es_handler._connected = True
-    mock_es_handler.es_logger = AsyncMock()
-
-    handler = build_request_trace_es_handler(mock_es_handler)
-
-    event = RequestCompletedEvent(
-        trace_id="eval-trace-123",
-        session_id="eval-session-456",
-        assistant_response="eval reply",
-        trace_summary={},
-        trace_breakdown=[],
-        source_component="test",
-        eval_mode=True,
-    )
-    await handler(event)
-
-    mock_es_handler.es_logger.index_request_trace_from_snapshot.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_es_trace_handler_indexes_non_eval_events() -> None:
-    """ES trace handler must index RequestCompletedEvent when eval_mode=False."""
-    mock_es_handler = MagicMock()
-    mock_es_handler._connected = True
-    mock_es_handler.es_logger = AsyncMock()
-
-    handler = build_request_trace_es_handler(mock_es_handler)
-
-    event = RequestCompletedEvent(
-        trace_id="real-trace-123",
-        session_id="real-session-456",
-        assistant_response="real reply",
-        trace_summary={},
-        trace_breakdown=[],
-        source_component="test",
-        eval_mode=False,
-    )
-    await handler(event)
-
-    mock_es_handler.es_logger.index_request_trace_from_snapshot.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
 # Session writer continues for eval (multi-turn eval continuity)
 # ---------------------------------------------------------------------------
 
@@ -273,8 +219,6 @@ async def test_session_writer_runs_for_eval_events() -> None:
         trace_id="eval-trace-789",
         session_id=str(uuid4()),
         assistant_response="eval multi-turn reply",
-        trace_summary={},
-        trace_breakdown=[],
         source_component="test",
         eval_mode=True,
     )

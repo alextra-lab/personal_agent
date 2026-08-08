@@ -221,6 +221,73 @@ models:
             assert "CF-Access-Client-Id" not in headers
 
     @pytest.mark.asyncio
+    async def test_respond_injects_w3c_traceparent_alongside_legacy_headers(
+        self, client: LocalLLMClient
+    ) -> None:
+        """AC-14 (ADR-0129 D3 / FRE-1067): a well-formed W3C traceparent header
+        is sent, its trace-id matches the active model-call span's trace id,
+        and the legacy X-Trace-Id/X-Span-Id headers are still sent (slm_server
+        still reads them; their removal is a separate cross-repo change).
+        """
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        from personal_agent.telemetry.spans import model_call_span as real_model_call_span
+
+        test_provider = TracerProvider()
+        exporter = InMemorySpanExporter()
+        test_provider.add_span_processor(SimpleSpanProcessor(exporter))
+        test_tracer = test_provider.get_tracer("test-client-traceparent")
+
+        def _model_call_span_with_test_tracer(*, role: str, model: str, provider: str):
+            return real_model_call_span(
+                role=role, model=model, provider=provider, tracer=test_tracer
+            )
+
+        mock_response = {
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+        }
+        with (
+            patch("httpx.AsyncClient") as mock_client_class,
+            patch(
+                "personal_agent.llm_client.client.model_call_span",
+                side_effect=_model_call_span_with_test_tracer,
+            ),
+        ):
+            mock_client = AsyncMock()
+            mock_client.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            trace_ctx = TraceContext.new_trace(session_id="sess-tp")
+            await client.respond(
+                role=ModelRole.PRIMARY,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=trace_ctx,
+            )
+
+            headers = mock_client.stream.call_args[1]["headers"]
+            # Legacy headers retained.
+            assert headers["X-Trace-Id"] == str(trace_ctx.trace_id)
+            assert "X-Span-Id" in headers
+
+            assert "traceparent" in headers
+            parts = headers["traceparent"].split("-")
+            assert len(parts) == 4, f"malformed traceparent: {headers['traceparent']!r}"
+            version, tp_trace_id, tp_span_id, flags = parts
+            assert version == "00"
+            assert len(tp_trace_id) == 32
+            assert len(tp_span_id) == 16
+            assert len(flags) == 2
+
+            (finished_span,) = exporter.get_finished_spans()
+            assert tp_trace_id == format(finished_span.context.trace_id, "032x")
+            assert tp_span_id == headers["X-Span-Id"]
+
+    @pytest.mark.asyncio
     async def test_respond_never_sends_cf_access_headers_on_tunnel(
         self, tunnel_client: LocalLLMClient
     ) -> None:

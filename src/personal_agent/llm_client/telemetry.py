@@ -6,14 +6,12 @@ Both :class:`personal_agent.llm_client.client.LocalLLMClient` and
 module so a request handler that switches between local and cloud paths
 cannot tell the difference from telemetry alone.
 
-The canonical field contract is enumerated in
-:data:`personal_agent.telemetry.events.CANONICAL_MODEL_CALL_STARTED_FIELDS` and
-:data:`personal_agent.telemetry.events.CANONICAL_MODEL_CALL_COMPLETED_FIELDS`.
-The Phase 2 parity test imports those frozensets directly and asserts that
-both clients emit a superset — adding a new required field there forces
-every model client to populate it.
+ADR-0129 D3 / FRE-1067: the field-contract frozensets this module used to cite
+(``CANONICAL_MODEL_CALL_STARTED_FIELDS`` / ``CANONICAL_MODEL_CALL_COMPLETED_FIELDS``)
+are retired — the parity test now asserts span-attribute conformance (real
+OTel span id, ``gen_ai.*`` attributes) instead of a frozen field-name set.
 
-FRE-376 Phase 3 (this revision): the back-compat aliases (``model_id``,
+FRE-376 Phase 3: the back-compat aliases (``model_id``,
 ``prompt_tokens``, ``completion_tokens``, ``tokens``, ``cache_write_tokens``)
 and the legacy ``litellm_request_*`` event names have been removed. Consumers
 must read the canonical names (``model``, ``input_tokens``, ``output_tokens``,
@@ -106,7 +104,6 @@ def emit_model_call_completed(
     provider: str,
     trace_ctx: TraceContext,
     span_id: str,
-    latency_ms: int,
     input_tokens: int | None,
     output_tokens: int | None,
     prompt_identity: PromptIdentity,
@@ -126,8 +123,8 @@ def emit_model_call_completed(
             attributed against (ADR-0121 §8, replacing the retired
             ``TraceContext.profile``).
         trace_ctx: Trace context as passed into the call (pre-``new_span``).
-        span_id: Span id of the model call (same one used in ``_started``).
-        latency_ms: Wall-clock latency of the call in milliseconds.
+        span_id: Span id of the model call (same one used in ``_started``);
+            the real OTel model-call span id (ADR-0129 D3 / FRE-1067).
         input_tokens: Prompt token count, when reported by the provider.
         output_tokens: Completion token count, when reported by the provider.
         prompt_identity: Identity of the prompt sent on this call (ADR-0078 D1/D4).
@@ -139,13 +136,19 @@ def emit_model_call_completed(
         cache_read_tokens: Provider-specific cache-read token count.
         extra: Provider-specific fields to merge into the emit
             (e.g. ``{"api_type": ..., "fallback_used": ..., "cost_usd": ...}``).
+
+    Note:
+        Carries no ``latency_ms``/``duration_ms`` (ADR-0129 D3 / FRE-1067 AC-9)
+        — span duration is intrinsic to the model-call span now, so there is
+        no second elapsed-time field to diverge from it. Callers that still
+        need wall-clock latency for a durable ledger (e.g. Postgres
+        ``api_costs.latency_ms``) compute and record it separately.
     """
     payload: dict[str, Any] = {
         "model": model,
         "provider": provider,
         "role": role,
         "endpoint": endpoint,
-        "latency_ms": latency_ms,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,

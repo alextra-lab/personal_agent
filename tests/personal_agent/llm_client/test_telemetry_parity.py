@@ -4,13 +4,14 @@ Two layers of test:
 
 1. **Helper contract** (``TestCanonicalEmitContract``) — calls
    :func:`emit_model_call_started` / :func:`emit_model_call_completed`
-   directly against a mock logger and asserts the kwargs cover the
-   canonical field sets defined in
-   :data:`personal_agent.telemetry.events.CANONICAL_MODEL_CALL_STARTED_FIELDS`
-   /
-   :data:`personal_agent.telemetry.events.CANONICAL_MODEL_CALL_COMPLETED_FIELDS`.
-   Adding a required field to those frozensets forces this test to fail
-   until the helper is updated.
+   directly against a mock logger and asserts specific expected fields are
+   present with correct values. ADR-0129 D3 / FRE-1067 retired the
+   ``CANONICAL_MODEL_CALL_*_FIELDS`` frozensets this used to diff against
+   (span attribute conformance — real OTel span id, ``gen_ai.*``
+   attributes — is asserted by the span-tree integration test instead,
+   since spans are created by the *callers* of these helpers, not by the
+   helpers themselves) — this layer now asserts span-attribute-adjacent
+   contract directly: no ``latency_ms``/``duration_ms``, no legacy aliases.
 
 2. **Client wiring** (``TestClientWiring``) — patches the helpers at each
    client's import site and verifies the clients invoke them with the
@@ -50,11 +51,24 @@ def _identity() -> Any:
     )
 
 
-from personal_agent.telemetry.events import (
-    CANONICAL_MODEL_CALL_COMPLETED_FIELDS,
-    CANONICAL_MODEL_CALL_STARTED_FIELDS,
-)
 from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
+
+# ADR-0129 D3 / FRE-1067: replaces the retired CANONICAL_MODEL_CALL_*_FIELDS
+# frozensets — the fields both emits are still expected to carry.
+_EXPECTED_STARTED_FIELDS = frozenset(
+    {"model", "provider", "role", "endpoint", "trace_id", "session_id", "span_id", "parent_span_id"}
+)
+_EXPECTED_COMPLETED_FIELDS = _EXPECTED_STARTED_FIELDS | frozenset(
+    {
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "prompt_callsite",
+        "prompt_component_ids",
+        "prompt_static_prefix_hash",
+        "prompt_dynamic_hash",
+    }
+)
 
 
 def _ctx_with_session() -> TraceContext:
@@ -77,10 +91,10 @@ def _ctx_with_session() -> TraceContext:
 
 
 class TestCanonicalEmitContract:
-    """The helpers must cover the canonical field set on every call."""
+    """The helpers must cover the expected field set on every call."""
 
     def test_started_helper_emits_canonical_fields(self) -> None:
-        """``model_call_started`` kwargs cover ``CANONICAL_MODEL_CALL_STARTED_FIELDS``."""
+        """``model_call_started`` kwargs cover the expected started-field set."""
         log = MagicMock()
         ctx = _ctx_with_session()
 
@@ -97,15 +111,15 @@ class TestCanonicalEmitContract:
         log.info.assert_called_once()
         event_name, kwargs = log.info.call_args.args[0], log.info.call_args.kwargs
         assert event_name == "model_call_started"
-        missing = CANONICAL_MODEL_CALL_STARTED_FIELDS - set(kwargs)
-        assert not missing, f"started helper missing canonical fields: {missing}"
+        missing = _EXPECTED_STARTED_FIELDS - set(kwargs)
+        assert not missing, f"started helper missing expected fields: {missing}"
         assert kwargs["trace_id"] == ctx.trace_id
         assert kwargs["session_id"] == "11111111-1111-1111-1111-111111111111"
         assert kwargs["span_id"] == "33333333-3333-3333-3333-333333333333"
         assert kwargs["parent_span_id"] == "22222222-2222-2222-2222-222222222222"
 
     def test_completed_helper_emits_canonical_fields(self) -> None:
-        """``model_call_completed`` kwargs cover ``CANONICAL_MODEL_CALL_COMPLETED_FIELDS``."""
+        """``model_call_completed`` kwargs cover the expected completed-field set."""
         log = MagicMock()
         ctx = _ctx_with_session()
 
@@ -117,7 +131,6 @@ class TestCanonicalEmitContract:
             provider="anthropic",
             trace_ctx=ctx,
             span_id="33333333-3333-3333-3333-333333333333",
-            latency_ms=125,
             input_tokens=100,
             output_tokens=50,
             total_tokens=150,
@@ -127,14 +140,35 @@ class TestCanonicalEmitContract:
         log.info.assert_called_once()
         event_name, kwargs = log.info.call_args.args[0], log.info.call_args.kwargs
         assert event_name == "model_call_completed"
-        missing = CANONICAL_MODEL_CALL_COMPLETED_FIELDS - set(kwargs)
-        assert not missing, f"completed helper missing canonical fields: {missing}"
+        missing = _EXPECTED_COMPLETED_FIELDS - set(kwargs)
+        assert not missing, f"completed helper missing expected fields: {missing}"
         assert kwargs["input_tokens"] == 100
         assert kwargs["output_tokens"] == 50
-        assert kwargs["latency_ms"] == 125
         assert kwargs["prompt_callsite"] == "orchestrator.primary"
         assert kwargs["prompt_component_ids"] == ["operator_stanza"]
         assert len(kwargs["prompt_static_prefix_hash"]) == 16
+
+    def test_completed_helper_emits_no_latency_or_duration_fields(self) -> None:
+        """ADR-0129 D3 / FRE-1067 AC-9: span duration is intrinsic — no
+        elapsed-time field survives on the converted model-call path.
+        """
+        log = MagicMock()
+        emit_model_call_completed(
+            log=log,
+            role="primary",
+            model="anthropic/claude-sonnet-4-6",
+            endpoint="anthropic",
+            provider="anthropic",
+            trace_ctx=_ctx_with_session(),
+            span_id="33333333-3333-3333-3333-333333333333",
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            prompt_identity=_identity(),
+        )
+        kwargs = log.info.call_args.kwargs
+        assert "latency_ms" not in kwargs
+        assert "duration_ms" not in kwargs
 
     def test_completed_helper_drops_legacy_token_aliases(self) -> None:
         """Phase 3 (ADR-0074): ``prompt_tokens`` / ``completion_tokens`` / ``model_id`` aliases removed."""
@@ -147,7 +181,6 @@ class TestCanonicalEmitContract:
             provider="anthropic",
             trace_ctx=_ctx_with_session(),
             span_id="33333333-3333-3333-3333-333333333333",
-            latency_ms=125,
             input_tokens=100,
             output_tokens=50,
             total_tokens=150,

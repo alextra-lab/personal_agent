@@ -60,8 +60,24 @@ Sequenced after FRE-1064 (done, `Done` state confirmed via `get_issue`).
    that handler would just log `elasticsearch_log_failed` and return `None`, silently defeating
    AC-1..AC-6's "raises" requirement).
 
-3. **No environment split in this ticket.** `validate_document` always raises. FRE-1178 (C2) wraps
-   this call to catch-and-count in production; out of scope here per the ticket body.
+3. **No environment split in this ticket, but `log_event`'s "always raises" is scoped to its own
+   callers, not the whole queued pipeline** — a distinction the original plan missed and a codex
+   plan-review (post-implementation, 2026-08-08) surfaced. `es_logger.log_event` itself always
+   raises `VocabularyViolationError` under test/CI, proven directly (AC-1..AC-6). But
+   `ElasticsearchHandler._deliver()` — the real `emit()` -> queue -> `_deliver()` path every
+   structlog call in the app goes through — cannot let that propagate: the existing corpus already
+   carries retired spellings (`duration_ms`/`latency_ms`) at several live, frequently-hit call sites
+   (`llm_client/client.py`, `llm_client/cost_tracker.py`, `orchestrator/executor.py`'s skill-routing
+   path, `memory/service.py`'s recall path, `second_brain/`, `captains_log/feedback.py`,
+   `orchestrator/context_compressor.py`). Letting a violation kill the background delivery consumer
+   task would break ES telemetry delivery almost immediately on any real run, before those call
+   sites are ever cleaned up. `_deliver()` instead catches `VocabularyViolationError` distinctly from
+   `write_failures` — logs it at ERROR with the violated field/rule, counts it under a new
+   `vocabulary_violations` stat, and keeps the consumer alive. FRE-1178 (C2) still owns wiring that
+   counter into the joinability monitor for real production observability; this ticket only keeps a
+   violation from being indistinguishable from a transient ES error at delivery time. Cleaning up
+   the existing `duration_ms`/`latency_ms` call sites is real, valuable follow-up work, but is a
+   larger diff across unrelated files and belongs in its own ticket, not folded into this one.
 
 ## Files touched
 

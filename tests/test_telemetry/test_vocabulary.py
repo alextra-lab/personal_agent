@@ -33,6 +33,28 @@ def test_every_governed_type_rejects_wrong_type(governed_name: str, declared_typ
     assert exc_info.value.rule == "declared_type"
 
 
+def test_int_declared_field_rejects_a_bool() -> None:
+    """Rule 3: bool is a subclass of int, so isinstance alone would let it through.
+
+    Codex review (2026-08-08): ``input_tokens=True`` must fail exactly like
+    any other wrong-typed value, not silently pass because Python considers
+    ``bool`` an ``int``.
+    """
+    with pytest.raises(VocabularyViolationError) as exc_info:
+        validate_document({"input_tokens": True})
+    assert exc_info.value.rule == "declared_type"
+
+
+def test_a_null_governed_field_passes() -> None:
+    """Rule 3: a governed field with no value is not a type violation.
+
+    ``es_logger.log_event`` legitimately writes ``trace_id``/``span_id`` as
+    ``None`` when no trace context exists — Rule 3 must not treat that as a
+    declared-type failure.
+    """
+    validate_document({"trace_id": None, "span_id": None})  # must not raise
+
+
 def test_near_miss_threshold_is_085() -> None:
     """AC-3: the near-miss threshold is decided at 0.85, not left to implementation."""
     assert NEAR_MISS_THRESHOLD == 0.85

@@ -122,3 +122,22 @@ async def test_log_event_validates_the_timestamp_it_merges_itself() -> None:
 
     assert exc_info.value.field == "@timestamp"
     mock_client.index.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_log_event_validates_the_event_type_it_merges_itself() -> None:
+    """ADR-0133 AC-6: ``event_type``, merged from the positional argument, is checked too.
+
+    ``trace_id`` is not separately tested here: ``log_event`` always coerces it
+    to ``str(trace_id) if trace_id else None`` before merging, so it can never
+    carry a wrong-typed value regardless of what the caller passes in.
+    """
+    logger = ElasticsearchLogger()
+    mock_client = AsyncMock()
+    logger.client = mock_client
+
+    with pytest.raises(VocabularyViolationError) as exc_info:
+        await logger.log_event(12345, {})  # event_type declared str
+
+    assert exc_info.value.field == "event_type"
+    mock_client.index.assert_not_called()

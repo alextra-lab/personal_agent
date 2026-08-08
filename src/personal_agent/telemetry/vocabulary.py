@@ -167,7 +167,17 @@ def validate_document(doc: Mapping[str, Any]) -> None:
         if key not in doc:
             continue
         value = doc[key]
-        if value is not None and not isinstance(value, declared_type):
+        if value is None:
+            # trace_id/span_id are legitimately absent when no trace context
+            # exists (es_logger.log_event passes None, not a sentinel) — a
+            # governed field with no value is not a type violation.
+            continue
+        # bool is a subclass of int: isinstance(True, int) is True, so an
+        # int-declared field would otherwise silently accept a bool.
+        wrong_type = not isinstance(value, declared_type) or (
+            declared_type is int and isinstance(value, bool)
+        )
+        if wrong_type:
             raise VocabularyViolationError(
                 f"'{key}' must be {declared_type.__name__}, got {type(value).__name__}",
                 field=key,

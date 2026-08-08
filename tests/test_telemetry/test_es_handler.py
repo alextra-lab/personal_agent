@@ -712,6 +712,53 @@ async def test_plain_logging_fallback_record_still_reaches_the_validator() -> No
         )
 
 
+@pytest.mark.asyncio
+async def test_a_violation_through_the_real_queued_delivery_path_is_counted_distinctly() -> None:
+    """Codex review (2026-08-08): _deliver() must not conflate a violation with write_failures.
+
+    ``ElasticsearchHandler.emit()`` -> queue -> ``_deliver()`` is the delivery
+    path every structlog call in the app actually goes through — the AC-5 test
+    above calls ``log_event`` directly and never exercises it. The existing
+    corpus already carries retired spellings at several live call sites
+    (``duration_ms``/``latency_ms``), so letting a violation propagate out of
+    the background consumer would kill delivery on the very first one — it is
+    counted and logged distinctly instead, and the consumer keeps running.
+    """
+    handler, _ = await _handler_with_real_logger()
+
+    handler.emit(_record("task_started", duration_ms=12))  # retired spelling
+    await handler.drain(timeout=2.0)
+
+    stats = handler.stats()
+    assert stats.vocabulary_violations == 1
+    assert stats.write_failures == 0
+
+    consumer = handler._consumer
+    assert consumer is not None
+    assert not consumer.done()  # the consumer survives the violation
+
+    # And the consumer is still delivering normally afterward.
+    handler.emit(_record("task_started", session_id="sess-1"))
+    await handler.drain(timeout=2.0)
+    assert handler.stats().delivered == 1
+
+
+@pytest.mark.asyncio
+async def test_log_event_validates_even_when_elasticsearch_is_disconnected() -> None:
+    """A disconnected client must not hide a violation that would otherwise raise.
+
+    ``log_event`` used to check ``self.client`` before assembling and
+    validating ``doc``, so a violating record logged while Elasticsearch was
+    unreachable skipped validation entirely and just returned ``None`` —
+    silently, exactly the failure shape ADR-0133 exists to remove.
+    """
+    handler, _ = await _handler_with_real_logger()
+    handler.es_logger.client = None
+
+    with pytest.raises(VocabularyViolationError):
+        await handler.es_logger.log_event("task_started", {"duration_ms": 12})
+
+
 # ---------------------------------------------------------------------------
 # Payload shape (pre-existing coverage, preserved)
 # ---------------------------------------------------------------------------

@@ -23,7 +23,11 @@ class TraceSinkProtocol(Protocol):
     implementations of this protocol.
 
     Key invariants:
-        - ``log_event`` is best-effort and never raises to callers.
+        - ``log_event`` is best-effort for ES write/connectivity failures and
+          never raises those to callers — but ADR-0133 D2/D4 raises
+          ``VocabularyViolationError`` for a governed-vocabulary violation
+          under test/CI, deliberately not covered by that best-effort
+          contract (a development-time guarantee, not a delivery outcome).
         - ``search_events`` returns an empty list (not an exception) when
           no events match or the backend is unavailable.
         - ``index_document`` is idempotent when called with the same ``doc_id``.

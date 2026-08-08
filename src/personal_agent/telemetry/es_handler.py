@@ -38,8 +38,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from personal_agent.exceptions import ESHandlerLoopError
+from personal_agent.exceptions import ESHandlerLoopError, VocabularyViolationError
+from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.es_logger import ElasticsearchLogger
+
+log = get_logger(__name__)
 
 DEFAULT_QUEUE_MAXSIZE = 10_000
 """Bound on undelivered records held in memory.
@@ -154,10 +157,10 @@ class ESDeliveryStats:
     so neither side can be attributed from the exposed totals.
 
     What does hold, once a drain has settled, is the inequality
-    ``delivered + write_failures + dropped_shutdown + queue_depth <= enqueued``,
-    with the difference absorbed by the drop counters above. Read the drop
-    counters as the diagnostic; they are named by cause precisely because the
-    aggregate cannot be balanced.
+    ``delivered + write_failures + vocabulary_violations + dropped_shutdown +
+    queue_depth <= enqueued``, with the difference absorbed by the drop
+    counters above. Read the drop counters as the diagnostic; they are named
+    by cause precisely because the aggregate cannot be balanced.
 
     Attributes:
         enqueued: Records accepted onto the queue.
@@ -170,6 +173,11 @@ class ESDeliveryStats:
         enqueue_errors: Hand-offs that never reached the queue (dead/closed
             owner loop, serialization failure). Never opens the breaker.
         drain_timeouts: Drains that hit their deadline with work outstanding.
+        vocabulary_violations: Records that failed ADR-0133 validation.
+            Counted separately from ``write_failures`` — a governed-vocabulary
+            violation is a producer bug, not a transient Elasticsearch error,
+            and conflating the two would hide it in the noise. Does not open
+            the circuit breaker.
         queue_depth: Records currently waiting, at snapshot time.
     """
 
@@ -182,6 +190,7 @@ class ESDeliveryStats:
     dropped_shutdown: int
     enqueue_errors: int
     drain_timeouts: int
+    vocabulary_violations: int
     queue_depth: int
 
 
@@ -263,6 +272,7 @@ class ElasticsearchHandler(logging.Handler):
             "dropped_shutdown": 0,
             "enqueue_errors": 0,
             "drain_timeouts": 0,
+            "vocabulary_violations": 0,
         }
         self._last_stats_export = 0.0
         self._last_exported_counters: dict[str, int] = {}
@@ -630,6 +640,24 @@ class ElasticsearchHandler(logging.Handler):
                 index=item.index,
                 timestamp=item.timestamp,
             )
+        except VocabularyViolationError as e:
+            # Counted and logged distinctly from write_failures, not raised:
+            # the existing corpus already carries retired spellings at
+            # several live call sites (duration_ms/latency_ms), so letting
+            # this propagate out of the background consumer would kill
+            # delivery on the very first one. FRE-1178 owns wiring this
+            # counter into the joinability monitor for real production
+            # observability; this only keeps a violation from being
+            # indistinguishable from a transient ES error.
+            log.error(
+                "vocabulary_violation",
+                event_type=item.event_type,
+                field=e.field,
+                rule=e.rule,
+                trace_id=item.trace_id,
+            )
+            self._count("vocabulary_violations")
+            return
         except Exception:  # noqa: BLE001 - delivery must not break logging
             self._count("write_failures")
             self._record_failure()

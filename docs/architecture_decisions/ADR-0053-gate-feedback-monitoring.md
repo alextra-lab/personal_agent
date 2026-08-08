@@ -1,6 +1,6 @@
 # ADR-0053: Deterministic Gate Feedback-Loop Monitoring Framework
 
-**Status**: Parked (scheduled) — 2026-06-21 (FRE-582; owner ruling "park but schedule — it must be in the planning"). Revisit via FRE-589 (planning + design) after FRE-583 (OTel attribute map) and FRE-585 (joinability value-coherence) land. Originally Proposed 2026-04-22. Decision log: `docs/research/2026-06-21-fre-582-feedback-loops-proposal-analysis.md`.
+**Status**: Parked (scheduled) — 2026-06-21 (FRE-582; owner ruling "park but schedule — it must be in the planning"). Revisit via FRE-589 (planning + design) after FRE-583 (OTel attribute map) and FRE-585 (joinability value-coherence) land. Originally Proposed 2026-04-22. Decision log: `docs/research/2026-06-21-fre-582-feedback-loops-proposal-analysis.md`. **D4 amended 2026-08-08 (FRE-1213)** — the visual tier is Grafana, not Kibana; option C's structure is unchanged.
 **Date**: 2026-04-22
 **Deciders**: Project owner
 **Depends on**: ADR-0041 (Event Bus — Redis Streams), ADR-0043 (Three-Layer Separation)
@@ -236,7 +236,16 @@ Extend `TelemetryQueries` with six new methods operating on the `trace_summary.g
 
 ### D4: Surfacing Channel
 
-**Primary: Kibana.** The `trace_summary.gateway.*` fields indexed by the ES indexer are immediately queryable in Kibana. The Kibana dashboard extended for this ADR adds a **"Gateway Health" panel** with:
+> **Amended 2026-08-08 (FRE-1213): the visual tier is Grafana, not Kibana.** Kibana's retirement is
+> directed by ADR-0129 D6 and delivered by FRE-1214. This ADR is `Parked (scheduled)` and unbuilt, so
+> nothing here has shipped on Kibana — but D4 *selects* a Kibana panel, and a session picking this up
+> from FRE-589 would build one. **Only the platform changes.** Option C's three-tier structure — visual,
+> narrative (Captain's Log), programmatic (`TelemetryQueries`) — is the decision, and it stands; so does
+> the reasoning that rejected Kibana-only (option A) and a bespoke PWA panel (option B), since option B
+> was rejected on cost and the platform swap does not make a PWA panel cheaper. Read every "Kibana"
+> below as the dashboard platform of the day. The panel content is unchanged.
+
+**Primary: the dashboard platform (Grafana since 2026-08-08; read as Kibana before that date).** The `trace_summary.gateway.*` fields indexed by the ES indexer are immediately queryable there. The dashboard extended for this ADR adds a **"Gateway Health" panel** with:
 - Intent distribution pie chart (7 TaskTypes over trailing 7 days)
 - Strategy distribution (4 DecompositionStrategies over trailing 7 days)
 - Confidence histogram (p50/p75/p90 over trailing 7 days)

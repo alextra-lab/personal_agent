@@ -1,6 +1,6 @@
 # ADR-0055: System Health & Homeostasis Stream
 
-**Status:** Proposed — In Review
+**Status:** Proposed — In Review; **secondary surface amended 2026-08-08 (FRE-1213)** — the two panels land on Grafana, not Kibana (ADR-0129 D6 / FRE-1214). Panels and queries unchanged.
 **Date:** 2026-04-24
 **Deciders:** Single maintainer (FrenchForest)
 **Depends on:** ADR-0053 (Feedback Stream ADR Template), ADR-0054 (Feedback Stream Bus Convention), ADR-0041 (Event Bus — Redis Streams)
@@ -231,9 +231,18 @@ CaptainLogEntry(
 
 `CaptainLogManager` entry → ADR-0030 consolidation → `PromotionPipeline.scan_promotable_entries()` after `seen_count ≥ 3`, `age ≥ 7 d` → Linear issue in the dedicated project. Issue format in the Linear-project section below. Labels inherit from ADR-0040.
 
-**Secondary — Kibana `agent-logs-*` MODE_TRANSITION:**
+**Secondary — `agent-logs-*` MODE_TRANSITION, on the dashboard platform:**
 
-The existing `MODE_TRANSITION` event already lands in ES. The "Agent Reliability" Kibana dashboard gains two panels:
+> **Amended 2026-08-08 (FRE-1213): the two panels land on Grafana, not Kibana.** Kibana's retirement is
+> directed by ADR-0129 D6 and delivered by FRE-1214. This ADR is `Proposed — In Review` and unbuilt, so
+> nothing has shipped on Kibana; but it *commits* two Kibana panels, and a session building it as
+> written would put them on a platform being deleted. **Only the platform changes** — the panels, their
+> queries and their place as the *secondary* surface beneath the Captain's Log path are unchanged. The
+> remediation string quoted elsewhere in this ADR (*"Review agent-logs-\* MODE_TRANSITION entries … in
+> Kibana"*) is shown to the owner and must name Grafana when built; FRE-1214 covers the equivalent
+> strings already live in `events/pipeline_handlers.py`.
+
+The existing `MODE_TRANSITION` event already lands in ES. The "Agent Reliability" dashboard gains two panels:
 
 - "Mode transitions — 7 d timeline": date histogram on `event_type:"MODE_TRANSITION"`, stacked by `from_mode → to_mode`.
 - "Mode edge cadence — 24 h top-N": terms aggregation on `{from_mode}->{to_mode}`, sorted by count desc.
@@ -303,7 +312,7 @@ In scope:
 - `cg:mode-controller` consumer, rolling window, throttled evaluation, cadence counter, calibration-proposal emission.
 - Replacement of the four hardcoded `Mode.NORMAL` sites in `service/app.py` with `get_current_mode()`.
 - Five new config settings (see Module Placement).
-- Two Kibana panels on the existing "Agent Reliability" dashboard.
+- Two panels on the existing "Agent Reliability" dashboard (**Grafana** since the 2026-08-08 amendment; read as Kibana before that date).
 - Unit tests for window aggregation, throttle, cadence counter, fingerprint stability.
 
 Out of scope:

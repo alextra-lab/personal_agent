@@ -1,6 +1,6 @@
 # ADR-0134: Activity Alerting — Absence as a First-Class Signal, on Platform-Native Alerting
 
-**Status:** Proposed
+**Status:** Proposed; **D2a's Kibana stage abandoned 2026-08-08** — the ADR's own stated contingency fired on FRE-1187's measurement (see Status Updates). The full rule set lands on Grafana.
 **Date:** 2026-08-07
 **Deciders:** Project owner (FRE-1058, owner-directed 2026-08-07)
 **Tags:** observability, alerting, absence-detection, telemetry, grafana, elasticsearch
@@ -118,12 +118,19 @@ connectors (email, webhook, Slack, PagerDuty, …) without stating the tier boun
 **now cheaply answerable** — set the key, restart Kibana, enumerate the API — and it is the first
 implementation step rather than an assumption baked into the decision.
 
-**FRE-1072** (ADR-0129 B7) brings Tempo and Grafana and retires Kibana. Grafana OSS unified alerting
+**FRE-1072** (ADR-0129 B7) brings Tempo and Grafana. Grafana OSS unified alerting
 carries no licence gate and has a first-class **No Data** alert state, so it is the destination for the
 full rule set — **planned and ticketed, not hypothetical.** It is also not close: the ADR-0129 chain is
 at B2 (FRE-1065 In Progress), with B3–B8 approved behind it, putting FRE-1072 roughly five sequenced
 tickets out. That distance, against a failure class that already ran six days undetected, is what
 makes the staging in D2a a real decision rather than a formality.
+
+*(**Corrected 2026-08-08, FRE-1213.** This sentence read "brings Tempo and Grafana **and retires
+Kibana**". That was never true of FRE-1072 — ADR-0129's 2026-08-07 amendment explicitly retained
+Kibana, and its retirement is now separately sequenced as FRE-1214 under the FRE-1203 Grafana
+migration program. FRE-1202 recorded the drift. The distance argument above is left as written
+because it is what the staging decision rested on at authoring time; what became of that staging is
+recorded in D2a and in the Status Updates, not by rewriting the reasoning that produced it.)*
 
 ### Scope boundary
 
@@ -214,6 +221,18 @@ failure it is meant to catch has already run for six days undetected once.
 
 ### D2a — Staged delivery, split by a rule that decides itself
 
+> **ABANDONED 2026-08-08 — by this decision's own stated contingency, not by supersession.** D2a wrote
+> the condition under which its Kibana stage should be dropped: *"If the `basic` connector set proves
+> to contain nothing that leaves the box … the Kibana stage is abandoned outright: rules 1 and 2 wait
+> for FRE-1072 with the rest."* FRE-1187 set the encryption key, restarted Kibana and enumerated
+> `/api/actions/connector_types`: **29 connector types, of which exactly two are enabled under this
+> `basic` licence — `.index` and `.server-log` — and neither leaves the box.** Every connector that
+> does requires at least a gold licence. **The contingency fired as designed.** The whole rule set
+> lands on Grafana; nothing was authored on Kibana and nothing needs porting off it. The staging
+> reasoning below is left standing because it is *why* the measurement was commissioned as the first
+> implementation step rather than assumed — and commissioning it is what turned a guess into a
+> verdict. Read it as history with a known outcome, not as live instruction.
+
 The contract lands now; the rules land in two stages, and **the criterion for which stage a rule falls
 into is whether it requires a new investigation surface** (D3):
 
@@ -280,7 +299,9 @@ is a saved Discover query, *FRE-1072* iff a new surface must be built for it.
 | 2 | A scheduled probe stops writing its result document | absence | A dead probe — the meta-alert that keeps every other rule honest | Saved Discover query on that probe's result index | **now** (joinability, SLM health only — see prerequisite) |
 
 **Staging for rules 1–2 is decided in D2a and restated there in full; where this column and D2a
-disagree, D2a governs.**
+disagree, D2a governs.** **Since 2026-08-08 the Stage column has one value throughout: Grafana.**
+D2a's contingency fired, so rules 1 and 2 join 3–6 there; every *"now, on Kibana"* in this table and
+the paragraphs around it describes a stage that was never entered.
 | 3 | A probe result reports red | threshold | Joinability orphans, delivery breach, SLM health down — data that already exists and nothing reads | The failing probe's detail panel | FRE-1072 |
 | 4 | Spend rate anomaly against the `api_costs` ledger | threshold | Runaway or misattributed cost, on the one substrate with append-only ground truth | Cost surface over Postgres, scoped to the window and model/role | FRE-1072 |
 | 5 | Disk or cluster pressure | threshold | The `~10 GiB` box, with a recorded history of index-count and shard pathologies | Cluster/lifecycle surface | FRE-1072 |
@@ -476,6 +497,16 @@ deduplication and silences. Rules authored there are not thrown away when Kibana
 detection by an unbounded interval — during which the failure class this ADR exists to catch remains
 exactly as invisible as it was when it cost six days of telemetry and was found by accident.
 
+**Outcome, recorded 2026-08-08 because it is uncomfortable and therefore worth stating plainly: this
+rejected option is what happened.** D2a's contingency fired on FRE-1187's measurement, so the whole
+rule set waits for Grafana after all. **The rejection was not wrong, and this is not a retroactive
+reversal.** Option 5 was rejected for *reasoning from a broken instrument* — inferring a licence limit
+from an HTTP 500 that was actually a missing encryption key. The staged alternative forced that
+instrument to be diagnosed before anything was built on its verdict; the diagnosis then showed the
+Kibana stage genuinely could not deliver, for a reason nobody had established. **Arriving at the same
+destination by measurement rather than by assumption is the difference this ADR was written to
+defend**, and the cost of getting there was one small ticket.
+
 **Why Rejected:** Rejected as the *whole* answer, not as the destination — Grafana remains where the
 full set lands (D2). Owner-rejected — *"Grafana does not exist yet."* The draft reached this position
 by misreading a broken instrument as a negative result: Kibana's `connector_types` returned HTTP 500,
@@ -527,17 +558,23 @@ benefit at a fraction of the waste.
 
 ### Negative Consequences
 
-- **Two rules are authored twice.** Rules 1 and 2 land on Kibana and are re-authored on Grafana at
-  FRE-1072. Accepted deliberately (D2a): the discarded artifact is a rule definition, not a dashboard,
-  and the alternative is leaving FRE-1051's failure class undetected for five sequenced tickets.
-- **Alerting spans two platforms during the interval**, which is a real if temporary split-brain: two
-  places to look for a rule, and a migration step that must not silently drop one.
-- **One blocking unknown remains** — whether the `basic` connector set can deliver anything out of the
-  box. If it cannot, the Kibana stage is worthless and everything waits for Grafana after all. This is
-  established first, before rules are authored, precisely so it cannot be discovered late.
-- **Enabling Kibana alerting requires a secret and a restart.** The encryption key must come from the
-  environment rather than committed config, and it is a live-service change — master's call, not a
-  worker's.
+- ~~**Two rules are authored twice.**~~ **Never materialised (2026-08-08).** D2a's contingency fired
+  before any rule was authored, so rules 1 and 2 land once, on Grafana. Recorded as unrealised rather
+  than deleted: this was an accepted cost of a staging decision, and it is worth knowing that staging
+  cost nothing in the end because the gating measurement was taken first.
+- ~~**Alerting spans two platforms during the interval.**~~ **Never materialised (2026-08-08)** — the
+  interval had zero length. There is one alerting platform and no migration step to drop a rule at.
+- ~~**One blocking unknown remains**~~ — **resolved 2026-08-07 by FRE-1187, negatively.** The `basic`
+  connector set delivers nothing out of the box: 29 connector types, only `.index` and `.server-log`
+  enabled, neither leaving the box. This was established first, before rules were authored, precisely
+  so it could not be discovered late — and that sequencing is what made the answer cheap.
+- **Enabling Kibana alerting required a secret and a restart** — done under FRE-1187 to *take* the
+  measurement, not to ship a rule. Retained as a live-service cost that was actually paid; the
+  apparatus it created (`.env.kibana` and its custody) is dead weight once Kibana is retired, and
+  FRE-1214 removes it.
+- **Everything now waits for Grafana** — the outcome rejected Option 5 was written to avoid. It is not
+  a design failure but a measured one: the detection gap this ADR exists to close stays open until
+  FRE-1072 lands, and no interim coverage is available on the platform we already own.
 - **Rule 1's "system is active" qualifier is genuinely hard** and under-specified here, in *both*
   directions: too loose and it false-alarms nightly until it is muted; sourced from the wrong substrate
   and it goes silent precisely when the log path breaks (D4). It is the single hardest thing this ADR
@@ -562,12 +599,12 @@ benefit at a fraction of the waste.
 | Risk | Severity | Mitigation |
 |------|----------|------------|
 | Rule 1 false-alarms on idle periods and gets muted; the mute then reads as coverage | High | The activity qualifier is rule 1's core deliverable, not a detail; its ticket's criteria assert quiet-period behaviour explicitly |
-| The `basic` connector set turns out to deliver nothing out-of-box, reproducing "the alert is a log line" | Medium | Established as the **first** implementation step, before any rule is authored; if confirmed, D2a's single contingency applies — the Kibana stage is abandoned and rules 1–2 wait for FRE-1072 with the rest |
+| ~~The `basic` connector set turns out to deliver nothing out-of-box, reproducing "the alert is a log line"~~ **— OCCURRED, and the mitigation worked (FRE-1187, 2026-08-07)** | Medium | Established as the **first** implementation step, before any rule was authored; confirmed, so D2a's single contingency applied — the Kibana stage is abandoned and rules 1–2 wait for FRE-1072 with the rest. The risk landed and cost nothing, which is what a mitigation is for |
 | Rule 1's activity witness reaches the index by the same emission path it is watching, so a missing sink silences witness and family together and the rule stays quiet | High | D4 requires an independent **emission path** (Caddy-via-Filebeat, not the in-process handler); AC-1 induces exactly this condition |
 | Rule 1's shortfall branch false-alarms on ordinary traffic change — deployment, weekday/weekend, request-mix shift — because a binary "active" witness does not normalize volume | High | The shortfall branch requires a *correlated denominator*, not a binary witness (D1); families without one get the stoppage branch only, declared. AC-6 phase A tests quiet behaviour, but tuning against traffic seasonality is rule 1's ticket's own work |
 | Rule 1 is blind to a loss that persists long enough to become its own baseline, and during warm-up | Medium | Accepted and stated; the delivery-ratio probe remains the on-suspicion instrument for absolute completeness on the one family with an oracle |
-| Rules 1 and 2 are authored on Kibana and thrown away at FRE-1072 | Low | Bounded by D2a's split: only rules needing *no new surface* land early, so no dashboard is built twice |
-| The Kibana stage is forgotten at migration, leaving rules 1–2 behind on a retired platform | Medium | FRE-1072's own ticket carries the port as an explicit obligation; the seam ticket's AC-2 walk would catch an unresolvable link |
+| ~~Rules 1 and 2 are authored on Kibana and thrown away at FRE-1072~~ **— cannot occur (2026-08-08)** | Low | Moot: nothing was authored on Kibana. Retained as a record that the bound (D2a's split) was never tested |
+| ~~The Kibana stage is forgotten at migration, leaving rules 1–2 behind on a retired platform~~ **— cannot occur (2026-08-08)** | Medium | Moot: there is nothing on Kibana to leave behind, and no port obligation for FRE-1072's ticket to carry. **The stated mitigation is therefore withdrawn rather than satisfied** — if the stage had been entered, this row's protection would still be untested |
 | Partial loss in an oracle-less family stays invisible (absence ≠ completeness) | Medium | Stated as a known limit in Consequences; the FRE-1051 probe remains available as an on-suspicion diagnostic |
 | Alert rules drift between the live platform and git | Medium | Rules are version-controlled per D2, inheriting ADR-0090 D3's export discipline |
 | The alert set grows until it is ignored | Medium | D3's investigation-link test is the gate; a condition with no target becomes a panel instead |
@@ -577,18 +614,28 @@ benefit at a fraction of the waste.
 
 ## Implementation Notes
 
-- **First step, and it gates everything else:** set `xpack.encryptedSavedObjects.encryptionKey` for
-  Kibana, restart, then enumerate `/api/actions/connector_types` and record which connectors this
-  `basic` licence actually exposes. The key is a **secret** — it comes from the environment, never from
-  committed config (the config-guard pre-commit hook enforces this) — and the restart is a live-service
-  change, so it is master's to authorize.
-- **Staged against FRE-1072** (D2a). Rules 1 and 2 land on Kibana now because their investigation
-  targets are cheap — a saved query for rule 2, a minimal three-series surface for rule 1, the one
-  artifact knowingly built twice. Rules 3-6 land on Grafana with FRE-1072 along with their dashboards.
-  No target for rules 1-2 exists today; each is authored as part of its own rule's delivery (D3).
-  D1/D3/D4/D5 carry over unchanged because none of them names a rule syntax.
-- **FRE-1072's ticket must carry the port of rules 1–2** as an explicit obligation, or the Kibana stage
-  is orphaned on a retired platform.
+- ~~**First step, and it gates everything else:**~~ **DONE — FRE-1187, merged 2026-08-07.** The key was
+  set from a host-local environment file (never committed; the config-guard pre-commit hook enforces
+  this), Kibana was restarted under owner authorization, and `/api/actions/connector_types` was
+  enumerated: **29 connector types, `.index` and `.server-log` the only two enabled under this `basic`
+  licence, neither leaving the box.** The verdict is recorded in
+  `docs/research/FRE-1187-kibana-alerting-connector-verdict.md`. **This gated everything else, and it
+  closed the gate.**
+- ~~**Staged against FRE-1072** (D2a)~~ — **the staging is void (2026-08-08).** All six rules land on
+  Grafana with FRE-1072, each with its own dashboard. **No rule is authored on Kibana**, so the "one
+  artifact knowingly built twice" is built once. No investigation target for any rule exists today;
+  each is authored as part of its own rule's delivery (D3). D1/D3/D4/D5 carry over unchanged because
+  none of them names a rule syntax — which is exactly why the platform change costs the contract
+  nothing.
+- ~~**FRE-1072's ticket must carry the port of rules 1–2**~~ — **withdrawn (2026-08-08).** There is
+  nothing on Kibana to port. The obligation is replaced by a simpler one: FRE-1072 (or whichever
+  ticket authors the rules) delivers **all six**, not four.
+- **Rule 1's `api_costs` denominator has no path into Elasticsearch, confirmed live by FRE-1187** — a
+  live index-catalog check found no matching index. On Kibana this was a blocker for the shortfall
+  branch (Kibana queries only Elasticsearch). **On Grafana it dissolves**: the Postgres datasource
+  reaches `api_costs` directly, so the denominator needs no ES projection at all. Recorded because
+  this is a real simplification the platform change hands to rule 1's implementation, not merely a
+  relocation of it.
 - **Must not collide with FRE-1055 / FRE-1056**, in flight in `build1`, which bind the Elasticsearch
   sink correctly and harden the handler. This ADR consumes their outcome and re-decides none of it.
 - **Files touched by the D6 amendment:** `docs/architecture_decisions/ADR-0090-telemetry-surface-contract.md`
@@ -714,10 +761,15 @@ an undeclared family present in the index is itself a failure.
 **Seam ticket:** **FRE-1185** — *ADR-0134 SEAM — adjudicate the activity-alerting criteria*.
 **Due date: 2026-11-30.**
 
-The date is **gated by FRE-1072, not only by the observation windows.** The seam holds *all* seven
-criteria, and four of the six rules (AC-2's full walk, AC-4's platform induction, AC-7's cross-check
-across the whole set) cannot be adjudicated until the Grafana stage lands — FRE-1072 currently sits
-roughly five sequenced tickets behind the ADR-0129 chain head. On top of that, AC-6 needs a
+The date is **gated by FRE-1072, not only by the observation windows** — and **more strongly so since
+2026-08-08**, when D2a's contingency fired. The seam holds *all* seven criteria, and where four of the
+six rules previously waited on Grafana, **now all six do**: no rule lands on Kibana, so AC-1's
+per-family inductions and AC-3's probe-liveness coverage join AC-2's full walk, AC-4's platform
+induction and AC-7's cross-check in waiting for the Grafana stage. FRE-1072 sat roughly five sequenced
+tickets behind the ADR-0129 chain head when this date was set. **The date does not move on this
+change** — it was already set by the FRE-1072 dependency plus AC-7's 30-day window — but its rationale
+is now stronger rather than weaker, and adjudicating any part of the set early has become even less
+meaningful. On top of that, AC-6 needs a
 multi-night idle window and AC-7 needs 30 days of live operation *after* the full set is running.
 2026-11-30 is the earliest plausible date on that chain and is an estimate, not a measurement: **if
 FRE-1072 lands materially earlier or later, master resets this date rather than adjudicating early
@@ -733,7 +785,7 @@ merged.
 ## References
 
 - ADR-0090 — Telemetry Surface Contract (emit ↔ mapping ↔ dashboard); amended by D6 above. Status: Accepted.
-- ADR-0129 — OpenTelemetry Instrumentation and Trace Visibility; its B7 phase (FRE-1072) brings Grafana and retires Kibana. Status: Accepted.
+- ADR-0129 — OpenTelemetry Instrumentation and Trace Visibility; its B7 phase (FRE-1072) brings Tempo and Grafana. Kibana's retirement is **not** FRE-1072's — it is directed by ADR-0129 D6's 2026-08-08 amendment and delivered by FRE-1214 under the FRE-1203 program. Status: Accepted.
 - ADR-0133 — The Typed Emit Envelope for the Residual Log Corpus; declined the field registry that ADR-0090 still lists as an open decision. Status: Proposed.
 - ADR-0132 — Egress chain (Caddy → Filebeat → DomainGuard); the deployed Filebeat and its persistent filestream registry referenced in Alternatives Option 2. Status: Accepted.
 - ADR-0088 — Execution-topology emission seam; the emission complement to ADR-0090's surface contract. Status: Accepted.
@@ -742,7 +794,11 @@ merged.
 - Linear FRE-1058 — this ADR's ticket (ADR-0090's fourth corner), Observability Foundation.
 - Linear FRE-1051 — the delivery measurement, the corrected diagnosis, and the probe. Done 2026-07-31.
 - Linear FRE-1055 / FRE-1056 — Elasticsearch handler hardening and sink binding; in flight, fix the measured cause.
-- Linear FRE-1072 — ADR-0129 B7, Tempo + Grafana + Kibana retirement; the destination for the full rule set under D2a, and the ticket that must carry the port of rules 1–2.
+- Linear FRE-1072 — ADR-0129 B7, Tempo + Grafana; the destination for the full rule set. It does **not** retire Kibana and no longer carries a port obligation for rules 1–2, since D2a's Kibana stage was abandoned before any rule was authored.
+- Linear FRE-1187 — ADR-0134's first implementation step: set the encryption key, restart, enumerate. Its measurement (29 connectors, two enabled, none leaving the box) is what fired D2a's contingency. Done 2026-08-07.
+- Linear FRE-1214 / FRE-1203 — the Kibana retirement ticket and the Grafana migration program that owns it; the reason nothing in this ADR should be built on Kibana.
+- Linear FRE-1202 — the recorded drift that line 121 and the two references above still said FRE-1072 "retires Kibana"; resolved by this amendment.
+- `docs/research/FRE-1187-kibana-alerting-connector-verdict.md` — the committed per-connector inventory with licence state; the evidence D2a's contingency fired on.
 - Linear FRE-533 — the 1023-row three-way reconciliation inventory whose grain is discussed in Context.
 - Linear FRE-1039 — Grafana over Postgres for aggregate cost and ledger truth; D4 rule 4's surface.
 - Code: `src/personal_agent/telemetry/lifecycle_manager.py:183,206` — the alert that is a log line.
@@ -760,6 +816,58 @@ merged.
 ---
 
 ## Status Updates
+
+### 2026-08-08 — D2a's Kibana stage abandoned: the contingency fired
+
+**Changed By:** `adr` session (FRE-1213).
+**Reason:** Two separate things landed on this ADR, and they are recorded separately because only one
+of them is a change of mind.
+
+**First — D2a's stated contingency fired, which is this ADR working rather than being overtaken.**
+D2a wrote the condition itself: *"If the `basic` connector set proves to contain nothing that leaves
+the box … the Kibana stage is abandoned outright: rules 1 and 2 wait for FRE-1072 with the rest."*
+FRE-1187 — commissioned by this ADR as its first implementation step precisely so the question would
+be measured rather than assumed — set the encryption key, restarted Kibana, and enumerated
+`/api/actions/connector_types`: **29 connector types, exactly two enabled under this `basic` licence
+(`.index` and `.server-log`), neither of which leaves the box.** Every connector that does requires
+at least a gold licence. The recorded verdict is *abandon the Kibana stage*.
+
+**No decision was reversed here.** The staging predicate, the contract (D1, D3, D4, D5) and the alert
+set are untouched; none of them names a rule syntax, which is exactly why the platform change costs
+the contract nothing. What changed is which branch of a two-branch decision the evidence selected.
+
+**The consequences are recorded as unrealised rather than deleted.** Two Negative Consequences ("two
+rules are authored twice", "alerting spans two platforms") and two risk rows never materialised,
+because the gating measurement was taken *before* any rule was authored. They are struck through and
+annotated rather than removed: a design that priced a cost, then avoided paying it by sequencing the
+measurement first, is worth being able to read later. **One mitigation is withdrawn rather than
+satisfied** — the "Kibana stage is forgotten at migration" row's protection was never tested, and
+recording it as satisfied would overclaim.
+
+**Rejected Option 5 is what happened, and it is labelled as such.** The full rule set now waits for
+Grafana — the outcome Option 5 proposed and this ADR rejected. The rejection still stands and the
+reason is the distinction worth keeping: Option 5 was rejected for *reasoning from a broken
+instrument*, inferring a licence limitation from an HTTP 500 that was really a missing encryption
+key. Reaching the same destination by measurement rather than by assumption, at the cost of one small
+ticket, is the difference this ADR was written to defend.
+
+**One real simplification comes with the platform change.** FRE-1187 confirmed live that the
+`api_costs` denominator has no path into Elasticsearch. On Kibana that blocked rule 1's shortfall
+branch outright, since Kibana queries only Elasticsearch. On Grafana it dissolves — the Postgres
+datasource reads `api_costs` directly — so rule 1 lands whole rather than split across branches.
+
+**Second — a drift correction that predates all of this (FRE-1202).** Line 121 and two References
+stated that FRE-1072 *"retires Kibana"*. That was never true of FRE-1072: ADR-0129's 2026-08-07
+amendment explicitly retained Kibana, and its retirement is now directed by that ADR's 2026-08-08
+amendment and delivered separately by FRE-1214 under the FRE-1203 Grafana migration program.
+Corrected in all three places. **The Context paragraph's distance-to-Grafana reasoning is left as
+written** — it is what the staging decision rested on at authoring time, and rewriting the reasoning
+to match its outcome would destroy the record of why the measurement was commissioned at all.
+
+**What this does not change.** The seam ticket (FRE-1185) and its 2026-11-30 due date stand; the date
+was already gated by FRE-1072 plus AC-7's 30-day window. Its rationale is *strengthened* — where four
+of six rules previously waited on Grafana, now all six do — which makes early adjudication less
+meaningful, not more.
 
 ### 2026-08-07 - Proposed
 **Changed By:** `adr` session (FRE-1058)

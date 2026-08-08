@@ -1,83 +1,83 @@
-# Last session — 2026-08-07 (the day I kept measuring the adjacent thing)
+# Last session — 2026-08-08 (the spike that fought the harness, not the code)
 
 ## Doing / discussing
 
-Observability Foundation, driven hard at the owner's direction, and one instruction that governs
-everything: **we are in a spike — do not bring findings, just run the board.** The owner said plainly
-"i don't care right now. Just keep going. At the end of the Spike - we will start caring." Grafana is
-the priority he set: complete it sooner, because the Kibana retirement decision waits on it. Nothing is
-at the gate except PR #859, which is build1's bounce fix. He is building FRE-1071 himself in the
-slm_server repo and asked that I gate its PR when it comes.
+A spike the owner framed plainly: **done when the queue is empty and master is at the controls.** Grafana
+and Tempo went live and gated; twelve tickets were sequenced across three streams that were all empty
+that morning. Everything now converges on **FRE-1070, the Collector** — it is the single step before the
+owner can restart slm_server, before spans acquire a sink at all, and before two dark dashboards can be
+repointed. It is pinned Urgent at the head of build2 for exactly that reason. The owner ended the day
+frustrated, and fairly: most of the cost was infrastructure, not work.
 
 ## What was decided and why
 
-**Kibana is retained, not retired, and the ADR was amended to say so.** Owner ruling, now a console
-directive with a decidable retirement condition. Three premises behind the original retirement turned
-out weaker than written, and all three are recorded in ADR-0129's Status Update rather than left to be
-rediscovered. This is the thread most likely to be re-litigated by a fresh session, so: it is settled.
+**The owner overrode master on #868 and accepted a dashboard blackout.** Removing the `request_trace`
+write path takes `request_traces` and `request_timing` entirely dark — 7 of 7 panels — because the
+replacement has no sink until FRE-1070. Master recommended merging and holding the deploy; the owner
+said merge and deploy. **This is a decision, not a defect.** Do not "discover" it later and treat it as
+a regression, and do not roll it back without asking.
 
-**Kibana cannot alert at all under this licence** — FRE-1187 enumerated 29 connectors, only Index and
-Server-log enabled, everything reaching outside needs gold. So ADR-0134's Kibana stage is abandoned
-outright, FRE-1190 and FRE-1192 were re-scoped onto Grafana, and *all* alerting now waits on FRE-1072.
-That makes Grafana-first the only path to being told when something breaks, not merely the faster one.
+**Grafana is the target. Full stop.** The owner: *"Grafana was chosen because they can do everything
+Kibana can do more."* Master had approved an ADR (FRE-1039) to re-decide whether Grafana replaces
+Kibana — a question the owner ruled on 2026-08-07 — and the owner caught it. Cancelled; the genuinely
+live remainder became FRE-1203. **New dashboards go to Grafana.** Kibana is retained, and that is also
+settled. Neither is open.
 
-**Four instrument failures, mine, in one session — this is the finding that matters.** Each returned a
-clean, well-formed answer to a question *adjacent* to the one being asked. Container RSS read as ES
-health (92% vs 64% heap — the same figure ADR-0129 cites). A regex requiring a terminal date, which
-silently dropped every `-v2` index (140 vs 162). An index age parsed from the name rather than
-`creation_date`, which claimed 21 indices were past retention when the true answer is zero. And a
-Linear read taken at 07:31 and acted on at 08:20, holding FRE-1058 open for four hours on a comment
-posted at 07:32. Two of the four were caught by accident; one by the system refusing to act on it.
-Yesterday's five were *emit* failures; these are *measurement* failures. Different class, same
-invisibility. I proposed making it a standing gate check and the owner has not ruled.
+**"If something is creating errors or bad data, we can't build the objects that depend on it."** The
+owner's words, and it is now a sequencing rule, not a remark. It is why FRE-1186 was pulled forward
+Urgent, and why FRE-1189 was made to wait on FRE-1008 — scheduling a probe whose measurement is inert
+by construction produces a reliable stream of meaningless documents.
 
-**I was corrected twice by seats and both corrections were right.** The adr seat found I had claimed
-six Caddy blocks each with an allowlist (there are four inbound; one has an allowlist — I'd counted
-outbound `reverse_proxy` targets as site blocks) and that no `monitoring` endpoint existed (it is
-documented at `docker-compose.cloud.yml:155-158`, tunnelling straight to Kibana). Both were in a ticket
-body a build seat would have followed. **The owner's mental model was right and mine was wrong** — he
-named agent, graph, api and monitoring, which is exactly the real set.
+**`/code-review ultra` does not exist over Remote Control.** The escalated-diff gate names it as the
+mechanism and the owner cannot run it. Master substituted a mechanical, targeted check twice — and that
+substitution is what found six panels bucketing on a field their families do not carry (#864) and the
+request_trace blackout (#868). Neither would have surfaced otherwise. The contract still depends on a
+tool the owner cannot reach; that is unresolved.
 
-**An escalation rule that worked twice, still unwritten.** Escalate to ultra only when the diff is in
-the trigger set **and** a defect would be silent with no detector inside a stated window. #856 passed
-the first and failed the second (an identity-format regression surfaces on the next query) — I advised
-against, correctly. #859 passed both — I advised for, and the ultrareview found a real `@timestamp`
-defect nothing would ever have caught. But I justified it on the wrong grounds (base rate) and asserted
-a detector existed without checking; there is none.
+**No trust-ladder row exists for ticket approval.** Master listed recommendations instead of scheduling
+them, the owner pushed back hard, and the answer is structural rather than caution: a grant exists only
+if the ladder records it. If the owner wants small work scheduled without a round-trip, that is a row
+only he can write.
+
+**Master's own errors, recorded so they are not repeated rather than rediscovered.** Master filed a
+defect against machinery that works — asserting the dispatcher's hold state had "no timeout, no
+escalation" without checking. FRE-924 built exactly that escalation; it fired correctly at 30 minutes
+and master ignored its own alert for the following sixteen hours. And master approved an ADR to
+re-litigate a settled call, above. Both were caught by the owner.
 
 ## Worktrees — anything special
 
-- **build1** — PR #859 bounced by me on the ultrareview finding; seat has the message, hadn't pushed at
-  reset. Its pane showed "1 shell still running", the same shape as the 2026-08-06 wedge. Not wedged —
-  it went idle cleanly — but check that shell first if it goes quiet. Recovery is `cc-sessions restart
-  cc-1build`, never a kill.
-- **adrs / build2** — clean, on merged branches.
+- **build1** — was wedged (remote-control reported busy while the pane sat idle; the daemon named it
+  `dispatch_seat_wedged`, 29 ticks). `cc-sessions restart cc-1build` cleared it **but handed the seat
+  straight into a "Resume from summary" prompt that nobody was watching for** — the documented recovery
+  is incomplete, and the seat stays dead until that prompt is answered.
+- **build2** — clean. Its earlier acceptance stack published on `0.0.0.0`; it tore that down when told.
 
 ## Sequence position + drift
 
-No drift. Everything ran inside Observability Foundation under the console's directive. I **removed
-FRE-1072's blockedBy on FRE-1070** — its criteria are self-contained by fixture injection and never
-needed the Collector — which cut Grafana from three hops to one. That is a deliberate deviation from
-ADR-0129's stated build order, made on the owner's "complete it sooner" instruction, and it is recorded
-on FRE-1193.
+On the console's Observability directive throughout. One thing the owner has **not** ruled on: three of
+master's six recommended approvals were in *Build/ADR Dispatch Automation*, not Observability — the
+explore-stream chain (FRE-1197/1198/1199). Master flagged the split and argued FRE-1199 earns its place
+on rate grounds, since it would add a fourth working stream. Still undecided; nothing was approved from
+that project.
 
 ## Answers for the fresh start
 
-- **Why is ADR-0134 still `Proposed`?** The adr seat recommended Accepted and deliberately declined to
-  pre-empt the owner, because every decision in it was the owner's in-session. The flip is his word.
-  ADR-0135 by contrast merged **Accepted** — the owner settled its principal question directly.
-- **Why does FRE-1071 have a hold on it and not a blocker?** Its code is buildable now (every AC is
-  provable without a Collector) but its *deploy* removes slm_server's ES writer while no Collector
-  exists — a silent telemetry blackout until FRE-1070. The constraint is on the release, not the PR,
-  and it is written on the ticket.
-- **Why is `slm-requests` still minting daily indices?** Separate repo, FRE-1071's scope. FRE-1194
-  governed the three families that *are* ours; it deleted nothing, because zero were genuinely past 90
-  days.
-- **Did the owner authorize the live Kibana restart in FRE-1187?** The seat says he did, directly, in
-  its session. I recorded it as the owner acting at will and asked him to correct me if wrong; he did
-  not. The ticket text had reserved that step for master.
-- **Two things I own that are unwritten:** the `new_span()` split — it still mints dashed UUIDs while
-  `span_id` returns hex, so `parent_span_id` and `span_id` can never join. Pre-existing, recorded on
-  FRE-1065, no home ticket; FRE-1067 is the natural place. And FRE-1200 needs a **Fable trust-ladder
-  row**, which is owner-voice only — until then every Fable selection is an explicit per-dispatch ask,
-  which is the correct default.
+- **Why are two Grafana dashboards empty?** Deliberate and owner-accepted; see above. They come back
+  when FRE-1070 lands and something repoints them at Tempo — **that repoint is not yet ticketed.**
+- **Can slm_server be restarted?** No, and the owner asked four times. Not until the Collector exists.
+  Answer it in one line; the long version annoys.
+- **Why does FRE-1189 wait on FRE-1008?** The cache-erosion probe cannot measure anything — both hashes
+  derive from the same input, byte-identical on five of five live samples.
+- **Two tickets cannot dispatch as written and master owes the fix:** FRE-566 has *no acceptance
+  criteria at all* and defers two design decisions "to specify at approval"; FRE-1052 reserves its own
+  central question for the owner, who approved the split-retention option but the body still says
+  "the agreed value" with none agreed.
+- **The ADR-0134 chain is three-quarters dead work.** FRE-1190/1191/1192 are all premised on authoring
+  alert rules on Kibana, which FRE-1187's abandon verdict killed. They need rewriting to Grafana, not
+  approving. The owner has not ruled on rewrite-versus-cancel.
+- **Was the safety-classifier outage real?** Yes — `claude-opus-5` unavailable for a whole session
+  blocked both reviewer subagents *and* all writes under `.claude/`, which fail closed. Master placed a
+  seat's deliverable by hand after reading it. Seats were told: don't retry, hand master the paths.
+- **The owner is tired of being the detector.** Three silent stalls cost ~26 hours of stream time and
+  every one was found by a human looking at a pane. Lead with answers, not tables.

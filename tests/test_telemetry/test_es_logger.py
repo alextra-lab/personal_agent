@@ -8,11 +8,13 @@ gone with the method.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from personal_agent.config.env_loader import Environment
 from personal_agent.exceptions import VocabularyViolationError
+from personal_agent.telemetry import vocabulary
 from personal_agent.telemetry.es_logger import ElasticsearchLogger
 
 
@@ -141,3 +143,41 @@ async def test_log_event_validates_the_event_type_it_merges_itself() -> None:
 
     assert exc_info.value.field == "event_type"
     mock_client.index.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# FRE-1178 AC-1: production mode stores a violating record unchanged
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_log_event_in_production_indexes_a_violation_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A violating record in production reaches ``client.index`` with the key intact.
+
+    No exception propagates, the record is not dropped, and the offending
+    key survives with its value intact — sanitising it would make the
+    corpus look clean while destroying the evidence the counter exists to
+    record (ADR-0133 D4, FRE-1178). Scoped to *the validator's own*
+    behaviour: ``_index_agent_log`` still runs every document through
+    ``redact_mapping`` (FRE-1068), a separate, pre-existing security control
+    that can rewrite a secret-*shaped* value regardless of vocabulary
+    status — this test uses a non-secret-shaped value (``duration_ms=12``)
+    so redaction is not a confound.
+    """
+    mock_settings = MagicMock()
+    mock_settings.environment = Environment.PRODUCTION
+    monkeypatch.setattr(vocabulary, "settings", mock_settings)
+
+    logger = ElasticsearchLogger()
+    mock_client = AsyncMock()
+    mock_client.index = AsyncMock(return_value={"_id": "doc-1"})
+    logger.client = mock_client
+
+    doc_id = await logger.log_event("task_started", {"duration_ms": 12})  # retired spelling
+
+    assert doc_id == "doc-1"
+    written = mock_client.index.call_args.kwargs["document"]
+    assert written["duration_ms"] == 12
+    assert written["event_type"] == "task_started"

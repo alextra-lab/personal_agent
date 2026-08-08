@@ -228,8 +228,11 @@ class ElasticsearchLogger:
 
         Raises:
             VocabularyViolationError: The assembled document violates the
-                governed telemetry vocabulary (ADR-0133 D2). Raised
-                regardless of Elasticsearch connectivity.
+                governed telemetry vocabulary (ADR-0133 D2), outside
+                production only. Checked regardless of Elasticsearch
+                connectivity. In production ``validate_document`` counts the
+                same violation instead of raising, so this call proceeds to
+                index the document unchanged (ADR-0133 D4, FRE-1178).
         """
         doc = {
             "@timestamp": timestamp if timestamp is not None else datetime.utcnow().isoformat(),
@@ -244,10 +247,11 @@ class ElasticsearchLogger:
         # branches and the document actually assembled for the write. Ahead
         # of the client check so a disconnected Elasticsearch can never hide
         # a violation, and outside the try/except below deliberately: that
-        # block exists to report an Elasticsearch write failure, and a
-        # violation caught by it would silently become
-        # "elasticsearch_log_failed" instead of raising (ADR-0133 D4's
-        # development-time guarantee, restored by FRE-1178 for production).
+        # block exists to report an Elasticsearch write failure, not a
+        # vocabulary violation. validate_document itself owns the
+        # raise-outside-production / count-and-continue-in-production split
+        # (ADR-0133 D4, FRE-1178) — this call site never branches on
+        # environment.
         validate_document(doc)
 
         if not self.client:

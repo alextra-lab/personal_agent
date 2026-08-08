@@ -28,6 +28,7 @@ from personal_agent.observability.joinability.result import (
 )
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.events import MODEL_CALL_COMPLETED
+from personal_agent.telemetry.vocabulary import snapshot_counts
 
 # Loggers whose traceless ES events are expected and out of scope for the gate.
 # WS transport events carry session_id for correlation but have no LLM trace.
@@ -224,6 +225,10 @@ class JoinabilityWalk:
             orphans,
             sampled_session_id=sampled_session_id,
         )
+        # ADR-0133 D4 / FRE-1178: the governed telemetry vocabulary's own
+        # counters ride this monitor rather than a new one — snapshotted
+        # here so every published result doc carries both numbers.
+        vocab_counts = snapshot_counts()
         return ResultDoc(
             run_id=str(uuid.uuid4()),
             started_at=started_at,
@@ -237,6 +242,8 @@ class JoinabilityWalk:
             orphans=list(orphans),
             outcome=outcome,
             trace_id=self.ctx.trace_id,
+            vocabulary_validated=vocab_counts.validated,
+            vocabulary_violations=vocab_counts.violations,
         )
 
     # -- Postgres walks -----------------------------------------------------

@@ -27,6 +27,7 @@ from personal_agent.observability.joinability.result import (
     aggregate_outcome,
 )
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.events import MODEL_CALL_COMPLETED
 
 # Loggers whose traceless ES events are expected and out of scope for the gate.
 # WS transport events carry session_id for correlation but have no LLM trace.
@@ -648,6 +649,36 @@ class JoinabilityWalk:
                             }
                         }
                     },
+                    # Traces that actually billed (FRE-1186 remedy 3): a paid
+                    # call's model_call_completed carries cost_usd > 0 regardless
+                    # of provider (emit_model_call_completed's `extra`); the local/
+                    # free-inference client never sets cost_usd at all, so a free
+                    # call is excluded by the range filter automatically. Scoped to
+                    # this one event (not just "any doc with cost_usd") so an
+                    # unrelated cost-adjacent log line (cost_gate, budget) can't
+                    # false-positive a trace into "should have an api_costs row".
+                    # Field is event_type, not event: es_logger.py's log_event()
+                    # builds ``doc = {..., "event_type": event_type, **data}`` —
+                    # structlog's own "event" key is reserved and dropped before
+                    # the doc is built (es_handler.py _RESERVED_EVENT_KEYS), so it
+                    # is never actually indexed under that name on these docs.
+                    # This is what lets us tell a genuine correlation failure (a
+                    # trace that billed but never landed an api_costs row —
+                    # record_api_call can fail non-fatally, litellm_client.py's
+                    # cost_record_failed) apart from a benign system span that was
+                    # never billed (consolidation, brainstem ticks, HTTP/WS
+                    # lifecycle — the case the comment below already documented).
+                    "cost_bearing_trace": {
+                        "filter": {
+                            "bool": {
+                                "filter": [
+                                    {"term": {"event_type": MODEL_CALL_COMPLETED}},
+                                    {"range": {"cost_usd": {"gt": 0}}},
+                                ]
+                            }
+                        },
+                        "aggs": {"by_trace": {"terms": {"field": "trace_id", "size": 200}}},
+                    },
                 },
                 ignore_unavailable=True,
                 allow_no_indices=True,
@@ -662,6 +693,13 @@ class JoinabilityWalk:
         )
         buckets = response.get("aggregations", {}).get("by_trace", {}).get("buckets", [])
         es_trace_ids = {b["key"] for b in buckets}
+        cost_bearing_buckets = (
+            response.get("aggregations", {})
+            .get("cost_bearing_trace", {})
+            .get("by_trace", {})
+            .get("buckets", [])
+        )
+        cost_bearing_trace_ids = {b["key"] for b in cost_bearing_buckets}
         status: Literal["green", "yellow", "red", "skipped"] = "green"
         if no_trace_hits > 0:
             status = "red"
@@ -676,20 +714,41 @@ class JoinabilityWalk:
                     severity="red",
                 )
             )
-        # Discover any trace ids ES knows about that PG didn't surface — usually
-        # benign (system spans: HTTP request traces, background task traces that
-        # don't create api_costs rows). Recorded as informational orphans but do
-        # NOT escalate check status — the gate criterion is identity-threading
-        # completeness (zero missing trace_id), not cost-attribution completeness.
+        # Trace ids ES knows about that PG didn't surface. Most are benign
+        # (system spans: HTTP request traces, background task traces that never
+        # bill and so never create an api_costs row) — those stay an
+        # informational yellow orphan, unescalated, same as before FRE-1186
+        # remedy 3. But a trace that DID bill (cost_bearing_trace_ids, above) and
+        # still has no api_costs row is a genuine correlation failure — the
+        # write either failed (litellm_client.py's non-fatal cost_record_failed)
+        # or never happened — and that is exactly the class ADR-0129 AC-2/AC-3
+        # need to catch once correlation is a gated criterion, so it reds.
         unknown_in_es = es_trace_ids - trace_ids
-        if unknown_in_es:
+        unjoined_cost_traces = unknown_in_es & cost_bearing_trace_ids
+        benign_system_spans = unknown_in_es - unjoined_cost_traces
+        if unjoined_cost_traces:
+            status = "red"
+            orphans.append(
+                Orphan(
+                    substrate=substrate,
+                    kind="es_pg_mismatch",
+                    detail={
+                        "session_id": session_id,
+                        "trace_ids_billed_but_missing_api_costs_row": sorted(unjoined_cost_traces)[
+                            :20
+                        ],
+                    },
+                    severity="red",
+                )
+            )
+        if benign_system_spans:
             orphans.append(
                 Orphan(
                     substrate=substrate,
                     kind="three_way_mismatch",
                     detail={
                         "session_id": session_id,
-                        "trace_ids_only_in_es": sorted(unknown_in_es)[:20],
+                        "trace_ids_only_in_es": sorted(benign_system_spans)[:20],
                     },
                     severity="yellow",
                 )

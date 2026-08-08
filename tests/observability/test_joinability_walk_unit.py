@@ -619,6 +619,155 @@ async def test_es_captures_and_reflections_query_use_normalized_trace_ids(ctx: A
 
 
 # ---------------------------------------------------------------------------
+# Tests — FRE-1186 remedy 3: escalate a genuine correlation failure, not a
+# benign system span (master gate bounce, 2026-08-08)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_red_when_es_trace_billed_but_has_no_api_costs_row(ctx: Any) -> None:
+    """A trace that billed (cost_usd > 0 on model_call_completed) and never
+    landed an api_costs row is a genuine correlation failure — this is the
+    class remedy 3 exists to catch, e.g. litellm_client.py's non-fatal
+    ``cost_record_failed`` swallowing the INSERT error.
+    """
+    billed_orphan_trace = uuid.uuid4().hex
+
+    async def _search(*_a: Any, **kw: Any) -> Any:
+        index = str(kw.get("index", ""))
+        if "agent-logs" in index:
+            return {
+                "hits": {"total": {"value": 9}},
+                "aggregations": {
+                    "by_trace": {
+                        "buckets": [
+                            {"key": TRACE_A_HEX},
+                            {"key": TRACE_B_HEX},
+                            {"key": billed_orphan_trace},
+                        ]
+                    },
+                    "no_trace_id": {"doc_count": 0},
+                    "cost_bearing_trace": {"by_trace": {"buckets": [{"key": billed_orphan_trace}]}},
+                },
+            }
+        return {
+            "hits": {"total": {"value": 8}},
+            "aggregations": {
+                "by_trace": {"buckets": [{"key": TRACE_A_HEX}, {"key": TRACE_B_HEX}]},
+                "no_trace_id": {"doc_count": 0},
+            },
+        }
+
+    es = MagicMock()
+    es.search = AsyncMock(side_effect=_search)
+    walk = _build_walk(pg_pool=_green_pg(), es=es, neo4j=_green_neo4j(), ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+
+    assert doc.outcome == "red"
+    mismatch = next(
+        o
+        for o in doc.orphans
+        if o.substrate == "elasticsearch.agent_logs" and o.kind == "es_pg_mismatch"
+    )
+    assert mismatch.severity == "red"
+    assert mismatch.detail["trace_ids_billed_but_missing_api_costs_row"] == [billed_orphan_trace]
+    # The two real, correctly-joined traces must not be swept into the red orphan.
+    assert TRACE_A_HEX not in mismatch.detail["trace_ids_billed_but_missing_api_costs_row"]
+    assert TRACE_B_HEX not in mismatch.detail["trace_ids_billed_but_missing_api_costs_row"]
+    # And no benign yellow orphan should fire for a trace that IS the red case.
+    assert not any(
+        o.kind == "three_way_mismatch"
+        and billed_orphan_trace in o.detail.get("trace_ids_only_in_es", [])
+        for o in doc.orphans
+    )
+
+
+@pytest.mark.asyncio
+async def test_cost_bearing_trace_agg_filters_on_event_type_field(ctx: Any) -> None:
+    """The cost-bearing filter must query ``event_type``, not ``event``.
+
+    ``agent-logs-*`` documents carry the event name under ``event_type``
+    (``es_logger.py``'s ``log_event``: ``doc = {..., "event_type": event_type,
+    **data}`` — structlog's own ``event`` key is reserved and dropped before
+    the doc is built, per ``es_handler.py``'s ``_RESERVED_EVENT_KEYS``). A
+    query against ``event`` is syntactically valid but matches nothing,
+    silently making remedy 3 never escalate — this test pins the field name
+    against exactly that regression.
+    """
+    walk = _build_walk(pg_pool=_green_pg(), es=_green_es(), neo4j=_green_neo4j(), ctx=ctx)
+    await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+
+    agent_log_call = next(
+        c
+        for c in walk.es.search.call_args_list  # type: ignore[union-attr]
+        if "agent-logs" in str(c.kwargs.get("index", ""))
+    )
+    cost_bearing_filter = (
+        agent_log_call.kwargs.get("aggs", {})
+        .get("cost_bearing_trace", {})
+        .get("filter", {})
+        .get("bool", {})
+        .get("filter", [])
+    )
+    assert {"term": {"event_type": "model_call_completed"}} in cost_bearing_filter, (
+        f"cost_bearing_trace agg filter was {cost_bearing_filter!r} — must term-match "
+        "event_type (the field agent-logs-* documents actually carry the event name "
+        "under), not event (never indexed as a top-level field on these docs)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_yellow_when_unknown_es_trace_never_billed(ctx: Any) -> None:
+    """An unknown ES trace with NO cost-bearing model_call_completed stays the
+    existing informational yellow orphan — the benign-system-span case remedy
+    3 must not false-red (consolidation, brainstem ticks, HTTP/WS lifecycle).
+    """
+    unbilled_trace = uuid.uuid4().hex
+
+    async def _search(*_a: Any, **kw: Any) -> Any:
+        index = str(kw.get("index", ""))
+        if "agent-logs" in index:
+            return {
+                "hits": {"total": {"value": 9}},
+                "aggregations": {
+                    "by_trace": {
+                        "buckets": [
+                            {"key": TRACE_A_HEX},
+                            {"key": TRACE_B_HEX},
+                            {"key": unbilled_trace},
+                        ]
+                    },
+                    "no_trace_id": {"doc_count": 0},
+                    # cost_bearing_trace present but does NOT name unbilled_trace —
+                    # it ran, but never billed (e.g. a system-spawned task).
+                    "cost_bearing_trace": {"by_trace": {"buckets": []}},
+                },
+            }
+        return {
+            "hits": {"total": {"value": 8}},
+            "aggregations": {
+                "by_trace": {"buckets": [{"key": TRACE_A_HEX}, {"key": TRACE_B_HEX}]},
+                "no_trace_id": {"doc_count": 0},
+            },
+        }
+
+    es = MagicMock()
+    es.search = AsyncMock(side_effect=_search)
+    walk = _build_walk(pg_pool=_green_pg(), es=es, neo4j=_green_neo4j(), ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+
+    assert doc.outcome == "green"
+    assert not any(o.kind == "es_pg_mismatch" for o in doc.orphans)
+    benign = next(
+        o
+        for o in doc.orphans
+        if o.substrate == "elasticsearch.agent_logs" and o.kind == "three_way_mismatch"
+    )
+    assert benign.severity == "yellow"
+    assert benign.detail["trace_ids_only_in_es"] == [unbilled_trace]
+
+
+# ---------------------------------------------------------------------------
 # Tests — yellow when a substrate raises (network blip)
 # ---------------------------------------------------------------------------
 

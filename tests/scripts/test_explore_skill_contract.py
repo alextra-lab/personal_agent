@@ -141,6 +141,9 @@ def test_operative_sentence_carries_no_hardcoded_arm_count() -> None:
     # variant self-contradictory instead of merely shorter, which is what would
     # break the seam's discrimination test.
     rule = _norm(_section(_read(), _RULE_START, _RULE_END))
+    # Anchor the negatives on a positive first: an empty or gutted rule block
+    # would satisfy every `not in` below without stating a rule at all.
+    assert "every arm stated below" in rule
     for forbidden in ("all three", "all 3", "three arms", "each of the three"):
         assert forbidden not in rule, f"rule block hardcodes an arm count: {forbidden!r}"
 
@@ -149,6 +152,9 @@ def test_arms_do_not_cross_reference() -> None:
     text = _read()
     for n in (1, 2, 3):
         block = _norm(_arm_block(text, n))
+        # An empty block would pass every cross-reference check below while
+        # stating no test at all; require the arm to state itself first.
+        assert f"#### arm {n}" in block
         for other in {1, 2, 3} - {n}:
             assert f"arm {other}" not in block, (
                 f"arm {n} references arm {other} — deleting one would strand the other"

@@ -668,6 +668,12 @@ class JoinabilityWalk:
                     # cost_record_failed) apart from a benign system span that was
                     # never billed (consolidation, brainstem ticks, HTTP/WS
                     # lifecycle — the case the comment below already documented).
+                    # Known gap (FRE-1205): the gateway streaming-chat path's
+                    # own model_call_completed (chat_api.py
+                    # _emit_gateway_model_call_completed) never sets cost_usd,
+                    # so a correlation failure on THAT path stays yellow below
+                    # rather than escalating here — everything routed through
+                    # llm_client (LiteLLMClient / LocalLLMClient) is covered.
                     "cost_bearing_trace": {
                         "filter": {
                             "bool": {

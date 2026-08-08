@@ -549,7 +549,6 @@ class LocalLLMClient:
                         llm_response = adapt_chat_completions_response(response_data)
 
                         # Emit telemetry: call completed
-                        duration_ms = int((time.time() - start_time) * 1000)
                         _usage = llm_response["usage"]
                         _pt = _usage.get("prompt_tokens", 0)
                         _ct = _usage.get("completion_tokens", 0)

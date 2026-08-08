@@ -113,12 +113,13 @@ class TestGrafanaComposeServiceSource:
         assert depends_on["tempo"]["condition"] == "service_started"
 
     def test_cloud_service_binds_loopback_only(self) -> None:
-        """Host port 3001, not 3000: seshat-pwa already binds 127.0.0.1:3000 on this host
-        (live-incident regression — FRE-1072 deploy failure, 2026-08-07). Container port stays
-        3000 — only the host-side binding moved.
+        """No static host port: two consecutive live incidents (3000 collided with seshat-pwa,
+        3001 collided with an orphaned next-server process — FRE-1072, 2026-08-07) established
+        that no port chosen inside this repo can be known-safe on an arbitrary host. The host
+        picks via GRAFANA_HOST_PORT (default 3001); container port stays 3000.
         """
         ports = self._grafana_service("docker-compose.cloud.yml")["ports"]
-        assert any(p.startswith("127.0.0.1:3001:3000") for p in ports)
+        assert any(p.startswith("127.0.0.1:${GRAFANA_HOST_PORT:-3001}:3000") for p in ports)
 
     def test_cloud_service_has_resource_limits(self) -> None:
         service = self._grafana_service("docker-compose.cloud.yml")

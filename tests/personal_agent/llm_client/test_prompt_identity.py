@@ -99,6 +99,62 @@ class TestSerializeDynamicContent:
         as_assistant = [{"role": "assistant", "content": "hello"}]
         assert _serialize_dynamic_content(as_user) != _serialize_dynamic_content(as_assistant)
 
+    def test_distinguishes_non_text_block_count(self) -> None:
+        """Codex/code-reviewer finding: a set-of-types collapse would make two
+        images and one image serialize identically. Must not.
+        """
+        one_image = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "https://a"}}],
+            }
+        ]
+        two_images = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "https://a"}},
+                    {"type": "image_url", "image_url": {"url": "https://b"}},
+                ],
+            }
+        ]
+        assert _serialize_dynamic_content(one_image) != _serialize_dynamic_content(two_images)
+
+    def test_distinguishes_non_text_block_content(self) -> None:
+        """Same block type, same count, different payload → must still differ."""
+        image_a = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "https://a"}}],
+            }
+        ]
+        image_b = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "https://b"}}],
+            }
+        ]
+        assert _serialize_dynamic_content(image_a) != _serialize_dynamic_content(image_b)
+
+    def test_distinguishes_tool_calls(self) -> None:
+        same_content = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "1", "function": {"name": "search", "arguments": "{}"}}],
+            }
+        ]
+        different_tool_call = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "1", "function": {"name": "browse", "arguments": "{}"}}],
+            }
+        ]
+        assert _serialize_dynamic_content(same_content) != _serialize_dynamic_content(
+            different_tool_call
+        )
+
     def test_covers_tools(self) -> None:
         messages = [{"role": "user", "content": "hi"}]
         tools_a = [{"name": "digest", "parameters": {"a": 1}}]

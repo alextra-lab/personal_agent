@@ -152,9 +152,11 @@ def _serialize_dynamic_content(
     component-aware split: ``orchestrator.primary``'s per-turn tail (FRE-1008)
     and every fallback callsite (:func:`derive_fallback_prompt_identity`). A
     naive join of message text would let two structurally different requests
-    collide on identical concatenated text — role tags and content-block types
-    make the serialization sensitive to structure, not just text. Tool schemas
-    are included when present: a callsite that starts/stops sending tools, or
+    collide on identical concatenated text — role tags and a per-block
+    fingerprint (ordered, not deduplicated, so a changed/added non-text block
+    like an image attachment moves the hash even when no text differs) make
+    the serialization sensitive to structure, not just text. Tool schemas are
+    included when present: a callsite that starts/stops sending tools, or
     changes a tool's schema, must move ``dynamic_hash``.
 
     Args:
@@ -169,12 +171,26 @@ def _serialize_dynamic_content(
     for m in request_messages:
         role = m.get("role", "")
         content = m.get("content")
-        block_types = (
-            ",".join(sorted({b.get("type", "") for b in content if isinstance(b, dict)}))
-            if isinstance(content, list)
-            else ""
-        )
-        parts.append(f"[{role}|{block_types}]{get_text_content(content)}")
+        block_descriptors = ""
+        if isinstance(content, list):
+            # Ordered, not deduplicated: a naive `{b.get("type") for b in content}`
+            # set collapses both count and content of same-typed non-text blocks
+            # (e.g. two different image_url blocks both just say "image_url" once),
+            # leaving dynamic_hash blind to a turn that genuinely added/changed
+            # attachments (ADR-0101). Non-text blocks are fingerprinted by hashing
+            # the whole block (get_text_content only extracts "text"-type content).
+            descriptors = []
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                btype = b.get("type", "")
+                descriptors.append(
+                    "text"
+                    if btype == "text"
+                    else f"{btype}:{_short_hash(json.dumps(b, sort_keys=True, default=str))}"
+                )
+            block_descriptors = ",".join(descriptors)
+        parts.append(f"[{role}|{block_descriptors}]{get_text_content(content)}")
         if m.get("tool_calls"):
             parts.append(f"[tool_calls]{json.dumps(m['tool_calls'], sort_keys=True, default=str)}")
     if tools:

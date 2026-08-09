@@ -174,6 +174,24 @@ NEAR_MISS_EXCEPTIONS: dict[str, NearMissException] = {
             "record (es_handler.py _build_item) and must keep passing"
         ),
     ),
+    "mode": NearMissException(
+        matched_governed_name="model",
+        similarity=0.889,
+        reason=(
+            "mode and model are distinct fields: mode is a feature flag or "
+            "execution mode, model is the LLM identifier. Both live in logs; "
+            "80 docs/day carry mode (FRE-1179 Master review 2026-08-09)"
+        ),
+    ),
+    "roles": NearMissException(
+        matched_governed_name="role",
+        similarity=0.889,
+        reason=(
+            "roles and role are distinct fields: roles is a list or plural "
+            "collection, role is the singular LLM call role. Both live in logs; "
+            "44 docs/day carry roles (FRE-1179 Master review 2026-08-09)"
+        ),
+    ),
 }
 
 

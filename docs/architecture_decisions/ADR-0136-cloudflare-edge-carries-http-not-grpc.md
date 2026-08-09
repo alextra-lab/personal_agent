@@ -336,7 +336,7 @@ That is an ADR's job, and a reference note carries no ruling the next design is 
 | Someone enables the zone gRPC toggle without reading this ADR; Access silently stops enforcing zone-wide | High | AC-1 makes the setting's state directly readable and failable; D3 makes scope-checking the habit for any zone setting |
 | Cloudflare changes Access's gRPC behaviour and this ADR becomes a stale prohibition | Medium | D1 states the expiry condition explicitly — the ruling is conditional on the documented behaviour and is to be revisited, not obeyed, if it changes |
 | An implementer reads `--protocol http2` as enabling gRPC and re-derives the wrong conclusion | Medium | The Context diagram separates the three layers; Implementation Notes records the conflation by name |
-| A producer's OTLP config drifts to gRPC against a public hostname after the ingress lands | Medium | AC-2 reads runtime state rather than repository text, and pairs the producer census with an independent ingress-rule census so a missing or wrong artifact cannot pass |
+| A producer's OTLP config drifts to gRPC against a public hostname after the ingress lands | Medium | AC-2 reads runtime state rather than repository text, derives its producer population from observed spans rather than a hand list, and follows each Cloudflare-fronted path through Caddy to its upstream. Partial by construction — AC-2 states which paths it does not cover |
 | The prohibition is the only control, and nobody checks it again after adjudication | Medium | Accepted and stated. A recurring probe for a setting nobody intends to flip is disproportionate; the gap is named in Implementation Notes rather than papered over |
 
 ---
@@ -403,23 +403,44 @@ be visible.
   gRPC-content-type requests for any hostname in the zone, and that is the finding. This criterion requires
   an owner action by design; ADR criteria are permitted to (ADR-0130 D1).
 
-- **AC-2 — No producer sends OTLP over gRPC to anything outside the trust boundary.** **Two arms, both
-  required**, because a self-reported artifact on its own can pass vacuously — a producer that publishes no
-  artifact would otherwise satisfy the criterion by being invisible.
-  - **(a) Producer census.** Enumerate the deployment's OTLP producers from the ADR-0129 chain — the
-    gateway, `slm_server`, and any Collector introduced by FRE-1224 — and read each one's
-    effective-configuration artifact (the gateway's is served at `/telemetry/effective-config`, F5) for its
-    `otlp_endpoint` and `otlp_protocol`. Every gRPC endpoint must resolve to loopback or a compose-network
-    service name. **An enumerated producer with no readable artifact is a FAIL, not a pass.**
-  - **(b) Path census, independent of any self-report.** The live tunnel ingress configuration contains no
-    rule routing a hostname to a Collector **gRPC** receiver port (4317) — read from the connector's logged
-    configuration, the same store and method F2 used. This arm holds even when a producer's artifact is
-    absent, stale or simply wrong, because no gRPC edge path can exist without an ingress rule to carry it.
+- **AC-2 — gRPC OTLP stays inside the trust boundary, and no Cloudflare-fronted path carries it.**
 
-  · *Fails if* an enumerated producer pairs `grpc` with a publicly-routable Cloudflare-fronted hostname, **or**
-  an enumerated producer publishes no readable artifact, **or** any ingress rule targets 4317. Non-vacuous
-  today: the gateway's `otel-collector:4317` satisfies (a) and would fail it if repointed at `<otlp-host>`;
-  (b) is satisfied by the measured six-rule configuration and would fail on a seventh rule naming 4317.
+  **Scope, stated first because it was over-claimed in drafting:** this criterion is bounded by what D2
+  decides — the Cloudflare edge. A producer exporting gRPC to a *non*-Cloudflare off-box endpoint would
+  violate **ADR-0129 D7** ("Nothing goes off-box. No SaaS exporter is configured") and is asserted there,
+  not here.
+
+  **Three arms, all required.** A self-reported artifact alone passes vacuously — a producer publishing no
+  artifact satisfies it by being invisible — and a port-number check alone misses indirection.
+
+  - **(a) Producer census, derived rather than hand-listed.** Enumerate producers as the union of: every
+    distinct `service.name` that produced spans in Tempo over the adjudication window — an *observed*
+    census, which catches a producer nobody declared, because a producer successfully crossing the edge is
+    by construction visible downstream — **and** the ADR-0129 chain's named producers (the gateway,
+    `slm_server`, any Collector from FRE-1224), which catches one that is configured but not currently
+    delivering. For each, read its effective-configuration artifact (the gateway's is served at
+    `/telemetry/effective-config`, F5) and assert every gRPC endpoint resolves to loopback or a
+    compose-network service name. **A producer in the union with no readable artifact is a FAIL, not a pass.**
+  - **(b) Path census — no Cloudflare-fronted path terminates at a gRPC receiver.** Read the live tunnel
+    ingress rules (F2's method, the connector's logged configuration); for each rule routing into Caddy,
+    follow it through to the Caddyfile site block it lands in; assert no resulting upstream is an OTLP gRPC
+    receiver as declared in the Collector's own configuration. Following the Caddy hop is the point — a
+    check for literal port 4317 in the ingress rules would miss every indirect route, and most of our rules
+    are indirect.
+  - **(c) No direct exposure that neither arm above would see.** The Collector container publishes no host
+    port (F1's method — read the container's port bindings in full, not just grep for 4317).
+
+  · *Fails if* any producer in the census pairs `grpc` with an endpoint outside loopback/compose, **or** any
+  producer in the census publishes no readable artifact, **or** any Cloudflare-fronted path resolves to a
+  gRPC receiver, **or** the Collector publishes a host port. Non-vacuous today: the gateway's
+  `otel-collector:4317` satisfies (a) and would fail it if repointed at `<otlp-host>`; (b) is satisfied by
+  the measured six-rule configuration and would fail if any of them, directly or through Caddy, reached a
+  gRPC receiver.
+
+  **What a green result does not prove, stated rather than implied.** It is evidence about the paths
+  enumerated above — not a proof that no gRPC leaves this host by any means. An unenumerated egress path (a
+  second connector, a host process forwarding on its own) sits outside these arms. Closing that would take a
+  full network egress audit, which is disproportionate to this decision and is not claimed here.
 
 **Seam ticket:** **FRE-1231** — *Adjudicate ADR-0136: the Cloudflare zone gRPC constraint*. Filed parked
 (`Backlog`), **due 2026-08-23**. This ADR has no implementation chain, so its criteria are adjudicable as

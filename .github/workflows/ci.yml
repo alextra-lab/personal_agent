@@ -32,6 +32,64 @@ permissions:
   contents: read
 
 jobs:
+  # ── PR ticket token guard (FRE-1011) ─────────────────────────────────────
+  # Prevents docs/close-out PRs from carrying FRE-XXXX tokens in titles, which
+  # trigger the Linear GitHub integration and corrupt ticket state.
+  guard-pr-tokens:
+    name: Guard PR title against FRE tokens (FRE-1011)
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Check PR title and branch for ticket tokens
+        env:
+          BRANCH_NAME: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          uv run python << 'EOF'
+          import os
+          import sys
+          sys.path.insert(0, "scripts")
+          from guard_pr_ticket_tokens import check_branch_name, check_pr_title, check_pr_body_warning
+
+          branch_name = os.getenv("BRANCH_NAME", "")
+          pr_title = os.getenv("PR_TITLE", "")
+          pr_body = os.getenv("PR_BODY", "")
+
+          # Check branch name (docs branches must not have FRE tokens)
+          is_valid, msg = check_branch_name(branch_name)
+          if not is_valid:
+              print(f"::error::{msg}")
+              sys.exit(1)
+
+          # Check PR title (must not have tokens unless branch carries them)
+          is_valid, msg = check_pr_title(pr_title, branch_name)
+          if not is_valid:
+              print(f"::error::{msg}")
+              sys.exit(1)
+
+          # Warn about body references
+          warning = check_pr_body_warning(pr_body, branch_name)
+          if warning:
+              print(f"::warning::{warning}")
+
+          print("✓ PR title and branch token check passed")
+          EOF
+
   # ── Changed-path detection (drives job-level skips; NOT a required check) ────
   changes:
     name: Detect changed paths

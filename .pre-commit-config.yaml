@@ -55,3 +55,9 @@ repos:
         language: system
         files: ^src/personal_agent/.*\.py$
         pass_filenames: false
+      - id: guard-pr-ticket-tokens
+        name: FRE-1011 guard docs branches against FRE tokens
+        entry: uv run python scripts/guard_pr_ticket_tokens.py
+        language: system
+        pass_filenames: false
+        always_run: true

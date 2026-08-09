@@ -24,6 +24,7 @@ _RENDER_ENV = {
     "SESHAT_APP_PASSWORD": "test",
     "NEO4J_PASSWORD": "test",
     "GRAFANA_ADMIN_PASSWORD": "test",
+    "GRAFANA_RO_PASSWORD": "test",
 }
 _RENDER_OVERRIDE = "tests/scripts/fixtures/gateway_render_override.yml"
 

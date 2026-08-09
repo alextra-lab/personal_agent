@@ -133,6 +133,7 @@ services:
       - GF_AUTH_BASIC_ENABLED=true
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-grafana_dev_password}
       - GF_SERVER_ROUTER_LOGGING=true
+      - GRAFANA_RO_PASSWORD=${GRAFANA_RO_PASSWORD:-grafana_ro_dev_password}
     volumes:
       - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./config/grafana/dashboards:/etc/grafana/dashboards:ro
@@ -143,6 +144,8 @@ services:
       tempo:
         condition: service_started
       elasticsearch:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]

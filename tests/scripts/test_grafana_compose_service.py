@@ -24,6 +24,7 @@ _RENDER_ENV = {
     "SESHAT_APP_PASSWORD": "test",
     "NEO4J_PASSWORD": "test",
     "GRAFANA_ADMIN_PASSWORD": "test",
+    "GRAFANA_RO_PASSWORD": "test",
 }
 _RENDER_OVERRIDE = "tests/scripts/fixtures/gateway_render_override.yml"
 
@@ -95,6 +96,34 @@ class TestGrafanaComposeServiceSource:
         env = self._grafana_service("docker-compose.cloud.yml")["environment"]
         password_line = next(e for e in env if "GF_SECURITY_ADMIN_PASSWORD" in str(e))
         assert ":?" in password_line, f"expected a required-var guard, got: {password_line}"
+
+    @pytest.mark.parametrize("compose_file", ["docker-compose.yml", "docker-compose.cloud.yml"])
+    def test_ro_password_not_hardcoded(self, compose_file: str) -> None:
+        """FRE-1203: GRAFANA_RO_PASSWORD backs the pg-ledger datasource's grafana_ro credential
+        (config/grafana/provisioning/datasources/datasources.yaml) — must come from the
+        environment, matching GRAFANA_ADMIN_PASSWORD's pattern above.
+        """
+        env = self._grafana_service(compose_file)["environment"]
+        password_line = next(e for e in env if "GRAFANA_RO_PASSWORD" in str(e))
+        assert "${GRAFANA_RO_PASSWORD" in password_line
+
+    def test_cloud_ro_password_is_required_not_silently_blank(self) -> None:
+        """Same reasoning as test_cloud_admin_password_is_required_not_silently_blank: a silently
+        blank GRAFANA_RO_PASSWORD would mismatch the grafana_ro Postgres role's real password and
+        fail the datasource at query time rather than at boot, obscuring the actual cause.
+        """
+        env = self._grafana_service("docker-compose.cloud.yml")["environment"]
+        password_line = next(e for e in env if "GRAFANA_RO_PASSWORD" in str(e))
+        assert ":?" in password_line, f"expected a required-var guard, got: {password_line}"
+
+    @pytest.mark.parametrize("compose_file", ["docker-compose.yml", "docker-compose.cloud.yml"])
+    def test_depends_on_postgres_healthy(self, compose_file: str) -> None:
+        """FRE-1203: the pg-ledger datasource needs Postgres reachable at boot; unlike Tempo
+        (distroless, no healthcheck), Postgres has a real healthcheck so this dependency can wait
+        on it rather than merely on process start.
+        """
+        depends_on = self._grafana_service(compose_file)["depends_on"]
+        assert depends_on["postgres"]["condition"] == "service_healthy"
 
     @pytest.mark.parametrize("compose_file", ["docker-compose.yml", "docker-compose.cloud.yml"])
     def test_dashboards_provisioned_from_files_not_ui(self, compose_file: str) -> None:

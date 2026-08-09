@@ -20,9 +20,9 @@ from personal_agent.cost_gate import (
     NON_GATED_ROLES,
     UnknownBudgetRoleError,
     budget_role_for,
-    load_budget_config,
 )
 from personal_agent.llm_client.types import ModelRole
+from tests._helpers.budget_config import load_budget_config_for_tests
 
 
 def test_model_role_members_all_mapped() -> None:
@@ -46,7 +46,7 @@ def test_budget_yaml_roles_all_self_resolve() -> None:
     budget.yaml with its own $5 daily cap, but absent from the resolver map, so
     ``budget_role_for("study")`` returned ``main_inference``.
     """
-    declared = sorted(load_budget_config().roles)
+    declared = sorted(load_budget_config_for_tests().roles)
     unreachable = [name for name in declared if BUDGET_ROLE_BY_FACTORY_NAME.get(name) != name]
     assert not unreachable, (
         f"budget.yaml roles that do not self-resolve through the map: {unreachable}"
@@ -55,7 +55,7 @@ def test_budget_yaml_roles_all_self_resolve() -> None:
 
 def test_map_targets_are_declared_budget_roles() -> None:
     """No map entry points at a budget lane budget.yaml does not declare."""
-    declared = set(load_budget_config().roles)
+    declared = set(load_budget_config_for_tests().roles)
     dangling = {k: v for k, v in BUDGET_ROLE_BY_FACTORY_NAME.items() if v not in declared}
     assert not dangling, f"map entries pointing at undeclared budget roles: {dangling}"
 

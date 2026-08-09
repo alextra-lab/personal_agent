@@ -236,6 +236,11 @@ Configuration is managed via environment variables and `.env` file:
 # Copy example configuration
 cp .env.example .env
 
+# Per-role LLM spend caps — the real file is gitignored (operational config,
+# not source), so a fresh clone must create it from the template. The tests
+# and the cost gate both need it present.
+cp config/governance/budget.yaml.example config/governance/budget.yaml
+
 # Edit as needed
 vim .env
 ```

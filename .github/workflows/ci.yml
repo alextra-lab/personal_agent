@@ -83,6 +83,22 @@ jobs:
       - name: Install ast-grep
         run: uv tool install ast-grep-cli@0.45.0
 
+      # config/governance/budget.yaml is gitignored (FRE-1238) — real spend caps
+      # do not live in a public repo — so a CI checkout has only the template.
+      # Several unit tests exercise production paths (dspy_gate, the migration
+      # scripts' cost-gate setup) that call load_budget_config() internally, and
+      # that loader is deliberately strict: no fallback, so a gateway missing its
+      # real caps fails loudly instead of silently running on placeholders. CI is
+      # a deployment like any other and needs a config file present; the template
+      # supplies it, carrying the real role structure with placeholder amounts.
+      # No test asserts a cap VALUE, so the placeholders change nothing.
+      #
+      # Deliberately NOT done in the "Config guard" job: that job must run
+      # against a checkout with no real file so it keeps proving the guard's
+      # .example fallback works live (FRE-1238 AC-3).
+      - name: Seed budget config from the template
+        run: cp -n config/governance/budget.yaml.example config/governance/budget.yaml
+
       - name: Run unit tests
         run: uv run python -m pytest -m "not integration" -q --tb=short
         env:

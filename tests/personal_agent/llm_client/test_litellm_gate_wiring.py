@@ -284,14 +284,18 @@ async def test_denied_path_does_not_call_litellm(
 
 @pytest_asyncio.fixture
 async def real_gate() -> AsyncIterator[CostGate]:
-    """A connected CostGate against the REAL config/governance/budget.yaml.
+    """A connected CostGate against the shipped budget config.
 
     Unlike ``gate_for_role`` (a synthetic per-test role + config), this exercises the
     actually-declared ``artifact_builder`` / ``main_inference`` policies so a regression that
     removes either role's YAML declaration fails this test too (ticket AC-2, ADR-0118 T1 /
     FRE-879).
+
+    Reads the real ``budget.yaml`` where it exists and the committed
+    ``budget.yaml.example`` otherwise — the real file is gitignored (FRE-1238),
+    and what this fixture needs is the role *declarations*, which both carry.
     """
-    from personal_agent.cost_gate import load_budget_config
+    from tests._helpers.budget_config import load_budget_config_for_tests as load_budget_config
 
     gate = CostGate(config=load_budget_config(), db_url=settings.database_url)
     await gate.connect()

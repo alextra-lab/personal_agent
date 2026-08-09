@@ -16,11 +16,11 @@ import pytest
 
 from personal_agent.cost_gate import (
     BudgetConfigError,
-    load_budget_config,
     validate_role_totality,
 )
 from personal_agent.cost_gate.types import BudgetConfig, CapEntry, RoleConfig
 from personal_agent.llm_client.types import ModelRole
+from tests._helpers.budget_config import load_budget_config_for_tests
 
 _ROLE = RoleConfig(default_output_tokens=256, safety_factor=1.2, on_denial="nack")
 
@@ -45,8 +45,14 @@ def _check(
 
 
 def test_real_config_passes() -> None:
-    """The committed budget.yaml, role map and ModelRole all agree."""
-    validate_role_totality(load_budget_config())  # must not raise
+    """The shipped budget config, role map and ModelRole all agree.
+
+    Reads the real ``budget.yaml`` where it exists (a dev machine, the VPS) and
+    the committed ``budget.yaml.example`` otherwise — the real file is
+    gitignored (FRE-1209). Both carry the same role structure, which is the
+    invariant here; the caps themselves are not read.
+    """
+    validate_role_totality(load_budget_config_for_tests())  # must not raise
 
 
 def test_declared_role_missing_from_map_raises() -> None:

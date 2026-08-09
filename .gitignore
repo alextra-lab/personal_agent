@@ -123,6 +123,10 @@ telemetry/evaluation/EVAL-primitive-tools/run-g3-full-sonnet-2026-04-28/
 .env.test
 # Note: .env.example is tracked as a template
 
+# Real operational cost caps — owner ruling 2026-08-09 (FRE-1209): real config
+# values do not belong in the public repo. budget.yaml.example is the template.
+config/governance/budget.yaml
+
 # Experiment results (environment-specific, regeneratable)
 experiments/*/results/
 

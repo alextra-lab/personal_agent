@@ -201,6 +201,46 @@ class TestPart2PostgresLedgerDatasource:
         finally:
             await conn.close()
 
+    @pytest.mark.asyncio
+    async def test_grafana_ro_can_select_all_five_ledger_tables(self) -> None:
+        """Owner ruling 2026-08-09 narrowed the grant to exactly these five tables — each must
+        actually be reachable, not just the one (`api_costs`) the other tests happen to use.
+        """
+        _require_stack()
+        _require_writes_opt_in()
+        conn = await _grafana_ro_connection()
+        try:
+            for table in (
+                "api_costs",
+                "route_traces",
+                "budget_policies",
+                "budget_counters",
+                "budget_reservations",
+            ):
+                count = await conn.fetchval(f"SELECT count(*) FROM {table}")
+                assert count is not None, f"expected SELECT on {table} to succeed"
+        finally:
+            await conn.close()
+
+    @pytest.mark.asyncio
+    async def test_grafana_ro_refused_on_tables_outside_the_narrowed_grant(self) -> None:
+        """Positive proof the 2026-08-09 narrowing actually took: before it, `grafana_ro` had
+        `SELECT` on every `public` table via `GRANT SELECT ON ALL TABLES IN SCHEMA public`. This
+        must now fail with the same `permission denied` shape as the write-verb refusals above —
+        `users.email` (PII) and `sessions.messages` (raw conversation transcripts) were the
+        concrete exposure the security review flagged.
+        """
+        _require_stack()
+        _require_writes_opt_in()
+        conn = await _grafana_ro_connection()
+        try:
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await conn.fetchval("SELECT email FROM users")
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await conn.fetchval("SELECT messages FROM sessions")
+        finally:
+            await conn.close()
+
     def test_datasource_credential_resolved_from_environment(self) -> None:
         """Grafana never echoes secureJsonData back in a GET, but secureJsonFields.password
         reads True only when the env-substituted value was actually set — the live analogue of

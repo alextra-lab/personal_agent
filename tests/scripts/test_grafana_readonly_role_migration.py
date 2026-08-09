@@ -14,6 +14,13 @@ from personal_agent.config.config_guard import repo_root
 
 _MIGRATION_PATH = "docker/postgres/migrations/0025_grafana_readonly_role.sql"
 _WRITE_VERBS = ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "DROP", "ALTER TABLE")
+_LEDGER_TABLES = (
+    "api_costs",
+    "route_traces",
+    "budget_policies",
+    "budget_counters",
+    "budget_reservations",
+)
 
 
 def _migration_text() -> str:
@@ -55,9 +62,25 @@ class TestMigrationFile:
             for verb in _WRITE_VERBS:
                 assert verb not in line.upper(), f"write verb {verb!r} found in grant: {line!r}"
 
-    def test_grants_public_and_sysgraph_select(self) -> None:
+    def test_grants_only_the_named_ledger_tables_on_public(self) -> None:
+        """Owner ruling 2026-08-09: table-grain, not `ALL TABLES IN SCHEMA public` — `public`
+        also holds `users.email` (PII) and raw conversation content the ticket never asked to
+        expose. Each of the five ledger tables must be named explicitly.
+        """
         text = _migration_text()
-        assert "GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro" in text
+        for table in _LEDGER_TABLES:
+            assert f"public.{table}" in text, f"expected an explicit grant naming public.{table}"
+        assert "GRANT SELECT ON ALL TABLES IN SCHEMA public" not in text
+
+    def test_no_default_privileges_on_public(self) -> None:
+        """The removed clause is the one that most needed removing: it silently grants every
+        FUTURE public table — including any that later holds PII — with nobody deciding.
+        """
+        text = _migration_text()
+        assert "ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public" not in text
+
+    def test_grants_sysgraph_select_unaffected_by_the_narrowing(self) -> None:
+        text = _migration_text()
         assert "GRANT SELECT ON ALL TABLES IN SCHEMA sysgraph TO grafana_ro" in text
 
     def test_sysgraph_default_privileges_target_the_schema_owner_not_agent(self) -> None:
@@ -92,19 +115,37 @@ class TestInitSqlMirror:
         shared_grants = [
             "GRANT CONNECT ON DATABASE personal_agent TO grafana_ro;",
             "GRANT USAGE ON SCHEMA public TO grafana_ro;",
-            "GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro;",
             "GRANT USAGE ON SCHEMA sysgraph TO grafana_ro;",
             "GRANT SELECT ON ALL TABLES IN SCHEMA sysgraph TO grafana_ro;",
         ]
         for grant in shared_grants:
             assert grant in init_text, f"init.sql missing: {grant!r}"
             assert grant in migration_text, f"migration missing: {grant!r}"
+        for table in _LEDGER_TABLES:
+            assert f"public.{table}" in init_text, f"init.sql missing grant on public.{table}"
+            assert f"public.{table}" in migration_text, f"migration missing grant on public.{table}"
+        # `ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public` legitimately exists for
+        # seshat_app (pre-existing, unrelated) — the assertion is that grafana_ro is never its
+        # target, not that the phrase never appears in the file at all. `sysgraph`'s own
+        # default-privileges clause also legitimately ends in the same "GRANT SELECT ON TABLES
+        # TO grafana_ro" text, so the check must be scoped to the `agent`+`public` combination
+        # specifically, not that substring anywhere.
+        forbidden = (
+            "ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public\n"
+            "    GRANT SELECT ON TABLES TO grafana_ro;"
+        )
+        assert forbidden not in init_text
+        assert forbidden not in migration_text
 
-    def test_appears_after_all_public_table_creation(self) -> None:
-        """`GRANT SELECT ON ALL TABLES IN SCHEMA public` only covers tables that already exist —
-        placed before the last CREATE TABLE, a fresh install would silently miss one.
+    def test_appears_after_the_five_ledger_tables_are_created(self) -> None:
+        """The explicit per-table grant only works if each named table already exists — placed
+        before any of the five, a fresh install would fail with an undefined-table error.
         """
         text = _init_sql_text()
-        last_create_table = text.rfind("CREATE TABLE")
-        grafana_ro_grant = text.find("GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro")
-        assert grafana_ro_grant > last_create_table > -1
+        grafana_ro_grant = text.find("public.api_costs,\n    public.route_traces")
+        assert grafana_ro_grant > -1
+        for table in _LEDGER_TABLES:
+            create_stmt = text.find(f"CREATE TABLE IF NOT EXISTS {table}")
+            assert -1 < create_stmt < grafana_ro_grant, (
+                f"public.{table} must be created before the grafana_ro grant"
+            )

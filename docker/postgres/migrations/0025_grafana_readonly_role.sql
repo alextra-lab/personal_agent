@@ -10,11 +10,25 @@
 -- only, no INSERT/UPDATE/DELETE anywhere, so the worst an anonymous Explore
 -- query can do is read.
 --
+-- GRANT SCOPE: table-grain, not schema-wide. `public` holds PII (`users.email`)
+-- and raw conversation content (`sessions.messages`, `captains_log_captures`,
+-- `captains_log_reflections`) alongside the cost tables. Owner ruling
+-- 2026-08-09 narrowed this from an earlier `GRANT SELECT ON ALL TABLES IN
+-- SCHEMA public` + `ALTER DEFAULT PRIVILEGES FOR ROLE agent` draft: the
+-- "avoid a follow-up migration" justification for granting broad didn't
+-- hold (FRE-1210 ships its own migration, 0026, regardless), so the cost of
+-- narrowing is one extra grant line per future table, not a whole migration.
+-- No `ALTER DEFAULT PRIVILEGES` on `public` — a future table (including any
+-- that later holds PII) is granted deliberately, in its own migration, not
+-- silently by this one.
+--
 -- sysgraph: owner ruled 2026-08-08 that a read-only observer may see
 -- sysgraph.* — ADR-0105 AC-2's isolation is against the application
 -- write/recall path, not a read-only Viewer behind Cloudflare Access. This
 -- grant does not touch seshat_app or recall_role, which stay denied; their
--- existing permission-denied proof (0014/0015) is untouched.
+-- existing permission-denied proof (0014/0015) is untouched. Unaffected by
+-- the 2026-08-09 narrowing above — sysgraph stays schema-wide, separately
+-- owner-ruled.
 --
 -- ADMIN CREDENTIAL: run this migration (and every DDL migration) as the
 -- `agent` SUPERUSER — AGENT_DATABASE_ADMIN_URL, not the app's
@@ -44,9 +58,13 @@ $$;
 
 GRANT CONNECT ON DATABASE personal_agent TO grafana_ro;
 GRANT USAGE ON SCHEMA public TO grafana_ro;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro;
-ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public
-    GRANT SELECT ON TABLES TO grafana_ro;
+GRANT SELECT ON
+    public.api_costs,
+    public.route_traces,
+    public.budget_policies,
+    public.budget_counters,
+    public.budget_reservations
+TO grafana_ro;
 
 -- sysgraph: read-only observation, owner ruling 2026-08-08 (see migration header). ADR-0105
 -- AC-2's isolation is against the application write/recall path, NOT against a read-only

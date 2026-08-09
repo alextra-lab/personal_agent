@@ -630,6 +630,9 @@ ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public
 -- for existing DBs; see that file's header for the full rationale (Grafana OSS
 -- Viewer can issue arbitrary queries against every datasource, so containment
 -- is SELECT-only, not per-datasource — and the sysgraph grant's owner ruling).
+-- Table-grain grant on `public` (owner ruling 2026-08-09) — no
+-- ALTER DEFAULT PRIVILEGES there, so a future public table is never
+-- silently readable by an anonymous Grafana Viewer.
 -- ===========================================================================
 
 DO $$
@@ -642,9 +645,13 @@ $$;
 
 GRANT CONNECT ON DATABASE personal_agent TO grafana_ro;
 GRANT USAGE ON SCHEMA public TO grafana_ro;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro;
-ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public
-    GRANT SELECT ON TABLES TO grafana_ro;
+GRANT SELECT ON
+    public.api_costs,
+    public.route_traces,
+    public.budget_policies,
+    public.budget_counters,
+    public.budget_reservations
+TO grafana_ro;
 
 GRANT USAGE ON SCHEMA sysgraph TO grafana_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA sysgraph TO grafana_ro;

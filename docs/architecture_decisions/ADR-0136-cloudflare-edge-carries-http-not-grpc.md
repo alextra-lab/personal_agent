@@ -405,10 +405,15 @@ be visible.
 
 - **AC-2 — gRPC OTLP stays inside the trust boundary, and no Cloudflare-fronted path carries it.**
 
-  **Scope, stated first because it was over-claimed in drafting:** this criterion is bounded by what D2
-  decides — the Cloudflare edge. A producer exporting gRPC to a *non*-Cloudflare off-box endpoint would
-  violate **ADR-0129 D7** ("Nothing goes off-box. No SaaS exporter is configured") and is asserted there,
-  not here.
+  **Scope, stated first because drafting got it wrong in both directions.** This criterion asserts **all of
+  D2**, whose rule is the broader of its two clauses: gRPC belongs *inside the trust boundary* — loopback or
+  the compose network — and only the HTTP conversion of it crosses the Cloudflare edge. So a producer
+  exporting gRPC to **any** endpoint outside loopback/compose fails here, Cloudflare-fronted or not; the
+  failure predicate below is deliberately that wide, and matches D2 rather than narrowing it.
+
+  ADR-0129 D7's "Nothing goes off-box. No SaaS exporter is configured" is **adjacent, not a delegation** —
+  it is broader in a different dimension (every signal, not only gRPC) and narrower in this one (it does not
+  speak to protocol). Neither criterion discharges any part of the other.
 
   **Three arms, all required.** A self-reported artifact alone passes vacuously — a producer publishing no
   artifact satisfies it by being invisible — and a port-number check alone misses indirection.

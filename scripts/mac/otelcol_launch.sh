@@ -50,15 +50,29 @@ fi
 # is a manual step, so enforce it here rather than trusting it: refuse unless we own the file and
 # neither group nor other can write it.
 #
-# `stat -f` is BSD/macOS; `stat -c` is GNU. Both are tried because the contract tests run in CI on
-# Linux even though the component itself is macOS-only.
-env_meta="$(stat -f '%u %Op' "$ENV_FILE" 2>/dev/null || stat -c '%u %a' "$ENV_FILE" 2>/dev/null || true)"
-if [ -z "$env_meta" ]; then
-    printf 'seshat-otelcol: cannot stat %s — refusing to source it.\n' "$ENV_FILE" >&2
-    exit "$EX_CONFIG"
-fi
+# Branch on the platform explicitly rather than trying one form and falling back on failure.
+# BSD `stat -f` formats a file; GNU `stat -f` reports FILESYSTEM status and *succeeds* with
+# unrelated output, so a `cmd-a || cmd-b` chain silently parses garbage on Linux instead of
+# falling through. (Caught by CI, which runs these contract tests on Linux even though the
+# component is macOS-only.)
+case "$(uname -s)" in
+    Darwin) env_meta="$(stat -f '%u %Op' "$ENV_FILE" 2>/dev/null || true)" ;;
+    *)      env_meta="$(stat -c '%u %a'  "$ENV_FILE" 2>/dev/null || true)" ;;
+esac
+
 env_owner="${env_meta%% *}"
 env_mode="${env_meta##* }"
+
+# Fail closed on an unparseable result. Without this, a stat whose output shape we did not expect
+# yields empty fields and the checks below compare emptiness — which is how a security control
+# quietly stops controlling anything.
+case "$env_owner" in
+    ''|*[!0-9]*)
+        printf 'seshat-otelcol: cannot determine ownership of %s — refusing to source it.\n' \
+            "$ENV_FILE" >&2
+        exit "$EX_CONFIG"
+        ;;
+esac
 # Last three octal digits. BSD %Op prefixes the file type (100600); GNU %a does not (600).
 env_perm="$(printf '%s' "$env_mode" | sed 's/.*\(...\)$/\1/')"
 env_group_other="$(printf '%s' "$env_perm" | cut -c2-3)"

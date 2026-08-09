@@ -157,6 +157,25 @@ def test_installed_unit_runs_frozen_copies_not_the_working_tree() -> None:
     assert "@@CONFIG_PATH@@" in template, "the unit must pin the config path explicitly"
 
 
+def test_ownership_check_branches_on_platform_rather_than_on_command_failure() -> None:
+    """`stat -f X || stat -c X` is a trap, and it reached CI once already.
+
+    BSD `stat -f` formats a file; GNU `stat -f` reports FILESYSTEM status and **succeeds** with
+    unrelated output. So the fallback never fires on Linux and the wrapper parses garbage — the
+    ownership field came out empty and the check silently compared emptiness. A security control
+    that cannot parse its input must fail closed, not evaluate a blank.
+    """
+    wrapper = _wrapper_path().read_text()
+    assert "stat -f" in wrapper and "stat -c" in wrapper, "both stat dialects should be handled"
+    assert "uname -s" in wrapper, (
+        "platform must be branched on explicitly, not inferred from failure"
+    )
+    assert "stat -f '%u %Op' \"$ENV_FILE\" 2>/dev/null || stat -c" not in wrapper, (
+        "the try-and-fallback chain silently parses garbage on Linux"
+    )
+    assert "cannot determine ownership" in wrapper, "an unparseable stat must fail closed"
+
+
 def test_installer_is_executable() -> None:
     """docs/guides/MAC_OTEL_COLLECTOR.md documents invoking it directly."""
     installer = repo_root() / "scripts/mac/install_otelcol.sh"

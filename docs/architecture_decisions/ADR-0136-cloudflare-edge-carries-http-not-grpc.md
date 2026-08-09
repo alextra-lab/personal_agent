@@ -13,10 +13,15 @@
 
 The FRE-1220 study, looking for a way to get `slm_server`'s OTLP spans from the Mac to the VPS
 Collector, found that the obvious symmetry — the in-repo gateway exports OTLP over gRPC, so the Mac
-should too — is not merely awkward across the Cloudflare edge. Its nearest working form is a **silent
-security failure**: Cloudflare Access does not enforce on gRPC, and the setting that would make gRPC
-carryable is **zone-level**, so enabling it to serve one endpoint stops Access enforcing gRPC-content-type
-requests on **every** hostname in the zone, with the policies still displaying as configured.
+should too — is not awkward across the Cloudflare edge but **unavailable**, and that the configuration
+change which looks like it would fix that is a **silent security failure**.
+
+**Two independent walls, and their order matters.** First, Cloudflare Tunnel documents gRPC as unsupported
+on public hostname deployments at all — which is the only mode this deployment runs. Second, and separately,
+the zone-level setting that makes Cloudflare's reverse proxy handle gRPC would, if enabled, stop Access
+enforcing on gRPC-content-type requests across **every** hostname in the zone, with the policies still
+displaying as configured. So enabling the toggle would not even deliver a working public-hostname path; it
+would only pay the security cost.
 
 This ADR records that as a standing constraint. It is deliberately small: it rules on what may cross the
 Cloudflare edge and what may not, and it decides nothing about the OTLP ingress design itself.
@@ -69,11 +74,16 @@ gRPC; the two are independent.
 | Who authenticates | Access application policy — IdP login, or a service token for headless clients | **Device enrolment** — WARP client, Split Tunnels, Zero Trust org |
 | Our state | six hostnames, all L7 | `warp-routing: enabled=false` *(FRE-1220 F2)* |
 
-This is the piece that makes the constraint self-explaining. gRPC works in private mode **because
-Cloudflare stops being a reverse proxy there** — it moves packets rather than reading requests. No requests
-are parsed, so there is no Access; authentication moves to the device badge instead. In public-hostname
-mode the edge must understand what it forwards, and gRPC's HTTP/2 trailers are special handling it performs
-only when the zone toggle is on.
+**What is documented**, and what the decision rests on: gRPC is supported via private subnet routing and
+unsupported on public hostname deployments; the private path's prerequisites are WARP client deployment,
+Split Tunnel configuration and Zero Trust enrolment — so its authentication is device-based rather than an
+Access application policy.
+
+**What is reasoned**, marked as such because Cloudflare does not document its internals: the split appears
+to track whether the edge is parsing HTTP at all. In public-hostname mode it terminates TLS and reconstructs
+requests, so it can only forward what it understands; private routing carries a CIDR, where there are no
+requests to parse and correspondingly no Access application to apply. A reader may check this inference —
+**nothing below depends on it.**
 
 **Our topology joins no network at all.** cloudflared opens an *outbound* connection from the VPS and holds
 it; there is no inbound port and no route table. That is a real security property. Its cost is that
@@ -142,9 +152,14 @@ into a false instruction.
 ### D2 — gRPC stays inside the trust boundary; protocol conversion happens before the edge
 
 **gRPC is a service-to-service protocol and is used as one here.** It is not natively usable from a browser
-(browsers cannot control HTTP/2 framing), which is the root of Access's gap: Access's model is an
-interactive identity flow — intercept, redirect to the IdP, set a signed token — and a gRPC client has no
-browser to redirect.
+— browsers cannot control HTTP/2 framing, which is why browser gRPC requires `grpc-web` plus a translating
+proxy.
+
+**Why Access does not support gRPC is not documented by Cloudflare, and this decision does not need a
+reason** — the behaviour is documented, and that is what the rule rests on. One tempting explanation should
+be resisted: "a gRPC client has no browser to follow an identity redirect" does not explain it, because
+Access serves headless HTTP clients perfectly well through Service Auth tokens — the very mechanism the
+OTLP ingress design uses.
 
 So the rule follows the protocol's own design rather than working around it:
 
@@ -191,19 +206,27 @@ authenticating gRPC traffic to your origin servers" — to replace what Access s
 
 **Pros:**
 - Protocol symmetry with the in-repo gateway's gRPC exporter.
-- It is the vendor's stated remedy, so it is a supported posture rather than an improvisation.
+- Adding origin-side authentication is Cloudflare's own stated remedy for the Access gap, so the mitigation
+  is at least the vendor-recommended one rather than an improvisation.
 
 **Cons:**
+- **It does not actually produce a working path.** The toggle governs Cloudflare's reverse proxy; Tunnel
+  separately documents gRPC as unsupported on public hostname deployments, which is the only mode we run.
+  Enabling it pays the security cost without delivering the capability.
 - Because the toggle is zone-wide, the replacement authentication is needed on **every** hostname that could
-  receive a gRPC-content-type request — all six — not only the endpoint motivating the change.
+  receive a gRPC-content-type request — not only the endpoint motivating the change.
 - Builds a second, independent authentication layer across the entire surface to carry one telemetry stream.
 - The failure mode while it is being built is silent: policies keep displaying as configured.
 
-**Why Rejected:** **Refused on principle rather than costed.** This trades the deployment's only edge
-authentication layer — silently, across every hostname — to satisfy one endpoint's protocol preference. The
-thing purchased is unmeasurable: OTLP export is unary calls, OTLP/HTTP also carries protobuf, and measured
-volume is 3 documents in 24 hours (F4). A rewrite of the authentication layer to buy nothing measurable is
-not a trade-off to weigh.
+**Why Rejected:** **Refused on principle, and separately non-functional.** The principled refusal stands on
+its own: this trades the deployment's only edge authentication layer — silently, across every hostname it
+fronts — to satisfy one endpoint's protocol preference, and what it purchases is unmeasurable (OTLP export
+is unary calls, OTLP/HTTP also carries protobuf, and measured volume is 3 documents in 24 hours, F4). A
+rewrite of the authentication layer to buy nothing measurable is not a trade-off to weigh.
+
+The functional objection is recorded second **deliberately**, because it is the weaker guarantee: vendor
+support matrices change, and if Cloudflare later supports gRPC on public hostnames the first objection is
+the one that still holds.
 
 ### Option 2: WARP + private subnet routing — the documented supported gRPC path
 
@@ -275,8 +298,13 @@ That is an ADR's job, and a reference note carries no ruling the next design is 
 
 ### Positive Consequences
 
-- **Access enforcement stays intact across all six hostnames.** The only edge authentication layer this
-  deployment has continues to apply to every request it fronts.
+- **No hostname loses Access enforcement.** The only edge authentication layer this deployment has continues
+  to apply wherever it is configured. Stated that way deliberately: **which** of the six hostnames carry an
+  Access application is *not* established here — the study's tunnel-configuration read "claims nothing about
+  any Cloudflare object not represented in the tunnel's ingress document (Access applications, DNS records
+  and WAF rules are not visible in this store)" (F2), and Access was positively measured on one hostname
+  only (F3). What this decision preserves is that the toggle does not remove enforcement from wherever it
+  exists; enumerating that inventory is part of the broader question below, not a claim made here.
 - **The OTLP ingress design is constrained before it is built**, rather than adjudicated in an
   implementation PR — the edge hop is HTTP, and FRE-1223/1224 inherit that as settled.
 - **gRPC is used as designed**, inside the trust boundary, rather than forced through a proxy that must
@@ -308,7 +336,7 @@ That is an ADR's job, and a reference note carries no ruling the next design is 
 | Someone enables the zone gRPC toggle without reading this ADR; Access silently stops enforcing zone-wide | High | AC-1 makes the setting's state directly readable and failable; D3 makes scope-checking the habit for any zone setting |
 | Cloudflare changes Access's gRPC behaviour and this ADR becomes a stale prohibition | Medium | D1 states the expiry condition explicitly — the ruling is conditional on the documented behaviour and is to be revisited, not obeyed, if it changes |
 | An implementer reads `--protocol http2` as enabling gRPC and re-derives the wrong conclusion | Medium | The Context diagram separates the three layers; Implementation Notes records the conflation by name |
-| A producer's OTLP config drifts to gRPC against a public hostname after the ingress lands | Medium | AC-2 reads the effective-config artifacts at runtime rather than trusting repository text |
+| A producer's OTLP config drifts to gRPC against a public hostname after the ingress lands | Medium | AC-2 reads runtime state rather than repository text, and pairs the producer census with an independent ingress-rule census so a missing or wrong artifact cannot pass |
 | The prohibition is the only control, and nobody checks it again after adjudication | Medium | Accepted and stated. A recurring probe for a setting nobody intends to flip is disproportionate; the gap is named in Implementation Notes rather than papered over |
 
 ---
@@ -335,6 +363,25 @@ proposed as work here.
 Collector of FRE-1224; the edge-side shape it must produce is the OTLP/HTTP receiver measured in F8. Neither
 is decided by this ADR — they are named so the constraint has a visible landing site.
 
+**A black-box external probe was drafted as a third criterion and dropped; the reasoning is kept so it is
+not re-attempted.** The idea was to send a request carrying `content-type: application/grpc` to a zone
+hostname and rely on Cloudflare's documented "when gRPC is not enabled on a zone, Cloudflare will respond to
+gRPC requests with a `403 Forbidden`". It fails as an instrument on three counts, any one of which is
+disqualifying:
+
+- **A content-type header is not gRPC.** Cloudflare's own enabling requirements name port 443, TLS, HTTP/2
+  advertised over ALPN *and* the content type. A plain HTTPS request wearing the header may never exercise
+  the path the criterion claims to test.
+- **403 is ambiguous.** Access returns 403 to unauthenticated requests as well — measured on `<es-host>`
+  (F3) — so a bare 403 cannot distinguish "gRPC is disabled" from "Access refused me", and the origin can
+  produce a 403 of its own.
+- **The disambiguating variant rests on an undocumented ordering.** Sending the same request *with* valid
+  service-token headers only discriminates if the gRPC check precedes Access, which Cloudflare does not
+  state. That is an inference, and a criterion resting on an unverified inference verifies nothing.
+
+AC-1 reads the setting directly and carries the constraint without any of this. Shipping the probe as a
+conditional criterion would have added ceremony, not assurance.
+
 ---
 
 ## Verification / Acceptance Criteria
@@ -356,26 +403,23 @@ be visible.
   gRPC-content-type requests for any hostname in the zone, and that is the finding. This criterion requires
   an owner action by design; ADR criteria are permitted to (ADR-0130 D1).
 
-- **AC-2 — No producer sends OTLP over gRPC to anything outside the trust boundary.** · **Check:** for every
-  producer publishing an effective-configuration artifact (ADR-0129; the gateway's is served at
-  `/telemetry/effective-config`, F5), read its `otlp_endpoint` and `otlp_protocol`; assert that every
-  endpoint whose protocol is gRPC resolves to loopback or a compose-network service name, and that **no**
-  gRPC endpoint names a publicly-routable Cloudflare-fronted hostname. · *Fails if* any artifact pairs
-  `grpc` with a public hostname. Non-vacuous today: the gateway's `otel-collector:4317` satisfies it and
-  would fail it if repointed at `<otlp-host>`. Runtime state is read deliberately rather than repository
-  text, because the producer that matters most runs off-box.
+- **AC-2 — No producer sends OTLP over gRPC to anything outside the trust boundary.** **Two arms, both
+  required**, because a self-reported artifact on its own can pass vacuously — a producer that publishes no
+  artifact would otherwise satisfy the criterion by being invisible.
+  - **(a) Producer census.** Enumerate the deployment's OTLP producers from the ADR-0129 chain — the
+    gateway, `slm_server`, and any Collector introduced by FRE-1224 — and read each one's
+    effective-configuration artifact (the gateway's is served at `/telemetry/effective-config`, F5) for its
+    `otlp_endpoint` and `otlp_protocol`. Every gRPC endpoint must resolve to loopback or a compose-network
+    service name. **An enumerated producer with no readable artifact is a FAIL, not a pass.**
+  - **(b) Path census, independent of any self-report.** The live tunnel ingress configuration contains no
+    rule routing a hostname to a Collector **gRPC** receiver port (4317) — read from the connector's logged
+    configuration, the same store and method F2 used. This arm holds even when a producer's artifact is
+    absent, stale or simply wrong, because no gRPC edge path can exist without an ingress rule to carry it.
 
-- **AC-3 — A gRPC-content-type request to a zone hostname is refused at the edge, established with a
-  discriminating control.** · **Check:** send a request carrying `content-type: application/grpc` to a zone
-  hostname **with** valid Access service-token headers. With the toggle off, Cloudflare answers `403` per
-  its documented behaviour; with the toggle on, Access ignores the request and it reaches the origin, which
-  answers something other than `403`. · *Fails if* the authenticated gRPC-content-type request reaches the
-  origin. **This criterion's first step is validating its own instrument**: a bare unauthenticated 403
-  proves nothing, because Access returns 403 to unauthenticated requests too (measured on `<es-host>`,
-  FRE-1220 F3). The assumption that the gRPC check precedes Access on an authenticated request is an
-  inference, not documented. **If the two arms cannot be shown to discriminate, this criterion is
-  adjudicated `UNVERIFIABLE`** — a first-class verdict, never silently treated as a pass — and AC-1 carries
-  the constraint alone, which it is designed to do.
+  · *Fails if* an enumerated producer pairs `grpc` with a publicly-routable Cloudflare-fronted hostname, **or**
+  an enumerated producer publishes no readable artifact, **or** any ingress rule targets 4317. Non-vacuous
+  today: the gateway's `otel-collector:4317` satisfies (a) and would fail it if repointed at `<otlp-host>`;
+  (b) is satisfied by the measured six-rule configuration and would fail on a seventh rule naming 4317.
 
 **Seam ticket:** **FRE-1231** — *Adjudicate ADR-0136: the Cloudflare zone gRPC constraint*. Filed parked
 (`Backlog`), **due 2026-08-23**. This ADR has no implementation chain, so its criteria are adjudicable as

@@ -87,7 +87,7 @@ services:
       retries: 3
 
   # Tempo 2.10.7 — trace storage/query backend (ADR-0129 D6). FRE-1072's own fixture-injection
-  # tests keep targeting Tempo's OTLP receiver directly (4317/4318 below); the otel-collector
+  # tests keep targeting Tempo's OTLP receiver directly (host 4327/4328 below); the otel-collector
   # service further down is the application's own egress path (ADR-0129 D5, FRE-1070), on
   # different host ports so the two never collide.
   # No healthcheck: the image is distroless (no shell, no wget, no self-check flag) — Grafana
@@ -101,8 +101,13 @@ services:
       - tempo_data:/var/tempo
     ports:
       - "3200:3200"   # Tempo HTTP API / query
-      - "4317:4317"   # OTLP gRPC receiver
-      - "4318:4318"   # OTLP HTTP receiver
+      # Deliberately NOT 4317/4318 on the host (FRE-1224). Host port 4318 belongs to the Mac-local
+      # OTel Collector, because it is slm_server's compiled-in default OTLP endpoint — a container
+      # taking it back sends slm_server's telemetry dark, and silently: the launchd Collector just
+      # fails to bind and respawns. Loopback-bound as well; nothing off-box needs Tempo directly.
+      # Guarded by tests/scripts/test_mac_collector_port_is_unclaimed.py.
+      - "127.0.0.1:4327:4317"   # OTLP gRPC receiver
+      - "127.0.0.1:4328:4318"   # OTLP HTTP receiver
 
   # OTel Collector — the single trace egress point (ADR-0129 D5, FRE-1070). Vanilla upstream
   # core distribution, not contrib and not a vendor distro. Redacts one declared span attribute
@@ -114,9 +119,10 @@ services:
     volumes:
       - ./config/otel/collector-config.yaml:/etc/otel-collector-config.yaml:ro
     ports:
-      # Loopback-only, and deliberately not 4317/4318 (Tempo's, above) — this ticket's own
-      # acceptance fixture (tests/integration/test_fre1070_otel_collector_acceptance.py) is the
-      # only thing that needs the HTTP port; the gateway itself exports over gRPC only.
+      # Loopback-only, and deliberately not Tempo's host ports (4327/4328, above) nor 4318, which
+      # belongs to the Mac-local OTel Collector (FRE-1224) — this ticket's own acceptance fixture
+      # (tests/integration/test_fre1070_otel_collector_acceptance.py) is the only thing that needs
+      # the HTTP port; the gateway itself exports over gRPC only.
       - "127.0.0.1:4319:4317"   # OTLP gRPC
       - "127.0.0.1:4320:4318"   # OTLP HTTP
     depends_on:

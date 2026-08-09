@@ -506,6 +506,7 @@ services:
       GRAPH_HOST: ${GRAPH_HOST:-graph.example.com}
       ES_HOST: ${ES_HOST:-es.example.com}
       API_HOST: ${API_HOST:-api.example.com}
+      OTLP_HOST: ${OTLP_HOST:-otlp.example.com}
       # Outbound egress upstreams (ADR-0132 D1). Real hosts come from .env;
       # tracked source ships inert placeholders (FRE-895).
       SLM_HOST: ${SLM_HOST:-slm.example.com}

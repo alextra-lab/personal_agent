@@ -106,6 +106,42 @@ http://{$ES_HOST:es.example.com}:80 {
 	}
 }
 
+# Cloudflare Tunnel — OTLP ingress for the Mac-local OTel Collector (FRE-1224), the VPS half
+# of FRE-1223 (FRE-1239). The Mac Collector posts spans to {$OTLP_HOST} (real value from .env;
+# FRE-895) behind Cloudflare Access; cloudflared forwards to this listener from the cloud-sim
+# compose network. HTTP only, never gRPC — the Cloudflare zone gRPC toggle stays off (ADR-0136).
+# Path-allowlisted to the exact traces path, POST only, no query string — in the FRE-411 style,
+# so a leaked Access token can only inject traces on one path. remote_ip restricts to the
+# compose network (docker-compose.cloud.yml's own cloud-sim subnet) cloudflared runs on, so a
+# request straight to the VPS IP with a forged Host header is refused even before the path
+# check. request_body caps a single request so an oversized POST can't exhaust the Collector.
+# The access log redacts the Cloudflare Access credential headers so this hop's evidence trail
+# (ADR-0132 D3) never carries a bearer credential into caddy-access-*.
+http://{$OTLP_HOST:otlp.example.com}:80 {
+	@allowed {
+		method POST
+		path_regexp ^/v1/traces$
+		query ""
+		remote_ip 172.25.0.0/16
+	}
+	handle @allowed {
+		request_body {
+			max_size 20MiB
+		}
+		reverse_proxy otel-collector:4318
+	}
+	respond "Forbidden" 403
+	log {
+		output stdout
+		format filter {
+			request>headers>Cf-Access-Jwt-Assertion delete
+			request>headers>Cf-Access-Client-Id delete
+			request>headers>Cf-Access-Client-Secret delete
+			wrap json
+		}
+	}
+}
+
 # Cloudflare Tunnel — external agent API access
 # All paths route directly to the gateway.
 # TLS is terminated at the Cloudflare edge; traffic arrives here as plain HTTP.

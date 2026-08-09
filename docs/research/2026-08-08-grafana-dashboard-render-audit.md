@@ -4,13 +4,15 @@
 `docs/superpowers/plans/2026-08-08-fre-1203-grafana-migration-program.md` § T3.
 
 **Method.** All 16 dashboards were driven live against `http://127.0.0.1:3003` (Grafana 13.1.3,
-anonymous Viewer). For every panel: (1) the dashboard was opened via Playwright, given a 4s settle,
-screenshotted full-page at the browser's default width with `fullPage: true`; (2) the DOM was
-asserted for `[data-testid="data-testid Panel status error"]` (render error) and panel-header text;
-(3) the panel's own `targets` were extracted from the committed JSON and POSTed verbatim to
-`POST /api/ds/query` at the dashboard's own time range — this is the objective, falsifiable row-count
-evidence base for every verdict below, not a screenshot eyeball. Every dashboard runs `now-24h` to
-`now` except `health_check` (`now-1h`). The full query→response corpus and extracted panel
+anonymous Viewer). For every dashboard: (1) the Playwright browser viewport was resized to **1920×1400
+before navigation** (see §0.1 — this, not `fullPage: true`, is what gets every panel in frame), the
+dashboard opened and given a 4s settle; (2) the DOM was asserted for
+`[data-testid="data-testid Panel status error"]` (render error) and, per panel, the header's
+`getBoundingClientRect().bottom` was checked to confirm it falls inside the viewport before the
+screenshot was taken; (3) the panel's own `targets` were extracted from the committed JSON and POSTed
+verbatim to `POST /api/ds/query` at the dashboard's own time range — this is the objective, falsifiable
+row-count evidence base for every verdict below, not a screenshot eyeball. Every dashboard runs
+`now-24h` to `now` except `health_check` (`now-1h`). The full query→response corpus and extracted panel
 definitions are reproducible from `config/grafana/dashboards/*.json` plus the query shape documented
 in §0 below; they are not committed as separate artifacts (ephemeral evidence, not a deliverable).
 
@@ -33,6 +35,27 @@ response's `results.<refId>.frames[].data.values` is summed across frames for a 
 `error` field on the result is recorded verbatim. This is the same request shape the Grafana frontend
 itself issues (confirmed by capturing the live network request for the `cost_budget` dashboard via
 Playwright's `browser_network_request` before writing the replay script).
+
+### 0.1 How each screenshot was captured (corrected during review)
+
+The first pass of this audit took each screenshot with `page.screenshot({ fullPage: true })` at
+Playwright's default viewport, on the assumption that `fullPage` scrolls and stitches the entire
+document regardless of the starting window size. That assumption is wrong for this app: Grafana's
+dashboard grid does not grow `document.body` — `document.body.scrollHeight` stayed pinned to the
+current viewport height (confirmed by direct DOM measurement), so `fullPage: true` captured nothing
+beyond whatever the small default viewport already showed. The result was 16 identical 780×493
+images, each showing only the 1–2 panels that fit in that small window — caught at master's review
+gate (all 16 dashboards hold between 1 and 6 panels, so uniform image dimensions across dashboards
+holding different panel counts was itself the tell).
+
+**The fix:** call `browser_resize(1920, 1400)` — matching the ticket's own stated screenshot spec —
+**before** `browser_navigate`, so the full 1920×1400 viewport exists from the first paint and every
+panel in the grid lays out and mounts inside it directly; no scroll-and-stitch is needed. This was
+verified per dashboard, not assumed: after the 4s settle, every panel header's
+`getBoundingClientRect().bottom` was read via `browser_evaluate` and confirmed to fall under 1400px
+(the largest dashboards, at 6 panels, bottom out at 1327px) before the screenshot was taken. All 16
+screenshots referenced throughout this document are `1920×1400` PNGs captured this way, with every
+panel confirmed in frame — not the original 780×493 crops.
 
 ---
 

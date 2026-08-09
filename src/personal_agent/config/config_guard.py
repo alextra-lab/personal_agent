@@ -848,8 +848,17 @@ def check_budget_role_coverage(root: Path) -> list[Finding]:
     startup half, and both delegate to the same ``role_totality_findings`` so
     the two can never disagree about what "consistent" means.
 
+    The real ``budget.yaml`` is gitignored (owner ruling 2026-08-09, FRE-1209 —
+    operational spend ceilings are deployment config, not source, and this repo
+    is public), so a fresh clone has only ``budget.yaml.example``. Fall back to
+    it: the invariant under test is the *role structure*, which the template
+    carries in full — only the dollar amounts differ, and this check never reads
+    them. A deployment whose real file has drifted is caught at startup by
+    ``validate_role_totality``, which always reads the runtime file.
+
     Args:
-        root: Repository root; ``config/governance/budget.yaml`` is read from it.
+        root: Repository root; ``config/governance/budget.yaml`` is read from
+            it, falling back to ``budget.yaml.example`` when absent.
 
     Returns:
         One safety finding per inconsistency; empty when the three agree.
@@ -859,11 +868,16 @@ def check_budget_role_coverage(root: Path) -> list[Finding]:
 
     budget_path = root / "config" / "governance" / "budget.yaml"
     if not budget_path.exists():
+        budget_path = budget_path.with_suffix(".yaml.example")
+    if not budget_path.exists():
         return [
             Finding(
                 check="budget_role_coverage",
                 severity="safety",
-                message=f"{budget_path} is missing — cost-gate roles cannot be verified.",
+                message=(
+                    f"neither {root / 'config' / 'governance' / 'budget.yaml'} nor its "
+                    f".example exists — cost-gate roles cannot be verified."
+                ),
             )
         ]
 

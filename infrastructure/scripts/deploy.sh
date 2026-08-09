@@ -46,11 +46,24 @@ fi
 
 # ── Build remote command ──────────────────────────────────────────────────────
 
+# config/governance/budget.yaml holds the real spend caps and is gitignored
+# (FRE-1238) — it lives on the box, not in git. It was tracked until that
+# ticket's commit, and `git pull` DELETES a file whose commit removes it:
+# .gitignore protects untracked files, not a tracked-file deletion arriving in
+# a pull. Losing it stops the gateway booting (cost-gate init is fatal —
+# service/app.py). So snapshot it before the pull and restore it after if the
+# pull took it away. Restores only from a non-empty backup, so a box that
+# genuinely has no budget.yaml is left alone rather than handed an empty one.
+PRESERVE_BUDGET_PRE='_bkp=$(mktemp) && { test -f config/governance/budget.yaml && cp -p config/governance/budget.yaml "$_bkp" || true; }'
+PRESERVE_BUDGET_POST='{ test -f config/governance/budget.yaml || { test -s "$_bkp" && cp -p "$_bkp" config/governance/budget.yaml; }; } && rm -f "$_bkp"'
+
 if $FULL; then
   REMOTE_CMD="
     cd $DEPLOY_PATH &&
     test -f .env || { echo 'ERROR: .env not found at $DEPLOY_PATH — see .env.example'; exit 1; } &&
+    $PRESERVE_BUDGET_PRE &&
     git pull --ff-only &&
+    $PRESERVE_BUDGET_POST &&
     docker compose -f $COMPOSE_FILE build &&
     docker compose -f $COMPOSE_FILE up -d
   "
@@ -59,7 +72,9 @@ elif $BUILD; then
   REMOTE_CMD="
     cd $DEPLOY_PATH &&
     test -f .env || { echo 'ERROR: .env not found at $DEPLOY_PATH — see .env.example'; exit 1; } &&
+    $PRESERVE_BUDGET_PRE &&
     git pull --ff-only &&
+    $PRESERVE_BUDGET_POST &&
     docker compose -f $COMPOSE_FILE build seshat-gateway &&
     docker compose -f $COMPOSE_FILE up -d seshat-gateway
   "
@@ -68,7 +83,9 @@ else
   REMOTE_CMD="
     cd $DEPLOY_PATH &&
     test -f .env || { echo 'ERROR: .env not found at $DEPLOY_PATH — see .env.example'; exit 1; } &&
+    $PRESERVE_BUDGET_PRE &&
     git pull --ff-only &&
+    $PRESERVE_BUDGET_POST &&
     docker compose -f $COMPOSE_FILE up -d
   "
   echo "==> Pull + restart (no rebuild) to $SSH_HOST:$DEPLOY_PATH"

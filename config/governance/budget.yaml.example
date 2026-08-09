@@ -1,0 +1,86 @@
+# Cost Check Gate — per-role budgets and denial behaviour (ADR-0065).
+#
+# TEMPLATE. Copy to `budget.yaml` and set your own caps:
+#
+#     cp config/governance/budget.yaml.example config/governance/budget.yaml
+#
+# The real `budget.yaml` is gitignored (owner ruling 2026-08-09, FRE-1209):
+# operational spend ceilings are deployment config, not source, and this repo
+# is public. Every cap_usd below is a PLACEHOLDER — not the deployed value.
+#
+# What IS load-bearing here and must stay in sync with the code: the set of
+# role names, and whether each role is capped or listed under `uncapped_roles`.
+# `cost_gate.validate_role_totality` (startup) and `check_budget_role_coverage`
+# (CI) both assert that this role structure agrees with the `ModelRole` enum and
+# `cost_gate/role_map.py`. Adding a role to the code means adding it here too;
+# the dollar amounts are yours to choose, the role names are not.
+version: 1
+
+roles:
+  main_inference:
+    default_output_tokens: 1024
+    safety_factor: 1.2
+    on_denial: raise        # FastAPI 503 → PWA error card
+  entity_extraction:
+    default_output_tokens: 256
+    safety_factor: 1.2
+    on_denial: nack         # background consumer NACK → Redis Streams redeliver
+  captains_log:
+    default_output_tokens: 512
+    safety_factor: 1.2
+    on_denial: nack
+  insights:
+    default_output_tokens: 512
+    safety_factor: 1.2
+    on_denial: nack
+  promotion:
+    default_output_tokens: 256
+    safety_factor: 1.2
+    on_denial: nack
+  freshness:
+    default_output_tokens: 128
+    safety_factor: 1.2
+    on_denial: nack
+  skill_routing:
+    default_output_tokens: 64       # returns a small JSON array of skill names
+    safety_factor: 1.2
+    on_denial: raise                # surface failures instead of silently returning []
+  study:
+    default_output_tokens: 512
+    safety_factor: 1.2
+    on_denial: raise                # standalone one-shot script — surface budget denial immediately
+  artifact_builder:
+    default_output_tokens: 1024
+    safety_factor: 1.2
+    on_denial: raise        # user-facing build path (ADR-0118 T1) — mirrors main_inference
+
+# Roles deliberately run WITHOUT a per-role dollar cap (FRE-989 finding two).
+#
+# Listing a role here is a DECISION. It is what distinguishes "we chose not to
+# cap this" from "we forgot" — the startup validator and the CI config guard
+# both reject a declared role that is neither capped nor listed here.
+#
+# "Uncapped" means no PER-ROLE ceiling, not unlimited: caps_for() always folds
+# in the synthetic weekly `_total` cap below, so these are still bounded
+# collectively.
+uncapped_roles:
+  - insights
+  - promotion
+  - freshness
+
+# PLACEHOLDER VALUES — set these to your own ceilings in `budget.yaml`.
+# The (time_window, role) pairs mirror the real deployment's shape; only the
+# dollar amounts are invented.
+caps:
+  - {time_window: daily,  role: entity_extraction, cap_usd: 1.00}
+  - {time_window: daily,  role: captains_log,      cap_usd: 1.00}
+  - {time_window: daily,  role: main_inference,    cap_usd: 1.00}
+  - {time_window: daily,  role: skill_routing,     cap_usd: 1.00}
+  - {time_window: daily,  role: study,             cap_usd: 1.00}
+  - {time_window: daily,  role: artifact_builder,  cap_usd: 1.00}
+  - {time_window: weekly, role: entity_extraction, cap_usd: 5.00}
+  - {time_window: weekly, role: main_inference,    cap_usd: 5.00}
+  - {time_window: weekly, role: skill_routing,     cap_usd: 5.00}
+  - {time_window: weekly, role: study,             cap_usd: 5.00}
+  - {time_window: weekly, role: artifact_builder,  cap_usd: 5.00}
+  - {time_window: weekly, role: _total,            cap_usd: 10.00}  # keep in sync with AGENT_CLOUD_WEEKLY_BUDGET_USD (.env)

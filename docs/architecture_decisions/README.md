@@ -193,7 +193,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0108](ADR-0108-stored-artifact-vision-reprocessing.md) | Stored-Artifact Vision Re-processing (analyze-to-text, explicit tool) | Proposed |
 | [ADR-0109](ADR-0109-entity-taxonomy-redesign.md) | Entity & Relationship Taxonomy — V1 (inherited) → V2 (first principled derivation) | Accepted |
 
-### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0135)
+### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0136)
 
 | ADR | Title | Status |
 |-----|-------|--------|
@@ -223,6 +223,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0133](ADR-0133-typed-emit-envelope-residual-log-corpus.md) | The Typed Emit Envelope for the Residual Log Corpus — Enforcement by Declared Retired Spelling, and the Field Registry Declined (restores ADR-0128 Tier 1 on the surface ADR-0129 leaves ungoverned; answers ADR-0090's deferred registry question *no*) | Proposed |
 | [ADR-0134](ADR-0134-activity-alerting-absence-as-a-first-class-signal.md) | Activity Alerting — Absence as a First-Class Signal, on Platform-Native Alerting (five instruments, no egress; declines ADR-0090's proposed fourth corner and amends its D6 done-bar instead) | Proposed |
 | [ADR-0135](ADR-0135-explore-seat-working-contract.md) | The Explore Seat's Working Contract — Findings Carry Evidence, Proposals Carry Feasibility, and the Gate Sits at the Exit (amends ADR-0131 D4's filing plane for `cc-explore`; re-scopes FRE-977 into a `stream:explore` dispatch) | Accepted |
+| [ADR-0136](ADR-0136-cloudflare-edge-carries-http-not-grpc.md) | The Cloudflare Edge Carries HTTP, Not gRPC — the Zone gRPC Toggle Stays Off, and Protocol Conversion Happens Before the Edge (Access does not enforce on gRPC and the toggle is zone-wide; records the constraint FRE-1220 Proposal 5 asked for) | Accepted |
 
 ### Supplementary
 

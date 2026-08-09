@@ -222,6 +222,20 @@ class BrainstemScheduler:
             settings, "slm_health_probe_interval_seconds", 300.0
         )
 
+        # Cache-erosion monitor (ADR-0078 / FRE-1189)
+        self._last_cache_erosion_probe_run: datetime | None = None
+        self.cache_erosion_probe_enabled = getattr(settings, "cache_erosion_probe_enabled", True)
+        self.cache_erosion_probe_interval_seconds = getattr(
+            settings, "cache_erosion_probe_interval_seconds", 3600
+        )
+
+        # Delivery-ratio probe (FRE-1051 / FRE-1189)
+        self._last_delivery_ratio_probe_run: datetime | None = None
+        self.delivery_ratio_probe_enabled = getattr(settings, "delivery_ratio_probe_enabled", True)
+        self.delivery_ratio_probe_interval_seconds = getattr(
+            settings, "delivery_ratio_probe_interval_seconds", 86400
+        )
+
         # DomainGuard blocklist warm (FRE-1162): moves the URLhaus feed fetch off the
         # request path onto this scheduler's startup + periodic jobs. Interval is
         # derived from the guard's own TTL setting rather than a fixed constant, so it
@@ -1120,6 +1134,65 @@ class BrainstemScheduler:
                         log.warning(
                             "slm_health_probe_failed",
                             error=str(slm_probe_err),
+                            exc_info=True,
+                            trace_id=iteration_trace_id,
+                        )
+
+                # Hourly: cache-erosion probe (ADR-0078 / FRE-1189). Unlike the
+                # joinability/SLM-health runners above, this runner can return None on a
+                # recoverable condition (disabled, no ES client) that is not an exception —
+                # so the timestamp only advances on a produced doc, not unconditionally.
+                if self.cache_erosion_probe_enabled and (
+                    self._last_cache_erosion_probe_run is None
+                    or (now - self._last_cache_erosion_probe_run).total_seconds()
+                    >= self.cache_erosion_probe_interval_seconds
+                ):
+                    try:
+                        from personal_agent.observability.cache_erosion.scheduler_runner import (
+                            run_scheduled_cache_erosion_probe,
+                        )
+
+                        cache_erosion_doc = await run_scheduled_cache_erosion_probe(
+                            es_client=cast(
+                                "AsyncElasticsearch | None",
+                                self._lifecycle_es_client,
+                            )
+                        )
+                        if cache_erosion_doc is not None:
+                            self._last_cache_erosion_probe_run = now
+                    except Exception as cache_erosion_err:
+                        log.warning(
+                            "cache_erosion_probe_failed",
+                            error=str(cache_erosion_err),
+                            exc_info=True,
+                            trace_id=iteration_trace_id,
+                        )
+
+                # Daily: delivery-ratio probe (FRE-1051 / FRE-1189). Same None-vs-exception
+                # distinction as cache-erosion above (disabled, no ES client, or Postgres
+                # unreachable all return None rather than raising).
+                if self.delivery_ratio_probe_enabled and (
+                    self._last_delivery_ratio_probe_run is None
+                    or (now - self._last_delivery_ratio_probe_run).total_seconds()
+                    >= self.delivery_ratio_probe_interval_seconds
+                ):
+                    try:
+                        from personal_agent.observability.delivery_ratio.scheduler_runner import (
+                            run_scheduled_delivery_ratio_probe,
+                        )
+
+                        delivery_ratio_doc = await run_scheduled_delivery_ratio_probe(
+                            es_client=cast(
+                                "AsyncElasticsearch | None",
+                                self._lifecycle_es_client,
+                            )
+                        )
+                        if delivery_ratio_doc is not None:
+                            self._last_delivery_ratio_probe_run = now
+                    except Exception as delivery_ratio_err:
+                        log.warning(
+                            "delivery_ratio_probe_failed",
+                            error=str(delivery_ratio_err),
                             exc_info=True,
                             trace_id=iteration_trace_id,
                         )

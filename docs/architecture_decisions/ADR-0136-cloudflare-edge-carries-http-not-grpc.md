@@ -426,7 +426,24 @@ be visible.
     `slm_server`, any Collector from FRE-1224), which catches one that is configured but not currently
     delivering. For each, read its effective-configuration artifact (the gateway's is served at
     `/telemetry/effective-config`, F5) and assert every gRPC endpoint resolves to loopback or a
-    compose-network service name. **A producer in the union with no readable artifact is a FAIL, not a pass.**
+    compose-network service name. **A producer in the union with no readable artifact is a FAIL, not a pass** —
+    **with one narrow exception, added 2026-08-09 because as originally written this arm was unachievable
+    against the topology it names.** A **Collector** in the union cannot publish an effective-configuration
+    artifact at all: the vanilla upstream distribution exposes component names through zpages and not
+    exporter endpoints, and `configz/effective` is a Splunk-distribution endpoint that ADR-0129 D5's distro
+    choice excludes. Naming "any Collector from FRE-1224" in this census and then failing it for a capability
+    it does not have would make this criterion impossible to satisfy. So for a Collector specifically, arm
+    (a) is discharged by its **reviewed, version-controlled configuration file** — the same substitution
+    ADR-0129 D6 already accepts for Grafana's provisioned dashboards — and the arm's real weight moves to
+    **(b) and (c)**, which answer this criterion's actual question from the receiving side.
+    **That substitution is adequate *here* and would not be adequate for ADR-0129 AC-7, and the asymmetry
+    is the point rather than a convenience.** This criterion asks whether gRPC crosses the Cloudflare edge —
+    a property observable at the edge, which is ours: arms (b) and (c) read the live ingress rules and the
+    Collector's port bindings independently of what any producer claims. AC-7 asks whether anything bypasses
+    redaction, where a hidden second exporter *is* the entire threat and no edge-side observation substitutes.
+    A reviewed file is therefore sufficient evidence for the narrow question and insufficient for the broad
+    one. **What this exception gives up:** a Collector running a configuration other than its reviewed file
+    is not detected by arm (a). Nothing here closes that.
   - **(b) Path census — no Cloudflare-fronted path terminates at a gRPC receiver.** Read the live tunnel
     ingress rules (F2's method, the connector's logged configuration); for each rule routing into Caddy,
     follow it through to the Caddyfile site block it lands in; assert no resulting upstream is an OTLP gRPC
@@ -437,7 +454,9 @@ be visible.
     port (F1's method — read the container's port bindings in full, not just grep for 4317).
 
   · *Fails if* any producer in the census pairs `grpc` with an endpoint outside loopback/compose, **or** any
-  producer in the census publishes no readable artifact, **or** any Cloudflare-fronted path resolves to a
+  producer in the census publishes no readable artifact **and is not a Collector discharging arm (a) by its
+  reviewed configuration file**, **or** a Collector in the census has no reviewed configuration file to read,
+  **or** any Cloudflare-fronted path resolves to a
   gRPC receiver, **or** the Collector publishes a host port. Non-vacuous today: the gateway's
   `otel-collector:4317` satisfies (a) and would fail it if repointed at `<otlp-host>`; (b) is satisfied by
   the measured six-rule configuration and would fail if any of them, directly or through Caddy, reached a
@@ -479,6 +498,31 @@ at the first advance-dispatch on or after that date, and an `adr` session adjudi
 ---
 
 ## Status Updates
+
+### 2026-08-09 (later) — AC-2(a) corrected: a Collector in the census cannot publish an artifact, and the criterion as written could not pass
+**Changed By:** `/adr` session (FRE-1225), during the adjudication D4 deferred to that ticket.
+**Reason:** A defect in this ADR's own criterion, found the same day it was accepted, by adversarial
+review of the FRE-1225 amendment (Codex, round 1). Status is unchanged: **Accepted**.
+
+AC-2(a) enumerates "any Collector from FRE-1224" in its producer census and fails any census member with
+no readable effective-configuration artifact. **A vanilla OpenTelemetry Collector has no such artifact to
+publish** — zpages exposes component names rather than exporter endpoints, and `configz/effective` belongs
+to the Splunk distribution that ADR-0129 D5's vanilla-upstream choice excludes. The criterion therefore
+named a producer and demanded of it a capability it does not have: unachievable by construction, not merely
+hard. This was not known when the criterion was written, and the FRE-1225 discussion is what surfaced it.
+
+**The fix is a narrow exception rather than dropping the Collector from the census**, because it is a real
+producer and removing it would shrink the census to hide the problem. For a Collector, arm (a) is discharged
+by its reviewed, version-controlled configuration file, and the arm's weight moves to (b) and (c) — which
+read the live ingress rules and the container's port bindings, and so answer this criterion's question from
+the receiving side without trusting any producer's claim. The asymmetry with ADR-0129 AC-7, which is
+**not** granted the same substitution, is argued in the criterion itself: the edge is observable and
+redaction bypass is not.
+
+**What it gives up is recorded rather than glossed:** a Collector running something other than its reviewed
+file is not detected by arm (a). **Seam ticket FRE-1232's scope changes** — its AC-2(a) walk now reads a
+configuration file for any Collector in the census instead of fetching an artifact from it. AC-1 and the
+rest of AC-2 are untouched, and no new seam ticket is created.
 
 ### 2026-08-09 — Accepted
 

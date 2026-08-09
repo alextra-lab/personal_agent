@@ -479,6 +479,11 @@ producer's spans reaching Tempo in volume reconciled against `api_costs`, the le
 traverse the path under test. A hop shipping *nothing* to the terminus fails that cleanly, which is what
 makes the clause discriminating rather than decorative.
 
+**AC-7 is also retitled, for the same reason and at the same standard.** It read *"and no producer bypasses
+it"* — an absence no clause in it can establish, next to a body that names three ways a bypass passes. It
+now reads *"and no producer's reported exporter registry or delivered traffic reveals a bypass"*: named for
+what it detects. The criterion's substance is unchanged by the retitle; only the claim is.
+
 **It is reachability and not termination, and the first draft of this entry overclaimed by saying
 otherwise.** A hop splitting its output — most to the VPS Collector, some elsewhere — reconciles within
 tolerance and passes. So the residual exposure is stated in AC-7 as three named limits rather than one:

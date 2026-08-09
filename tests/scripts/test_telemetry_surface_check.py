@@ -495,6 +495,83 @@ def test_sample_mapping_empty_list_is_inconclusive(tmp_path: Path) -> None:
     assert findings == []
 
 
+def test_sample_mapping_null_value_is_not_mismatch(tmp_path: Path) -> None:
+    # FRE-1130: null values in any field type are indexed as absence in ES, not as type mismatches.
+    # A numeric field holding null should not trigger "producer-type-mismatch", but will appear
+    # in "null-only-field" category.
+    _write_template(
+        tmp_path / "index-template.json",
+        index_patterns=["agent-monitors-health-*"],
+        properties={"gpu_utilisation_percent": {"type": "float"}},
+    )
+    templates = load_templates(tmp_path)
+    doc = {"gpu_utilisation_percent": None}
+    findings = check_sample_document_types(templates, "http://es", fetch=_fake_fetch([doc]))
+    assert len(findings) == 1
+    assert findings[0].klass == "null-only-field"  # Not producer-type-mismatch
+    assert findings[0].field == "gpu_utilisation_percent"
+
+
+def test_sample_mapping_null_only_field_goes_to_null_only_category(tmp_path: Path) -> None:
+    # FRE-1130: fields that hold null in every sampled document should appear in a separate
+    # "null-only-field" category, not as "producer-type-mismatch".
+    _write_template(
+        tmp_path / "index-template.json",
+        index_patterns=["agent-monitors-health-*"],
+        properties={
+            "gpu_utilisation_percent": {"type": "float"},
+            "video_memory_used_bytes": {"type": "integer"},
+        },
+    )
+    templates = load_templates(tmp_path)
+    docs = [
+        {"gpu_utilisation_percent": None, "video_memory_used_bytes": None},
+        {"gpu_utilisation_percent": None, "video_memory_used_bytes": None},
+    ]
+    findings = check_sample_document_types(templates, "http://es", fetch=_fake_fetch(docs))
+    null_only = [f for f in findings if f.klass == "null-only-field"]
+    mismatches = [f for f in findings if f.klass == "producer-type-mismatch"]
+    assert len(null_only) == 2  # both fields hold only nulls
+    assert len(mismatches) == 0  # no type mismatches
+    assert {f.field for f in null_only} == {"gpu_utilisation_percent", "video_memory_used_bytes"}
+
+
+def test_sample_mapping_mixed_null_and_valid_not_null_only(tmp_path: Path) -> None:
+    # FRE-1130: a field with some nulls and some valid values is NOT "null-only" — it only
+    # becomes null-only if every sampled document has a null value (or list of only-nulls).
+    _write_template(
+        tmp_path / "index-template.json",
+        index_patterns=["agent-monitors-health-*"],
+        properties={"video_memory_used_bytes": {"type": "integer"}},
+    )
+    templates = load_templates(tmp_path)
+    docs = [
+        {"video_memory_used_bytes": None},
+        {"video_memory_used_bytes": 1024},
+    ]
+    findings = check_sample_document_types(templates, "http://es", fetch=_fake_fetch(docs))
+    null_only = [f for f in findings if f.klass == "null-only-field"]
+    mismatches = [f for f in findings if f.klass == "producer-type-mismatch"]
+    assert len(null_only) == 0  # has at least one valid value
+    assert len(mismatches) == 0  # type is correct when present
+
+
+def test_sample_mapping_genuine_mismatch_still_caught_regression(tmp_path: Path) -> None:
+    # FRE-1130: regression guard — genuine type mismatches are still reported even with null fix.
+    # This proves we didn't disable the check when adding null handling.
+    _write_template(
+        tmp_path / "index-template.json",
+        index_patterns=["agent-monitors-health-*"],
+        properties={"gpu_utilisation_percent": {"type": "float"}},
+    )
+    templates = load_templates(tmp_path)
+    doc = {"gpu_utilisation_percent": "not a number"}  # String in numeric field
+    findings = check_sample_document_types(templates, "http://es", fetch=_fake_fetch([doc]))
+    mismatches = [f for f in findings if f.klass == "producer-type-mismatch"]
+    assert len(mismatches) == 1
+    assert mismatches[0].field == "gpu_utilisation_percent"
+
+
 def test_sample_mapping_dedupes_across_multiple_docs(tmp_path: Path) -> None:
     _write_template(
         tmp_path / "index-template.json",

@@ -749,15 +749,20 @@ def _field_type_mismatch(mapped_type: str, value: Any) -> str | None:
     Applied element-wise: a list is only flagged when an element's shape doesn't fit, not merely
     for being a list — a bare list is the normal shape for a keyword/text array field (e.g.
     ``tools_used``). Only the numeric/string/boolean type families are validated; ``date``/
-    ``geo_point``/other types are left alone rather than guessed at.
+    ``geo_point``/other types are left alone rather than guessed at. Null values are treated as
+    absence (FRE-1130), not as type mismatches.
 
     Args:
         mapped_type: The field's explicitly mapped ES type.
         value: The raw JSON value sampled from a live document.
 
     Returns:
-        A klass string if a mismatch is found, else ``None``.
+        A klass string if a mismatch is found, else ``None``. ``None`` is returned for null values
+        and empty lists (both inconclusive).
     """
+    if value is None:
+        return None  # null is indexed as absence, not a type mismatch (FRE-1130)
+
     elements = value if isinstance(value, list) else [value]
     if not elements:
         return None  # empty list is inconclusive, not a mismatch
@@ -841,6 +846,9 @@ def check_sample_document_types(
     ``integer`` while the producer wrote a list of strings; ``FLOAT_HINT`` false-fired on the word
     "threshold" and the static lint's finding was wrongly baselined as intentional).
 
+    Fields holding only null across all sampled documents are reported as "null-only-field"
+    (FRE-1130), not as type mismatches — null is indexed as absence, not a value.
+
     Args:
         templates: Loaded repo templates.
         es_url: Base Elasticsearch URL.
@@ -849,7 +857,8 @@ def check_sample_document_types(
             inject a fake to avoid a live ES dependency).
 
     Returns:
-        One Finding per distinct ``(family, field)`` mismatch found across the sampled documents.
+        One Finding per distinct ``(family, field)`` mismatch or null-only case found across the
+        sampled documents.
     """
     findings: list[Finding] = []
     for tmpl in templates:
@@ -857,12 +866,27 @@ def check_sample_document_types(
             continue
         docs = fetch(es_url, tmpl.index_patterns[0], size)
         flagged: set[str] = set()
+        null_only_candidates: dict[str, bool] = {}  # fname -> all_values_so_far_are_null
+
         for doc in docs:
             flat = _flatten_doc_values(doc)
             for fname, attrs in tmpl.template.explicit.items():
                 if attrs.get("container") or fname in flagged or fname not in flat:
                     continue
-                klass = _field_type_mismatch(attrs.get("type", ""), flat[fname])
+                value = flat[fname]
+
+                # Track null-only fields across documents (FRE-1130).
+                if fname not in null_only_candidates:
+                    null_only_candidates[fname] = value is None
+                elif null_only_candidates[fname]:
+                    # Only stays True if this doc's value is also None or all elements are None.
+                    if isinstance(value, list):
+                        null_only_candidates[fname] = all(el is None for el in value)
+                    else:
+                        null_only_candidates[fname] = value is None
+
+                # Check for type mismatches.
+                klass = _field_type_mismatch(attrs.get("type", ""), value)
                 if klass:
                     flagged.add(fname)
                     findings.append(
@@ -879,6 +903,24 @@ def check_sample_document_types(
                             source=tmpl.path,
                         )
                     )
+
+        # Report null-only fields separately (FRE-1130).
+        for fname, is_null_only in null_only_candidates.items():
+            if is_null_only and fname not in flagged:
+                findings.append(
+                    Finding(
+                        check="sample-mapping",
+                        klass="null-only-field",
+                        family=tmpl.path,
+                        field=fname,
+                        detail=(
+                            f"'{fname}' holds null in all sampled documents — the producer "
+                            f"never populates this field"
+                        ),
+                        source=tmpl.path,
+                    )
+                )
+
     return findings
 
 

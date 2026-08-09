@@ -611,6 +611,39 @@ async def test_hydration_no_double_count_with_live(monkeypatch: pytest.MonkeyPat
     assert emitted[-1]["session_cost_usd"] == pytest.approx(0.7)
 
 
+async def test_hydration_no_double_count_across_trace_id_renderings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One trace in two renderings is one entry, not two (FRE-1215).
+
+    The two writers into ``sess.costs`` disagree on rendering: hydration reads
+    ``api_costs`` and keys on ``str(uuid)`` — dashed — while live completion keys on the
+    raw event string, which since FRE-1215 is the OTel span's 32-hex form. Both name the
+    same turn, so an un-normalised map holds it twice and ``session_cost_usd`` sums the
+    partial hydrated value on top of the authoritative live one.
+    """
+    from personal_agent.observability.topology.projector import SessionHydration
+
+    emitted = _capture(monkeypatch)
+    dashed = "6306095c-a2b4-4f4b-811e-8a640255e115"
+    hexed = "6306095ca2b44f4b811e8a640255e115"
+
+    async def _source(session_id: str) -> SessionHydration:
+        return SessionHydration(costs={dashed: 0.5})
+
+    proj = TurnObservationProjector(hydration_source=_source)
+
+    await proj.handle(TopologyEnteredEvent(trace_id=hexed, session_id="s-1", topology="primary"))
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id=hexed, session_id="s-1", topology="primary", cost_authoritative_usd=0.7
+        )
+    )
+
+    # 0.7 (live wins), not 1.2 (0.5 hydrated + 0.7 live counted as two traces).
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.7)
+
+
 async def test_hydration_best_effort_source_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """A failing hydration source must not propagate — projector continues carry-only (D4)."""
     from personal_agent.observability.topology.projector import SessionHydration

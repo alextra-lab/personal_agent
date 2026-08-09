@@ -48,7 +48,7 @@ from personal_agent.service.repositories.session_repository import SessionReposi
 from personal_agent.sysgraph import SysgraphRepository, set_default_sysgraph_repo
 from personal_agent.telemetry import add_elasticsearch_handler, get_logger
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
-from personal_agent.telemetry.trace import SystemTraceContext
+from personal_agent.telemetry.trace import SystemTraceContext, read_or_mint_trace_id
 from personal_agent.transport.events import TextDeltaEvent
 
 log = get_logger(__name__)
@@ -1975,7 +1975,7 @@ async def chat(
     Returns:
         Response with assistant message and session_id
     """
-    trace_id = str(uuid4())
+    trace_id = read_or_mint_trace_id()
     _bind_request_identity(trace_id=trace_id, session_id=session_id, user_id=request_user.user_id)
     try:
         return await _chat_impl(
@@ -2472,7 +2472,12 @@ async def chat_stream_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="session_id must be a valid UUID v4") from exc
 
-    trace_id = str(uuid4())
+    # FRE-1215: adopt the active root span's identity rather than minting an
+    # unrelated uuid4. RequestRootSpanMiddleware already has a span open here, and
+    # _add_span_context stamps every log record from it (ADR-0129 D4) — a minted id
+    # would reach api_costs while Elasticsearch recorded the span's, leaving the two
+    # substrates naming the same turn differently and no join able to match them.
+    trace_id = read_or_mint_trace_id()
 
     dedup = get_deduplicator().check_and_record(
         session_id, message, trace_id, client_msg_id=client_msg_id

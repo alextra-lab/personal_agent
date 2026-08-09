@@ -55,7 +55,13 @@ fi
 # pull took it away. Restores only from a non-empty backup, so a box that
 # genuinely has no budget.yaml is left alone rather than handed an empty one.
 PRESERVE_BUDGET_PRE='_bkp=$(mktemp) && { test -f config/governance/budget.yaml && cp -p config/governance/budget.yaml "$_bkp" || true; }'
-PRESERVE_BUDGET_POST='{ test -f config/governance/budget.yaml || { test -s "$_bkp" && cp -p "$_bkp" config/governance/budget.yaml; }; } && rm -f "$_bkp"'
+# Note the trailing `;` rather than `&&` before the cleanup, and the `|| true`
+# on the restore: on a box that legitimately has no budget.yaml there is
+# nothing to restore, and that must not read as failure. Chained with `&&` the
+# whole step would exit non-zero and, sitting inside REMOTE_CMD's single &&
+# chain, would abort the deploy before `docker compose` ever ran — while also
+# leaking the temp file.
+PRESERVE_BUDGET_POST='{ test -f config/governance/budget.yaml || { test -s "$_bkp" && cp -p "$_bkp" config/governance/budget.yaml || true; }; }; rm -f "$_bkp"'
 
 if $FULL; then
   REMOTE_CMD="

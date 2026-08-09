@@ -412,6 +412,18 @@ be visible.
   exporting gRPC to **any** endpoint outside loopback/compose fails here, Cloudflare-fronted or not; the
   failure predicate below is deliberately that wide, and matches D2 rather than narrowing it.
 
+  **What the arms can actually observe is narrower than that rule, per component class, and the two must not
+  be conflated — amended 2026-08-09.** For a producer publishing a live effective-configuration artifact
+  (the gateway, `slm_server`), the predicate is enforced at full strength: the running process reports its
+  own endpoints and a gRPC endpoint outside loopback/compose fails. **For a Collector it is not**, because a
+  Collector publishes no such artifact and arm (a) falls back to its reviewed configuration file: the
+  predicate is enforced against the **declared** configuration, and a Collector whose *running* process
+  exports gRPC to a remote endpoint passes every arm while violating D2. Arms (b) and (c) do not compensate —
+  they observe the **edge**, and D2's rule is broader than the edge. So AC-2 asserts D2 **as far as each
+  component class can be observed**, and the boundary is stated here rather than left for a reader to
+  discover in the exception below. Recording it this way keeps the criterion internally consistent: the rule
+  is unchanged and unnarrowed, and what varies is the strength of the evidence available against it.
+
   ADR-0129 D7's "Nothing goes off-box. No SaaS exporter is configured" is **adjacent, not a delegation** —
   it is broader in a different dimension (every signal, not only gRPC) and narrower in this one (it does not
   speak to protocol). Neither criterion discharges any part of the other.
@@ -434,8 +446,9 @@ be visible.
     choice excludes. Naming "any Collector from FRE-1224" in this census and then failing it for a capability
     it does not have would make this criterion impossible to satisfy. So for a Collector specifically, arm
     (a) is discharged by its **reviewed, version-controlled configuration file** — the same substitution
-    ADR-0129 D6 already accepts for Grafana's provisioned dashboards — and the arm's real weight moves to
-    **(b) and (c)**, which answer this criterion's actual question from the receiving side.
+    ADR-0129 D6 already accepts for Grafana's provisioned dashboards. **(b) and (c) still run and still bind
+    that Collector, but they do not compensate for the weaker (a)**: they observe the edge, and D2's rule
+    reaches past it (see the observability note in the scope statement above).
     **The substitution is narrower than this criterion, and saying otherwise would repeat the error it
     fixes.** A first drafting of this exception argued that arms (b) and (c) make the reviewed file adequate.
     They do not, and the reason is the scope note above: **AC-2 asserts all of D2** — gRPC belongs inside the
@@ -489,6 +502,12 @@ be visible.
   enumerated above — not a proof that no gRPC leaves this host by any means. An unenumerated egress path (a
   second connector, a host process forwarding on its own) sits outside these arms. Closing that would take a
   full network egress audit, which is disproportionate to this decision and is not claimed here.
+
+  **A second gap was added deliberately on 2026-08-09 and is larger than the first**, so it is recorded
+  beside it rather than folded into it: a green result does not prove a **Collector's running configuration
+  matches its reviewed file.** The first gap is about components nobody enumerated; this one is about an
+  *enumerated* census member whose evidence is weaker than every other member's. It exists because a vanilla
+  Collector cannot publish a live artifact, and the alternative was a criterion that could never pass.
 
 **Seam ticket:** **[FRE-1232](https://linear.app/frenchforest/issue/FRE-1232)** — *Adjudicate ADR-0136 — the
 Cloudflare zone gRPC constraint*. Filed parked

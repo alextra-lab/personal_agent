@@ -89,12 +89,15 @@ class TestOtelCollectorComposeServiceSource:
             assert str(spec).startswith("127.0.0.1:"), f"expected loopback-only bind, got {spec!r}"
 
     def test_dev_ports_do_not_collide_with_tempo(self) -> None:
-        """Tempo owns 4317/4318 for FRE-1072's direct-inject tests; the Collector must not
-        claim the same host ports.
+        """Tempo owns 4327/4328 on the host for FRE-1072's direct-inject tests; the Collector must
+        not claim the same host ports.
+
+        Tempo moved off host 4317/4318 in FRE-1224: host 4318 belongs to the Mac-local OTel
+        Collector, since it is slm_server's compiled-in default OTLP endpoint.
         """
         ports = self._service("docker-compose.yml")["ports"]
         host_ports = {str(spec).split(":")[1] for spec in ports}
-        assert host_ports.isdisjoint({"4317", "4318"})
+        assert host_ports.isdisjoint({"4327", "4328"})
 
     def test_cloud_service_has_resource_limits(self) -> None:
         service = self._service("docker-compose.cloud.yml")

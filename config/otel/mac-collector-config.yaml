@@ -1,0 +1,95 @@
+# Mac-local OTel Collector — credential custodian and buffer for slm_server's spans (FRE-1224).
+#
+# Vanilla upstream core distribution (otelcol 0.158.0), the same pin as the VPS Collector in
+# docker-compose.yml — no contrib components, no vendor distro (ADR-0129 D5).
+#
+# What this component is FOR, precisely:
+#   1. Custody — it holds the Cloudflare Access service token so slm_server does not. ADR-0132 D2
+#      classes the Access pair as an *environment* credential: it exists only because this
+#      deployment's private surfaces sit behind Cloudflare Access, so it belongs to the environment
+#      layer rather than inside an application process. D1's mechanism (Caddy holds it) is VPS-side
+#      egress and does not transfer — for OTLP the Mac is the client.
+#   2. Buffering — a local queue and retry across a downstream outage, which the direct-to-
+#      Elasticsearch writer removed by FRE-1071 never had.
+#
+# What it is NOT for: protocol conversion. slm_server already exports OTLP/HTTP (verified in
+# slm_server src/slm_server/telemetry.py at ea2b0b8: the exporter is imported from
+# opentelemetry.exporter.otlp.proto.HTTP, _OTLP_PROTOCOL is "http/protobuf", and the default
+# endpoint is http://localhost:4318). The ticket body's "the protocol problem dissolves" rationale
+# is void; custody and buffering are what carry this component.
+#
+# Secrets: this file is committed, so every credential and the ingress hostname are ${env:...}
+# references only. scripts/mac/otelcol_launch.sh loads them from a mode-0600 file outside the repo
+# and refuses to start if any is missing — failing closed rather than shipping an empty header.
+
+receivers:
+  otlp:
+    protocols:
+      # Loopback only. The VPS Collector binds 0.0.0.0 because it serves a compose network; this
+      # one must not be reachable from off-box, or anything on the LAN could inject spans that we
+      # would then forward under our own Cloudflare Access credential.
+      #
+      # Port 4318 is not a free choice — it is slm_server's compiled-in default, and keeping it is
+      # what makes "no producer-side change" true. tests/scripts/test_mac_collector_port_is_
+      # unclaimed.py guards it against a compose service taking it back.
+      #
+      # No gRPC receiver: slm_server speaks HTTP, so a gRPC listener would be unused surface, and
+      # ADR-0136 keeps gRPC off this path entirely.
+      http:
+        endpoint: 127.0.0.1:4318
+
+processors:
+  batch:
+    # FRE-1239's merged Caddy block caps a single request at `request_body { max_size 20MiB }`.
+    # The default batch processor has neither a byte ceiling nor a hard span cap, so batches can
+    # coalesce without bound — and the moment they would is a backlog flush after an outage, when
+    # the queue is deepest and the spans matter most. A hard span ceiling keeps any single export
+    # comfortably inside the edge's limit.
+    send_batch_size: 512
+    send_batch_max_size: 2048
+
+exporters:
+  # `otlp_http`, NOT the `otlphttp` alias: the v0.158.0 exporter README states the alias is
+  # deprecated and will be removed in a future version.
+  otlp_http/vps:
+    # Base-endpoint form on purpose. The exporter appends /v1/traces with no query string, which
+    # matches FRE-1239's allowlist (method POST, path_regexp ^/v1/traces$, query "") by
+    # construction. A hand-written traces_endpoint could drift off the allowlisted path and would
+    # then be refused with a 403 that looks like an auth failure.
+    endpoint: ${env:SESHAT_OTLP_INGRESS_URL}
+    headers:
+      CF-Access-Client-Id: ${env:SESHAT_OTLP_CF_ACCESS_CLIENT_ID}
+      CF-Access-Client-Secret: ${env:SESHAT_OTLP_CF_ACCESS_CLIENT_SECRET}
+    sending_queue:
+      enabled: true
+      # The default sizer counts export REQUESTS (batches), not spans — so this is 5000 queued
+      # batches, not 5000 spans. Beyond it the queue overflows and data is dropped; the drop is
+      # observable as a non-zero otelcol_exporter_enqueue_failed_spans. AC-4 states that bound
+      # rather than claiming unlimited retention.
+      queue_size: 5000
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 300s
+      # 0 means retries never stop (v0.158.0 exporterhelper). Any positive value would silently
+      # define a window after which buffered spans are discarded — the opposite of the point.
+      max_elapsed_time: 0
+
+  debug:
+    # `basic` reports counts only. `normal`/`detailed` would write every span attribute into the
+    # launchd stdout log, which is persistent and grows fastest exactly while the downstream is
+    # intentionally unreachable. Counts are all that is needed to prove the Collector received a
+    # span.
+    verbosity: basic
+
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    # Traces only. This Collector exists to carry slm_server's spans; a metrics or logs pipeline
+    # would be unrequested scope carrying the same credential.
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/vps, debug]

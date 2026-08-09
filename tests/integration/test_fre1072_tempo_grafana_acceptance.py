@@ -44,7 +44,9 @@ pytestmark = pytest.mark.integration
 # (e.g. a shared VPS where sibling worktree sessions already occupy the standard ports) without
 # editing the test — the defaults are the documented dev-compose ports.
 _TEMPO_URL = os.environ.get("FRE1072_TEMPO_URL", "http://localhost:3200")
-_TEMPO_OTLP_URL = os.environ.get("FRE1072_TEMPO_OTLP_URL", "http://localhost:4318")
+# 4328, not 4318: FRE-1224 moved Tempo's host bindings to 4327/4328 because host 4318 belongs to
+# the Mac-local OTel Collector (slm_server's compiled-in default OTLP endpoint).
+_TEMPO_OTLP_URL = os.environ.get("FRE1072_TEMPO_OTLP_URL", "http://localhost:4328")
 _GRAFANA_URL = os.environ.get("FRE1072_GRAFANA_URL", "http://localhost:3000")
 _ES_URL = os.environ.get("FRE1072_ES_URL", "http://localhost:9200")  # fre-375-allow: see docstring
 _GRAFANA_ADMIN_AUTH = ("admin", os.environ.get("GRAFANA_ADMIN_PASSWORD", "grafana_dev_password"))

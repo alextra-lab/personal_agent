@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd unit for the Mac-local OTel Collector (FRE-1224).
+
+  TEMPLATE — @@TOKENS@@ are substituted by scripts/mac/install_otelcol.sh at install time. No
+  absolute path may be committed here: scripts/check_no_personal_paths.py rejects a /Users/
+  segment (and a $HOME/Dev layout) anywhere in a tracked file.
+
+  Note there are NO EnvironmentVariables here, deliberately. The Cloudflare Access token is loaded
+  by the wrapper from a mode-0600 file outside the repo; putting it here would place a live
+  credential in a plaintext plist under LaunchAgents.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.seshat.otelcol</string>
+
+    <!-- Both paths are the install-owned FROZEN copies under ~/.local/libexec/seshat, never the
+         git working tree. This agent is persistent and holds a live Cloudflare Access token; if it
+         ran the repo's copies, a branch checkout would change the code it executes and the endpoint
+         that credential is sent to. Re-run install_otelcol.sh to pick up a change. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>@@WRAPPER_PATH@@</string>
+        <string>@@CONFIG_PATH@@</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if it dies: the buffer is only useful if the process is actually there when
+         slm_server emits. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Paired with the wrapper's exit 78 on a config error. KeepAlive plus an immediate config
+         failure is a tight respawn loop that would flood the log; 30s bounds it and leaves the
+         failure legible in `launchctl print system/com.seshat.otelcol`. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>@@LOG_PATH@@</string>
+    <key>StandardErrorPath</key>
+    <string>@@LOG_PATH@@</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -95,11 +95,21 @@ DECLARED_TYPES: dict[str, type[object]] = {
     "event_type": str,
     "trace_id": str,
     "span_id": str,
+    "parent_span_id": str,
     "session_id": str,
     "component_id": str,
     "user_id": str,
     "input_tokens": int,
     "output_tokens": int,
+    "total_tokens": int,
+    "role": str,
+    "provider": str,
+    "model": str,
+    "endpoint": str,
+    "prompt_callsite": str,
+    "prompt_component_ids": list,
+    "prompt_static_prefix_hash": str,
+    "prompt_dynamic_hash": str,
 }
 
 #: Governed names — the canonical sides of :data:`RETIRED_SPELLINGS` plus
@@ -112,6 +122,26 @@ GOVERNED_NAMES: frozenset[str] = frozenset(
 #: Similarity threshold for Rule 2, per ADR-0133 D3. Not a free parameter —
 #: the ADR's Context table measures the cost curve and fixes this value.
 NEAR_MISS_THRESHOLD = 0.85
+
+
+@dataclass(frozen=True)
+class FieldExclusion:
+    """One entry in the field exclusion list (ADR-0133 D7).
+
+    Attributes:
+        reason: Why this field is not governed in the log path. Must be
+            evidence-backed; "moved to spans" without verifying the field
+            no longer appears on logs is not a valid reason (FRE-1179).
+    """
+
+    reason: str
+
+
+#: Fields that are deliberately NOT governed in the log path. ADR-0133 D7:
+#: "An exclusion without a stated reason is a defect, not a configuration."
+#: Empty after FRE-1179: all eight model-call fields initially listed here
+#: were verified still present in recent log records and moved to DECLARED_TYPES.
+FIELD_EXCLUSIONS: dict[str, FieldExclusion] = {}
 
 
 @dataclass(frozen=True)

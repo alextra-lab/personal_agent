@@ -39,6 +39,7 @@ from personal_agent.llm_client.telemetry import (
     emit_model_call_completed,
     emit_model_call_started,
 )
+from personal_agent.telemetry.vocabulary import FIELD_EXCLUSIONS
 
 
 def _identity() -> Any:
@@ -209,6 +210,52 @@ class TestCanonicalEmitContract:
         kwargs = log.info.call_args.kwargs
         assert "model_id" not in kwargs
         assert kwargs["model"] == "anthropic/claude-sonnet-4-6"
+
+    def test_fre1179_emitted_fields_not_excluded(self) -> None:
+        """FRE-1179 anti-recurrence: no emitted key is in FIELD_EXCLUSIONS.
+
+        Master's review (2026-08-09) found all eight originally-excluded fields
+        still live in log records. This test ensures a future reclassification
+        as "excluded" gets caught by the parity-test layer (static execution
+        proof), not waiting for ES to reveal it. Fails if any emitted key
+        matches an exclusion reason.
+        """
+        log_started = MagicMock()
+        log_completed = MagicMock()
+        ctx = _ctx_with_session()
+
+        emit_model_call_started(
+            log=log_started,
+            role="primary",
+            model="anthropic/claude-sonnet-4-6",
+            endpoint="anthropic",
+            provider="anthropic",
+            trace_ctx=ctx,
+            span_id="33333333-3333-3333-3333-333333333333",
+        )
+
+        emit_model_call_completed(
+            log=log_completed,
+            role="primary",
+            model="anthropic/claude-sonnet-4-6",
+            endpoint="anthropic",
+            provider="anthropic",
+            trace_ctx=ctx,
+            span_id="33333333-3333-3333-3333-333333333333",
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            prompt_identity=_identity(),
+        )
+
+        started_keys = set(log_started.info.call_args.kwargs)
+        completed_keys = set(log_completed.info.call_args.kwargs)
+        emitted = started_keys | completed_keys
+
+        excluded_in_emitted = emitted & set(FIELD_EXCLUSIONS)
+        assert not excluded_in_emitted, (
+            f"FIELD_EXCLUSIONS contains fields still written by model-call log emitters: {sorted(excluded_in_emitted)}"
+        )
 
 
 # ---------------------------------------------------------------------------

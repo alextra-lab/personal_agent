@@ -327,7 +327,8 @@ That is an ADR's job, and a reference note carries no ruling the next design is 
   anonymous `Viewer` posture on explicit equivalence grounds — "Kibana today has all three properties,
   against the same Elasticsearch, behind the same single gate." When Kibana is retired (FRE-1214), that
   comparator ceases to exist and D6's stated justification voids by its own terms. This ADR notes the
-  expiry and does not resolve it; it is filed separately.
+  expiry and does not resolve it; it is filed separately as
+  [FRE-1233](https://linear.app/frenchforest/issue/FRE-1233).
 
 ### Risks and Mitigations
 
@@ -447,7 +448,8 @@ be visible.
   second connector, a host process forwarding on its own) sits outside these arms. Closing that would take a
   full network egress audit, which is disproportionate to this decision and is not claimed here.
 
-**Seam ticket:** **FRE-1231** — *Adjudicate ADR-0136: the Cloudflare zone gRPC constraint*. Filed parked
+**Seam ticket:** **[FRE-1232](https://linear.app/frenchforest/issue/FRE-1232)** — *Adjudicate ADR-0136 — the
+Cloudflare zone gRPC constraint*. Filed parked
 (`Backlog`), **due 2026-08-23**. This ADR has no implementation chain, so its criteria are adjudicable as
 soon as it is accepted; the due date allows for merge plus the owner-executed AC-1 read. Master activates it
 at the first advance-dispatch on or after that date, and an `adr` session adjudicates it.
@@ -468,6 +470,8 @@ at the first advance-dispatch on or after that date, and an `adr` session adjudi
 - [FRE-1224](https://linear.app/frenchforest/issue/FRE-1224) — Mac-local Collector as credential custodian (the D2 conversion point)
 - [FRE-1225](https://linear.app/frenchforest/issue/FRE-1225) — ADR-0129 AC-7 adjudication for a chained-Collector topology (out of scope per D4)
 - [FRE-1228](https://linear.app/frenchforest/issue/FRE-1228) — Terraform-vs-dashboard ownership of Cloudflare objects (gates the Implementation Notes enforcement mechanism)
+- [FRE-1232](https://linear.app/frenchforest/issue/FRE-1232) — **this ADR's seam ticket**; the sole place AC-1 and AC-2 are asserted (ADR-0130 D2)
+- [FRE-1233](https://linear.app/frenchforest/issue/FRE-1233) — ADR-0129 D6's anonymous-Viewer justification expires when Kibana is retired (surfaced by this discussion, out of scope per D4)
 - [gRPC connections — Cloudflare Network settings](https://developers.cloudflare.com/network/grpc-connections/)
 - [gRPC — Cloudflare Tunnel use cases](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/use-cases/grpc/)
 - [Service tokens — Cloudflare One](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)

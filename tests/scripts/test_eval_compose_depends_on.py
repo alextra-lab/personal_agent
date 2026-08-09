@@ -32,6 +32,7 @@ _RENDER_ENV = {
     "NEO4J_PASSWORD": "test",
     "AGENT_OWNER_EMAIL": "test@example.com",
     "GRAFANA_ADMIN_PASSWORD": "test",  # FRE-1072 — now a required var in docker-compose.cloud.yml
+    "GRAFANA_RO_PASSWORD": "test",  # FRE-1203 — now a required var in docker-compose.cloud.yml
 }
 
 _RENDER_OVERRIDE = "tests/scripts/fixtures/gateway_render_override.yml"

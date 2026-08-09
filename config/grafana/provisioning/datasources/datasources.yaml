@@ -18,6 +18,11 @@ datasources:
       nodeGraph:
         enabled: true
 
+  # FRE-1203 part 1: logMessageField/logLevelField make Explore render a message column
+  # with level colouring instead of the raw _source document per row. Field names below
+  # are verified against sampled live documents per family (not assumed) — see the FRE-1203
+  # PR description for the per-family population counts. Only agent-logs carries a genuine
+  # severity concept, so it is the only family that gets logLevelField.
   - name: Elasticsearch - agent-logs
     type: elasticsearch
     uid: es-agent-logs
@@ -26,6 +31,8 @@ datasources:
     jsonData:
       index: "agent-logs*"
       timeField: "@timestamp"
+      logMessageField: "message"
+      logLevelField: "level"
       dataLinks:
         - field: trace_id
           datasourceUid: tempo
@@ -39,6 +46,7 @@ datasources:
     jsonData:
       index: "agent-captains-captures-*"
       timeField: "timestamp"
+      logMessageField: "user_message"
 
   - name: Elasticsearch - captains-reflections
     type: elasticsearch
@@ -48,6 +56,7 @@ datasources:
     jsonData:
       index: "agent-captains-reflections-*"
       timeField: "timestamp"
+      logMessageField: "title"
 
   - name: Elasticsearch - insights
     type: elasticsearch
@@ -57,6 +66,7 @@ datasources:
     jsonData:
       index: "agent-insights-*"
       timeField: "timestamp"
+      logMessageField: "summary"
 
   # Used by the monitors_joinability_slm dashboard rebuild (AC-6, F13).
   - name: Elasticsearch - monitors-joinability
@@ -67,6 +77,7 @@ datasources:
     jsonData:
       index: "agent-monitors-joinability-2*"
       timeField: "started_at"
+      logMessageField: "outcome"
 
   - name: Elasticsearch - monitors-slm-health
     type: elasticsearch
@@ -76,6 +87,7 @@ datasources:
     jsonData:
       index: "agent-monitors-slm-health-*"
       timeField: "probed_at"
+      logMessageField: "status"
 
   - name: Elasticsearch - monitors-joinability-substrate
     type: elasticsearch
@@ -85,3 +97,23 @@ datasources:
     jsonData:
       index: "agent-monitors-joinability-substrate-*"
       timeField: "started_at"
+      logMessageField: "substrate"
+
+  # FRE-1203 part 2: aggregate cost/ledger truth lives in Postgres, not Elasticsearch (the ES
+  # cost event carries neither purpose nor token counts, and drops up to 83% of events on bad
+  # days — FRE-1051). Connects as grafana_ro (SELECT-only, docker/postgres/migrations/0025),
+  # never seshat_app or the agent superuser. Single-`$` interpolation (unlike the `$$`-escaped
+  # Grafana template vars above) is env-substituted by the provisioning loader, so no literal
+  # secret lands in this tracked file.
+  - name: PostgreSQL - ledger
+    type: grafana-postgresql-datasource
+    uid: pg-ledger
+    access: proxy
+    url: postgres:5432
+    user: grafana_ro
+    jsonData:
+      database: personal_agent
+      sslmode: disable
+      postgresVersion: 1700
+    secureJsonData:
+      password: $GRAFANA_RO_PASSWORD

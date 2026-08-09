@@ -623,3 +623,30 @@ ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public
 -- Intentionally NO grant on schema sysgraph: seshat_app is not a superuser and
 -- has no USAGE there, so the app connection is denied — physical isolation now
 -- holds against the actual deployed connection, not just the recall_role proxy.
+
+-- ===========================================================================
+-- grafana_ro — read-only role for the Grafana Postgres datasource (FRE-1203
+-- part 2). Mirrored in docker/postgres/migrations/0025_grafana_readonly_role.sql
+-- for existing DBs; see that file's header for the full rationale (Grafana OSS
+-- Viewer can issue arbitrary queries against every datasource, so containment
+-- is SELECT-only, not per-datasource — and the sysgraph grant's owner ruling).
+-- ===========================================================================
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'grafana_ro') THEN
+        CREATE ROLE grafana_ro LOGIN PASSWORD 'grafana_ro_dev_password';
+    END IF;
+END
+$$;
+
+GRANT CONNECT ON DATABASE personal_agent TO grafana_ro;
+GRANT USAGE ON SCHEMA public TO grafana_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro;
+ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public
+    GRANT SELECT ON TABLES TO grafana_ro;
+
+GRANT USAGE ON SCHEMA sysgraph TO grafana_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA sysgraph TO grafana_ro;
+ALTER DEFAULT PRIVILEGES FOR ROLE sysgraph_role IN SCHEMA sysgraph
+    GRANT SELECT ON TABLES TO grafana_ro;

@@ -1,0 +1,41 @@
+{
+  "index_patterns": ["agent-monitors-cache-erosion-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "10s",
+      "index.lifecycle.name": "agent-monitors-cache-erosion-policy"
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "run_at":      { "type": "date" },
+        "window_days": { "type": "integer" },
+        "threshold":   { "type": "float" },
+        "any_eroded":  { "type": "boolean" },
+        "trace_id":    { "type": "keyword" },
+        "kind":        { "type": "keyword" },
+        "results": {
+          "type": "nested",
+          "properties": {
+            "callsite":      { "type": "keyword" },
+            "day_a":         { "type": "date" },
+            "day_b":         { "type": "date" },
+            "hash_count_a":  { "type": "integer" },
+            "hash_count_b":  { "type": "integer" },
+            "jaccard":       { "type": "float" },
+            "status":        { "type": "keyword" },
+            "threshold":     { "type": "float" }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Cache-erosion probe result docs (ADR-0078 / FRE-1189). One doc per scheduled probe run.",
+    "managed_by": "scripts/setup-elasticsearch.sh"
+  }
+}

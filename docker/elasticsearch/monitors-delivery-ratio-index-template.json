@@ -1,0 +1,42 @@
+{
+  "index_patterns": ["agent-monitors-delivery-ratio-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "10s",
+      "index.lifecycle.name": "agent-monitors-delivery-ratio-policy"
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "run_at":   { "type": "date" },
+        "since":    { "type": "date" },
+        "until":    { "type": "date" },
+        "status":   { "type": "keyword" },
+        "trace_id": { "type": "keyword" },
+        "kind":     { "type": "keyword" },
+        "families": {
+          "type": "nested",
+          "properties": {
+            "family":       { "type": "keyword" },
+            "oracle":       { "type": "keyword" },
+            "oracle_count": { "type": "long" },
+            "es_count":     { "type": "long" },
+            "ratio":        { "type": "float" },
+            "lost":         { "type": "long" },
+            "status":       { "type": "keyword" },
+            "min_ratio":    { "type": "float" },
+            "zero_cause":   { "type": "keyword" }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Delivery-ratio probe result docs (FRE-1051 / FRE-1189). One doc per scheduled probe run.",
+    "managed_by": "scripts/setup-elasticsearch.sh"
+  }
+}

@@ -338,6 +338,25 @@ put_and_apply_template "Index template: agent-monitors-joinability-substrate-tem
   "/_index_template/agent-monitors-joinability-substrate-template" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-joinability-substrate-index-template.json"
 
+# 5c. Cache-erosion probe ILM policy + index template (ADR-0078 / FRE-1189). Brought
+#     under BrainstemScheduler alongside joinability/SLM-health; previously a manual
+#     CLI that wrote no result document at all.
+put_resource "ILM policy: agent-monitors-cache-erosion-policy" \
+  "/_ilm/policy/agent-monitors-cache-erosion-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-cache-erosion-ilm-policy.json"
+put_and_apply_template "Index template: agent-monitors-cache-erosion-template" \
+  "/_index_template/agent-monitors-cache-erosion-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-cache-erosion-index-template.json"
+
+# 5d. Delivery-ratio probe ILM policy + index template (FRE-1051 / FRE-1189). Same
+#     scheduling treatment as 5c — previously a manual CLI writing no result document.
+put_resource "ILM policy: agent-monitors-delivery-ratio-policy" \
+  "/_ilm/policy/agent-monitors-delivery-ratio-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-delivery-ratio-ilm-policy.json"
+put_and_apply_template "Index template: agent-monitors-delivery-ratio-template" \
+  "/_index_template/agent-monitors-delivery-ratio-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-delivery-ratio-index-template.json"
+
 # 6. SLM request telemetry ILM policy (FRE-1106). Mirror the application-log
 #    policy (hot at zero, delete at 30d, no warm phase). PUT the policy before
 #    the template so new indices bind on creation.

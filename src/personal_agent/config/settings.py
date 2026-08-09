@@ -1645,6 +1645,56 @@ class AppConfig(BaseSettings):
         description="Pending request queue depth at or above which the SLM is considered degraded",
     )
 
+    # Cache-erosion monitor (ADR-0078 / FRE-1189)
+    cache_erosion_probe_enabled: bool = Field(
+        default=True,
+        description="Enable scheduled cache-erosion probe runs (ADR-0078 / FRE-1189)",
+    )
+    cache_erosion_probe_interval_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description="Seconds between cache-erosion probe runs in the brainstem scheduler",
+    )
+    cache_erosion_probe_window_days: int = Field(
+        default=2,
+        ge=2,
+        description="Consecutive-day comparison window for the cache-erosion probe",
+    )
+    cache_erosion_probe_threshold: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=1.0,
+        description="Jaccard similarity floor; below this the probe reports erosion",
+    )
+    cache_erosion_probe_index_prefix: str = Field(
+        default="agent-monitors-cache-erosion",
+        description="Elasticsearch index prefix for cache-erosion probe result docs",
+    )
+
+    # Delivery-ratio probe (FRE-1051 / FRE-1189)
+    delivery_ratio_probe_enabled: bool = Field(
+        default=True,
+        description="Enable scheduled delivery-ratio probe runs (FRE-1051 / FRE-1189)",
+    )
+    delivery_ratio_probe_interval_seconds: int = Field(
+        default=86400,
+        ge=300,
+        description="Seconds between delivery-ratio probe runs in the brainstem scheduler",
+    )
+    delivery_ratio_probe_min_ratio: float = Field(
+        default=0.99,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Delivery floor below which a family is a breach; mirrors "
+            "observability.delivery_ratio.probe.DEFAULT_MIN_RATIO"
+        ),
+    )
+    delivery_ratio_probe_index_prefix: str = Field(
+        default="agent-monitors-delivery-ratio",
+        description="Elasticsearch index prefix for delivery-ratio probe result docs",
+    )
+
     # Consolidation Quality Monitor (Phase 2.3, FRE-32)
     quality_monitor_enabled: bool = Field(
         default=True,

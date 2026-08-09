@@ -1,6 +1,7 @@
 """Tests for brainstem scheduler."""
 
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -775,3 +776,408 @@ class TestDomainGuardWarmScheduling:
                 assert sched.domain_guard_warm_interval_seconds == expected
                 if sched.running:
                     await sched.stop()
+
+
+@pytest.mark.asyncio
+class TestCacheErosionScheduling:
+    """FRE-1189: cache-erosion probe scheduling (ADR-0078)."""
+
+    async def test_lifecycle_loop_runs_probe_when_due(self, scheduler):
+        """The periodic job calls the runner and advances the last-run timestamp."""
+        scheduler.running = True
+        scheduler._last_cache_erosion_probe_run = None
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        mock_runner = AsyncMock(return_value=MagicMock())
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.observability.cache_erosion.scheduler_runner.run_scheduled_cache_erosion_probe",
+                new=mock_runner,
+            ),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()
+
+        mock_runner.assert_awaited_once()
+        assert scheduler._last_cache_erosion_probe_run is not None
+
+    async def test_lifecycle_loop_skips_probe_when_recent(self, scheduler):
+        """Within the interval, the loop does not call the runner again."""
+        scheduler.running = True
+        now = datetime.now(timezone.utc)
+        scheduler._last_cache_erosion_probe_run = now
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = now
+
+        mock_runner = AsyncMock(return_value=MagicMock())
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.observability.cache_erosion.scheduler_runner.run_scheduled_cache_erosion_probe",
+                new=mock_runner,
+            ),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()
+
+        mock_runner.assert_not_awaited()
+
+    async def test_probe_failure_does_not_advance_timestamp(self, scheduler):
+        """A runner exception is caught, logged, and does not advance the timestamp."""
+        scheduler.running = True
+        scheduler._last_cache_erosion_probe_run = None
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        mock_runner = AsyncMock(side_effect=RuntimeError("es down"))
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.observability.cache_erosion.scheduler_runner.run_scheduled_cache_erosion_probe",
+                new=mock_runner,
+            ),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()  # must not raise
+
+        mock_runner.assert_awaited_once()
+        assert scheduler._last_cache_erosion_probe_run is None
+
+    async def test_probe_returning_none_does_not_advance_timestamp(self, scheduler):
+        """A None return (not an exception) must not advance the timestamp either."""
+        scheduler.running = True
+        scheduler._last_cache_erosion_probe_run = None
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        mock_runner = AsyncMock(return_value=None)
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.observability.cache_erosion.scheduler_runner.run_scheduled_cache_erosion_probe",
+                new=mock_runner,
+            ),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()
+
+        mock_runner.assert_awaited_once()
+        assert scheduler._last_cache_erosion_probe_run is None
+
+
+@pytest.mark.asyncio
+class TestDeliveryRatioScheduling:
+    """FRE-1189: delivery-ratio probe scheduling (FRE-1051)."""
+
+    async def test_lifecycle_loop_runs_probe_when_due(self, scheduler):
+        """The periodic job calls the runner and advances the last-run timestamp."""
+        scheduler.running = True
+        scheduler._last_delivery_ratio_probe_run = None
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        mock_runner = AsyncMock(return_value=MagicMock())
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.observability.delivery_ratio.scheduler_runner.run_scheduled_delivery_ratio_probe",
+                new=mock_runner,
+            ),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()
+
+        mock_runner.assert_awaited_once()
+        assert scheduler._last_delivery_ratio_probe_run is not None
+
+    async def test_lifecycle_loop_skips_probe_when_recent(self, scheduler):
+        """Within the interval, the loop does not call the runner again."""
+        scheduler.running = True
+        now = datetime.now(timezone.utc)
+        scheduler._last_delivery_ratio_probe_run = now
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = now
+
+        mock_runner = AsyncMock(return_value=MagicMock())
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.observability.delivery_ratio.scheduler_runner.run_scheduled_delivery_ratio_probe",
+                new=mock_runner,
+            ),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()
+
+        mock_runner.assert_not_awaited()
+
+    async def test_probe_failure_does_not_advance_timestamp(self, scheduler):
+        """A runner exception is caught, logged, and does not advance the timestamp."""
+        scheduler.running = True
+        scheduler._last_delivery_ratio_probe_run = None
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        mock_runner = AsyncMock(side_effect=RuntimeError("pg down"))
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.observability.delivery_ratio.scheduler_runner.run_scheduled_delivery_ratio_probe",
+                new=mock_runner,
+            ),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()  # must not raise
+
+        mock_runner.assert_awaited_once()
+        assert scheduler._last_delivery_ratio_probe_run is None
+
+    async def test_probe_returning_none_does_not_advance_timestamp(self, scheduler):
+        """A transient Postgres-open failure returns None and must not advance the timestamp."""
+        scheduler.running = True
+        scheduler._last_delivery_ratio_probe_run = None
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        mock_runner = AsyncMock(return_value=None)
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.observability.delivery_ratio.scheduler_runner.run_scheduled_delivery_ratio_probe",
+                new=mock_runner,
+            ),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()
+
+        mock_runner.assert_awaited_once()
+        assert scheduler._last_delivery_ratio_probe_run is None
+
+
+@pytest.mark.asyncio
+class TestCacheErosionSettingsWiring:
+    """AC-5 corollary: the interval is settings-driven, not just an instance attribute."""
+
+    async def test_enabled_and_interval_come_from_settings(self):
+        """Constructing BrainstemScheduler() copies these fields from settings."""
+        with (
+            patch.object(scheduler_module.settings, "cache_erosion_probe_enabled", False),
+            patch.object(scheduler_module.settings, "cache_erosion_probe_interval_seconds", 1234),
+        ):
+            sched = BrainstemScheduler()
+            assert sched.cache_erosion_probe_enabled is False
+            assert sched.cache_erosion_probe_interval_seconds == 1234
+            if sched.running:
+                await sched.stop()
+
+
+@pytest.mark.asyncio
+class TestDeliveryRatioSettingsWiring:
+    """AC-5 corollary (see TestCacheErosionSettingsWiring)."""
+
+    async def test_enabled_and_interval_come_from_settings(self):
+        """Constructing BrainstemScheduler() copies these fields from settings."""
+        with (
+            patch.object(scheduler_module.settings, "delivery_ratio_probe_enabled", False),
+            patch.object(scheduler_module.settings, "delivery_ratio_probe_interval_seconds", 5678),
+        ):
+            sched = BrainstemScheduler()
+            assert sched.delivery_ratio_probe_enabled is False
+            assert sched.delivery_ratio_probe_interval_seconds == 5678
+            if sched.running:
+                await sched.stop()
+
+
+@pytest.mark.asyncio
+class TestCacheErosionCompressedInterval:
+    """AC-1 / AC-3: real BrainstemScheduler, compressed interval, no manual invocation."""
+
+    async def test_compressed_interval_produces_spaced_documents(self, scheduler):
+        """Two runs under a compressed interval are spaced by the configured value."""
+        from personal_agent.observability.cache_erosion.monitor import ErosionReport
+
+        # Capture the real sleep BEFORE patching asyncio.sleep — calling the patched
+        # name from inside its own replacement recurses forever (codex finding 1).
+        real_sleep = asyncio.sleep
+
+        scheduler.running = True
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+        scheduler.cache_erosion_probe_enabled = True
+        scheduler.cache_erosion_probe_interval_seconds = 0.2
+        scheduler._last_cache_erosion_probe_run = None
+        # Isolate the probe under test — every other real (unmocked) periodic job in
+        # this loop (joinability, SLM-health, delivery-ratio, DomainGuard warm) adds
+        # unpredictable per-tick network/IO overhead that erodes the timing margin
+        # below, so disable/pre-satisfy each of them rather than let noise into the
+        # measurement.
+        scheduler.delivery_ratio_probe_enabled = False
+        scheduler.joinability_probe_enabled = False
+        scheduler.slm_health_probe_enabled = False
+        scheduler._last_domain_guard_warm_run = datetime.now(timezone.utc)
+        scheduler._lifecycle_es_client = AsyncMock()
+
+        call_times: list[float] = []
+        fake_report = ErosionReport(
+            computed_at=datetime.now(timezone.utc), results=[], any_eroded=False, threshold=0.9
+        )
+
+        async def fake_compute_erosion_report(*args, **kwargs):
+            call_times.append(time.monotonic())
+            return fake_report
+
+        tick_count = 0
+
+        async def fast_sleep(_seconds: float) -> None:
+            nonlocal tick_count
+            tick_count += 1
+            if tick_count > 15:
+                scheduler.running = False
+            await real_sleep(0.02)
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=fast_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.observability.cache_erosion.scheduler_runner.compute_erosion_report",
+                new=fake_compute_erosion_report,
+            ),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()
+
+        assert len(call_times) >= 2, (
+            "the scheduler must invoke the probe with no manual call (AC-1)"
+        )
+        gap = call_times[1] - call_times[0]
+        # Lower-bound only (codex: don't assert an upper bound — slow CI can violate it
+        # without a product defect). A comfortable fraction of the configured 0.2s
+        # interval — well above a single 0.02s tick's overhead even under load — is
+        # enough to show the loop did not fire on every tick regardless of interval
+        # (AC-3).
+        assert gap >= 0.08
+
+
+@pytest.mark.asyncio
+class TestDeliveryRatioCompressedInterval:
+    """AC-1 / AC-3 (see TestCacheErosionCompressedInterval)."""
+
+    async def test_compressed_interval_produces_spaced_documents(self, scheduler):
+        """Two runs under a compressed interval are spaced by the configured value."""
+        from personal_agent.observability.delivery_ratio.probe import DeliveryReport
+
+        real_sleep = asyncio.sleep
+
+        scheduler.running = True
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+        scheduler.delivery_ratio_probe_enabled = True
+        scheduler.delivery_ratio_probe_interval_seconds = 0.2
+        scheduler._last_delivery_ratio_probe_run = None
+        # Isolate the probe under test (see TestCacheErosionCompressedInterval for why).
+        scheduler.cache_erosion_probe_enabled = False
+        scheduler.joinability_probe_enabled = False
+        scheduler.slm_health_probe_enabled = False
+        scheduler._last_domain_guard_warm_run = datetime.now(timezone.utc)
+        scheduler._lifecycle_es_client = AsyncMock()
+
+        call_times: list[float] = []
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+        fake_report = DeliveryReport(since=yesterday, until=yesterday, families=[])
+        fake_conn = AsyncMock()
+
+        async def fake_collect_report(*args, **kwargs):
+            call_times.append(time.monotonic())
+            return fake_report
+
+        tick_count = 0
+
+        async def fast_sleep(_seconds: float) -> None:
+            nonlocal tick_count
+            tick_count += 1
+            if tick_count > 15:
+                scheduler.running = False
+            await real_sleep(0.02)
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=fast_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.observability.delivery_ratio.scheduler_runner.collect_report",
+                new=fake_collect_report,
+            ),
+            patch(
+                "personal_agent.observability.delivery_ratio.scheduler_runner._open_pg_conn",
+                new=AsyncMock(return_value=fake_conn),
+            ),
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()
+
+        assert len(call_times) >= 2, (
+            "the scheduler must invoke the probe with no manual call (AC-1)"
+        )
+        gap = call_times[1] - call_times[0]
+        assert gap >= 0.08

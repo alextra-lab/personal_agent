@@ -1,0 +1,28 @@
+{
+  "policy": {
+    "_meta": {
+      "description": "ILM for agent-monitors-delivery-ratio-* (monthly index agent-monitors-delivery-ratio-YYYY-MM, FRE-543/FRE-1036 monthly-index convention; 1 doc/day at the default daily interval — the smallest volume of the four scheduled probes). min_age-based delete from index creation (no rollover write-alias, mirrors the joinability/SLM-health precedent). Retention: 90d. warm forcemerge fires at 32d so the current monthly index isn't merged while still open.",
+      "retention_days": 90,
+      "managed_by": "scripts/setup-elasticsearch.sh"
+    },
+    "phases": {
+      "hot": {
+        "min_age": "0ms",
+        "actions": {
+          "set_priority": { "priority": 100 }
+        }
+      },
+      "warm": {
+        "min_age": "32d",
+        "actions": {
+          "forcemerge": { "max_num_segments": 1 },
+          "set_priority": { "priority": 50 }
+        }
+      },
+      "delete": {
+        "min_age": "90d",
+        "actions": { "delete": {} }
+      }
+    }
+  }
+}

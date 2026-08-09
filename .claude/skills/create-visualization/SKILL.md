@@ -210,7 +210,8 @@ jq -s -r '
     unit: (.fieldConfig.defaults.unit // null),
     steps: (.fieldConfig.defaults.thresholds.steps // []),
     needsThresholds: ((.type == "stat" or .type == "gauge" or .type == "bargauge")
-      or ((.title + " " + (.description // "")) | test("budget|target|limit|SLO|cap|ceiling|quota"; "i")))
+      or ((.title + " " + (.description // ""))
+          | test("\\b(budget|target|limit|SLO|cap|ceiling|quota)\\b"; "i")))
   } ]
 | map(. + {reasons: (
     (if .ui then [] else ["not-UI-authored (no pluginVersion)"] end)
@@ -222,8 +223,12 @@ jq -s -r '
 ```
 
 Empty output means every panel passed. Today it rejects **68 of 68** (68 not-UI-authored, 68 no-unit,
-19 no-thresholds) — that is the gate's calibration: **a gate that passes the current corpus is not a
+15 no-thresholds) — that is the gate's calibration: **a gate that passes the current corpus is not a
 gate.** It also passes a correctly-authored panel, which is the other half of the calibration.
+
+**Keep the keyword test word-anchored.** Written unanchored it matches substrings: `SLO` fires on
+*"Slowest traces (top 20)"* and `cap` on *"capacity"*. Caught in review — it had inflated the
+no-thresholds count from 15 to 19.
 
 ### The four gates (ALL required, in order)
 
@@ -278,8 +283,11 @@ not "a chart exists."
 ## Related
 
 - Dashboard-level composition (shared controls, consistent filters, reading order, cross-viz drill-down,
-  whether the *set* answers one coherent question) is a separate **Build** skill, `compose-a-dashboard`.
-  It is written from the FRE-1207 render audit — see that ticket before composing a whole dashboard.
+  whether the *set* answers one coherent question) is planned as a separate **Build** skill,
+  `compose-a-dashboard` — **not yet written; do not go looking for it.** It is FRE-1234, blocked on the
+  FRE-1207 render audit, because three of its six rules need rendered evidence that no static
+  measurement can supply. Until it exists, composing a whole dashboard has no contract: say so rather
+  than improvising one.
 - Memory: `feedback_visualizations_build_in_ui_not_hand_authored`.
 - Grafana corpus evidence and the loop's verification: FRE-1206, and
   `docs/superpowers/plans/2026-08-08-fre-1203-grafana-migration-program.md` § 1.

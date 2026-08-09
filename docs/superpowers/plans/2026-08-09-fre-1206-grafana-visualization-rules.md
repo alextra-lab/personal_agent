@@ -97,7 +97,7 @@ and that `compose-a-dashboard` is no longer parked. Add the `[[…]]` link.
 | AC-1 | Trigger fires on a Grafana task | Frontmatter `description` names Grafana, panel, dashboard, Postgres datasource; grep shows it |
 | AC-2 | Absolute rule forbids hand-authoring in any tool | The rule sentence names no vendor; grep for `Lens` shows it only in the worked example |
 | AC-3 | Grafana build loop executable as written | Every step in §2 verified live; the loop is driven once end to end and the resulting UI-authored panel JSON is quoted in the skill as the worked example |
-| AC-4 | The field-config gate **can fail** | The skill's own `jq` gate, copy-pasted and run from the repo root against `config/grafana/dashboards/*.json`, returns **68 rejected, 0 passed** (68 not-UI-authored, 68 no-unit, 19 no-thresholds), **and passes a correctly-authored panel** — both halves of the calibration |
+| AC-4 | The field-config gate **can fail** | The skill's own `jq` gate, copy-pasted and run from the repo root against `config/grafana/dashboards/*.json`, returns **68 rejected, 0 passed** (68 not-UI-authored, 68 no-unit, 15 no-thresholds), **and passes a correctly-authored panel** — both halves of the calibration |
 | AC-5 | `compose-a-dashboard` cites measured evidence | **Moved to FRE-1234** with the deliverable — see §5 |
 
 ## 5. AC-5 / T0.2 — split out to FRE-1234
@@ -151,6 +151,22 @@ Run before implementation. Findings acted on, and the two rejected with reasons:
 5. Rename + update the memory (the Kibana-scoped *name* is the same defect as the Kibana-scoped trigger). → verify: MEMORY.md index line and the skill's § Related both point at the new name; no stale refs. **Done.**
 6. Tear down the ephemeral authoring container. → verify: `docker ps` shows no `grafana-authoring`. **Done.**
 7. Quality gates + self-review, then PR.
+
+## 6b. Self-review disposition (`feature-dev:code-reviewer`, on the committed diff)
+
+Diff class: **self-serve** — process/skill wording, no production write path, no schema, no deleting
+path, no cost/governance code, no change to the trust ladder. Two Important findings, both confirmed
+against the real corpus, both fixed on-branch:
+
+| Finding | Fix |
+|---|---|
+| **The `needsThresholds` keyword test was unanchored, and misfired on the live corpus.** `SLO` matched the substring in *"Slowest traces (top 20)"*, flagging two `request_traces` panels as needing an SLO threshold. The stated calibration was therefore partly an artifact of the bug. | Anchored to `\b(…)\b`. Re-measured: **no-thresholds 19 → 15**; total rejected stays 68/68. The skill now carries the trap as a written warning, since anyone re-typing the regex would reintroduce it. |
+| **`## Related` claimed `compose-a-dashboard` exists and "is written from the FRE-1207 render audit"** — contradicting §5 of this very plan, and pointing a future session at two files that do not exist. Introduced when T0.2 was split out and that section was not updated. | Restated as a forward pointer: not yet written, FRE-1234, blocked on FRE-1207, and *"until it exists, composing a whole dashboard has no contract: say so rather than improvising one."* |
+
+The reviewer independently verified and found sound: the `jq` slurp/shape, `null + string` safety, the
+`steps`/`unit` predicates, the 68/68 `pluginVersion`+`fieldConfig` claim, the `docker inspect --format`
+template and its quoting, `$PWD` resolution from repo root, the `updateIntervalSeconds: 30` claim, and
+all four cited Grafana v13.1 doc URLs. No secrets, personal paths or deployment identifiers.
 
 ## 7. Out of scope
 

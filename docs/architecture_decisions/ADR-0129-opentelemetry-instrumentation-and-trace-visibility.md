@@ -114,6 +114,15 @@ Two consequences are the reason rather than side effects. First, it is the one p
 
 **The vanilla upstream Collector is used, not a vendor distribution** — not Grafana Alloy, not EDOT, not the Splunk or Datadog distros. All are competent; choosing the neutral one is what keeps the backend a configuration line rather than a commitment, and it is what makes Option 5's deferral real rather than rhetorical.
 
+**"The Collector" means the terminus, not the first hop** — ruled 2026-08-09 (FRE-1225), on the FRE-1220 study's Proposal 4. A producer may export to a Collector **on its own host, over loopback**, which forwards to the VPS Collector. That is ordinary OpenTelemetry agent→gateway topology and it honours this decision's actual prohibition, which is on exporting to a **backend** directly — a local Collector is not a backend. Two bounds stop it becoming a general licence:
+
+- **Same host, loopback only.** An intermediate Collector reached over a network is not permitted: it would add a hop that is neither inside the trust boundary nor behind the edge, and the reason for the hop — holding a credential the producer should not hold — does not require one.
+- **The terminus is the VPS Collector**, where redaction is applied and from which Tempo is written. Redaction coverage is therefore unaffected by the hop.
+
+**What the hop costs is stated rather than glossed, because it is a capability limit and not a wording choice.** The vanilla upstream Collector **publishes no effective configuration**: its zpages expose component *names* (`servicez`, `pipelinez`, `extensionz`, `featurez`, `tracez`, `expvarz`), not the endpoints its exporters address, and the `configz/effective` endpoint that would is a Splunk-distribution feature — excluded by this decision's own distro choice, and removed even there. So an intermediate Collector cannot satisfy AC-7's *method*, a live self-reported config read from the running process, the way an application producer can. AC-7 is amended to prove termination **from the data** instead: the producer's spans arriving in Tempo, which only the VPS Collector writes. That is weaker than a live config read — it cannot see a second exporter added out-of-band — and materially stronger than a declaration nobody checks.
+
+**Persistent buffering is not adopted along with the hop.** The Collector's persistent sending queue requires the `file_storage` extension from contrib. An intermediate hop under this decision buffers **in memory only**: that covers a laptop sleeping, since the process survives, and does not survive a restart. Recorded as a known limit rather than solved, so a later loss investigation starts from the right place.
+
 ### D6 — Tempo stores traces; Elasticsearch keeps logs; Grafana correlates, and Kibana's retirement is directed
 
 - **Tempo** receives spans, and its `query_frontend.metrics.max_duration` is configured to at least 14 days (the documented default is 24 hours, which would make AC-8's fortnight-long percentile query unrunnable — a configuration this ADR commits to rather than discovers).
@@ -352,7 +361,11 @@ ADR-0128 moves to **Superseded** when this ADR is Accepted.
 
 - **AC-6 — `slm_server` exports OTLP on every active emit path and stops minting dated indices.** · **Check:** after the `slm_server` change, over the window: (a) total `slm_server` span count reconciles against its `api_costs` rows within the bounded delivery baseline, and every such span's `trace_id` equals the calling turn's ledger `trace_id`; (b) spans are stratified by an emit-path attribute **that `slm_server` must set**, and each of the four paths (chat, responses, rerank, streaming) either shows shared-trace propagation or is listed as inactive; (c) no new `slm-requests-YYYY.MM.DD` index is created. · *Fails if* the total diverges beyond baseline, any active path shows no propagation, any path is neither active nor listed inactive, or a new dated index appears. **A limitation is recorded honestly:** `api_costs` has **no emit-path column**, so per-path *denominators* are not independently available — (a) gates the total against the ledger and (b) gates per-path presence using an attribute the producer supplies. A path that both stopped emitting and stopped serving traffic would be indistinguishable, which is why an inactive path must be declared rather than inferred. (a) remains unfakeable from inside this repository: only genuine cross-process propagation yields a shared trace id.
 
-- **AC-7 — Collector redaction demonstrably fires, and no producer bypasses it.** · **Check:** (i) *positive control* — emit a span carrying an attribute matching a declared redaction rule and confirm the attribute is **absent** in Tempo; (ii) every producer publishes a **machine-readable effective-configuration artifact** that the verifier reads — including `slm_server`, whose ticket must expose one, since it runs on a separate host the verifier cannot otherwise inspect — and no artifact names an OTLP endpoint other than the Collector. · *Fails if* the planted attribute survives to storage, any producer is configured to export elsewhere, or **any producer publishes no artifact** (an uninspectable producer is a failure, not an exemption). The positive control is required because a redactor that never fires yields the same clean result as one that works. **Scope is explicit and narrow:** this covers the OTLP trace path only. Logs reach Elasticsearch directly (D5), so the `free_text` dynamic template auto-indexing `stdout`, `stderr` and `raw_*` is untouched by this criterion and is filed separately. This must not be read as asserting log-side redaction.
+- **AC-7 — Collector redaction demonstrably fires, and no producer bypasses it.** *(Clause (ii) reworded and clause (iii) added 2026-08-09 for the loopback-hop topology D5 now permits; see the Status Update of that date.)* · **Check:** (i) *positive control* — emit a span carrying an attribute matching a declared redaction rule and confirm the attribute is **absent** in Tempo; (ii) every **span-originating** producer publishes a **machine-readable effective-configuration artifact** that the verifier reads — including `slm_server`, whose ticket must expose one, since it runs on a separate host the verifier cannot otherwise inspect — and **every** span destination that artifact names is one of exactly two admissible classes: the VPS Collector's ingress, or a **same-host loopback** Collector permitted by D5; (iii) where an artifact names a loopback hop, that producer's spans are **present in Tempo**, which only the VPS Collector writes — so the chain is proven to terminate there rather than asserted to. · *Fails if* the planted attribute survives to storage, any artifact names a destination outside (ii)'s two admissible classes, **any producer publishes no artifact** (an uninspectable producer is a failure, not an exemption), or a producer whose artifact names a loopback hop has no spans in Tempo. The positive control is required because a redactor that never fires yields the same clean result as one that works.
+
+  **Why (ii) says *every* destination and (iii) exists at all.** The original wording — *"no artifact names an OTLP endpoint other than the Collector"* — is singular, so an artifact enumerating a second exporter alongside a compliant one arguably satisfied it; the closure form does not. (iii) is what stops the loopback allowance passing vacuously: a hop that silently shipped elsewhere would leave Tempo empty for that producer, and a criterion that accepted the producer's own `localhost` value with nothing behind it could not fail. For `slm_server` specifically, (iii) is already the substance of AC-6(a) — asserting it here keeps AC-7 self-contained rather than duplicating machinery. **What neither clause proves is named rather than implied:** an exporter added to the loopback hop out-of-band, after the fact, is invisible to both — the vanilla Collector publishes no config to read (D5), so this is a capability limit, not an oversight, and it is the price of the hop.
+
+  **Scope is explicit and narrow:** this covers the OTLP trace path only. Logs reach Elasticsearch directly (D5), so the `free_text` dynamic template auto-indexing `stdout`, `stderr` and `raw_*` is untouched by this criterion and is filed separately. This must not be read as asserting log-side redaction.
 
 - **AC-8 — "Did responses get faster?" is answerable from one query over a fortnight.** · **Check:** a Grafana panel plotting per-day p50 and p95 turn duration from spans returns a non-empty series for **every day on which `api_costs` records model calls** across a ≥14-day post-cutover window, computed **without unioning two fields**; and each active day's turn-span count reconciles against that day's distinct `api_costs` `trace_id` count within the bounded delivery baseline. · *Fails if* an active day is empty, answering requires more than one duration field, or a day's span count diverges beyond baseline. Continuity is defined over *active* days because a genuinely idle day is not a defect and a criterion that failed one would be unachievable. `api_costs` supplies the fortnight-long denominator that `session_events` cannot, being purged at 24 hours (rule 1). The count reconciliation is load-bearing: one surviving span per day yields a continuous series that is a lie. This criterion also depends on D6's committed `max_duration` configuration — a 14-day metrics query fails against Tempo's 24-hour default.
 
@@ -365,6 +378,8 @@ ADR-0128 moves to **Superseded** when this ADR is Accepted.
   **A replacement clause was considered, and the honest reason for declining it is scope, not unfalsifiability.** The first formulation tried — *"`monitoring` does not serve Kibana"* — **is** unfalsifiable: once no Kibana exists nothing can serve it, so no defect could fail the check. But a second formulation is **not**, and adversarial review (Codex, round 1) was right to press it: *read the Cloudflare ingress rule for `monitoring` and fail if it still targets `kibana:5601`*. That inspects the **route**, not the response, and a route left stale after the container's deletion fails it cleanly — which is precisely the state this ADR would otherwise never notice. It is also well within what an ADR's own criteria may demand: AC-10(a)–(d) already require owner action outside this repository, expressly permitted by ADR-0130 D1. **So the criterion was available and is being given up deliberately.** It is declined because the owner ruled the `monitoring` repoint outside this program's scope and into their own hands, and a criterion asserting a state nobody is tasked with reaching would gate this ADR on work no ticket owns. **Recorded this way so the trade is visible:** the check is not impossible, it is unowned — and if the owner ever wants it back, the formulation above is the one that works.
 
 **Seam ticket:** **FRE-1073**, designated by FRE-1080 under ADR-0130 D2, is the single place **all ten** criteria above are asserted. No implementation ticket carries, quotes, restates or discharges any part of them (ADR-0130 D1); each child instead carries criteria written for its own deliverable, and what this ADR gates at a child's merge is **design adherence** (ADR-0130 D3). **AC-1, AC-2, AC-3, AC-5, AC-6 and AC-8** hold only once *every* child has landed, and **AC-10** additionally requires an owner action outside this repository — so none is provable by any single child, and this ADR does not close when its last child merges. An `adr` session adjudicates FRE-1073, producing one verdict per criterion — green, red or inconclusive, with the evidence and its actual output — recorded into the Status Updates below. **ADR-0129 reaches `Implemented` only if every verdict is green; otherwise it stays `Accepted`.**
+
+**FRE-1073's AC-7 walk changed on 2026-08-09, and no other criterion moved.** The criterion count is again unchanged — all ten are still asserted at FRE-1073 — but AC-7 now reads *every* destination in each artifact rather than one, and adds clause (iii), a Tempo-presence check for any producer routing through a loopback hop. **No new seam ticket is created and none is needed:** these are ADR-0129's own criteria, they stay asserted in exactly one place, and FRE-1073 remains that place (ADR-0130 D2). AC-1 through AC-6 and AC-8 through AC-10 are untouched.
 
 **FRE-1073's scope narrowed on 2026-08-08 and the change is recorded here so master does not have to derive it.** The criterion *count* is unchanged — all ten are still asserted there, and no criterion was added or removed — but **AC-10 lost clause (e)**, so FRE-1073's AC-10 walk no longer includes a live `monitoring` request. Nothing else moved: AC-1 through AC-9 are untouched by the retirement ruling, exactly as the 2026-08-07 amendment left them.
 
@@ -405,10 +420,76 @@ ADR-0128 moves to **Superseded** when this ADR is Accepted.
 - [OpenTelemetry Collector — architecture and processors](https://opentelemetry.io/docs/collector/)
 - [Grafana Tempo — TraceQL metrics and query-frontend limits](https://grafana.com/docs/tempo/latest/operations/traceql-metrics/)
 - [Elastic — EDOT Collector and OTLP intake](https://www.elastic.co/docs/reference/opentelemetry/) — the Option 2 path FRE-588 specifies
+- ADR-0136 — The Cloudflare Edge Carries HTTP, Not gRPC (Accepted — 2026-08-09): its D4 explicitly defers the chained-Collector question to FRE-1225, which the 2026-08-09 amendment to D5/AC-7 settles; its D2 is why protocol conversion, where any is needed, happens before the edge
+- ADR-0132 — D2's environment-credential principle: the Cloudflare Access pair belongs to the environment layer rather than inside an application process, which is the surviving justification for the loopback hop D5 now permits
+- `docs/research/2026-08-08-fre-1220-otlp-ingress-security-and-cloudflare-capability.md` — the FRE-1220 study; Proposal 4 raised the AC-7 wording gap and F5/F9 supply the measured custody and protocol positions
+- Linear FRE-1225 — the adjudication ticket the 2026-08-09 amendment was authored under
+- Linear FRE-1224 — the Mac-local Collector as credential custodian; the topology D5's loopback allowance exists for, and the ticket whose gRPC premise the amendment corrects
+- Linear FRE-1071 — `slm_server`'s OTLP export; its AC-5 is the implementation-side criterion the amendment resolves, and `alextra-lab/slm_server#14` is where OTLP/HTTP over gRPC was chosen
+- [OpenTelemetry Collector — zPages extension](https://github.com/open-telemetry/opentelemetry-collector/blob/main/extension/zpagesextension/README.md) — the vanilla upstream debug surface: component names, not exporter endpoints, which is the capability limit D5 records
+- [Splunk Distribution of the OpenTelemetry Collector — troubleshooting](https://help.splunk.com/en/splunk-observability-cloud/manage-data/splunk-distribution-of-the-opentelemetry-collector/get-started-with-the-splunk-distribution-of-the-opentelemetry-collector/troubleshooting/general-troubleshooting) — `debug/configz/effective`, the effective-configuration endpoint that exists only in a distribution this ADR excludes
+- [OpenTelemetry Collector — resiliency and the persistent sending queue](https://opentelemetry.io/docs/collector/resiliency/) — persistence requires contrib's `file_storage`, which is why D5 records the hop as buffering in memory only
 
 ---
 
 ## Status Updates
+
+### 2026-08-09 — D5 clarified and AC-7 reworded: a same-host loopback Collector is permitted, and termination is proven from the data
+**Changed By:** `/adr` session (FRE-1225), recording the owner's ruling reached in session.
+**Reason:** The FRE-1220 study (Proposal 4) found AC-7's wording narrower than D5's decision: D5
+prohibits exporting to a **backend**, but AC-7 required that no artifact name an OTLP endpoint other
+than "the Collector" — which would fail a two-tier topology the decision itself permits. ADR-0136 D4
+explicitly deferred the question here rather than settling it, and an implementer guessing either way
+produces a criterion that passes vacuously or a topology that cannot pass. Status is unchanged:
+**Accepted**.
+
+**The ticket's premise was stale, and correcting it changed the answer.** FRE-1225 and FRE-1224 both
+state that `slm_server` exports OTLP/**gRPC** to loopback, making a local Collector necessary to
+convert to HTTP before the Cloudflare edge (ADR-0136 D2). The merged FRE-1071 change
+(`alextra-lab/slm_server#14`) exports **OTLP/HTTP**, by an explicit design note — *"avoids pulling
+`grpcio` into a deliberately lean dependency list"* — at a default endpoint of `http://localhost:4318`.
+There is no gRPC on that host and no conversion to perform. The Mac-local Collector's remaining
+justification is therefore **credential custody** (ADR-0132 D2's environment-credential principle: the
+Cloudflare Access token belongs to the environment layer, not inside an application process) and
+**buffering**, not protocol.
+
+**A thinner custodian was proposed and rejected.** A loopback transport proxy — Caddy on the producer's
+host attaching the Access headers, mirroring ADR-0132 D1's VPS-side mechanism — decouples the credential
+just as well and never parses OTLP, so it raises no chain question at all. It was rejected on
+simplicity and maintenance, and the reasoning is worth keeping: `slm_server`'s default endpoint is
+already `http://localhost:4318`, which is the Collector's own default OTLP/HTTP port, so a Collector hop
+needs **no producer change whatsoever**; it is the same software already running on the VPS, so it is
+one component to maintain rather than two; and the host in question is a laptop running local models,
+where a second component type earns nothing. The owner ruled on that basis.
+
+**What the ruling gives up, and why it is accepted.** AC-7's method is deliberately paranoid — prove
+non-bypass by reading a **live** config from the running process, because a producer on an uninspectable
+host can otherwise claim anything. A vanilla Collector cannot meet it: verified against the upstream
+zpages extension, which exposes component *names* and not exporter endpoints, and against the
+`configz/effective` endpoint, which is a Splunk-distribution feature this ADR's own distro choice
+excludes. Rather than reword AC-7 to accept an unverifiable declaration — the exact criterion-inflation
+this ADR's four verification rules exist to prevent — termination is proven from the data: the
+producer's spans present in Tempo, which only the VPS Collector writes. A hop shipping elsewhere leaves
+Tempo empty for that producer and fails cleanly. **The residual gap is recorded in AC-7 rather than
+argued away:** an exporter added to the hop out-of-band is invisible to both clauses.
+
+**An adjacent precedent was weighed and is what made the trade acceptable.** D6 already accepts
+file-provisioned Grafana dashboards over UI assembly precisely because a reviewed file *"makes it
+reviewable in a diff instead of verifiable only by logging in"* — the same substitution, for a component
+with strictly broader reach than a forwarding hop.
+
+**Buffering is bounded and said so in D5.** The Collector's persistent sending queue requires contrib's
+`file_storage` extension; the hop buffers in memory only, which covers a laptop sleeping and not a
+restart.
+
+**Consequences for the chain.** **FRE-1071 AC-5** — *"the effective-configuration artifact is readable
+and names the Collector"* — now reads as satisfied by a same-host loopback endpoint, so the merged
+evidence (`"otlp_endpoint": "http://localhost:4318"`) stands, **conditional on clause (iii)**: its spans
+must reach Tempo once the ingress exists, which is AC-6(a)'s substance and FRE-1073's to adjudicate.
+**FRE-1224** keeps its custody and buffering rationale and loses its protocol rationale; its body
+asserts a gRPC premise that is no longer true. **No implementation ticket is filed by this amendment** —
+it changes a criterion's wording and a decision's scope, and every implementation it bears on already
+exists.
 
 ### 2026-08-08 — D6 amended again: the retirement is directed and sequenced; the owner declares completion
 **Changed By:** `/adr` session (FRE-1213), recording the owner's ruling relayed in session.

@@ -200,3 +200,55 @@ def test_outside_production_a_violation_still_raises_after_counting(
         validate_document({"duration_ms": 12})
 
     assert snapshot_counts() == VocabularyCounts(validated=1, violations=1)
+
+
+# ---------------------------------------------------------------------------
+# FRE-1179: retiring CANONICAL_MODEL_CALL_*_FIELDS into the vocabulary
+# ---------------------------------------------------------------------------
+
+
+def test_ac1_every_model_call_field_is_in_declared_types() -> None:
+    """AC-1 (FRE-1179): all model-call fields are declared types, not exclusions.
+
+    Pinned literals from the parity test (test_telemetry_parity.py), which
+    replaced the frozensets FRE-1067 deleted. Master measured live ES from
+    2026-08-08 14:40 onward (24h post-FRE-1067 deploy) and found all eight
+    originally-excluded fields still on log records. This test asserts they
+    are all in DECLARED_TYPES with their correct types.
+    """
+    all_model_call_fields = frozenset(
+        {
+            "model",
+            "provider",
+            "role",
+            "endpoint",
+            "trace_id",
+            "session_id",
+            "span_id",
+            "parent_span_id",
+            "latency_ms",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "prompt_callsite",
+            "prompt_component_ids",
+            "prompt_static_prefix_hash",
+            "prompt_dynamic_hash",
+        }
+    )
+
+    # All except latency_ms (which is retired) must be in DECLARED_TYPES
+    in_declared = all_model_call_fields - {"latency_ms"}
+    missing = in_declared - set(DECLARED_TYPES)
+    assert not missing, f"model-call fields not in DECLARED_TYPES: {missing}"
+
+
+def test_ac4_latency_ms_is_retired_spelling_not_governed() -> None:
+    """AC-4 (FRE-1179): latency_ms transferred as retired spelling, not governed name.
+
+    ADR-0133 D3 Rule 1 catches it; it should not appear in DECLARED_TYPES
+    (which would legitimise one half of the span/log divergence ADR-0129 measured).
+    """
+    assert "latency_ms" in RETIRED_SPELLINGS
+    assert RETIRED_SPELLINGS["latency_ms"] is None  # retired outright, no canonical
+    assert "latency_ms" not in DECLARED_TYPES

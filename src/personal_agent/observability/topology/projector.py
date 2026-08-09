@@ -73,6 +73,24 @@ _ROLLING_EMIT_SECONDS = 300.0
 _HEALTH_INDEX_PREFIX = "agent-monitors-projector-health"
 
 
+def _cost_key(trace_id: str) -> str:
+    """Canonical key for the session cost map, insensitive to trace-id rendering.
+
+    The two writers into ``SessionAggregate.costs`` disagree on rendering, and the map
+    is summed rather than deduplicated — so an un-normalised key double-counts a turn
+    (FRE-1215). Hydration reads ``api_costs`` and keys on ``str(uuid)``, which Postgres
+    renders dashed; live completion keys on the raw event string, which is the OTel
+    span's 32-hex form. Both name the same trace.
+
+    Args:
+        trace_id: A trace id in either rendering.
+
+    Returns:
+        The id as lowercase hex with dashes stripped.
+    """
+    return trace_id.replace("-", "").lower()
+
+
 @dataclass
 class SessionHydration:
     """Substrate data returned by the hydration source on first session touch (ADR-0092 §D4).
@@ -114,7 +132,10 @@ class SessionAggregate:
     Attributes:
         session_id: Owning session identifier.
         costs: Idempotent ``{trace_id_str: authoritative_cost_usd}`` map (set, never ``+=``).
-            The surfaced ``session_cost_usd`` is ``sum(costs.values())``.
+            Keyed through :func:`_cost_key` so the dashed ids hydration reads from
+            ``api_costs`` and the 32-hex ids live events carry collapse to one entry
+            per trace (FRE-1215). The surfaced ``session_cost_usd`` is
+            ``sum(costs.values())``.
         context_tokens: Latest ``context_tokens`` seen for this session; carried across turns
             so the session lane never resets to zero on new user input (D3).
         hydrated: ``True`` once the one-per-session substrate hydration has run.
@@ -261,7 +282,7 @@ class TurnObservationProjector:
         try:
             hydration = await self._hydration_source(sess.session_id)
             for tid, cost in hydration.costs.items():
-                sess.costs.setdefault(tid, cost)
+                sess.costs.setdefault(_cost_key(tid), cost)
             sess.compaction_b_ids.update(hydration.compaction_b_ids)
             sess.compaction_d_ids.update(hydration.compaction_d_ids)
             sess.quality_alert_ids.update(hydration.quality_alert_ids)
@@ -398,7 +419,7 @@ class TurnObservationProjector:
             # Authoritative wins (ADR-0088 D3): reconcile the live meter to SUM(api_costs).
             obs.live_cost_usd = event.cost_authoritative_usd
             # ADR-0092 §D2: idempotent session cost roll-up (set, never +=).
-            sess.costs[event.trace_id] = event.cost_authoritative_usd
+            sess.costs[_cost_key(event.trace_id)] = event.cost_authoritative_usd
             # ADR-0092 §D5: clear transient quality_alert when this turn had no A firing.
             if not obs.compaction_a_fired:
                 sess.quality_alert = None

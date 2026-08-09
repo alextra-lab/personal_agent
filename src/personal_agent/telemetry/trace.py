@@ -57,8 +57,16 @@ def _active_trace_id() -> str | None:
     return format(span_context.trace_id, f"0{_TRACE_ID_HEX_WIDTH}x")
 
 
-def _read_or_mint_trace_id() -> str:
+def read_or_mint_trace_id() -> str:
     """Read the active span's trace id, falling back to minting one.
+
+    Public because request entrypoints need the id itself, not a whole
+    :class:`TraceContext` — the ``/chat`` and ``/chat/stream`` handlers mint their
+    trace id before any context exists (FRE-1215). An entrypoint that minted its
+    own id instead would disagree with every log record of its own request, since
+    :func:`personal_agent.telemetry.logger._add_span_context` stamps those from the
+    active span (ADR-0129 D4); Postgres would then record one identifier and
+    Elasticsearch another, and no cross-substrate join could match them.
 
     Returns:
         A 32-hex trace id — the active span's when one is active, otherwise a
@@ -146,7 +154,7 @@ class TraceContext:
             one when no span is active) and no parent span.
         """
         return cls(
-            trace_id=_read_or_mint_trace_id(),
+            trace_id=read_or_mint_trace_id(),
             user_id=user_id,
             session_id=session_id,
             authenticated=authenticated,
@@ -260,7 +268,7 @@ class SystemTraceContext:
                 f"whitespace-free identifier; got {source!r}"
             )
         return TraceContext(
-            trace_id=_read_or_mint_trace_id(),
+            trace_id=read_or_mint_trace_id(),
             user_id=user_id,
             session_id=session_id,
             kind=f"{SYSTEM_KIND_PREFIX}{source}",

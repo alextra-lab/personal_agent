@@ -436,20 +436,43 @@ be visible.
     (a) is discharged by its **reviewed, version-controlled configuration file** — the same substitution
     ADR-0129 D6 already accepts for Grafana's provisioned dashboards — and the arm's real weight moves to
     **(b) and (c)**, which answer this criterion's actual question from the receiving side.
-    **That substitution is adequate *here* and would not be adequate for ADR-0129 AC-7, and the asymmetry
-    is the point rather than a convenience.** This criterion asks whether gRPC crosses the Cloudflare edge —
-    a property observable at the edge, which is ours: arms (b) and (c) read the live ingress rules and the
-    Collector's port bindings independently of what any producer claims. AC-7 asks whether anything bypasses
-    redaction, where a hidden second exporter *is* the entire threat and no edge-side observation substitutes.
-    A reviewed file is therefore sufficient evidence for the narrow question and insufficient for the broad
-    one. **What this exception gives up:** a Collector running a configuration other than its reviewed file
-    is not detected by arm (a). Nothing here closes that.
+    **The substitution is narrower than this criterion, and saying otherwise would repeat the error it
+    fixes.** A first drafting of this exception argued that arms (b) and (c) make the reviewed file adequate.
+    They do not, and the reason is the scope note above: **AC-2 asserts all of D2** — gRPC belongs inside the
+    trust boundary, Cloudflare-fronted or not — while (b) and (c) observe only the *edge*. A Collector whose
+    reviewed file says OTLP/HTTP but whose running process exports gRPC straight to an unrelated remote
+    endpoint passes (b), passes (c), and violates D2. That is an **enumerated** census member evading the
+    criterion, which is categorically worse than the unenumerated-path caveat recorded at the end of AC-2,
+    and it is not covered by it.
+
+    **So the exception is recorded as a bounded loss rather than an equivalence.** For a Collector, arm (a)
+    covers the **declared** configuration only. The running-versus-declared gap is real, unclosed, and larger
+    for this component class than for any other in the census — every other member self-reports from a live
+    process. It is accepted because the alternative is a criterion that cannot pass at all, and because the
+    reviewed file still fails a Collector *declared* to export gRPC off-box, which is the realistic error.
+    **What would close it** is a Collector distribution that publishes its effective configuration — the
+    Splunk endpoint, or an OpAMP-reporting deployment — either of which reopens the vendor-distribution choice
+    ADR-0129 D5 made deliberately. That trade is named here so a future reader sees a decision rather than an
+    oversight.
+
+    **The asymmetry with ADR-0129 AC-7 stands on a smaller claim than the one first drafted.** AC-7 is not
+    granted this substitution — not because the edge makes AC-2 safe, but because AC-7's threat *is* the
+    hidden destination, so accepting a declared config there would be accepting the answer to the very
+    question asked. Here the declared config is partial evidence toward a rule that also has independent
+    edge-side arms; there it would be the whole of the evidence.
   - **(b) Path census — no Cloudflare-fronted path terminates at a gRPC receiver.** Read the live tunnel
-    ingress rules (F2's method, the connector's logged configuration); for each rule routing into Caddy,
-    follow it through to the Caddyfile site block it lands in; assert no resulting upstream is an OTLP gRPC
-    receiver as declared in the Collector's own configuration. Following the Caddy hop is the point — a
-    check for literal port 4317 in the ingress rules would miss every indirect route, and most of our rules
-    are indirect.
+    ingress rules (F2's method, the connector's logged configuration) and classify **every** rule, not only
+    the indirect ones: for each rule routing into Caddy, follow it through to the Caddyfile site block it
+    lands in and assert no resulting upstream is an OTLP gRPC receiver as declared in the Collector's own
+    configuration; **for each rule routing directly at a service, assert that service:port is not an OTLP
+    gRPC receiver by the same declaration.** Following the Caddy hop is the point for the indirect
+    majority — a check for literal port 4317 in the ingress rules would miss every indirect route. **The
+    direct arm was added 2026-08-09** because the original method said only "for each rule routing into
+    Caddy", which left a rule pointed straight at `otel-collector:4317` unclassified: it needs no published
+    host port, so (c) would not see it either, and the failure predicate's "any Cloudflare-fronted path"
+    would have been broader than the procedure that establishes it. This is Kibana's own topology (D6 of
+    ADR-0129 records the tunnel serving `monitoring` directly from `kibana:5601`), so a direct rule is a
+    shape this deployment actually uses, not a hypothetical.
   - **(c) No direct exposure that neither arm above would see.** The Collector container publishes no host
     port (F1's method — read the container's port bindings in full, not just grep for 4317).
 
@@ -520,8 +543,23 @@ the receiving side without trusting any producer's claim. The asymmetry with ADR
 redaction bypass is not.
 
 **What it gives up is recorded rather than glossed:** a Collector running something other than its reviewed
-file is not detected by arm (a). **Seam ticket FRE-1232's scope changes** — its AC-2(a) walk now reads a
-configuration file for any Collector in the census instead of fetching an artifact from it. AC-1 and the
+file is not detected by arm (a) — and adversarial review (Codex, round 2) was right that the first drafting
+of this exception overstated its adequacy. It argued that arms (b) and (c) compensate; they do not, because
+AC-2 asserts all of D2 — no gRPC outside loopback/compose, Cloudflare-fronted or not — while (b) and (c)
+observe only the edge. A Collector exporting gRPC directly to a remote endpoint passes both and violates D2.
+The exception is therefore recorded as a **bounded loss**, with the condition that would close it (a
+distribution publishing its effective configuration, which reopens ADR-0129 D5's distro choice) named
+alongside it.
+
+**Arm (b)'s method is also corrected here**, independently of the exception: it previously classified only
+rules "routing into Caddy", leaving a rule pointed straight at `otel-collector:4317` unexamined by (b) and
+invisible to (c), so the failure predicate claimed more than the procedure delivered. A direct-to-service
+arm is added — the shape is not hypothetical, since the tunnel already serves `monitoring` directly from
+`kibana:5601`.
+
+**Seam ticket FRE-1232's scope changes** — its AC-2(a) walk now reads a
+configuration file for any Collector in the census instead of fetching an artifact from it, and its AC-2(b)
+walk classifies direct ingress rules as well as Caddy-routed ones. AC-1 and the
 rest of AC-2 are untouched, and no new seam ticket is created.
 
 ### 2026-08-09 — Accepted

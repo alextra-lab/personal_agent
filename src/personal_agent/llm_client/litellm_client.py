@@ -24,7 +24,7 @@ from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as ge
 
 from personal_agent.llm_client.prompt_identity import (
     PromptIdentity,
-    derive_prompt_identity,
+    derive_fallback_prompt_identity,
 )
 from personal_agent.llm_client.telemetry import (
     emit_model_call_completed,
@@ -780,10 +780,13 @@ class LiteLLMClient:
         _total_tokens = usage.get("total_tokens")
         _cache_read = usage.get("cache_read_input_tokens")
         _cache_creation = usage.get("cache_creation_input_tokens")
-        _identity = prompt_identity or derive_prompt_identity(
+        # FRE-1008: hashes the actual api_messages/tools sent above, not
+        # system_prompt twice — see prompt_identity.py.
+        _identity = prompt_identity or derive_fallback_prompt_identity(
             f"role.{role.value}",
-            static_prefix=system_prompt or "",
-            full_prompt=system_prompt or "",
+            system_prompt=system_prompt,
+            request_messages=api_messages,
+            tools=tools,
         )
         emit_model_call_completed(
             log=log,

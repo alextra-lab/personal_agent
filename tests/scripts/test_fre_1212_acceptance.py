@@ -5,10 +5,12 @@ import json
 import re
 from pathlib import Path
 
+from personal_agent.config.config_guard import repo_root
+
 
 def load_dashboard(name: str) -> dict:
     """Load a Grafana dashboard JSON."""
-    path = Path("/opt/seshat/config/grafana/dashboards") / f"{name}.json"
+    path = repo_root() / "config" / "grafana" / "dashboards" / f"{name}.json"
     with open(path) as f:
         return json.load(f)
 
@@ -17,14 +19,14 @@ def load_datasources() -> dict:
     """Load datasources.yaml as a dict (after YAML parsing)."""
     import yaml
 
-    path = Path("/opt/seshat/config/grafana/provisioning/datasources/datasources.yaml")
+    path = repo_root() / "config" / "grafana" / "provisioning" / "datasources" / "datasources.yaml"
     with open(path) as f:
         return yaml.safe_load(f)
 
 
 def test_ac1_request_traces_deleted():
     """AC-1: request_traces dashboard deleted (3 panels)."""
-    path = Path("/opt/seshat/config/grafana/dashboards/request_traces.json")
+    path = repo_root() / "config" / "grafana" / "dashboards" / "request_traces.json"
     assert not path.exists(), "request_traces.json should be deleted (3 panels all disposed delete)"
 
 

@@ -17,11 +17,10 @@ from personal_agent.config.config_guard import repo_root
 _DATASOURCES_PATH = "config/grafana/provisioning/datasources/datasources.yaml"
 
 # uid -> expected logMessageField, verified against real sampled documents (2026-08-09).
+# FRE-1212: es-captains-captures and es-insights deleted (unreferenced per FRE-1207 audit).
 _EXPECTED_MESSAGE_FIELDS = {
     "es-agent-logs": "message",
-    "es-captains-captures": "user_message",
     "es-captains-reflections": "title",
-    "es-insights": "summary",
     "es-monitors-joinability": "outcome",
     "es-monitors-slm-health": "status",
     "es-monitors-joinability-substrate": "substrate",
@@ -36,7 +35,7 @@ def _load_datasources() -> dict[str, dict[str, object]]:
 class TestLogLineRenderingFields:
     """FRE-1203 part 1 — Explore renders a message column, not the raw _source document."""
 
-    def test_all_seven_es_families_declare_a_verified_message_field(self) -> None:
+    def test_all_five_active_es_families_declare_a_verified_message_field(self) -> None:
         datasources = _load_datasources()
         for uid, expected_field in _EXPECTED_MESSAGE_FIELDS.items():
             json_data = datasources[uid]["jsonData"]
@@ -47,7 +46,7 @@ class TestLogLineRenderingFields:
 
     def test_only_agent_logs_declares_a_level_field(self) -> None:
         """Only agent-logs carries a genuine severity concept (structlog's `level`); the other
-        six families are probe/capture records with no severity field, so declaring one there
+        four families are probe/capture records with no severity field, so declaring one there
         would name a key no record carries — the exact trap the ticket warns against.
         """
         datasources = _load_datasources()

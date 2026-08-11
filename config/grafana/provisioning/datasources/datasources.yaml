@@ -38,16 +38,6 @@ datasources:
           datasourceUid: tempo
           url: '$${__value.raw}'
 
-  - name: Elasticsearch - captains-captures
-    type: elasticsearch
-    uid: es-captains-captures
-    access: proxy
-    url: http://elasticsearch:9200
-    jsonData:
-      index: "agent-captains-captures-*"
-      timeField: "timestamp"
-      logMessageField: "user_message"
-
   - name: Elasticsearch - captains-reflections
     type: elasticsearch
     uid: es-captains-reflections
@@ -57,16 +47,6 @@ datasources:
       index: "agent-captains-reflections-*"
       timeField: "timestamp"
       logMessageField: "title"
-
-  - name: Elasticsearch - insights
-    type: elasticsearch
-    uid: es-insights
-    access: proxy
-    url: http://elasticsearch:9200
-    jsonData:
-      index: "agent-insights-*"
-      timeField: "timestamp"
-      logMessageField: "summary"
 
   # Used by the monitors_joinability_slm dashboard rebuild (AC-6, F13).
   - name: Elasticsearch - monitors-joinability

@@ -1908,6 +1908,15 @@ class AppConfig(BaseSettings):
         default="0 3 * * 0",
         description="Cron expression for the weekly staleness-review brainstem job (default: Sunday 03:00 UTC).",
     )
+    kg_stats_projection_schedule_cron: str = Field(
+        default="0 4 * * *",
+        description="Cron expression for the daily kg_stats Neo4j->Postgres projection job "
+        "(FRE-1210 T6.1; default: every day 04:00 UTC, offset one hour from the weekly "
+        "freshness review's 03:00 to avoid overlapping Neo4j scan load on Sundays). A "
+        "separate job from freshness_review_schedule_cron -- see "
+        "brainstem/jobs/kg_stats_projection.py's module docstring for why they aren't "
+        "the same schedule.",
+    )
     freshness_dormant_entity_proposal_threshold: int = Field(
         default=10,
         ge=1,

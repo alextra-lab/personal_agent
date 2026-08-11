@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""FRE-533 — three-way telemetry reconciliation extractor.
+"""ARCHIVED (FRE-1208) — one-shot FRE-533 audit artifact, kept for provenance only.
+
+Not imported anywhere and not wired into CI. Its dashboard corner is Kibana-NDJSON-shaped and was
+not ported to Grafana; ``scripts/audit/telemetry_surface_check.py`` (the live CI gate) carries its
+own inlined copy of this file's reusable ES-mapping primitives (``flatten_properties``,
+``Template``/``DynamicRule``, the trap-hint regexes) rather than importing them from here.
+
+FRE-533 — three-way telemetry reconciliation extractor.
 
 Read-only audit tool. For every ``agent-*`` Elasticsearch index family it walks all
 three corners of the reconciliation triangle and dumps deterministic JSON

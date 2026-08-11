@@ -3,8 +3,9 @@
 
 Static, no-live-stack guard that closes the **mapping ↔ dashboard** corner pair and lints
 the **mapping** corner for the trap classes that fail *silently* in production (the 2026-05-10
-and FRE-411 incidents). Both corners are committed files, so the floor checks run in a hermetic
-CI job with no Elasticsearch and no Kibana.
+and FRE-411 incidents). Both corners are committed files (ES index templates + Grafana dashboard
+JSON, ``config/grafana/dashboards/`` — FRE-1208 repointed this from Kibana NDJSON), so the floor
+checks run in a hermetic CI job with no live Elasticsearch and no live Grafana.
 
 Floor checks (gate-able):
 
@@ -46,42 +47,162 @@ Usage::
     python scripts/audit/telemetry_surface_check.py --write-baseline scripts/audit/telemetry_surface_baseline.json   # regenerate the allowlist
     python scripts/audit/telemetry_surface_check.py --es-url http://localhost:9200  # + live check
 
-Reuses the validated FRE-533 primitives (``flatten_properties``, ``Template``/``DynamicRule``,
-``Template.expected_type``, the trap-hint regexes) so its classifications match the reconciliation
-table (``docs/research/2026-06-08-fre-533-telemetry-surface-reconciliation.md``).
+Carries its own copy of the validated FRE-533 ES-mapping primitives (``flatten_properties``,
+``Template``/``DynamicRule``, ``Template.expected_type``, the trap-hint regexes) so its
+classifications match the reconciliation table
+(``docs/research/2026-06-08-fre-533-telemetry-surface-reconciliation.md``). Originally imported from
+``scripts/audit/fre533_reconcile.py``; FRE-1208 inlined them when that script was archived (its
+Kibana-specific dashboard parsing had no Grafana equivalent worth porting, but these primitives are
+format-agnostic — they parse the ES *mapping* corner, not the dashboard corner — and this checker
+still needs them live).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from scripts.audit.fre533_reconcile import (
-    FLOAT_HINT,
-    JOIN_KEY,
-    MS_HINT,
-    TEXT_TRAP_HINT,
-    DynamicRule,
-    Template,
-    flatten_properties,
-)
+import yaml  # type: ignore[import-untyped]
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_TEMPLATES_DIR = REPO / "docker" / "elasticsearch"
-DEFAULT_DASHBOARDS_DIR = REPO / "config" / "kibana" / "dashboards"
+DEFAULT_DASHBOARDS_DIR = REPO / "config" / "grafana" / "dashboards"
+DEFAULT_DATASOURCES_PATH = (
+    REPO / "config" / "grafana" / "provisioning" / "datasources" / "datasources.yaml"
+)
 EMIT_DIRS = (
     "src/personal_agent/telemetry",
     "src/personal_agent/captains_log",
     "src/personal_agent/observability",
 )
+
+# ---------------------------------------------------------------------------
+# FRE-533 ES-mapping primitives (inlined — see module docstring)
+# ---------------------------------------------------------------------------
+
+# Field-name hints for trap detection. Word-anchored so "iteration" does NOT match
+# "ratio" (a real false positive seen in the first pass).
+FLOAT_HINT = re.compile(
+    r"(^|_)(cost|usd|ratio|rate|pct|percent|score|confidence|temperature|"
+    r"avg|mean|fraction|probability|threshold)(_|$)",
+    re.I,
+)
+MS_HINT = re.compile(r"(_ms|_latency|_duration|_seconds|_offset)$", re.I)
+JOIN_KEY = {"trace_id", "session_id", "span_id", "run_id", "entry_id"}
+TEXT_TRAP_HINT = re.compile(
+    r"(error|message|content|digest|output|response|prompt|stderr|stdout|"
+    r"traceback|reason|preview|excerpt|snippet|rationale|summary|body)",
+    re.I,
+)
+
+
+def _glob_match(glob: str, value: str) -> bool:
+    """ES simple glob (``*`` only) match."""
+    return re.fullmatch(re.escape(glob).replace(r"\*", ".*"), value) is not None
+
+
+@dataclass
+class DynamicRule:
+    """One ES ``dynamic_templates`` rule, compiled for matching."""
+
+    name: str
+    match_glob: str | None
+    match_regex: re.Pattern[str] | None
+    match_mapping_type: str
+    mapped_type: str
+
+    def matches(self, field_name: str) -> bool:
+        """Whether ``field_name`` (leaf, last path segment) triggers this rule."""
+        leaf = field_name.rsplit(".", 1)[-1]
+        if self.match_regex is not None:
+            return self.match_regex.match(leaf) is not None
+        if self.match_glob is not None:
+            return _glob_match(self.match_glob, leaf)
+        return False
+
+
+def flatten_properties(props: Mapping[str, Any], prefix: str = "") -> dict[str, dict[str, Any]]:
+    """Flatten an ES ``properties`` tree to ``leaf_path -> attrs``.
+
+    Object / nested roots are recorded *and* recursed into. Multi-field ``.keyword``
+    subfields are noted on the parent as ``has_keyword_subfield``.
+
+    Args:
+        props: The ``properties`` mapping from an ES mapping body.
+        prefix: Dotted path prefix for recursion.
+
+    Returns:
+        Mapping of dotted field path to attribute dict (``type``, ``ignore_above``,
+        ``index``, ``enabled``, ``dynamic``, ``has_keyword_subfield``, ``container``).
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for name, body in props.items():
+        path = f"{prefix}{name}"
+        body = body or {}
+        attrs: dict[str, Any] = {
+            "type": body.get("type"),
+            "ignore_above": body.get("ignore_above"),
+            "index": body.get("index", True),
+            "enabled": body.get("enabled", True),
+            "dynamic": body.get("dynamic"),
+            "has_keyword_subfield": "keyword" in (body.get("fields") or {}),
+        }
+        is_container = "properties" in body or body.get("type") in {"object", "nested"}
+        if is_container:
+            attrs["container"] = body.get("type") or "object"
+        out[path] = attrs
+        if "properties" in body and body.get("enabled", True) is not False:
+            out.update(flatten_properties(body["properties"], prefix=f"{path}."))
+    return out
+
+
+@dataclass
+class Template:
+    """Parsed repo template: explicit props + ordered dynamic rules."""
+
+    path: str
+    dynamic: bool | str
+    explicit: dict[str, dict[str, Any]]
+    rules: list[DynamicRule] = field(default_factory=list)
+
+    def expected_type(self, field_name: str, json_kind: str = "string") -> dict[str, Any]:
+        """Resolve the type the template assigns ``field_name``.
+
+        Order: explicit property → first matching dynamic rule → ES default for the
+        JSON kind (when ``dynamic`` is truthy) → unindexed (``dynamic: false``).
+
+        Args:
+            field_name: Dotted leaf field path.
+            json_kind: The JSON value kind seen in source: ``string``, ``long``,
+                ``double``, ``boolean``.
+
+        Returns:
+            Dict with ``via`` (explicit/dynamic-rule/es-default/unindexed) and ``type``.
+        """
+        if field_name in self.explicit:
+            return {"via": "explicit", "type": self.explicit[field_name].get("type")}
+        for rule in self.rules:
+            if rule.match_mapping_type in {"*", json_kind} and rule.matches(field_name):
+                return {"via": f"dynamic:{rule.name}", "type": rule.mapped_type}
+        if self.dynamic is False:
+            return {"via": "unindexed(dynamic:false)", "type": None}
+        es_default = {
+            "string": "text+keyword(default)",
+            "long": "long",
+            "double": "float",
+            "boolean": "boolean",
+        }.get(json_kind, "text+keyword(default)")
+        return {"via": "es-default", "type": es_default}
+
 
 # Join keys that must be exact-match `keyword` (ADR-0074 + ADR-0090 D2 adds task_id).
 JOIN_KEYS: frozenset[str] = frozenset(JOIN_KEY | {"task_id"})
@@ -139,13 +260,15 @@ class LoadedTemplate:
 
 @dataclass(frozen=True)
 class PanelRef:
-    """A single dashboard panel and the fields it references.
+    """A single dashboard panel target and the fields it references.
 
     Args:
-        dashboard: NDJSON filename the panel lives in.
-        title: Panel/visualization title (or saved-object id when untitled).
-        index_pattern_title: The index-pattern title the panel is bound to (family hint).
-        fields: The distinct field references extracted from the panel.
+        dashboard: Dashboard JSON filename the panel lives in.
+        title: Panel title (or ``<untitled>`` when absent).
+        index_pattern_title: The ES index-pattern glob the panel's target datasource resolves to
+            (family hint) — looked up from the target's ``datasource.uid`` against Grafana's
+            provisioned datasources.
+        fields: The distinct field references extracted from the panel target.
     """
 
     dashboard: str
@@ -319,99 +442,108 @@ def resolve_template(title: str, templates: Sequence[LoadedTemplate]) -> LoadedT
 # ---------------------------------------------------------------------------
 
 
-def _walk_field_refs(obj: Any) -> Iterable[str]:
-    """Yield every field reference in a saved object: ``field``/``sourceField`` + saved-search ``columns``."""
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if k in {"field", "sourceField"} and isinstance(v, str):
-                yield v
-            elif k == "columns" and isinstance(v, list):
-                for col in v:
-                    if isinstance(col, str):
-                        yield col
-            else:
-                yield from _walk_field_refs(v)
-    elif isinstance(obj, list):
-        for item in obj:
-            yield from _walk_field_refs(item)
+def load_datasource_index_patterns(path: Path) -> dict[str, str]:
+    """Map Grafana Elasticsearch-datasource ``uid`` → its provisioned index glob.
 
+    Grafana panels identify their target family via ``datasource.uid`` on each target; the ES index
+    glob itself lives one level up, on the datasource provisioning entry (``jsonData.index``), not on
+    the panel. This is the family-resolution equivalent of Kibana's per-panel index-pattern saved
+    object.
 
-def _index_pattern_titles(dashboards_dir: Path) -> dict[str, str]:
-    """Map index-pattern saved-object ``id`` → ``attributes.title`` across all NDJSON files."""
+    Args:
+        path: Path to ``config/grafana/provisioning/datasources/datasources.yaml``.
+
+    Returns:
+        ``{uid: index_pattern}`` for every ``type: elasticsearch`` datasource entry. Non-ES
+        datasources (Tempo, Postgres) are omitted — their targets carry no ``metrics``/
+        ``bucketAggs``/ES-shaped ``query`` for this checker to reconcile.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist (same fail-loud posture as :func:`load_baseline`
+            — a typo'd or missing datasources file must not silently resolve every panel's family to
+            nothing).
+    """
+    if not path.is_file():
+        raise FileNotFoundError(f"Grafana datasources file not found: {path}")
+    data = yaml.safe_load(path.read_text()) or {}
     out: dict[str, str] = {}
-    for ndjson in sorted(dashboards_dir.glob("*.ndjson")):
-        for line in ndjson.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                so = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if so.get("type") == "index-pattern":
-                title = (so.get("attributes") or {}).get("title")
-                if isinstance(so.get("id"), str) and isinstance(title, str):
-                    out[so["id"]] = title
+    for ds in data.get("datasources", []) or []:
+        if ds.get("type") != "elasticsearch":
+            continue
+        uid = ds.get("uid")
+        index = (ds.get("jsonData") or {}).get("index")
+        if isinstance(uid, str) and isinstance(index, str):
+            out[uid] = index
     return out
 
 
-def _panel_index_pattern(so: dict[str, Any], id_to_title: dict[str, str]) -> str | None:
-    """Find the index-pattern title a viz/lens saved object is bound to via its ``references``."""
-    for ref in so.get("references") or []:
-        if isinstance(ref, dict) and ref.get("type") == "index-pattern":
-            title = id_to_title.get(ref.get("id"))
-            if title:
-                return title
-    return None
+# ES Lucene/KQL query-string field references: an identifier immediately followed by `:`, e.g.
+# `event_type: "x"` or `reachable:false`. Every committed target `query` string (55 occurrences
+# across config/grafana/dashboards/*.json as of FRE-1208) follows this simple `field: value` /
+# `field: (v1 or v2)` shape — no `_exists_:`-style meta-syntax — so this narrow extraction is
+# sufficient; it is not a general Lucene parser.
+_QUERY_FIELD_REF = re.compile(r"(?<![\w.])([A-Za-z_][A-Za-z0-9_.]*)\s*:")
 
 
-def parse_panels(dashboards_dir: Path) -> list[PanelRef]:
-    """Parse all visualization/lens panels with their bound index-pattern and field references.
+def _query_field_refs(query: str) -> set[str]:
+    """Extract ``field`` names referenced in a Grafana ES target's Lucene-style ``query`` string."""
+    return set(_QUERY_FIELD_REF.findall(query)) if query else set()
+
+
+def parse_panels(dashboards_dir: Path, datasource_index: Mapping[str, str]) -> list[PanelRef]:
+    """Parse all Elasticsearch panel targets with their resolved family and field references.
 
     Args:
-        dashboards_dir: Directory of committed Kibana NDJSON saved objects.
+        dashboards_dir: Directory of committed Grafana dashboard JSON files
+            (``config/grafana/dashboards``).
+        datasource_index: ``{datasource_uid: index_pattern}`` from
+            :func:`load_datasource_index_patterns`.
 
     Returns:
-        One :class:`PanelRef` per visualization/lens object that references at least one field.
+        One :class:`PanelRef` per panel target whose own ``datasource.type == "elasticsearch"`` and
+        that references at least one field (via ``metrics[].field``, ``bucketAggs[].field``, or its
+        ``query`` string — ADR-0090's full ``{query, metrics[].field, bucketAggs[].field}`` target
+        shape). Non-ES targets (Tempo, Postgres) are skipped.
+
+    Raises:
+        FileNotFoundError: If ``dashboards_dir`` does not exist.
+        ValueError: If an ES-typed target names a ``datasource.uid`` not present in
+            ``datasource_index`` — a stale/typo'd uid must fail the gate, not silently stop checking
+            that family.
     """
-    id_to_title = _index_pattern_titles(dashboards_dir)
+    if not dashboards_dir.is_dir():
+        raise FileNotFoundError(f"Grafana dashboards directory not found: {dashboards_dir}")
     panels: list[PanelRef] = []
-    for ndjson in sorted(dashboards_dir.glob("*.ndjson")):
-        for line in ndjson.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                so = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if so.get("type") not in {"visualization", "lens"}:
-                continue
-            attrs = so.get("attributes") or {}
-            fields: set[str] = set()
-            for key in ("visState", "kibanaSavedObjectMeta"):
-                blob = attrs.get(key)
-                if isinstance(blob, dict):
-                    blob = blob.get("searchSourceJSON")
-                if isinstance(blob, str):
-                    try:
-                        fields.update(_walk_field_refs(json.loads(blob)))
-                    except json.JSONDecodeError:
-                        pass
-            if isinstance(attrs.get("state"), dict):
-                fields.update(_walk_field_refs(attrs["state"]))
-            fields.update(_walk_field_refs(attrs))
-            refs = tuple(sorted(f for f in fields if not f.startswith("_")))
-            if not refs:
-                continue
-            panels.append(
-                PanelRef(
-                    dashboard=ndjson.name,
-                    title=attrs.get("title") or so.get("id") or "<untitled>",
-                    index_pattern_title=_panel_index_pattern(so, id_to_title),
-                    fields=refs,
+    for dash_path in sorted(dashboards_dir.glob("*.json")):
+        data = json.loads(dash_path.read_text())
+        for panel in data.get("panels", []) or []:
+            title = panel.get("title") or "<untitled>"
+            for target in panel.get("targets", []) or []:
+                ds = target.get("datasource") or {}
+                if ds.get("type") != "elasticsearch":
+                    continue
+                uid = ds.get("uid")
+                if not isinstance(uid, str) or uid not in datasource_index:
+                    raise ValueError(
+                        f"{dash_path.name}: panel '{title}' targets unknown Elasticsearch "
+                        f"datasource uid '{uid}' (not provisioned in datasources.yaml)"
+                    )
+                fields: set[str] = {
+                    m["field"]
+                    for m in (*target.get("metrics", []), *target.get("bucketAggs", []))
+                    if isinstance(m, dict) and isinstance(m.get("field"), str)
+                }
+                fields |= _query_field_refs(target.get("query") or "")
+                if not fields:
+                    continue
+                panels.append(
+                    PanelRef(
+                        dashboard=dash_path.name,
+                        title=title,
+                        index_pattern_title=datasource_index[uid],
+                        fields=tuple(sorted(fields)),
+                    )
                 )
-            )
     return panels
 
 
@@ -940,20 +1072,24 @@ class Report:
 def run_checks(
     templates_dir: Path,
     dashboards_dir: Path,
+    datasources_path: Path = DEFAULT_DATASOURCES_PATH,
     es_url: str | None = None,
 ) -> Report:
     """Run all checks and partition findings into floor vs report-only.
 
     Args:
         templates_dir: Directory of ES index templates.
-        dashboards_dir: Directory of Kibana NDJSON saved objects.
+        dashboards_dir: Directory of Grafana dashboard JSON files.
+        datasources_path: Path to Grafana's provisioned ``datasources.yaml`` (resolves each panel
+            target's ``datasource.uid`` to its ES index family).
         es_url: Optional Elasticsearch base URL to enable the live-mapping check.
 
     Returns:
         A :class:`Report` with floor (checks 1–2) and report-only (checks 3–4) findings.
     """
     templates = load_templates(templates_dir)
-    panels = parse_panels(dashboards_dir)
+    datasource_index = load_datasource_index_patterns(datasources_path)
+    panels = parse_panels(dashboards_dir, datasource_index)
     report = Report()
     report.floor.extend(check_mapping_dashboard(panels, templates))
     report.floor.extend(check_trap_lint(templates))
@@ -1089,6 +1225,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--templates-dir", type=Path, default=DEFAULT_TEMPLATES_DIR)
     ap.add_argument("--dashboards-dir", type=Path, default=DEFAULT_DASHBOARDS_DIR)
     ap.add_argument(
+        "--datasources",
+        type=Path,
+        default=DEFAULT_DATASOURCES_PATH,
+        help="Grafana provisioned datasources.yaml (resolves each panel target's ES index family)",
+    )
+    ap.add_argument(
         "--es-url", default=None, help="enable the environment-gated live-mapping check"
     )
     ap.add_argument(
@@ -1105,7 +1247,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
-    report = run_checks(args.templates_dir, args.dashboards_dir, args.es_url)
+    report = run_checks(args.templates_dir, args.dashboards_dir, args.datasources, args.es_url)
 
     if args.write_baseline is not None:
         write_baseline(args.write_baseline, report.floor)

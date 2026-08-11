@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""FRE-535 (B1) — Kibana panel live-verification harness.
+"""ARCHIVED (FRE-1208) — one-shot FRE-535 audit artifact, kept for provenance only.
+
+Not imported anywhere and not wired into CI. Fully self-contained (stdlib only), so it remains
+independently runnable against a live Kibana/ES stack if ever needed for historical comparison, but
+its dashboard corner is Kibana-NDJSON-shaped and was not ported to Grafana.
+
+FRE-535 (B1) — Kibana panel live-verification harness.
 
 Read-only gate for the "no silent-empty panels" acceptance criterion. For every
 visualisation in the repo Kibana NDJSON saved objects (``config/kibana/dashboards``)

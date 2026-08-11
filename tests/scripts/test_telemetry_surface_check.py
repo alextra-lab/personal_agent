@@ -4,6 +4,11 @@
 Covers the floor checks (mapping↔dashboard, trap-class lint) and the report-only/gate behaviour
 with synthetic in-``tmp_path`` templates + dashboards, a frozen gold-regression fixture locking the
 FRE-533 classification semantics, and a smoke test over the committed repo files.
+
+FRE-1208 repointed the dashboard corner from Kibana NDJSON to Grafana panel JSON
+(``panels[].targets[].{query,metrics[].field,bucketAggs[].field}``), resolving each target's ES
+index family via its ``datasource.uid`` against ``config/grafana/provisioning/datasources/
+datasources.yaml`` rather than a Kibana index-pattern saved object.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import yaml
 from scripts.audit.telemetry_surface_check import (
     DEFAULT_DASHBOARDS_DIR,
     DEFAULT_TEMPLATES_DIR,
@@ -24,6 +30,7 @@ from scripts.audit.telemetry_surface_check import (
     diff_baseline,
     finding_key,
     load_baseline,
+    load_datasource_index_patterns,
     load_templates,
     main,
     parse_panels,
@@ -83,29 +90,39 @@ def _write_template(
     path.write_text(json.dumps(body))
 
 
-def _write_dashboard(path: Path, objects: list[dict[str, object]]) -> None:
-    path.write_text("\n".join(json.dumps(o) for o in objects))
+def _write_datasources_yaml(path: Path, index_by_uid: dict[str, str]) -> None:
+    """A minimal Grafana ``datasources.yaml`` — one ``elasticsearch`` entry per ``(uid, index)``."""
+    datasources = [
+        {"uid": uid, "type": "elasticsearch", "jsonData": {"index": index}}
+        for uid, index in index_by_uid.items()
+    ]
+    path.write_text(yaml.safe_dump({"datasources": datasources}))
 
 
-def _viz(title: str, ip_id: str, fields: list[str]) -> dict[str, object]:
-    """A minimal legacy-visualization saved object referencing ``fields`` via terms aggs."""
-    aggs = [{"type": "terms", "params": {"field": f}} for f in fields]
+def _target(
+    uid: str,
+    *,
+    metrics_fields: list[str] | None = None,
+    bucket_fields: list[str] | None = None,
+    query: str = "",
+    ds_type: str = "elasticsearch",
+) -> dict[str, object]:
+    """A minimal Grafana panel target of the shape ``{query, metrics[].field, bucketAggs[].field}``."""
     return {
-        "id": f"viz-{title}",
-        "type": "visualization",
-        "attributes": {"title": title, "visState": json.dumps({"aggs": aggs})},
-        "references": [
-            {
-                "id": ip_id,
-                "name": "kibanaSavedObjectMeta.searchSourceJSON.index",
-                "type": "index-pattern",
-            }
-        ],
+        "refId": "A",
+        "datasource": {"type": ds_type, "uid": uid},
+        "query": query,
+        "metrics": [{"type": "count", "id": "1", "field": f} for f in (metrics_fields or [])],
+        "bucketAggs": [{"type": "terms", "id": "2", "field": f} for f in (bucket_fields or [])],
     }
 
 
-def _index_pattern(ip_id: str, title: str) -> dict[str, object]:
-    return {"id": ip_id, "type": "index-pattern", "attributes": {"title": title}}
+def _panel(title: str, targets: list[dict[str, object]]) -> dict[str, object]:
+    return {"id": 1, "type": "table", "title": title, "targets": targets}
+
+
+def _write_dashboard_json(path: Path, panels: list[dict[str, object]]) -> None:
+    path.write_text(json.dumps({"panels": panels}))
 
 
 # ---------------------------------------------------------------------------
@@ -158,34 +175,144 @@ def test_resolve_captures_title_prefers_captures_over_subagents(tmp_path: Path) 
 
 
 # ---------------------------------------------------------------------------
-# Dashboard parsing
+# Datasource loading (FRE-1208 — the Grafana family-resolution corner)
+# ---------------------------------------------------------------------------
+
+
+def test_load_datasource_index_patterns_filters_non_elasticsearch(tmp_path: Path) -> None:
+    path = tmp_path / "datasources.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "datasources": [
+                    {
+                        "uid": "es-agent-logs",
+                        "type": "elasticsearch",
+                        "jsonData": {"index": "agent-logs*"},
+                    },
+                    {
+                        "uid": "pg-ledger",
+                        "type": "grafana-postgresql-datasource",
+                        "jsonData": {"database": "personal_agent"},
+                    },
+                    {"uid": "tempo", "type": "tempo"},
+                ]
+            }
+        )
+    )
+    assert load_datasource_index_patterns(path) == {"es-agent-logs": "agent-logs*"}
+
+
+def test_load_datasource_index_patterns_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        load_datasource_index_patterns(tmp_path / "nope.yaml")
+
+
+def test_load_real_datasources_yaml_has_agent_logs() -> None:
+    path = REPO / "config" / "grafana" / "provisioning" / "datasources" / "datasources.yaml"
+    result = load_datasource_index_patterns(path)
+    assert result.get("es-agent-logs") == "agent-logs*"
+
+
+# ---------------------------------------------------------------------------
+# Dashboard parsing (FRE-1208 — Grafana panel JSON)
 # ---------------------------------------------------------------------------
 
 
 def test_parse_panels_extracts_fields_and_index_pattern(tmp_path: Path) -> None:
-    _write_dashboard(
-        tmp_path / "d.ndjson",
+    ddir = tmp_path / "dashboards"
+    ddir.mkdir()
+    _write_dashboard_json(
+        ddir / "d.json",
         [
-            _index_pattern("ip1", "agent-logs-*"),
-            _viz("Panel A", "ip1", ["model.keyword", "cost_usd"]),
+            _panel(
+                "Panel A",
+                [
+                    _target(
+                        "es-agent-logs",
+                        metrics_fields=["cost_usd"],
+                        bucket_fields=["model.keyword"],
+                    )
+                ],
+            )
         ],
     )
-    panels = parse_panels(tmp_path)
+    datasource_index = {"es-agent-logs": "agent-logs-*"}
+    panels = parse_panels(ddir, datasource_index)
     assert len(panels) == 1
     assert panels[0].index_pattern_title == "agent-logs-*"
-    assert set(panels[0].fields) == {"model.keyword", "cost_usd"}
+    assert set(panels[0].fields) == {"cost_usd", "model.keyword"}
 
 
-def test_parse_panels_extracts_saved_search_columns(tmp_path: Path) -> None:
-    so = {
-        "id": "search-1",
-        "type": "lens",
-        "attributes": {"title": "Search", "state": {"columns": ["trace_id", "phase.keyword"]}},
-        "references": [{"id": "ip1", "type": "index-pattern"}],
-    }
-    _write_dashboard(tmp_path / "d.ndjson", [_index_pattern("ip1", "agent-logs-*"), so])
-    panels = parse_panels(tmp_path)
-    assert set(panels[0].fields) == {"trace_id", "phase.keyword"}
+def test_parse_panels_extracts_query_field_refs(tmp_path: Path) -> None:
+    # Real committed panels (health_check.json "Fixture Health Check", turn_session_artifact.json
+    # "Turn classification detail") reference fields ONLY via the query string, with empty
+    # metrics/bucketAggs. Dropping query parsing would make them invisible to the checker.
+    ddir = tmp_path / "dashboards"
+    ddir.mkdir()
+    _write_dashboard_json(
+        ddir / "d.json",
+        [
+            _panel(
+                "Health check",
+                [_target("es-agent-logs", query='event_type: "x" and outcome: "success"')],
+            )
+        ],
+    )
+    panels = parse_panels(ddir, {"es-agent-logs": "agent-logs-*"})
+    assert len(panels) == 1
+    assert set(panels[0].fields) == {"event_type", "outcome"}
+
+
+def test_parse_panels_merges_query_and_metric_fields(tmp_path: Path) -> None:
+    ddir = tmp_path / "dashboards"
+    ddir.mkdir()
+    _write_dashboard_json(
+        ddir / "d.json",
+        [
+            _panel(
+                "Mixed",
+                [
+                    _target(
+                        "es-agent-logs",
+                        query='event_type: "cost_gate_committed"',
+                        metrics_fields=["cost_usd"],
+                        bucket_fields=["@timestamp"],
+                    )
+                ],
+            )
+        ],
+    )
+    panels = parse_panels(ddir, {"es-agent-logs": "agent-logs-*"})
+    assert set(panels[0].fields) == {"event_type", "cost_usd", "@timestamp"}
+
+
+def test_parse_panels_skips_non_elasticsearch_targets(tmp_path: Path) -> None:
+    ddir = tmp_path / "dashboards"
+    ddir.mkdir()
+    _write_dashboard_json(
+        ddir / "d.json",
+        [_panel("Trace panel", [_target("tempo", query="trace_id:abc", ds_type="tempo")])],
+    )
+    panels = parse_panels(ddir, {"es-agent-logs": "agent-logs-*"})
+    assert panels == []
+
+
+def test_parse_panels_raises_on_unknown_datasource_uid(tmp_path: Path) -> None:
+    # A stale/typo'd uid must fail CI, not silently stop checking a family.
+    ddir = tmp_path / "dashboards"
+    ddir.mkdir()
+    _write_dashboard_json(
+        ddir / "d.json",
+        [_panel("P", [_target("es-ghost", metrics_fields=["cost_usd"])])],
+    )
+    with pytest.raises(ValueError, match="es-ghost"):
+        parse_panels(ddir, {"es-agent-logs": "agent-logs-*"})
+
+
+def test_parse_panels_raises_on_missing_dashboards_dir(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        parse_panels(tmp_path / "nope", {})
 
 
 # ---------------------------------------------------------------------------
@@ -203,12 +330,14 @@ def _resolve_one(
         rules=_GUARDED_DYNAMIC_RULES,
         **tmpl_kw,  # type: ignore[arg-type]
     )
-    _write_dashboard(
-        tmp_path / "d.ndjson",
-        [_index_pattern("ip1", "agent-logs-*"), _viz("P", "ip1", [ref])],
+    ddir = tmp_path / "dashboards"
+    ddir.mkdir()
+    _write_dashboard_json(
+        ddir / "d.json",
+        [_panel("P", [_target("es-agent-logs", bucket_fields=[ref])])],
     )
     templates = load_templates(tmp_path)
-    panels = parse_panels(tmp_path)
+    panels = parse_panels(ddir, {"es-agent-logs": "agent-logs-*"})
     return check_mapping_dashboard(panels, templates)
 
 
@@ -291,8 +420,8 @@ def test_trap_lint_clean_template_has_no_findings(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _drift_dirs(tmp_path: Path) -> tuple[Path, Path]:
-    """A template+dashboard pair with one deliberate drift in each floor check."""
+def _drift_dirs(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """A template+dashboard+datasources trio with one deliberate drift in each floor check."""
     tdir = tmp_path / "templates"
     ddir = tmp_path / "dashboards"
     tdir.mkdir()
@@ -307,25 +436,38 @@ def _drift_dirs(tmp_path: Path) -> tuple[Path, Path]:
         },  # drift: numeric-as-long
         rules=_GUARDED_DYNAMIC_RULES,
     )
-    _write_dashboard(
-        ddir / "d.ndjson",
+    _write_dashboard_json(
+        ddir / "d.json",
         [
-            _index_pattern("ip1", "agent-logs-*"),
-            _viz("P", "ip1", ["model.keyword"]),
+            _panel("P", [_target("es-agent-logs", bucket_fields=["model.keyword"])])
         ],  # drift: bare-keyword .keyword
     )
-    return tdir, ddir
+    dspath = tmp_path / "datasources.yaml"
+    _write_datasources_yaml(dspath, {"es-agent-logs": "agent-logs-*"})
+    return tdir, ddir, dspath
 
 
 def test_gate_exits_nonzero_on_introduced_drift(tmp_path: Path) -> None:
-    tdir, ddir = _drift_dirs(tmp_path)
-    rc = main(["--gate", "--templates-dir", str(tdir), "--dashboards-dir", str(ddir)])
+    tdir, ddir, dspath = _drift_dirs(tmp_path)
+    rc = main(
+        [
+            "--gate",
+            "--templates-dir",
+            str(tdir),
+            "--dashboards-dir",
+            str(ddir),
+            "--datasources",
+            str(dspath),
+        ]
+    )
     assert rc == 1
 
 
 def test_report_mode_exits_zero_despite_drift(tmp_path: Path) -> None:
-    tdir, ddir = _drift_dirs(tmp_path)
-    rc = main(["--templates-dir", str(tdir), "--dashboards-dir", str(ddir)])
+    tdir, ddir, dspath = _drift_dirs(tmp_path)
+    rc = main(
+        ["--templates-dir", str(tdir), "--dashboards-dir", str(ddir), "--datasources", str(dspath)]
+    )
     assert rc == 0
 
 
@@ -340,11 +482,23 @@ def test_gate_passes_on_clean_surface(tmp_path: Path) -> None:
         properties={"model": {"type": "text", "fields": {"keyword": {"type": "keyword"}}}},
         rules=_GUARDED_DYNAMIC_RULES,
     )
-    _write_dashboard(
-        ddir / "d.ndjson",
-        [_index_pattern("ip1", "agent-logs-*"), _viz("P", "ip1", ["model.keyword"])],
+    _write_dashboard_json(
+        ddir / "d.json",
+        [_panel("P", [_target("es-agent-logs", bucket_fields=["model.keyword"])])],
     )
-    rc = main(["--gate", "--templates-dir", str(tdir), "--dashboards-dir", str(ddir)])
+    dspath = tmp_path / "datasources.yaml"
+    _write_datasources_yaml(dspath, {"es-agent-logs": "agent-logs-*"})
+    rc = main(
+        [
+            "--gate",
+            "--templates-dir",
+            str(tdir),
+            "--dashboards-dir",
+            str(ddir),
+            "--datasources",
+            str(dspath),
+        ]
+    )
     assert rc == 0
 
 
@@ -375,16 +529,22 @@ def test_gold_classification_semantics(tmp_path: Path) -> None:
             "session_id": {"type": "text"},  # gold: join key as text → trap
         },
     )
-    _write_dashboard(
-        ddir / "llm.ndjson",
+    _write_dashboard_json(
+        ddir / "llm.json",
         [
-            _index_pattern("ip1", "agent-logs-*"),
-            _viz("LLM Call Count by Model", "ip1", ["model.keyword"]),
-            _viz("Avg Duration by Phase", "ip1", ["phase.keyword"]),
-            _viz("OK panel", "ip1", ["labelled.keyword"]),
+            _panel(
+                "LLM Call Count by Model",
+                [_target("es-agent-logs", bucket_fields=["model.keyword"])],
+            ),
+            _panel(
+                "Avg Duration by Phase", [_target("es-agent-logs", bucket_fields=["phase.keyword"])]
+            ),
+            _panel("OK panel", [_target("es-agent-logs", bucket_fields=["labelled.keyword"])]),
         ],
     )
-    report = run_checks(tdir, ddir)
+    dspath = tmp_path / "datasources.yaml"
+    _write_datasources_yaml(dspath, {"es-agent-logs": "agent-logs-*"})
+    report = run_checks(tdir, ddir, dspath)
     md = {(f.field, f.klass) for f in report.floor if f.check == "mapping-dashboard"}
     assert ("model.keyword", "keyword-on-bare-keyword") in md
     assert ("phase.keyword", "keyword-on-bare-keyword") in md
@@ -609,13 +769,14 @@ def test_sample_mapping_real_committed_captures_template_is_clean() -> None:
 
 
 def test_real_files_run_hermetically_report_mode() -> None:
-    rc = main([])  # defaults → committed templates + dashboards, report mode
+    rc = main([])  # defaults → committed templates + Grafana dashboards, report mode
     assert rc == 0
 
 
 def test_real_committed_dashboard_keyword_refs_are_clean() -> None:
-    # FRE-555: the two previously-broken `agent-insights` panels are fixed — `insight_type.keyword`
-    # rewritten to the bare keyword `insight_type`, `title.keyword` backed by a new keyword subfield.
+    # FRE-1208: proves the Grafana port's field extraction (metrics/bucketAggs/query, resolved via
+    # the datasources.yaml family map) is clean against the real committed dashboards — zero
+    # mapping-dashboard floor findings, same bar the pre-port Kibana checker held (FRE-555).
     report = run_checks(DEFAULT_TEMPLATES_DIR, DEFAULT_DASHBOARDS_DIR)
     md = {f.field for f in report.floor if f.check == "mapping-dashboard"}
     assert md == set(), md
@@ -635,7 +796,9 @@ def test_real_committed_floor_is_exactly_the_allowlisted_exceptions() -> None:
     # allowlist. Locks completeness: a *new* floor finding, or a wrong check/klass/family/source on
     # a surviving one, fails this test (and CI). FRE-1107 removed metrics_summary.threshold_violations
     # from the baseline — it was never a count (see the corrected template _meta), so the mapping fix
-    # makes this field's finding disappear rather than need re-allowlisting.
+    # makes this field's finding disappear rather than need re-allowlisting. FRE-1208 repointed the
+    # dashboard corner at Grafana JSON; this test proves that port introduced zero new drift (every
+    # baseline entry is still `trap-lint` — the mapping corner alone — not `mapping-dashboard`).
     report = run_checks(DEFAULT_TEMPLATES_DIR, DEFAULT_DASHBOARDS_DIR)
     keys = {finding_key(f) for f in report.floor}
     baseline = REPO / "scripts" / "audit" / "telemetry_surface_baseline.json"
@@ -645,8 +808,10 @@ def test_real_committed_floor_is_exactly_the_allowlisted_exceptions() -> None:
 
 
 def test_real_committed_baseline_makes_gate_pass() -> None:
-    # FRE-555: the committed allowlist makes the hermetic `--gate` exit 0 — the safety net the CI flip
-    # depends on.
+    # FRE-555/FRE-1208: the committed allowlist makes the hermetic `--gate` exit 0 against the
+    # Grafana-ported dashboard corner — the safety net the CI flip depends on, and AC-1's literal
+    # proof (a run with config/kibana/ absent behaves identically, since this reads only
+    # config/grafana/ + docker/elasticsearch/ now).
     baseline = REPO / "scripts" / "audit" / "telemetry_surface_baseline.json"
     rc = main(["--gate", "--baseline", str(baseline)])
     assert rc == 0
@@ -738,7 +903,7 @@ def test_diff_baseline_partitions_new_grandfathered_stale() -> None:
 
 
 def test_gate_with_baseline_suppresses_grandfathered(tmp_path: Path) -> None:
-    tdir, ddir = _drift_dirs(tmp_path)
+    tdir, ddir, dspath = _drift_dirs(tmp_path)
     # Snapshot every current floor finding into a baseline → gate passes.
     bpath = tmp_path / "baseline.json"
     rc_w = main(
@@ -749,6 +914,8 @@ def test_gate_with_baseline_suppresses_grandfathered(tmp_path: Path) -> None:
             str(tdir),
             "--dashboards-dir",
             str(ddir),
+            "--datasources",
+            str(dspath),
         ]
     )
     assert rc_w == 0
@@ -761,13 +928,15 @@ def test_gate_with_baseline_suppresses_grandfathered(tmp_path: Path) -> None:
             str(tdir),
             "--dashboards-dir",
             str(ddir),
+            "--datasources",
+            str(dspath),
         ]
     )
     assert rc == 0
 
 
 def test_gate_with_baseline_still_fails_on_new_drift(tmp_path: Path) -> None:
-    tdir, ddir = _drift_dirs(tmp_path)
+    tdir, ddir, dspath = _drift_dirs(tmp_path)
     # Baseline covers only the missing-meta finding; the numeric + bare-keyword drift stays gated.
     tmpl_path = str(tdir / "index-template.json")
     bpath = tmp_path / "baseline.json"
@@ -793,13 +962,15 @@ def test_gate_with_baseline_still_fails_on_new_drift(tmp_path: Path) -> None:
             str(tdir),
             "--dashboards-dir",
             str(ddir),
+            "--datasources",
+            str(dspath),
         ]
     )
     assert rc == 1
 
 
 def test_write_baseline_roundtrips(tmp_path: Path) -> None:
-    tdir, ddir = _drift_dirs(tmp_path)
+    tdir, ddir, dspath = _drift_dirs(tmp_path)
     bpath = tmp_path / "baseline.json"
     main(
         [
@@ -809,6 +980,8 @@ def test_write_baseline_roundtrips(tmp_path: Path) -> None:
             str(tdir),
             "--dashboards-dir",
             str(ddir),
+            "--datasources",
+            str(dspath),
         ]
     )
     data = json.loads(bpath.read_text())
@@ -828,10 +1001,12 @@ def test_stale_baseline_entry_is_reported_not_gated(tmp_path: Path) -> None:
         properties={"model": {"type": "text", "fields": {"keyword": {"type": "keyword"}}}},
         rules=_GUARDED_DYNAMIC_RULES,
     )
-    _write_dashboard(
-        ddir / "d.ndjson",
-        [_index_pattern("ip1", "agent-logs-*"), _viz("P", "ip1", ["model.keyword"])],
+    _write_dashboard_json(
+        ddir / "d.json",
+        [_panel("P", [_target("es-agent-logs", bucket_fields=["model.keyword"])])],
     )
+    dspath = tmp_path / "datasources.yaml"
+    _write_datasources_yaml(dspath, {"es-agent-logs": "agent-logs-*"})
     bpath = tmp_path / "baseline.json"
     bpath.write_text(
         json.dumps(
@@ -855,6 +1030,8 @@ def test_stale_baseline_entry_is_reported_not_gated(tmp_path: Path) -> None:
             str(tdir),
             "--dashboards-dir",
             str(ddir),
+            "--datasources",
+            str(dspath),
         ]
     )
     assert rc == 0

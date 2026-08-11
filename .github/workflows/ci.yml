@@ -226,12 +226,13 @@ jobs:
           uv run python scripts/check_egress_bypass_rules.py
 
   # ── Telemetry surface reconciliation (ADR-0090 D5, GATE) ─────────────────────
-  # Hermetic static check: ES index templates ↔ Kibana dashboard NDJSON + trap-class
-  # mapping lint. Hard gate (FRE-555): fails on any floor finding whose (check, klass,
-  # family, field, source) key is NOT in the committed allowlist. The baseline grand-
-  # fathers only reviewed-correct exceptions (name-heuristic false positives) + the two
-  # *_ms→float fixes deferred to a reindex follow-up — each annotated with its rationale
-  # in scripts/audit/telemetry_surface_baseline.json. New/changed drift fails the build.
+  # Hermetic static check: ES index templates ↔ Grafana dashboard JSON + trap-class
+  # mapping lint (FRE-1208 repointed the dashboard corner from Kibana NDJSON). Hard gate
+  # (FRE-555): fails on any floor finding whose (check, klass, family, field, source) key
+  # is NOT in the committed allowlist. The baseline grandfathers only reviewed-correct
+  # exceptions (name-heuristic false positives) + the two *_ms→float fixes deferred to a
+  # reindex follow-up — each annotated with its rationale in
+  # scripts/audit/telemetry_surface_baseline.json. New/changed drift fails the build.
   telemetry-surface:
     name: Telemetry surface reconciliation (gate)
     runs-on: ubuntu-24.04

@@ -119,9 +119,23 @@ reachable through the Cloudflare tunnel, so that is a live security-posture chan
    - **The unit dropdown has a trap.** Typing `Dollars` offers both `Currency / Dollars ($)` (→
      `"currencyUSD"`) and `Custom unit: Dollars` (→ a free-text unit). Take the registry entry. Reach for
      a custom unit only when nothing in the registry fits, and say why in the panel description.
-5. **Extract the artifact** — `GET /api/dashboards/uid/<uid>` (or Dashboard settings → JSON Model), and
-   copy the panel object out. A correctly UI-authored panel looks like this — this exact object came out
-   of the loop above, and it is what a good panel minimally carries:
+5. **Extract the artifact via `GET /api/dashboards/uid/<uid>`'s `.dashboard` field — not Dashboard
+   settings → JSON Model.** The two are **not equivalent on 13.1.3**: the JSON Model tab shows the new
+   dashboard-editor's internal v2 schema (`kind: "Panel"`, `elements`, `layout: GridLayout`,
+   `vizConfig`) — a different shape entirely from the classic v1 schema (`panels[]`, `gridPos`,
+   `datasource: {type, uid}`, `schemaVersion`) every committed file in this repo uses and every
+   reader (the Gate 0 jq script, the acceptance tests, file provisioning itself) assumes. The
+   classic REST API still returns v1 — Grafana converts on the way out — so it, not the settings
+   tab, is the correct extraction point (found live, FRE-1209: the settings tab's export silently
+   produces a schema this repo's own tooling cannot read). **Before saving, confirm any Title/Tags
+   edits actually persisted** — editing them in the Settings panel only updates in-browser React
+   state until you click the dashboard's own Save (a title collision with a same-named *provisioned*
+   dashboard already mounted read-only in the authoring instance will reject that save with "A
+   dashboard or a folder with the same name already exists"; use a temporary working title, save,
+   then correct `title`/`uid` by hand in the exported JSON before committing).
+
+   Once extracted, copy the panel object out. A correctly UI-authored panel looks like this — this
+   exact object came out of the loop above, and it is what a good panel minimally carries:
    ```json
    {
      "type": "stat",
@@ -143,9 +157,21 @@ reachable through the Cloudflare tunnel, so that is a live security-posture chan
 6. **Tear the authoring instance down — always, including after a failure:**
    `docker rm -f grafana-authoring`, then confirm with `docker ps`. Leaving it up leaves an
    unauthenticated Editor running.
-7. **Verify on the real instance, not the authoring one.** File provisioning reloads on
-   `updateIntervalSeconds: 30` (`config/grafana/provisioning/dashboards/dashboards.yaml`) — wait for the
-   reload, then render-assert (Step 2).
+7. **Verify on the real instance, not the authoring one — but check which tree it actually mounts
+   first.** File provisioning reloads on `updateIntervalSeconds: 30`
+   (`config/grafana/provisioning/dashboards/dashboards.yaml`), then render-assert (Step 2). **From a
+   worktree** (this repo runs several in parallel — `build`, `build2`, `adrs`, …): confirm with
+   `docker inspect cloud-sim-grafana --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'`
+   before waiting on a reload that can never come. The shared dev stack's `cloud-sim-grafana` mounts
+   `/opt/seshat` (the **primary checkout, main branch**), not any worktree path — a branch's dashboard
+   JSON living only in its worktree is invisible to it no matter how long you wait (found live,
+   FRE-1209: two separate polling loops ran for minutes against a file that could never change).
+   **Fix:** stand up a second, throwaway instance the same way as the authoring one but
+   `GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer` (matching prod, not Editor) and read-only-mount *your own
+   worktree's* `config/grafana/provisioning` and `config/grafana/dashboards` — same network, so the
+   `pg-ledger` / ES datasources still resolve against the real backing stores. Render-assert and
+   raw-data cross-check against that; tear it down after. Only a build session working directly in
+   `/opt/seshat` itself (not a worktree) can skip this and use `cloud-sim-grafana` directly.
 
 **Grafana render-assert** (Kibana's `data-ech-render-complete` does not exist here; these two selector
 names are the vendor's own, from `grafana-e2e-selectors` at the matching tag):

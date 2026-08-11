@@ -195,3 +195,16 @@ class TestTopHeatEntities:
         entities = [_entity(f"e{i}", access_count=i + 1, days_ago=1) for i in range(15)]
         top = _top_heat_entities(entities, cfg, now=_NOW)
         assert len(top) == 10
+
+    def test_oversized_name_truncated_to_column_width(self) -> None:
+        """A name longer than dimension's VARCHAR(255) is truncated, not left to fail on INSERT.
+
+        An unbounded name reaching write_kg_stats would raise on the INSERT and
+        abort the whole run's executemany batch, silently blacking out every
+        other metric for the day -- codex plan-review finding.
+        """
+        cfg = get_settings()
+        long_name = "x" * 300
+        entities = [_entity(long_name, access_count=5, days_ago=1)]
+        top = _top_heat_entities(entities, cfg, now=_NOW)
+        assert len(top[0].dimension) == 255

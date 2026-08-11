@@ -46,6 +46,7 @@ log = get_logger(__name__)
 _BATCH = 500
 _PG_CONNECT_TIMEOUT_SECONDS = 10.0
 _TOP_HEAT_LIMIT = 10
+_MAX_DIMENSION_LENGTH = 255  # kg_stats.dimension is VARCHAR(255) -- migration 0026
 
 # Semantic KG edges only -- mirrors second_brain/quality_monitor.py's
 # check_graph_health convention. Excludes infrastructure/provenance edges
@@ -328,7 +329,11 @@ def _top_heat_entities(
             continue
         age_days = (now - e.last_accessed_at).total_seconds() / 86400.0
         score = e.access_count * math.exp(-lam * max(age_days, 0.0))
-        scored.append((e.name, score))
+        # dimension is VARCHAR(255) (migration 0026); entity names are free-text
+        # LLM output with no length ceiling upstream. An oversized name would
+        # otherwise raise on INSERT and abort the whole run's executemany batch
+        # (write_kg_stats), silently blacking out every other metric for the day.
+        scored.append((e.name[:_MAX_DIMENSION_LENGTH], score))
     scored.sort(key=lambda pair: pair[1], reverse=True)
     return [KgStatRow("top_heat_entity", name, score) for name, score in scored[:_TOP_HEAT_LIMIT]]
 

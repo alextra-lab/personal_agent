@@ -533,8 +533,9 @@ class KgStatModel(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     # server_default mirrors init.sql / migration 0026's ``DEFAULT NOW()`` --
-    # see ConsolidationAttemptModel's comment above for why this matters if
-    # the app boots and calls create_all before the migration has run.
+    # see SessionModelSelectionModel's created_at/updated_at comment above for
+    # why this matters if the app boots and calls create_all before the
+    # migration has run.
     observed_at = Column(
         DateTime(timezone=True), nullable=False, default=datetime.now, server_default=func.now()
     )

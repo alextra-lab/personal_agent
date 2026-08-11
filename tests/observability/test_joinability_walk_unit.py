@@ -645,6 +645,97 @@ async def test_es_captures_and_reflections_query_use_normalized_trace_ids(ctx: A
         )
 
 
+@pytest.mark.asyncio
+async def test_green_when_es_bucket_key_is_dashed_form_of_pg_recorded_trace(ctx: Any) -> None:
+    """AC-1 regression (master Verify Failed, 2026-08-09).
+
+    Live ES documents are not uniformly hex. The joinability probe measured
+    65 distinct dashed trace ids in agent-logs over 24h, one of them
+    (6306095c-a2b4-4f4b-811e-8a640255e115) a trace with 23 api_costs rows —
+    genuinely joined, but still reported as ES-only because only the
+    Postgres-sourced ``trace_ids`` set was normalized (``_walk_api_costs``);
+    the ES ``by_trace`` bucket keys were compared as-is. Normalizing both
+    sides at the collection boundary fixes it.
+    """
+    es = MagicMock()
+    es.search = AsyncMock(
+        return_value={
+            "hits": {"total": {"value": 8}},
+            "aggregations": {
+                "by_trace": {
+                    # TRACE_A arrives from ES already dashed — same shape PG's
+                    # own UUID-column round-trip produces, not the hex form
+                    # every other fixture in this file uses.
+                    "buckets": [{"key": TRACE_A}, {"key": TRACE_B_HEX}],
+                },
+                "no_trace_id": {"doc_count": 0},
+            },
+        }
+    )
+    walk = _build_walk(pg_pool=_green_pg(), es=es, ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "green", doc.orphans
+    assert not any(
+        o.substrate == "elasticsearch.agent_logs" and o.kind == "three_way_mismatch"
+        for o in doc.orphans
+    ), doc.orphans
+
+
+@pytest.mark.asyncio
+async def test_red_when_billed_trace_has_dashed_es_key_and_no_api_costs_row(ctx: Any) -> None:
+    """The cost-bearing bucket must normalize too, not just ``by_trace``.
+
+    A trace that billed and never landed an ``api_costs`` row is the genuine
+    correlation failure remedy 3 exists to catch (FRE-1186). If ES returns
+    that trace's key dashed and only ``by_trace`` were normalized, the
+    (normalized) ``unknown_in_es`` set would never intersect the
+    (unnormalized) ``cost_bearing_trace_ids`` set, silently swallowing the
+    red escalation into the benign yellow bucket instead.
+    """
+    billed_orphan_trace_dashed = str(uuid.uuid4())
+
+    async def _search(*_a: Any, **kw: Any) -> Any:
+        index = str(kw.get("index", ""))
+        if "agent-logs" in index:
+            return {
+                "hits": {"total": {"value": 9}},
+                "aggregations": {
+                    "by_trace": {
+                        "buckets": [
+                            {"key": TRACE_A_HEX},
+                            {"key": TRACE_B_HEX},
+                            {"key": billed_orphan_trace_dashed},
+                        ]
+                    },
+                    "no_trace_id": {"doc_count": 0},
+                    "cost_bearing_trace": {
+                        "by_trace": {"buckets": [{"key": billed_orphan_trace_dashed}]}
+                    },
+                },
+            }
+        return {
+            "hits": {"total": {"value": 8}},
+            "aggregations": {
+                "by_trace": {"buckets": [{"key": TRACE_A_HEX}, {"key": TRACE_B_HEX}]},
+                "no_trace_id": {"doc_count": 0},
+            },
+        }
+
+    es = MagicMock()
+    es.search = AsyncMock(side_effect=_search)
+    walk = _build_walk(pg_pool=_green_pg(), es=es, neo4j=_green_neo4j(), ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+
+    assert doc.outcome == "red"
+    mismatch = next(
+        o
+        for o in doc.orphans
+        if o.substrate == "elasticsearch.agent_logs" and o.kind == "es_pg_mismatch"
+    )
+    expected_normalized = billed_orphan_trace_dashed.replace("-", "").lower()
+    assert mismatch.detail["trace_ids_billed_but_missing_api_costs_row"] == [expected_normalized]
+
+
 # ---------------------------------------------------------------------------
 # Tests — FRE-1186 remedy 3: escalate a genuine correlation failure, not a
 # benign system span (master gate bounce, 2026-08-08)

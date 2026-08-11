@@ -705,14 +705,20 @@ class JoinabilityWalk:
             response.get("aggregations", {}).get("no_trace_id", {}).get("doc_count", 0)
         )
         buckets = response.get("aggregations", {}).get("by_trace", {}).get("buckets", [])
-        es_trace_ids = {b["key"] for b in buckets}
+        # Collection boundary (FRE-1186 AC-1): live ES documents are not
+        # uniformly hex despite FRE-1064's structlog processor writing
+        # format(trace_id, "032x") — 65 distinct dashed trace ids were found
+        # in agent-logs over a single 24h window. Normalizing here, not just
+        # the Postgres-sourced `trace_ids` set, is what makes a genuinely
+        # joined trace compare equal regardless of which form ES stored it in.
+        es_trace_ids = {_normalize_trace_id(b["key"]) for b in buckets}
         cost_bearing_buckets = (
             response.get("aggregations", {})
             .get("cost_bearing_trace", {})
             .get("by_trace", {})
             .get("buckets", [])
         )
-        cost_bearing_trace_ids = {b["key"] for b in cost_bearing_buckets}
+        cost_bearing_trace_ids = {_normalize_trace_id(b["key"]) for b in cost_bearing_buckets}
         status: Literal["green", "yellow", "red", "skipped"] = "green"
         if no_trace_hits > 0:
             status = "red"

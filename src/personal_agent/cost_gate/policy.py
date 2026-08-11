@@ -101,6 +101,12 @@ async def sync_budget_policies_to_db(config: BudgetConfig, pool: asyncpg.Pool) -
     Args:
         config: The loaded, validated ``BudgetConfig``.
         pool: An open asyncpg pool (the caller's ``CostGate.pool``).
+
+    Raises:
+        asyncpg.PostgresError: On a connection failure or a constraint
+            violation (e.g. a duplicate ``(time_window, role)`` pair in
+            ``budget.yaml``). The startup lifespan caller wraps this call
+            fail-open and does not propagate it.
     """
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute("DELETE FROM budget_policies WHERE user_id IS NULL AND provider IS NULL")

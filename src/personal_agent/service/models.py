@@ -518,3 +518,36 @@ class ConsolidationAttemptModel(Base):
             name="consolidation_attempts_trace_id_attempt_number_role_key",
         ),
     )
+
+
+class KgStatModel(Base):
+    """SQLAlchemy model for the kg_stats table.
+
+    Daily Neo4j -> Postgres projection of KG freshness/health metrics
+    (FRE-1210 T6.1 / ADR-0042 / FRE-161). One row per (observed_at,
+    metric_name, dimension). See migrations/0026_kg_stats.sql for the full
+    column-width and uniqueness rationale.
+    """
+
+    __tablename__ = "kg_stats"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    # server_default mirrors init.sql / migration 0026's ``DEFAULT NOW()`` --
+    # see ConsolidationAttemptModel's comment above for why this matters if
+    # the app boots and calls create_all before the migration has run.
+    observed_at = Column(
+        DateTime(timezone=True), nullable=False, default=datetime.now, server_default=func.now()
+    )
+    metric_name = Column(String(64), nullable=False)
+    dimension = Column(String(255), nullable=True)
+    metric_value = Column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "observed_at",
+            "metric_name",
+            "dimension",
+            name="kg_stats_observed_at_metric_name_dimension_key",
+            postgresql_nulls_not_distinct=True,
+        ),
+    )

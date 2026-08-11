@@ -342,8 +342,8 @@ on `pg-ledger`, tagged `grafana-native`, file `config/grafana/dashboards/kg_heal
 |---|---|---|---|
 | 1 | Cold-mass trend | `timeseries`, unit `percentunit`, threshold step at 0.3 | `metric_name='cold_mass_ratio'` over `observed_at` |
 | 2 | Heat histogram | `bargauge` | latest run, `metric_name='access_count_bucket'`, one bar per `dimension` |
-| 3 | Recency × frequency heatmap | `heatmap` (panel-type/config TBD live, see below) | latest run, `metric_name='recency_frequency_cell'` (new combined metric, see below) |
-| 4 | Type × recency heatmap | `heatmap` (panel-type/config TBD live, see below) | latest run, `metric_name='type_recency_cell'` (new combined metric, see below) |
+| 3 | Recency × frequency heatmap | `table` + Grouping-to-matrix transform + colored-background cells (see below) | latest run, `metric_name='recency_frequency_cell'` (new combined metric, see below) |
+| 4 | Type × recency heatmap | `table` + Grouping-to-matrix transform + colored-background cells (see below) | latest run, `metric_name='type_recency_cell'` (new combined metric, see below) |
 | 5 | Node counts by type over time | `timeseries` | `metric_name='entity_count'`, series per `dimension` |
 | 6 | Edge counts by type over time | `timeseries` | `metric_name='relationship_count'`, series per `dimension` |
 | 7 | Embedding reachability trend | `timeseries` | `metric_name='embedding_missing'` over time |
@@ -379,22 +379,25 @@ SELECT split_part(dimension, '|', 1) AS bucket_x,
 FROM kg_stats
 WHERE metric_name = 'recency_frequency_cell' AND observed_at = (SELECT max(observed_at) FROM kg_stats WHERE metric_name = 'recency_frequency_cell')
 ```
-This produces a genuine 3-column Table-format frame (`bucket_x`, `bucket_y`, `cnt`) — the shape a
-pre-bucketed Grafana heatmap needs (the data-plane "HeatmapCells" contract:
-https://grafana.com/developers/dataplane/heatmap). **What remains genuinely open, and is correctly
-left for live UI verification rather than guessed here**: whether the Grafana 13.1 native `heatmap`
-panel type accepts categorical (non-time) X-axis labels from a Table-format Postgres query in
-"already bucketed" mode, or whether these two panels need a different panel type (a `state-timeline`,
-or a `table` with cell-background thresholds simulating a heatmap) to render this shape correctly.
-Codex's research (citing the official heatmap docs) found no repo precedent and flagged genuine
-ambiguity even from the docs alone. **Resolve this during Step 0/1 of the `create-visualization`
-skill** — read the Postgres data-source and heatmap panel docs live (skill § Documentation-first
-already mandates this), build panel 3 in the ephemeral Editor instance first as a spike, and see what
-actually renders before committing to a panel type for both. This is not a deferred design decision
-in the sense the model-routing policy warns against (an unresolved *requirement*) — the requirement
-(a populated, bucket-accurate visual cross-tab) is fully specified; only the Grafana panel-type
-mechanics are appropriately left to the skill's own "verify against the running docs/instance, don't
-guess" discipline, exactly as the skill intends for every panel.
+This produces a genuine 3-column Table-format frame (`bucket_x`, `bucket_y`, `cnt`).
+
+**Resolved (2026-08-11, docs-first per the skill) — panels 3–4 use `table`, not `heatmap`.** Read
+live: the Grafana v13.1 heatmap panel docs
+(https://grafana.com/docs/grafana/v13.1/panels-visualizations/visualizations/heatmap/) describe the
+X-bucket setting as "how the x-axis is split into buckets... a time interval in the Size input" — no
+categorical-axis mode is documented. The data-plane HeatmapCells contract
+(https://grafana.com/developers/dataplane/heatmap) states cell size is "defined by the columns...
+chosen as the xMax|xMin|x and the yMax|yMin|y" and its own worked example types `x` as **Time** and
+`y` as **Number** — neither axis in `recency_frequency_cell` (recency bucket × access bucket) or
+`type_recency_cell` (entity type × recency bucket) is a genuine timestamp, so the native `heatmap`
+panel's documented contract doesn't fit either cross-tab. Instead: a `table` panel with the
+**"Grouping to matrix" transform** (Grafana v13.1 transform docs — Column/Row/Cell-value fields,
+`https://grafana.com/docs/grafana/v13.1/panels-visualizations/query-transform-data/transform-data/`)
+reshapes the 3-column `(bucket_x, bucket_y, cnt)` frame into a wide grid, and the table panel's
+documented **Colored background** cell display mode ("If thresholds, value mappings, or color
+schemes are set, the cell background is displayed in the appropriate color") renders that grid as a
+heatmap-style color grade. This is Grafana's own documented tool for a categorical×categorical
+matrix, not an improvised workaround.
 
 ### Dashboard description caveats (AC-5, and codex finding 4.3's "near-empty" scoping fix)
 

@@ -709,6 +709,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             run_counter_snapshotter,
             run_reaper,
             set_default_gate,
+            sync_budget_policies_to_db,
             validate_role_totality,
         )
 
@@ -722,6 +723,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         cost_gate = CostGate(config=budget_config, db_url=settings.database_url)
         await cost_gate.connect()
         set_default_gate(cost_gate)
+        # Mirror budget.yaml's caps into budget_policies (FRE-1209): nothing
+        # else writes to that table, so it sat permanently empty and defeated
+        # the Cost & Budget dashboard's utilisation panel. Fail-open —
+        # enforcement reads the YAML directly (unchanged) and does not
+        # consult this table, so a DB hiccup here must not block startup.
+        try:
+            assert cost_gate.pool is not None
+            await sync_budget_policies_to_db(budget_config, cost_gate.pool)
+        except Exception as sync_exc:  # noqa: BLE001
+            log.error(
+                "budget_policies_sync_failed",
+                error=str(sync_exc),
+                remedy=(
+                    "budget_policies audit table may be stale; enforcement is "
+                    "unaffected (still YAML-driven)."
+                ),
+                exc_info=True,
+            )
         cost_gate_reaper_task = asyncio.create_task(run_reaper(cost_gate))
         # Cap-utilization snapshot emitter (FRE-547): mirrors budget_counters to
         # ES so the Cost & Budget dashboard can render utilization vs caps. The

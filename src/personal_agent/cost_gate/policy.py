@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import asyncpg  # type: ignore[import-untyped]
 import structlog
 from pydantic import ValidationError
 
@@ -80,3 +81,40 @@ def load_budget_config(path: Path | str | None = None) -> BudgetConfig:
         version=config.version,
     )
     return config
+
+
+async def sync_budget_policies_to_db(config: BudgetConfig, pool: asyncpg.Pool) -> None:
+    """Mirror ``budget.yaml``'s caps into ``budget_policies`` (v1 scope only).
+
+    ``budget_policies`` exists for audit and v2 per-user/per-provider extensions
+    (module docstring above), but nothing wrote to it before this function —
+    it sat permanently empty, which defeats any dashboard panel joining
+    against it (FRE-1209). Call once at app startup, after the config that
+    drives enforcement is loaded and validated; the gate itself keeps reading
+    the YAML directly and does not consult this table, so a failure here
+    cannot affect enforcement.
+
+    A full replace inside one transaction, not a merge: a cap removed from
+    YAML must not linger in the DB as a stale, unenforced row that a human
+    reading the audit table would mistake for still active.
+
+    Args:
+        config: The loaded, validated ``BudgetConfig``.
+        pool: An open asyncpg pool (the caller's ``CostGate.pool``).
+
+    Raises:
+        asyncpg.PostgresError: On a connection failure or a constraint
+            violation (e.g. a duplicate ``(time_window, role)`` pair in
+            ``budget.yaml``). The startup lifespan caller wraps this call
+            fail-open and does not propagate it.
+    """
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute("DELETE FROM budget_policies WHERE user_id IS NULL AND provider IS NULL")
+        await conn.executemany(
+            """
+            INSERT INTO budget_policies (time_window, role, cap_usd)
+            VALUES ($1, $2, $3)
+            """,
+            [(cap.time_window, cap.role, cap.cap_usd) for cap in config.caps],
+        )
+    log.info("budget_policies_synced", caps=len(config.caps))

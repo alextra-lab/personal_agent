@@ -109,59 +109,7 @@
         }
       ]
     },
-    {
-      "id": 3,
-      "type": "timeseries",
-      "title": "Consolidation activity",
-      "description": "Count of scheduler consolidation lifecycle events over time (consolidation_triggered / consolidation_started / consolidation_completed), broken down by stage. Query unchanged from the original (it was already correct) -- this is a value-confirm pass. Verified live: all three stages are alive today (960/960/1878 docs respectively, last emitted 2026-07-01T11:40), and triggered/started counts match 1:1 (960=960) while completed is roughly 2x (1878) -- consistent with consolidation completing more than once per trigger cycle. No staleness or mismatch found; consolidation is running normally.",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 16
-      },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
-          },
-          "query": "event_type: (consolidation_triggered or consolidation_completed or consolidation_started)",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "event_type",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
-              }
-            },
-            {
-              "type": "date_histogram",
-              "id": "2",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
+{
       "id": 4,
       "type": "timeseries",
       "title": "State transitions",

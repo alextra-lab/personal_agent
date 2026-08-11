@@ -153,49 +153,7 @@
         }
       ]
     },
-    {
-      "id": 4,
-      "type": "stat",
-      "title": "Artifact envelope + gate status summary",
-      "description": "Single-row scorecard: artifact_gate_decision outcomes + artifact_envelope_integrity probe outcomes (ADR-0089 D5). Note: agent-logs-2026.06.17 sits near the ES 300-field mapping ceiling -- 1 of 14 gate_decision docs on that day has gate_decision silently dropped from the mapping (see PR #295 delegation_outcomes retire-proposal for the systemic issue); it is counted here under \"Gate: other/missing\" (FRE-703 C4 redesign).",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 24
-      },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
-          },
-          "query": "",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "date_histogram",
-              "id": "99",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
+{
       "id": 5,
       "type": "table",
       "title": "Artifact envelope detail (join on artifact_id)",

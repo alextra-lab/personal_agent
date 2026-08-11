@@ -266,10 +266,11 @@ class TestAC6DashboardPanelsExecuteCleanly:
     """AC-6 — every dashboard in the FRE-533 inventory has a named Grafana equivalent whose
     query executes against its datasource without a query or datasource error.
 
-    Walks every provisioned dashboard (config/grafana/dashboards/*.json — 15, per the corrected
-    inventory in the FRE-1072 plan's Revision 2 §0) and re-issues each panel's own target through
-    Grafana's /api/ds/query, the same execution path a rendered panel uses. Emptiness is not a
-    failure per the ticket's own AC-6 text; only a query/datasource error is.
+    Walks every provisioned dashboard (config/grafana/dashboards/*.json — 14, per the corrected
+    inventory in the FRE-1072 plan's Revision 2 §0, decremented by FRE-1209's `cost_budget` rebuild)
+    and re-issues each panel's own target through Grafana's /api/ds/query, the same execution path
+    a rendered panel uses. Emptiness is not a failure per the ticket's own AC-6 text; only a
+    query/datasource error is.
     """
 
     def test_every_panel_query_executes_without_error(self) -> None:
@@ -284,9 +285,11 @@ class TestAC6DashboardPanelsExecuteCleanly:
         dashboards = r.json()
         # "rebuilt-from-kibana", not just "fre-1072" — the health_check.json canary (AC-5) also
         # carries the fre-1072 tag but is explicitly not part of the AC-6 rebuild inventory.
+        # FRE-1209 dropped this tag from cost_budget.json (rebuilt onto Postgres, tagged
+        # grafana-native instead), decrementing the count from 15 to 14.
         ours = [d for d in dashboards if "rebuilt-from-kibana" in d.get("tags", [])]
-        assert len(ours) == 15, (
-            f"expected 15 FRE-1072 dashboards provisioned, found {len(ours)}: {[d['title'] for d in ours]}"
+        assert len(ours) == 14, (
+            f"expected 14 FRE-1072 dashboards provisioned, found {len(ours)}: {[d['title'] for d in ours]}"
         )
 
         now_ms = int(time.time() * 1000)

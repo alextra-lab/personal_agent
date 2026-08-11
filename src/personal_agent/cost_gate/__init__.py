@@ -10,6 +10,9 @@ Public surface:
 - :class:`BudgetConfig`, :class:`RoleConfig`, :class:`CapEntry` — frozen
   Pydantic models loaded from ``config/governance/budget.yaml``
 - :func:`load_budget_config` — load the YAML into a ``BudgetConfig``
+- :func:`sync_budget_policies_to_db` — mirror the loaded caps into
+  ``budget_policies`` (FRE-1209); call once at startup so the audit table
+  this module's docstring promises is actually populated
 - :func:`run_reaper` — long-running task to spawn from the FastAPI lifespan
 - :func:`run_counter_snapshotter` — long-running task that snapshots
   ``budget_counters`` to ES on a fixed cadence (FRE-547) for the cap-utilization
@@ -33,7 +36,11 @@ The ``DenialReason`` enum is shared with the FRE-307 telemetry layer.
 from __future__ import annotations
 
 from personal_agent.cost_gate.gate import RESERVATION_TTL_SECONDS, CostGate
-from personal_agent.cost_gate.policy import BudgetConfigError, load_budget_config
+from personal_agent.cost_gate.policy import (
+    BudgetConfigError,
+    load_budget_config,
+    sync_budget_policies_to_db,
+)
 from personal_agent.cost_gate.reaper import DEFAULT_REAPER_INTERVAL_SECONDS, run_reaper
 from personal_agent.cost_gate.role_map import (
     BUDGET_ROLE_BY_FACTORY_NAME,
@@ -129,5 +136,6 @@ __all__ = [
     "run_reaper",
     "run_silence_monitor",
     "set_default_gate",
+    "sync_budget_policies_to_db",
     "validate_role_totality",
 ]

@@ -128,6 +128,26 @@ systemctl status seshat-dispatch-orchestrator
   cc-<stream>`), answer any waiting prompt, or investigate a crash. The
   orchestrator never advances on silence — it advances only on the durable
   open-PR + `In Review` evidence.
+- **`dispatch_seat_wedged`** (FRE-922/FRE-1077) → this **seat** shows the
+  suspected-wedge signature: Remote Control reports `busy` while the pane is
+  idle — typically an orphaned `run_in_background` poller (CC #61568) holding
+  the seat's RC status busy with nothing actually running. Past N consecutive
+  ticks (default 2; `--wedge-ticks`) the anomaly surfaces: a greppable warning
+  every tick, plus a master ping on the crossing tick and then **again every
+  `--wedge-renotify-ticks` ticks (default 12) for as long as the wedge
+  persists** — a wedge does not self-clear, so the alert keeps escalating
+  rather than firing once and going silent (the FRE-1077 fix; the 2026-07-31
+  incident produced 186 silent-but-warned ticks over 15+ hours under the old
+  one-shot design). Attach to the seat (`tmux attach -t cc-<stream>`), find and
+  kill the orphaned process holding it busy (check for a background loop whose
+  own grep pattern matches its command line — the same substring-matching trap
+  that removed the pytest-lock pre-tool hook on 2026-07-18), then verify RC
+  reports the seat idle. Surfacing only — the daemon never kills a process
+  itself; the stream stays eligible and dispatches the moment the wedge
+  clears. The count and notification schedule are **persisted**
+  (`telemetry/dispatch_wedge_state.json`, `--wedge-state-file`), so a
+  dispatcher restart mid-wedge resumes rather than losing or re-arming the
+  alarm.
 - **`dispatch_held_too_long`** (FRE-924) → a **surfaced manual card** (a KEEP /
   manual-model-required continuation, or a `delivery-failed` / `seat-unhealthy`
   card) has awaited the owner past the escalation threshold (default 30 min;

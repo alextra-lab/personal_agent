@@ -22,23 +22,28 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
 from scripts.dispatch.next_resolver import IssueSnapshot
 from scripts.dispatch.orchestrator import (
     DEFAULT_SEAT_FAILURE_THRESHOLD,
     DEFAULT_STALL_TIMEOUT_S,
+    DEFAULT_WEDGE_RENOTIFY_TICKS,
     MAX_DELIVERY_ATTEMPTS,
     DispatchRecord,
+    WedgeState,
     _record_for_result,
     check_preconditions,
     decide,
     is_anthropic_endpoint,
     load_state,
+    load_wedge_state,
     main,
     model_for_labels,
     rc_server_alive,
     run_once,
+    save_wedge_state,
 )
 
 _BUILD1_WORKTREE = ".claude/worktrees/build"
@@ -561,7 +566,8 @@ def test_run_once_stall_notifies_once() -> None:
     assert notifier2.events == []
 
 
-# --- FRE-922: suspected-wedge detection (surface, never kill) ---------------
+# --- FRE-922/FRE-1077: suspected-wedge detection (surface, never kill; keep --
+# --- escalating, and survive a restart, once surfaced) ----------------------
 
 _BUILD_WORKTREE = "/opt/seshat/.claude/worktrees/build"
 _WEDGE_IDLE_PANE = "some earlier output\n❯\n"
@@ -613,10 +619,15 @@ class _CapturingLogger:
         self.warnings.append((event, fields))
 
 
-def _run_wedge(runner: _RecordingRunner, ticks: int, wedge_ticks: int = 2):  # type: ignore[no-untyped-def]
+def _run_wedge(
+    runner: _RecordingRunner,
+    ticks: int,
+    wedge_ticks: int = 2,
+    wedge_renotify_ticks: int = DEFAULT_WEDGE_RENOTIFY_TICKS,
+):  # type: ignore[no-untyped-def]
     board = [_issue("FRE-1", "Approved", _OPUS)]
     state: dict[str, DispatchRecord] = {}
-    wedge_counts: dict[str, int] = {}
+    wedge_state: dict[str, WedgeState] = {}
     notifier = _Notifier()
     logger = _CapturingLogger()
     for _ in range(ticks):
@@ -633,10 +644,11 @@ def _run_wedge(runner: _RecordingRunner, ticks: int, wedge_ticks: int = 2):  # t
             logger=logger,
             execute=True,
             rc_alive=lambda: True,
-            wedge_counts=wedge_counts,
+            wedge_state=wedge_state,
             wedge_ticks=wedge_ticks,
+            wedge_renotify_ticks=wedge_renotify_ticks,
         )
-    return state, wedge_counts, notifier, logger
+    return state, wedge_state, notifier, logger
 
 
 def _no_termination_argv(runner: _RecordingRunner) -> bool:
@@ -653,11 +665,12 @@ def test_wedge_is_surfaced_past_threshold_and_never_killed() -> None:
     stays eligible (no record), and NO process-termination command is ever issued.
     """
     runner = _WedgeRunner(pane=_WEDGE_IDLE_PANE)
-    # wedge_ticks=2 → tick3 is the crossing tick; a 4th tick must not re-notify.
-    state, wedge_counts, notifier, logger = _run_wedge(runner, ticks=4, wedge_ticks=2)
+    # wedge_ticks=2 → tick3 is the crossing tick; a 4th tick (default renotify
+    # cadence, 12) must not re-notify yet.
+    state, wedge_state, notifier, logger = _run_wedge(runner, ticks=4, wedge_ticks=2)
 
     wedge_events = [e for e in notifier.events if e[0] == "dispatch_seat_wedged"]
-    assert len(wedge_events) == 1, "master is pinged exactly once per wedge episode"
+    assert len(wedge_events) == 1, "master is pinged once on the crossing tick"
     assert wedge_events[0][1]["stream"] == "build1"
     assert wedge_events[0][1]["ticket"] == "FRE-1"
     # The distinct anomaly log fires on every post-threshold tick (ticks 3 and 4).
@@ -666,9 +679,37 @@ def test_wedge_is_surfaced_past_threshold_and_never_killed() -> None:
     # The stream is never marked in-flight — it must dispatch the moment the
     # wedge clears — and the counter kept climbing.
     assert "build1" not in state
-    assert wedge_counts["build1"] == 4
+    assert wedge_state["build1"].count == 4
+    assert wedge_state["build1"].last_notified_count == 3
     # AC-2: detection + surfacing ONLY — the daemon never terminates a process.
     assert _no_termination_argv(runner)
+
+
+def test_wedge_renotifies_on_a_schedule_past_the_crossing_tick() -> None:
+    """FRE-1077 AC-1: a persisting wedge keeps escalating, not just crossing once.
+
+    A wedge does not self-clear — the seat is stuck by construction — so the
+    single crossing-tick ping (FRE-922) went silent for the rest of the
+    incident: 186 further post-crossing ticks produced zero further pings.
+    Master must be re-notified on a defined schedule for as long as the wedge
+    persists. This test explicitly runs PAST the second notification point —
+    a test that stops at the crossing tick (the old coverage) still passes
+    today's already-broken behavior, so it proves nothing about this AC.
+    """
+    runner = _WedgeRunner(pane=_WEDGE_IDLE_PANE)
+    # wedge_ticks=2, renotify every 3 ticks → crossing at count 3, then 6, then 9.
+    _state, wedge_state, notifier, logger = _run_wedge(
+        runner, ticks=10, wedge_ticks=2, wedge_renotify_ticks=3
+    )
+
+    wedge_events = [e for e in notifier.events if e[0] == "dispatch_seat_wedged"]
+    notified_counts = [e[1]["consecutive_ticks"] for e in wedge_events]
+    assert notified_counts == [3, 6, 9], "re-notified on schedule, not once"
+    # The greppable per-tick warning still fires on every post-threshold tick.
+    wedge_logs = [w for w in logger.warnings if w[0] == "dispatch_seat_wedged"]
+    assert len(wedge_logs) == 8  # ticks 3..10
+    assert wedge_state["build1"].count == 10
+    assert wedge_state["build1"].last_notified_count == 9
 
 
 def test_wedge_ping_is_once_per_episode_and_re_fires_on_a_new_episode() -> None:
@@ -681,7 +722,7 @@ def test_wedge_ping_is_once_per_episode_and_re_fires_on_a_new_episode() -> None:
     """
     runner = _WedgeRunner(pane=_WEDGE_IDLE_PANE)
     state: dict[str, DispatchRecord] = {}
-    wedge_counts: dict[str, int] = {}
+    wedge_state: dict[str, WedgeState] = {}
     notifier = _Notifier()
 
     def _one_tick() -> None:
@@ -698,7 +739,7 @@ def test_wedge_ping_is_once_per_episode_and_re_fires_on_a_new_episode() -> None:
             logger=_NullLogger(),
             execute=True,
             rc_alive=lambda: True,
-            wedge_counts=wedge_counts,
+            wedge_state=wedge_state,
             wedge_ticks=2,
         )
 
@@ -707,7 +748,7 @@ def test_wedge_ping_is_once_per_episode_and_re_fires_on_a_new_episode() -> None:
     assert sum(e[0] == "dispatch_seat_wedged" for e in notifier.events) == 1
     runner._pane = _WEDGE_BUSY_PANE  # seat genuinely busy → wedge clears, count reset
     _one_tick()
-    assert wedge_counts.get("build1", 0) == 0
+    assert "build1" not in wedge_state
     runner._pane = _WEDGE_IDLE_PANE  # episode 2: re-wedges
     for _ in range(3):
         _one_tick()
@@ -723,11 +764,11 @@ def test_genuinely_busy_seat_is_never_mistaken_for_a_wedge() -> None:
     stream stays eligible). A real in-flight build is never surfaced as wedged.
     """
     runner = _WedgeRunner(pane=_WEDGE_BUSY_PANE)
-    state, wedge_counts, notifier, logger = _run_wedge(runner, ticks=5, wedge_ticks=2)
+    state, wedge_state, notifier, logger = _run_wedge(runner, ticks=5, wedge_ticks=2)
 
     assert not any(e[0] == "dispatch_seat_wedged" for e in notifier.events)
     assert not any(w[0] == "dispatch_seat_wedged" for w in logger.warnings)
-    assert wedge_counts.get("build1", 0) == 0  # reset every tick
+    assert "build1" not in wedge_state  # reset every tick
     assert "build1" not in state  # generic seat-busy still writes no record
     assert _no_termination_argv(runner)
 
@@ -742,7 +783,7 @@ def test_stale_wedge_count_is_reset_on_a_non_wedge_decision() -> None:
     """
     runner = _RecordingRunner()
     board = [_issue("FRE-786", "In Progress", _OPUS)]  # a launched record → await
-    wedge_counts = {"build1": 5}
+    wedge_state = {"build1": WedgeState(count=5)}
     run_once(
         ["build1"],
         {"build1": _launched_record()},
@@ -756,10 +797,10 @@ def test_stale_wedge_count_is_reset_on_a_non_wedge_decision() -> None:
         logger=_NullLogger(),
         execute=True,
         rc_alive=lambda: True,
-        wedge_counts=wedge_counts,
+        wedge_state=wedge_state,
         wedge_ticks=2,
     )
-    assert "build1" not in wedge_counts  # cleared
+    assert "build1" not in wedge_state  # cleared
 
 
 def test_blocked_launch_tick_resets_a_stale_wedge_count() -> None:
@@ -769,7 +810,7 @@ def test_blocked_launch_tick_resets_a_stale_wedge_count() -> None:
     """
     runner = _RecordingRunner()
     board = [_issue("FRE-1", "Approved", _OPUS)]
-    wedge_counts = {"build1": 4}
+    wedge_state = {"build1": WedgeState(count=4)}
     run_once(
         ["build1"],
         {},
@@ -784,10 +825,10 @@ def test_blocked_launch_tick_resets_a_stale_wedge_count() -> None:
         execute=True,
         rc_alive=lambda: True,
         kill_switch_engaged=lambda: True,  # blocks the launch
-        wedge_counts=wedge_counts,
+        wedge_state=wedge_state,
         wedge_ticks=2,
     )
-    assert "build1" not in wedge_counts
+    assert "build1" not in wedge_state
     assert not any("new-session" in c for c in runner.calls)  # never launched
 
 
@@ -795,7 +836,7 @@ def test_duplicate_streams_do_not_double_increment_the_wedge_counter() -> None:
     """Codex-minor: a repeated ``--streams`` value must count a stream once/tick."""
     runner = _WedgeRunner(pane=_WEDGE_IDLE_PANE)
     board = [_issue("FRE-1", "Approved", _OPUS)]
-    wedge_counts: dict[str, int] = {}
+    wedge_state: dict[str, WedgeState] = {}
     run_once(
         ["build1", "build1", "build1"],  # duplicated
         {},
@@ -809,10 +850,136 @@ def test_duplicate_streams_do_not_double_increment_the_wedge_counter() -> None:
         logger=_NullLogger(),
         execute=True,
         rc_alive=lambda: True,
-        wedge_counts=wedge_counts,
+        wedge_state=wedge_state,
         wedge_ticks=2,
     )
-    assert wedge_counts["build1"] == 1  # one increment for one tick, not three
+    assert wedge_state["build1"].count == 1  # one increment for one tick, not three
+
+
+def test_wedge_state_persists_across_a_simulated_restart(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """FRE-1077 AC-2: the counter and the notification schedule survive a restart.
+
+    ``main()``'s ``tick()`` already reloads ``dispatch_state.json`` from disk on
+    every tick — doing the same for the wedge state makes restart-safety fall
+    out for free, so the test proves it directly: persist to a real file via
+    ``save_wedge_state``, discard the in-memory dict entirely (the "restart"),
+    reload via ``load_wedge_state``, and keep ticking.
+
+    The restart lands precisely mid-schedule — after the first notification
+    (count 3, ``last_notified_count == 3``) but before the next one is due
+    (count 6) — because that is the only placement that actually distinguishes
+    correct behavior from both failure modes: a restart at a just-notified tick
+    or long past the next due tick can't tell "resumed" from "reset to zero" or
+    "reset the schedule."
+    """
+    runner = _WedgeRunner(pane=_WEDGE_IDLE_PANE)
+    path = tmp_path / "wedge_state.json"
+    wedge_state: dict[str, WedgeState] = {}
+    notifier = _Notifier()
+
+    def _one_tick(state: dict[str, WedgeState]) -> None:
+        run_once(
+            ["build1"],
+            {},
+            now=0.0,
+            stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+            board_fetcher=lambda s: [_issue("FRE-1", "Approved", _OPUS)],
+            reconcile=lambda _t: None,
+            runner=runner,
+            notifier=notifier,
+            persist=lambda st: None,
+            logger=_NullLogger(),
+            execute=True,
+            rc_alive=lambda: True,
+            wedge_state=state,
+            wedge_ticks=2,
+            wedge_renotify_ticks=3,
+            persist_wedge=lambda st: save_wedge_state(path, st),
+        )
+
+    for _ in range(4):  # count -> 4; one notification fired at count 3
+        _one_tick(wedge_state)
+    assert sum(e[0] == "dispatch_seat_wedged" for e in notifier.events) == 1
+    assert wedge_state["build1"] == WedgeState(count=4, last_notified_count=3)
+
+    # --- simulated restart: the in-memory dict is gone; reload from disk ----
+    resumed_state = load_wedge_state(path)
+    assert resumed_state["build1"] == WedgeState(count=4, last_notified_count=3)
+
+    _one_tick(resumed_state)  # count -> 5; 5 - 3 = 2 < 3, not due yet
+    assert sum(e[0] == "dispatch_seat_wedged" for e in notifier.events) == 1, (
+        "the restart itself must not spuriously re-arm or double-fire a notification"
+    )
+    assert resumed_state["build1"].count == 5
+
+    _one_tick(resumed_state)  # count -> 6; 6 - 3 = 3 >= 3, due
+    assert sum(e[0] == "dispatch_seat_wedged" for e in notifier.events) == 2, (
+        "progress and the schedule both survived the restart"
+    )
+    assert resumed_state["build1"] == WedgeState(count=6, last_notified_count=6)
+
+
+def test_wedge_state_file_round_trips(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Persisted wedge state survives a save/load round trip.
+
+    A corrupt or invariant-violating record is dropped rather than
+    crash-looping the daemon (mirroring ``load_state``'s defensive handling of
+    a bad ``attempts`` field).
+    """
+    path = tmp_path / "wedge_state.json"
+    save_wedge_state(path, {"build1": WedgeState(count=5, last_notified_count=3)})
+    assert load_wedge_state(path) == {"build1": WedgeState(count=5, last_notified_count=3)}
+
+    # Absent file → empty, not an error.
+    assert load_wedge_state(tmp_path / "missing.json") == {}
+
+    # A non-int count is dropped (same shape as the DispatchRecord.attempts guard).
+    path.write_text(json.dumps({"build1": {"count": "oops", "last_notified_count": 0}}))
+    assert load_wedge_state(path) == {}
+
+    # A structurally-valid-but-invariant-violating record must also be dropped:
+    # last_notified_count > count would leave `count - last_notified_count`
+    # permanently negative, silently suppressing the re-notify schedule forever
+    # (the exact failure this design exists to eliminate) — flagged in codex
+    # plan-review.
+    path.write_text(json.dumps({"build1": {"count": 3, "last_notified_count": 9}}))
+    assert load_wedge_state(path) == {}
+
+
+def test_main_wires_the_new_wedge_flags_through(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
+    """The CLI flags must reach the loader, not silently fall back to the default path."""
+    import scripts.dispatch.orchestrator as orch
+
+    monkeypatch.setattr(orch, "load_linear_key", lambda: "key")
+    monkeypatch.setattr(orch, "fetch_board", lambda stream, key: [])
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+
+    seen_paths: list[Path] = []
+    original_load = orch.load_wedge_state
+
+    def _spy_load(path: Path) -> dict[str, WedgeState]:
+        seen_paths.append(path)
+        return original_load(path)
+
+    monkeypatch.setattr(orch, "load_wedge_state", _spy_load)
+
+    wedge_state_file = tmp_path / "custom_wedge_state.json"
+    state_file = tmp_path / "state.json"
+    rc = main(
+        [
+            "--once",
+            "--state-file",
+            str(state_file),
+            "--wedge-state-file",
+            str(wedge_state_file),
+            "--wedge-renotify-ticks",
+            "5",
+            "--streams",
+            "build1",
+        ]
+    )
+    assert rc == 0
+    assert seen_paths == [wedge_state_file]
 
 
 # --- FRE-924: held-too-long escalation (surface by age, never resolve) ------

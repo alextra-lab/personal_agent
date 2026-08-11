@@ -32,12 +32,25 @@ def _init_sql_text() -> str:
 
 
 class TestMigrationFile:
-    def test_next_free_migration_number_used(self) -> None:
+    def test_migration_numbers_are_contiguous(self) -> None:
+        """No gaps/duplicates in the migration sequence (durable, not a fixed ceiling).
+
+        Was a hardcoded ``numbers[-1] == 25`` snapshot -- this migration's own
+        header comment predicted its own obsolescence: "the 'avoid a
+        follow-up migration' justification for granting broad didn't hold
+        (FRE-1210 ships its own migration, 0026, regardless)". 0026 landing
+        is the expected, planned-for outcome, not a regression -- so the
+        guard now checks the numbering invariant that actually matters
+        (sequential, no gaps) instead of a number that goes stale on every
+        future migration.
+        """
         migrations_dir = repo_root() / "docker/postgres/migrations"
         numbers = sorted(int(p.name[:4]) for p in migrations_dir.glob("[0-9][0-9][0-9][0-9]_*.sql"))
-        assert numbers[-1] == 25, (
-            f"expected 0025 to be the highest migration, got {numbers[-1]:04d}"
+        assert numbers[0] == 1
+        assert numbers == list(range(1, numbers[-1] + 1)), (
+            f"gap or duplicate in migration numbering: {numbers}"
         )
+        assert numbers[-1] >= 26, "0026 (FRE-1210 kg_stats) or later expected"
 
     def test_is_idempotent(self) -> None:
         text = _migration_text()

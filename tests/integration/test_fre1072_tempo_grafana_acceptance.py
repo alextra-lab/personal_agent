@@ -286,10 +286,11 @@ class TestAC6DashboardPanelsExecuteCleanly:
         # "rebuilt-from-kibana", not just "fre-1072" — the health_check.json canary (AC-5) also
         # carries the fre-1072 tag but is explicitly not part of the AC-6 rebuild inventory.
         # FRE-1209 dropped this tag from cost_budget.json (rebuilt onto Postgres, tagged
-        # grafana-native instead), decrementing the count from 15 to 14.
+        # grafana-native instead), decrementing 15→14. FRE-1212 deleted the empty request_traces.json
+        # (all 3 panels disposed delete), decrementing 14→13.
         ours = [d for d in dashboards if "rebuilt-from-kibana" in d.get("tags", [])]
-        assert len(ours) == 14, (
-            f"expected 14 FRE-1072 dashboards provisioned, found {len(ours)}: {[d['title'] for d in ours]}"
+        assert len(ours) == 13, (
+            f"expected 13 FRE-1072 dashboards provisioned, found {len(ours)}: {[d['title'] for d in ours]}"
         )
 
         now_ms = int(time.time() * 1000)

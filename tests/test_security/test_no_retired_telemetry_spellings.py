@@ -164,6 +164,30 @@ class TestRealTreeIsClean:
         assert result.returncode == 0, result.stdout + result.stderr
 
 
+def _reported_names(violation: str) -> set[str]:
+    """Retired names a violation actually reports — excludes file-path noise.
+
+    ``violation`` is ``_scan_tree``'s ``f"{path} — {detail}"`` string, and the
+    path half is real source text that can itself contain a retired name as a
+    substring (e.g. ``src/personal_agent/events/bus.py`` contains "event").
+    Matching against the whole string — as an earlier version of the overflow
+    filter below did — silently exempts any *other* retired name's violation
+    reported under such a path (master gate round 2, FRE-1219 PR #904: a
+    violation under ``src/personal_agent/events/bus.py`` was dropped by the
+    "event" exemption even though its actual retired name was unrelated).
+    Parses the two shapes ``_find_violations`` emits instead, so only the
+    name actually reported counts.
+
+    Args:
+        violation: One entry from ``_scan_tree``'s return value.
+
+    Returns:
+        The retired name(s) — normally exactly one — the violation reports.
+    """
+    detail = violation.split(" — ", 1)[1]
+    return {n for n in RETIRED_SPELLINGS if f"{n}=..." in detail or f"retired key {n!r}" in detail}
+
+
 #: Structural hits outside FRE_1219_NAMES that this scan finds and are NOT this
 #: ticket's job to fix. Each entry names a reason — an exclusion without one is
 #: a defect, not a configuration (mirrors vocabulary.py's own
@@ -241,10 +265,34 @@ class TestVocabularyIsTheAuthority:
         overflow = [
             v
             for v in violations
-            if not any(name in v for name in FRE_1219_NAMES)
-            and not any(name in v for name in _KNOWN_OUT_OF_SCOPE_OVERFLOW_REASONS)
+            if not (_reported_names(v) & FRE_1219_NAMES)
+            and not (_reported_names(v) & _KNOWN_OUT_OF_SCOPE_OVERFLOW_REASONS.keys())
         ]
         assert not overflow, "\n".join(overflow)
+
+    def test_exemption_does_not_match_on_path_noise(self) -> None:
+        """Master gate round 2: an out-of-scope violation under a path that
+        happens to contain an exempted name as a substring (e.g.
+        ``src/personal_agent/events/bus.py`` contains "event") must NOT be
+        exempted — only the violation's actually-reported name may exempt it.
+
+        Demonstrated by master: a violation string ``"src/personal_agent/
+        events/bus.py — line 42: log.info('x', started_at=1)"`` was silently
+        dropped by ``any(name in v for name in {"event", ...})`` even though
+        the reported name is ``started_at``, unrelated to the "event"
+        exemption's reason. Regression-tested directly against the shape
+        master's overflow filter now uses (``_reported_names``), not against
+        the string-membership shape that had the bug.
+        """
+        violation = "src/personal_agent/events/bus.py — line 42: log.info(..., started_at=..., ...)"
+        # The reported name is exactly started_at, despite "event" appearing in the path.
+        assert _reported_names(violation) == {"started_at"}
+        # started_at is neither in scope nor a documented exemption — this violation
+        # would surface as overflow (test failure) were it ever found for real, which
+        # is the property this fix protects: the old any(name in v ...) shape dropped
+        # it silently because "event" is a substring of the file path.
+        assert not (_reported_names(violation) & FRE_1219_NAMES)
+        assert not (_reported_names(violation) & _KNOWN_OUT_OF_SCOPE_OVERFLOW_REASONS.keys())
 
     def test_rule_names_are_present_in_the_ast_grep_rule_text(self) -> None:
         rule_text = RULE_PATH.read_text()

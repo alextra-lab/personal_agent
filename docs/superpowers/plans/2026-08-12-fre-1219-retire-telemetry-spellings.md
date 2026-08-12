@@ -19,6 +19,32 @@ owner approval before coding (this document, both now satisfied — implementati
 AC-2 is the discriminating one: deleting all four keys would satisfy a careless reading of AC-1 while
 destroying token accounting on `api_cost_recorded` and `model_call_completed`.
 
+## Master gate round 1 (PR #904) — two regression-guard defects, fixed
+
+Behaviour was sound; the guards meant to keep it fixed were not. Both verified by master against
+seeded fixtures (never inferred from the already-clean tree — "a vacuous rule and a clean tree are
+indistinguishable"):
+
+1. **The ast-grep rule was partially vacuous.** Every pattern's trailing `$$$` did not match zero args
+   in argument position, so the retired kwarg was only caught when another argument followed it —
+   missing the common real shape (kwarg last). Master seeded 6 cases; the rule caught 2 of 4 true
+   positives. Fixed with a `kind: keyword_argument` rule scoped `inside` a `log.*`/`logger.*` call's
+   `argument_list` (position-independent) — master's own verified pattern. Re-encoded master's 6-case
+   set as `TestSeededViolationFiresAstGrep` in the test file, invoking the real rule via subprocess, so
+   this can't silently regress to vacuous again.
+2. **The vocabulary-sync check asserted a subset while claiming equality.** `FRE_1219_NAMES <=
+   RETIRED_SPELLINGS.keys()` catches a name being removed from the vocabulary but not one being added —
+   the exact direction the docstring promised. Literal equality is also wrong (4 names vs. 11). Fixed
+   per master's description: scan `src/` for all 11 `RETIRED_SPELLINGS`, assert the "overflow" (an
+   undocumented violation for a name outside `FRE_1219_NAMES`) is empty — `TestVocabularyIsTheAuthority`.
+
+That scan surfaced two real findings outside this ticket's scope, documented (not silently fixed or
+dropped) in the test file's `_KNOWN_OUT_OF_SCOPE_OVERFLOW_REASONS`: the known `event=event_type`/
+structlog-reserved-parameter collision (5 sites, `es_logger.py` — the `elasticsearch_not_connected`
+bug master is filing to Backlog), and a **newly-found** genuine `timestamp` kwarg on
+`telemetry/metrics.py:217`'s rarely-exercised `invalid_timestamp` warning — a real, currently-live
+violation for a name outside this ticket's 4-name scope, flagged to master rather than fixed here.
+
 ## Codex review disposition
 
 Reviewed by `codex-rescue` (session `019ff508-b46d-7e30-ac0c-5c92d5ffcd4e`) against this plan before any

@@ -115,7 +115,6 @@ async def record_consolidation_attempt(
         attempt_number=attempt_number,
         outcome=outcome,
         denial_reason=denial_reason,
-        duration_ms=int((completed_at - started_at).total_seconds() * 1000),
     )
     return attempt_number
 

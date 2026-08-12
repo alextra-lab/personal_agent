@@ -102,6 +102,35 @@ async def test_latency_breakdown_redacts_summary_and_phase_docs() -> None:
     assert PLANTED_LITERAL not in summary["phases"][0]["description"]
 
 
+@pytest.mark.asyncio
+async def test_latency_breakdown_drops_retired_duration_ms_field() -> None:
+    """FRE-1219 AC-1: index_latency_breakdown bypasses validate_document() (it
+    builds ES documents by hand, not via log_event), so a structural search over
+    log/logger kwargs cannot see this site's literal "duration_ms" document keys.
+    Regression-tested directly instead: neither the summary's per-phase entries
+    nor the flat per-phase documents may carry the retired field.
+    """
+    logger, client = _logger_with_mock_client()
+
+    await logger.index_latency_breakdown(
+        trace_id="t4",
+        breakdown=[
+            {"phase": "total_request_to_reply", "duration_ms": 9.0},
+            {"phase": "tool_execution", "duration_ms": 4.0},
+        ],
+        session_id="s1",
+    )
+
+    docs = _indexed_documents(client)
+    assert docs, "latency path indexed nothing"
+    summary = docs[0]
+    assert "duration_ms" not in summary["phases"][0]
+    flat_docs = docs[1:]
+    assert flat_docs, "no flat per-phase documents indexed"
+    for flat_doc in flat_docs:
+        assert "duration_ms" not in flat_doc
+
+
 # --------------------------------------------------------------------------
 # AC-2 positive control
 # --------------------------------------------------------------------------

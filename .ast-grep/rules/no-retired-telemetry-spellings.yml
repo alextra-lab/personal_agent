@@ -1,0 +1,19 @@
+id: no-retired-telemetry-spellings
+language: python
+severity: error
+message: >-
+  duration_ms/latency_ms/prompt_tokens/completion_tokens are retired spellings
+  under the ADR-0133 governed telemetry vocabulary (telemetry/vocabulary.py's
+  RETIRED_SPELLINGS). duration_ms/latency_ms have no replacement (ADR-0129
+  moved intrinsic duration onto OTel spans) — drop the field. prompt_tokens/
+  completion_tokens rename to input_tokens/output_tokens (FRE-1219).
+rule:
+  any:
+    - pattern: log.$METHOD($$$, duration_ms=$VAL, $$$)
+    - pattern: log.$METHOD($$$, latency_ms=$VAL, $$$)
+    - pattern: log.$METHOD($$$, prompt_tokens=$VAL, $$$)
+    - pattern: log.$METHOD($$$, completion_tokens=$VAL, $$$)
+    - pattern: logger.$METHOD($$$, duration_ms=$VAL, $$$)
+    - pattern: logger.$METHOD($$$, latency_ms=$VAL, $$$)
+    - pattern: logger.$METHOD($$$, prompt_tokens=$VAL, $$$)
+    - pattern: logger.$METHOD($$$, completion_tokens=$VAL, $$$)

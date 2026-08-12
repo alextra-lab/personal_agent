@@ -415,11 +415,9 @@ class ElasticsearchLogger:
         for row in breakdown:
             phase = row.get("phase")
             if phase and phase != "total_request_to_reply":
-                dur = row.get("duration_ms")
                 phases_payload.append(
                     {
                         "phase": phase,
-                        "duration_ms": float(dur) if dur is not None else None,
                         "start_time": row.get("start_time"),
                         "end_time": row.get("end_time"),
                         "description": (row.get("description") or "")[:500],
@@ -446,7 +444,6 @@ class ElasticsearchLogger:
             ts = datetime.utcnow().isoformat()
             for row in phases_payload:
                 phase_name = row.get("phase")
-                dur = row.get("duration_ms")
                 if phase_name is None:
                     continue
                 flat_doc: dict[str, Any] = {
@@ -455,7 +452,6 @@ class ElasticsearchLogger:
                     "trace_id": trace_id,
                     "session_id": session_id,
                     "phase": phase_name,
-                    "duration_ms": dur,
                 }
                 flat_id = f"{trace_id}_{phase_name}"
                 try:

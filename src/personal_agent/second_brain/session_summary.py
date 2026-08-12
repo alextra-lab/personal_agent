@@ -35,7 +35,6 @@ false accusation into the graph that nothing downstream can distinguish from a r
 
 from __future__ import annotations
 
-import time
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
@@ -727,7 +726,6 @@ async def generate_session_digest(
             detail=f"estimated {estimated_tokens} input tokens exceeds limit {limit}",
         )
 
-    started_at = time.perf_counter()
     log.info(
         "session_summary_started",
         session_id=session_id,
@@ -866,7 +864,6 @@ async def generate_session_digest(
             correction_span_chars=sum(
                 len(c.span) + len(c.evidence_span) for c in digest.corrections
             ),
-            duration_ms=(time.perf_counter() - started_at) * 1000.0,
             model_key=role_name,
         )
         return SessionSummaryOutcome(

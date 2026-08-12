@@ -341,7 +341,6 @@ async def rerank(
         )
         return _passthrough(documents)
 
-    start = time.monotonic()
     try:
         results, provider, cost_usd = await _attempt_rerank(
             model_id,
@@ -357,7 +356,6 @@ async def rerank(
             settings=settings,
         )
     except Exception as exc:
-        duration_ms = (time.monotonic() - start) * 1000
         log.warning(
             "reranker_failed",
             trace_id=trace_id,
@@ -366,7 +364,6 @@ async def rerank(
             span_id=span_id,
             model_id=model_id,
             error=str(exc),
-            duration_ms=round(duration_ms, 1),
             candidate_count=len(documents),
             input_cap=input_cap,
         )
@@ -374,7 +371,6 @@ async def rerank(
             query,
             documents,
             top_k,
-            overall_start=start,
             trace_id=trace_id,
             session_id=session_id,
             task_id=task_id,
@@ -383,7 +379,6 @@ async def rerank(
             settings=settings,
         )
 
-    duration_ms = (time.monotonic() - start) * 1000
     _log_reranker_applied(
         trace_id=trace_id,
         session_id=session_id,
@@ -394,7 +389,6 @@ async def rerank(
         input_cap=input_cap,
         top_k=top_k,
         results=results,
-        duration_ms=duration_ms,
         fallback=False,
         provider=provider,
         cost_usd=cost_usd,
@@ -407,7 +401,6 @@ async def _rerank_fallback(
     documents: Sequence[str],
     top_k: int,
     *,
-    overall_start: float,
     trace_id: str | None,
     session_id: str | None,
     task_id: str | None,
@@ -416,12 +409,6 @@ async def _rerank_fallback(
     settings: AppConfig,
 ) -> list[RerankResult]:
     """Try the "reranker_fallback" target after the primary has failed (FRE-851).
-
-    ``overall_start`` is the monotonic timestamp the ORIGINAL (primary)
-    attempt began — every duration logged here covers the full time the
-    caller actually waited (the failed primary attempt plus this one), not
-    just this attempt's own time, so telemetry reflects the true cost of a
-    degraded turn instead of hiding the primary's latency.
 
     Degrades to passthrough if the fallback role can't be resolved or its
     call also fails — the same graceful-degradation contract as the primary.
@@ -455,7 +442,6 @@ async def _rerank_fallback(
             settings=settings,
         )
     except Exception as exc:
-        duration_ms = (time.monotonic() - overall_start) * 1000
         log.warning(
             "reranker_fallback_failed",
             trace_id=trace_id,
@@ -464,13 +450,11 @@ async def _rerank_fallback(
             span_id=span_id,
             model_id=model_id,
             error=str(exc),
-            duration_ms=round(duration_ms, 1),
             candidate_count=len(documents),
             input_cap=input_cap,
         )
         return _passthrough(documents)
 
-    duration_ms = (time.monotonic() - overall_start) * 1000
     _log_reranker_applied(
         trace_id=trace_id,
         session_id=session_id,
@@ -481,7 +465,6 @@ async def _rerank_fallback(
         input_cap=input_cap,
         top_k=top_k,
         results=results,
-        duration_ms=duration_ms,
         fallback=True,
         provider=provider,
         cost_usd=cost_usd,
@@ -500,7 +483,6 @@ def _log_reranker_applied(
     input_cap: int,
     top_k: int,
     results: list[RerankResult],
-    duration_ms: float,
     fallback: bool,
     provider: str,
     cost_usd: float | None,
@@ -523,7 +505,6 @@ def _log_reranker_applied(
         top_k=top_k,
         result_count=len(results),
         top_score=results[0].score if results else None,
-        duration_ms=round(duration_ms, 1),
         fallback=fallback,
         provider=provider,
         cost_usd=cost_usd,

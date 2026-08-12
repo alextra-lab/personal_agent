@@ -251,3 +251,63 @@ def test_actual_cost_for_response_reflects_document_page_tokens() -> None:
     # text-only-basis bug (scanned_cost == baseline_cost) is unambiguously
     # distinguishable from the correct page-inclusive basis.
     assert scanned_cost > baseline_cost * 10
+
+
+# ---------------------------------------------------------------------------
+# FRE-1219 AC-2: the prompt_tokens/completion_tokens -> input_tokens/output_tokens
+# rename on "actual_cost_fallback_priced" preserves the values, not just renames
+# the keys away. Fails if the fix merely deletes the retired keys.
+# ---------------------------------------------------------------------------
+
+
+def test_actual_cost_fallback_priced_renames_tokens_preserving_values(monkeypatch) -> None:
+    """Force the fallback-pricing branch and assert input_tokens/output_tokens
+    carry exactly the usage values previously reported under prompt_tokens/
+    completion_tokens — a bare-deletion "fix" would make this fail (AC-2).
+    """
+    from unittest.mock import patch
+
+    import litellm
+    from litellm import ModelResponse
+
+    from personal_agent.llm_client.cost_estimator import actual_cost_for_response
+
+    # An unregistered model id makes litellm.completion_cost raise, forcing the
+    # fallback path; a synthetic model_cost entry gives the fallback a nonzero
+    # price so it takes the "priced" branch (log.info), not "unpriced" (log.warning).
+    fake_model = "fre-1219-test/unregistered-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        fake_model,
+        {"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002},
+    )
+
+    response = ModelResponse(
+        id="msg_test_fre1219",
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "ok", "role": "assistant", "tool_calls": None},
+            }
+        ],
+        usage={"prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168},
+        model=fake_model,
+        object="chat.completion",
+    )
+
+    with patch("personal_agent.llm_client.cost_estimator.log") as mock_log:
+        cost = actual_cost_for_response(response=response, model=fake_model, trace_id="t")
+
+    assert cost > 0
+    events = [
+        call
+        for call in mock_log.info.call_args_list
+        if call.args and call.args[0] == "actual_cost_fallback_priced"
+    ]
+    assert events, "actual_cost_fallback_priced event was not emitted"
+    emitted = events[0].kwargs
+    assert "prompt_tokens" not in emitted
+    assert "completion_tokens" not in emitted
+    assert emitted["input_tokens"] == 123
+    assert emitted["output_tokens"] == 45

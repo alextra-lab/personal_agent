@@ -168,6 +168,7 @@ class BrainstemScheduler:
         self._linear_client = linear_client
         self.memory_service: MemoryService | None = memory_service
         self._last_freshness_review_week: tuple[int, int] | None = None
+        self._last_kg_stats_projection_date: date | None = None  # FRE-1210 T6.1
         self.feedback_polling_hour_utc = settings.feedback_polling_hour_utc
         self._last_outcome_ingestion_date: date | None = None  # ADR-0105 D7
         self.outcome_ingestion_hour_utc = settings.outcome_ingestion_hour_utc
@@ -1285,6 +1286,38 @@ class BrainstemScheduler:
                                 exc_info=True,
                             )
                         self._last_freshness_review_week = (year, week)
+
+                # Daily kg_stats projection (FRE-1210 T6.1) -- a separate job from the
+                # weekly freshness review above, not a cadence change to it; see
+                # brainstem/jobs/kg_stats_projection.py's module docstring for why.
+                if (
+                    settings.freshness_enabled
+                    and self.memory_service is not None
+                    and (
+                        self._last_kg_stats_projection_date is None
+                        or self._last_kg_stats_projection_date != today
+                    )
+                ):
+                    from personal_agent.brainstem.jobs.kg_stats_projection import (
+                        parse_kg_stats_projection_schedule,
+                        run_kg_stats_projection,
+                    )
+
+                    kg_minute, kg_hour = parse_kg_stats_projection_schedule(
+                        settings.kg_stats_projection_schedule_cron
+                    )
+                    if now.hour == kg_hour and now.minute == kg_minute:
+                        trace_kg = f"kg-stats-projection-{today.isoformat()}"
+                        try:
+                            await run_kg_stats_projection(self.memory_service, trace_kg)
+                        except Exception as kg_err:
+                            log.warning(
+                                "kg_stats_projection_failed",
+                                trace_id=trace_kg,
+                                error=str(kg_err),
+                                exc_info=True,
+                            )
+                        self._last_kg_stats_projection_date = today
 
                 # Daily Linear feedback polling (ADR-0040 / ADR-0041 Phase 3)
                 # Insights and promotion run reactively via consolidation.completed events;

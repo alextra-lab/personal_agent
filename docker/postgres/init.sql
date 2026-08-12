@@ -293,6 +293,19 @@ CREATE INDEX IF NOT EXISTS idx_consolidation_attempts_trace
 CREATE INDEX IF NOT EXISTS idx_consolidation_attempts_outcome
     ON consolidation_attempts(outcome, started_at DESC);
 
+-- Daily Neo4j -> Postgres projection of KG freshness/health metrics (FRE-1210
+-- T6.1 / ADR-0042 / FRE-161). See migrations/0026_kg_stats.sql for the full
+-- rationale (dimension width, NULLS NOT DISTINCT, grant scope).
+CREATE TABLE IF NOT EXISTS kg_stats (
+    id              BIGSERIAL PRIMARY KEY,
+    observed_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metric_name     VARCHAR(64) NOT NULL,
+    dimension       VARCHAR(255),
+    metric_value    DOUBLE PRECISION NOT NULL,
+    UNIQUE NULLS NOT DISTINCT (observed_at, metric_name, dimension)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_stats_metric_time ON kg_stats(metric_name, observed_at DESC);
+
 -- Backfill — populate the unscoped (_total) counter rows for the current
 -- daily and weekly windows from existing api_costs aggregates so the gate
 -- sees existing spend on first start. Per-role backfill isn't possible
@@ -650,7 +663,8 @@ GRANT SELECT ON
     public.route_traces,
     public.budget_policies,
     public.budget_counters,
-    public.budget_reservations
+    public.budget_reservations,
+    public.kg_stats
 TO grafana_ro;
 
 GRANT USAGE ON SCHEMA sysgraph TO grafana_ro;

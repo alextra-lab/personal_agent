@@ -300,7 +300,6 @@ class ExpansionController:
                 )
                 logger.info(
                     "planner_completed",
-                    duration_ms=round(duration_ms),
                     plan_task_count=len(plan.tasks),
                     parse_success=True,
                     fallback_used=False,
@@ -315,16 +314,13 @@ class ExpansionController:
             )
 
         except asyncio.TimeoutError:
-            duration_ms = time.monotonic() * 1000 - start_ms
             logger.warning(
                 "planner_failed",
                 reason="timeout",
-                duration_ms=round(duration_ms),
                 trace_id=trace_id,
             )
 
         except Exception as exc:
-            duration_ms = time.monotonic() * 1000 - start_ms
             logger.warning(
                 "planner_failed",
                 reason="exception",
@@ -479,7 +475,6 @@ class ExpansionController:
             logger.info(
                 "subagent_completed",
                 task_name=sr.spec_task,
-                duration_ms=round(sr.duration_ms),
                 status="success" if sr.success else "failed",
                 trace_id=trace_id,
             )

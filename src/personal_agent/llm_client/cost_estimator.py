@@ -252,8 +252,8 @@ def actual_cost_for_response(
         log.info(
             "actual_cost_fallback_priced",
             model=model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
             cost_usd=float(fallback),
             trace_id=trace_id,
         )

@@ -231,7 +231,6 @@ async def compress_turns(
         _log_role_missing_once(trace_id)
         return FALLBACK_MARKER
 
-    start_ms = time.monotonic() * 1000
     formatted = _format_messages_for_compression(evicted_messages)
 
     try:
@@ -265,14 +264,12 @@ async def compress_turns(
             )
             return FALLBACK_MARKER
 
-        duration_ms = time.monotonic() * 1000 - start_ms
         summary_tokens = max(1, len(summary) // 4)
 
         log.info(
             "context_compression_completed",
             evicted_count=len(evicted_messages),
             summary_tokens=summary_tokens,
-            duration_ms=round(duration_ms),
             trace_id=trace_id,
         )
         return summary
@@ -287,14 +284,12 @@ async def compress_turns(
         if cause == CAUSE_ROLE_MISSING:
             _log_role_missing_once(trace_id)
             return FALLBACK_MARKER
-        duration_ms = time.monotonic() * 1000 - start_ms
         log.warning(
             "context_compression_failed",
             cause=cause,
             error=str(exc),
             error_type=type(exc).__name__,
             evicted_count=len(evicted_messages),
-            duration_ms=round(duration_ms),
             trace_id=trace_id,
         )
         return FALLBACK_MARKER

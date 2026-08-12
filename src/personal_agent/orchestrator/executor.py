@@ -4271,7 +4271,6 @@ async def step_llm_call(
                 _routing_client = get_llm_client_for_key(
                     settings.skill_routing_model_key, budget_role="skill_routing"
                 )
-                _routing_start = time.time()
                 _relevant = await route_skills(
                     user_message=_user_message,
                     routing_client=_routing_client,
@@ -4279,7 +4278,6 @@ async def step_llm_call(
                     trace_id=ctx.trace_id,
                     session_id=ctx.session_id,
                 )
-                _routing_latency_ms = int((time.time() - _routing_start) * 1000)
                 # Pre-load returned skill bodies — primary agent sees them already in scope
                 from personal_agent.orchestrator.skills import get_all_skills  # noqa: PLC0415
 
@@ -4291,7 +4289,6 @@ async def step_llm_call(
                 log.info(
                     "skill_routing_call_completed",
                     routing_model_key=settings.skill_routing_model_key,
-                    latency_ms=_routing_latency_ms,
                     skills_returned=_relevant,
                     trace_id=ctx.trace_id,
                 )
@@ -4820,7 +4817,6 @@ async def step_llm_call(
                 parent_span_id=trace_ctx.parent_span_id,
                 model_role=model_role.value,
                 channel=ctx.channel.value,
-                duration_ms=int((time.time() - step_start_time) * 1000),
                 status="deadline_exceeded",
                 next_state="synthesis",
             )
@@ -4883,7 +4879,6 @@ async def step_llm_call(
                 parent_span_id=trace_ctx.parent_span_id,
                 model_role=model_role.value,
                 channel=ctx.channel.value,
-                duration_ms=int((time.time() - step_start_time) * 1000),
                 status="deadline_exceeded",
                 next_state="synthesis",
             )
@@ -4912,7 +4907,6 @@ async def step_llm_call(
             LLM_STEP_COMPLETED,
             trace_id=ctx.trace_id,
             span_id=span_id,
-            duration_ms=duration_ms,
             model_role=model_role.value,
             tokens=total_tokens,
         )
@@ -5055,7 +5049,6 @@ async def step_llm_call(
 
         # ADR-0074 §I3: emit STEP_PLANNING_COMPLETED on every success exit so
         # the planning event pairs cleanly. Status indicates branch taken.
-        step_planning_duration_ms = int((time.time() - step_start_time) * 1000)
         log.info(
             STEP_PLANNING_COMPLETED,
             trace_id=ctx.trace_id,
@@ -5064,7 +5057,6 @@ async def step_llm_call(
             parent_span_id=trace_ctx.parent_span_id,
             model_role=model_role.value,
             channel=ctx.channel.value,
-            duration_ms=step_planning_duration_ms,
             status="success",
             next_state="tool_execution" if response_tool_calls else "synthesis",
         )
@@ -5081,13 +5073,11 @@ async def step_llm_call(
             return TaskState.SYNTHESIS
 
     except Exception as e:
-        duration_ms = int((time.time() - step_start_time) * 1000)
         log.error(
             MODEL_CALL_ERROR,
             trace_id=ctx.trace_id,
             session_id=ctx.session_id,
             span_id=span_id,
-            duration_ms=duration_ms,
             error=str(e),
             error_type=type(e).__name__,
         )
@@ -5163,7 +5153,6 @@ async def step_llm_call(
             parent_span_id=trace_ctx.parent_span_id,
             model_role=model_role.value,
             channel=ctx.channel.value,
-            duration_ms=duration_ms,
             status="error",
             error_type=type(e).__name__,
             error_category=classified.category,

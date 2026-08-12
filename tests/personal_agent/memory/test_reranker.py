@@ -47,7 +47,10 @@ class TestRerank:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF", "http://localhost:8504/v1"),
             ),
-            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=mock_client),
+            patch(
+                "personal_agent.memory.reranker.create_guarded_http_client",
+                return_value=mock_client,
+            ),
         ):
             results = await rerank("what database?", ["doc0", "doc1", "doc2"])
 
@@ -85,7 +88,10 @@ class TestRerank:
                 "personal_agent.memory.reranker._get_reranker_config",
                 return_value=("ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF", "http://localhost:8504/v1"),
             ),
-            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=mock_client),
+            patch(
+                "personal_agent.memory.reranker.create_guarded_http_client",
+                return_value=mock_client,
+            ),
         ):
             results = await rerank("query", ["a", "b"])
 
@@ -109,8 +115,6 @@ class TestRerank:
 
         assert len(results) == 2
         assert results[0].document == "a"
-
-
 
 
 class TestCfAccessInjection:
@@ -782,57 +786,6 @@ class TestFallbackToMacTunnel:
         ]
         assert failed
         assert "voyage_api_key" in failed[0].kwargs["error"]
-
-    @pytest.mark.asyncio
-    async def test_fallback_success_does_not_restart_the_clock(self) -> None:
-        """FRE-851 telemetry fix: the fallback path measures total elapsed time since the
-        ORIGINAL (primary) attempt began, not a fresh timer started inside _rerank_fallback —
-        otherwise duration_ms on a degraded turn silently hides the failed primary's latency.
-        """
-        import time as time_module
-
-        fallback_resp = MagicMock()
-        fallback_resp.raise_for_status = MagicMock()
-        fallback_resp.json.return_value = {"results": [{"index": 0, "relevance_score": 0.5}]}
-
-        client = AsyncMock()
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=False)
-        client.post = AsyncMock(side_effect=[httpx.ConnectError("voyage down"), fallback_resp])
-
-        real_monotonic = time_module.monotonic
-
-        with (
-            patch(
-                "personal_agent.memory.reranker._get_reranker_config",
-                return_value=("rerank-2.5", "https://api.voyageai.com/v1"),
-            ),
-            patch(
-                "personal_agent.memory.reranker._get_reranker_fallback_config",
-                return_value=("Qwen/Qwen3-Reranker-4B-mxfp8", "https://slm.example.com/v1"),
-            ),
-            patch("personal_agent.memory.reranker.create_guarded_http_client", return_value=client),
-            patch("personal_agent.memory.reranker.get_settings") as mock_settings,
-            patch(
-                "personal_agent.memory.reranker.time.monotonic", wraps=real_monotonic
-            ) as mock_monotonic,
-        ):
-            mock_settings.return_value.reranker_enabled = True
-            mock_settings.return_value.reranker_input_cap = 25
-            mock_settings.return_value.voyage_api_key = "test-voyage-key"
-            mock_settings.return_value.slm_base_url = "https://slm.example.com"
-            await rerank("q", ["a"], top_k=5)
-
-        # Exactly 6 reads: rerank()'s start, the reranker_failed duration, the
-        # fallback's final duration computed FROM that same start (the original
-        # 3 -- not 4, which would mean _rerank_fallback started its own
-        # independent clock), plus 3 from _attempt_rerank's own per-call cost-
-        # latency timer (FRE-974): 1 for the failed Voyage attempt (its
-        # call_start read before the ConnectError aborts the call before the
-        # matching end-read) and 2 for the successful fallback attempt
-        # (call_start + the end read, since the fallback is never billed but
-        # the latency timer runs unconditionally).
-        assert mock_monotonic.call_count == 6
 
 
 class TestPassthrough:

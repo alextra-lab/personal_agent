@@ -1608,7 +1608,6 @@ async def artifact_draft_executor(
                 timeout=draft_timeout,
             )
     except asyncio.TimeoutError as exc:
-        sub_agent_duration_ms = int(time.monotonic() * 1000) - start_ms
         log.warning(
             "artifact_draft_sub_agent_complete",
             trace_id=trace_id,
@@ -1616,7 +1615,6 @@ async def artifact_draft_executor(
             span_id=span_id,
             task_id=task_id,
             success=False,
-            duration_ms=sub_agent_duration_ms,
             error="timeout",
         )
         # FRE-402: a sub-agent timeout is non-recoverable — surface immediately
@@ -1627,7 +1625,6 @@ async def artifact_draft_executor(
             next_step="Try a simpler artifact, or switch to Cloud for more capacity.",
         ) from exc
     except Exception as exc:
-        sub_agent_duration_ms = int(time.monotonic() * 1000) - start_ms
         log.warning(
             "artifact_draft_sub_agent_complete",
             trace_id=trace_id,
@@ -1635,7 +1632,6 @@ async def artifact_draft_executor(
             span_id=span_id,
             task_id=task_id,
             success=False,
-            duration_ms=sub_agent_duration_ms,
             error=str(exc),
         )
         raise ToolExecutionError(
@@ -1661,7 +1657,6 @@ async def artifact_draft_executor(
         span_id=span_id,
         task_id=task_id,
         success=True,
-        duration_ms=sub_agent_duration_ms,
         html_length=len(html_content),
         output_tokens=output_tokens,
     )

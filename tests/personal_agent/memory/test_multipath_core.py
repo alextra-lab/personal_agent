@@ -237,14 +237,15 @@ class TestCapAndOperatingPoint:
 
 
 class TestLatencyTelemetry:
-    """FRE-724 AC-6(c) — the multipath_recall event carries a numeric latency_ms.
+    """FRE-1219: multipath_recall no longer carries latency_ms.
 
-    The end-to-end recall latency is the durable signal p50/p95 panels read and the
-    standing auto-rollback guard watches, so the emit must always carry it as a float.
+    ADR-0133 retires latency_ms outright (no canonical replacement — ADR-0129
+    moved intrinsic duration onto OTel spans). This recall path has no span
+    wrapper, so the measurement is dropped rather than relocated (AC-3).
     """
 
     @pytest.mark.asyncio
-    async def test_latency_ms_emitted_as_float(self, monkeypatch) -> None:
+    async def test_latency_ms_not_emitted(self, monkeypatch) -> None:
         _enable(monkeypatch, multiquery=True, lexical=True)
         service = _service()
         service.multi_query_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
@@ -257,9 +258,7 @@ class TestLatencyTelemetry:
             if call.args and call.args[0] == "multipath_recall"
         ]
         assert events, "multipath_recall event was not emitted"
-        latency = events[0].kwargs["latency_ms"]
-        assert isinstance(latency, float)
-        assert latency >= 0.0
+        assert "latency_ms" not in events[0].kwargs
 
 
 class TestRerankNeverGates:

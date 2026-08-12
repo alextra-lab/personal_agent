@@ -249,7 +249,6 @@ class CostTrackerService:
                     model=model,
                     purpose=purpose,
                     cost_usd=cost_usd,
-                    latency_ms=latency_ms,
                     record_id=record_id,
                     trace_id=str(trace_id),
                     session_id=str(session_id),

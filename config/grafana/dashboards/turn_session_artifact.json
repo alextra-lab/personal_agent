@@ -13,7 +13,7 @@
       "id": 1,
       "type": "barchart",
       "title": "Session activity: cost, turns, calls, artifacts",
-      "description": "Per-session rollup: total cost, LLM calls, distinct turns (traces), avg latency, and artifacts produced (FRE-703 C4 redesign).",
+      "description": "Per-session rollup: total cost, LLM calls, distinct turns (traces), and artifacts produced (FRE-703 C4 redesign). Previously also showed avg latency; latency_ms was retired from agent-logs with no log-field replacement (ADR-0129 moved intrinsic duration onto OTel spans, FRE-1219) and dropped from this panel rather than left silently empty.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -37,11 +37,6 @@
               "type": "cardinality",
               "id": "1",
               "field": "trace_id"
-            },
-            {
-              "type": "avg",
-              "id": "2",
-              "field": "latency_ms"
             },
             {
               "type": "sum",

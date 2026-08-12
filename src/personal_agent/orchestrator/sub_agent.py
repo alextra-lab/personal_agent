@@ -310,7 +310,6 @@ async def run_sub_agent(
         "sub_agent_complete",
         task_id=task_id_str,
         success=result.success,
-        duration_ms=result.duration_ms,
         token_count=result.token_count,
         digest_chars=_digest_chars,
         full_output_chars=_full_output_chars,

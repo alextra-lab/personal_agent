@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import pathlib
 import re
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -448,13 +447,11 @@ class FeedbackPoller:
                     label="Defer",
                     handler="defer",
                     success=True,
-                    duration_ms=0,
                 )
                 continue
             handler = _HANDLERS.get(event.label)
             if not handler:
                 continue
-            t0 = time.perf_counter()
             success = True
             try:
                 await handler(event, self._client)
@@ -468,14 +465,12 @@ class FeedbackPoller:
                     error=str(exc),
                     exc_info=True,
                 )
-            duration_ms = int((time.perf_counter() - t0) * 1000)
             log.info(
                 "feedback_event_processed",
                 issue_id=event.issue_identifier,
                 label=event.label,
                 handler=event.label.lower().replace(" ", "_"),
                 success=success,
-                duration_ms=duration_ms,
             )
         _save_poller_state(self._state_path, state)
 

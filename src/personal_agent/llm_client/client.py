@@ -6,7 +6,6 @@ servers (LM Studio, Ollama, etc.) with proper error handling, retries, and telem
 
 import asyncio
 import json
-import time
 from pathlib import Path
 from typing import Any
 
@@ -366,9 +365,7 @@ class LocalLLMClient:
 
         # Emit telemetry: call started (ADR-0074 §I2 canonical shape). The
         # model-call span (ADR-0129 D3 / FRE-1067) wraps the whole retry loop
-        # below — one span per client-perceived call, matching the existing
-        # start_time/duration_ms stopwatch boundary exactly.
-        start_time = time.time()
+        # below — one span per client-perceived call.
         with model_call_span(
             role=role.value, model=model_id, provider=model_config.provider or "unknown"
         ) as _model_span:
@@ -662,7 +659,6 @@ class LocalLLMClient:
                     break
 
             # Emit telemetry: call error
-            duration_ms = int((time.time() - start_time) * 1000)
             error_type = type(last_error).__name__ if last_error else "UnknownError"
             log.error(
                 MODEL_CALL_ERROR,
@@ -671,7 +667,6 @@ class LocalLLMClient:
                 endpoint=current_endpoint,
                 error_type=error_type,
                 error=str(last_error) if last_error else "Unknown error",
-                latency_ms=duration_ms,
                 trace_id=trace_ctx.trace_id,
                 session_id=trace_ctx.session_id,
                 span_id=span_id,

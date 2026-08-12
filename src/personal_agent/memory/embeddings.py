@@ -402,7 +402,6 @@ async def _embed_managed_batch(
                 model=model,
                 tokens=total_tokens,
                 cost_usd=cost_usd,
-                latency_ms=latency_ms,
                 trace_id=trace_id,
                 session_id=session_id,
             )

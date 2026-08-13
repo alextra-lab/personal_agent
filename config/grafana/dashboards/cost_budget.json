@@ -561,7 +561,7 @@
         "type": "grafana-postgresql-datasource",
         "uid": "pg-ledger"
       },
-      "description": "route_traces.cost_live_usd vs cost_authoritative_usd, every trace in the window. Deliberately NOT filtered to cost_reconciled=true: that flag means abs(live-authoritative)<=tolerance (route_trace/assembler.py), so filtering on it would hide exactly the divergent rows this panel exists to surface. divergence=0 on a reconciled trace; non-zero where the live estimate and the ledger disagree. All trace_id values here are native Postgres UUIDs -- the dashed-vs-hex split (FRE-1186) is an ES<->PG issue and does not apply to this single-substrate query.",
+      "description": "route_traces.cost_live_usd vs cost_authoritative_usd, every trace in the window. Deliberately NOT filtered to cost_reconciled=true: that flag means abs(live-authoritative)<=tolerance (route_trace/assembler.py), so filtering on it would hide exactly the divergent rows this panel exists to surface. divergence=0 on a reconciled trace; non-zero where the live estimate and the ledger disagree. All trace_id values here are native Postgres UUIDs -- the dashed-vs-hex split (FRE-1186) is an ES<->PG issue and does not apply to this single-substrate query. trace_id_hex is a hidden helper column (dashes stripped) feeding the trace_id data link -- Tempo rejects dashed trace IDs (verified live), so the link target must use the undashed form while the visible trace_id column stays human-readable.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -591,7 +591,40 @@
             ]
           },
           "unit": "currencyUSD"
-        }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id",
+              "scope": "series"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "View trace waterfall",
+                    "url": "/d/fre1072-request-timing-e2e/request-timing-e2e?var-trace_id=${__data.fields.trace_id_hex}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id_hex",
+              "scope": "series"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom.viz",
+                "value": true
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -615,7 +648,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT trace_id, cost_reconciled, cost_live_usd, cost_authoritative_usd, (cost_authoritative_usd - cost_live_usd) AS divergence FROM route_traces WHERE $__timeFilter(created_at) ORDER BY created_at DESC",
+          "rawSql": "SELECT trace_id, cost_reconciled, cost_live_usd, cost_authoritative_usd, (cost_authoritative_usd - cost_live_usd) AS divergence, REPLACE(trace_id::text, '-', '') AS trace_id_hex FROM route_traces WHERE $__timeFilter(created_at) ORDER BY created_at DESC",
           "refId": "A",
           "sql": {
             "columns": [

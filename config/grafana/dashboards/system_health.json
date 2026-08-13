@@ -1,169 +1,435 @@
 {
-  "uid": "fre1072-system-health",
-  "title": "System Health",
-  "tags": [
-    "fre-1072",
-    "rebuilt-from-kibana"
-  ],
-  "timezone": "browser",
-  "schemaVersion": 39,
-  "version": 1,
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Mixed-source dashboard by design (FRE-1211): 1 Postgres panel (Error events by type, route_traces.error_type/error_class) + 2 Elasticsearch panels (CPU & memory over time, sensor_poll; State transitions, state_transition). The FRE-1207 audit found no Postgres table for host sensor metrics or orchestrator state transitions anywhere in this program's plan, so forcing those two panels onto Postgres would mean inventing a source that would render empty forever -- failing the 'verified against real data' gate far worse than an honest Elasticsearch panel. Only the error-events panel had a real typed Postgres column to move to; moving it also fixed BUG-1 (the old ES panel's Lucene query used lowercase and/or/not, which Grafana's parser doesn't recognize as boolean operators, so it silently rendered an unfiltered top-10 event list under an 'errors' title). time.from is now-90d: the binding constraint is route_traces.error_type, whose 20 all-time rows span 2026-06-07 to 2026-08-07 (about 2 months) -- a shorter window (e.g. the dashboard's old now-24h) reads empty despite real error signal existing. The two ES families (sensor_poll, state_transition) both comfortably fit inside the same 90d window (spanning 2026-07-14 to today, live). The former 4th panel (Consolidation activity) was deleted per FRE-1212's audit disposition -- 38 days stale and redundant with extraction_retry_health's Postgres rebuild.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "liveNow": false,
   "panels": [
     {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Count of route_traces.error_type events over time (Postgres), replacing the ES-sourced version's BUG-1 (FRE-1207 audit sec.4): the old panel's Lucene query used lowercase and/or/not, which Grafana's ES parser only recognizes as uppercase AND/OR/NOT -- the lowercase tokens fell through as bare search terms, so a query claiming to filter for errors/failures while excluding error_monitor_* housekeeping actually returned the unfiltered top-10 event types (task_started, perplexity_query_started, etc., none error-related). Moving to route_traces.error_type/error_class sidesteps this bug class entirely -- there is no Lucene string to get case-wrong. degraded_stages was inspected too (skill Step 0) and excluded from this query: all 536 route_traces rows carry an empty array, so it currently carries zero discriminating signal. Verified live: 20 of 536 route_traces rows ever carry a non-null error_type (spanning 2026-06-07 to 2026-08-07), split LLMServerError (12), LLMClientError (3), sub_agent_failed (3), AttachmentUnsupportedError (2). Errors are rare -- the dashboard's time.from must cover at least this ~2-month span or the panel reads empty despite real signal existing.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
-      "type": "timeseries",
-      "title": "CPU & memory over time",
-      "description": "Average cpu_load / memory_used from sensor_poll (170,242 docs, live today) over the last 90d. FIXES a bug: the prior committed panel OR'd in system_metrics_snapshot, which is dead test-harness pollution -- its 220 docs all come from logger=test_elasticsearch_logging (last emitted 2026-06-20), and it uses different field names (cpu_percent/memory_percent) that never matched this panel's cpu_load/memory_used aggregations anyway, so those docs silently contributed zero data. Rebuilt against sensor_poll alone. Verified live: avg CPU ~6.2%, avg memory ~55.8% over the last 24h (matches the VPS's 8 vCPU / ~10GiB envelope) -- system is healthy.",
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "dataset": "personal_agent",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(created_at,$__interval), error_type, count(*) AS error_count FROM route_traces WHERE $__timeFilter(created_at) AND error_type IS NOT NULL GROUP BY 1, error_type ORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Error events by type",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "description": "Average cpu_load / memory_used from ES sensor_poll (query: event_type: \"sensor_poll\"), rebuilt in the Grafana UI on Elasticsearch -- no Postgres table exists anywhere in this program's plan for host sensor metrics, so a PG rebuild would be inventing a source (audit disposition: rebuild-in-the-UI-on-ES). Confirmed the query does NOT repeat the prior committed panel's bug (OR'ing in system_metrics_snapshot, dead test-harness pollution with mismatched field names cpu_percent/memory_percent): this query filters to sensor_poll alone, and live search confirms zero system_metrics_snapshot docs currently exist in the index at all. Both fields are 0-100 scale (verified live: cpu_load min 0/max 100, memory_used min 40.2/max 96.5), hence unit Percent (0-100), not percentunit. Verified live over the dashboard's 90d window: avg CPU 4.48%, avg memory 78.5% (126,607 sensor_poll docs, spanning 2026-07-14 to today, live) -- system is healthy, consistent with the VPS's 8 vCPU / ~10GiB envelope.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 0
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 2,
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "alias": "",
+          "bucketAggs": [
+            {
+              "field": "@timestamp",
+              "id": "2",
+              "settings": {
+                "interval": "auto"
+              },
+              "type": "date_histogram"
+            }
+          ],
           "datasource": {
             "type": "elasticsearch",
             "uid": "es-agent-logs"
           },
-          "query": "event_type: \"sensor_poll\"",
+          "editorType": "builder",
           "metrics": [
             {
-              "type": "avg",
+              "field": "cpu_load",
               "id": "1",
-              "field": "cpu_load"
+              "type": "avg"
             },
             {
-              "type": "avg",
-              "id": "2",
-              "field": "memory_used"
+              "field": "memory_used",
+              "id": "3",
+              "type": "avg"
             }
           ],
-          "bucketAggs": [
-            {
-              "type": "date_histogram",
-              "id": "1",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
-              }
-            }
-          ]
+          "preserveQuery": false,
+          "query": "event_type: \"sensor_poll\"",
+          "queryType": "lucene",
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "CPU & memory over time",
+      "type": "timeseries"
     },
     {
-      "id": 2,
-      "type": "timeseries",
-      "title": "Error events by type",
-      "description": "Count of error/failure events over time, broken down by event_type (top 10), using a self-adapting wildcard query -- event_type:*error* or event_type:*failed*, excluding error_monitor_* (the error-scanner's own housekeeping events, not actual failures). FIXES a staleness bug: the prior committed panel hardcoded 3 event types (elasticsearch_index_failed, model_call_error, entity_extraction_failed), and 2 of those 3 went dead 24-55 days ago (model_call_error last emitted 2026-06-07; entity_extraction_failed last emitted 2026-05-07) -- so the panel visually showed errors declining toward zero, which was actually just instrumentation churn, not improving health. Verified live over the last 7 days: 381 real error/failure events, dominated by elasticsearch_index_failed (170), generic error (107, level=ERROR asyncio/connector cleanup warnings), and slm_health_probe_http_error (90). This wildcard query self-adapts to future event-type churn instead of silently going stale again.",
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-logs"
+      },
+      "description": "Count of orchestrator state_transition events over time, broken down by originating state (from_state), rebuilt in the Grafana UI on Elasticsearch -- no Postgres table tracks orchestrator state transitions anywhere in this program's plan, so a PG rebuild would be inventing a source (audit disposition: rebuild-in-the-UI-on-ES). This panel's underlying query (event_type: \"state_transition\", Terms on from_state then Date Histogram) was already correct in the prior committed version -- confirmed against live data, not just trusted: the 3 from_state buckets (llm_call, init, tool_execution) match the field the orchestrator actually emits, and the query genuinely filters to state_transition docs (no BUG-1-style lowercase-boolean defect, since this query carries no boolean operators at all). What was stale was the committed DESCRIPTION's counts, not the query: it claimed 13,772 total docs / last emitted 2026-07-01, but the family is alive today -- verified live: 1,471 docs over the dashboard's 90d window (2026-07-14 to today), from_state split llm_call (602), init (494), tool_execution (375). Orchestrator is transitioning states normally.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 8
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
-          },
-          "query": "(event_type: *error* or event_type: *failed*) and not event_type: error_monitor*",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "event_type",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
-              }
-            },
-            {
-              "type": "date_histogram",
-              "id": "2",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
-              }
-            }
-          ]
+      "id": 3,
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
         }
-      ]
-    },
-{
-      "id": 4,
-      "type": "timeseries",
-      "title": "State transitions",
-      "description": "Count of orchestrator state_transition events over time, broken down by originating state (from_state). Query unchanged from the original (it was already correct) -- this is a value-confirm pass. Verified live: alive today (13,772 total docs, last emitted 2026-07-01T11:40), with exactly 3 distinct from_state values -- llm_call (5,818), tool_execution (4,562), init (3,392). Orchestrator is transitioning states normally.",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 24
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
-          "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
-          },
-          "query": "event_type: \"state_transition\"",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
+          "alias": "",
           "bucketAggs": [
             {
-              "type": "terms",
-              "id": "1",
               "field": "from_state",
+              "id": "3",
               "settings": {
-                "size": "10",
+                "min_doc_count": "1",
                 "order": "desc",
-                "orderBy": "_count"
-              }
+                "orderBy": "_term",
+                "size": "10"
+              },
+              "type": "terms"
             },
             {
-              "type": "date_histogram",
-              "id": "2",
               "field": "@timestamp",
+              "id": "2",
               "settings": {
-                "interval": "1h"
-              }
+                "interval": "auto"
+              },
+              "type": "date_histogram"
             }
-          ]
+          ],
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-logs"
+          },
+          "editorType": "builder",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "preserveQuery": false,
+          "query": "event_type: \"state_transition\"",
+          "queryType": "lucene",
+          "refId": "A"
         }
-      ]
+      ],
+      "title": "State transitions",
+      "type": "timeseries"
     }
   ],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
   "time": {
-    "from": "now-24h",
+    "from": "now-90d",
     "to": "now"
-  }
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ]
+  },
+  "timezone": "browser",
+  "title": "System Health",
+  "uid": "fre1072-system-health",
+  "version": 1,
+  "tags": [
+    "fre-1072",
+    "grafana-native"
+  ]
 }

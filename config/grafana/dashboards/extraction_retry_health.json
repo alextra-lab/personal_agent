@@ -1,205 +1,524 @@
 {
-  "uid": "fre1072-extraction-retry-health",
-  "title": "Extraction Retry Health",
-  "tags": [
-    "fre-1072",
-    "rebuilt-from-kibana"
-  ],
-  "timezone": "browser",
-  "schemaVersion": 39,
-  "version": 1,
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Consolidation-attempt outcomes and denial reasons for the entity-extraction consolidation pipeline (FRE-311's budget/retry gate). Source: Postgres consolidation_attempts, 2026-05-01 to present (5,101 rows). Rebuilt on Postgres (FRE-1211) -- the ES-era dashboard undercounted (ES drops events); these are the exact ledger counts.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "liveNow": false,
   "panels": [
     {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "outcome (success / extraction_returned_fallback / budget_denied) from Postgres consolidation_attempts, time-bucketed. Rebuilt on Postgres (FRE-1211) from the ES-era dashboard; the real PG population (5,101 rows, 2026-05-01 to present) is denser than the old ES-derived counts.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
-      "type": "timeseries",
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "dataset": "personal_agent",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(started_at,$__interval), outcome, COUNT(*) AS count FROM consolidation_attempts WHERE $__timeFilter(started_at) GROUP BY 1, outcome ORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
       "title": "Consolidation outcome over time",
-      "description": "consolidation_attempt_recorded outcomes (success/extraction_returned_fallback/budget_denied) over time, 90d/full history. Replaces the original \"Dead-letter rate\" panel, which was mislabeled -- dead_letter is not a real outcome value this event ever emits; the real signal it queried was extraction_returned_fallback. Critical timeline finding, verified against live ES weekly buckets: week of 2026-04-27 was 99.7% fallback (702/704, an acute incident), week of 05-04 shifted to 100% budget_denied/success (0 fallback), a two-week gap (05-11 to 05-18) had zero attempts, and every week since 2026-05-25 (5+ consecutive weeks) has been 100% success. A time-collapsed aggregate (46.3% fallback all-time) would misleadingly read as an active crisis; the time axis is what makes current health legible.",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Total consolidation_attempts rows by outcome, all time (2026-05-01 to present, 5,101 rows): success 3,217 / extraction_returned_fallback 1,625 / budget_denied 259. Rebuilt on Postgres (FRE-1211); these are the real PG counts, denser than the old ES-era figures (1,517 attempts / 556 successes / 259 cap_exceeded denials).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 0
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 2,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "overflow": "ellipsis",
+          "placement": "right",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: \"consolidation_attempt_recorded\"",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "outcome",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT outcome, COUNT(*) AS count FROM consolidation_attempts GROUP BY outcome ORDER BY count DESC",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            },
-            {
-              "type": "date_histogram",
-              "id": "2",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
               }
-            }
-          ]
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Consolidation outcome totals",
+      "type": "barchart"
     },
     {
-      "id": 2,
-      "type": "barchart",
-      "title": "Consolidation outcome totals",
-      "description": "Total consolidation_attempt_recorded outcomes (90d, full history -- 1517 attempts). See the Consolidation outcome over time panel before reading these totals in isolation: the 702 extraction_returned_fallback attempts are almost entirely from one resolved incident week (2026-04-27); the system has been 100% success for 5+ consecutive weeks since 2026-05-25.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "denial_reason breakdown for outcome='budget_denied' consolidation_attempts rows, all time (2026-05-01 to present). cap_exceeded is 100% of denials (259/259) -- it is the only denial_reason value this table has ever recorded. If this stays saturated, FRE-311's auto-tuning monitor should raise the per-role extraction allowance. Rebuilt on Postgres (FRE-1211).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 8
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 3,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "overflow": "ellipsis",
+          "placement": "right",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: \"consolidation_attempt_recorded\"",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "outcome",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT denial_reason, COUNT(*) AS count FROM consolidation_attempts WHERE outcome = 'budget_denied' GROUP BY denial_reason ORDER BY count DESC",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            }
-          ]
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Top denial reason",
+      "type": "barchart"
     },
     {
-      "id": 3,
-      "type": "barchart",
-      "title": "Top denial reason",
-      "description": "denial_reason breakdown for budget_denied consolidation attempts (90d, full history). cap_exceeded is 100% of denials (259/259) -- the auto-tuning monitor (FRE-311) should propose a cap raise if this stays saturated.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Median attempt_number for outcome='success' consolidation_attempts rows, time-bucketed. All-time (2026-05-01 to present, 3,217 successes): p50=1, p90=1, p99=33.8 (percentile_cont interpolated), max=75 attempts -- most successes land on the first try; the tail is longer than the old ES-era read (p99=12, max=13), which undercounted because ES dropped events. Rebuilt on Postgres (FRE-1211), source of truth.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 16
+        "y": 8
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
-          },
-          "query": "event_type: \"consolidation_attempt_recorded\" and outcome: \"budget_denied\"",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "denial_reason",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
       "id": 4,
-      "type": "timeseries",
-      "title": "Median attempts to success",
-      "description": "Median attempt_number for successful consolidation attempts, over time (90d, full history -- 556 successes; median=1, p90=2, p99=12, max=13 attempts). Dropped the original per-role breakdown: role is always entity_extraction (a single value across all 1517 attempts ever recorded), so the split added no information.",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 24
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: \"consolidation_attempt_recorded\" and outcome: \"success\"",
-          "metrics": [
-            {
-              "type": "percentiles",
-              "id": "1",
-              "field": "attempt_number",
-              "settings": {
-                "percents": [
-                  "50"
-                ]
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(started_at,$__interval), percentile_cont(0.5) WITHIN GROUP (ORDER BY attempt_number) AS median_attempts FROM consolidation_attempts WHERE outcome = 'success' AND $__timeFilter(started_at) GROUP BY 1 ORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "date_histogram",
-              "id": "1",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
               }
-            }
-          ]
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Median attempts to success",
+      "type": "timeseries"
     }
   ],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
   "time": {
-    "from": "now-24h",
+    "from": "now-110d",
     "to": "now"
-  }
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ]
+  },
+  "timezone": "browser",
+  "title": "Extraction Retry Health",
+  "uid": "fre1072-extraction-retry-health",
+  "version": 1,
+  "tags": [
+    "fre-1072",
+    "grafana-native"
+  ]
 }

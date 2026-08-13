@@ -31,32 +31,41 @@ def test_ac1_request_traces_deleted():
 
 
 def test_ac1_system_health_consolidation_deleted():
-    """AC-1: system_health 'Consolidation activity' (panel 3) is deleted."""
+    """AC-1: system_health 'Consolidation activity' is deleted.
+
+    FRE-1211 fully rebuilt this dashboard through the Grafana UI (create-visualization skill),
+    which reassigns fresh sequential panel ids on export -- the specific numeric id-gap this test
+    originally checked (FRE-1212 deleted id 3 from an otherwise hand-edited file, leaving ids
+    1/2/4) is an implementation detail of that one-off deletion, not a durable invariant across a
+    full rebuild. The real acceptance criterion -- that the "Consolidation activity" panel itself
+    is gone -- is what's checked here.
+    """
     db = load_dashboard("system_health")
-    # Should have 3 panels after deleting panel 3
     assert len(db["panels"]) == 3, f"Expected 3 panels, got {len(db['panels'])}"
-    # Panel 3 should not exist
-    panel_ids = [p["id"] for p in db["panels"]]
-    assert 3 not in panel_ids, "Panel 3 (Consolidation activity) still exists"
-    # Panels 1, 2, 4 should exist
-    assert 1 in panel_ids, "Panel 1 missing"
-    assert 2 in panel_ids, "Panel 2 missing"
-    assert 4 in panel_ids, "Panel 4 missing"
+    titles = [p["title"] for p in db["panels"]]
+    assert "Consolidation activity" not in titles, "Consolidation activity panel still exists"
 
 
 def test_ac1_turn_session_artifact_panel4_deleted():
-    """AC-1: turn_session_artifact panel 4 (empty query) is deleted."""
+    """AC-1: turn_session_artifact's empty-query panel is deleted.
+
+    FRE-1211 fully rebuilt this dashboard through the Grafana UI (create-visualization skill),
+    which reassigns fresh sequential panel ids on export -- the specific numeric id-gap this test
+    originally checked (FRE-1212 deleted id 4 from an otherwise hand-edited file, leaving ids
+    1/2/3/5) is an implementation detail of that one-off deletion, not a durable invariant across a
+    full rebuild. The real acceptance criterion -- that no panel runs an empty query against
+    es-agent-logs -- is what's checked here (also independently covered by
+    test_ac3_no_empty_queries_against_agent_logs below).
+    """
     db = load_dashboard("turn_session_artifact")
-    # Should have 4 panels after deleting panel 4
     assert len(db["panels"]) == 4, f"Expected 4 panels, got {len(db['panels'])}"
-    # Panel 4 should not exist
-    panel_ids = [p["id"] for p in db["panels"]]
-    assert 4 not in panel_ids, "Panel 4 (empty query) still exists"
-    # Panels 1, 2, 3, 5 should exist
-    assert 1 in panel_ids, "Panel 1 missing"
-    assert 2 in panel_ids, "Panel 2 missing"
-    assert 3 in panel_ids, "Panel 3 missing"
-    assert 5 in panel_ids, "Panel 5 missing"
+    for panel in db["panels"]:
+        ds = panel.get("datasource", {})
+        if isinstance(ds, dict) and ds.get("uid") == "es-agent-logs":
+            for target in panel.get("targets", []):
+                assert target.get("query", "") != "", (
+                    f"Panel '{panel['title']}' has an empty query against es-agent-logs"
+                )
 
 
 def test_ac2_no_unreferenced_datasources():

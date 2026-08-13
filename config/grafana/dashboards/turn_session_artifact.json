@@ -1,189 +1,470 @@
 {
-  "uid": "fre1072-turn-session-artifact-analytics",
-  "title": "Turn, Session & Artifact Analytics",
-  "tags": [
-    "fre-1072",
-    "rebuilt-from-kibana"
-  ],
-  "timezone": "browser",
-  "schemaVersion": 39,
-  "version": 1,
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Per-session activity (cost, turns, LLM calls, artifacts), turn complexity mix over time, turn classification detail, and artifact detail -- all Postgres-native (api_costs, route_traces, artifacts), replacing the Elasticsearch rebuild-from-Kibana version. FRE-1211.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "liveNow": false,
   "panels": [
     {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Per-session rollup keyed on session_id: SUM(cost_usd)/COUNT(*) from api_costs, COUNT(DISTINCT trace_id)/AVG(latency_total_ms) from route_traces, COUNT(*) from artifacts. FULL OUTER JOIN across the three (not through sessions -- grafana_ro is deliberately not granted SELECT on sessions, which carries raw conversation content). Top 15 sessions by total cost, last 90 days. FRE-1211 rebuild onto Postgres.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "total_cost_usd",
+              "scope": "series"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
-      "type": "barchart",
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "dataset": "personal_agent",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH costs AS (\n  SELECT session_id, SUM(cost_usd) AS total_cost_usd, COUNT(*) AS llm_calls\n  FROM api_costs\n  WHERE $__timeFilter(timestamp) AND session_id IS NOT NULL\n  GROUP BY session_id\n),\ntraces AS (\n  SELECT session_id, COUNT(DISTINCT trace_id) AS turns, AVG(latency_total_ms) AS avg_latency_ms\n  FROM route_traces\n  WHERE $__timeFilter(created_at) AND session_id IS NOT NULL\n  GROUP BY session_id\n),\narts AS (\n  SELECT session_id, COUNT(*) AS artifacts\n  FROM artifacts\n  WHERE $__timeFilter(created_at) AND session_id IS NOT NULL\n  GROUP BY session_id\n)\nSELECT COALESCE(costs.session_id, traces.session_id, arts.session_id) AS session_id,\n       COALESCE(costs.total_cost_usd, 0) AS total_cost_usd,\n       COALESCE(costs.llm_calls, 0) AS llm_calls,\n       COALESCE(traces.turns, 0) AS turns,\n       COALESCE(arts.artifacts, 0) AS artifacts\nFROM costs\nFULL OUTER JOIN traces ON traces.session_id = costs.session_id\nFULL OUTER JOIN arts ON arts.session_id = COALESCE(costs.session_id, traces.session_id)\nORDER BY total_cost_usd DESC\nLIMIT 15",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
       "title": "Session activity: cost, turns, calls, artifacts",
-      "description": "Per-session rollup: total cost, LLM calls, distinct turns (traces), and artifacts produced (FRE-703 C4 redesign). Previously also showed avg latency; latency_ms was retired from agent-logs with no log-field replacement (ADR-0129 moved intrinsic duration onto OTel spans, FRE-1219) and dropped from this panel rather than left silently empty.",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "route_traces.complexity (simple/moderate/complex/unknown -- NULL coalesced), COUNT(*) time-bucketed via $__timeGroupAlias(created_at, $__interval), stacked. Last 90 days -- route_traces oldest row is 2026-06-07, so this covers its full recorded history. FRE-1211 rebuild onto Postgres.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 0
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 2,
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "session_id: *",
-          "metrics": [
-            {
-              "type": "cardinality",
-              "id": "1",
-              "field": "trace_id"
-            },
-            {
-              "type": "sum",
-              "id": "3",
-              "field": "cost_usd"
-            },
-            {
-              "type": "count",
-              "id": "4"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "session_id",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(created_at, $__interval), COALESCE(complexity, 'unknown') AS complexity, COUNT(*) AS turns\nFROM route_traces\nWHERE $__timeFilter(created_at)\nGROUP BY 1, complexity\nORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            }
-          ]
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Turn complexity mix over time",
+      "type": "timeseries"
     },
     {
-      "id": 2,
-      "type": "timeseries",
-      "title": "Turn complexity mix over time",
-      "description": "Gateway complexity mix (simple/moderate/complex) per time bucket, stacked (FRE-703 C4 redesign).",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Per-trace classification from route_traces: task_type, complexity, decomposition_strategy, tool_iteration_count, model_role. Most recent 100 traces in the selected window. Rebuilt from a broken raw _source ES dump (Prediction 3) into an explicit-column Postgres table. FRE-1211.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 8
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 3,
+      "options": {
+        "cellHeight": "sm",
+        "showHeader": true
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: \"gateway_output\"",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "date_histogram",
-              "id": "1",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT trace_id, created_at, task_type, complexity, decomposition_strategy, tool_iteration_count, model_role\nFROM route_traces\nWHERE $__timeFilter(created_at)\nORDER BY created_at DESC\nLIMIT 100",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            },
-            {
-              "type": "terms",
-              "id": "2",
-              "field": "complexity",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
               }
-            }
-          ]
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Turn classification detail",
+      "type": "table"
     },
     {
-      "id": 3,
-      "type": "table",
-      "title": "Turn classification detail",
-      "description": "Raw document table. Columns in source: trace_id, task_type, complexity, strategy, token_count, mode",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Reframed from the old panel's claimed columns (artifact_id, trace_id, session_id, probe_status, envelope_ok, served_mime, http_status, gate_decision) -- confirmed live via information_schema that no Postgres table carries probe_status/envelope_ok/served_mime/http_status/gate_decision; that envelope/gate-probe signal, if it exists at all, is ES-only and out of scope for this rebuild. Shown instead: what public.artifacts actually tracks -- id, session_id (NULL for user uploads with no chat session), type, content_type, size_bytes, created_by, created_at. Most recent 100 artifacts in the selected window. FRE-1211.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "bytes"
+        }
+      },
       "gridPos": {
         "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 16
+        "w": 12,
+        "x": 12,
+        "y": 8
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 4,
+      "options": {
+        "cellHeight": "sm",
+        "showHeader": true
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: \"gateway_output\"",
-          "metrics": [
-            {
-              "type": "raw_document",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": []
-        }
-      ]
-    },
-{
-      "id": 5,
-      "type": "table",
-      "title": "Artifact envelope detail (join on artifact_id)",
-      "description": "Raw document table. Columns in source: artifact_id, trace_id, session_id, probe_status, envelope_ok, served_mime, http_status, gate_decision",
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 32
-      },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
-      "targets": [
-        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT id AS artifact_id, session_id, type, content_type, size_bytes, created_by, created_at\nFROM artifacts\nWHERE $__timeFilter(created_at)\nORDER BY created_at DESC\nLIMIT 100",
           "refId": "A",
-          "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
-          },
-          "query": "event_type: (\"artifact_envelope_integrity\" or \"artifact_gate_decision\")",
-          "metrics": [
-            {
-              "type": "raw_document",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": []
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Artifact detail (Postgres artifacts)",
+      "type": "table"
     }
   ],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
+  "tags": [
+    "fre-1072",
+    "grafana-native"
+  ],
   "time": {
-    "from": "now-24h",
+    "from": "now-90d",
     "to": "now"
-  }
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ]
+  },
+  "timezone": "browser",
+  "title": "Turn, Session & Artifact Analytics",
+  "uid": "fre1072-turn-session-artifact-analytics",
+  "version": 1
 }

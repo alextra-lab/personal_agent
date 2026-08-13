@@ -254,8 +254,19 @@ class SecondBrainConsolidator:
                 # per-iteration — bound_contextvars restores the prior value on exit
                 # rather than a blanket clear, so it cannot leak capture N's user_id
                 # into capture N+1's log lines.
+                #
+                # Bound as `capture_trace_id`, not `trace_id` (ADR-0129 D3 / FRE-1069):
+                # the whole run now executes under one "consolidation" root span, and
+                # `_add_span_context` (telemetry/logger.py) unconditionally overwrites
+                # event_dict["trace_id"] from the active span on every log call — it
+                # does not defer to an explicit kwarg or an already-bound contextvar.
+                # Binding/passing `trace_id=capture.trace_id` here would therefore be
+                # silently clobbered by the run-level span's trace_id on every log
+                # line, destroying the per-capture correlation this binding exists to
+                # provide. `capture_trace_id` is a field `_add_span_context` never
+                # touches, so it survives.
                 with structlog.contextvars.bound_contextvars(
-                    trace_id=capture.trace_id,
+                    capture_trace_id=capture.trace_id,
                     session_id=capture.session_id,
                     user_id=str(capture.user_id),
                 ):
@@ -267,6 +278,7 @@ class SecondBrainConsolidator:
                             log.debug(
                                 "consolidation_skipped_already_consolidated",
                                 capture_num=i,
+                                capture_trace_id=capture.trace_id,
                                 trace_id=capture.trace_id,
                             )
                             continue
@@ -274,6 +286,7 @@ class SecondBrainConsolidator:
                             "consolidation_processing_capture",
                             capture_num=i,
                             total=len(captures),
+                            capture_trace_id=capture.trace_id,
                             trace_id=capture.trace_id,
                         )
                         result = await self._process_capture(
@@ -306,12 +319,14 @@ class SecondBrainConsolidator:
                             capture_num=i,
                             entities=result.get("entities_created", 0),
                             relationships=result.get("relationships_created", 0),
+                            capture_trace_id=capture.trace_id,
                             trace_id=capture.trace_id,
                         )
                     except Exception as e:
                         log.error(
                             "capture_processing_failed",
                             capture_num=i,
+                            capture_trace_id=capture.trace_id,
                             trace_id=capture.trace_id,
                             error=str(e),
                             error_type=type(e).__name__,
@@ -602,6 +617,7 @@ class SecondBrainConsolidator:
             )
             log.warning(
                 "consolidation_extraction_budget_denied",
+                capture_trace_id=capture.trace_id,
                 trace_id=capture.trace_id,
                 attempt_number=attempt_number,
                 previous_failure_count=previous_failures,
@@ -650,6 +666,7 @@ class SecondBrainConsolidator:
                 )
                 log.warning(
                     "consolidation_extraction_capped",
+                    capture_trace_id=capture.trace_id,
                     trace_id=capture.trace_id,
                     attempt_number=attempt_number,
                     max_attempts=max_attempts,
@@ -701,6 +718,7 @@ class SecondBrainConsolidator:
             )
             log.warning(
                 "consolidation_extraction_fallback_skip",
+                capture_trace_id=capture.trace_id,
                 trace_id=capture.trace_id,
                 attempt_number=attempt_number,
                 previous_failure_count=previous_failures,
@@ -797,6 +815,7 @@ class SecondBrainConsolidator:
                 unresolved_entity_mentions.append(raw_name)
                 log.warning(
                     "consolidation_entity_write_unresolved",
+                    capture_trace_id=capture.trace_id,
                     trace_id=capture.trace_id,
                     session_id=capture.session_id,
                     entity_name=raw_name,
@@ -847,6 +866,7 @@ class SecondBrainConsolidator:
         if not turn_written:
             log.warning(
                 "consolidation_turn_write_failed",
+                capture_trace_id=capture.trace_id,
                 trace_id=capture.trace_id,
                 session_id=capture.session_id,
                 reason="create_conversation reported failure; entities written without a Turn",
@@ -876,6 +896,7 @@ class SecondBrainConsolidator:
                     entities_dispatch_finding_failed += 1
                     log.warning(
                         "dispatch_finding_sysgraph_unavailable",
+                        capture_trace_id=capture.trace_id,
                         trace_id=capture.trace_id,
                         entity_name=entity_data.get("name", ""),
                     )
@@ -892,6 +913,7 @@ class SecondBrainConsolidator:
                     entities_dispatch_finding_failed += 1
                     log.warning(
                         "dispatch_finding_sysgraph_write_failed",
+                        capture_trace_id=capture.trace_id,
                         trace_id=capture.trace_id,
                         entity_name=entity_data.get("name", ""),
                         error=str(e),
@@ -918,6 +940,7 @@ class SecondBrainConsolidator:
                 relationships_dispatch_skipped += 1
                 log.warning(
                     "dispatch_relationship_endpoint_skipped",
+                    capture_trace_id=capture.trace_id,
                     trace_id=capture.trace_id,
                     source=source_name,
                     target=target_name,

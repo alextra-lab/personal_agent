@@ -1039,13 +1039,18 @@ class BrainstemScheduler:
     async def _lifecycle_loop(self) -> None:
         """Run data lifecycle tasks: hourly disk check, daily 2AM archive, weekly Sunday 3AM purge."""
         while self.running:
-            # ADR-0129 D3 / FRE-1069: root span for this tick — opened before the
-            # existing trace-id mint below so it reads this span's identity instead
-            # of minting a disconnected one.
-            span, token, cv_tokens = open_root_span("scheduler.lifecycle", tracer=self._tracer)
-            iteration_trace_id = _new_scheduler_trace_id("scheduler.lifecycle")
+            root_span_state: RootSpanState | None = None
+            iteration_trace_id: str | None = None
             try:
                 await asyncio.sleep(LIFECYCLE_CHECK_INTERVAL_SECONDS)
+
+                # ADR-0129 D3 / FRE-1069: root span for this tick — opened after the
+                # idle sleep (matching _session_summary_sweep_loop's pattern) so the
+                # span measures the tick's actual work, not idle wait time, and
+                # opened before the trace-id mint below so it reads this span's
+                # identity instead of minting a disconnected one.
+                root_span_state = open_root_span("scheduler.lifecycle", tracer=self._tracer)
+                iteration_trace_id = _new_scheduler_trace_id("scheduler.lifecycle")
 
                 now = datetime.now(timezone.utc)
                 lifecycle_enabled = getattr(settings, "data_lifecycle_enabled", True)
@@ -1464,7 +1469,8 @@ class BrainstemScheduler:
                     trace_id=iteration_trace_id,
                 )
             finally:
-                close_root_span(span, token, cv_tokens)
+                if root_span_state is not None:
+                    close_root_span(*root_span_state)
 
     async def _publish_feedback_events(
         self, feedback_events: list[Any], *, trace_id: str | None = None

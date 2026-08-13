@@ -222,13 +222,18 @@ Where a change **replaces** an existing working path, the addition and the remov
 tickets**. Three things follow, and the third is what makes the first two bind:
 
 1. The removal is `blockedBy` the addition.
-2. The removal's acceptance criterion is **observed data on the new path** — not that the new path is
-   configured, registered, exported or deployed.
-3. **The removal does not receive its `stream:` label until the addition's observed-data evidence is
-   recorded on the addition ticket.** A `blockedBy` relation clears when its blocker **merges**
-   (lifecycle-rules § Dispatch), which is earlier than deploy and much earlier than proof. The relation
-   therefore supplies *ordering* and the label gate supplies *proof*; without the third clause the
+2. **Observed data on the new path is a dispatch precondition of the removal, not the removal's
+   acceptance criterion.** The removal does not receive its `stream:` label until evidence that the new
+   path is carrying data is recorded on the addition ticket. A `blockedBy` relation clears when its
+   blocker **merges** (lifecycle-rules § Dispatch), which is earlier than deploy and much earlier than
+   proof; the relation therefore supplies *ordering* and this gate supplies *proof*. Without it the
    removal can be dispatched and merged while the new path carries nothing, which is the precise harm.
+3. **The removal ticket's own acceptance criterion is about the removal**: once it lands, the old path
+   emits nothing **and the new path is still observed carrying data**. Making the precondition serve as
+   the criterion instead — as this ADR's second draft did — yields a criterion that is already true
+   before the ticket is dispatched, which a no-op removal satisfies and which master's own decidability
+   check (ADR-0130 D6) would rightly reject at the label gate. The precondition proves the new path
+   works *before* the removal; the criterion proves it still works *after*, with the old path gone.
 
 **The scope test is whether the old and new paths can both be live at the same time.** Different
 processes, hosts, repositories or deploy units are **indicators** that they can — not the definition.
@@ -421,19 +426,29 @@ Dispatch is both earlier and, for cross-repository work, the only gate that sees
   until the addition's evidence lands, so the old path lingers by design.
 - Judging whether both paths can be live at once is itself a judgement at the dispatch gate, and a wrong
   call in the permissive direction reproduces exactly the coupling D4 forbids.
+- **This is the third and fourth checkpoint on criterion quality, and a fifth is already filed.**
+  ADR-0126 D7 asks whether a criterion can fail; ADR-0130 D6 asks whether it is decidable from the
+  ticket's own deliverable; this ADR adds D3's dependency question and D4's cutover question; and
+  FRE-1112 (Needs Approval) proposes a further one — whether the stated check is *executable* against
+  the fixtures it names, from where it must run. That ticket warns in its own body that *"three rules
+  that each reject a different defect class are harder to apply than one that composes them"*, and this
+  ADR makes that warning more pressing rather than less. **Composing them is deliberately not attempted
+  here**: FRE-1112 is an open decision the owner has not approved, and folding an unapproved rule into
+  this one would repeat the over-reach this ADR's own scope discipline exists to avoid. It is named as
+  the next question, not answered.
 
 ### Risks and Mitigations
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
 | The pre-label list grows until master skims it, and all three questions degrade together | High | D3 carries a retirement condition over an enumerable population, so one of them is removable by construction; D1/D2 move the load to authoring, where it is spent once per chain rather than once per ticket; AC-4 fails if labelled tickets carry no recorded answer |
-| D2's sufficiency test is applied as a rubber stamp — every row judged sufficient | High | AC-2 requires a **blind reperformance** of the test over the same mapping and fails on any unexplained divergence in either direction, so an audit that flags only the known case and passes everything else is caught rather than assumed to work |
+| D2's sufficiency test is applied as a rubber stamp — every row judged sufficient | High | AC-2 reperforms entailment on the rows the audit marked **sufficient**, so a stamp is caught by finding what it passed rather than by trusting a claim about reading order; a positive control of synthetic rows with known status fails the criterion if the rubric itself cannot classify them. Comparing two flag sets was the second draft's answer and was weaker — two correlated readers produce identical sets that are identically wrong |
 | The split parks a cross-child property on a child, contradicting ADR-0130 D1 | High | D1's second rule requires each half to be decidable by its own owner and sends the residual to the seam; the worked example carries three rows, not two, and AC-1 fails if any half left undecidable by the split was not assigned to the seam. This is the defect codex found in this ADR's own first draft |
 | "Two parties" is read narrowly, reproducing FRE-1221's original narrowness | Medium | D1 states four sentence shapes covering shipping, reading, reaching and obtaining; D3's question separately names a network path, a host, a credential and a deployed component; AC-1 enumerates two-party obligations from the ADR's **Decision section** rather than from the mapping's own phrasing, so a passively-worded row cannot escape classification |
 | The both-live-at-once test is judged permissively so a coupled cutover ships as one ticket | Medium | D4 states the test as the property itself and demotes process/host/repository/deploy-unit to indicators that mislead in both directions, with the reasoning recorded on the ticket; AC-3 fails on any replacement that shipped whole |
 | The removal merges before the new path carries anything, because the relation cleared at the addition's merge | High | D4 clause 3 withholds the removal's `stream:` label until the addition's observed-data evidence is recorded; AC-3 reads the label's timing against that evidence and fails if the label came first |
 | The removal is never built, so the old path runs forever | Medium | Not fully mitigated, and stated as such: the removal is a filed ticket with a relation, visible on the board and subject to the same approval and labelling as any other work. What the rule buys is that a lingering old path is a queue entry rather than a silent state — not a guarantee it is removed |
-| D3 is never retired because nobody re-audits the pre-existing mappings | Medium | The audit is a filed implementation ticket in this ADR's own chain, not an aspiration; AC-4 fails if the retirement condition is unmet **after** that audit has closed, so an incomplete audit cannot be excused by a still-open population |
+| D3 is never retired because nobody re-audits the pre-existing mappings | Medium | The audit is a filed implementation ticket in this ADR's own chain, not an aspiration; AC-4 fails if the retirement condition is unmet at adjudication **regardless of the audit ticket's state**, so the condition cannot be dodged by leaving that ticket open — which is what the second draft's "after the audit has closed" wording allowed |
 | The whole thing is a fourth observer over the same inference and does not converge | High | Deliberately confronted rather than mitigated away: D1 and D4 change the artifact's shape permanently and require no vigilance once applied; D2 and D3 are reads. AC-5 is the honest test — it audits post-amendment chains directly rather than waiting for someone to file a defect report |
 
 ---
@@ -494,31 +509,42 @@ implementing ticket.
   makes this an outcome rather than a paperwork check: perfectly split rows over an unbuilt endpoint
   fail.
 
-- **AC-2 — The sufficiency test is discriminating on rows nobody has pre-marked.** · **Check:** the seam
-  adjudicator applies D2's test independently to **every** row of ADR-0129's mapping on FRE-1043 —
-  reading each named criterion on its owning ticket and judging entailment — **before** reading the flag
-  set published by this ADR's audit ticket, then compares the two sets row by row. · *Fails if* the two
-  sets diverge on any row without a stated resolution: a row the audit passed and the reperformance
-  flags is a rubber stamp, and a row the audit flagged and the reperformance passes is over-flagging.
-  Also *fails if* D5.d is absent from **both** sets, or if any flagged row's disposition is anything
-  other than D1's and D2's permitted resolutions — a criterion that does entail the obligation, a filed
-  covering ticket with its id on the row, or assignment to the seam. A flag withdrawn on the judgement
-  that the gap is acceptable is a failure, not a disposition. The blind reperformance is the point: an
-  audit hard-coded to flag the one case everybody already knows about passes any check that only asks
-  whether D5.d was caught.
+- **AC-2 — The sufficiency test catches rows the audit passed, and its rubric survives a control.** ·
+  **Check:** three parts, and the ordering is structural rather than promised — the audit ticket closes
+  and publishes its flag set before the seam is activated, so that set is a durable, timestamped record
+  the seam cannot retro-fit. (a) **Reperformance on passed rows:** the seam adjudicator draws the rows
+  ADR-0129's audit marked *sufficient* and independently tests entailment on each, reading the named
+  criterion on its owning ticket. (b) **Positive control:** the adjudicator constructs synthetic rows of
+  known status — some whose named criterion demonstrably entails the obligation, some whose plainly does
+  not, at least three of each — and runs the same rubric over them without knowing which is which by
+  construction order. (c) **Dispositions:** read every flagged row's resolution. · *Fails if* any
+  audit-passed row fails entailment on reperformance — that is the rubber stamp, caught without relying
+  on anyone's claim about reading order; if the rubric misclassifies any control row, which means the
+  instrument does not work and the whole audit is uninterpretable; if D5.d appears in neither the audit's
+  flags nor the reperformance; or if any flagged row's disposition is anything other than D1's and D2's
+  permitted resolutions — a criterion that does entail the obligation, a filed covering ticket with its
+  id on the row, or assignment to the seam. A flag withdrawn on the judgement that the gap is acceptable
+  is a failure, not a disposition. Testing *passed* rows rather than comparing two flag sets is the
+  point: two correlated readers can produce identical sets that are identically wrong, and comparing
+  them would call that agreement.
 
 - **AC-3 — A path replacement ships as two tickets, and the removal is dispatched only after the new
-  path is observed carrying data.** · **Check:** enumerate every **replacement of an existing working
-  path** completed during the window, identified from merged changes and from ADR Decision sections —
-  **not** from ticket scope text, since a compliant split leaves no single ticket carrying both
-  operations and quantifying over scope makes the population empty by construction. For each: confirm
-  two tickets with a `blockedBy` relation; read the removal ticket's criterion; and read the removal
-  ticket's history to establish whether its `stream:` label was applied before or after the addition's
-  observed-data evidence was recorded. · *Fails if* any replacement shipped as one ticket; if the
-  relation is absent; if the removal's criterion is satisfied by the new path being configured,
-  registered, exported or deployed rather than by data observed on it; if the removal was labelled
-  before that evidence existed — **or**, if no path replacement completed during the window, reports
-  **inconclusive** rather than green.
+  path is observed carrying data.** · **Check:** enumerate every path replacement whose **addition
+  ticket was filed** during the window — *begun*, not *completed*, so an abandoned removal, a merged
+  no-op removal and a removal left permanently unlabelled all stay inside the population instead of
+  escaping it by never finishing. The inventory is bounded and enumerable: FrenchForest Linear tickets
+  filed in the window, plus merged changes in the repositories those tickets name — which is what makes
+  a cross-repository case like `slm_server` reachable rather than out of scope by accident. Discovery is
+  from ticket bodies and ADR Decision sections, **not** from a single ticket's scope text, since a
+  compliant split leaves no one ticket carrying both operations. For each: confirm two tickets with a
+  `blockedBy` relation; read the removal ticket's own criterion; and read the removal ticket's history
+  against the addition ticket's evidence timestamps to establish whether the `stream:` label was applied
+  before or after the observed-data evidence was recorded. · *Fails if* any replacement shipped as one
+  ticket; if the relation is absent; if the removal's own criterion does not assert the old path gone
+  **and** the new path still carrying data — in particular if it merely restates the dispatch
+  precondition, which is already true before the ticket starts; if the removal was labelled before the
+  addition's evidence existed; if a removal merged without its old path actually being gone — **or**,
+  if no path replacement was begun during the window, reports **inconclusive** rather than green.
 
 - **AC-4 — The backstop produces recorded answers, those answers hold, and an incomplete audit cannot
   excuse a live D3.** · **Check:** (a) list implementation tickets labelled during the window whose
@@ -528,25 +554,33 @@ implementing ticket.
   re-audited under D1 and D2 or its chain has reached a terminal state. · *Fails if* any such ticket was
   labelled with no recorded answer; if any ticket answered "no" subsequently produced a filed defect
   reporting that it depended on something nothing provisions — the answer having been **wrong** is the
-  substantive failure, not the missing paperwork; or if the retirement condition is unmet **while the
-  audit ticket has already closed**, which means the audit did not cover its own population. A still-open
-  population is an acceptable reason for D3 to remain live only while the work that drains it is still
-  outstanding.
+  substantive failure, not the missing paperwork; or if **the retirement condition is unmet at
+  adjudication, whatever the audit ticket's state**. An open audit ticket is not an excuse: making it
+  one would let the condition be dodged indefinitely by never closing that ticket, which is the cheapest
+  possible evasion. A red verdict here is a legitimate and expected output — the seam closes on
+  adjudication rather than on success (ADR-0130 D2), master files remediation, and D3 simply stays live
+  with its population named.
 
 - **AC-5 — No post-amendment chain closes a child against a dependency that was never delivered.** ·
   **Check:** two parts, and the first is the substantive one. (a) **Active:** for each post-amendment
-  chain whose last child reached `Done` during the window, re-derive from the system whether any child's
-  criteria depended on a network path, host, credential or deployed component that was undelivered at
-  the moment that child closed. (b) **Passive:** search Linear for tickets filed during the window
-  reporting that merged work depends on an unprovisioned precondition, and classify each hit's chain as
-  pre- or post-amendment. · *Fails if* (a) finds any post-amendment child that closed against an
-  undelivered dependency, or (b) finds any such ticket naming a post-amendment chain. Reports
-  **inconclusive** if fewer than three post-amendment chains that contain **at least one two-party
-  obligation or one path replacement** completed during the window — the denominator counts chains that
-  actually exercise the rule, because three chains with no external dependency at all would turn this
-  green while testing nothing. The active half exists because an absence-of-filed-reports check passes
-  whenever nobody notices; a chain nobody audited is not a chain that worked. A **pre-amendment** chain
-  producing such a ticket is not a failure here — those are D3's population, and AC-4 judges them.
+  chain whose last child reached `Done` during the window, determine whether any child's criteria
+  depended on a network path, host, credential or deployed component that was undelivered when that
+  child closed. This is a **historical** question and must be decided from records that carry time, not
+  from current state, which would report today's world and pass a gap since filled: the child's
+  close-out evidence comment (master writes one on every `Done` — lifecycle-rules § Evidence contract),
+  the git history of the provisioning artifact, and the deploy history. Where no such timestamped record
+  exists for a child, that chain reports **inconclusive** rather than green. (b) **Passive:** search
+  Linear for tickets filed during the window reporting that merged work depends on an unprovisioned
+  precondition, and classify each hit's chain as pre- or post-amendment. · *Fails if* (a) finds any
+  post-amendment child that closed against an undelivered dependency, or (b) finds any such ticket
+  naming a post-amendment chain. Reports **inconclusive** if fewer than three post-amendment chains
+  qualify, where qualifying means containing at least one path replacement, **or** at least one
+  two-party obligation whose provider half required something **not already deployed when the chain was
+  filed** — an obligation resting on Postgres or any already-running service is an easy negative, and
+  three of those would turn this green without exercising provisioning at all. The active half exists
+  because an absence-of-filed-reports check passes whenever nobody notices; a chain nobody audited is
+  not a chain that worked. A **pre-amendment** chain producing such a ticket is not a failure here —
+  those are D3's population, and AC-4 judges them.
 
 **Seam ticket:** filed with the chain, parked (`Backlog`), carrying a **due date of 2026-11-12** —
 ninety days after the contract amendment is expected to merge, which is the earliest date AC-1, AC-3,
@@ -568,6 +602,8 @@ first advance-dispatch on or after the due date.
 - FRE-1073 — ADR-0129 B8: that ADR's seam ticket, and the owner of the end-to-end row in D1's corrected split
 - FRE-1230 — owns the `slm_server` restart gate, where FRE-1071's coupling actually bites; the instance of the pattern D4 generalises
 - FRE-1253 — whether a seam ticket's due date should be derived from its chain's last dependent; filed separately and deliberately not folded in here
+- FRE-1112 (Needs Approval) — the sibling gap in the same layer: whether a criterion's stated check is *executable* against the fixtures it names; its own body raises the checkpoint-composition question this ADR's Negative Consequences names and does not answer
+- FRE-1081 — ADR-0130's seam ticket, `Approved` and parked with a 2026-10-29 due date; the unadjudicated objective that makes Option 2's in-place amendment unsafe
 - ADR-0130 — Two Tiers of Acceptance Criteria (**Accepted**): D1's coverage clause and D6's dispatch check are extended by this ADR; its Option 1 rejection is the argument this ADR had to answer about its own D3
 - ADR-0129 — OpenTelemetry Instrumentation, with Trace Visibility as the Acceptance Bar (**Accepted**, D6 amended 2026-08-07 and 2026-08-08): the chain whose mapping is the worked example; unchanged by this ADR
 - ADR-0033 — Multi-Provider Model Taxonomy (**Accepted**): its clean-break decision is the case D4's scope test exists to preserve
@@ -594,4 +630,8 @@ cutover rule be included after the session checked that it is absent from the co
 natural home is dispatch rather than merge. Codex round one returned ten blocking findings against the
 first draft; the two most consequential were that AC-3's population was empty by construction under
 compliance, and that D1's own worked split parked a cross-child reachability property on a child — the
-exact violation of ADR-0130 D1 this ADR exists to prevent. Both are fixed here.
+exact violation of ADR-0130 D1 this ADR exists to prevent. Round two verified six of those repairs and
+returned five further blocking findings, the sharpest being that D4 had made the dispatch precondition
+serve as the removal ticket's acceptance criterion — a criterion already true before the ticket is
+dispatched, which ADR-0130 D6 would reject at the label gate. All are fixed here; D4 now separates the
+precondition from the criterion explicitly.

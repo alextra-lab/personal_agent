@@ -42,18 +42,18 @@ cloud compose stack with no host port publication at all, and its AC-4 constrain
 Collector exporter may address anything off-box* — which is the opposite direction and adjudicates
 nothing about receiving.
 
-**Failure 2 — the named criterion does not entail the obligation.** D5.d cites FRE-1071's AC-1 and AC-3.
-AC-1 is traceparent continuation, so the exported span's trace id equals the caller's. AC-3 is
-Elasticsearch-writer removal with existing documents' `ts` untouched. Neither asserts that an endpoint
-exists, or that it is reachable from the host the producer runs on. A green verdict on both leaves the
-obligation entirely unproven.
+**Failure 2 — the named criteria do not entail the obligation.** D5.d cites FRE-1071's first and third
+criteria (B6-1 and B6-3 in the FRE-1080 rescope plan). The first is traceparent continuation, so the
+exported span's trace id equals the caller's. The third is that no code path writes telemetry to
+Elasticsearch at all — the writer and the client-side index-URL formatting removed, with a test
+observing zero outbound Elasticsearch requests. Neither asserts that an endpoint exists, or that it is
+reachable from the host the producer runs on. A green verdict on both leaves the obligation entirely
+unproven.
 
 This is precisely the hole the existing integrity check does not cover. Codex's review of the mapping's
 first draft caught **six rows with an owner and no criterion** (D2.b, D2.c, D3.c, D3.e, D8.a, D8.c) and
 all six were fixed. Nobody tested for a row with an owner and the **wrong** criterion, because a
-presence check cannot distinguish the two — both look complete. As a minor corroborating detail, the
-mapping's own header states 43 rows while the published table enumerates 41; a count that does not
-reconcile is the same class of defect at a different altitude, and it survived the same review.
+presence check cannot distinguish the two — both look complete.
 
 **Failure 3 — the removal and its replacement shipped as one change.** Had FRE-1071 shipped only the
 OTLP export, a missing ingress would have been a silent no-op: spans go nowhere, Elasticsearch keeps
@@ -111,105 +111,140 @@ That is the axis this ADR acts on.
 
 **What did we decide?**
 
-Four decisions across three mechanisms. D1 and D2 change how the obligation → owner mapping is written
+Five decisions across three mechanisms. D1 and D2 change how the obligation → owner mapping is written
 (authoring, `adr` Step 5). D3 is a bounded backstop at dispatch for chains authored before them. D4
-changes how a cutover is decomposed. D5 states the edit surface.
+changes how a cutover is decomposed and dispatched. D5 states the edit surface.
 
-### D1 — An obligation naming two parties may not carry a single non-seam owner, and assignment follows the provisioner
+### D1 — An obligation naming two parties is split by provisioner, and every half must be decidable by its own owner
 
 In the obligation → owner mapping, an obligation whose sentence names **two parties** — *A ships to B*,
-*A reads B's output*, *A reaches B*, *A gets X from B* — is **split into a provider row and a consumer
-row**, each owned by the deliverable that makes its own half true.
+*A reads B's output*, *A reaches B*, *A gets X from B* — may not carry a single non-seam owner. It is
+**split**, and the split is governed by two rules applied in order:
 
-**Assignment follows who provisions the thing, never the grammatical subject.** D5.d's subject is
-`slm_server`; its provisioner is the Collector. Splitting it yields:
+1. **Assignment follows who provisions the thing, never the grammatical subject.** D5.d's subject is
+   `slm_server`; its provisioner is the Collector.
+2. **Each half must be stated at an altitude its own owner's deliverable can decide** (ADR-0130 D1).
+   A half that remains undecidable after the split is **not** forced onto either ticket — it goes to the
+   seam, which is where a property observable only once two children interact belongs by definition.
 
-| half | obligation | owner |
-|---|---|---|
-| provider | an OTLP endpoint exists that is reachable from off-box | FRE-1070 |
-| consumer | `slm_server` addresses that endpoint instead of formatting index URLs | FRE-1071 |
+Applied to D5.d, this yields three rows, not two:
 
-The split is what makes the defect visible, because the provider half then has **no criterion available
-on FRE-1070** — its AC-4 constrains exporting off-box, and no criterion of its asserts an inbound path.
-An unfillable "Proved by" cell is a legible, unmissable signal at authoring time. The single-owner form
-concealed it behind a citation that read as complete.
+| half | obligation | owner | decidable there because |
+|---|---|---|---|
+| provider | the Collector publishes an OTLP receiver on a port reachable from outside its container network | FRE-1070 | its own compose file, plus a probe from the container host |
+| consumer | `slm_server` addresses that endpoint instead of formatting index URLs | FRE-1071 | its own effective-configuration artifact |
+| end-to-end | a span emitted by `slm_server` on its own host arrives at the VPS Collector | **seam** (FRE-1073) | needs both deliverables and the edge between them |
 
-**A half that no ticket in the chain can make true has exactly two resolutions, and neither is prose:**
+**The split is what makes the defect visible**, and it does so at the provider row: FRE-1070 has **no
+criterion asserting a published, host-reachable port** — its AC-4 constrains exporting off-box and no
+other criterion of its addresses ingress. The "Proved by" cell is unfillable, which is a legible,
+unmissable signal at authoring time. The single-owner form concealed exactly that behind a citation
+that read as complete.
+
+**Note what the third row does *not* do.** Sending end-to-end reachability to the seam is the same
+disposition ADR-0130 D1 already mandates, and it is emphatically not where the fix lives — the seam
+adjudicates late, which is the cost FRE-1221 correctly identified. The fix lives in the **provider
+row**, which is decidable early and was missing entirely.
+
+**A provider half that no ticket in the chain can make true has exactly two resolutions, and neither is
+prose:**
 
 1. **A provisioning ticket is filed, and its `blockedBy` relation is written in the same action.** One
    action, not two — a ticket entering a chain without its relations is a dispatch bug that surfaces as
    a false head (lifecycle-rules § Dispatch), and a provisioning ticket with no relation is precisely a
    precondition with no ordering.
-2. **The half is assigned to the ADR's seam ticket**, which is where anything not decidable from a
-   single child's deliverable belongs by definition (ADR-0130 D1), so its adjudication is expected
-   rather than discovered.
+2. **The half is assigned to the seam**, so its adjudication is expected rather than discovered.
 
 **Recording the assumption in prose with no owner is not a resolution.** That is the state FRE-1220 was
 already in, and it is what a mapping exists to make impossible.
 
 ### D2 — A row's named criterion must *entail* the obligation, not merely sit on the right ticket
 
-The mapping's integrity check gains a **sufficiency** test alongside its existing **presence** test. For
-each row: read the criterion named in "Proved by" on the owning ticket, and confirm that **a passing
-verdict on that criterion makes the obligation true**. If it does not, the row is not covered, whatever
-its cells contain.
+The mapping's integrity check gains a **sufficiency** test alongside its existing **presence** test.
+**It applies to every row**, one-party and split alike. For each: read the criterion named in "Proved
+by" on the owning ticket, and confirm that **a passing verdict on that criterion makes the obligation
+true**. If it does not, the row is not covered, whatever its cells contain.
 
 Presence asks *is there an owner and a criterion?* Sufficiency asks *would this criterion, passing, make
 this sentence true?* D5.d passes the first and fails the second, which is why it shipped.
 
-This test is a judgement, and it is deliberately applied to a **small, pre-filtered set**: D1's split is
-mechanical from the sentence's grammar and is what surfaces the rows most likely to fail sufficiency.
-The two compose — the cheap grammatical filter produces the candidates, and the expensive semantic read
-is spent only on them.
+**D1's split is not a filter on which rows are tested.** It is the operation that produces the rows most
+likely to fail sufficiency — a provider half with no available criterion fails it on sight — but a
+one-party row citing a criterion that does not prove it is covered by this test and is not exempted by
+anything in D1.
 
-### D3 — The dispatch backstop, narrowed, bounded, and carrying its own retirement condition
+A row failing sufficiency is resolved the same three ways: a criterion that does entail the obligation
+is named instead, a covering ticket is filed with its id recorded on the row, or the row is assigned to
+the seam. A sufficiency flag may be **withdrawn** only on the finding that the original criterion does
+entail the obligation after all — not on a judgement that the gap is acceptable.
+
+### D3 — The dispatch backstop: one question, bounded, recorded, with a retirement condition
 
 For chains whose mappings were published **before** D1 and D2 are in force, the mapping cannot be
 relied on, so one question is added to the existing pre-`stream:`-label list in `lifecycle-rules`
 § Dispatch and `master` SKILL Step 8 — an added read at a step already mandatory, not a new step:
 
-> **Is this ticket's own deliverable what makes each of its criteria true, or does something outside it
-> have to exist first?**
+> **Does any criterion of this ticket depend on a network path, a host, a credential or a deployed
+> component that does not exist yet and that no ticket in this chain delivers?**
 
-If something outside it has to exist first, D1's two resolutions apply unchanged: a provisioning ticket
-with its relation written in the same action, or the assumption recorded on the ADR's seam ticket.
+The existence-and-ownership clause is **inside** the question, not stated separately as a boundary. A
+criterion relying on Postgres, the test stack, or any already-running service answers it "no" without
+requiring master to remember an unstated exception — which a question phrased as *"does this depend on
+anything outside the ticket"* would not, since nearly every criterion does.
 
-**The question is deliberately about the ticket in front of master, not about the chain.** FRE-1221's
-form asked whether *any ticket in this chain* builds the assumed thing, which returns a reassuring "yes"
-whenever a component with the right name exists anywhere in the decomposition. This form asks whether
-**this** deliverable is the thing that makes the criterion true, which is answerable by reading the
-ticket and admits no such substitution.
+If the answer is yes, D1's two resolutions apply unchanged: a provisioning ticket with its relation
+written in the same action, or the assumption assigned to the ADR's seam ticket.
 
-**The boundary is stated, because an unbounded version reintroduces what ADR-0130 D1 removed.** The
-check does **not** ask whether the ticket integrates correctly — that remains the seam ticket's job. It
-asks only whether the ticket depends on something that does not exist and has no owner.
+**The question is about the ticket in front of master, not about the chain's inventory.** FRE-1221's
+form asked whether *any ticket in this chain builds* the assumed thing, which returns a reassuring "yes"
+whenever a component with the right name exists anywhere in the decomposition — the Collector did.
+This form asks whether the thing **this ticket's criteria depend on** exists and is delivered by
+something, which admits no such substitution.
 
-**This is the weakest of the four decisions and is labelled as such rather than dressed up.** It is an
+**The check does not ask whether the ticket integrates correctly** — that remains the seam ticket's job.
+
+**The answer is recorded on the ticket**, in the same pass and on the same surface as the open-remedy
+disposition, so the gate leaves evidence rather than only a decision.
+
+**This is the weakest of the four mechanisms and is labelled as such rather than dressed up.** It is an
 observer; it depends on master reading carefully; the convergence study predicts observers do not hold.
 It is adopted only because D1 and D2 are prospective and cannot reach mappings already published.
 
-**Retirement condition:** D3 retires when every obligation → owner mapping published before this ADR has
-either been re-audited under D1 and D2, or its chain has reached a terminal state. At that point no
-un-audited mapping remains and the backstop has no population. Retirement is recorded in this ADR's
-Status Updates and the question is removed from both documents.
+**Retirement condition.** D3 retires when every obligation → owner mapping published before this ADR has
+either been re-audited under D1 and D2, or its chain has reached a terminal state. That population is
+enumerable rather than notional: it is every ADR in `docs/architecture_decisions/README.md` carrying
+implementation tickets filed before the amendment, whose umbrella ticket holds a mapping. Retirement is
+recorded in this ADR's Status Updates and the question is removed from both documents.
 
-### D4 — A cutover is two tickets, and the removal's precondition is observed data
+### D4 — A cutover is two tickets; the removal waits on observed data, at dispatch as well as at close
 
 Where a change **replaces** an existing working path, the addition and the removal are **separate
-tickets**. The removal is `blockedBy` the addition, and its acceptance criterion is **observed data on
-the new path** — not that the new path is configured, registered, or deployed.
+tickets**. Three things follow, and the third is what makes the first two bind:
 
-**The scope condition is load-bearing, and a blanket rule would be wrong.** This applies when the old
-and new paths are **separable in time** — different processes, hosts, repositories, or deploy units, so
-both can run at once. It does **not** apply to an in-process rename, where ADR-0033 decided the opposite
-deliberately and correctly:
+1. The removal is `blockedBy` the addition.
+2. The removal's acceptance criterion is **observed data on the new path** — not that the new path is
+   configured, registered, exported or deployed.
+3. **The removal does not receive its `stream:` label until the addition's observed-data evidence is
+   recorded on the addition ticket.** A `blockedBy` relation clears when its blocker **merges**
+   (lifecycle-rules § Dispatch), which is earlier than deploy and much earlier than proof. The relation
+   therefore supplies *ordering* and the label gate supplies *proof*; without the third clause the
+   removal can be dispatched and merged while the new path carries nothing, which is the precise harm.
+
+**The scope test is whether the old and new paths can both be live at the same time.** Different
+processes, hosts, repositories or deploy units are **indicators** that they can — not the definition.
+The indicator misleads in both directions: a protocol change spanning two repositories may still have
+to be atomic, and a single process can dual-write, expose two routes, or switch behind a flag. **Where
+the indicator and the test disagree, the test governs**, and the reasoning is recorded on the ticket.
+
+**A blanket rule would be wrong**, which is why the scope test exists. ADR-0033 decided the opposite
+deliberately and correctly for an in-process rename:
 
 > *"This is a clean break: every reference to the old enum values is updated in the same commit. No
 > backward-compat code that exists only for migration."*
 
-That decision stands untouched. Forcing expand-contract onto an enum rename would manufacture exactly
-the migration-only compatibility code ADR-0033 rejected, for no benefit: the two paths are not
-separable, so there is no interval in which both run.
+That decision stands untouched. The two paths there cannot both be live — there is no interval for the
+rule to create — so forcing expand-contract onto it would manufacture exactly the migration-only
+compatibility code ADR-0033 rejected, for nothing.
 
 **This is checked at dispatch, from the ticket's scope text — not at merge.** FRE-1071 lives in a
 separate repository; master never saw its diff and never could. A merge-gate diff-shape check is
@@ -218,12 +253,12 @@ however, said plainly that it removes the Elasticsearch writer and adds OTLP exp
 is in front of master at the pre-label gate.
 
 **The mechanism's value is structural rather than vigilant.** The question is asked once; its output is
-a permanent change to the shape of the work. Once the chain carries two tickets and a relation, nothing
-further has to be remembered, and the ordering is enforced by the resolver rather than by attention.
+a permanent change to the shape of the work. Once the chain carries two tickets and a relation, the
+ordering is enforced by the resolver rather than by attention.
 
 **What it buys, stated precisely:** it does not *find* a missing precondition — D1, D2 and D3 do that.
-It makes a missed one **survivable**, converting a regression into a no-op. It is therefore immune to
-preconditions nobody thought to name at all, which is the only one of the four mechanisms that is.
+It makes a missed one **survivable**, converting a regression into a no-op. It is therefore the only one
+of the four mechanisms immune to preconditions nobody thought to name at all.
 
 ### D5 — Four documents are amended in one change, and ADR-0130 is pointed here
 
@@ -232,15 +267,21 @@ session reads first (ADR-0130 D5's reasoning, applied to its own successor).
 
 | where | becomes |
 |---|---|
-| `.claude/skills/adr/SKILL.md` Step 5 | the mapping splits two-party obligations by provisioner (D1); the coverage check tests sufficiency, not presence (D2) |
-| `.claude/skills/lifecycle-rules.md` § Dispatch | the pre-label list gains D3's backstop question and D4's cutover question |
-| `.claude/skills/master/SKILL.md` Step 8 | the same two questions in the advance-dispatch bullets, alongside the D6 decidability check and the open-remedy disposition |
+| `.claude/skills/adr/SKILL.md` Step 5 | the mapping splits two-party obligations by provisioner and states each half at an altitude its owner can decide (D1); the coverage check tests sufficiency on every row, not presence (D2) |
+| `.claude/skills/lifecycle-rules.md` § Dispatch | the pre-label list gains D3's backstop question and D4's cutover question, including the removal-label gate |
+| `.claude/skills/master/SKILL.md` Step 8 | the same two questions in the advance-dispatch bullets, alongside the existing ADR-0130 D6 decidability check and the open-remedy disposition |
 | `docs/architecture_decisions/ADR-0130-*.md` | a Status Update recording that D1's coverage clause and D6's dispatch check are extended here — so no document teaches the unextended rule |
 
-ADR-0130 is **amended by reference, not edited in place.** Its decisions and criteria are untouched,
-because its seam ticket is unadjudicated and due-dated against the criteria it carried at filing;
-adding criteria to it now would make that seam accrete work after its due date was set, which is the
-failure ADR-0130 D2 froze seam scope to prevent.
+ADR-0130 is **amended by reference, not edited in place**, and this is sound rather than evasive
+precisely because nothing here contradicts its Decision text. D1's second rule *applies* ADR-0130 D1's
+own altitude requirement to each half of a split, and sends the residual end-to-end property to the
+seam exactly as ADR-0130 D1 already directs. Had the split instead parked a cross-child property on a
+child — as this ADR's first draft did — a Status Update would not have been enough, and ADR-0130's
+Decision section would have had to change.
+
+Editing it in place is refused for a separate reason: its seam ticket is unadjudicated and due-dated
+against the criteria it carried at filing, so adding criteria to it now would make that seam accrete
+work after its due date was set — the failure ADR-0130 D2 froze seam scope to prevent.
 
 ---
 
@@ -256,16 +297,17 @@ failure ADR-0130 D2 froze seam scope to prevent.
 - Requires no change to how any chain is authored, so it applies immediately to every existing mapping.
 
 **Cons:**
-- Answers "no" on the case that motivated it. FRE-1070 builds the Collector, the Collector is in the
-  chain, and the question asks whether any chain ticket builds the assumed component.
+- Answers "no" on the case that motivated it. FRE-1070 builds the Collector, the Collector is a deployed
+  component, and it is in the chain.
 - Leaves the mapping — where the obligation was actually mis-assigned — completely untouched.
 - Is an observer, which ADR-0130's own Option 1 rejection and the convergence study both argue does not
   hold.
 
 **Why Rejected:** As the *primary* answer it treats the reading of a mapping while leaving the writing
 of it unchanged — the same shape ADR-0130 rejected when it declined to add queue machinery around
-unchanged criteria. Adopted as **D3**, narrowed to a question about the ticket's own deliverable rather
-than the chain's inventory, and explicitly scoped as a backstop with a retirement condition.
+unchanged criteria. Adopted as **D3**, re-phrased around the ticket's own dependencies with the
+existence-and-ownership test folded into the question, and explicitly scoped as a backstop with a
+retirement condition.
 
 ### Option 2: A D9 on ADR-0130 rather than a new ADR
 
@@ -285,27 +327,28 @@ the cutover, and update its criteria accordingly.
   adjudication that eventually runs, so its `Implemented` verdict would overclaim.
 
 **Why Rejected:** The multiplicity objection does not survive inspection — ADR-0130 D5's concern is
-**contradiction**, not two documents. A successor that names what it extends, plus a Status Update on
-the predecessor pointing forward, leaves nothing teaching the unextended rule; ADR-0129 already carries
-exactly this shape through its D6 amendments (FRE-1193, FRE-1213). The seam objection has no such
-answer, so a new ADR with its own seam is correct.
+**contradiction**, not two documents, and this ADR contradicts none of its Decision text (D5). A
+successor that names what it extends, plus a Status Update on the predecessor pointing forward, leaves
+nothing teaching the unextended rule; ADR-0129 already carries exactly this shape through its D6
+amendments (FRE-1193, FRE-1213). The seam objection has no such answer, so a new ADR with its own seam
+is correct.
 
 ### Option 3: A blanket "never remove the old path in the same change"
 
-**Description:** State D4 without a scope condition — every removal of an existing path is a separate
-ticket from its replacement, unconditionally.
+**Description:** State D4 without a scope test — every removal of an existing path is a separate ticket
+from its replacement, unconditionally.
 
 **Pros:**
-- Trivially checkable, with no judgement about separability at the gate.
+- Trivially checkable, with no judgement about whether both paths can be live at once.
 - No class of cutover can slip through by being argued into the exception.
 
 **Cons:**
 - Directly contradicts ADR-0033, which decided a clean-break enum rename in one commit *specifically to
   avoid* backward-compat code existing only for migration — and was right to.
-- Manufactures a two-ticket chain and a compatibility shim for in-process changes where both paths
-  cannot meaningfully coexist, so the interval the rule exists to create does not exist.
+- Manufactures a two-ticket chain and a compatibility shim for changes where both paths cannot
+  coexist, so the interval the rule exists to create does not exist.
 
-**Why Rejected:** Adopted **with** the separability scope condition (D4). A rule that contradicts a
+**Why Rejected:** Adopted **with** the both-live-at-once scope test (D4). A rule that contradicts a
 standing, correct decision would be resolved by whichever document the session read first — the exact
 failure D5 exists to prevent — and would be quietly ignored in practice, which is worse than a narrower
 rule that is obeyed.
@@ -355,42 +398,43 @@ Dispatch is both earlier and, for cross-repository work, the only gate that sees
 
 - A two-party obligation can no longer be assigned to one side, so the specific mis-assignment that
   produced FRE-1220 stops being available rather than becoming better-observed.
-- An unfillable "Proved by" cell becomes the visible artifact of a missing provider, at authoring time,
-  before any child is dispatched — the cheapest moment the gap can surface.
+- An unfillable "Proved by" cell on a provider row becomes the visible artifact of a missing provider,
+  at authoring time, before any child is dispatched — the cheapest moment the gap can surface.
 - The sufficiency test closes the owner-and-wrong-criterion hole that the presence test cannot see, and
   that a full adversarial codex round did not catch.
-- A cutover's ordering becomes structural — a relation the resolver enforces — instead of a sequencing
-  fact someone has to hold in mind across two merges in two repositories.
+- A cutover's ordering becomes structural, and its *proof* becomes a dispatch precondition rather than
+  a close-out hope — the removal cannot be labelled while the new path carries nothing.
 - A missed precondition of *any* kind degrades to a no-op rather than a regression, which is the only
   protection here that does not require anyone to have anticipated the specific gap.
-- The weakest mechanism carries a stated retirement condition, so the gate does not accumulate questions
-  permanently.
+- The weakest mechanism carries a retirement condition over an enumerable population, so the gate does
+  not accumulate questions permanently.
 
 ### Negative Consequences
 
 - The pre-label list reaches three questions plus the open-remedy disposition. That is real cost at a
   step master runs at every merge, and two of the three depend on master reading carefully.
-- D2's sufficiency test is a judgement, so two readers can disagree about whether a criterion entails an
-  obligation. D1's split narrows where the judgement is spent but does not remove it.
+- D2's sufficiency test is a judgement applied to every row, which is more expensive than the presence
+  check it augments, and two readers can disagree about entailment.
 - Splitting two-party obligations lengthens mappings — ADR-0129's would have gained rows — and a longer
-  inventory is read less carefully, which is the mechanism that produced the unreconciled row count.
-- D4 makes some chains longer by one ticket and one relation, and the removal ticket may sit unbuilt for
-  a while, so the old path lingers.
-- Judging separability is itself a judgement at the dispatch gate, and a wrong call in the permissive
-  direction reproduces exactly the coupling D4 forbids.
+  inventory is read less carefully.
+- D4 makes some chains longer by one ticket and one relation, and the removal ticket may sit unlabelled
+  until the addition's evidence lands, so the old path lingers by design.
+- Judging whether both paths can be live at once is itself a judgement at the dispatch gate, and a wrong
+  call in the permissive direction reproduces exactly the coupling D4 forbids.
 
 ### Risks and Mitigations
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| The pre-label list grows until master skims it, and all three questions degrade together | High | D3 carries a retirement condition that removes one of them by construction; D1/D2 move the load to authoring, where it is spent once per chain rather than once per ticket; AC-4 tests whether the backstop is producing recorded answers or is being skipped |
-| D2's sufficiency test is applied as a rubber stamp — every row judged sufficient | High | AC-2 reperforms the test against ADR-0129's already-published mapping and **fails if it does not flag D5.d**, so a test too weak to catch its own motivating case is caught by the criterion rather than assumed to work |
-| "Two parties" is read narrowly (only network paths), reproducing FRE-1221's original narrowness | Medium | D1 states four sentence shapes and names credentials, hosts and deployed components alongside paths; AC-1 fails on a chain whose two-party rows were assigned by grammatical subject regardless of the resource kind |
-| Separability is judged permissively so a coupled cutover ships as one ticket anyway | Medium | D4 states the test as different processes/hosts/repositories/deploy units — an observable property of the two artifacts, not an intent judgement; AC-3 fails on any qualifying ticket that shipped whole |
-| The removal ticket is never built, so the old path runs forever and the migration is half-done | Medium | The removal is a filed `Approved` ticket with a relation, so it is visible in the resolver's eligible set rather than living in prose; a lingering old path is a queue entry, not a silent state |
-| Splitting inflates mappings until the inventory is skimmed, hiding a row rather than a sentence | Medium | The split adds rows only where two parties are named, not uniformly; the unreconciled 43-vs-41 count is itself dispositioned by the retrospective audit rather than left as a known-bad exemplar |
-| D3 is never retired because nobody re-audits the pre-existing mappings | Medium | The audit is a filed implementation ticket in this ADR's own chain, not an aspiration; AC-4 reads the retirement condition's status at the window's end and records it either way |
-| The whole thing is a fourth observer over the same inference and does not converge | High | Deliberately confronted rather than mitigated away: D1 and D4 change the artifact's shape permanently and require no vigilance once applied; D2 and D3 are reads. AC-5 is the honest test — it fails if the defect class recurs on a chain authored under this ADR, whatever the mechanism's theory says |
+| The pre-label list grows until master skims it, and all three questions degrade together | High | D3 carries a retirement condition over an enumerable population, so one of them is removable by construction; D1/D2 move the load to authoring, where it is spent once per chain rather than once per ticket; AC-4 fails if labelled tickets carry no recorded answer |
+| D2's sufficiency test is applied as a rubber stamp — every row judged sufficient | High | AC-2 requires a **blind reperformance** of the test over the same mapping and fails on any unexplained divergence in either direction, so an audit that flags only the known case and passes everything else is caught rather than assumed to work |
+| The split parks a cross-child property on a child, contradicting ADR-0130 D1 | High | D1's second rule requires each half to be decidable by its own owner and sends the residual to the seam; the worked example carries three rows, not two, and AC-1 fails if any half left undecidable by the split was not assigned to the seam. This is the defect codex found in this ADR's own first draft |
+| "Two parties" is read narrowly, reproducing FRE-1221's original narrowness | Medium | D1 states four sentence shapes covering shipping, reading, reaching and obtaining; D3's question separately names a network path, a host, a credential and a deployed component; AC-1 enumerates two-party obligations from the ADR's **Decision section** rather than from the mapping's own phrasing, so a passively-worded row cannot escape classification |
+| The both-live-at-once test is judged permissively so a coupled cutover ships as one ticket | Medium | D4 states the test as the property itself and demotes process/host/repository/deploy-unit to indicators that mislead in both directions, with the reasoning recorded on the ticket; AC-3 fails on any replacement that shipped whole |
+| The removal merges before the new path carries anything, because the relation cleared at the addition's merge | High | D4 clause 3 withholds the removal's `stream:` label until the addition's observed-data evidence is recorded; AC-3 reads the label's timing against that evidence and fails if the label came first |
+| The removal is never built, so the old path runs forever | Medium | Not fully mitigated, and stated as such: the removal is a filed ticket with a relation, visible on the board and subject to the same approval and labelling as any other work. What the rule buys is that a lingering old path is a queue entry rather than a silent state — not a guarantee it is removed |
+| D3 is never retired because nobody re-audits the pre-existing mappings | Medium | The audit is a filed implementation ticket in this ADR's own chain, not an aspiration; AC-4 fails if the retirement condition is unmet **after** that audit has closed, so an incomplete audit cannot be excused by a still-open population |
+| The whole thing is a fourth observer over the same inference and does not converge | High | Deliberately confronted rather than mitigated away: D1 and D4 change the artifact's shape permanently and require no vigilance once applied; D2 and D3 are reads. AC-5 is the honest test — it audits post-amendment chains directly rather than waiting for someone to file a defect report |
 
 ---
 
@@ -398,17 +442,18 @@ Dispatch is both earlier and, for cross-repository work, the only gate that sees
 
 **Files affected:**
 
-- `.claude/skills/adr/SKILL.md` — Step 5, the obligation → owner mapping paragraph: D1's split-by-
-  provisioner rule and its two resolutions, D2's sufficiency test.
+- `.claude/skills/adr/SKILL.md` — Step 5, the obligation → owner mapping paragraph: D1's split rules and
+  its two resolutions, D2's sufficiency test.
 - `.claude/skills/lifecycle-rules.md` — § Dispatch, the pre-`stream:`-label bullet list: D3's backstop
-  question with its boundary and retirement condition, D4's cutover question with its scope condition.
+  question with its recording surface and retirement condition, D4's cutover question and removal-label
+  gate.
 - `.claude/skills/master/SKILL.md` — Step 8 advance-dispatch bullets: the same two questions, stated
   alongside the existing ADR-0130 D6 decidability check and the open-remedy disposition.
 - `docs/architecture_decisions/ADR-0130-two-tiers-of-acceptance-criteria.md` — a Status Update only.
 - `docs/architecture_decisions/README.md` — the index row for this ADR, in the authoring commit.
 
 **Not affected:** ADR-0130's Decision and Verification sections, and ADR-0033 in its entirety — D4's
-scope condition exists to preserve its clean-break decision rather than override it.
+scope test exists to preserve its clean-break decision rather than override it.
 
 **Dependencies:** none. This ADR is documentation and skill text only.
 
@@ -416,10 +461,11 @@ scope condition exists to preserve its clean-break decision rather than override
 published before that PR under D1 and D2, dispositioning each flagged row → this ADR's seam ticket,
 parked until both have landed.
 
-**Testing strategy:** the artifacts are documents, a published mapping and the board, so the criteria
-are read from those. AC-2 is adjudicable as soon as the audit lands. AC-1, AC-3 and AC-5 need chains
-authored under the rule and therefore a window; AC-4 reads the retirement condition at the window's end.
-All five belong to the seam ticket (ADR-0130 D2) and none is discharged by an implementing ticket.
+**Testing strategy:** the artifacts are documents, published mappings and the board, so the criteria are
+read from those plus the deployed system. AC-2 is adjudicable as soon as the audit lands. AC-1, AC-3 and
+AC-5 need chains authored under the rule and therefore a window; AC-4 reads the retirement condition at
+the window's end. All five belong to the seam ticket (ADR-0130 D2) and none is discharged by an
+implementing ticket.
 
 ---
 
@@ -429,62 +475,74 @@ All five belong to the seam ticket (ADR-0130 D2) and none is discharged by an im
 
 **All five belong to this ADR's seam ticket.** None is discharged by an implementing ticket.
 
-- **AC-1 — Two-party obligations are actually split, and split toward the provisioner.** For every ADR
-  chain whose obligation → owner mapping is published after the amendment lands, every row whose
-  obligation sentence names two parties appears as two rows with two owners, or as one row owned by the
-  seam. · **Check:** read each such mapping row by row; classify each obligation as one-party or
-  two-party from its sentence; for each two-party obligation confirm the split, then confirm each
-  provider half is owned by the ticket whose deliverable **brings the thing into existence** rather than
-  the one that consumes it. · *Fails if* any two-party obligation carries a single non-seam owner; if
-  any provider half is owned by the consumer's ticket; if any half no chain ticket can make true was
-  recorded as prose rather than resolved by a filed provisioning ticket **with its relation written** or
-  by assignment to the seam — **or**, if no chain published a mapping containing a two-party obligation
-  during the window, reports **inconclusive** rather than green, since a rule proves nothing against a
-  population of zero.
+- **AC-1 — A two-party obligation's provider half is actually delivered before its consumer's ticket
+  closes.** · **Check:** for each ADR chain whose implementation tickets were filed after the amendment,
+  enumerate the two-party obligations **from that ADR's own Decision section**, independently of how the
+  mapping phrased them. For each, identify the provider half and verify **from the system** — the
+  deployed artifact, the committed configuration, or a probe — that it was delivered on or before the
+  date the consumer's ticket reached `Done`. Then read the mapping's rows for the same obligation. ·
+  *Fails if* any two-party obligation's provider half was undelivered when its consumer ticket reached
+  `Done`; if any two-party obligation appears in the mapping under a single non-seam owner; if any half
+  left undecidable by the split was parked on a child rather than assigned to the seam — **or**, if no
+  post-amendment chain contains a two-party obligation, reports **inconclusive** rather than green.
+  Enumerating from the Decision section rather than the mapping is what stops a passively-phrased row
+  from escaping classification, and verifying delivery from the system rather than from the rows is what
+  makes this an outcome rather than a paperwork check: perfectly split rows over an unbuilt endpoint
+  fail.
 
-- **AC-2 — The sufficiency test is discriminating enough to catch the case that motivated it.**
-  Reperformed against ADR-0129's already-published mapping on FRE-1043, D2's test flags row D5.d, and
-  every row it flags carries a disposition. · **Check:** for each row of that mapping, read the criterion
-  named in "Proved by" on the owning ticket and judge whether a passing verdict on it makes the
-  obligation true; compare the resulting flag set against the audit published by this ADR's chain. ·
-  *Fails if* D5.d is not among the flagged rows — a test that cannot catch its own motivating case
-  verifies nothing — **or** if any flagged row carries no disposition (in scope naming the criterion,
-  filed naming the id, or rejected with a reason), **or** if the mapping's stated row count still does
-  not reconcile with its enumerated rows at adjudication.
+- **AC-2 — The sufficiency test is discriminating on rows nobody has pre-marked.** · **Check:** the seam
+  adjudicator applies D2's test independently to **every** row of ADR-0129's mapping on FRE-1043 —
+  reading each named criterion on its owning ticket and judging entailment — **before** reading the flag
+  set published by this ADR's audit ticket, then compares the two sets row by row. · *Fails if* the two
+  sets diverge on any row without a stated resolution: a row the audit passed and the reperformance
+  flags is a rubber stamp, and a row the audit flagged and the reperformance passes is over-flagging.
+  Also *fails if* D5.d is absent from **both** sets, or if any flagged row's disposition is anything
+  other than D1's and D2's permitted resolutions — a criterion that does entail the obligation, a filed
+  covering ticket with its id on the row, or assignment to the seam. A flag withdrawn on the judgement
+  that the gap is acceptable is a failure, not a disposition. The blind reperformance is the point: an
+  audit hard-coded to flag the one case everybody already knows about passes any check that only asks
+  whether D5.d was caught.
 
-- **AC-3 — A cutover ships as two tickets, and the removal waits on observed data.** For every
-  implementation ticket filed after the amendment lands whose scope both adds a replacement path and
-  removes an existing working one across a process, host, repository or deploy-unit boundary, the work
-  is two tickets with a `blockedBy` relation, and the removal ticket's acceptance criterion names
-  **observed data arriving on the new path**. · **Check:** identify qualifying tickets from their scope
-  text; for each, confirm two tickets and the relation, then read the removal ticket's criterion. ·
-  *Fails if* any qualifying ticket shipped as one change; if the relation is absent; if the removal
-  ticket's criterion is satisfied by the new path being configured, registered, exported or deployed
-  rather than by data observed on it — **or**, if no qualifying ticket was filed during the window,
-  reports **inconclusive** rather than green.
+- **AC-3 — A path replacement ships as two tickets, and the removal is dispatched only after the new
+  path is observed carrying data.** · **Check:** enumerate every **replacement of an existing working
+  path** completed during the window, identified from merged changes and from ADR Decision sections —
+  **not** from ticket scope text, since a compliant split leaves no single ticket carrying both
+  operations and quantifying over scope makes the population empty by construction. For each: confirm
+  two tickets with a `blockedBy` relation; read the removal ticket's criterion; and read the removal
+  ticket's history to establish whether its `stream:` label was applied before or after the addition's
+  observed-data evidence was recorded. · *Fails if* any replacement shipped as one ticket; if the
+  relation is absent; if the removal's criterion is satisfied by the new path being configured,
+  registered, exported or deployed rather than by data observed on it; if the removal was labelled
+  before that evidence existed — **or**, if no path replacement completed during the window, reports
+  **inconclusive** rather than green.
 
-- **AC-4 — The backstop either produces recorded answers or is retired, and is not silently skipped.**
-  Every implementation ticket labelled during the window whose chain's mapping predates the amendment
-  carries a recorded answer to D3's question, and at the window's end D3's retirement condition is
-  evaluated and its status recorded in this ADR's Status Updates. · **Check:** list tickets labelled
-  during the window belonging to pre-amendment chains; confirm each carries a recorded answer; then list
-  every pre-amendment mapping and confirm each has been re-audited or its chain has reached a terminal
-  state. · *Fails if* any such ticket was labelled with no recorded answer; if a ticket whose answer was
-  "no" subsequently produced a filed defect reporting that it depended on something nothing provisions
-  — the answer having been wrong is the substantive failure, not the paperwork — or if the retirement
-  condition is neither met nor recorded as unmet with the remaining population named.
+- **AC-4 — The backstop produces recorded answers, those answers hold, and an incomplete audit cannot
+  excuse a live D3.** · **Check:** (a) list implementation tickets labelled during the window whose
+  chain's mapping predates the amendment, and confirm each carries a recorded answer to D3's question on
+  the ticket; (b) enumerate every pre-amendment mapping — each ADR in the index carrying implementation
+  tickets filed before the amendment, whose umbrella holds a mapping — and confirm each has been
+  re-audited under D1 and D2 or its chain has reached a terminal state. · *Fails if* any such ticket was
+  labelled with no recorded answer; if any ticket answered "no" subsequently produced a filed defect
+  reporting that it depended on something nothing provisions — the answer having been **wrong** is the
+  substantive failure, not the missing paperwork; or if the retirement condition is unmet **while the
+  audit ticket has already closed**, which means the audit did not cover its own population. A still-open
+  population is an acceptable reason for D3 to remain live only while the work that drains it is still
+  outstanding.
 
-- **AC-5 — The defect class stops recurring on chains authored under this rule.** No ticket is filed
-  during the window reporting that merged work depends on a precondition nothing provisions, where the
-  chain in question was authored after the amendment landed. · **Check:** search Linear for tickets
-  filed in the window whose body reports a merged ticket assuming a component, path, credential or host
-  that no ticket built; for each hit, determine whether its chain's mapping predates or postdates the
-  amendment. · *Fails if* any such ticket names a post-amendment chain — **or**, if fewer than three
-  ADR chains were authored during the window, reports **inconclusive** rather than green. Three is the
-  non-vacuity floor: a quiet period in which nothing was decomposed cannot distinguish a working rule
-  from an unexercised one, and is the most available way for this criterion to pass while the process is
-  still broken. A pre-amendment chain producing such a ticket is **not** a failure — those are D3's
-  population, and AC-4 judges them.
+- **AC-5 — No post-amendment chain closes a child against a dependency that was never delivered.** ·
+  **Check:** two parts, and the first is the substantive one. (a) **Active:** for each post-amendment
+  chain whose last child reached `Done` during the window, re-derive from the system whether any child's
+  criteria depended on a network path, host, credential or deployed component that was undelivered at
+  the moment that child closed. (b) **Passive:** search Linear for tickets filed during the window
+  reporting that merged work depends on an unprovisioned precondition, and classify each hit's chain as
+  pre- or post-amendment. · *Fails if* (a) finds any post-amendment child that closed against an
+  undelivered dependency, or (b) finds any such ticket naming a post-amendment chain. Reports
+  **inconclusive** if fewer than three post-amendment chains that contain **at least one two-party
+  obligation or one path replacement** completed during the window — the denominator counts chains that
+  actually exercise the rule, because three chains with no external dependency at all would turn this
+  green while testing nothing. The active half exists because an absence-of-filed-reports check passes
+  whenever nobody notices; a chain nobody audited is not a chain that worked. A **pre-amendment** chain
+  producing such a ticket is not a failure here — those are D3's population, and AC-4 judges them.
 
 **Seam ticket:** filed with the chain, parked (`Backlog`), carrying a **due date of 2026-11-12** —
 ninety days after the contract amendment is expected to merge, which is the earliest date AC-1, AC-3,
@@ -503,15 +561,16 @@ first advance-dispatch on or after the due date.
 - FRE-1080 — ADR-0130 T2: re-scoped the ADR-0129 chain and published the mapping; its codex round caught six owner-without-criterion rows and no owner-with-wrong-criterion row
 - FRE-1070 — ADR-0129 B5: the Collector, deployed with no host port publication; its AC-4 constrains exporting off-box and adjudicates nothing about receiving
 - FRE-1071 — ADR-0129 B6: shipped the Elasticsearch-writer removal and the OTLP export as one change, in a separate repository
-- FRE-1073 — ADR-0129 B8: that ADR's seam ticket, where the gap was scheduled to surface after the whole chain had shipped
+- FRE-1073 — ADR-0129 B8: that ADR's seam ticket, and the owner of the end-to-end row in D1's corrected split
 - FRE-1230 — owns the `slm_server` restart gate, where FRE-1071's coupling actually bites; the instance of the pattern D4 generalises
 - FRE-1253 — whether a seam ticket's due date should be derived from its chain's last dependent; filed separately and deliberately not folded in here
 - ADR-0130 — Two Tiers of Acceptance Criteria (**Accepted**): D1's coverage clause and D6's dispatch check are extended by this ADR; its Option 1 rejection is the argument this ADR had to answer about its own D3
 - ADR-0129 — OpenTelemetry Instrumentation, with Trace Visibility as the Acceptance Bar (**Accepted**, D6 amended 2026-08-07 and 2026-08-08): the chain whose mapping is the worked example; unchanged by this ADR
-- ADR-0033 — Multi-Provider Model Taxonomy (**Accepted**): its clean-break decision is the case D4's scope condition exists to preserve
+- ADR-0033 — Multi-Provider Model Taxonomy (**Accepted**): its clean-break decision is the case D4's scope test exists to preserve
 - ADR-0127 — The Harness Self-Analysis Pillar (**Proposed**): the eventual home for a mechanical mapping validator (Option 4); nothing here depends on it
 - ADR-0131 — Retire MASTER_PLAN for the Owner Console (**Accepted**): D4's one-writer rule, which places the mapping and the filing of provisioning tickets on the filing plane open to every session
 - ADR-0136 — The Cloudflare Edge Carries HTTP, Not gRPC (**Accepted**): the protocol constraint recorded from the same FRE-1220 study
+- `docs/superpowers/plans/2026-07-31-fre-1080-adr-0129-chain-rescope.md` — the committed rescope carrying FRE-1070's and FRE-1071's criteria and the mapping's D5.d row
 - `docs/research/2026-08-08-fre-1220-otlp-ingress-security-and-cloudflare-capability.md` — the commissioned study that measured the existing ingress and corrected FRE-1220's framing
 - `docs/research/2026-07-29-why-pipeline-point-fixes-do-not-converge.md` — the convergence law used to reject Option 1 and to grade D3 as the weakest mechanism
 - `.claude/skills/adr/SKILL.md` · `.claude/skills/lifecycle-rules.md` · `.claude/skills/master/SKILL.md` — the three contract documents amended by D5
@@ -528,4 +587,7 @@ that FRE-1221's premise — an integration property evicted by ADR-0130 D1 into 
 contradicted by the published mapping, which named the obligation and gave it an owner. The owner chose
 the combined shape (authoring rule plus dispatch backstop) over either alone, and directed that the
 cutover rule be included after the session checked that it is absent from the contract and that its
-natural home is dispatch rather than merge.
+natural home is dispatch rather than merge. Codex round one returned ten blocking findings against the
+first draft; the two most consequential were that AC-3's population was empty by construction under
+compliance, and that D1's own worked split parked a cross-child reachability property on a child — the
+exact violation of ADR-0130 D1 this ADR exists to prevent. Both are fixed here.

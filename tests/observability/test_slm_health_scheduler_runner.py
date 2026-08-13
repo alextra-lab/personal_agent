@@ -142,3 +142,56 @@ class TestRunScheduledSlmHealthProbe:
             result = await run_scheduled_slm_health_probe(es_client=None)
 
         assert result is None
+
+
+class TestRunScheduledSlmHealthProbeRootSpan:
+    """AC-1/AC-2 (ADR-0129 D3, FRE-1069): the probe opens exactly one root span, and
+    every log record it emits carries that span's identity and ``kind``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_opens_exactly_one_root_span_with_full_log_coverage(self) -> None:
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        from personal_agent.observability.slm_health.scheduler_runner import (
+            run_scheduled_slm_health_probe,
+        )
+        from tests._helpers.log_capture import capture_log_records
+
+        provider = TracerProvider()
+        exporter = InMemorySpanExporter()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer("test")
+
+        snap = _make_snapshot("up")
+        with (
+            patch(
+                "personal_agent.observability.slm_health.scheduler_runner.probe_slm_health",
+                new=AsyncMock(return_value=snap),
+            ),
+            patch(
+                "personal_agent.observability.slm_health.scheduler_runner.write_result",
+                new=AsyncMock(),
+            ),
+            capture_log_records() as records,
+        ):
+            await run_scheduled_slm_health_probe(es_client=None, tracer=tracer)
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.parent is None
+        assert span.attributes is not None
+        assert span.attributes["personal_agent.kind"] == "system:slm_health_probe"
+
+        expected_trace_id = format(span.context.trace_id, "032x")
+        expected_span_id = format(span.context.span_id, "016x")
+        assert records, "expected at least one log record during the probe"
+        for record in records:
+            assert record.get("trace_id") == expected_trace_id
+            assert record.get("span_id") == expected_span_id
+            assert record.get("kind") == "system:slm_health_probe"

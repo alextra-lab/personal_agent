@@ -27,10 +27,12 @@ from personal_agent.observability.delivery_ratio.result import (
 )
 from personal_agent.observability.delivery_ratio.sink import write_result
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.spans import close_root_span, open_root_span
 from personal_agent.telemetry.trace import SystemTraceContext
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
+    from opentelemetry.trace import Tracer
 
 log = get_logger(__name__)
 
@@ -38,15 +40,22 @@ _PG_CONNECT_TIMEOUT_SECONDS = 10.0
 
 
 async def run_scheduled_delivery_ratio_probe(
-    *, es_client: "AsyncElasticsearch | None"
+    *, es_client: "AsyncElasticsearch | None", tracer: "Tracer | None" = None
 ) -> DeliveryRatioResultDoc | None:
     """Run one delivery-ratio probe tick from the brainstem scheduler.
+
+    Opens a root span for the tick (ADR-0129 D3, FRE-1069, folded in alongside
+    this ticket's three named sibling probes) — only when the probe actually
+    runs; a disabled probe produces no span.
 
     Args:
         es_client: Already-open ``AsyncElasticsearch`` client owned by the
             scheduler's :class:`DataLifecycleManager`. The probe also needs
             Postgres, opened here as a short-lived connection since the
             scheduler does not otherwise own one.
+        tracer: Tracer to open the root span with. Defaults to the
+            process-wide tracer; tests inject their own tracer bound to an
+            in-memory exporter.
 
     Returns:
         The :class:`DeliveryRatioResultDoc` for the run, or ``None`` if the
@@ -59,27 +68,30 @@ async def run_scheduled_delivery_ratio_probe(
     if not getattr(settings, "delivery_ratio_probe_enabled", True):
         return None
 
-    ctx = SystemTraceContext.new("delivery_ratio_probe")
-    if es_client is None:
-        log.warning(
-            "delivery_ratio_probe_skipped_no_es_client",
-            trace_id=ctx.trace_id,
-            component="delivery_ratio",
-        )
-        return None
-
-    run_at = datetime.now(timezone.utc)
-    yesterday = (run_at - timedelta(days=1)).date()
-
-    pg_conn = await _open_pg_conn()
-    if pg_conn is None:
-        log.warning(
-            "delivery_ratio_probe_pg_open_failed",
-            trace_id=ctx.trace_id,
-            component="delivery_ratio",
-        )
-        return None
+    span, token, cv_tokens = open_root_span("delivery_ratio_probe", tracer=tracer)
+    pg_conn = None
     try:
+        ctx = SystemTraceContext.new("delivery_ratio_probe")
+        if es_client is None:
+            log.warning(
+                "delivery_ratio_probe_skipped_no_es_client",
+                trace_id=ctx.trace_id,
+                component="delivery_ratio",
+            )
+            return None
+
+        run_at = datetime.now(timezone.utc)
+        yesterday = (run_at - timedelta(days=1)).date()
+
+        pg_conn = await _open_pg_conn()
+        if pg_conn is None:
+            log.warning(
+                "delivery_ratio_probe_pg_open_failed",
+                trace_id=ctx.trace_id,
+                component="delivery_ratio",
+            )
+            return None
+
         report = await collect_report(
             es_client,
             pg_conn,
@@ -109,7 +121,11 @@ async def run_scheduled_delivery_ratio_probe(
 
         return doc
     finally:
-        await _close_pg_conn(pg_conn)
+        try:
+            if pg_conn is not None:
+                await _close_pg_conn(pg_conn)
+        finally:
+            close_root_span(span, token, cv_tokens)
 
 
 async def _open_pg_conn() -> Any | None:

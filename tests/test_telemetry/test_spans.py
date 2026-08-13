@@ -8,7 +8,10 @@ the process-global provider is never touched.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
+import structlog
 from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -203,3 +206,103 @@ class TestSemconvVersionPin:
         from importlib.metadata import version
 
         assert spans.SEMCONV_VERSION == version("opentelemetry-semantic-conventions")
+
+
+class TestOpenCloseRootSpan:
+    """Background entrypoint root span lifecycle (ADR-0129 D3, FRE-1069).
+
+    Round-1 codex plan review flagged that a root span opened without an
+    explicit empty parent context would silently inherit whatever span is
+    already current — these tests assert root-ness holds even under an
+    already-active unrelated span, and that closing restores rather than
+    blindly clears the ``kind`` contextvar.
+    """
+
+    def test_open_root_span_is_root_even_under_an_active_parent(
+        self, tracer: Tracer, exporter: InMemorySpanExporter
+    ) -> None:
+        with tracer.start_as_current_span("unrelated_parent"):
+            span, token, cv_tokens = spans.open_root_span("scheduler.lifecycle", tracer=tracer)
+            spans.close_root_span(span, token, cv_tokens)
+
+        finished = {s.name: s for s in exporter.get_finished_spans()}
+        assert finished["scheduler.lifecycle"].parent is None
+
+    def test_open_root_span_makes_it_current(self, tracer: Tracer) -> None:
+        span, token, cv_tokens = spans.open_root_span("consolidation", tracer=tracer)
+        try:
+            current = otel_trace.get_current_span()
+            assert current.get_span_context().span_id == span.get_span_context().span_id
+        finally:
+            spans.close_root_span(span, token, cv_tokens)
+
+    def test_close_root_span_restores_prior_context(self, tracer: Tracer) -> None:
+        before = otel_trace.get_current_span()
+        span, token, cv_tokens = spans.open_root_span("consolidation", tracer=tracer)
+        spans.close_root_span(span, token, cv_tokens)
+        after = otel_trace.get_current_span()
+        assert after.get_span_context().span_id == before.get_span_context().span_id
+
+    def test_close_root_span_ends_the_span(
+        self, tracer: Tracer, exporter: InMemorySpanExporter
+    ) -> None:
+        span, token, cv_tokens = spans.open_root_span("consolidation", tracer=tracer)
+        spans.close_root_span(span, token, cv_tokens)
+        (finished,) = exporter.get_finished_spans()
+        assert finished.end_time is not None
+
+    def test_open_root_span_sets_kind_attribute(
+        self, tracer: Tracer, exporter: InMemorySpanExporter
+    ) -> None:
+        span, token, cv_tokens = spans.open_root_span("joinability_probe", tracer=tracer)
+        spans.close_root_span(span, token, cv_tokens)
+        (finished,) = exporter.get_finished_spans()
+        assert finished.attributes is not None
+        assert finished.attributes[spans.namespaced("kind")] == "system:joinability_probe"
+
+    def test_open_root_span_binds_kind_contextvar(self, tracer: Tracer) -> None:
+        span, token, cv_tokens = spans.open_root_span("slm_health_probe", tracer=tracer)
+        try:
+            bound = structlog.contextvars.get_contextvars()
+            assert bound["kind"] == "system:slm_health_probe"
+        finally:
+            spans.close_root_span(span, token, cv_tokens)
+
+    def test_close_root_span_restores_a_pre_existing_kind_binding(self, tracer: Tracer) -> None:
+        """The reset must restore a prior binding, not just clear to absent."""
+        outer_tokens = structlog.contextvars.bind_contextvars(kind="outer")
+        try:
+            span, token, cv_tokens = spans.open_root_span("cache_erosion_probe", tracer=tracer)
+            assert structlog.contextvars.get_contextvars()["kind"] == "system:cache_erosion_probe"
+            spans.close_root_span(span, token, cv_tokens)
+            assert structlog.contextvars.get_contextvars()["kind"] == "outer"
+        finally:
+            structlog.contextvars.reset_contextvars(**outer_tokens)
+
+    @pytest.mark.asyncio
+    async def test_two_interleaved_tasks_get_independent_root_spans(
+        self, tracer: Tracer, exporter: InMemorySpanExporter
+    ) -> None:
+        """Concurrent asyncio tasks each opening a root span must not cross-contaminate."""
+
+        async def _run(source: str, delay: float) -> str:
+            span, token, cv_tokens = spans.open_root_span(source, tracer=tracer)
+            try:
+                await asyncio.sleep(delay)
+                return structlog.contextvars.get_contextvars()["kind"]
+            finally:
+                spans.close_root_span(span, token, cv_tokens)
+
+        results = await asyncio.gather(
+            _run("scheduler.lifecycle", 0.01),
+            _run("consolidation", 0.0),
+        )
+
+        assert results == ["system:scheduler.lifecycle", "system:consolidation"]
+        finished = {s.name: s for s in exporter.get_finished_spans()}
+        assert finished["scheduler.lifecycle"].parent is None
+        assert finished["consolidation"].parent is None
+        assert (
+            finished["scheduler.lifecycle"].context.trace_id
+            != finished["consolidation"].context.trace_id
+        )

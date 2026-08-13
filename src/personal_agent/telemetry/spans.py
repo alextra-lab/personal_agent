@@ -15,15 +15,20 @@ automatically because it is current.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from contextvars import Token
 from importlib.metadata import version as _pkg_version
+from typing import Any
 
+import structlog
 from opentelemetry import context as context_api
 from opentelemetry import trace
 from opentelemetry.context.context import Context
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as gen_ai
 from opentelemetry.trace import Span, Tracer
+
+from personal_agent.telemetry.trace import SYSTEM_KIND_PREFIX
 
 _TRACER_NAME = "personal_agent"
 _ATTR_NAMESPACE = "personal_agent"
@@ -32,6 +37,13 @@ _ATTR_NAMESPACE = "personal_agent"
 # this value fails the AC-13 test loudly instead of drifting silently. Bump
 # this constant in the same commit as the pyproject.toml dependency bump.
 SEMCONV_VERSION = "0.65b0"
+
+# The exact tuple open_root_span()/close_root_span() exchange — named so call
+# sites that must hold it across conditional branches (a root span opened only
+# once real work starts, e.g. the scheduler's session-summary sweep loop) can
+# type a single `RootSpanState | None` local instead of three separately-typed
+# optionals mypy cannot jointly narrow.
+RootSpanState = tuple[Span, "Token[Context]", Mapping[str, "Token[Any]"]]
 
 
 def get_tracer() -> Tracer:
@@ -63,6 +75,73 @@ def close_step_span(span: Span, token: Token[Context], *, tool_count: int) -> No
     span.set_attribute(namespaced("step.tool_count"), tool_count)
     span.end()
     context_api.detach(token)
+
+
+def open_root_span(source: str, *, tracer: Tracer | None = None) -> RootSpanState:
+    """Open a background entrypoint's root span (ADR-0129 D3, FRE-1069).
+
+    ``context=Context()`` is passed explicitly so the new span is a genuine
+    root regardless of any span already current on the caller's task — without
+    it, a span opened inside e.g. the scheduler's lifecycle loop would silently
+    parent onto whatever happened to be active.
+
+    Attaches the span as the current OTel context so ``SystemTraceContext.new(source)``
+    (:mod:`personal_agent.telemetry.trace`) and ``_add_span_context``
+    (:mod:`personal_agent.telemetry.logger`) read its identity instead of
+    minting a disconnected one, and binds ``kind`` via ``structlog.contextvars``
+    so log records carry it directly, matching how ``session_id`` already
+    propagates.
+
+    Callers that spawn long-lived ``asyncio.create_task()`` children while this
+    span is open MUST pass ``context=contextvars.Context()`` to ``create_task()``
+    for each such child — otherwise the child copies this span (and the bound
+    ``kind``) into its own task-local context at creation time, and
+    :func:`close_root_span`'s detach/reset on THIS task never reaches that
+    copy, so the child logs a dead span's identity forever. See
+    :func:`personal_agent.service.app.lifespan` for the pattern.
+
+    Args:
+        source: Short identifier of the background entrypoint, e.g.
+            ``"scheduler.lifecycle"``, ``"consolidation"``, ``"joinability_probe"``.
+        tracer: Tracer to open the span with. Defaults to the process-wide
+            tracer resolved against whatever provider ``configure_tracing()``
+            installed. Tests inject their own tracer bound to a provider
+            carrying an in-memory exporter.
+
+    Returns:
+        A ``(span, otel_token, contextvars_tokens)`` tuple. The caller MUST
+        pass all three to :func:`close_root_span`.
+    """
+    kind = f"{SYSTEM_KIND_PREFIX}{source}"
+    span = (tracer or get_tracer()).start_span(
+        source, context=Context(), attributes={namespaced("kind"): kind}
+    )
+    token = context_api.attach(trace.set_span_in_context(span))
+    cv_tokens = structlog.contextvars.bind_contextvars(kind=kind)
+    return span, token, cv_tokens
+
+
+def close_root_span(
+    span: Span, token: Token[Context], cv_tokens: Mapping[str, "Token[Any]"]
+) -> None:
+    """End a background entrypoint's root span (ADR-0129 D3, FRE-1069).
+
+    Nested ``finally`` so a ``span.end()`` exception can't skip the OTel
+    detach or the structlog reset.
+
+    Args:
+        span: The span returned by :func:`open_root_span`.
+        token: The OTel context token returned by :func:`open_root_span`.
+        cv_tokens: The structlog contextvars tokens returned by
+            :func:`open_root_span`.
+    """
+    try:
+        span.end()
+    finally:
+        try:
+            context_api.detach(token)
+        finally:
+            structlog.contextvars.reset_contextvars(**cv_tokens)
 
 
 def model_call_span(

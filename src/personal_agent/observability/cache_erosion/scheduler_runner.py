@@ -20,18 +20,23 @@ from personal_agent.observability.cache_erosion.result import (
 )
 from personal_agent.observability.cache_erosion.sink import write_result
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.spans import close_root_span, open_root_span
 from personal_agent.telemetry.trace import SystemTraceContext
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
+    from opentelemetry.trace import Tracer
 
 log = get_logger(__name__)
 
 
 async def run_scheduled_cache_erosion_probe(
-    *, es_client: "AsyncElasticsearch | None"
+    *, es_client: "AsyncElasticsearch | None", tracer: "Tracer | None" = None
 ) -> CacheErosionResultDoc | None:
     """Run one cache-erosion probe tick from the brainstem scheduler.
+
+    Opens a root span for the tick (ADR-0129 D3, FRE-1069) — only when the probe
+    actually runs; a disabled probe produces no span.
 
     Args:
         es_client: Already-open ``AsyncElasticsearch`` client owned by the
@@ -39,6 +44,9 @@ async def run_scheduled_cache_erosion_probe(
             substrate is ``agent-logs-*``, so a missing client means the probe
             cannot run at all this tick (unlike joinability, which can
             partially walk other substrates without ES).
+        tracer: Tracer to open the root span with. Defaults to the
+            process-wide tracer; tests inject their own tracer bound to an
+            in-memory exporter.
 
     Returns:
         The :class:`CacheErosionResultDoc` for the run, or ``None`` if the
@@ -50,41 +58,45 @@ async def run_scheduled_cache_erosion_probe(
     if not getattr(settings, "cache_erosion_probe_enabled", True):
         return None
 
-    ctx = SystemTraceContext.new("cache_erosion_probe")
-    if es_client is None:
-        log.warning(
-            "cache_erosion_probe_skipped_no_es_client",
-            trace_id=ctx.trace_id,
-            component="cache_erosion",
-        )
-        return None
-
-    window_days = settings.cache_erosion_probe_window_days
-    threshold = settings.cache_erosion_probe_threshold
-
-    report = await compute_erosion_report(
-        es_client,
-        logs_prefix=settings.elasticsearch_index_prefix,
-        window_days=window_days,
-        threshold=threshold,
-    )
-    doc = from_report(report, window_days=window_days, trace_id=ctx.trace_id)
-
-    log.info(
-        "cache_erosion_probe_completed",
-        any_eroded=doc.any_eroded,
-        trace_id=ctx.trace_id,
-        component="cache_erosion",
-    )
-
+    span, token, cv_tokens = open_root_span("cache_erosion_probe", tracer=tracer)
     try:
-        await write_result(es_client, doc, prefix=settings.cache_erosion_probe_index_prefix)
-    except Exception as exc:  # noqa: BLE001
-        log.warning(
-            "cache_erosion_probe_es_write_failed",
-            error=str(exc),
+        ctx = SystemTraceContext.new("cache_erosion_probe")
+        if es_client is None:
+            log.warning(
+                "cache_erosion_probe_skipped_no_es_client",
+                trace_id=ctx.trace_id,
+                component="cache_erosion",
+            )
+            return None
+
+        window_days = settings.cache_erosion_probe_window_days
+        threshold = settings.cache_erosion_probe_threshold
+
+        report = await compute_erosion_report(
+            es_client,
+            logs_prefix=settings.elasticsearch_index_prefix,
+            window_days=window_days,
+            threshold=threshold,
+        )
+        doc = from_report(report, window_days=window_days, trace_id=ctx.trace_id)
+
+        log.info(
+            "cache_erosion_probe_completed",
+            any_eroded=doc.any_eroded,
             trace_id=ctx.trace_id,
             component="cache_erosion",
         )
 
-    return doc
+        try:
+            await write_result(es_client, doc, prefix=settings.cache_erosion_probe_index_prefix)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "cache_erosion_probe_es_write_failed",
+                error=str(exc),
+                trace_id=ctx.trace_id,
+                component="cache_erosion",
+            )
+
+        return doc
+    finally:
+        close_root_span(span, token, cv_tokens)

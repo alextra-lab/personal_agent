@@ -1181,3 +1181,143 @@ class TestDeliveryRatioCompressedInterval:
         )
         gap = call_times[1] - call_times[0]
         assert gap >= 0.08
+
+
+@pytest.mark.asyncio
+class TestSchedulerRootSpans:
+    """AC-1/AC-2 (ADR-0129 D3, FRE-1069): each scheduler tick opens exactly one root
+    span, and every log record it emits carries that span's identity and ``kind``.
+    """
+
+    async def test_lifecycle_loop_opens_exactly_one_root_span_with_full_log_coverage(
+        self,
+    ) -> None:
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        from tests._helpers.log_capture import capture_log_records
+
+        provider = TracerProvider()
+        exporter = InMemorySpanExporter()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer("test")
+
+        scheduler = BrainstemScheduler(tracer=tracer)
+        scheduler.running = True
+        now = datetime.now(timezone.utc)
+        # Skip every conditional job this tick — the only guaranteed log line is
+        # _emit_consolidation_health, which always fires on the first call
+        # (its "only on state change" guard compares against None).
+        scheduler._last_disk_check = now
+        scheduler._backfill_es_logger = None
+        scheduler._last_embedding_backfill_run = now
+        scheduler.joinability_probe_enabled = False
+        scheduler.slm_health_probe_enabled = False
+        scheduler.cache_erosion_probe_enabled = False
+        scheduler.delivery_ratio_probe_enabled = False
+        scheduler._last_domain_guard_warm_run = now
+        scheduler._last_freshness_review_week = now.isocalendar()[:2]
+        scheduler._last_kg_stats_projection_date = now.date()
+        scheduler.feedback_poller = None
+        scheduler._linear_client = None
+        scheduler.quality_monitor_enabled = False
+        scheduler.skill_routing_threshold_monitor_enabled = False
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch(
+                "personal_agent.brainstem.scheduler.asyncio.sleep",
+                new=stop_after_first_sleep,
+            ),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            capture_log_records() as records,
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.freshness_enabled = False
+
+            await scheduler._lifecycle_loop()
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.parent is None
+        assert span.attributes is not None
+        assert span.attributes["personal_agent.kind"] == "system:scheduler.lifecycle"
+
+        expected_trace_id = format(span.context.trace_id, "032x")
+        expected_span_id = format(span.context.span_id, "016x")
+        assert records, "expected at least one log record during the lifecycle tick"
+        for record in records:
+            assert record.get("trace_id") == expected_trace_id
+            assert record.get("span_id") == expected_span_id
+            assert record.get("kind") == "system:scheduler.lifecycle"
+
+    async def test_session_summary_sweep_loop_opens_exactly_one_root_span(
+        self,
+    ) -> None:
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        from tests._helpers.log_capture import capture_log_records
+
+        provider = TracerProvider()
+        exporter = InMemorySpanExporter()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer("test")
+
+        scheduler = BrainstemScheduler(tracer=tracer)
+        scheduler.running = True
+        # memory_service=None routes run_session_summary_sweep to its real,
+        # already-logging "disabled" early return (cheap, deterministic, no
+        # substrate needed) rather than mocking the method away entirely.
+        scheduler.memory_service = None
+        real_sweep = scheduler.run_session_summary_sweep
+
+        async def noop_sleep(_: float) -> None:
+            return None
+
+        async def sweep_once_then_stop(*, trace_id: str) -> dict[str, int]:
+            # The loop's own "if not self.running: break" runs BEFORE the root span
+            # opens — flipping `running` during the sleep mock would exit before a
+            # span is ever opened. Flip it here instead, after the span for this
+            # iteration has already opened and the real sweep has run.
+            result = await real_sweep(trace_id=trace_id)
+            scheduler.running = False
+            return result
+
+        with (
+            patch(
+                "personal_agent.brainstem.scheduler.asyncio.sleep",
+                new=noop_sleep,
+            ),
+            patch.object(
+                scheduler,
+                "run_session_summary_sweep",
+                new=sweep_once_then_stop,
+            ),
+            capture_log_records() as records,
+        ):
+            await scheduler._session_summary_sweep_loop()
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.parent is None
+        assert span.attributes is not None
+        assert span.attributes["personal_agent.kind"] == "system:scheduler.session_summary"
+
+        expected_trace_id = format(span.context.trace_id, "032x")
+        expected_span_id = format(span.context.span_id, "016x")
+        assert records, "expected at least one log record during the sweep tick"
+        for record in records:
+            assert record.get("trace_id") == expected_trace_id
+            assert record.get("span_id") == expected_span_id
+            assert record.get("kind") == "system:scheduler.session_summary"

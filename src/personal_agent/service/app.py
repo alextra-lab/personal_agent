@@ -1,6 +1,7 @@
 """FastAPI service application."""
 
 import asyncio
+import contextvars
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, cast
@@ -48,6 +49,7 @@ from personal_agent.service.repositories.session_repository import SessionReposi
 from personal_agent.sysgraph import SysgraphRepository, set_default_sysgraph_repo
 from personal_agent.telemetry import add_elasticsearch_handler, get_logger
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
+from personal_agent.telemetry.spans import close_root_span, open_root_span
 from personal_agent.telemetry.trace import SystemTraceContext, read_or_mint_trace_id
 from personal_agent.transport.events import TextDeltaEvent
 
@@ -665,277 +667,296 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # provider to draw tracers from.
     from personal_agent.telemetry.otel_bootstrap import configure_tracing
 
-    configure_tracing(
+    provider = configure_tracing(
         service_name=settings.agent_id or "personal-agent",
         otlp_endpoint=settings.otel_exporter_endpoint,
     )
-
-    # Vision-capability drift guard (ADR-0101 §5; FRE-734): log which roles are
-    # vision-capable in the active config and warn if an expected production role
-    # is not flagged. Non-fatal — surfaces config-parity drift in the boot logs so
-    # it is caught here, not by a user on a broken image turn.
-    from personal_agent.config.model_loader import check_vision_capabilities
-
-    check_vision_capabilities()
-
-    # Pre-flight: verify PostgreSQL is reachable before attempting any DB operations
-    pg_host, pg_port = _parse_db_host_port(settings.database_url)
-    await _preflight_check_tcp("PostgreSQL", pg_host, pg_port)
-
-    # Initialize database
-    await init_db()
-    log.info("database_initialized")
-
-    # Route-trace ledger (FRE-452 / ADR-0088 D6): direct durable observability sink.
-    # Connect early so every turn's terminal write has a pool; non-fatal on failure.
-    from personal_agent.observability.route_trace import get_route_trace_ledger
-
-    await get_route_trace_ledger().connect()
-
-    # Cost tracker singleton (FRE-988): connect the shared pool once at startup
-    # rather than paying asyncpg.create_pool() setup on the first priced call.
-    # connect() is idempotent, so a call site's own connect() later is a no-op.
-    from personal_agent.llm_client.cost_tracker import get_cost_tracker_service
-
-    await get_cost_tracker_service().connect()
-
-    # Cost Check Gate (ADR-0065 / FRE-305): atomic Postgres-backed reservation
-    # primitive in front of every paid LLM call. Loaded here so the
-    # subsequent service-init code can already issue paid calls if needed.
+    startup_span, startup_token, startup_cv_tokens = open_root_span(
+        "startup", tracer=provider.get_tracer(__name__)
+    )
     try:
-        from personal_agent.cost_gate import (
-            CostGate,
-            load_budget_config,
-            run_counter_snapshotter,
-            run_reaper,
-            set_default_gate,
-            sync_budget_policies_to_db,
-            validate_role_totality,
-        )
+        # Vision-capability drift guard (ADR-0101 §5; FRE-734): log which roles are
+        # vision-capable in the active config and warn if an expected production role
+        # is not flagged. Non-fatal — surfaces config-parity drift in the boot logs so
+        # it is caught here, not by a user on a broken image turn.
+        from personal_agent.config.model_loader import check_vision_capabilities
 
-        budget_config = load_budget_config()
-        # FRE-989: refuse to serve on a config whose roles, caps and resolver
-        # map disagree. budget.yaml is a RUNTIME file baked into the image, so
-        # the CI guard validates the tree, not the container that ships — a
-        # drifted deploy would otherwise mis-bill silently for the life of the
-        # process, which is exactly how `study` billed main_inference unnoticed.
-        validate_role_totality(budget_config)
-        cost_gate = CostGate(config=budget_config, db_url=settings.database_url)
-        await cost_gate.connect()
-        set_default_gate(cost_gate)
-        # Mirror budget.yaml's caps into budget_policies (FRE-1209): nothing
-        # else writes to that table, so it sat permanently empty and defeated
-        # the Cost & Budget dashboard's utilisation panel. Fail-open —
-        # enforcement reads the YAML directly (unchanged) and does not
-        # consult this table, so a DB hiccup here must not block startup.
+        check_vision_capabilities()
+
+        # Pre-flight: verify PostgreSQL is reachable before attempting any DB operations
+        pg_host, pg_port = _parse_db_host_port(settings.database_url)
+        await _preflight_check_tcp("PostgreSQL", pg_host, pg_port)
+
+        # Initialize database
+        await init_db()
+        log.info("database_initialized")
+
+        # Route-trace ledger (FRE-452 / ADR-0088 D6): direct durable observability sink.
+        # Connect early so every turn's terminal write has a pool; non-fatal on failure.
+        from personal_agent.observability.route_trace import get_route_trace_ledger
+
+        await get_route_trace_ledger().connect()
+
+        # Cost tracker singleton (FRE-988): connect the shared pool once at startup
+        # rather than paying asyncpg.create_pool() setup on the first priced call.
+        # connect() is idempotent, so a call site's own connect() later is a no-op.
+        from personal_agent.llm_client.cost_tracker import get_cost_tracker_service
+
+        await get_cost_tracker_service().connect()
+
+        # Cost Check Gate (ADR-0065 / FRE-305): atomic Postgres-backed reservation
+        # primitive in front of every paid LLM call. Loaded here so the
+        # subsequent service-init code can already issue paid calls if needed.
         try:
-            assert cost_gate.pool is not None
-            await sync_budget_policies_to_db(budget_config, cost_gate.pool)
-        except Exception as sync_exc:  # noqa: BLE001
+            from personal_agent.cost_gate import (
+                CostGate,
+                load_budget_config,
+                run_counter_snapshotter,
+                run_reaper,
+                set_default_gate,
+                sync_budget_policies_to_db,
+                validate_role_totality,
+            )
+
+            budget_config = load_budget_config()
+            # FRE-989: refuse to serve on a config whose roles, caps and resolver
+            # map disagree. budget.yaml is a RUNTIME file baked into the image, so
+            # the CI guard validates the tree, not the container that ships — a
+            # drifted deploy would otherwise mis-bill silently for the life of the
+            # process, which is exactly how `study` billed main_inference unnoticed.
+            validate_role_totality(budget_config)
+            cost_gate = CostGate(config=budget_config, db_url=settings.database_url)
+            await cost_gate.connect()
+            set_default_gate(cost_gate)
+            # Mirror budget.yaml's caps into budget_policies (FRE-1209): nothing
+            # else writes to that table, so it sat permanently empty and defeated
+            # the Cost & Budget dashboard's utilisation panel. Fail-open —
+            # enforcement reads the YAML directly (unchanged) and does not
+            # consult this table, so a DB hiccup here must not block startup.
+            try:
+                assert cost_gate.pool is not None
+                await sync_budget_policies_to_db(budget_config, cost_gate.pool)
+            except Exception as sync_exc:  # noqa: BLE001
+                log.error(
+                    "budget_policies_sync_failed",
+                    error=str(sync_exc),
+                    remedy=(
+                        "budget_policies audit table may be stale; enforcement is "
+                        "unaffected (still YAML-driven)."
+                    ),
+                    exc_info=True,
+                )
+            # context=contextvars.Context() (ADR-0129 D3, FRE-1069): this task
+            # outlives the startup root span above — a bare create_task() would
+            # copy the span (and its bound `kind`) into the task's own context at
+            # creation time, so it would keep stamping every log line with a dead
+            # span's identity for the rest of the process's life once that span
+            # closes at the end of this try/finally.
+            cost_gate_reaper_task = asyncio.create_task(
+                run_reaper(cost_gate), context=contextvars.Context()
+            )
+            # Cap-utilization snapshot emitter (FRE-547): mirrors budget_counters to
+            # ES so the Cost & Budget dashboard can render utilization vs caps. The
+            # snapshotter sleeps before its first emit, so the ES log handler
+            # (attached below) is wired before any snapshot fires.
+            cost_gate_snapshotter_task = asyncio.create_task(
+                run_counter_snapshotter(cost_gate), context=contextvars.Context()
+            )
+            log.info(
+                "cost_gate_initialized",
+                roles=len(budget_config.roles),
+                caps=len(budget_config.caps),
+            )
+
+            # Config-owned model pricing (ADR-0101 §8b / FRE-691): push per-token
+            # rates from models.yaml into litellm.model_cost so cloud cost —
+            # including image (vision) tokens — reconciles deterministically and
+            # non-zero, independent of litellm's shipped registry. Fail-open: on
+            # error the shipped registry still prices known ids; log loudly.
+            try:
+                from personal_agent.config.model_loader import load_model_config
+                from personal_agent.llm_client.pricing import register_model_pricing
+
+                register_model_pricing(load_model_config())
+            except Exception as pricing_exc:  # noqa: BLE001
+                log.error(
+                    "model_pricing_registration_failed",
+                    error=str(pricing_exc),
+                    remedy="Cloud cost falls back to litellm's shipped registry; verify models config.",
+                    exc_info=True,
+                )
+        except Exception as e:
+            # Failing to initialise the gate is fatal — without it, paid calls
+            # would fall back to the unprotected advisory check the gate replaces.
             log.error(
-                "budget_policies_sync_failed",
-                error=str(sync_exc),
-                remedy=(
-                    "budget_policies audit table may be stale; enforcement is "
-                    "unaffected (still YAML-driven)."
-                ),
+                "cost_gate_init_failed",
+                error=str(e),
+                remedy="Verify config/governance/budget.yaml and DB connectivity.",
                 exc_info=True,
             )
-        cost_gate_reaper_task = asyncio.create_task(run_reaper(cost_gate))
-        # Cap-utilization snapshot emitter (FRE-547): mirrors budget_counters to
-        # ES so the Cost & Budget dashboard can render utilization vs caps. The
-        # snapshotter sleeps before its first emit, so the ES log handler
-        # (attached below) is wired before any snapshot fires.
-        cost_gate_snapshotter_task = asyncio.create_task(run_counter_snapshotter(cost_gate))
-        log.info(
-            "cost_gate_initialized",
-            roles=len(budget_config.roles),
-            caps=len(budget_config.caps),
-        )
+            raise
 
-        # Config-owned model pricing (ADR-0101 §8b / FRE-691): push per-token
-        # rates from models.yaml into litellm.model_cost so cloud cost —
-        # including image (vision) tokens — reconciles deterministically and
-        # non-zero, independent of litellm's shipped registry. Fail-open: on
-        # error the shipped registry still prices known ids; log loudly.
+        # Connect to Elasticsearch and integrate with logging
+        es_handler = ElasticsearchHandler(
+            settings.elasticsearch_url, index_prefix=settings.elasticsearch_index_prefix
+        )
+        if await es_handler.connect():
+            add_elasticsearch_handler(es_handler)
+            set_es_indexer(build_es_indexer_from_handler(es_handler))
+            log.info("elasticsearch_logging_enabled")
+
+            # Captain's Log → ES indexing (Phase 2.3): pass handler during lifespan
+            from personal_agent.captains_log.capture import (
+                set_default_es_handler as set_capture_es_handler,
+            )
+            from personal_agent.captains_log.manager import CaptainLogManager
+
+            set_capture_es_handler(es_handler)
+            CaptainLogManager.set_default_es_handler(es_handler)
+            log.info("captains_log_es_indexing_enabled")
+
+            # Captain's Log ES backfill (FRE-30): one replay pass on startup
+            try:
+                from personal_agent.captains_log.backfill import run_backfill
+
+                # context=contextvars.Context() — see the cost-gate tasks above.
+                asyncio.create_task(
+                    run_backfill(es_handler.es_logger), context=contextvars.Context()
+                )
+            except Exception as e:
+                log.warning("captains_log_backfill_startup_failed", error=str(e))
+
+        # main_inference silence monitor (FRE-1117): flags a day where a
+        # cloud-selected primary session booked nothing to the lane — see
+        # cost_gate/silence_monitor.py for why that, and only that, is worth a
+        # human's attention. Started here, after the ES handler is wired above
+        # (not inside the cost-gate try/except further up): its first post-restart
+        # check runs almost immediately (unlike the snapshotter's sleep-first — see
+        # snapshotter.py), so starting it before ES is attached risks a finding
+        # landing in file/console only and never reaching the dashboard. A
+        # pricing-registration failure earlier must not skip this monitor either,
+        # hence its own independent try.
         try:
             from personal_agent.config.model_loader import load_model_config
-            from personal_agent.llm_client.pricing import register_model_pricing
+            from personal_agent.cost_gate import run_silence_monitor
 
-            register_model_pricing(load_model_config())
-        except Exception as pricing_exc:  # noqa: BLE001
+            # context=contextvars.Context() — see the cost-gate tasks above.
+            cost_gate_silence_monitor_task = asyncio.create_task(
+                run_silence_monitor(load_model_config()), context=contextvars.Context()
+            )
+        except Exception as silence_exc:  # noqa: BLE001
             log.error(
-                "model_pricing_registration_failed",
-                error=str(pricing_exc),
-                remedy="Cloud cost falls back to litellm's shipped registry; verify models config.",
+                "main_inference_silence_monitor_startup_failed",
+                error=str(silence_exc),
+                remedy="Verify config/models.yaml; the monitor stays off until next restart.",
                 exc_info=True,
             )
-    except Exception as e:
-        # Failing to initialise the gate is fatal — without it, paid calls
-        # would fall back to the unprotected advisory check the gate replaces.
-        log.error(
-            "cost_gate_init_failed",
-            error=str(e),
-            remedy="Verify config/governance/budget.yaml and DB connectivity.",
-            exc_info=True,
-        )
-        raise
 
-    # Connect to Elasticsearch and integrate with logging
-    es_handler = ElasticsearchHandler(
-        settings.elasticsearch_url, index_prefix=settings.elasticsearch_index_prefix
-    )
-    if await es_handler.connect():
-        add_elasticsearch_handler(es_handler)
-        set_es_indexer(build_es_indexer_from_handler(es_handler))
-        log.info("elasticsearch_logging_enabled")
-
-        # Captain's Log → ES indexing (Phase 2.3): pass handler during lifespan
-        from personal_agent.captains_log.capture import (
-            set_default_es_handler as set_capture_es_handler,
-        )
-        from personal_agent.captains_log.manager import CaptainLogManager
-
-        set_capture_es_handler(es_handler)
-        CaptainLogManager.set_default_es_handler(es_handler)
-        log.info("captains_log_es_indexing_enabled")
-
-        # Captain's Log ES backfill (FRE-30): one replay pass on startup
-        try:
-            from personal_agent.captains_log.backfill import run_backfill
-
-            asyncio.create_task(run_backfill(es_handler.es_logger))
-        except Exception as e:
-            log.warning("captains_log_backfill_startup_failed", error=str(e))
-
-    # main_inference silence monitor (FRE-1117): flags a day where a
-    # cloud-selected primary session booked nothing to the lane — see
-    # cost_gate/silence_monitor.py for why that, and only that, is worth a
-    # human's attention. Started here, after the ES handler is wired above
-    # (not inside the cost-gate try/except further up): its first post-restart
-    # check runs almost immediately (unlike the snapshotter's sleep-first — see
-    # snapshotter.py), so starting it before ES is attached risks a finding
-    # landing in file/console only and never reaching the dashboard. A
-    # pricing-registration failure earlier must not skip this monitor either,
-    # hence its own independent try.
-    try:
-        from personal_agent.config.model_loader import load_model_config
-        from personal_agent.cost_gate import run_silence_monitor
-
-        cost_gate_silence_monitor_task = asyncio.create_task(
-            run_silence_monitor(load_model_config())
-        )
-    except Exception as silence_exc:  # noqa: BLE001
-        log.error(
-            "main_inference_silence_monitor_startup_failed",
-            error=str(silence_exc),
-            remedy="Verify config/models.yaml; the monitor stays off until next restart.",
-            exc_info=True,
-        )
-
-    # Connect to Neo4j (if enabled) — non-fatal, matches ES graceful-degradation pattern
-    if settings.enable_memory_graph:
-        try:
-            memory_service = MemoryService()
-            await memory_service.connect()
-            log.info("memory_service_initialized")
-            # Ensure Neo4j vector index exists for embedding search (idempotent)
+        # Connect to Neo4j (if enabled) — non-fatal, matches ES graceful-degradation pattern
+        if settings.enable_memory_graph:
             try:
-                await memory_service.ensure_vector_index()
-                log.info("neo4j_vector_index_ensured")
-            except Exception as idx_e:
-                log.warning("neo4j_vector_index_setup_failed", error=str(idx_e))
-            # Ensure Neo4j full-text index for the lexical recall arm (ADR-0104 /
-            # FRE-723). Idempotent; needed even while the arm is flag-dark, else
-            # the index never exists to enable it against later.
-            try:
-                await memory_service.ensure_fulltext_index()
-                log.info("neo4j_fulltext_index_ensured")
-            except Exception as ft_e:
-                log.warning("neo4j_fulltext_index_setup_failed", error=str(ft_e))
-            # Ensure Entity.class index (ADR-0115 D2 persistence seam / FRE-864).
-            # Idempotent; needed so recall can predicate on class once dispatch/ranking
-            # (FRE-728 / the ADR-0104 arm) consume it.
-            try:
-                await memory_service.ensure_entity_class_index()
-                log.info("neo4j_entity_class_index_ensured")
-            except Exception as cls_idx_e:
-                log.warning("neo4j_entity_class_index_setup_failed", error=str(cls_idx_e))
-            # Ensure Session.session_id index (ADR-0124 Phase 1 / FRE-948). Idempotent;
-            # the session-browser digest read makes this label scan user-facing and
-            # unconditional on every session-list page load.
-            try:
-                await memory_service.ensure_session_id_index()
-                log.info("neo4j_session_id_index_ensured")
-            except Exception as sid_idx_e:
-                log.warning("neo4j_session_id_index_setup_failed", error=str(sid_idx_e))
-            # Ensure Turn.session_id index (FRE-992). Idempotent; the digest sweep
-            # counts a session's Turn nodes on every pass to decide whether its
-            # captures were read whole, and link_session_turns already matches Turn by
-            # session_id — both are label scans without it.
-            try:
-                await memory_service.ensure_turn_session_id_index()
-                log.info("neo4j_turn_session_id_index_ensured")
-            except Exception as turn_idx_e:
-                log.warning("neo4j_turn_session_id_index_setup_failed", error=str(turn_idx_e))
-            # Ensure Turn.user_id index (FRE-1119). Idempotent; recall_personal_history's
-            # property-authoritative reachability match is a full label scan without it —
-            # profiled live at 31,019 DB hits vs. 75 for the indexed edge traversal it falls
-            # back to.
-            try:
-                await memory_service.ensure_turn_user_id_index()
-                log.info("neo4j_turn_user_id_index_ensured")
-            except Exception as turn_uid_idx_e:
-                log.warning("neo4j_turn_user_id_index_setup_failed", error=str(turn_uid_idx_e))
-            # Bootstrap owner identity (FRE-213 / ADR-0052) — idempotent, no-op when empty
-            if settings.owner_name and settings.agent_owner_email:
+                memory_service = MemoryService()
+                await memory_service.connect()
+                log.info("memory_service_initialized")
+                # Ensure Neo4j vector index exists for embedding search (idempotent)
                 try:
-                    async with AsyncSessionLocal() as db:
-                        owner_user_id = await get_or_create_user_by_email(
-                            db, settings.agent_owner_email
+                    await memory_service.ensure_vector_index()
+                    log.info("neo4j_vector_index_ensured")
+                except Exception as idx_e:
+                    log.warning("neo4j_vector_index_setup_failed", error=str(idx_e))
+                # Ensure Neo4j full-text index for the lexical recall arm (ADR-0104 /
+                # FRE-723). Idempotent; needed even while the arm is flag-dark, else
+                # the index never exists to enable it against later.
+                try:
+                    await memory_service.ensure_fulltext_index()
+                    log.info("neo4j_fulltext_index_ensured")
+                except Exception as ft_e:
+                    log.warning("neo4j_fulltext_index_setup_failed", error=str(ft_e))
+                # Ensure Entity.class index (ADR-0115 D2 persistence seam / FRE-864).
+                # Idempotent; needed so recall can predicate on class once dispatch/ranking
+                # (FRE-728 / the ADR-0104 arm) consume it.
+                try:
+                    await memory_service.ensure_entity_class_index()
+                    log.info("neo4j_entity_class_index_ensured")
+                except Exception as cls_idx_e:
+                    log.warning("neo4j_entity_class_index_setup_failed", error=str(cls_idx_e))
+                # Ensure Session.session_id index (ADR-0124 Phase 1 / FRE-948). Idempotent;
+                # the session-browser digest read makes this label scan user-facing and
+                # unconditional on every session-list page load.
+                try:
+                    await memory_service.ensure_session_id_index()
+                    log.info("neo4j_session_id_index_ensured")
+                except Exception as sid_idx_e:
+                    log.warning("neo4j_session_id_index_setup_failed", error=str(sid_idx_e))
+                # Ensure Turn.session_id index (FRE-992). Idempotent; the digest sweep
+                # counts a session's Turn nodes on every pass to decide whether its
+                # captures were read whole, and link_session_turns already matches Turn by
+                # session_id — both are label scans without it.
+                try:
+                    await memory_service.ensure_turn_session_id_index()
+                    log.info("neo4j_turn_session_id_index_ensured")
+                except Exception as turn_idx_e:
+                    log.warning("neo4j_turn_session_id_index_setup_failed", error=str(turn_idx_e))
+                # Ensure Turn.user_id index (FRE-1119). Idempotent; recall_personal_history's
+                # property-authoritative reachability match is a full label scan without it —
+                # profiled live at 31,019 DB hits vs. 75 for the indexed edge traversal it falls
+                # back to.
+                try:
+                    await memory_service.ensure_turn_user_id_index()
+                    log.info("neo4j_turn_user_id_index_ensured")
+                except Exception as turn_uid_idx_e:
+                    log.warning("neo4j_turn_user_id_index_setup_failed", error=str(turn_uid_idx_e))
+                # Bootstrap owner identity (FRE-213 / ADR-0052) — idempotent, no-op when empty
+                if settings.owner_name and settings.agent_owner_email:
+                    try:
+                        async with AsyncSessionLocal() as db:
+                            owner_user_id = await get_or_create_user_by_email(
+                                db, settings.agent_owner_email
+                            )
+                        await memory_service.bootstrap_owner_identity(
+                            agent_id=settings.agent_id,
+                            user_id=owner_user_id,
+                            email=settings.agent_owner_email,
+                            name=settings.owner_name,
                         )
-                    await memory_service.bootstrap_owner_identity(
-                        agent_id=settings.agent_id,
-                        user_id=owner_user_id,
-                        email=settings.agent_owner_email,
-                        name=settings.owner_name,
-                    )
-                except Exception as boot_e:
-                    log.warning("owner_bootstrap_failed", error=str(boot_e))
-            # Seed display names for non-owner CF Access users (FRE-344)
-            for _email, _display_name in settings.user_display_names.items():
-                try:
-                    async with AsyncSessionLocal() as db:
-                        _uid = await upsert_display_name_for_email(db, _email, _display_name)
-                    local_part = _email.split("@")[0]
-                    await memory_service.update_person_name_if_default(
-                        user_id=_uid,
-                        current_default=local_part,
-                        new_name=_display_name,
-                    )
-                    log.info("display_name_seeded", email=_email)
-                except Exception as seed_e:
-                    log.warning("display_name_seed_failed", email=_email, error=str(seed_e))
-        except Exception as e:
-            log.warning(
-                "memory_service_connect_failed",
-                error=str(e),
-                remedy="Neo4j may not be running. Run 'make infra-up'.",
-            )
-            memory_service = None
+                    except Exception as boot_e:
+                        log.warning("owner_bootstrap_failed", error=str(boot_e))
+                # Seed display names for non-owner CF Access users (FRE-344)
+                for _email, _display_name in settings.user_display_names.items():
+                    try:
+                        async with AsyncSessionLocal() as db:
+                            _uid = await upsert_display_name_for_email(db, _email, _display_name)
+                        local_part = _email.split("@")[0]
+                        await memory_service.update_person_name_if_default(
+                            user_id=_uid,
+                            current_default=local_part,
+                            new_name=_display_name,
+                        )
+                        log.info("display_name_seeded", email=_email)
+                    except Exception as seed_e:
+                        log.warning("display_name_seed_failed", email=_email, error=str(seed_e))
+            except Exception as e:
+                log.warning(
+                    "memory_service_connect_failed",
+                    error=str(e),
+                    remedy="Neo4j may not be running. Run 'make infra-up'.",
+                )
+                memory_service = None
 
-    # Sysgraph (ADR-0105 D9/FRE-721): one process-level connected repository, shared
-    # via set_default_sysgraph_repo so the per-turn Captain's Log reflection path
-    # (orchestrator/executor.py -> captains_log/reflection.py) never opens a fresh
-    # asyncpg pool on every single turn. Best-effort — a connect failure must never
-    # block startup; the shared getter simply returns None (feature degrades open).
-    try:
-        sysgraph_repo = SysgraphRepository(settings.sysgraph_database_url)
-        await sysgraph_repo.connect()
-        set_default_sysgraph_repo(sysgraph_repo)
-        log.info("sysgraph_shared_repo_initialized")
-    except Exception as sysgraph_e:
-        log.warning("sysgraph_shared_repo_connect_failed", error=str(sysgraph_e))
+        # Sysgraph (ADR-0105 D9/FRE-721): one process-level connected repository, shared
+        # via set_default_sysgraph_repo so the per-turn Captain's Log reflection path
+        # (orchestrator/executor.py -> captains_log/reflection.py) never opens a fresh
+        # asyncpg pool on every single turn. Best-effort — a connect failure must never
+        # block startup; the shared getter simply returns None (feature degrades open).
+        try:
+            sysgraph_repo = SysgraphRepository(settings.sysgraph_database_url)
+            await sysgraph_repo.connect()
+            set_default_sysgraph_repo(sysgraph_repo)
+            log.info("sysgraph_shared_repo_initialized")
+        except Exception as sysgraph_e:
+            log.warning("sysgraph_shared_repo_connect_failed", error=str(sysgraph_e))
+    finally:
+        close_root_span(startup_span, startup_token, startup_cv_tokens)
 
     metrics_daemon = MetricsDaemon(
         poll_interval_seconds=settings.metrics_daemon_poll_interval_seconds,

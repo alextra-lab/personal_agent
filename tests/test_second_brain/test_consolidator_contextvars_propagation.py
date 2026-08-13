@@ -4,10 +4,13 @@
 background pass (triggered by the scheduler's lifecycle loop or the
 ``request.captured`` event consumer — never from within a live request's own
 ``structlog.contextvars`` scope). Each capture must have its OWN
-trace_id/session_id/user_id bound for the duration it is processed, and that
-binding must not bleed into the next capture's log lines — a stale bind would
-be a *wrong* user_id, which ADR-0107 AC-3a treats as a hard failure, not a
-tolerable gap.
+capture_trace_id/session_id/user_id bound for the duration it is processed,
+and that binding must not bleed into the next capture's log lines — a stale
+bind would be a *wrong* user_id, which ADR-0107 AC-3a treats as a hard
+failure, not a tolerable gap. (Bound as ``capture_trace_id`` rather than
+``trace_id`` since ADR-0129/FRE-1069: the loop runs under one root span, and
+``trace_id`` is reserved for that span's own identity — see the loop's own
+comment in consolidator.py.)
 """
 
 from __future__ import annotations
@@ -77,8 +80,13 @@ async def test_each_capture_binds_its_own_identity_not_the_previous_ones(
     ):
         await consolidator.consolidate_recent_captures(days=7)
 
+    # ADR-0129 D3/FRE-1069: the loop now runs under a single "consolidation" root
+    # span, and _add_span_context (telemetry/logger.py) unconditionally overwrites
+    # event_dict["trace_id"] from that span — so the per-capture identity is bound
+    # (and asserted here) under the distinct key "capture_trace_id" instead, which
+    # _add_span_context never touches.
     per_capture_logs = {
-        entry["trace_id"]: entry
+        entry["capture_trace_id"]: entry
         for entry in captured
         if entry.get("event") == "consolidation_processing_capture"
     }

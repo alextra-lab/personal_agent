@@ -28,23 +28,37 @@ from personal_agent.observability.joinability.sink import (
 )
 from personal_agent.observability.joinability.walk import JoinabilityWalk
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.spans import close_root_span, open_root_span
 from personal_agent.telemetry.trace import SystemTraceContext
 from personal_agent.telemetry.vocabulary import snapshot_counts
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
+    from opentelemetry.trace import Tracer
 
 log = get_logger(__name__)
 
 
-async def run_scheduled_probe(*, es_client: "AsyncElasticsearch | None") -> ResultDoc | None:
+async def run_scheduled_probe(
+    *, es_client: "AsyncElasticsearch | None", tracer: "Tracer | None" = None
+) -> ResultDoc | None:
     """Run one joinability probe tick from the brainstem scheduler.
+
+    Opens a root span for the tick (ADR-0129 D3, FRE-1069) — only when the probe
+    actually runs; a disabled probe produces no span. Resource acquisition
+    (Postgres/Neo4j/Redis) happens inside the same try/finally that closes the
+    span, so a hypothetical future exception from opening a substrate connection
+    still reaches the ``finally`` that releases whatever was opened and closes
+    the span, rather than leaking either.
 
     Args:
         es_client: Already-open AsyncElasticsearch client owned by the
             scheduler's :class:`DataLifecycleManager`. When ``None`` the
             probe still walks Postgres/Neo4j and emits a result doc to
             stdout via the structured log, but does not persist to ES.
+        tracer: Tracer to open the root span with. Defaults to the
+            process-wide tracer; tests inject their own tracer bound to an
+            in-memory exporter.
 
     Returns:
         The :class:`ResultDoc` for the run, or ``None`` if the probe could
@@ -55,15 +69,20 @@ async def run_scheduled_probe(*, es_client: "AsyncElasticsearch | None") -> Resu
     if not getattr(settings, "joinability_probe_enabled", True):
         return None
 
-    ctx = SystemTraceContext.new("joinability_probe")
-    started_at = datetime.now(timezone.utc)
-    seed = seed_for(started_at)
-    window_hours = settings.joinability_probe_window_hours
-
-    pg_pool = await _open_pg_pool()
-    neo4j_driver = _open_neo4j_driver()
-    redis = await _open_redis()
+    span, token, cv_tokens = open_root_span("joinability_probe", tracer=tracer)
+    pg_pool = None
+    neo4j_driver = None
+    redis = None
     try:
+        ctx = SystemTraceContext.new("joinability_probe")
+        started_at = datetime.now(timezone.utc)
+        seed = seed_for(started_at)
+        window_hours = settings.joinability_probe_window_hours
+
+        pg_pool = await _open_pg_pool()
+        neo4j_driver = _open_neo4j_driver()
+        redis = await _open_redis()
+
         session_id = await _pick_session(pg_pool, window_hours=window_hours, seed=seed)
         # Substrate clients are typed as Any | None at open time (lazy imports);
         # the walk's __init__ tightens them per-substrate. Pass directly.
@@ -145,7 +164,10 @@ async def run_scheduled_probe(*, es_client: "AsyncElasticsearch | None") -> Resu
                     )
         return doc
     finally:
-        await _close(pg_pool, neo4j_driver, redis)
+        try:
+            await _close(pg_pool, neo4j_driver, redis)
+        finally:
+            close_root_span(span, token, cv_tokens)
 
 
 # ---------------------------------------------------------------------------

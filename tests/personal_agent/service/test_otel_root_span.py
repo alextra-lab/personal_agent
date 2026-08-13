@@ -173,3 +173,84 @@ def test_root_span_middleware_wraps_cors_in_the_real_app() -> None:
         m.cls is CORSMiddleware  # type: ignore[comparison-overlap]
         for m in app.user_middleware[1:]
     )
+
+
+class _StartupMarker(Exception):
+    """Private marker raised to halt lifespan() startup deterministically, without
+    needing live Postgres/ES/Neo4j.
+    """
+
+
+async def _raise_startup_marker(*_args: object, **_kwargs: object) -> None:
+    raise _StartupMarker
+
+
+@pytest.mark.asyncio
+async def test_startup_root_span_ac1_ac2(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-1/AC-2 (ADR-0129 D3, FRE-1069) for service startup.
+
+    ``configure_tracing`` is imported *inside* ``lifespan()`` at call time, so
+    patching the source attribute (rather than a name already bound in
+    ``app.py``) is picked up correctly. ``_preflight_check_tcp`` and ``init_db``
+    are stubbed to succeed without live Postgres, so the real
+    ``log.info("database_initialized")`` call fires — giving a genuine
+    post-bootstrap record — before the marker is raised from the next step
+    (the route-trace ledger connect). This proves BOTH that pre-bootstrap
+    records (``service_starting``) carry no identity AND that records emitted
+    after ``configure_tracing`` succeeds carry the startup span's identity even
+    though ``lifespan()`` never reaches its own ``yield`` — the try/finally's
+    guaranteed closure, not best-effort.
+    """
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    from tests._helpers.log_capture import capture_log_records
+
+    test_provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    test_provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    async def _noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "personal_agent.telemetry.otel_bootstrap.configure_tracing",
+        lambda **_kwargs: test_provider,
+    )
+    monkeypatch.setattr("personal_agent.service.app._preflight_check_tcp", _noop)
+    monkeypatch.setattr("personal_agent.service.app.init_db", _noop)
+    monkeypatch.setattr(
+        "personal_agent.observability.route_trace.get_route_trace_ledger",
+        lambda: type("_FakeLedger", (), {"connect": _raise_startup_marker})(),
+    )
+
+    from personal_agent.service.app import app, lifespan
+
+    with capture_log_records() as records:
+        with pytest.raises(_StartupMarker):
+            async with lifespan(app):
+                pass
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.parent is None
+    assert span.attributes is not None
+    assert span.attributes["personal_agent.kind"] == "system:startup"
+
+    expected_trace_id = format(span.context.trace_id, "032x")
+    expected_span_id = format(span.context.span_id, "016x")
+
+    boundary = next(i for i, r in enumerate(records) if r.get("event") == "service_starting")
+    pre_bootstrap = records[: boundary + 1]
+    post_bootstrap = records[boundary + 1 :]
+
+    for record in pre_bootstrap:
+        assert "trace_id" not in record
+        assert "kind" not in record
+
+    assert post_bootstrap, "expected at least one log record after configure_tracing() succeeded"
+    for record in post_bootstrap:
+        assert record.get("trace_id") == expected_trace_id
+        assert record.get("span_id") == expected_span_id
+        assert record.get("kind") == "system:startup"

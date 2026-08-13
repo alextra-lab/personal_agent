@@ -9,7 +9,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -39,7 +39,11 @@ from personal_agent.second_brain.entity_extraction import (
 )
 from personal_agent.sysgraph import get_default_sysgraph_repo
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.spans import close_root_span, open_root_span
 from personal_agent.telemetry.trace import SystemTraceContext
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Tracer
 
 log = get_logger(__name__)
 
@@ -149,13 +153,18 @@ class SecondBrainConsolidator:
     def __init__(
         self,
         memory_service: MemoryService | None = None,
+        tracer: "Tracer | None" = None,
     ) -> None:  # noqa: D107
         """Initialize consolidator with optional dependencies.
 
         Args:
             memory_service: Optional memory service (creates new if None).
+            tracer: Tracer to open each consolidation run's root span with
+                (ADR-0129 D3, FRE-1069). Defaults to the process-wide tracer;
+                tests inject their own tracer bound to an in-memory exporter.
         """
         self.memory_service = memory_service or MemoryService()
+        self._tracer = tracer
 
         # Ensure memory service is connected
         if not self.memory_service.connected:
@@ -180,219 +189,242 @@ class SecondBrainConsolidator:
         Returns:
             Summary dict with processing results
         """
-        run_trace_id = _new_consolidation_trace_id()
-        log.info("consolidation_started", days=days, limit=limit, trace_id=run_trace_id)
+        span, token, cv_tokens = open_root_span("consolidation", tracer=self._tracer)
+        try:
+            run_trace_id = _new_consolidation_trace_id()
+            log.info("consolidation_started", days=days, limit=limit, trace_id=run_trace_id)
 
-        # Read recent captures
-        end_date = datetime.now(timezone.utc)
-        start_date = end_date - timedelta(days=days)
-        captures = read_captures(start_date=start_date, end_date=end_date, limit=limit)
+            # Read recent captures
+            end_date = datetime.now(timezone.utc)
+            start_date = end_date - timedelta(days=days)
+            captures = read_captures(start_date=start_date, end_date=end_date, limit=limit)
 
-        if not captures:
-            log.info("no_captures_to_consolidate", days=days, trace_id=run_trace_id)
-            return {
-                "captures_processed": 0,
-                "captures_skipped": 0,
-                "turns_created": 0,
-                "sessions_created": 0,
-                "entities_created": 0,
-                "relationships_created": 0,
-            }
+            if not captures:
+                log.info("no_captures_to_consolidate", days=days, trace_id=run_trace_id)
+                return {
+                    "captures_processed": 0,
+                    "captures_skipped": 0,
+                    "turns_created": 0,
+                    "sessions_created": 0,
+                    "entities_created": 0,
+                    "relationships_created": 0,
+                }
 
-        entity_extraction_role = resolve_role_model_key("entity_extraction")
+            entity_extraction_role = resolve_role_model_key("entity_extraction")
 
-        log.info(
-            "captures_found",
-            count=len(captures),
-            extraction_model=entity_extraction_role,
-            trace_id=run_trace_id,
-        )
+            log.info(
+                "captures_found",
+                count=len(captures),
+                extraction_model=entity_extraction_role,
+                trace_id=run_trace_id,
+            )
 
-        # Ensure memory service is connected
-        if not self.memory_service.connected:
-            await self.memory_service.connect()
+            # Ensure memory service is connected
+            if not self.memory_service.connected:
+                await self.memory_service.connect()
 
-        # Process each capture (skip ones already in the graph to avoid duplicate work)
-        turns_created = 0
-        entities_created = 0
-        relationships_created = 0
-        stances_created = 0
-        claims_created = 0
-        entities_dispatched_ephemeral = 0
-        entities_dispatched_finding = 0
-        entities_dispatch_finding_failed = 0
-        relationships_dispatch_skipped = 0
-        captures_skipped = 0
-        sessions_with_new_turns: set[str] = set()
-        all_entity_ids: list[str] = []
-        all_relationship_element_ids: list[str] = []
+            # Process each capture (skip ones already in the graph to avoid duplicate work)
+            turns_created = 0
+            entities_created = 0
+            relationships_created = 0
+            stances_created = 0
+            claims_created = 0
+            entities_dispatched_ephemeral = 0
+            entities_dispatched_finding = 0
+            entities_dispatch_finding_failed = 0
+            relationships_dispatch_skipped = 0
+            captures_skipped = 0
+            sessions_with_new_turns: set[str] = set()
+            all_entity_ids: list[str] = []
+            all_relationship_element_ids: list[str] = []
 
-        for i, capture in enumerate(captures, 1):
-            if should_pause and should_pause():
-                log.info(
-                    "consolidation_paused_request_active",
-                    capture_num=i,
-                    remaining=len(captures) - i + 1,
-                    trace_id=run_trace_id,
-                )
-                while should_pause():
-                    await asyncio.sleep(1.0)
-                log.info("consolidation_resumed", capture_num=i, trace_id=run_trace_id)
-            # ADR-0107 D5: this loop processes captures from many users in one
-            # background pass, so each capture's own identity must be (re)bound
-            # per-iteration — bound_contextvars restores the prior value on exit
-            # rather than a blanket clear, so it cannot leak capture N's user_id
-            # into capture N+1's log lines.
-            with structlog.contextvars.bound_contextvars(
-                trace_id=capture.trace_id,
-                session_id=capture.session_id,
-                user_id=str(capture.user_id),
-            ):
-                try:
-                    if await self.memory_service.turn_exists(
-                        capture.trace_id, trace_id=capture.trace_id
-                    ):
-                        captures_skipped += 1
+            for i, capture in enumerate(captures, 1):
+                if should_pause and should_pause():
+                    log.info(
+                        "consolidation_paused_request_active",
+                        capture_num=i,
+                        remaining=len(captures) - i + 1,
+                        trace_id=run_trace_id,
+                    )
+                    while should_pause():
+                        await asyncio.sleep(1.0)
+                    log.info("consolidation_resumed", capture_num=i, trace_id=run_trace_id)
+                # ADR-0107 D5: this loop processes captures from many users in one
+                # background pass, so each capture's own identity must be (re)bound
+                # per-iteration — bound_contextvars restores the prior value on exit
+                # rather than a blanket clear, so it cannot leak capture N's user_id
+                # into capture N+1's log lines.
+                #
+                # Bound as `capture_trace_id`, not `trace_id` (ADR-0129 D3 / FRE-1069):
+                # the whole run now executes under one "consolidation" root span, and
+                # `_add_span_context` (telemetry/logger.py) unconditionally overwrites
+                # event_dict["trace_id"] from the active span on every log call — it
+                # does not defer to an explicit kwarg or an already-bound contextvar.
+                # Binding/passing `trace_id=capture.trace_id` here would therefore be
+                # silently clobbered by the run-level span's trace_id on every log
+                # line, destroying the per-capture correlation this binding exists to
+                # provide. `capture_trace_id` is a field `_add_span_context` never
+                # touches, so it survives.
+                with structlog.contextvars.bound_contextvars(
+                    capture_trace_id=capture.trace_id,
+                    session_id=capture.session_id,
+                    user_id=str(capture.user_id),
+                ):
+                    try:
+                        if await self.memory_service.turn_exists(
+                            capture.trace_id, trace_id=capture.trace_id
+                        ):
+                            captures_skipped += 1
+                            log.debug(
+                                "consolidation_skipped_already_consolidated",
+                                capture_num=i,
+                                capture_trace_id=capture.trace_id,
+                                trace_id=capture.trace_id,
+                            )
+                            continue
                         log.debug(
-                            "consolidation_skipped_already_consolidated",
+                            "consolidation_processing_capture",
                             capture_num=i,
+                            total=len(captures),
+                            capture_trace_id=capture.trace_id,
                             trace_id=capture.trace_id,
                         )
-                        continue
+                        result = await self._process_capture(
+                            capture, extractor_model=entity_extraction_role
+                        )
+                        if result.get("turns_created"):
+                            turns_created += result["turns_created"]
+                            if capture.session_id:
+                                sessions_with_new_turns.add(capture.session_id)
+                        entities_created += result.get("entities_created", 0)
+                        relationships_created += result.get("relationships_created", 0)
+                        stances_created += result.get("stances_created", 0)
+                        claims_created += result.get("claims_created", 0)
+                        entities_dispatched_ephemeral += result.get(
+                            "entities_dispatched_ephemeral", 0
+                        )
+                        entities_dispatched_finding += result.get("entities_dispatched_finding", 0)
+                        entities_dispatch_finding_failed += result.get(
+                            "entities_dispatch_finding_failed", 0
+                        )
+                        relationships_dispatch_skipped += result.get(
+                            "relationships_dispatch_skipped", 0
+                        )
+                        all_entity_ids.extend(result.get("entity_ids", []))
+                        all_relationship_element_ids.extend(
+                            result.get("relationship_element_ids", [])
+                        )
+                        log.debug(
+                            "consolidation_capture_done",
+                            capture_num=i,
+                            entities=result.get("entities_created", 0),
+                            relationships=result.get("relationships_created", 0),
+                            capture_trace_id=capture.trace_id,
+                            trace_id=capture.trace_id,
+                        )
+                    except Exception as e:
+                        log.error(
+                            "capture_processing_failed",
+                            capture_num=i,
+                            capture_trace_id=capture.trace_id,
+                            trace_id=capture.trace_id,
+                            error=str(e),
+                            error_type=type(e).__name__,
+                            exc_info=True,
+                        )
+
+            # Build Session nodes for every session that received new turns this run
+            sessions_created = await self._consolidate_sessions(
+                captures, sessions_with_new_turns, trace_id=run_trace_id
+            )
+
+            # Promote qualifying entities from episodic → semantic memory
+            entities_promoted = 0
+            if turns_created > 0:
+                candidates = await self.memory_service.get_promotion_candidates(
+                    min_mentions=1, exclude_already_promoted=True
+                )
+                if candidates:
+                    promotion_result = await run_promotion_pipeline(
+                        service=self.memory_service,
+                        candidates=candidates,
+                        trace_id=run_trace_id,
+                    )
+                    entities_promoted = promotion_result.promoted_count
+
+            summary = {
+                "captures_processed": len(captures),
+                "captures_skipped": captures_skipped,
+                "turns_created": turns_created,
+                "sessions_created": sessions_created,
+                "entities_created": entities_created,
+                "relationships_created": relationships_created,
+                "stances_created": stances_created,
+                "claims_created": claims_created,
+                "entities_promoted": entities_promoted,
+                "entities_dispatched_ephemeral": entities_dispatched_ephemeral,
+                "entities_dispatched_finding": entities_dispatched_finding,
+                "entities_dispatch_finding_failed": entities_dispatch_finding_failed,
+                "relationships_dispatch_skipped": relationships_dispatch_skipped,
+            }
+
+            log.info(
+                "consolidation_completed",
+                **summary,
+                extraction_model=entity_extraction_role,
+                trace_id=run_trace_id,
+            )
+
+            _settings = get_settings()
+            bus = get_event_bus()
+
+            # Publish memory entities updated event (Phase 4)
+            if all_entity_ids:
+                entities_updated_event = MemoryEntitiesUpdatedEvent(
+                    entity_ids=all_entity_ids,
+                    consolidation_id=run_trace_id,
+                    source_component="second_brain.consolidator",
+                )
+                try:
+                    await bus.publish(STREAM_MEMORY_ENTITIES_UPDATED, entities_updated_event)
+                except Exception as e:
+                    log.warning(
+                        "memory_entities_updated_event_publish_failed",
+                        error=str(e),
+                        event_id=entities_updated_event.event_id,
+                        trace_id=run_trace_id,
+                    )
+
+            # Publish memory accessed event for consolidation traversal (Phase 4 / ADR-0042)
+            rel_ids_deduped = list(dict.fromkeys(all_relationship_element_ids))
+            if _settings.freshness_enabled and (all_entity_ids or rel_ids_deduped):
+                accessed_event = MemoryAccessedEvent(
+                    entity_ids=all_entity_ids,
+                    relationship_ids=rel_ids_deduped,
+                    access_context=AccessContext.CONSOLIDATION,
+                    query_type="consolidation_traversal",
+                    trace_id=run_trace_id,
+                    source_component="second_brain.consolidator",
+                )
+                try:
+                    await bus.publish(STREAM_MEMORY_ACCESSED, accessed_event)
                     log.debug(
-                        "consolidation_processing_capture",
-                        capture_num=i,
-                        total=len(captures),
-                        trace_id=capture.trace_id,
-                    )
-                    result = await self._process_capture(
-                        capture, extractor_model=entity_extraction_role
-                    )
-                    if result.get("turns_created"):
-                        turns_created += result["turns_created"]
-                        if capture.session_id:
-                            sessions_with_new_turns.add(capture.session_id)
-                    entities_created += result.get("entities_created", 0)
-                    relationships_created += result.get("relationships_created", 0)
-                    stances_created += result.get("stances_created", 0)
-                    claims_created += result.get("claims_created", 0)
-                    entities_dispatched_ephemeral += result.get("entities_dispatched_ephemeral", 0)
-                    entities_dispatched_finding += result.get("entities_dispatched_finding", 0)
-                    entities_dispatch_finding_failed += result.get(
-                        "entities_dispatch_finding_failed", 0
-                    )
-                    relationships_dispatch_skipped += result.get(
-                        "relationships_dispatch_skipped", 0
-                    )
-                    all_entity_ids.extend(result.get("entity_ids", []))
-                    all_relationship_element_ids.extend(result.get("relationship_element_ids", []))
-                    log.debug(
-                        "consolidation_capture_done",
-                        capture_num=i,
-                        entities=result.get("entities_created", 0),
-                        relationships=result.get("relationships_created", 0),
-                        trace_id=capture.trace_id,
+                        "consolidation_memory_access_event_published",
+                        entity_count=len(all_entity_ids),
+                        relationship_count=len(rel_ids_deduped),
+                        trace_id=run_trace_id,
                     )
                 except Exception as e:
-                    log.error(
-                        "capture_processing_failed",
-                        capture_num=i,
-                        trace_id=capture.trace_id,
+                    log.warning(
+                        "memory_access_event_publish_failed",
                         error=str(e),
-                        error_type=type(e).__name__,
-                        exc_info=True,
+                        event_id=accessed_event.event_id,
+                        trace_id=run_trace_id,
                     )
 
-        # Build Session nodes for every session that received new turns this run
-        sessions_created = await self._consolidate_sessions(
-            captures, sessions_with_new_turns, trace_id=run_trace_id
-        )
-
-        # Promote qualifying entities from episodic → semantic memory
-        entities_promoted = 0
-        if turns_created > 0:
-            candidates = await self.memory_service.get_promotion_candidates(
-                min_mentions=1, exclude_already_promoted=True
-            )
-            if candidates:
-                promotion_result = await run_promotion_pipeline(
-                    service=self.memory_service,
-                    candidates=candidates,
-                    trace_id=run_trace_id,
-                )
-                entities_promoted = promotion_result.promoted_count
-
-        summary = {
-            "captures_processed": len(captures),
-            "captures_skipped": captures_skipped,
-            "turns_created": turns_created,
-            "sessions_created": sessions_created,
-            "entities_created": entities_created,
-            "relationships_created": relationships_created,
-            "stances_created": stances_created,
-            "claims_created": claims_created,
-            "entities_promoted": entities_promoted,
-            "entities_dispatched_ephemeral": entities_dispatched_ephemeral,
-            "entities_dispatched_finding": entities_dispatched_finding,
-            "entities_dispatch_finding_failed": entities_dispatch_finding_failed,
-            "relationships_dispatch_skipped": relationships_dispatch_skipped,
-        }
-
-        log.info(
-            "consolidation_completed",
-            **summary,
-            extraction_model=entity_extraction_role,
-            trace_id=run_trace_id,
-        )
-
-        _settings = get_settings()
-        bus = get_event_bus()
-
-        # Publish memory entities updated event (Phase 4)
-        if all_entity_ids:
-            entities_updated_event = MemoryEntitiesUpdatedEvent(
-                entity_ids=all_entity_ids,
-                consolidation_id=run_trace_id,
-                source_component="second_brain.consolidator",
-            )
-            try:
-                await bus.publish(STREAM_MEMORY_ENTITIES_UPDATED, entities_updated_event)
-            except Exception as e:
-                log.warning(
-                    "memory_entities_updated_event_publish_failed",
-                    error=str(e),
-                    event_id=entities_updated_event.event_id,
-                    trace_id=run_trace_id,
-                )
-
-        # Publish memory accessed event for consolidation traversal (Phase 4 / ADR-0042)
-        rel_ids_deduped = list(dict.fromkeys(all_relationship_element_ids))
-        if _settings.freshness_enabled and (all_entity_ids or rel_ids_deduped):
-            accessed_event = MemoryAccessedEvent(
-                entity_ids=all_entity_ids,
-                relationship_ids=rel_ids_deduped,
-                access_context=AccessContext.CONSOLIDATION,
-                query_type="consolidation_traversal",
-                trace_id=run_trace_id,
-                source_component="second_brain.consolidator",
-            )
-            try:
-                await bus.publish(STREAM_MEMORY_ACCESSED, accessed_event)
-                log.debug(
-                    "consolidation_memory_access_event_published",
-                    entity_count=len(all_entity_ids),
-                    relationship_count=len(rel_ids_deduped),
-                    trace_id=run_trace_id,
-                )
-            except Exception as e:
-                log.warning(
-                    "memory_access_event_publish_failed",
-                    error=str(e),
-                    event_id=accessed_event.event_id,
-                    trace_id=run_trace_id,
-                )
-
-        return summary
+            return summary
+        finally:
+            close_root_span(span, token, cv_tokens)
 
     async def _consolidate_sessions(
         self,
@@ -585,6 +617,7 @@ class SecondBrainConsolidator:
             )
             log.warning(
                 "consolidation_extraction_budget_denied",
+                capture_trace_id=capture.trace_id,
                 trace_id=capture.trace_id,
                 attempt_number=attempt_number,
                 previous_failure_count=previous_failures,
@@ -633,6 +666,7 @@ class SecondBrainConsolidator:
                 )
                 log.warning(
                     "consolidation_extraction_capped",
+                    capture_trace_id=capture.trace_id,
                     trace_id=capture.trace_id,
                     attempt_number=attempt_number,
                     max_attempts=max_attempts,
@@ -684,6 +718,7 @@ class SecondBrainConsolidator:
             )
             log.warning(
                 "consolidation_extraction_fallback_skip",
+                capture_trace_id=capture.trace_id,
                 trace_id=capture.trace_id,
                 attempt_number=attempt_number,
                 previous_failure_count=previous_failures,
@@ -780,6 +815,7 @@ class SecondBrainConsolidator:
                 unresolved_entity_mentions.append(raw_name)
                 log.warning(
                     "consolidation_entity_write_unresolved",
+                    capture_trace_id=capture.trace_id,
                     trace_id=capture.trace_id,
                     session_id=capture.session_id,
                     entity_name=raw_name,
@@ -830,6 +866,7 @@ class SecondBrainConsolidator:
         if not turn_written:
             log.warning(
                 "consolidation_turn_write_failed",
+                capture_trace_id=capture.trace_id,
                 trace_id=capture.trace_id,
                 session_id=capture.session_id,
                 reason="create_conversation reported failure; entities written without a Turn",
@@ -859,6 +896,7 @@ class SecondBrainConsolidator:
                     entities_dispatch_finding_failed += 1
                     log.warning(
                         "dispatch_finding_sysgraph_unavailable",
+                        capture_trace_id=capture.trace_id,
                         trace_id=capture.trace_id,
                         entity_name=entity_data.get("name", ""),
                     )
@@ -875,6 +913,7 @@ class SecondBrainConsolidator:
                     entities_dispatch_finding_failed += 1
                     log.warning(
                         "dispatch_finding_sysgraph_write_failed",
+                        capture_trace_id=capture.trace_id,
                         trace_id=capture.trace_id,
                         entity_name=entity_data.get("name", ""),
                         error=str(e),
@@ -901,6 +940,7 @@ class SecondBrainConsolidator:
                 relationships_dispatch_skipped += 1
                 log.warning(
                     "dispatch_relationship_endpoint_skipped",
+                    capture_trace_id=capture.trace_id,
                     trace_id=capture.trace_id,
                     source=source_name,
                     target=target_name,

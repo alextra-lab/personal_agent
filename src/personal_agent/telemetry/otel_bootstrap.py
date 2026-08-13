@@ -8,6 +8,8 @@ no endpoint, no span processor is attached (FRE-1064 AC-7's original scope,
 kept for tests that need a provider with no export path).
 """
 
+from typing import Final
+
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.propagate import set_global_textmap
@@ -15,6 +17,30 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+# AC-3 (ADR-0129 D3, FRE-1069): every logger empirically verified to emit before this
+# module's configure_tracing() runs, so the pre-bootstrap population is enumerated by
+# name rather than absorbed into a tolerance.
+#
+# - "personal_agent.config.settings": load_app_config() logs (loading_app_config,
+#   substrate_profile_active, app_config_loaded) the moment any module's first
+#   get_settings() call executes. get_settings() caches into a module-global
+#   singleton, so this fires at most once per process, always during import — well
+#   before service.app.lifespan (and this module's configure_tracing) ever runs.
+# - "personal_agent.service.app": the single log.info("service_starting") line in
+#   lifespan(), two lines before the configure_tracing() call in the same function.
+# - "uvicorn.error": production boots via Uvicorn (docker-compose.cloud.yml), and the
+#   installed Uvicorn server itself logs through this stdlib logger ("Started server
+#   process", "Waiting for application startup" — .venv/lib/python3.12/site-packages/
+#   uvicorn/server.py) before the ASGI app's lifespan — and therefore configure_tracing
+#   — ever runs.
+PRE_BOOTSTRAP_LOGGERS: Final[frozenset[str]] = frozenset(
+    {
+        "personal_agent.config.settings",
+        "personal_agent.service.app",
+        "uvicorn.error",
+    }
+)
 
 
 def configure_tracing(

@@ -24,10 +24,12 @@ from personal_agent.second_brain.quality_monitor import ConsolidationQualityMoni
 from personal_agent.telemetry import SENSOR_POLL, get_logger
 from personal_agent.telemetry.lifecycle_manager import DataLifecycleManager
 from personal_agent.telemetry.queries import TelemetryQueries
+from personal_agent.telemetry.spans import RootSpanState, close_root_span, open_root_span
 from personal_agent.telemetry.trace import SystemTraceContext
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
+    from opentelemetry.trace import Tracer
 
     from personal_agent.brainstem.sensors.metrics_daemon import MetricsDaemon
 
@@ -115,9 +117,14 @@ class BrainstemScheduler:
         quality_monitor: ConsolidationQualityMonitor | None = None,
         metrics_daemon: "MetricsDaemon | None" = None,
         linear_client: LinearClient | None = None,
+        tracer: "Tracer | None" = None,
     ) -> None:  # noqa: D107
         """Initialize scheduler with consolidation thresholds and optional lifecycle ES client."""
         self.running = False
+        # ADR-0129 D3 / FRE-1069: tracer each scheduler tick opens its root span
+        # with. Defaults to the process-wide tracer; tests inject their own
+        # tracer bound to an in-memory exporter.
+        self._tracer = tracer
         self.consolidator: SecondBrainConsolidator | None = None
         self.last_consolidation: datetime | None = None
         self.last_request_time: datetime | None = None
@@ -488,10 +495,14 @@ class BrainstemScheduler:
         projection stale", which is answerable from state the graph already holds.
         """
         while self.running:
+            root_span_state: RootSpanState | None = None
             try:
                 await asyncio.sleep(settings.session_summary_sweep_interval_seconds)
                 if not self.running:
                     break
+                # ADR-0129 D3 / FRE-1069: root span for this tick, opened only once
+                # there is real work to do (not on the break-above path).
+                root_span_state = open_root_span("scheduler.session_summary", tracer=self._tracer)
                 await self.run_session_summary_sweep(
                     trace_id=_new_scheduler_trace_id("scheduler.session_summary")
                 )
@@ -504,6 +515,9 @@ class BrainstemScheduler:
                     exc_info=True,
                     trace_id=_new_scheduler_trace_id("scheduler.session_summary"),
                 )
+            finally:
+                if root_span_state is not None:
+                    close_root_span(*root_span_state)
 
     async def run_session_summary_sweep(self, *, trace_id: str) -> dict[str, int]:
         """Regenerate digests for every dirty-and-idle session (ADR-0124 D1).
@@ -1025,9 +1039,18 @@ class BrainstemScheduler:
     async def _lifecycle_loop(self) -> None:
         """Run data lifecycle tasks: hourly disk check, daily 2AM archive, weekly Sunday 3AM purge."""
         while self.running:
-            iteration_trace_id = _new_scheduler_trace_id("scheduler.lifecycle")
+            root_span_state: RootSpanState | None = None
+            iteration_trace_id: str | None = None
             try:
                 await asyncio.sleep(LIFECYCLE_CHECK_INTERVAL_SECONDS)
+
+                # ADR-0129 D3 / FRE-1069: root span for this tick — opened after the
+                # idle sleep (matching _session_summary_sweep_loop's pattern) so the
+                # span measures the tick's actual work, not idle wait time, and
+                # opened before the trace-id mint below so it reads this span's
+                # identity instead of minting a disconnected one.
+                root_span_state = open_root_span("scheduler.lifecycle", tracer=self._tracer)
+                iteration_trace_id = _new_scheduler_trace_id("scheduler.lifecycle")
 
                 now = datetime.now(timezone.utc)
                 lifecycle_enabled = getattr(settings, "data_lifecycle_enabled", True)
@@ -1445,6 +1468,9 @@ class BrainstemScheduler:
                     exc_info=True,
                     trace_id=iteration_trace_id,
                 )
+            finally:
+                if root_span_state is not None:
+                    close_root_span(*root_span_state)
 
     async def _publish_feedback_events(
         self, feedback_events: list[Any], *, trace_id: str | None = None

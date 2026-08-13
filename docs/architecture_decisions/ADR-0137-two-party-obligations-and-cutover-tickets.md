@@ -446,7 +446,7 @@ Dispatch is both earlier and, for cross-repository work, the only gate that sees
 | The split parks a cross-child property on a child, contradicting ADR-0130 D1 | High | D1's second rule requires each half to be decidable by its own owner and sends the residual to the seam; the worked example carries three rows, not two, and AC-1 fails if any half left undecidable by the split was not assigned to the seam. This is the defect codex found in this ADR's own first draft |
 | "Two parties" is read narrowly, reproducing FRE-1221's original narrowness | Medium | D1 states four sentence shapes covering shipping, reading, reaching and obtaining; D3's question separately names a network path, a host, a credential and a deployed component; AC-1 enumerates two-party obligations from the ADR's **Decision section** rather than from the mapping's own phrasing, so a passively-worded row cannot escape classification |
 | The both-live-at-once test is judged permissively so a coupled cutover ships as one ticket | Medium | D4 states the test as the property itself and demotes process/host/repository/deploy-unit to indicators that mislead in both directions, with the reasoning recorded on the ticket; AC-3 fails on any replacement that shipped whole |
-| The removal merges before the new path carries anything, because the relation cleared at the addition's merge | High | D4 clause 3 withholds the removal's `stream:` label until the addition's observed-data evidence is recorded; AC-3 reads the label's timing against that evidence and fails if the label came first |
+| The removal merges before the new path carries anything, because the relation cleared at the addition's merge | High | D4 clause 2 withholds the removal's `stream:` label until the addition's observed-data evidence is recorded; AC-3 reads the label's timing against that evidence and fails if the label came first |
 | The removal is never built, so the old path runs forever | Medium | Not fully mitigated, and stated as such: the removal is a filed ticket with a relation, visible on the board and subject to the same approval and labelling as any other work. What the rule buys is that a lingering old path is a queue entry rather than a silent state — not a guarantee it is removed |
 | D3 is never retired because nobody re-audits the pre-existing mappings | Medium | The audit is a filed implementation ticket in this ADR's own chain, not an aspiration; AC-4 fails if the retirement condition is unmet at adjudication **regardless of the audit ticket's state**, so the condition cannot be dodged by leaving that ticket open — which is what the second draft's "after the audit has closed" wording allowed |
 | The whole thing is a fourth observer over the same inference and does not converge | High | Deliberately confronted rather than mitigated away: D1 and D4 change the artifact's shape permanently and require no vigilance once applied; D2 and D3 are reads. AC-5 is the honest test — it audits post-amendment chains directly rather than waiting for someone to file a defect report |
@@ -516,8 +516,11 @@ implementing ticket.
   ADR-0129's audit marked *sufficient* and independently tests entailment on each, reading the named
   criterion on its owning ticket. (b) **Positive control:** the adjudicator constructs synthetic rows of
   known status — some whose named criterion demonstrably entails the obligation, some whose plainly does
-  not, at least three of each — and runs the same rubric over them without knowing which is which by
-  construction order. (c) **Dispositions:** read every flagged row's resolution. · *Fails if* any
+  not, at least three of each — and runs the same rubric over them, recording each classification
+  against the status the row was built to have. This is a control, not a blind test: whoever constructs
+  the rows necessarily knows their semantics, and pretending otherwise would overstate it. Its value is
+  that the expected classifications are fixed in advance, so a rubric that cannot separate them is
+  exposed. (c) **Dispositions:** read every flagged row's resolution. · *Fails if* any
   audit-passed row fails entailment on reperformance — that is the rubber stamp, caught without relying
   on anyone's claim about reading order; if the rubric misclassifies any control row, which means the
   instrument does not work and the whole audit is uninterpretable; if D5.d appears in neither the audit's
@@ -549,13 +552,18 @@ implementing ticket.
 - **AC-4 — The backstop produces recorded answers, those answers hold, and an incomplete audit cannot
   excuse a live D3.** · **Check:** (a) list implementation tickets labelled during the window whose
   chain's mapping predates the amendment, and confirm each carries a recorded answer to D3's question on
-  the ticket; (b) enumerate every pre-amendment mapping — each ADR in the index carrying implementation
-  tickets filed before the amendment, whose umbrella holds a mapping — and confirm each has been
-  re-audited under D1 and D2 or its chain has reached a terminal state. · *Fails if* any such ticket was
-  labelled with no recorded answer; if any ticket answered "no" subsequently produced a filed defect
-  reporting that it depended on something nothing provisions — the answer having been **wrong** is the
-  substantive failure, not the missing paperwork; or if **the retirement condition is unmet at
-  adjudication, whatever the audit ticket's state**. An open audit ticket is not an excuse: making it
+  the ticket; (b) **actively recheck every recorded "no"** — for each, establish from records that carry
+  time (the ticket's close-out evidence comment, the git history of the depended-on artifact, the deploy
+  history) whether the thing its criteria depended on was in fact delivered when that ticket closed;
+  where no such record can decide it, that ticket reports **inconclusive**, never green; (c) enumerate
+  every pre-amendment mapping — each ADR in the index carrying implementation tickets filed before the
+  amendment, whose umbrella holds a mapping — and confirm each has been re-audited under D1 and D2 or
+  its chain has reached a terminal state. · *Fails if* any such ticket was labelled with no recorded
+  answer; if **the recheck in (b) finds any "no" that was wrong**; or if **the retirement condition is
+  unmet at adjudication, whatever the audit ticket's state**. The recheck is what makes "those answers
+  hold" a claim rather than a hope: waiting for someone to file a defect is an absence-of-reports test
+  that passes whenever nobody notices, and the Evidence contract already forbids that shape by making
+  UNVERIFIABLE a first-class verdict instead of a silent PASS. An open audit ticket is not an excuse: making it
   one would let the condition be dodged indefinitely by never closing that ticket, which is the cheapest
   possible evasion. A red verdict here is a legitimate and expected output — the seam closes on
   adjudication rather than on success (ADR-0130 D2), master files remediation, and D3 simply stays live
@@ -574,10 +582,12 @@ implementing ticket.
   precondition, and classify each hit's chain as pre- or post-amendment. · *Fails if* (a) finds any
   post-amendment child that closed against an undelivered dependency, or (b) finds any such ticket
   naming a post-amendment chain. Reports **inconclusive** if fewer than three post-amendment chains
-  qualify, where qualifying means containing at least one path replacement, **or** at least one
-  two-party obligation whose provider half required something **not already deployed when the chain was
-  filed** — an obligation resting on Postgres or any already-running service is an easy negative, and
-  three of those would turn this green without exercising provisioning at all. The active half exists
+  qualify, where a chain qualifies only if it contains **something that was not already delivered when
+  the chain was filed** — a two-party obligation whose provider half had to be provisioned, or a path
+  replacement whose new path had to be built. A dependency resting on Postgres or any already-running
+  service is an easy negative, and so is a replacement pointing at a path that already existed; three of
+  either would turn this green without exercising provisioning at all. Counting path replacements
+  unconditionally would also duplicate AC-3, which already tests D4's behaviour. The active half exists
   because an absence-of-filed-reports check passes whenever nobody notices; a chain nobody audited is
   not a chain that worked. A **pre-amendment** chain producing such a ticket is not a failure here —
   those are D3's population, and AC-4 judges them.
@@ -633,5 +643,9 @@ compliance, and that D1's own worked split parked a cross-child reachability pro
 exact violation of ADR-0130 D1 this ADR exists to prevent. Round two verified six of those repairs and
 returned five further blocking findings, the sharpest being that D4 had made the dispatch precondition
 serve as the removal ticket's acceptance criterion — a criterion already true before the ticket is
-dispatched, which ADR-0130 D6 would reject at the label gate. All are fixed here; D4 now separates the
-precondition from the criterion explicitly.
+dispatched, which ADR-0130 D6 would reject at the label gate. D4 now separates the precondition from the
+criterion explicitly. Round three cleared four of those five and left two: AC-4 still verified its
+recorded answers by the absence of filed defect reports, and AC-5's denominator still counted a path
+replacement whose new path already existed. Both are fixed here, exhausting the three review rounds this
+skill permits; the two remaining non-blocking items — a stale clause reference and an overstated
+blindness claim in AC-2's control — are fixed in the same change.

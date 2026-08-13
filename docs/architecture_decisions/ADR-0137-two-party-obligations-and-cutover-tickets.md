@@ -440,7 +440,11 @@ Dispatch is both earlier and, for cross-repository work, the only gate that sees
 
 ## Implementation Notes
 
-**Files affected:**
+**Files affected — by this ADR's implementation chain, not by the PR that lands this ADR.** The ADR PR
+carries the decision record and its index row only; the four document edits below are the first
+implementation ticket's deliverable and land in a separate PR, which is why this branch shows no change
+to any skill file. This is the same sequence ADR-0130 followed (authored under FRE-1078; its four
+contract sentences amended later by FRE-1079).
 
 - `.claude/skills/adr/SKILL.md` — Step 5, the obligation → owner mapping paragraph: D1's split rules and
   its two resolutions, D2's sufficiency test.

@@ -664,7 +664,9 @@ GRANT SELECT ON
     public.budget_policies,
     public.budget_counters,
     public.budget_reservations,
-    public.kg_stats
+    public.kg_stats,
+    public.consolidation_attempts,
+    public.artifacts
 TO grafana_ro;
 
 GRANT USAGE ON SCHEMA sysgraph TO grafana_ro;

@@ -1,197 +1,574 @@
 {
-  "uid": "fre1072-request-timing-e2e",
-  "title": "Request Timing (E2E)",
-  "tags": [
-    "fre-1072",
-    "rebuilt-from-kibana"
-  ],
-  "timezone": "browser",
-  "schemaVersion": 39,
-  "version": 1,
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "What is request/turn latency, and where does it go? Per-stage breakdown (setup/llm_inference/tool_execution/persistence/synthesis) and total duration from route_traces.latency_breakdown/latency_total_ms (Postgres, one row per turn), request volume over the same window, and the live Tempo signal (p50/p95 span duration) plus a per-trace waterfall reachable from cost_budget's Cost reconciliation table (click a trace_id there to land here with it loaded). Postgres latency fields populate through 2026-08-08; time.from is set to cover that population and Tempo's 14-day trace retention.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "liveNow": false,
   "panels": [
     {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "description": "FRE-1072 AC-4: per-day p50/p95 turn duration from Tempo span duration alone (TraceQL quantile_over_time) -- no union with any Elasticsearch field. route_traces.trace_id (dashes removed) is the Tempo trace ID (verified live). This is the single duration source for this dashboard going forward -- kept as-is from the original build per the FRE-1207 render audit (the one Tempo panel in the whole corpus already correctly sourced); UI-rebuilt here only to pick up fieldConfig/unit/pluginVersion.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
-      "type": "stat",
-      "title": "Avg duration by stage",
-      "description": "Average phases_summary.<stage>.duration_ms across all request_trace events (90d, full history -- 794 requests, 2026-04-23 to 2026-06-07). llm_inference dominates (avg 24.9s), then tool_execution (avg 5.4s); setup/persistence/synthesis are negligible (<1s each). STALE SIGNAL: request_trace has emitted zero documents since 2026-06-07 (24+ days as of this build) -- this instrumentation has gone dark with no replacement found. This panel answers the stage-breakdown decision for the period it was live, not for current behavior. See the sibling Request volume over time panel, where the same cutoff is directly visible.",
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "limit": 20,
+          "metricsQueryType": "range",
+          "query": "{} | quantile_over_time(duration, 0.5, 0.95)",
+          "queryType": "traceql",
+          "refId": "A",
+          "serviceMapUseNativeHistograms": false,
+          "tableType": "traces"
+        }
+      ],
+      "title": "Turn duration p50/p95 (Tempo span duration)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Average duration per stage, unnested from route_traces.latency_breakdown->phases_summary (JSONB, one row per turn). Rebuilt on Postgres per FRE-1207's audit: the prior ES version (BUG-3) rendered real data despite its own description falsely claiming a stale signal -- this panel replaces it with a genuine per-stage breakdown and an honest window. llm_inference dominates; tool_execution is second; setup/persistence/synthesis/other are comparatively small. Only rows with a populated latency_breakdown are included (recent rows past 2026-08-08 do not yet carry one -- see the dashboard description).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#73BF69",
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "ms"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 0
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 2,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: \"request_trace\"",
-          "metrics": [
-            {
-              "type": "avg",
-              "id": "1",
-              "field": "phases_summary.setup.duration_ms"
-            },
-            {
-              "type": "avg",
-              "id": "2",
-              "field": "phases_summary.persistence.duration_ms"
-            },
-            {
-              "type": "avg",
-              "id": "3",
-              "field": "phases_summary.other.duration_ms"
-            },
-            {
-              "type": "avg",
-              "id": "4",
-              "field": "phases_summary.llm_inference.duration_ms"
-            },
-            {
-              "type": "avg",
-              "id": "5",
-              "field": "phases_summary.tool_execution.duration_ms"
-            },
-            {
-              "type": "avg",
-              "id": "6",
-              "field": "phases_summary.synthesis.duration_ms"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "date_histogram",
-              "id": "99",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT stage, avg((val->>'duration_ms')::float) AS avg_duration_ms FROM route_traces, jsonb_each(latency_breakdown->'phases_summary') AS kv(stage, val) WHERE latency_breakdown IS NOT NULL AND $__timeFilter(created_at) GROUP BY stage ORDER BY avg_duration_ms DESC\n",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            }
-          ]
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Avg duration by stage",
+      "type": "barchart"
     },
     {
-      "id": 2,
-      "type": "timeseries",
-      "title": "Total request duration over time",
-      "description": "Average total_duration_ms per request_trace event over time (90d, full history -- 794 requests, avg 29.8s). STALE SIGNAL: this event stopped emitting on 2026-06-07 -- the chart visibly ends 24+ days before today rather than continuing to the present, which is itself the key finding: end-to-end request-phase telemetry has gone dark with no replacement found.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Average route_traces.latency_total_ms per time bucket. Rebuilt on Postgres per FRE-1207's audit (BUG-3): the prior ES panel's own description falsely claimed this signal had gone stale, when the underlying request_trace family was actually still live at build time -- this version replaces the claim with real, queryable data and an honest window matching the dashboard's time.from. Only rows with a populated latency_total_ms are included.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "ms"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 8
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 3,
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: \"request_trace\"",
-          "metrics": [
-            {
-              "type": "avg",
-              "id": "1",
-              "field": "total_duration_ms"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "date_histogram",
-              "id": "1",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(created_at,$__interval), avg(latency_total_ms) AS avg_duration_ms FROM route_traces WHERE latency_total_ms IS NOT NULL AND $__timeFilter(created_at) GROUP BY 1 ORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            }
-          ]
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Total request duration over time",
+      "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Count of route_traces rows per time bucket (one row per turn). Rebuilt on Postgres per FRE-1207's audit (BUG-3): the prior ES panel's description falsely claimed the underlying request_trace signal had gone stale -- this version replaces the claim with a real, live count and an honest window matching the dashboard's time.from.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
       "id": 4,
-      "type": "timeseries",
-      "title": "Turn duration p50/p95 (Tempo span duration)",
-      "description": "FRE-1072 AC-4: per-day p50/p95 turn duration from Tempo span duration alone (TraceQL quantile_over_time) -- no union with any Elasticsearch field. This is deliberately the single duration source for this dashboard going forward: span duration is intrinsic to Tempo (no second field to union), and it replaces the sibling 'Total request duration over time' ES panel's total_duration_ms field, which this same dashboard's own history already flags as stale (the request_trace event stopped emitting on 2026-06-07). That ES panel is kept for its historical range; this one is the live signal.",
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "dataset": "personal_agent",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(created_at,$__interval), count(*) AS request_count FROM route_traces WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Request volume over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "description": "FRE-1211 AC-3: span waterfall for a single trace, looked up via the $trace_id dashboard variable against the tempo datasource (TraceQL query '${trace_id}', Tempo's bare-trace-ID lookup mode). Reachable by clicking a trace_id in cost_budget.json's Cost reconciliation table, which links here with var-trace_id set. route_traces.trace_id (dashes removed) is the Tempo trace ID -- verified live. Empty until a trace_id is supplied.",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 16
       },
-      "datasource": {
-        "type": "tempo",
-        "uid": "tempo"
+      "id": 5,
+      "options": {
+        "spanFilters": {
+          "adhocFilters": [],
+          "criticalPathOnly": false,
+          "matchesOnly": false
+        }
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
           "datasource": {
             "type": "tempo",
             "uid": "tempo"
           },
+          "limit": 20,
+          "metricsQueryType": "range",
+          "query": "${trace_id}",
           "queryType": "traceql",
-          "query": "{} | quantile_over_time(duration, 0.5, 0.95)"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "type": "timeseries",
-      "title": "Request volume over time",
-      "description": "Count of request_trace events over time (90d, full history -- 794 requests, 2026-04-23 to 2026-06-07). Replaces the original single-number \"Request Count\" metric panel, which had no time axis and so could not show that this signal has been silent for 24+ days. STALE SIGNAL: no request_trace docs since 2026-06-07 -- end-to-end request-phase telemetry has gone dark with no replacement found; this dashboard answers the stage-breakdown decision for the period it was live, not current behavior.",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 24
-      },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
-      "targets": [
-        {
           "refId": "A",
-          "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
-          },
-          "query": "event_type: \"request_trace\"",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "date_histogram",
-              "id": "1",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
-              }
-            }
-          ]
+          "serviceMapUseNativeHistograms": false,
+          "tableType": "traces"
         }
-      ]
+      ],
+      "title": "Trace waterfall (by Trace ID)",
+      "type": "traces"
     }
   ],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
+  "tags": [
+    "fre-1072",
+    "grafana-native"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "1beae1e1b4910d1df9370ca6d882c464",
+          "value": "1beae1e1b4910d1df9370ca6d882c464"
+        },
+        "description": "Defaults to a real trace (2026-08-11, verified live to carry spans) so the waterfall renders on cold open instead of Tempo's 'trace id is required' error -- integration finding, FRE-1211. A trace-id link from cost_budget's Cost reconciliation panel overrides this via the URL var. This default trace will age out of Tempo's 14-day retention; a follow-up should replace it with a query variable that auto-selects a recent trace instead of a static id.",
+        "hide": 0,
+        "label": "Trace ID",
+        "name": "trace_id",
+        "query": "",
+        "skipUrlSync": false,
+        "type": "textbox"
+      }
+    ]
+  },
   "time": {
-    "from": "now-24h",
+    "from": "now-10d",
     "to": "now"
-  }
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ]
+  },
+  "timezone": "browser",
+  "title": "Request Timing (E2E)",
+  "uid": "fre1072-request-timing-e2e",
+  "version": 1
 }

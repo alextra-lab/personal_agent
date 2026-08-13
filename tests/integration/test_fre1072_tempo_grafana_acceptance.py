@@ -287,10 +287,13 @@ class TestAC6DashboardPanelsExecuteCleanly:
         # carries the fre-1072 tag but is explicitly not part of the AC-6 rebuild inventory.
         # FRE-1209 dropped this tag from cost_budget.json (rebuilt onto Postgres, tagged
         # grafana-native instead), decrementing 15→14. FRE-1212 deleted the empty request_traces.json
-        # (all 3 panels disposed delete), decrementing 14→13.
+        # (all 3 panels disposed delete), decrementing 14→13. FRE-1211 rebuilt the remaining 8
+        # (intent_classification, request_timing, task_analytics, expansion_decomposition,
+        # llm_performance, system_health, extraction_retry_health, turn_session_artifact) onto
+        # Postgres, each dropping the tag for grafana-native, decrementing 13→5.
         ours = [d for d in dashboards if "rebuilt-from-kibana" in d.get("tags", [])]
-        assert len(ours) == 13, (
-            f"expected 13 FRE-1072 dashboards provisioned, found {len(ours)}: {[d['title'] for d in ours]}"
+        assert len(ours) == 5, (
+            f"expected 5 FRE-1072 dashboards provisioned, found {len(ours)}: {[d['title'] for d in ours]}"
         )
 
         now_ms = int(time.time() * 1000)

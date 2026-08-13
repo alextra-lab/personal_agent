@@ -1,324 +1,760 @@
 {
-  "uid": "fre1072-llm-performance",
-  "title": "LLM Performance",
-  "tags": [
-    "fre-1072",
-    "rebuilt-from-kibana"
-  ],
-  "timezone": "browser",
-  "schemaVersion": 39,
-  "version": 1,
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Per-model call volume and per-role (primary vs sub_agent) latency and prompt-token cost from route_traces and api_costs -- exact ledger figures, not the lossy ES event-count mirror. Answers: which models get called, and does latency/token cost differ between primary orchestration calls and sub-agent calls.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "liveNow": false,
   "panels": [
     {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Count of api_costs rows (LLM/embedding/rerank calls) grouped by model, over the dashboard time window. Source of truth for per-model call volume -- api_costs.model, not route_traces (which has no per-model field, only model_role tier).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#73BF69",
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
-      "type": "barchart",
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "dataset": "personal_agent",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT model, count(*) AS calls FROM api_costs WHERE $__timeFilter(timestamp) GROUP BY model ORDER BY calls DESC",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
       "title": "Call volume by model",
-      "description": "",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Avg and p95 of api_costs.latency_ms (per-LLM-call latency), joined to route_traces on trace_id to attach model_role. Uses the join, not route_traces.latency_total_ms directly, because that column is structurally null for every sub_agent row (0 of 46 all-time) -- it is only populated for the top-level orchestrator trace, not sub-agent dispatch. The join's api_costs.latency_ms also matches the old ES panel's semantics (per-call latency) more closely than the trace-level total would.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "ms"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 0
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 2,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: \"model_call_completed\"",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "model",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT rt.model_role AS role, avg(ac.latency_ms) AS avg_latency_ms, percentile_cont(0.95) WITHIN GROUP (ORDER BY ac.latency_ms) AS p95_latency_ms FROM api_costs ac JOIN route_traces rt ON rt.trace_id = ac.trace_id WHERE $__timeFilter(ac.timestamp) AND rt.model_role IS NOT NULL GROUP BY rt.model_role",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            }
-          ]
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Latency by role",
+      "type": "barchart"
     },
     {
-      "id": 2,
-      "type": "barchart",
-      "title": "Latency by role",
-      "description": "",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Avg api_costs.latency_ms grouped by model_role (via the same trace_id join as \"Latency by role\"), time-bucketed -- trended version of that panel. Not route_traces.latency_total_ms, which is structurally null for sub_agent rows.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "ms"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 8
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 3,
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: \"model_call_completed\"",
-          "metrics": [
-            {
-              "type": "percentiles",
-              "id": "1",
-              "field": "latency_ms",
-              "settings": {
-                "percents": [
-                  "95"
-                ]
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(ac.timestamp,$__interval), rt.model_role AS role, avg(ac.latency_ms) AS avg_latency_ms FROM api_costs ac JOIN route_traces rt ON rt.trace_id = ac.trace_id WHERE $__timeFilter(ac.timestamp) AND rt.model_role IS NOT NULL GROUP BY 1, role ORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            },
-            {
-              "type": "avg",
-              "id": "2",
-              "field": "latency_ms"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "role",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
               }
-            }
-          ]
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Latency over time by role",
+      "type": "timeseries"
     },
     {
-      "id": 3,
-      "type": "timeseries",
-      "title": "Latency over time by role",
-      "description": "",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Avg and p95 of api_costs.input_tokens, joined to route_traces on trace_id (both native Postgres uuid -- no dashed-vs-hex split, verified live) to attach model_role. Uses the join (not route_traces.input_tokens directly) because that column is unpopulated for sub_agent rows -- always 0 there despite real sub_agent token usage recorded in api_costs. Only api_costs rows whose trace_id matches a route_traces row are included (inner join); background-job purposes (study, entity_extraction, captains_log) rarely carry a route_trace and are excluded, not zeroed.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "dataset": "personal_agent",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT rt.model_role AS role, avg(ac.input_tokens) AS avg_input_tokens, percentile_cont(0.95) WITHIN GROUP (ORDER BY ac.input_tokens) AS p95_input_tokens FROM api_costs ac JOIN route_traces rt ON rt.trace_id = ac.trace_id WHERE $__timeFilter(ac.timestamp) AND rt.model_role IS NOT NULL GROUP BY rt.model_role",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Prompt tokens by role",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Sum of api_costs.input_tokens and output_tokens, time-bucketed, across all calls (every model/provider/purpose) in the window -- not split by role.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 5,
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "dataset": "personal_agent",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(timestamp,$__interval), sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens FROM api_costs WHERE $__timeFilter(timestamp) GROUP BY 1 ORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Token usage over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "route_traces.error_type, time-bucketed. Rebuilt on PG after live comparison against the old ES model_call_error signal: ES had 531 docs, all falling 2026-04-13..2026-06-01, zero since (dead signal). route_traces.error_type is a different, currently-live signal: 20 of 536 traces carry an error_type, spanning 2026-06-07..2026-08-07 -- most recent 5 days before this dashboard's build date -- so it reflects real, ongoing (if rare) failures, not a stale one-time event family. Types seen: LLMServerError, LLMClientError, sub_agent_failed, AttachmentUnsupportedError.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 16
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
-          },
-          "query": "event_type: \"model_call_completed\"",
-          "metrics": [
-            {
-              "type": "avg",
-              "id": "1",
-              "field": "latency_ms"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "date_histogram",
-              "id": "1",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
-              }
-            },
-            {
-              "type": "terms",
-              "id": "2",
-              "field": "role",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "type": "barchart",
-      "title": "Prompt tokens by role",
-      "description": "",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 24
-      },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
-          },
-          "query": "event_type: \"model_call_completed\"",
-          "metrics": [
-            {
-              "type": "avg",
-              "id": "1",
-              "field": "input_tokens"
-            },
-            {
-              "type": "percentiles",
-              "id": "2",
-              "field": "input_tokens",
-              "settings": {
-                "percents": [
-                  "95"
-                ]
-              }
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "role",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "type": "timeseries",
-      "title": "Token usage over time",
-      "description": "",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 32
-      },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
-          },
-          "query": "event_type: \"model_call_completed\"",
-          "metrics": [
-            {
-              "type": "sum",
-              "id": "1",
-              "field": "output_tokens"
-            },
-            {
-              "type": "sum",
-              "id": "2",
-              "field": "input_tokens"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "date_histogram",
-              "id": "1",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
       "id": 6,
-      "type": "timeseries",
-      "title": "Model call errors over time",
-      "description": "All 531 model_call_error docs fall between 2026-04-13 and 2026-06-01; zero since. Uses a 1-year time range to keep this historical signal visible -- absence of recent errors reflects no recent failures, not a broken panel. error_type breakdown has no model/role attribution (the raw event carries neither field).",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 40
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: \"model_call_error\"",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "date_histogram",
-              "id": "1",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(created_at,$__interval), error_type, count(*) AS errors FROM route_traces WHERE $__timeFilter(created_at) AND error_type IS NOT NULL GROUP BY 1, error_type ORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            },
-            {
-              "type": "terms",
-              "id": "2",
-              "field": "error_type",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
               }
-            }
-          ]
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Model call errors over time",
+      "type": "timeseries"
     }
   ],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
+  "tags": [
+    "fre-1072",
+    "grafana-native"
+  ],
   "time": {
-    "from": "now-24h",
+    "from": "now-30d",
     "to": "now"
-  }
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ]
+  },
+  "timezone": "browser",
+  "title": "LLM Performance",
+  "uid": "fre1072-llm-performance",
+  "version": 1
 }

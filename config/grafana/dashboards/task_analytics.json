@@ -1,251 +1,631 @@
 {
-  "uid": "fre1072-task-analytics",
-  "title": "Task Analytics",
-  "tags": [
-    "fre-1072",
-    "rebuilt-from-kibana"
-  ],
-  "timezone": "browser",
-  "schemaVersion": 39,
-  "version": 1,
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "What tools, skills, and iteration patterns does the agent actually use across tasks, and how often does a task expand into delegation or sub-agents? (route_traces, 30d)",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "liveNow": false,
   "panels": [
     {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "How many tool-call iterations a task takes before finishing, grouped by iteration count (30d). route_traces.tool_iteration_count, 277 traces in the window; 147 (53%) take zero tool iterations (pure conversational turns), the rest spread up to 24.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
-      "type": "timeseries",
-      "title": "Entity creation rate",
-      "description": "Count of entity_created events over time (90d, full history -- 6585 entities total).",
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "dataset": "personal_agent",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT tool_iteration_count::text AS iteration_count, COUNT(*) AS traces FROM route_traces WHERE $__timeFilter(created_at) GROUP BY tool_iteration_count ORDER BY tool_iteration_count",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Tool iteration count distribution",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Trace count per tool name, unnesting route_traces.tools_used (30d, top 15). A trace can use several tools so bars sum to more than the trace count; 147/277 traces in the window used no tools at all. Top 3 in this window: web_search, bash, search_memory (48/48/46).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#73BF69",
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 0
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 2,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: \"entity_created\"",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "date_histogram",
-              "id": "1",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT unnest(tools_used) AS tool, COUNT(*) AS traces FROM route_traces WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 2 DESC LIMIT 15",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            }
-          ]
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Most-used tools",
+      "type": "barchart"
     },
     {
-      "id": 2,
-      "type": "barchart",
-      "title": "Entity type breakdown",
-      "description": "Count of entity_created events by entity_type (90d, full history -- 6585 entities across 7 types). Answers the \"types\" half of the decision this dashboard must enable; the original dashboard had no type breakdown at all.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Trace count per skill name, unnesting route_traces.skills_loaded (30d, top 15) -- what scaffolding/knowledge context gets pulled into a task. 180/277 traces in the window loaded no skill. Top: personal-history-recall (24), infrastructure-health and artifact-design (14 each).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#73BF69",
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 8
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 3,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: \"entity_created\"",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "entity_type",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT unnest(skills_loaded) AS skill, COUNT(*) AS traces FROM route_traces WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 2 DESC LIMIT 15",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            }
-          ]
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Skills loaded frequency",
+      "type": "barchart"
     },
     {
-      "id": 3,
-      "type": "timeseries",
-      "title": "Tasks over time",
-      "description": "task_started vs task_completed events over time (90d, full history). See the Task completion rate panel: 1576 started vs 1149 completed, a ~27% gap.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "How each task's orchestration resolved: route_traces.orchestration_event (30d, 277 traces). primary_handled=265, delegate_called=11, fallback_triggered=1 in this window -- most tasks stay with the primary model; delegation and fallback are rare.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#73BF69",
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 16
+        "y": 8
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
+      "id": 4,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: (\"task_started\" or \"task_completed\")",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "event_type",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT orchestration_event, COUNT(*) AS traces FROM route_traces WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 2 DESC",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            },
-            {
-              "type": "date_histogram",
-              "id": "2",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
               }
-            }
-          ]
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Orchestration event breakdown",
+      "type": "barchart"
     },
     {
-      "id": 4,
-      "type": "barchart",
-      "title": "Task completion rate",
-      "description": "task_started vs task_completed totals (90d, full history). 1576 started vs 1149 completed -- a 427-turn (27.1%) gap between the two events. This could reflect abandoned/still-in-flight turns, an error path that skips task_completed, or an instrumentation gap; not investigated further here, flagged for a future observability pass.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "pg-ledger"
+      },
+      "description": "Daily sum of route_traces.sub_agent_count and count of traces that spawned at least one sub-agent (30d). Sparse and spiky: 12/277 traces in the window spawned any sub-agents at all, concentrated on a few days. Framed around task/tool activity (how often tasks expand), not sub-agent outcome detail -- that's expansion_decomposition's job.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 24
+        "y": 16
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
-          },
-          "query": "event_type: (\"task_started\" or \"task_completed\")",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "event_type",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
       "id": 5,
-      "type": "timeseries",
-      "title": "Memory enrichment activity",
-      "description": "memory_query_completed vs memory_enrichment_completed events over time (90d, full history -- 344 queries, 1240 enrichments). Adjacent to the entity/task volume story: shows how much memory-recall work backs each turn.",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 32
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "dataset": "personal_agent",
           "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
+            "type": "grafana-postgresql-datasource",
+            "uid": "pg-ledger"
           },
-          "query": "event_type: (\"memory_query_completed\" or \"memory_enrichment_completed\")",
-          "metrics": [
-            {
-              "type": "count",
-              "id": "1"
-            }
-          ],
-          "bucketAggs": [
-            {
-              "type": "terms",
-              "id": "1",
-              "field": "event_type",
-              "settings": {
-                "size": "10",
-                "order": "desc",
-                "orderBy": "_count"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(created_at,'1d'), SUM(sub_agent_count) AS subagents_spawned, COUNT(*) FILTER (WHERE sub_agent_count > 0) AS traces_with_subagents FROM route_traces WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
               }
-            },
-            {
-              "type": "date_histogram",
-              "id": "2",
-              "field": "@timestamp",
-              "settings": {
-                "interval": "1h"
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
               }
-            }
-          ]
+            ],
+            "limit": 50
+          }
         }
-      ]
+      ],
+      "title": "Sub-agent spawn activity over time",
+      "type": "timeseries"
     }
   ],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
   "time": {
-    "from": "now-24h",
+    "from": "now-30d",
     "to": "now"
-  }
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ]
+  },
+  "timezone": "browser",
+  "title": "Task Analytics",
+  "uid": "fre1072-task-analytics",
+  "version": 1,
+  "tags": [
+    "fre-1072",
+    "grafana-native"
+  ]
 }

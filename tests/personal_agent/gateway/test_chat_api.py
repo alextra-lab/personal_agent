@@ -104,10 +104,16 @@ def test_chat_starts_streaming() -> None:
     data = resp.json()
     assert data["session_id"] == sid
     assert data["status"] == "streaming"
-    # trace_id must be a non-empty string that looks like a UUID (no dashes stripped)
+    # FRE-1231: trace_id now comes from read_or_mint_trace_id() (ADR-0129 D1), which
+    # renders 32 lowercase hex chars (the OTel shape) rather than a dashed UUID —
+    # matching the id every log record of this request carries once the standalone
+    # gateway has an active root span. No repository consumer parses this field
+    # (grep-verified against seshat-pwa and the CLI); only this test asserted the
+    # old dashed shape.
     assert "trace_id" in data
-    assert len(data["trace_id"]) == 36  # UUID canonical form
-    assert data["trace_id"].count("-") == 4
+    assert len(data["trace_id"]) == 32
+    assert data["trace_id"].count("-") == 0
+    assert all(c in "0123456789abcdef" for c in data["trace_id"])
     mock_create_task.assert_called_once()
 
 

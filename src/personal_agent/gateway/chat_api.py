@@ -34,6 +34,7 @@ from personal_agent.service.models import SessionModel
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.spans import model_call_span
+from personal_agent.telemetry.trace import read_or_mint_trace_id
 from personal_agent.transport.agui.transport import _push_event
 from personal_agent.transport.events import TextDeltaEvent
 
@@ -478,7 +479,13 @@ async def chat(
         HTTPException: 404 if ``session_id`` already exists under a
             different user (do not confirm existence cross-user).
     """
-    trace_id = str(uuid4())
+    # FRE-1231 / ADR-0129 D1: read the active root span's identity (once the standalone
+    # gateway opens one) rather than minting an unrelated uuid4 — otherwise Postgres and
+    # Elasticsearch would record two different ids for the same call, as FRE-1215 found
+    # for service/app.py's /chat and /chat/stream. Renders 32 lowercase hex chars (the
+    # OTel shape) instead of the previous dashed UUID; no repository consumer parses this
+    # response field (grep-verified).
+    trace_id = read_or_mint_trace_id()
     settings = get_settings()
     api_key = settings.anthropic_api_key
     if not api_key:

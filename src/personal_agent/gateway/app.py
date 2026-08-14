@@ -19,6 +19,7 @@ Example (standalone production)::
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
@@ -36,6 +37,7 @@ from personal_agent.gateway.session_api import router as session_router
 from personal_agent.gateway.sub_agent_capture_api import router as sub_agent_capture_router
 from personal_agent.memory.session_digest import SessionDigestView
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.otel_middleware import RequestRootSpanMiddleware
 from personal_agent.transport.agui.ws_endpoint import ws_router as transport_router
 
 log = get_logger(__name__)
@@ -120,6 +122,19 @@ async def _gateway_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     settings = get_settings()
     log.info("gateway_starting_standalone")
+
+    # OTel tracer provider bootstrap (ADR-0129 D3/D4, FRE-1231): registers a
+    # process-wide tracer provider for the standalone gateway, distinct from the
+    # main service's ("personal-agent-gateway" vs "personal-agent") so Tempo/Grafana
+    # can tell the two processes apart. Must run before RequestRootSpanMiddleware
+    # serves its first request. The returned provider is retained (not re-fetched
+    # via the global lookup) so shutdown flushes exactly the provider this lifespan
+    # created — see the shutdown comment below for why that distinction matters.
+    from personal_agent.telemetry.otel_bootstrap import configure_tracing
+
+    tracer_provider = configure_tracing(
+        service_name="personal-agent-gateway", otlp_endpoint=settings.otel_exporter_endpoint
+    )
 
     # -----------------------------------------------------------------------
     # PostgreSQL — session factory
@@ -210,6 +225,20 @@ async def _gateway_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await app.state.knowledge_graph._service.disconnect()
         except Exception:
             pass
+
+    # Flush the OTel BatchSpanProcessor (ADR-0129 D5, FRE-1231) before the ES drain
+    # below, mirroring service/app.py's shutdown ordering. Shuts down the *local*
+    # `tracer_provider` this lifespan created — not `otel_trace.get_tracer_provider()`
+    # (the global) — because `configure_tracing()` returns a new provider on every
+    # call while `trace.set_tracer_provider()` only takes effect on the first call in
+    # a process (see its docstring); in a shared test process a global re-fetch could
+    # shut down some other invocation's provider instead of this one's. Dispatched via
+    # to_thread so a slow/unreachable Collector cannot stall the event loop.
+    from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
+    if isinstance(tracer_provider, SDKTracerProvider):
+        await asyncio.to_thread(tracer_provider.shutdown)
+
     # Elasticsearch last, so every teardown step above still ships its records.
     # The handler owns the client — closing app.state.es_client separately would
     # be a double close, since ElasticsearchLogger.disconnect already closes it.
@@ -412,6 +441,10 @@ def create_gateway_app() -> FastAPI:
         lifespan=_gateway_lifespan,
     )
     add_error_handlers(app)
+    # OTel request-boundary root span (ADR-0129 D3/D4, FRE-1231): every served request
+    # opens exactly one root span, matching service/app.py's own composition. Reads the
+    # process-wide tracer provider `_gateway_lifespan` registers at startup.
+    app.add_middleware(RequestRootSpanMiddleware)
     app.include_router(create_gateway_router())  # /api/v1/* — storage APIs
     app.include_router(chat_router)  # /chat   — Anthropic streaming
     app.include_router(transport_router)  # /stream/* — AG-UI SSE

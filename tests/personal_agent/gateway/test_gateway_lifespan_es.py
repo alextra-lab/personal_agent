@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
+from opentelemetry.sdk.trace import TracerProvider
 
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
 
@@ -152,6 +153,14 @@ async def _run_lifespan(app: FastAPI, client: _FakeESClient) -> AsyncIterator[No
             return_value=ledger,
         ),
         patch("elasticsearch.AsyncElasticsearch", return_value=client),
+        # FRE-1231: this file's subject is the Elasticsearch handler, not tracing —
+        # patch configure_tracing (source attribute, since _gateway_lifespan imports it
+        # locally at call time) to a lightweight no-exporter provider so these four
+        # tests don't each spin up a real OTel bootstrap / BatchSpanProcessor thread.
+        patch(
+            "personal_agent.telemetry.otel_bootstrap.configure_tracing",
+            return_value=TracerProvider(),
+        ),
     ):
         async with _gateway_lifespan(app):
             yield

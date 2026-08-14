@@ -1,6 +1,6 @@
 # ADR-0137: A Two-Party Obligation Is Split at Authoring, and a Cutover Is Two Tickets — the Dispatch Question Is Only the Backstop
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-13
 **Deciders:** project owner (FRE-1221)
 **Tags:** process, delivery, acceptance-criteria, lifecycle, skills, integration

@@ -34,13 +34,10 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 #   process", "Waiting for application startup" — .venv/lib/python3.12/site-packages/
 #   uvicorn/server.py) before the ASGI app's lifespan — and therefore configure_tracing
 #   — ever runs.
-# - "personal_agent.gateway.app": the standalone gateway's own lifespan (FRE-1231) logs
-#   gateway_starting_standalone one line before its own configure_tracing() call.
 PRE_BOOTSTRAP_LOGGERS: Final[frozenset[str]] = frozenset(
     {
         "personal_agent.config.settings",
         "personal_agent.service.app",
-        "personal_agent.gateway.app",
         "uvicorn.error",
     }
 )

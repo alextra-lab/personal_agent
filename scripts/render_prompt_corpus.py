@@ -236,12 +236,6 @@ LEAF_PROMPTS: list[ConstantEntry | FunctionEntry | ClassDocEntry] = [
         "_HTML_GENERATION_SYSTEM_PROMPT",
         "STATIC",
     ),
-    ConstantEntry(
-        "gateway_persona",
-        SRC_ROOT / "gateway" / "chat_api.py",
-        "_SYSTEM_PROMPT",
-        "STATIC",
-    ),
 ]
 
 # Orchestrator composed prompt component taxonomy (spec §1.2)

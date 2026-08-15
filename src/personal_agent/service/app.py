@@ -1661,8 +1661,8 @@ from personal_agent.service.telemetry_router import router as telemetry_router  
 app.include_router(telemetry_router)
 
 # Seshat API Gateway (FRE-206) — additive, does not affect existing routes.
-# In local dev mode the gateway router mounts on this app (port 9000).
-# In production, run personal_agent.gateway.app:gateway_app on its own port.
+# In local dev mode the gateway router mounts on this app (port 9000). The
+# cloud image (Dockerfile.gateway) also runs this same service app.
 if settings.gateway_mount_local:
     from personal_agent.gateway.app import create_gateway_router  # noqa: E402
 

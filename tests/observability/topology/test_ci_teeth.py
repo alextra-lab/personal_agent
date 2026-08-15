@@ -41,12 +41,6 @@ _ALLOWED_SDK_IMPORTERS: dict[tuple[str, str], str] = {
         "invocation; cost is tracked via llm_client.cost_tracker.record_vendor_cost, not "
         "record_api_call (FRE-974)"
     ),
-    ("gateway/chat_api.py", "anthropic"): (
-        "known live model invocation, not benign — this call site is dormant (no "
-        "deployment serves this router) and tracked for deletion by FRE-1261, which this "
-        "ticket (FRE-1262) blocks; allowlisted here as an explicit, named violation rather "
-        "than one hidden behind an unrelated litellm reason"
-    ),
 }
 
 

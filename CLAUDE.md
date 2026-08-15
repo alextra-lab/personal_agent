@@ -128,7 +128,7 @@ Expansion paths:
 | `sysgraph/` | Isolated System-graph store (proposals/stats/tickets/outcomes) in its own Postgres schema, physically separate from the Neo4j user KG (ADR-0105) |
 | `observability/` | Joinability probe and infrastructure monitors (ADR-0074) |
 | `ui/` | `service_cli.py` — the `uv run agent` entrypoint; connects to :9000 |
-| `gateway/` | Seshat API Gateway — standalone FastAPI app over storage only (Neo4j, Postgres, ES); mountable as a router in local mode or run standalone on :9001 |
+| `gateway/` | Seshat API Gateway — FastAPI router factory over storage only (Neo4j, Postgres, ES); mounted onto the main service app in local mode (`settings.gateway_mount_local`) |
 | `storage/` | R2-backed artifact store (ADR-0069); async S3-protocol wrapper for Cloudflare R2; owns key layout and artifact lifecycle |
 | `cost_gate/` | Atomic Postgres budget reservation gate (ADR-0065); transactional reserve/commit/refund lifecycle replacing advisory checks in `LiteLLMClient` |
 

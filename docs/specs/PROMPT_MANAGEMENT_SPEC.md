@@ -26,7 +26,6 @@ This section is the authoritative registry of named prompt components. Every com
 | `reflection_dspy_signature` | `captains_log/reflection_dspy.py` | 76 | STATIC | ~500 |
 | `reflection_manual_fallback` | `captains_log/reflection.py` | 158 | STATIC | ~575 |
 | `html_generation_system` | `tools/artifact_tools.py` | 656 | STATIC | ~500 |
-| `gateway_persona` | `gateway/chat_api.py` | 39 | STATIC | ~35 |
 
 **Cache tier definitions:**
 - `STATIC` — content is a module-level constant; never varies at runtime.
@@ -83,7 +82,6 @@ class PromptIdentity:
 | `second_brain.entity_extraction` | `second_brain/entity_extraction.py` |
 | `second_brain.session_summary` | `second_brain/session_summary.py` |
 | `captains_log.reflection` | `captains_log/reflection_dspy.py` |
-| `gateway.chat` | `gateway/chat_api.py` |
 | `artifact.html_generation` | `tools/artifact_tools.py` |
 
 ### 2.2 Stamping in telemetry
@@ -222,21 +220,18 @@ def derive_prompt_identity(
 - `static_prefix` = the **literal cacheable prefix**: the assembled bytes up to the first DYNAMIC component. In practice `f"{tool_awareness}\n\n{inner_system_before_memory}"` — captured at assembly time, before the `memory_section` append. By design this **excludes** the post-memory tool rules: those bytes are not in a stable-prefix position today, and pretending otherwise would hide the erosion P2 needs to see.
 - `full_prompt` = the complete assembled system prompt (all tiers).
 
-**Call site**: `executor.py` captures `inner_system_before_memory` (the system prompt value immediately before line 2193) and `tool_awareness` (line 2215), builds `static_prefix`, and constructs the `PromptIdentity` after the full prompt is assembled. Non-orchestrator callsites (compressor, entity extraction, gateway, etc.) that have no static/dynamic split pass `static_prefix = full_prompt = system_prompt`.
+**Call site**: `executor.py` captures `inner_system_before_memory` (the system prompt value immediately before line 2193) and `tool_awareness` (line 2215), builds `static_prefix`, and constructs the `PromptIdentity` after the full prompt is assembled. Non-orchestrator callsites (compressor, entity extraction, etc.) that have no static/dynamic split pass `static_prefix = full_prompt = system_prompt`.
 
 **AC nuance**: `static_prefix_hash` changes when prefix-resident STATIC/SEMI_STATIC content changes and is stable when only `memory_section` changes. A change to the *post-memory* tool rules does **not** move it — correct, because those bytes aren't in the cacheable prefix under the current composer. The optional composer redesign (gated on P2 data) relocates them.
 
 ---
 
-## 5. Gateway Telemetry Coverage (`gateway/chat_api.py`)
+## 5. Gateway Telemetry Coverage — moot (FRE-1261)
 
-**Current state**: `gateway/chat_api.py:88–93` calls `anthropic.AsyncAnthropic().messages.stream()` directly. No `model_call_started` / `model_call_completed` events are emitted. Cost is untracked. The `_SYSTEM_PROMPT` at :39 is a minimal Seshat persona (~35 tokens) that has drifted from the orchestrator persona.
-
-**P1 fix**:
-1. Extract the direct `anthropic` call into a thin wrapper that calls through `LiteLLMClient` (or emits the canonical events directly if a direct call is architecturally necessary).
-2. Assign `PromptIdentity(callsite="gateway.chat", component_ids=("gateway_persona",), ...)` to this path.
-3. The `gateway_persona` component gets a `component_id` entry in the taxonomy and appears in the corpus renderer output.
-4. Cost tracking: the gateway call is routed through `cost_gate/` budget reservation like all other call paths.
+`gateway/chat_api.py` (the standalone gateway's direct-`anthropic` chat endpoint this section
+proposed instrumenting) was retired by FRE-1261 — the standalone gateway app and its chat module
+were dead weight (no deployment served that router; ADR-0044/FRE-207 had already pivoted the cloud
+profile to the full service app). There is no longer a gateway telemetry gap to close here.
 
 ---
 
@@ -354,7 +349,7 @@ Both sites import from `personal_agent.llm_client.token_counter`. No other calle
 | Gate | Criterion |
 |------|-----------|
 | Pre-merge | `scripts/render_prompt_corpus.py` runs without error on a clean checkout |
-| Pre-merge | `docs/reference/PROMPT_CORPUS.md` contains entries for all 13 leaf prompts listed in §1.1 |
+| Pre-merge | `docs/reference/PROMPT_CORPUS.md` contains entries for all 12 leaf prompts listed in §1.1 |
 | Pre-merge | Each entry shows token count, source file:line, and cache tier |
 | Pre-merge | `make render-prompt-corpus` target exists and works |
 | Pre-merge | Re-running the script on an unchanged codebase produces identical output (deterministic) |
@@ -368,11 +363,9 @@ Both sites import from `personal_agent.llm_client.token_counter`. No other calle
 | Pre-merge | `PromptIdentity` dataclass defined in `llm_client/prompt_identity.py` |
 | Pre-merge | `emit_model_call_completed()` signature updated; mypy clean |
 | Pre-merge | `LiteLLMClient` and `LocalLLMClient` both pass `prompt_identity` |
-| Pre-merge | `gateway/chat_api.py` routed through canonical telemetry emit |
 | Pre-merge | `compute_prefix_hash` unit test: hash changes when STATIC/SEMI_STATIC content changes; hash does NOT change when only `memory_section` content changes |
 | Pre-merge | `token_counter.py` exists; both old heuristic sites replaced; `make test` passes |
 | Post-deploy | Query ES: all `model_call_completed` events in the last 100 calls carry non-null `prompt_callsite` and `prompt_static_prefix_hash` |
-| Post-deploy | Query ES: `prompt_callsite = "gateway.chat"` events now present (were absent before) |
 | Future-gate | P2 cache-erosion alarm can be wired once `static_prefix_hash` is stable over ≥7 days |
 
 ### P2 — Cost/Cache Attribution + Drift (Tier-2)
@@ -382,7 +375,7 @@ Both sites import from `personal_agent.llm_client.token_counter`. No other calle
 | Pre-merge | Kibana index template updated for new `prompt_*` fields |
 | Pre-merge | A "per-callsite token/cost" Kibana view exported and committed |
 | Pre-merge | Cache-erosion alert defined: fires when `static_prefix_hash` Jaccard similarity between consecutive days drops below 0.9 |
-| Post-deploy | Kibana view renders without errors; shows breakdown for at least `orchestrator.primary` and `gateway.chat` |
+| Post-deploy | Kibana view renders without errors; shows a breakdown for at least `orchestrator.primary` |
 | Post-deploy | Deliberately mutating a `STATIC` leaf prompt triggers the drift alert within one polling cycle |
 | Future-gate | Composer redesign ticket opened if mean cache-hit rate for `orchestrator.primary` is below 60% over 7 days |
 

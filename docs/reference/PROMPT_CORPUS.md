@@ -29,7 +29,6 @@
 | `reflection_dspy_signature` | 🟢 STATIC | 623 | `src/personal_agent/captains_log/reflection_dspy.py:76` |
 | `reflection_manual_fallback` | 🟢 STATIC | 497 | `src/personal_agent/captains_log/reflection.py:158` |
 | `html_generation_system` | 🟢 STATIC | 500 | `src/personal_agent/tools/artifact_tools.py:656` |
-| `gateway_persona` | 🟢 STATIC | 27 | `src/personal_agent/gateway/chat_api.py:39` |
 
 ### Skill Documents
 
@@ -606,21 +605,6 @@ REQUIREMENTS:
 - For comparison layouts: CSS grid with equal-width columns.
 - Maximum document size: aim for under 200KB of HTML text.
 ```
-
----
-
-### `gateway_persona`
-
-| | |
-|---|---|
-| **Cache tier** | 🟢 STATIC — never varies at runtime |
-| **Token count** | 27 |
-| **Source** | `src/personal_agent/gateway/chat_api.py:39` |
-
-```
-You are Seshat, a personal AI assistant with persistent memory and knowledge graph capabilities. You are helpful, thoughtful, and concise.
-```
-
 
 ---
 

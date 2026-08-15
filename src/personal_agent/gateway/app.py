@@ -1,33 +1,21 @@
-"""Seshat API Gateway — FastAPI application factory.
-
-Two entry points:
+"""Seshat API Gateway — FastAPI router factory.
 
 - :func:`create_gateway_router` — returns an ``APIRouter`` suitable for
   mounting on the main execution service (local dev, ``settings.gateway_mount_local``).
-- :func:`create_gateway_app` — returns a standalone ``FastAPI`` instance with
-  a minimal lifespan (no LLM client, no orchestrator, no brainstem scheduler).
 
 The gateway connects only to storage backends: Neo4j, PostgreSQL, and
-Elasticsearch.  In local mode these connections are shared with the main
-service through ``app.state`` (set by the execution service lifespan before
-mounting the router).
-
-Example (standalone production)::
-
-    uvicorn personal_agent.gateway.app:gateway_app --port 9001
+Elasticsearch.  These connections are shared with the main service through
+``app.state`` (set by the execution service lifespan before mounting the
+router).
 """
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Sequence
-from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator
+from typing import Any
 
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, Request
 
-from personal_agent.config.settings import get_settings
-from personal_agent.gateway.chat_api import router as chat_router
 from personal_agent.gateway.feedback_api import router as feedback_router
 from personal_agent.gateway.knowledge_api import router as knowledge_router
 from personal_agent.gateway.observation_api import router as observation_router
@@ -36,12 +24,6 @@ from personal_agent.gateway.session_api import config_router
 from personal_agent.gateway.session_api import router as session_router
 from personal_agent.gateway.sub_agent_capture_api import router as sub_agent_capture_router
 from personal_agent.memory.session_digest import SessionDigestView
-from personal_agent.telemetry import get_logger
-from personal_agent.telemetry.otel_middleware import RequestRootSpanMiddleware
-from personal_agent.transport.agui.ws_endpoint import ws_router as transport_router
-
-log = get_logger(__name__)
-
 
 # ---------------------------------------------------------------------------
 # Health router (no auth required)
@@ -76,7 +58,7 @@ async def gateway_health(request: Request) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Router factory (shared between local-mount and standalone modes)
+# Router factory
 # ---------------------------------------------------------------------------
 
 
@@ -99,162 +81,6 @@ def create_gateway_router() -> APIRouter:
     root.include_router(feedback_router)
     root.include_router(_health_router)
     return root
-
-
-# ---------------------------------------------------------------------------
-# Standalone lifespan (minimal — storage backends only)
-# ---------------------------------------------------------------------------
-
-
-@asynccontextmanager
-async def _gateway_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Minimal lifespan for standalone gateway deployment.
-
-    Connects to Neo4j, PostgreSQL, and Elasticsearch.
-    Does NOT start the orchestrator, LLM client, brainstem scheduler, or MCP
-    gateway — those belong to the execution service only.
-
-    Args:
-        app: FastAPI application instance.
-
-    Yields:
-        Control to FastAPI (endpoints active while inside the context).
-    """
-    settings = get_settings()
-    log.info("gateway_starting_standalone")
-
-    # OTel tracer provider bootstrap (ADR-0129 D3/D4, FRE-1231): registers a
-    # process-wide tracer provider for the standalone gateway, distinct from the
-    # main service's ("personal-agent-gateway" vs "personal-agent") so Tempo/Grafana
-    # can tell the two processes apart. Must run before RequestRootSpanMiddleware
-    # serves its first request. The returned provider is retained (not re-fetched
-    # via the global lookup) so shutdown flushes exactly the provider this lifespan
-    # created — see the shutdown comment below for why that distinction matters.
-    from personal_agent.telemetry.otel_bootstrap import configure_tracing
-
-    tracer_provider = configure_tracing(
-        service_name="personal-agent-gateway", otlp_endpoint=settings.otel_exporter_endpoint
-    )
-
-    # -----------------------------------------------------------------------
-    # PostgreSQL — session factory
-    # -----------------------------------------------------------------------
-    from personal_agent.service.database import AsyncSessionLocal, init_db
-
-    await init_db()
-    app.state.db_session_factory = AsyncSessionLocal
-    log.info("gateway_database_initialized")
-
-    # Route-trace ledger (FRE-452/FRE-514): own asyncpg pool, separate from the
-    # SQLAlchemy session factory. Connect here so a standalone gateway serves the
-    # /observations/route-traces/* read surface; idempotent (no-op if already connected).
-    from personal_agent.observability.route_trace import get_route_trace_ledger
-
-    await get_route_trace_ledger().connect()
-    log.info("gateway_route_trace_ledger_initialized")
-
-    # -----------------------------------------------------------------------
-    # Elasticsearch — observation queries
-    # -----------------------------------------------------------------------
-    # The handler is attached to the root logger, not merely harvested for its
-    # client: until FRE-1056 this process shipped no logs to Elasticsearch at
-    # all, because add_elasticsearch_handler had exactly one call site and it
-    # was in the execution service's lifespan.
-    app.state.es_client = None
-    app.state.es_handler = None
-    try:
-        from personal_agent.telemetry import add_elasticsearch_handler, detach_elasticsearch_handler
-        from personal_agent.telemetry.es_handler import ElasticsearchHandler
-
-        es_handler = ElasticsearchHandler(
-            settings.elasticsearch_url, index_prefix=settings.elasticsearch_index_prefix
-        )
-        if await es_handler.connect() and es_handler.es_logger.client is not None:
-            add_elasticsearch_handler(es_handler)
-            app.state.es_handler = es_handler
-            app.state.es_client = es_handler.es_logger.client
-            log.info("gateway_elasticsearch_connected")
-        else:
-            # Tear the handler down rather than dropping the reference. Two
-            # distinct leaks live here: ElasticsearchLogger.connect assigns its
-            # client *before* the handshake and does not clear it when the
-            # handshake fails, and ElasticsearchHandler.connect starts a
-            # delivery consumer whenever that inner call returns true.
-            await detach_elasticsearch_handler(es_handler)
-            log.warning("gateway_elasticsearch_unavailable")
-    except Exception as exc:
-        log.warning("gateway_elasticsearch_connect_failed", error=str(exc))
-
-    # -----------------------------------------------------------------------
-    # Neo4j — knowledge graph
-    # -----------------------------------------------------------------------
-    app.state.knowledge_graph = None
-    if settings.enable_memory_graph:
-        try:
-            from personal_agent.memory.service import MemoryService
-
-            memory_service = MemoryService()
-            if await memory_service.connect():
-                app.state.knowledge_graph = _KnowledgeGraphAdapter(memory_service)
-                log.info("gateway_neo4j_connected")
-                # ADR-0124 Phase 1 / FRE-948: idempotent, mirrors service/app.py's startup
-                # index bootstrap so the standalone gateway (cloud, :9001) also has it —
-                # not only the combined local-mode app where service/app.py's lifespan runs.
-                try:
-                    await memory_service.ensure_session_id_index()
-                    log.info("gateway_neo4j_session_id_index_ensured")
-                except Exception as idx_exc:
-                    log.warning("gateway_neo4j_session_id_index_setup_failed", error=str(idx_exc))
-            else:
-                log.warning("gateway_neo4j_unavailable")
-        except Exception as exc:
-            log.warning("gateway_neo4j_connect_failed", error=str(exc))
-
-    log.info("gateway_ready_standalone")
-    yield
-
-    # -----------------------------------------------------------------------
-    # Shutdown
-    # -----------------------------------------------------------------------
-    log.info("gateway_shutting_down")
-    from personal_agent.observability.route_trace import get_route_trace_ledger
-
-    await get_route_trace_ledger().disconnect()
-    if app.state.knowledge_graph is not None:
-        try:
-            await app.state.knowledge_graph._service.disconnect()
-        except Exception:
-            pass
-
-    # Flush the OTel BatchSpanProcessor (ADR-0129 D5, FRE-1231) before the ES drain
-    # below, mirroring service/app.py's shutdown ordering. Shuts down the *local*
-    # `tracer_provider` this lifespan created — not `otel_trace.get_tracer_provider()`
-    # (the global) — because `configure_tracing()` returns a new provider on every
-    # call while `trace.set_tracer_provider()` only takes effect on the first call in
-    # a process (see its docstring); in a shared test process a global re-fetch could
-    # shut down some other invocation's provider instead of this one's. Dispatched via
-    # to_thread so a slow/unreachable Collector cannot stall the event loop.
-    from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
-
-    if isinstance(tracer_provider, SDKTracerProvider):
-        await asyncio.to_thread(tracer_provider.shutdown)
-
-    # Elasticsearch last, so every teardown step above still ships its records.
-    # The handler owns the client — closing app.state.es_client separately would
-    # be a double close, since ElasticsearchLogger.disconnect already closes it.
-    # Only gateway_stopped below reaches file/console alone.
-    if app.state.es_handler is not None:
-        from personal_agent.telemetry import detach_elasticsearch_handler
-
-        try:
-            await detach_elasticsearch_handler(app.state.es_handler)
-        except Exception as exc:
-            log.warning("gateway_elasticsearch_shutdown_failed", error=str(exc))
-        app.state.es_handler = None
-        # Nulled because gateway endpoints resolve this from app.state at
-        # request time; leaving it pointing at a closed client is stale state.
-        app.state.es_client = None
-    log.info("gateway_stopped")
 
 
 # ---------------------------------------------------------------------------
@@ -415,41 +241,3 @@ class _KnowledgeGraphAdapter:
             session_ids, trace_id=trace_id
         )
         return result
-
-
-# ---------------------------------------------------------------------------
-# Standalone app factory
-# ---------------------------------------------------------------------------
-
-
-def create_gateway_app() -> FastAPI:
-    """Create a standalone FastAPI application for the Seshat API Gateway.
-
-    Suitable for a dedicated uvicorn process (port 9001 or behind a reverse
-    proxy).  The lifespan connects only to storage backends — no LLM client,
-    no orchestrator, no brainstem.
-
-    Returns:
-        Configured :class:`fastapi.FastAPI` instance.
-    """
-    from personal_agent.gateway.errors import add_error_handlers
-
-    app = FastAPI(
-        title="Seshat API Gateway",
-        description="Versioned REST API for knowledge graph, sessions, and observations",
-        version="1.0.0",
-        lifespan=_gateway_lifespan,
-    )
-    add_error_handlers(app)
-    # OTel request-boundary root span (ADR-0129 D3/D4, FRE-1231): every served request
-    # opens exactly one root span, matching service/app.py's own composition. Reads the
-    # process-wide tracer provider `_gateway_lifespan` registers at startup.
-    app.add_middleware(RequestRootSpanMiddleware)
-    app.include_router(create_gateway_router())  # /api/v1/* — storage APIs
-    app.include_router(chat_router)  # /chat   — Anthropic streaming
-    app.include_router(transport_router)  # /stream/* — AG-UI SSE
-    return app
-
-
-# Standalone ASGI entry-point for uvicorn
-gateway_app = create_gateway_app()

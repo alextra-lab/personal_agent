@@ -3,9 +3,10 @@
 # Cloud deployment image for the Knowledge Layer gateway.
 # Exposes Knowledge API and Observation API over FastAPI/HTTPS.
 #
-# NOTE: This Dockerfile depends on personal_agent.gateway.app:create_gateway_app
-# which is created by FRE-206. Once that task is complete, this will build
-# and run the gateway service.
+# NOTE: this image runs the full service app (personal_agent.service.app:app —
+# see the CMD below), not a standalone gateway factory. ADR-0044/FRE-207: the
+# cloud profile needs to dispatch through the profile-aware LLM factory, which
+# a storage-only app could not do.
 #
 # Usage:
 #   docker build -f Dockerfile.gateway -t seshat-gateway:latest .

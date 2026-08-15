@@ -22,11 +22,50 @@ from personal_agent.observability.topology import seam as seam_mod
 from personal_agent.observability.topology.projector import TurnObservationProjector
 
 _SRC_ROOT = Path(__file__).resolve().parents[3] / "src" / "personal_agent"
-# Benign non-invocation uses of the model SDK outside llm_client/ (verified by reading the
-# call site). gateway/chat_api.py reads ``litellm.model_cost`` for pricing — not a model
-# call. New entries require the same scrutiny: a *model invocation* outside llm_client/ is
-# a contract violation, not an allowlist candidate.
-_ALLOWED_SDK_IMPORTERS = {"gateway/chat_api.py"}
+
+# The provider SDKs a model invocation could use. Reviewable and extensible: add a name
+# here, not a regex tweak (FRE-1262 AC-1).
+_CONFINED_SDK_MODULES = ("litellm", "anthropic", "openai")
+
+_SDK_IMPORT_PATTERNS = {
+    sdk: re.compile(rf"(^|\n)\s*(import {sdk}\b|from {sdk}\b)") for sdk in _CONFINED_SDK_MODULES
+}
+
+# Non-invocation uses of a confined SDK outside llm_client/, keyed by (relative path, sdk
+# name) with the reason that specific SDK is not a model invocation at that call site
+# (verified by reading the call site). New entries require the same scrutiny: a *model
+# invocation* outside llm_client/ is a contract violation, not an allowlist candidate.
+_ALLOWED_SDK_IMPORTERS: dict[tuple[str, str], str] = {
+    ("memory/embeddings.py", "openai"): (
+        "embeddings-only call (client.embeddings.create), not a chat/completion model "
+        "invocation; cost is tracked via llm_client.cost_tracker.record_vendor_cost, not "
+        "record_api_call (FRE-974)"
+    ),
+    ("gateway/chat_api.py", "anthropic"): (
+        "known live model invocation, not benign — this call site is dormant (no "
+        "deployment serves this router) and tracked for deletion by FRE-1261, which this "
+        "ticket (FRE-1262) blocks; allowlisted here as an explicit, named violation rather "
+        "than one hidden behind an unrelated litellm reason"
+    ),
+}
+
+
+def _sdk_import_offenders(root: Path) -> list[str]:
+    """Scan ``root`` for confined-SDK imports outside ``llm_client/``, minus the allowlist.
+
+    Shared by the real-tree guard (below) and its seeded proof tests — a clean tree alone
+    cannot distinguish a working guard from a vacuous one (FRE-1262 AC-2/AC-3).
+    """
+    offenders: list[str] = []
+    for py in root.rglob("*.py"):
+        rel = py.relative_to(root).as_posix()
+        if rel.startswith("llm_client/"):
+            continue
+        text = py.read_text(encoding="utf-8")
+        for sdk, pattern in _SDK_IMPORT_PATTERNS.items():
+            if pattern.search(text) and (rel, sdk) not in _ALLOWED_SDK_IMPORTERS:
+                offenders.append(f"{rel}:{sdk}")
+    return offenders
 
 
 # -- (a) forced fallback → durable degradation record + turn_status degraded -------------
@@ -127,25 +166,42 @@ def test_out_of_seam_model_work_is_flagged() -> None:
     assert current_topology() is None
 
 
-# -- (c) static guard: the model SDK is confined to llm_client/ --------------------------
+# -- (c) static guard: provider SDKs are confined to llm_client/ -------------------------
 
 
 def test_model_sdk_confined_to_llm_client() -> None:
-    """No file outside llm_client/ imports the model SDK except the vetted allowlist."""
-    pattern = re.compile(r"(^|\n)\s*(import litellm|from litellm)\b")
-    offenders: list[str] = []
-    for py in _SRC_ROOT.rglob("*.py"):
-        rel = py.relative_to(_SRC_ROOT).as_posix()
-        if rel.startswith("llm_client/"):
-            continue
-        if pattern.search(py.read_text(encoding="utf-8")):
-            if rel in _ALLOWED_SDK_IMPORTERS:
-                continue
-            offenders.append(rel)
+    """No file outside llm_client/ imports a confined provider SDK except the allowlist."""
+    offenders = _sdk_import_offenders(_SRC_ROOT)
     assert not offenders, (
-        "model SDK imported outside llm_client/ (route model calls through "
-        f"CostTrackerService.record_api_call instead): {offenders}"
+        f"provider SDK ({', '.join(_CONFINED_SDK_MODULES)}) imported outside llm_client/ "
+        f"(route model calls through CostTrackerService.record_api_call instead): {offenders}"
     )
+
+
+def test_model_sdk_guard_catches_unlisted_provider_sdk(tmp_path: Path) -> None:
+    """A seeded, unlisted provider-SDK import outside llm_client/ is reported (AC-2).
+
+    The real tree is clean, which alone cannot distinguish a working guard from a vacuous
+    one — this proves the guard fires against a fabricated offender.
+    """
+    offending = tmp_path / "some_module" / "caller.py"
+    offending.parent.mkdir(parents=True)
+    offending.write_text("import anthropic\n")
+
+    assert _sdk_import_offenders(tmp_path) == ["some_module/caller.py:anthropic"]
+
+
+def test_model_sdk_guard_does_not_over_fire(tmp_path: Path) -> None:
+    """A permitted in-seam import and a non-import textual mention both go unreported (AC-3)."""
+    llm_client_dir = tmp_path / "llm_client"
+    llm_client_dir.mkdir()
+    (llm_client_dir / "client.py").write_text("import litellm\n")
+
+    (tmp_path / "docs_helper.py").write_text(
+        '"""Talks to litellm/anthropic/openai under the hood — no actual import here."""\n'
+    )
+
+    assert _sdk_import_offenders(tmp_path) == []
 
 
 # -- (d) ADR-0088 D4 — projector is the sole emit_turn_status caller --------------------

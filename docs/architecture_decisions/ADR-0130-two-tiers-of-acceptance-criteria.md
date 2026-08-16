@@ -489,3 +489,30 @@ Status Updates.
 **Reason:** Authored following owner-directed design discussion. The two-tier rule is the owner's; the
 session's contribution is its consequences for the five contract sentences, the seam ticket's definition,
 and the disposition of the held ADR-0129 chain.
+
+### 2026-08-16 — Extended by ADR-0137 (no change to this ADR's decisions or criteria)
+
+**Changed By:** `/adr` session (FRE-1254)
+**Reason:** **ADR-0137 (Accepted) extends D1's coverage clause and D6's dispatch check.** This ADR's
+Decision and Verification sections are deliberately untouched — its seam ticket FRE-1081 is
+unadjudicated and due-dated against the criteria carried at filing, so adding criteria here would make
+that seam adjudicate work scheduled after its due date was set, the accretion D2 froze seam scope to
+prevent. The extension is recorded by reference instead, so no document teaches the unextended rule.
+
+What ADR-0137 adds, and why: FRE-1071 merged against a precondition nothing provisioned, and D1's
+coverage partition did **not** miss it — ADR-0129's mapping row D5.d named the obligation and gave it an
+owner. It failed three other ways. The row was assigned by **grammatical subject** rather than by who
+provisions the thing, landing on the consumer in another repository. Its cited criteria did **not
+entail** it — a presence check cannot tell an owner-with-the-wrong-criterion from an owner-with-a-right
+one, and the adversarial review that caught six owner-without-criterion rows did not catch this. And the
+removal shipped with its replacement, turning a missing precondition into a regression rather than a
+no-op.
+
+So ADR-0137 D1 splits a two-party obligation by provisioner with every half decidable by its own owner —
+which is **this ADR's D1 altitude rule applied to each half**, not a departure from it — and sends the
+residual end-to-end property to the seam exactly as D1 already directs. D2 adds a **sufficiency** test to
+the coverage check, on every row. D3 adds a bounded, self-retiring backstop to D6's pre-label pass for
+chains whose mappings predate it. D4 makes a cutover two tickets.
+
+`adr` Step 5, `lifecycle-rules` § Dispatch and `master` SKILL Step 8 are amended in the same change
+(FRE-1254). ADR-0137's own objective is asserted at its seam ticket, FRE-1256, due 2026-11-12.

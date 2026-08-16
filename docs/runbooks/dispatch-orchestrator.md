@@ -71,11 +71,21 @@ sudo systemctl enable --now seshat-dispatch-orchestrator
   immediately (next tick logs `dispatch_blocked reason=kill-switch` and launches
   nothing). Remove the file to resume. Use this to stand dispatch down without
   stopping the daemon.
-- **Stall timeout + push.** A launched run with no PR past the stall timeout
-  (default 1 h) emits `dispatch_stall` once (surfaced in journald). Pending
+- **Stall timeout + push.** A launched run whose ticket has not yet reached
+  `In Progress` (still `Approved`/not-found/inconclusive) stalls past the
+  default 1 h grace (`--stall-timeout`) — nothing yet indicates the seat has
+  started. **FRE-1245:** once the ticket reaches `In Progress`, the record is
+  stall-checked against its own, longer default 4 h grace
+  (`--in-progress-stall-timeout`) rather than held unconditionally — a seat
+  that picks up a ticket and then goes idle (never confirms a run) is not
+  exempt from detection just because the board shows it "in flight" (the
+  pre-fix behavior let a seat sit idle 41 hours, ~490 ticks, with zero
+  alarms). Either threshold emits `dispatch_stall` once (surfaced in
+  journald); a confirmed run (`run_confirmed` — reached `In Review` + an open
+  PR) is never stall-notified regardless of elapsed time. Pending
   permission/decision prompts reach the owner's phone via **native RC push**
-  (enabled in the precondition table) — the durable open-PR + `In Review` signal
-  proves *success*; the stall path + push cover *liveness*.
+  (enabled in the precondition table) — the durable open-PR + `In Review`
+  signal proves *success*; the stall path + push cover *liveness*.
 - **Concurrency.** The orchestrator never launches into an occupied stream and
   never strips hooks, so the `check-pytest-lock` PreToolUse hook stays live and
   CI re-runs tests at the master gate regardless.

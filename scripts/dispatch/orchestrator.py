@@ -98,6 +98,23 @@ DEFAULT_STREAMS: tuple[str, ...] = ("build1", "build2", "adr")
 # the stall path only notifies, so a false positive is harmless noise.
 DEFAULT_STALL_TIMEOUT_S: float = 3600.0
 
+# In-progress stall grace (FRE-1245). Once a ticket reaches In Progress, the
+# unconditional hold is no longer safe on its own: the board reflects the
+# worker's pickup, not its progress, and a seat that ends its turn right after
+# pickup (asking for confirmation, mid-rescue, wedged) reads as "in-flight"
+# forever with zero alarms — the live incident this ticket fixes sat 41 hours,
+# ~490 ticks, before master found it by hand. ``run_confirmed`` is the
+# discriminator: unconfirmed past this threshold is a stall candidate;
+# confirmed never is. Deliberately LONGER than ``DEFAULT_STALL_TIMEOUT_S``
+# above — that grace covers a ticket that hasn't even been picked up yet, while
+# a genuinely building session legitimately sits In Progress and unconfirmed
+# for hours (TDD, codex plan-review, quality gates), so reusing the 1-hour
+# grace would false-alarm on ordinary work. 4 hours is generous headroom for a
+# real build while staying well short of this incident's 41 hours and
+# FRE-1077's 15 — and, like the timeout above, the stall path only notifies
+# (never re-dispatches), so a false positive is harmless noise.
+DEFAULT_IN_PROGRESS_STALL_TIMEOUT_S: float = 14400.0
+
 # Poll interval for the daemon loop (``--loop``).
 DEFAULT_POLL_INTERVAL_S: float = 300.0
 
@@ -379,7 +396,17 @@ class DispatchRecord:
         session_id: The launcher's session id, when known.
         run_confirmed: The run delivered a PR (reached ``In Review`` + open PR)
             — stall-watching stops once set.
-        stall_notified: A stall notification has already fired (throttle).
+        stall_notified: A pre-pickup stall notification (still Approved / not-
+            found / inconclusive) has already fired (throttle).
+        in_progress_stall_notified: An in-progress stall notification (ticket
+            reached In Progress, never confirmed a run) has already fired
+            (throttle). Kept SEPARATE from ``stall_notified`` (FRE-1245): the
+            two are distinct episodes on the SAME record — a ticket can sit
+            unconfirmed past the pre-pickup grace (notifying once), then
+            actually get picked up and later stall again past the (longer)
+            in-progress grace. A shared flag would leave the second episode
+            silently unnotified — throttled by the FIRST episode's already-set
+            latch — exactly the silence this ticket exists to end.
         attempts: Dispatch attempts consumed for this ticket. Claimed *before*
             the attempt is made, so it survives a daemon crash mid-sequence and
             the retry budget cannot be silently reset by a restart. An attempt
@@ -394,6 +421,7 @@ class DispatchRecord:
     session_id: str | None
     run_confirmed: bool = False
     stall_notified: bool = False
+    in_progress_stall_notified: bool = False
     attempts: int = 0
 
 
@@ -473,6 +501,7 @@ def decide(
     stall_timeout_s: float,
     tracked_pr_open: bool,
     tracked_state: str | None = None,
+    in_progress_stall_timeout_s: float = DEFAULT_IN_PROGRESS_STALL_TIMEOUT_S,
 ) -> StreamDecision:
     """Decide one stream's action for this tick (pure).
 
@@ -489,6 +518,8 @@ def decide(
             by-identifier Linear lookup (FRE-976), or ``None`` when the lookup
             was inconclusive (no such issue / failure). Only meaningful for a
             ``launched`` record; ignored otherwise.
+        in_progress_stall_timeout_s: Seconds after which a launched run whose
+            ticket is In Progress with no confirmed PR stalls (FRE-1245).
 
     Returns:
         The decided ``StreamDecision``.
@@ -506,6 +537,7 @@ def decide(
         stall_timeout_s=stall_timeout_s,
         tracked_pr_open=tracked_pr_open,
         tracked_state=tracked_state,
+        in_progress_stall_timeout_s=in_progress_stall_timeout_s,
     )
 
 
@@ -535,6 +567,7 @@ def _decide_launched(
     stall_timeout_s: float,
     tracked_pr_open: bool,
     tracked_state: str | None,
+    in_progress_stall_timeout_s: float = DEFAULT_IN_PROGRESS_STALL_TIMEOUT_S,
 ) -> StreamDecision:
     """Decide for an owned in-flight (``launched``) record.
 
@@ -548,7 +581,8 @@ def _decide_launched(
       release path — it fires whether or not the ticket still carries the stream
       label, which is exactly the FRE-965 wedge (merged straight to Done, label
       removed, no PR) that the old board-derived state could not see.
-    - A non-terminal state HOLDS the slot (``await``/``run_complete``).
+    - A non-terminal state HOLDS the slot (``await``/``run_complete``), except
+      In Progress, which is stall-checked below (FRE-1245).
     - ``None`` (Linear reports no such issue, or the lookup failed) is
       inconclusive — the slot is HELD, never released; a genuinely stuck launch
       is surfaced by the stall timer, not by a premature release (which would
@@ -564,8 +598,24 @@ def _decide_launched(
             stream, "run_complete", ticket=record.ticket, reason="pr-open-in-review"
         )
 
-    # At the gate or building — hold (a bounce keeps it In Review; never re-dispatch).
-    if normalized in {"in review", "in progress"}:
+    # At the gate — hold unconditionally (a bounce keeps it In Review; never
+    # re-dispatch). Deliberately NOT extended to the run-unconfirmed reasoning
+    # below (FRE-1245 scope: rejected for the "in review" half — master already
+    # gates that stage).
+    if normalized == "in review":
+        return StreamDecision(stream, "await", ticket=record.ticket, reason="in-flight")
+
+    # In Progress: the board reflects pickup, not progress, so this is NOT an
+    # unconditional hold (FRE-1245 — the prior unconditional-await here is what
+    # let a seat that never began work go 41 hours/~490 ticks with zero alarms).
+    # A confirmed run (PR already delivered) is never alarmed on, no matter how
+    # long it then sits In Progress; an unconfirmed one is a stall candidate
+    # past its own, longer grace.
+    if normalized == "in progress":
+        if not record.run_confirmed and now - record.launched_at > in_progress_stall_timeout_s:
+            return StreamDecision(
+                stream, "stall", ticket=record.ticket, reason="in-progress-past-timeout"
+            )
         return StreamDecision(stream, "await", ticket=record.ticket, reason="in-flight")
 
     # Not progressing (still Approved / not-found / inconclusive): the slot is
@@ -752,6 +802,7 @@ def run_once(
     *,
     now: float,
     stall_timeout_s: float,
+    in_progress_stall_timeout_s: float = DEFAULT_IN_PROGRESS_STALL_TIMEOUT_S,
     board_fetcher: Callable[[str], Sequence[IssueSnapshot]],
     reconcile: Callable[[str], str | None],
     runner: CommandRunner,
@@ -782,6 +833,8 @@ def run_once(
         state: Per-stream records, mutated in place.
         now: Wall-clock epoch seconds.
         stall_timeout_s: Stall grace seconds.
+        in_progress_stall_timeout_s: Stall grace seconds for a launched record
+            whose ticket is In Progress with no confirmed PR (FRE-1245).
         board_fetcher: Returns a stream's board snapshot.
         reconcile: Returns a ticket's TRUE current Linear state by direct
             by-identifier lookup, or ``None`` when Linear reports no such issue
@@ -871,6 +924,7 @@ def run_once(
             stall_timeout_s=stall_timeout_s,
             tracked_pr_open=tracked_pr_open,
             tracked_state=tracked_state,
+            in_progress_stall_timeout_s=in_progress_stall_timeout_s,
         )
         logger.info(
             "dispatch_decision",
@@ -1134,19 +1188,36 @@ def _apply(
             if state.pop(stream, None) is not None:
                 persist(state)
         case "stall":
+            # FRE-1245: two distinct stall episodes can occur on the SAME
+            # record — pre-pickup (still Approved/not-found/inconclusive) and
+            # in-progress (ticket picked up, never confirmed a run) — each
+            # throttled by its OWN latch. A shared latch would let the
+            # pre-pickup episode's already-set flag silently swallow the
+            # in-progress episode's notification, which is exactly the
+            # silence this ticket exists to end.
             record = state.get(stream)
-            if record is not None and not record.stall_notified:
+            in_progress = decision.reason == "in-progress-past-timeout"
+            already_notified = (
+                (record.in_progress_stall_notified if in_progress else record.stall_notified)
+                if record is not None
+                else True
+            )
+            if record is not None and not already_notified:
                 notifier(
                     "dispatch_stall",
                     trace_id=trace_id,
                     stream=stream,
                     ticket=decision.ticket,
                     launched_at=record.launched_at,
+                    reason=decision.reason,
                 )
                 logger.warning(
                     "dispatch_stall", trace_id=trace_id, stream=stream, ticket=decision.ticket
                 )
-                state[stream] = dataclasses.replace(record, stall_notified=True)
+                if in_progress:
+                    state[stream] = dataclasses.replace(record, in_progress_stall_notified=True)
+                else:
+                    state[stream] = dataclasses.replace(record, stall_notified=True)
                 persist(state)
         case "hold":
             # FRE-924: a surfaced card still held past the age threshold is
@@ -1603,6 +1674,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--stall-timeout", type=float, default=DEFAULT_STALL_TIMEOUT_S, help="Stall grace seconds."
     )
     parser.add_argument(
+        "--in-progress-stall-timeout",
+        type=float,
+        default=DEFAULT_IN_PROGRESS_STALL_TIMEOUT_S,
+        help="Stall grace seconds for a launched record whose ticket is In Progress "
+        "with no confirmed PR (FRE-1245).",
+    )
+    parser.add_argument(
         "--interval",
         type=float,
         default=DEFAULT_POLL_INTERVAL_S,
@@ -1687,6 +1765,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             state,
             now=time.time(),
             stall_timeout_s=args.stall_timeout,
+            in_progress_stall_timeout_s=args.in_progress_stall_timeout,
             board_fetcher=lambda stream: fetch_board(stream, api_key),
             reconcile=lambda ticket: fetch_issue_state(ticket, api_key),
             runner=subprocess_runner,

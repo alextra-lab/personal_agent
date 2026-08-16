@@ -19,6 +19,7 @@ terminal merge state (not at In-Review, which can be bounced by master).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from collections.abc import Sequence
@@ -27,6 +28,7 @@ from pathlib import Path
 import pytest
 from scripts.dispatch.next_resolver import IssueSnapshot
 from scripts.dispatch.orchestrator import (
+    DEFAULT_IN_PROGRESS_STALL_TIMEOUT_S,
     DEFAULT_SEAT_FAILURE_THRESHOLD,
     DEFAULT_STALL_TIMEOUT_S,
     DEFAULT_WEDGE_RENOTIFY_TICKS,
@@ -354,9 +356,11 @@ def test_decide_does_not_release_on_board_absence_when_reconcile_inconclusive() 
     assert past.kind not in {"clear", "launch"}
 
 
-def test_decide_holds_in_progress_even_when_far_past_timeout() -> None:
-    # A genuinely in-flight ticket (In Progress, no PR) is never released or
-    # stalled-out no matter how old — the boundary must not release too eagerly.
+def test_decide_holds_in_progress_within_its_own_grace_even_past_pickup_timeout() -> None:
+    # A genuinely in-flight ticket (In Progress, no PR) is never released, and
+    # is not stall-notified until PAST its own (longer) in-progress grace, even
+    # when it is already far past the shorter pre-pickup ``stall_timeout_s`` —
+    # the boundary must not release, or alarm, too eagerly on a real build.
     rec = _launched_record(now=0.0)
     d = decide(
         "build1",
@@ -366,9 +370,81 @@ def test_decide_holds_in_progress_even_when_far_past_timeout() -> None:
         stall_timeout_s=60,
         tracked_pr_open=False,
         tracked_state="In Progress",
+        in_progress_stall_timeout_s=DEFAULT_IN_PROGRESS_STALL_TIMEOUT_S,
     )
     assert d.kind == "await"
     assert d.kind not in {"clear", "stall"}
+
+
+def test_decide_stalls_in_progress_unconfirmed_past_in_progress_timeout() -> None:
+    # FRE-1245 AC1: a launched record whose ticket is In Progress with
+    # ``run_confirmed`` False must stall-notify once past the in-progress
+    # threshold — this failed against the pre-fix code, which held
+    # unconditionally on In Progress no matter how long it sat there.
+    rec = _launched_record(now=0.0, run_confirmed=False)
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=100.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state="In Progress",
+        in_progress_stall_timeout_s=60,
+    )
+    assert d.kind == "stall"
+    assert d.reason == "in-progress-past-timeout"
+
+
+def test_decide_never_stalls_in_progress_once_run_confirmed() -> None:
+    # FRE-1245 AC2: a confirmed run (PR already delivered) must never be
+    # alarmed on, no matter how long it then sits In Progress.
+    rec = _launched_record(now=0.0, run_confirmed=True)
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=10_000.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state="In Progress",
+        in_progress_stall_timeout_s=60,
+    )
+    assert d.kind == "await"
+    assert d.kind not in {"clear", "stall"}
+
+
+def test_decide_confirming_mid_stall_prevents_retroactive_in_progress_stall() -> None:
+    # FRE-1245 AC3: once a pending in-progress stall's run confirms, the alarm
+    # must not fire retroactively — a later tick, still In Progress and still
+    # past the threshold, must hold rather than stall once ``run_confirmed``
+    # flips True.
+    rec = _launched_record(now=0.0, run_confirmed=False)
+    before = decide(
+        "build1",
+        [],
+        rec,
+        now=100.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state="In Progress",
+        in_progress_stall_timeout_s=60,
+    )
+    assert before.kind == "stall"
+
+    confirmed = dataclasses.replace(rec, run_confirmed=True)
+    after = decide(
+        "build1",
+        [],
+        confirmed,
+        now=200.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state="In Progress",
+        in_progress_stall_timeout_s=60,
+    )
+    assert after.kind == "await"
+    assert after.kind not in {"clear", "stall"}
 
 
 # --- decide: surfaced record -----------------------------------------------
@@ -400,6 +476,7 @@ def _run(
     execute=True,
     notifier=None,
     stall=60,
+    in_progress_stall=DEFAULT_IN_PROGRESS_STALL_TIMEOUT_S,
     rc_alive=None,
     kill_switch_engaged=None,
     reconcile=None,
@@ -416,6 +493,7 @@ def _run(
         state,
         now=now,
         stall_timeout_s=stall,
+        in_progress_stall_timeout_s=in_progress_stall,
         board_fetcher=lambda s: board,
         reconcile=reconcile,
         runner=runner,
@@ -564,6 +642,79 @@ def test_run_once_stall_notifies_once() -> None:
     notifier2 = _Notifier()
     _run(state, runner, board, now=10_050.0, notifier=notifier2, stall=60)
     assert notifier2.events == []
+
+
+def test_run_once_in_progress_stall_notifies_independently_of_pre_pickup_stall() -> None:
+    # FRE-1245 regression (found in codex plan-review): a stall notification
+    # already fired during the PRE-PICKUP wait (still Approved) must not
+    # throttle a LATER, separate in-progress stall episode on the same
+    # record — the two are distinct episodes with independent latches. A
+    # shared latch here would silently swallow the seat-went-idle-after-pickup
+    # alarm this ticket exists to add.
+    notifier = _Notifier()
+    board = [_issue("FRE-786", "In Progress", _OPUS)]
+    runner = _RecordingRunner({"pr": _FakeRunResult(stdout="[]")})
+    already_pre_pickup_notified = _launched_record(stall_notified=True)
+    state, _ = _run(
+        {"build1": already_pre_pickup_notified},
+        runner,
+        board,
+        now=100.0,
+        notifier=notifier,
+        stall=60,
+        in_progress_stall=60,
+    )
+    assert len(notifier.events) == 1
+    assert notifier.events[0][0] == "dispatch_stall"
+    assert state["build1"].in_progress_stall_notified is True
+    assert state["build1"].stall_notified is True  # untouched — its own episode already closed
+
+    # Second tick: the in-progress episode already notified → no repeat.
+    notifier2 = _Notifier()
+    _run(state, runner, board, now=200.0, notifier=notifier2, stall=60, in_progress_stall=60)
+    assert notifier2.events == []
+
+
+def test_run_once_confirmed_run_never_stall_notifies_via_the_real_transition() -> None:
+    # FRE-1245 AC3, end-to-end: the run confirms via the REAL run_complete
+    # transition (In Review + an open PR), persisted through run_once/_apply —
+    # not a synthetic field flip — and a later tick must not fire the
+    # in-progress stall retroactively once that persisted state is confirmed.
+    runner = _RecordingRunner({"pr": _FakeRunResult(stdout="[]")})
+    in_progress_board = [_issue("FRE-786", "In Progress", _OPUS)]
+    notifier1 = _Notifier()
+    state, _ = _run(
+        {"build1": _launched_record()},
+        runner,
+        in_progress_board,
+        now=100.0,
+        notifier=notifier1,
+        stall=60,
+        in_progress_stall=60,
+    )
+    assert len(notifier1.events) == 1  # stalled once, unconfirmed
+    assert state["build1"].run_confirmed is False
+
+    # The run confirms: ticket reaches In Review with an open PR.
+    review_runner = _RecordingRunner({"pr": _FakeRunResult(stdout='[{"number": 385}]')})
+    review_board = [_issue("FRE-786", "In Review", _OPUS)]
+    state, _ = _run(state, review_runner, review_board, now=150.0, stall=60, in_progress_stall=60)
+    assert state["build1"].run_confirmed is True
+
+    # A later tick, back In Progress and well past both thresholds, must hold —
+    # never stall — now that the run is confirmed.
+    notifier2 = _Notifier()
+    state, _ = _run(
+        state,
+        runner,
+        in_progress_board,
+        now=10_000.0,
+        notifier=notifier2,
+        stall=60,
+        in_progress_stall=60,
+    )
+    assert notifier2.events == []
+    assert state["build1"].phase == "launched"
 
 
 # --- FRE-922/FRE-1077: suspected-wedge detection (surface, never kill; keep --
@@ -980,6 +1131,41 @@ def test_main_wires_the_new_wedge_flags_through(tmp_path, monkeypatch: pytest.Mo
     )
     assert rc == 0
     assert seen_paths == [wedge_state_file]
+
+
+def test_main_wires_in_progress_stall_timeout_through(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """The new CLI flag must reach ``run_once``, not silently fall back to the default."""
+    import scripts.dispatch.orchestrator as orch
+
+    monkeypatch.setattr(orch, "load_linear_key", lambda: "key")
+    monkeypatch.setattr(orch, "fetch_board", lambda stream, key: [])
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+
+    seen: list[float] = []
+    original_run_once = orch.run_once
+
+    def _spy_run_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(kwargs["in_progress_stall_timeout_s"])
+        return original_run_once(*args, **kwargs)
+
+    monkeypatch.setattr(orch, "run_once", _spy_run_once)
+
+    state_file = tmp_path / "state.json"
+    rc = main(
+        [
+            "--once",
+            "--state-file",
+            str(state_file),
+            "--in-progress-stall-timeout",
+            "999",
+            "--streams",
+            "build1",
+        ]
+    )
+    assert rc == 0
+    assert seen == [999.0]
 
 
 # --- FRE-924: held-too-long escalation (surface by age, never resolve) ------

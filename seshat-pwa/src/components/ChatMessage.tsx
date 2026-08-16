@@ -48,7 +48,7 @@ function CopyButton({ content }: { content: string }) {
   return (
     <button
       onClick={handleCopy}
-      className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity text-slate-500 hover:text-slate-300 p-1 rounded"
+      className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity text-ink-muted hover:text-ink p-1 rounded"
       aria-label="Copy message"
     >
       {copied ? (
@@ -66,13 +66,11 @@ function CopyButton({ content }: { content: string }) {
 }
 
 /**
- * Renders a single chat message in full-width layout.
+ * Renders a single chat message (FRE-1264 — alignment and typeface, not
+ * chrome, carry the role distinction; no avatar, no role label).
  *
- * Inspired by Claude.ai: avatar initial, role label, full-width content,
- * and an icon copy button that appears on hover.
- *
- * User messages have a subtle background tint for visual distinction.
- * Assistant messages render markdown with syntax-highlighted code blocks.
+ * User messages render as a right-aligned bubble capped at ~75% width.
+ * Assistant messages render full-width serif markdown with no bubble.
  */
 export function ChatMessage({ message, sessionId }: ChatMessageProps) {
   const isUser = message.role === 'user';
@@ -87,60 +85,67 @@ export function ChatMessage({ message, sessionId }: ChatMessageProps) {
     typeof sessionId === 'string' &&
     sessionId.length > 0;
 
-  return (
-    <div className={`group px-4 py-5 border-b border-slate-800/60 ${isUser ? 'bg-slate-800/40' : ''}`}>
-      {/* Avatar + role row */}
-      <div className="flex items-center gap-2.5 mb-2">
-        <div
-          className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 ${
-            isUser
-              ? 'bg-blue-600 text-white'
-              : 'bg-gradient-to-br from-violet-500 to-violet-700 text-white border border-violet-300/60'
-          }`}
-        >
-          {isUser ? 'Y' : 'S'}
-        </div>
-        <span className={`text-xs font-semibold ${isUser ? 'text-slate-300' : 'text-slate-400'}`}>
-          {isUser ? 'You' : 'Seshat'}
-        </span>
-        <span className="text-xs text-slate-600 ml-auto">
-          {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </span>
-        {/* TurnRating — persistent beside copy button, gated on completion (FRE-407). */}
-        {showRating && (
-          <TurnRating
-            traceId={message.traceId!}
-            sessionId={sessionId!}
-            initialRating={message.rating}
-          />
-        )}
-        {/* A placeholder row (e.g. a turn cancelled before any output) has
-            nothing meaningful to copy (ADR-0123 T4, FRE-937). */}
-        {message.content.length > 0 && <CopyButton content={message.content} />}
-      </div>
+  // A placeholder row (e.g. a turn cancelled before any output) has nothing
+  // meaningful to copy (ADR-0123 T4, FRE-937).
+  const hasCopyable = message.content.length > 0;
 
-      {/* Content */}
-      <div className="pl-[34px]">
-        {isUser ? (
-          <p className="text-sm leading-relaxed whitespace-pre-wrap break-words text-slate-100">
-            {message.content}
-          </p>
-        ) : (
-          <MarkdownContent content={message.content} />
-        )}
+  const controls = (
+    <div className="mt-1.5 flex items-center gap-2">
+      <span className="text-xs text-ink-muted">
+        {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+      </span>
+      {/* TurnRating is persistently visible by design (FRE-757) — never hover-gated. */}
+      {showRating && (
+        <TurnRating
+          traceId={message.traceId!}
+          sessionId={sessionId!}
+          initialRating={message.rating}
+        />
+      )}
+      {hasCopyable && <CopyButton content={message.content} />}
+    </div>
+  );
 
-        {/* Tool call badges */}
-        {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1">
-            {message.toolCalls.map((tool) => (
-              <ToolCallBadge key={`${tool.name}-${tool.status}`} tool={tool} />
-            ))}
+  if (isUser) {
+    return (
+      <div className="group px-4 py-2 flex justify-end">
+        {/* Visually hidden — AC-5 removes the *visible* avatar/role label
+            (alignment + typeface carry the distinction for sighted users),
+            but a screen-reader user still needs a cue who's speaking. */}
+        <span className="sr-only">You said</span>
+        <div className="max-w-[75%] flex flex-col items-end">
+          <div className="rounded-2xl bg-surface border border-line px-4 py-2.5">
+            <p className="text-sm leading-relaxed whitespace-pre-wrap break-words text-ink">
+              {message.content}
+            </p>
           </div>
-        )}
-
-        {/* Collapsed per-turn summary (ADR-0123 T4, FRE-937) */}
-        {!isUser && <TurnSummaryPanel summary={message.phaseSummary} />}
+          {controls}
+        </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="group px-4 py-4">
+      <span className="sr-only">Seshat said</span>
+      <MarkdownContent content={message.content} />
+
+      {/* Tool call badges — message.toolCalls is not populated by the live
+          stream today (useSSEStream routes tool state through activeTools /
+          phaseSummary.tools instead); kept for a hydration/history shape
+          that does carry it. */}
+      {message.toolCalls && message.toolCalls.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {message.toolCalls.map((tool) => (
+            <ToolCallBadge key={`${tool.name}-${tool.status}`} tool={tool} />
+          ))}
+        </div>
+      )}
+
+      {/* Collapsed per-turn summary (ADR-0123 T4, FRE-937) */}
+      <TurnSummaryPanel summary={message.phaseSummary} />
+
+      {controls}
     </div>
   );
 }

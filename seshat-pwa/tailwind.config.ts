@@ -9,7 +9,22 @@ const config: Config = {
   darkMode: 'class',
   theme: {
     extend: {
+      fontFamily: {
+        // Serif prose (FRE-1264 AC-4) — matches the ticket's target stack.
+        serif: ['Georgia', 'Cambria', '"Times New Roman"', 'Times', 'serif'],
+      },
       colors: {
+        // Theme-aware semantic tokens (FRE-1264) — resolve through the CSS
+        // custom properties in globals.css, which flip under `.dark`.
+        // Additive: does not touch the `seshat` / `slate` / `blue` overrides
+        // below, which keep not-yet-converted components' dark look intact.
+        bg: 'var(--bg)',
+        surface: 'var(--surface)',
+        line: 'var(--line)',
+        ink: 'var(--ink)',
+        'ink-muted': 'var(--ink-muted)',
+        accent: 'var(--accent)',
+        'accent-hover': 'var(--accent-hover)',
         seshat: {
           dark: '#1e2940',            // was #0f172a
           surface: '#2b3a55',         // was #1e293b

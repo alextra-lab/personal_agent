@@ -213,7 +213,7 @@ export function ChatInput({
 
   return (
     <div
-      className={`border-t border-slate-800 bg-slate-900 ${isDragOver ? 'ring-2 ring-inset ring-slate-500' : ''}`}
+      className={`border-t border-line bg-bg ${isDragOver ? 'ring-2 ring-inset ring-ink-muted' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -229,7 +229,7 @@ export function ChatInput({
                   ? 'border-red-700 bg-red-950 text-red-300'
                   : u.status === 'complete'
                     ? 'border-emerald-800 bg-emerald-950 text-emerald-300'
-                    : 'border-slate-700 bg-slate-800 text-slate-400'
+                    : 'border-line bg-surface text-ink-muted'
               }`}
             >
               {u.status === 'uploading' && (
@@ -282,7 +282,7 @@ export function ChatInput({
         */}
         <div
           data-testid="composer-container"
-          className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 focus-within:border-slate-500 focus-within:ring-1 focus-within:ring-slate-500/30 transition-colors duration-150"
+          className="flex flex-col rounded-2xl border border-line bg-surface focus-within:border-ink-muted focus-within:ring-1 focus-within:ring-ink-muted/30 transition-colors duration-150"
         >
           <div>
             <textarea
@@ -296,7 +296,7 @@ export function ChatInput({
               className="
                 w-full resize-none rounded-t-2xl px-4 pt-3 pb-1 text-base leading-6
                 bg-transparent border-0
-                text-slate-100 placeholder-slate-500
+                text-ink placeholder-ink-muted
                 focus:outline-none
                 disabled:opacity-50 disabled:cursor-not-allowed
                 transition-colors duration-150
@@ -333,7 +333,7 @@ export function ChatInput({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               aria-label="Attach file"
-              className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors"
+              className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-ink-muted hover:text-ink hover:bg-line/40 transition-colors"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -356,7 +356,7 @@ export function ChatInput({
                 type="button"
                 onClick={() => onStop?.()}
                 aria-label="Stop generating"
-                className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-all duration-150 bg-white hover:bg-slate-100 text-slate-900 cursor-pointer"
+                className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-all duration-150 bg-ink hover:opacity-90 text-bg cursor-pointer"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -378,8 +378,8 @@ export function ChatInput({
                   transition-all duration-150
                   ${
                     canSend
-                      ? 'bg-white hover:bg-slate-100 text-slate-900 cursor-pointer'
-                      : 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                      ? 'bg-ink hover:opacity-90 text-bg cursor-pointer'
+                      : 'bg-line text-ink-muted cursor-not-allowed'
                   }
                 `}
               >

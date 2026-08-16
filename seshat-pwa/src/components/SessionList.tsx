@@ -55,7 +55,7 @@ export function SessionList({ currentSessionId, onSelect }: SessionListProps) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-32 text-slate-500 text-sm">
+      <div className="flex items-center justify-center h-32 text-ink-muted text-sm">
         Loading…
       </div>
     );
@@ -71,7 +71,7 @@ export function SessionList({ currentSessionId, onSelect }: SessionListProps) {
 
   if (sessions.length === 0) {
     return (
-      <div className="flex items-center justify-center h-32 text-slate-500 text-sm">
+      <div className="flex items-center justify-center h-32 text-ink-muted text-sm">
         No prior conversations.
       </div>
     );
@@ -86,11 +86,11 @@ export function SessionList({ currentSessionId, onSelect }: SessionListProps) {
             <button
               onClick={() => handleSelect(s.session_id)}
               className={[
-                'block w-full text-left px-4 py-3 border-b border-slate-800 hover:bg-slate-800/50 transition-colors',
-                isActive ? 'bg-slate-800/70' : '',
+                'block w-full text-left px-4 py-3 border-b border-line hover:bg-surface transition-colors',
+                isActive ? 'bg-surface' : '',
               ].join(' ')}
             >
-              <p className={['text-sm font-medium truncate', isActive ? 'text-slate-100' : 'text-slate-300'].join(' ')}>
+              <p className={['text-sm font-medium truncate', isActive ? 'text-ink' : 'text-ink-muted'].join(' ')}>
                 {s.session_label ?? s.title ?? '(empty session)'}
                 {s.channel === 'EVAL' && (
                   <span className="ml-1.5 text-[10px] font-mono text-sky-400/70 border border-sky-400/30 rounded px-1">
@@ -98,11 +98,11 @@ export function SessionList({ currentSessionId, onSelect }: SessionListProps) {
                   </span>
                 )}
               </p>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs text-ink-muted mt-0.5">
                 {formatRelativeTime(s.last_active_at)} · {s.turn_count ?? 0} {(s.turn_count ?? 0) === 1 ? 'turn' : 'turns'}
               </p>
               {s.session_digest && (
-                <p className="text-xs text-slate-500 mt-1 line-clamp-3">
+                <p className="text-xs text-ink-muted mt-1 line-clamp-3">
                   {s.session_digest}
                 </p>
               )}

@@ -40,17 +40,17 @@ function PhaseSummaryRow({ entry, children }: { entry: PhaseSummaryEntry; childr
       data-state={entry.state}
       className="flex flex-col gap-1"
     >
-      <div className="flex items-center gap-2 text-xs text-slate-400">
-        {entry.state === 'completed' && <span className="text-emerald-400 flex-shrink-0">&#10003;</span>}
-        {entry.state === 'cancelled' && <span className="text-slate-500 flex-shrink-0">&#9632;</span>}
-        {entry.state === 'error' && <span className="text-red-400 flex-shrink-0">&#10005;</span>}
+      <div className="flex items-center gap-2 text-xs text-ink-muted">
+        {entry.state === 'completed' && <span className="text-emerald-700 dark:text-emerald-400 flex-shrink-0">&#10003;</span>}
+        {entry.state === 'cancelled' && <span className="text-ink-muted flex-shrink-0">&#9632;</span>}
+        {entry.state === 'error' && <span className="text-red-600 dark:text-red-400 flex-shrink-0">&#10005;</span>}
         <span
           className={
             entry.state === 'completed'
-              ? 'font-mono text-emerald-400'
+              ? 'font-mono text-emerald-700 dark:text-emerald-400'
               : entry.state === 'error'
-                ? 'font-mono text-red-400'
-                : 'font-mono text-slate-500'
+                ? 'font-mono text-red-600 dark:text-red-400'
+                : 'font-mono text-ink-muted'
           }
         >
           {labelFor(entry)}
@@ -77,20 +77,20 @@ export function TurnSummaryPanel({ summary }: TurnSummaryPanelProps) {
   const { topLevel, childrenByParent } = groupByParent(summary.phases);
 
   return (
-    <details data-testid="turn-summary" className="mt-2 text-xs text-slate-400">
+    <details data-testid="turn-summary" className="mt-2 text-xs text-ink-muted">
       <summary
         data-testid="turn-summary-header"
-        className="cursor-pointer select-none text-slate-500 hover:text-slate-300"
+        className="cursor-pointer select-none text-ink-muted hover:text-ink"
       >
         {headerLine(summary)}
       </summary>
-      <div className="mt-2 pl-2 flex flex-col gap-2 border-l border-slate-800">
+      <div className="mt-2 pl-2 flex flex-col gap-2 border-l border-line">
         {topLevel.map((entry) => {
           const kids = childrenByParent.get(entry.phaseId) ?? [];
           return (
             <PhaseSummaryRow key={entry.phaseId} entry={entry}>
               {kids.length > 0 && (
-                <div className="pl-5 flex flex-col gap-1 border-l border-slate-800">
+                <div className="pl-5 flex flex-col gap-1 border-l border-line">
                   {kids.map((child) => (
                     <PhaseSummaryRow key={child.phaseId} entry={child} />
                   ))}
@@ -104,7 +104,7 @@ export function TurnSummaryPanel({ summary }: TurnSummaryPanelProps) {
             {summary.tools.map((name) => (
               <span
                 key={name}
-                className="inline-flex items-center text-xs px-2 py-0.5 rounded-full font-mono bg-slate-800 text-slate-400 border border-slate-700"
+                className="inline-flex items-center text-xs px-2 py-0.5 rounded-full font-mono bg-surface text-ink-muted border border-line"
               >
                 {name}
               </span>

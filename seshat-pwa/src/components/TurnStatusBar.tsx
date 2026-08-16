@@ -58,10 +58,16 @@ export function TurnStatusBar({ status }: TurnStatusBarProps) {
   const ctxBar =
     ctxPct >= 85 ? 'bg-red-500' : ctxPct >= 70 ? 'bg-amber-500' : 'bg-emerald-500';
   const ctxLabel =
-    ctxPct >= 85 ? 'text-red-400' : ctxPct >= 70 ? 'text-amber-400' : 'text-emerald-400';
+    ctxPct >= 85
+      ? 'text-red-600 dark:text-red-400'
+      : ctxPct >= 70
+        ? 'text-amber-700 dark:text-amber-400'
+        : 'text-emerald-700 dark:text-emerald-400';
 
   const alertColor =
-    qualityAlert?.severity === 'high' ? 'text-red-400' : 'text-amber-400';
+    qualityAlert?.severity === 'high'
+      ? 'text-red-600 dark:text-red-400'
+      : 'text-amber-700 dark:text-amber-400';
 
   // --- Engagement lane ---
   // Absent ≠ zero: a warning colour is only ever derived from numbers the server
@@ -70,15 +76,15 @@ export function TurnStatusBar({ status }: TurnStatusBarProps) {
   const toolIterMax = presentNum(status.tool_iteration_max);
   const toolsKnown = toolIter !== null && toolIterMax !== null;
   const toolsAmber = toolsKnown && toolIterMax > 0 && toolIter >= toolIterMax - 2;
-  const toolsColor = toolsAmber ? 'text-amber-400' : 'text-slate-400';
+  const toolsColor = toolsAmber ? 'text-amber-700 dark:text-amber-400' : 'text-ink-muted';
 
   return (
     <div className="px-4 py-1.5 flex flex-col gap-0.5 text-xs">
       {/* Session lane */}
       <div className="flex items-center gap-3">
-        <span className="text-slate-500 flex-shrink-0">ctx</span>
+        <span className="text-ink-muted flex-shrink-0">ctx</span>
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          <div className="flex-1 h-1 bg-slate-700 rounded-full overflow-hidden">
+          <div className="flex-1 h-1 bg-line rounded-full overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-300 ${ctxBar}`}
               style={{ width: `${Math.min(ctxPct, 100)}%` }}
@@ -90,16 +96,16 @@ export function TurnStatusBar({ status }: TurnStatusBarProps) {
               : `${formatTokens(sessionCtxTokens)}/${UNKNOWN}`}
           </span>
         </div>
-        <span className="font-mono flex-shrink-0 text-slate-400">
+        <span className="font-mono flex-shrink-0 text-ink-muted">
           ${sessionCost.toFixed(2)}
         </span>
         {compactionCount > 0 && (
-          <span className="font-mono flex-shrink-0 text-slate-400">
+          <span className="font-mono flex-shrink-0 text-ink-muted">
             ⟳{compactionCount}
           </span>
         )}
         {cacheResetCount > 0 && (
-          <span className="font-mono flex-shrink-0 text-slate-400">
+          <span className="font-mono flex-shrink-0 text-ink-muted">
             ↻{cacheResetCount}
           </span>
         )}

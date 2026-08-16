@@ -58,6 +58,10 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
   const [lastUserMessage, setLastUserMessage] = useState<string>('');
   const [lastAttachments, setLastAttachments] = useState<UploadedAttachment[]>([]);
   const [sessionTurnCount, setSessionTurnCount] = useState<number | null>(null);
+  // Header line 1 (FRE-1264) — no "project" concept exists in this app's data
+  // model, so the header's two lines are session title over turn count
+  // rather than the ticket's literal "session name over project name".
+  const [sessionTitle, setSessionTitle] = useState<string | null>(null);
 
   const {
     roles: configRoles,
@@ -171,6 +175,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
       .then((s) => {
         if (cancelled || s === null) return;
         if (s.turn_count !== undefined) setSessionTurnCount(s.turn_count);
+        setSessionTitle(s.session_label ?? s.title ?? null);
         // FRE-426: seed the status bar so context + cost show on mount/switch,
         // before the first live turn_status. Corrected by the next turn.
         if (s.context_tokens !== undefined && s.context_max !== undefined) {
@@ -250,7 +255,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
   };
 
   return (
-    <div className="relative flex flex-col h-full bg-slate-900 text-slate-100">
+    <div className="relative flex flex-col h-full bg-bg text-ink">
       {/* Tool-approval modal — rendered above everything else (z-50) */}
       {pendingApproval !== null && (
         <ApprovalModal
@@ -269,17 +274,17 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             onClick={() => setIsDrawerOpen(false)}
           />
           {/* Panel */}
-          <div className="absolute inset-y-0 left-0 z-30 w-full md:w-80 bg-slate-900 border-r border-slate-700 flex flex-col">
+          <div className="absolute inset-y-0 left-0 z-30 w-full md:w-80 bg-bg border-r border-line flex flex-col">
             {/* Drawer header */}
             <div
-              className="flex items-center justify-between px-4 border-b border-slate-700 flex-shrink-0"
+              className="flex items-center justify-between px-4 border-b border-line flex-shrink-0"
               style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)', paddingBottom: '0.75rem' }}
             >
-              <h2 className="text-sm font-semibold text-slate-100">Conversations</h2>
+              <h2 className="text-sm font-semibold text-ink">Conversations</h2>
               <button
                 onClick={() => setIsDrawerOpen(false)}
                 aria-label="Close session list"
-                className="p-1 rounded text-slate-400 hover:text-slate-100 transition-colors"
+                className="p-1 rounded text-ink-muted hover:text-ink transition-colors"
               >
                 ✕
               </button>
@@ -288,7 +293,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             <Link
               href="/artifacts"
               onClick={() => setIsDrawerOpen(false)}
-              className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 border-b border-slate-700/50 transition-colors"
+              className="flex items-center gap-2 px-4 py-2.5 text-sm text-ink-muted hover:text-ink hover:bg-surface border-b border-line/50 transition-colors"
             >
               <span aria-hidden="true">📎</span>
               Artifacts
@@ -298,7 +303,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             <Link
               href={sessionId ? `/observe?session=${sessionId}` : '/observe'}
               onClick={() => setIsDrawerOpen(false)}
-              className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 border-b border-slate-700/50 transition-colors"
+              className="flex items-center gap-2 px-4 py-2.5 text-sm text-ink-muted hover:text-ink hover:bg-surface border-b border-line/50 transition-colors"
             >
               <span aria-hidden="true">🔍</span>
               Observe
@@ -316,38 +321,54 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         </>
       )}
 
-      {/* Header — safe-area top padding */}
+      {/* Header — safe-area top padding. Centred two-line title (FRE-1264):
+          session title over turn count. This app's data model has no
+          "project" concept (see the sessionTitle state declaration above),
+          so turn count — real per-session metadata already fetched here —
+          stands in for the ticket's literal "project name" line rather than
+          a fabricated field or static branding text. */}
       <header
-        className="flex items-center justify-between px-4 border-b border-slate-700 bg-slate-900/80 backdrop-blur-sm flex-shrink-0"
+        className="flex items-center justify-between px-4 border-b border-line bg-bg/80 backdrop-blur-sm flex-shrink-0"
         style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)', paddingBottom: '0.75rem' }}
       >
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsDrawerOpen(true)}
-            aria-label="Open session list"
-            className="p-1 rounded text-slate-400 hover:text-slate-100 transition-colors"
-          >
-            {/* Hamburger icon — three horizontal lines */}
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor">
-              <rect x="0" y="3" width="18" height="2" rx="1" />
-              <rect x="0" y="8" width="18" height="2" rx="1" />
-              <rect x="0" y="13" width="18" height="2" rx="1" />
-            </svg>
-          </button>
-          <h1 className="text-base font-semibold text-slate-100">Seshat</h1>
-          {sessionTurnCount !== null && sessionTurnCount > 0 && (
-            <span className="text-xs text-slate-500">
-              {sessionTurnCount} {sessionTurnCount === 1 ? 'turn' : 'turns'}
-            </span>
-          )}
+        <button
+          onClick={() => setIsDrawerOpen(true)}
+          aria-label="Open session list"
+          className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-ink-muted hover:text-ink hover:bg-surface transition-colors"
+        >
+          {/* Hamburger icon — three horizontal lines */}
+          <svg width="16" height="16" viewBox="0 0 18 18" fill="currentColor">
+            <rect x="0" y="3" width="18" height="2" rx="1" />
+            <rect x="0" y="8" width="18" height="2" rx="1" />
+            <rect x="0" y="13" width="18" height="2" rx="1" />
+          </svg>
+        </button>
+
+        <div className="flex flex-col items-center min-w-0 px-2">
+          <h1 className="text-sm font-semibold text-ink truncate max-w-[55vw]">
+            {sessionTitle ?? 'New conversation'}
+          </h1>
+          <span className="text-xs text-ink-muted">
+            {sessionTurnCount !== null && sessionTurnCount > 0
+              ? `${sessionTurnCount} ${sessionTurnCount === 1 ? 'turn' : 'turns'}`
+              : 'Seshat'}
+          </span>
         </div>
-        {messages.length > 0 && (
+
+        {messages.length > 0 ? (
           <button
             onClick={handleNewConversation}
-            className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+            aria-label="New conversation"
+            className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-ink-muted hover:text-ink hover:bg-surface transition-colors"
           >
-            New
+            {/* Plus icon */}
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M10 4a.75.75 0 01.75.75v4.5h4.5a.75.75 0 010 1.5h-4.5v4.5a.75.75 0 01-1.5 0v-4.5h-4.5a.75.75 0 010-1.5h4.5v-4.5A.75.75 0 0110 4z" />
+            </svg>
           </button>
+        ) : (
+          // Symmetric spacer so the title stays centred when there's no New button.
+          <div className="w-8 h-8 flex-shrink-0" aria-hidden="true" />
         )}
       </header>
 
@@ -360,11 +381,11 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
           </div>
         )}
         {isLoadingHistory ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-2">
+          <div className="flex flex-col items-center justify-center h-full text-ink-muted gap-2">
             <p className="text-sm">Loading conversation…</p>
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-2">
+          <div className="flex flex-col items-center justify-center h-full text-ink-muted gap-2">
             <p className="text-sm">Ask Seshat anything...</p>
           </div>
         ) : (
@@ -373,18 +394,12 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
               <ChatMessage key={msg.id} message={msg} sessionId={sessionId} />
             ))}
             {isStreaming && (
-              <div className="px-4 py-5 border-b border-slate-800/60">
-                <div className="flex items-center gap-2.5 mb-2">
-                  <div className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 bg-gradient-to-br from-violet-500 to-violet-700 text-white border border-violet-300/60">
-                    S
-                  </div>
-                  <span className="text-xs font-semibold text-slate-400">Seshat</span>
-                </div>
-                <div className="pl-[34px] flex gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:0ms]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:150ms]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:300ms]" />
-                </div>
+              // No avatar/role label (FRE-1264 AC-5) — matches ChatMessage's
+              // now-chromeless assistant layout.
+              <div className="px-4 py-4 flex gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-ink-muted animate-bounce [animation-delay:0ms]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-ink-muted animate-bounce [animation-delay:150ms]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-ink-muted animate-bounce [animation-delay:300ms]" />
               </div>
             )}
             {budgetDenied !== null && (
@@ -413,7 +428,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             {/* Resolved constraint pills (ADR-0076) */}
             {resolvedConstraints.map((r) => (
               <div key={r.request_id} className="px-4 py-1">
-                <span className="inline-block rounded-full bg-slate-800 border border-slate-700 px-3 py-1 text-xs text-slate-400">
+                <span className="inline-block rounded-full bg-surface border border-line px-3 py-1 text-xs text-ink-muted">
                   ▶ {resolutionLabel(r.constraint, r.action_id, r.resolution)}
                 </span>
               </div>
@@ -440,7 +455,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             {/* Stopped-by-user pill (ADR-0076) */}
             {cancelled && (
               <div className="px-4 py-1">
-                <span className="inline-block rounded-full bg-slate-800 border border-slate-700 px-3 py-1 text-xs text-slate-400">
+                <span className="inline-block rounded-full bg-surface border border-line px-3 py-1 text-xs text-ink-muted">
                   ■ Stopped by user
                 </span>
               </div>
@@ -448,17 +463,19 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
           </>
         )}
 
-        {/* HITL interrupt card */}
+        {/* HITL interrupt card — light-default + dark: override (same pattern
+            as BudgetDeniedCard.tsx) so the translucent amber wash doesn't
+            wash out to near-white under a light page background. */}
         {pendingInterrupt && (
-          <div className="mx-4 my-4 p-4 rounded-xl border border-amber-700/50 bg-amber-900/20">
-            <p className="text-sm font-medium text-amber-300 mb-1">Approval needed</p>
-            <p className="text-sm text-slate-300 mb-3">{pendingInterrupt.context}</p>
+          <div className="mx-4 my-4 p-4 rounded-xl border border-amber-300 bg-amber-50 dark:border-amber-700/50 dark:bg-amber-900/20">
+            <p className="text-sm font-medium text-amber-900 dark:text-amber-300 mb-1">Approval needed</p>
+            <p className="text-sm text-ink mb-3">{pendingInterrupt.context}</p>
             <div className="flex gap-2 flex-wrap">
               {pendingInterrupt.options.map((option) => (
                 <button
                   key={option}
                   onClick={() => handleInterruptChoice(option)}
-                  className="px-4 py-1.5 rounded-lg text-sm font-medium border transition-colors border-amber-600 text-amber-300 hover:bg-amber-800/40"
+                  className="px-4 py-1.5 rounded-lg text-sm font-medium border transition-colors border-amber-500 text-amber-900 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-300 dark:hover:bg-amber-800/40"
                 >
                   {option}
                 </button>

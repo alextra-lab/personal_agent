@@ -150,3 +150,24 @@ describe('ChatInput — model picker', () => {
     expect(screen.getByLabelText('Choose model')).toBeDefined();
   });
 });
+
+describe('ChatInput — two-row composer layout (FRE-1263)', () => {
+  it('AC-1: the textarea is not a flex sibling of the controls — its parent has no button descendants', () => {
+    render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
+    const textarea = screen.getByPlaceholderText('Message Seshat...');
+    expect(textarea.parentElement).not.toBeNull();
+    expect(textarea.parentElement!.querySelectorAll('button')).toHaveLength(0);
+  });
+
+  it('AC-5: model picker, attach, and send controls are all still present and reachable by their aria-labels', () => {
+    render(<ChatInput {...DEFAULT_PROPS} isStreaming={false} />);
+    expect(screen.getByLabelText('Choose model')).toBeDefined();
+    expect(screen.getByLabelText('Attach file')).toBeDefined();
+    expect(screen.getByLabelText('Send message')).toBeDefined();
+  });
+
+  it('AC-5: Stop control is reachable by its aria-label while streaming', () => {
+    render(<ChatInput {...DEFAULT_PROPS} isStreaming={true} onStop={vi.fn()} />);
+    expect(screen.getByLabelText('Stop generating')).toBeDefined();
+  });
+});

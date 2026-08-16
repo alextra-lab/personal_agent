@@ -463,17 +463,19 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
           </>
         )}
 
-        {/* HITL interrupt card */}
+        {/* HITL interrupt card — light-default + dark: override (same pattern
+            as BudgetDeniedCard.tsx) so the translucent amber wash doesn't
+            wash out to near-white under a light page background. */}
         {pendingInterrupt && (
-          <div className="mx-4 my-4 p-4 rounded-xl border border-amber-700/50 bg-amber-900/20">
-            <p className="text-sm font-medium text-amber-300 mb-1">Approval needed</p>
+          <div className="mx-4 my-4 p-4 rounded-xl border border-amber-300 bg-amber-50 dark:border-amber-700/50 dark:bg-amber-900/20">
+            <p className="text-sm font-medium text-amber-900 dark:text-amber-300 mb-1">Approval needed</p>
             <p className="text-sm text-ink mb-3">{pendingInterrupt.context}</p>
             <div className="flex gap-2 flex-wrap">
               {pendingInterrupt.options.map((option) => (
                 <button
                   key={option}
                   onClick={() => handleInterruptChoice(option)}
-                  className="px-4 py-1.5 rounded-lg text-sm font-medium border transition-colors border-amber-600 text-amber-300 hover:bg-amber-800/40"
+                  className="px-4 py-1.5 rounded-lg text-sm font-medium border transition-colors border-amber-500 text-amber-900 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-300 dark:hover:bg-amber-800/40"
                 >
                   {option}
                 </button>

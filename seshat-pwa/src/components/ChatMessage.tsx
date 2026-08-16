@@ -109,6 +109,10 @@ export function ChatMessage({ message, sessionId }: ChatMessageProps) {
   if (isUser) {
     return (
       <div className="group px-4 py-2 flex justify-end">
+        {/* Visually hidden — AC-5 removes the *visible* avatar/role label
+            (alignment + typeface carry the distinction for sighted users),
+            but a screen-reader user still needs a cue who's speaking. */}
+        <span className="sr-only">You said</span>
         <div className="max-w-[75%] flex flex-col items-end">
           <div className="rounded-2xl bg-surface border border-line px-4 py-2.5">
             <p className="text-sm leading-relaxed whitespace-pre-wrap break-words text-ink">
@@ -123,6 +127,7 @@ export function ChatMessage({ message, sessionId }: ChatMessageProps) {
 
   return (
     <div className="group px-4 py-4">
+      <span className="sr-only">Seshat said</span>
       <MarkdownContent content={message.content} />
 
       {/* Tool call badges — message.toolCalls is not populated by the live

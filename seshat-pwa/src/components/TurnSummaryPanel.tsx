@@ -41,15 +41,15 @@ function PhaseSummaryRow({ entry, children }: { entry: PhaseSummaryEntry; childr
       className="flex flex-col gap-1"
     >
       <div className="flex items-center gap-2 text-xs text-ink-muted">
-        {entry.state === 'completed' && <span className="text-emerald-400 flex-shrink-0">&#10003;</span>}
+        {entry.state === 'completed' && <span className="text-emerald-700 dark:text-emerald-400 flex-shrink-0">&#10003;</span>}
         {entry.state === 'cancelled' && <span className="text-ink-muted flex-shrink-0">&#9632;</span>}
-        {entry.state === 'error' && <span className="text-red-400 flex-shrink-0">&#10005;</span>}
+        {entry.state === 'error' && <span className="text-red-600 dark:text-red-400 flex-shrink-0">&#10005;</span>}
         <span
           className={
             entry.state === 'completed'
-              ? 'font-mono text-emerald-400'
+              ? 'font-mono text-emerald-700 dark:text-emerald-400'
               : entry.state === 'error'
-                ? 'font-mono text-red-400'
+                ? 'font-mono text-red-600 dark:text-red-400'
                 : 'font-mono text-ink-muted'
           }
         >

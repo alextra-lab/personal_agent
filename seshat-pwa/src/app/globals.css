@@ -17,9 +17,13 @@
   --ink: #1f1e1c;
   --ink-muted: #78766e;
   /* Terracotta accent — shared by both themes per the ticket's design (a new
-     colour, not a port of today's product blue). */
-  --accent: #cc785c;
-  --accent-hover: #b5613f;
+     colour, not a port of today's product blue), tuned per theme within the
+     same hue for WCAG AA text contrast (>=4.5:1) against each ground — a
+     single hex used as text on both a cream and a navy background can't
+     clear 4.5:1 on both at once (self-review found the original single
+     value failed in light mode ~3.3:1). */
+  --accent: #a8502e;
+  --accent-hover: #8f4226;
 }
 
 .dark {
@@ -31,8 +35,8 @@
   --line: #3d4d6b;
   --ink: #f3f6fa;
   --ink-muted: #9aa6b6;
-  --accent: #cc785c;
-  --accent-hover: #e0916f;
+  --accent: #d1826a;
+  --accent-hover: #e2a188;
 }
 
 /* --------------------------------------------------------------------------

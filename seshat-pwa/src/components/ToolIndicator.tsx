@@ -15,7 +15,7 @@ function ToolRow({ tool }: { tool: ToolCall }) {
         <span className="flex items-center gap-1.5">
           {/* Animated spinner */}
           <svg
-            className="animate-spin h-3.5 w-3.5 text-amber-400 flex-shrink-0"
+            className="animate-spin h-3.5 w-3.5 text-amber-700 dark:text-amber-400 flex-shrink-0"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
             viewBox="0 0 24 24"
@@ -34,14 +34,14 @@ function ToolRow({ tool }: { tool: ToolCall }) {
               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
             />
           </svg>
-          <span className="font-mono text-amber-400">{tool.name}</span>
+          <span className="font-mono text-amber-700 dark:text-amber-400">{tool.name}</span>
           <span>running...</span>
         </span>
       ) : (
         <span className="flex items-center gap-1.5">
           {/* Checkmark */}
           <svg
-            className="h-3.5 w-3.5 text-emerald-400 flex-shrink-0"
+            className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400 flex-shrink-0"
             xmlns="http://www.w3.org/2000/svg"
             viewBox="0 0 20 20"
             fill="currentColor"
@@ -52,7 +52,7 @@ function ToolRow({ tool }: { tool: ToolCall }) {
               clipRule="evenodd"
             />
           </svg>
-          <span className="font-mono text-emerald-400">{tool.name}</span>
+          <span className="font-mono text-emerald-700 dark:text-emerald-400">{tool.name}</span>
           {tool.result && (
             <span className="text-ink-muted truncate max-w-[200px]">
               — {tool.result}

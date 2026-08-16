@@ -3,6 +3,39 @@
 @tailwind utilities;
 
 /* --------------------------------------------------------------------------
+   Theme tokens (FRE-1264) — light/dark custom properties consumed by
+   tailwind.config.ts (colors.bg/surface/line/ink/'ink-muted'/accent/
+   'accent-hover'). `.dark` is toggled on <html> by THEME_INIT_SCRIPT
+   (src/lib/theme.ts) before hydration. These are additive: the pre-existing
+   `slate` / `seshat.*` Tailwind color overrides are untouched, so components
+   not yet converted to the new tokens keep their current dark appearance.
+   -------------------------------------------------------------------------- */
+:root {
+  --bg: #faf9f5;
+  --surface: #ffffff;
+  --line: #e5e1d8;
+  --ink: #1f1e1c;
+  --ink-muted: #78766e;
+  /* Terracotta accent — shared by both themes per the ticket's design (a new
+     colour, not a port of today's product blue). */
+  --accent: #cc785c;
+  --accent-hover: #b5613f;
+}
+
+.dark {
+  /* Reuses today's already-shipped dark values (tailwind.config.ts's
+     seshat.dark/surface/border/muted and the slate.900/800/700/100 ramp)
+     rather than inventing a third palette. */
+  --bg: #1e2940;
+  --surface: #2b3a55;
+  --line: #3d4d6b;
+  --ink: #f3f6fa;
+  --ink-muted: #9aa6b6;
+  --accent: #cc785c;
+  --accent-hover: #e0916f;
+}
+
+/* --------------------------------------------------------------------------
    Scrollbar styling (WebKit — Chrome, Safari, Edge)
    -------------------------------------------------------------------------- */
 .scrollbar-thin::-webkit-scrollbar {
@@ -14,18 +47,18 @@
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: #334155; /* slate-700 */
+  background-color: var(--line);
   border-radius: 9999px;
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background-color: #475569; /* slate-600 */
+  background-color: var(--ink-muted);
 }
 
 /* Firefox */
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: #334155 transparent;
+  scrollbar-color: var(--line) transparent;
 }
 
 /* --------------------------------------------------------------------------

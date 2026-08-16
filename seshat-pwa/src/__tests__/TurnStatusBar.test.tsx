@@ -203,10 +203,10 @@ describe('TurnStatusBar — engagement lane tool iteration', () => {
     expect(toolSpan.className).toContain('text-amber-400');
   });
 
-  it('shows normal (slate) tools label when iteration is below max-2', () => {
+  it('shows normal (muted) tools label when iteration is below max-2', () => {
     render(<TurnStatusBar status={makeStatus({ tool_iteration: 5, tool_iteration_max: 10 })} />);
     const toolSpan = screen.getByText(/tools 5\/10/);
-    expect(toolSpan.className).toContain('text-slate-400');
+    expect(toolSpan.className).toContain('text-ink-muted');
   });
 
   it('renders unknown — not 0/0 — when tool data has not arrived', () => {
@@ -245,7 +245,7 @@ describe('TurnStatusBar — absent is a distinct state from zero (FRE-928 AC-4 /
     );
     expect(screen.getByText(/tools 4\/25/)).toBeDefined();
     // The live defect: 4 of a fabricated 6 went amber; 4 of a real 25 must not.
-    expect(screen.getByText(/tools 4\/25/).className).toContain('text-slate-400');
+    expect(screen.getByText(/tools 4\/25/).className).toContain('text-ink-muted');
   });
 
   it('(c) a legitimate zero renders as 0, visibly distinct from unknown', () => {

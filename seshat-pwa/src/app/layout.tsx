@@ -1,8 +1,10 @@
 import type { Metadata, Viewport } from 'next';
+import Script from 'next/script';
 
 import './globals.css';
 import { RegisterSW } from '@/components/RegisterSW';
 import { RuntimeConfigProvider } from '@/components/RuntimeConfigProvider';
+import { THEME_INIT_SCRIPT } from '@/lib/theme';
 // Curated artifact toolkit alignment (FRE-532): bundle our own pinned copies of
 // the toolkit's chat-render stylesheets, ordered after Tailwind layers.
 import 'katex/dist/katex.min.css';
@@ -32,7 +34,12 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: 'cover', // handles iPhone notch
-  themeColor: '#2f6bff',
+  // Matches the page background in each theme (FRE-1264) — system-preference
+  // only, same as the browser chrome itself; does not read the stored override.
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#faf9f5' },
+    { media: '(prefers-color-scheme: dark)', color: '#1e2940' },
+  ],
 };
 
 // Must be force-dynamic so process.env.SESHAT_URL and GATEWAY_TOKEN are
@@ -46,7 +53,8 @@ interface RootLayoutProps {
 }
 
 /**
- * Root layout — wraps all pages with dark background and PWA manifest.
+ * Root layout — wraps all pages with the theme-aware background (FRE-1264)
+ * and PWA manifest.
  *
  * Reads SESHAT_URL and GATEWAY_TOKEN from the runtime Node.js environment
  * (not NEXT_PUBLIC_ build-time bake) and passes them to RuntimeConfigProvider,
@@ -64,8 +72,16 @@ export default function RootLayout({ children }: RootLayoutProps) {
   }
 
   return (
-    <html lang="en" className="dark h-full">
-      <body className="h-full bg-slate-900 text-slate-100 antialiased">
+    // suppressHydrationWarning: THEME_INIT_SCRIPT (below) mutates the `dark`
+    // class before hydration based on localStorage/system preference — an
+    // intentional, expected mismatch with the server-rendered class list.
+    <html lang="en" className="h-full" suppressHydrationWarning>
+      <head>
+        <Script id="theme-init" strategy="beforeInteractive">
+          {THEME_INIT_SCRIPT}
+        </Script>
+      </head>
+      <body className="h-full bg-bg text-ink antialiased">
         <RegisterSW />
         <RuntimeConfigProvider seshatUrl={seshatUrl} gatewayToken={gatewayToken}>
           {children}

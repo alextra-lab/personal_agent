@@ -76,6 +76,11 @@ function CodeBlock({ language, children }: { language: string; children: string 
   };
 
   return (
+    // palette-allowlist:start — code blocks stay a fixed dark island in both
+    // app themes (FRE-1264): the syntax-highlight theme (highlight.js
+    // github-dark, imported in layout.tsx) assumes a dark background, and
+    // swapping it per-theme is real work ungated by any AC here — a
+    // documented follow-up, not silently left scattered.
     <div className="relative group/code rounded-lg overflow-hidden my-2 border border-slate-700/50">
       {/* Code block header bar */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-slate-800 border-b border-slate-700/50">
@@ -106,6 +111,7 @@ function CodeBlock({ language, children }: { language: string; children: string 
         <CodeHighlight language={language} code={children} />
       </pre>
     </div>
+    // palette-allowlist:end
   );
 }
 
@@ -121,7 +127,7 @@ const markdownComponents: Components = {
 
     if (isInline) {
       return (
-        <code className="text-xs font-mono px-1 py-0.5 rounded bg-slate-700/60 text-slate-200">
+        <code className="text-xs font-mono px-1 py-0.5 rounded bg-line/60 text-ink">
           {children}
         </code>
       );
@@ -149,7 +155,7 @@ const markdownComponents: Components = {
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-blue-400 underline underline-offset-2 hover:text-blue-300"
+        className="text-accent underline underline-offset-2 hover:text-accent-hover"
       >
         {children}
       </a>
@@ -167,7 +173,12 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
   return (
     <div
       className={[
-        'prose prose-sm prose-invert max-w-none',
+        // Serif prose (FRE-1264 AC-4): 17px/1.6 on paragraphs and list items,
+        // targeted the same way spacing already is below rather than a bare
+        // container text-size override (which a plugin-scale utility like
+        // prose-sm could otherwise out-cascade).
+        'prose dark:prose-invert font-serif max-w-none',
+        'prose-p:text-[17px] prose-p:leading-[1.6] prose-li:text-[17px] prose-li:leading-[1.6]',
         'prose-p:my-1.5 prose-headings:mt-3 prose-headings:mb-1.5',
         'prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5',
         'prose-pre:my-0 prose-pre:p-0 prose-pre:bg-transparent prose-pre:rounded-none',

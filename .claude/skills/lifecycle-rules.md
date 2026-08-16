@@ -312,6 +312,30 @@ Dispatch state lives in Linear and is computed by the resolver (process v2, 2026
   not a new step to remember. The ticket is still open at this point, which is the point: a missed
   item is still recoverable. Default when undecided: file it to `Backlog` — the cheap path, and a rule
   that is cheap to obey survives.
+- **Path-assumption check before a `stream:` label (ADR-0137 D3).** In the same pass, ask: **does any
+  criterion of this ticket depend on a network path, a host, a credential or a deployed component that
+  does not exist yet and that no ticket in this chain delivers?** If yes, resolve it exactly as
+  ADR-0137 D1 does — file a provisioning ticket **and write its `blockedBy` relation in the same
+  action**, or assign the assumption to the ADR's seam ticket; **prose with no owner is not a
+  resolution**. **Record the answer
+  on the ticket**, alongside the open-remedy dispositions. The existence-and-ownership test sits *inside*
+  the question deliberately: a question phrased "does this depend on anything outside the ticket" fires
+  on Postgres and every already-running service, so it would be learned-ignored. This does **not** ask
+  whether the ticket integrates correctly — that stays the seam ticket's job. **Backstop only**: it
+  covers chains whose mappings predate ADR-0137 and **retires** once every such mapping has been
+  re-audited under D1/D2 or its chain has reached a terminal state. Full reasoning: ADR-0137 D3.
+- **Cutover check before a `stream:` label (ADR-0137 D4).** If the ticket **replaces an existing working
+  path**, it must be two tickets: the removal `blockedBy` the addition; **no `stream:` label on the
+  removal until observed-data evidence is recorded on the addition ticket** (a `blockedBy` relation
+  clears at the blocker's *merge*, which is earlier than deploy and much earlier than proof, so the
+  relation supplies ordering and this gate supplies proof); and the removal's **own** criterion is *the
+  old path emits nothing **and** the new path is still observed carrying data* — **never the dispatch
+  precondition restated**, which is already true before the ticket starts and which a no-op removal
+  satisfies. Scope test: **can both paths be live at the same time?** Different processes, hosts,
+  repositories or deploy units are *indicators*, not the test — two repositories can still need an
+  atomic change, and one process can dual-write behind a flag; where indicator and test disagree, the
+  test governs and the reasoning goes on the ticket. Full reasoning, and the ADR-0033 clean-break case
+  this preserves: ADR-0137 D4.
 - **Chains** are "blocked by" relations; only the unblocked head is pickable, and completing it
   automatically exposes the next — no re-dispatch step.
 - **Master removes a satisfied relation the moment its blocker merges** (reaches Awaiting

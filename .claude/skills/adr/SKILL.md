@@ -185,6 +185,34 @@ carries a criterion about exactly that; what it may not do is cite the ADR's `AC
 discharges. **Anything not decidable from a single child's deliverable belongs to the seam by
 definition**, including cross-child integration obligations, which belong to neither child.
 
+**An obligation naming two parties may not carry a single non-seam owner** (ADR-0137 D1). A sentence
+with two parties — *A ships to B*, *A reads B's output*, *A reaches B*, *A gets X from B* — is **split**,
+under two rules applied in order:
+1. **Assignment follows who provisions the thing, never the grammatical subject.** ADR-0129's row D5.d
+   read *"`slm_server` gets a network endpoint to ship to"* and was assigned to `slm_server` — the
+   consumer, in another repository, which could provision nothing. FRE-1220 is what that cost.
+2. **Each half must be stated at an altitude its own owner's deliverable can decide.** A half still
+   undecidable after the split is **not** forced onto either ticket — it goes to the seam. So a split
+   is often **three rows**: provider, consumer, and the end-to-end property at the seam. A two-way-only
+   split re-parks a cross-child property on a child, which is the ADR-0130 D1 violation this rule exists
+   to prevent.
+
+A provider half **no ticket in the chain can make true** has exactly two resolutions: file a
+provisioning ticket **and write its `blockedBy` relation in the same action**, or assign the half to the
+seam. **Recording it in prose with no owner is not a resolution** — that is the state FRE-1220 was
+already in. The signal to watch for is an **unfillable "Proved by" cell** on a provider row; that is the
+gap becoming visible at authoring time, which is the cheapest moment it can.
+
+**A row's named criterion must *entail* the obligation, not merely sit on the right ticket**
+(ADR-0137 D2). **For every row** — one-party and split alike — read the criterion named in "Proved by"
+and confirm that **a passing verdict on it makes the obligation true**. Presence asks *is there an owner
+and a criterion?*; sufficiency asks *would this criterion, passing, make this sentence true?* D5.d passed
+the first and failed the second, and an adversarial review that caught six owner-without-criterion rows
+did not catch it. A row that fails is resolved three ways: name a criterion that does entail it, file a
+covering ticket with its id on the row, or assign the row to the seam. A flag may be **withdrawn only**
+on the finding that the original criterion does entail the obligation after all — never on a judgement
+that the gap is acceptable.
+
 **Name the ADR's seam ticket and file it with the chain** (ADR-0130 D2) — exactly one per ADR, even a
 single-ticket one. It holds **all** of the ADR's criteria, is filed **parked** (`Backlog`, or
 `Approved` with no `stream:` label), and carries a Linear **due date** set to the earliest date all of

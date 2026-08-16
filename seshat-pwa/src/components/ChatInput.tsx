@@ -34,6 +34,10 @@ const ACCEPTED_TYPES =
   'image/png,image/jpeg,image/gif,image/webp,image/svg+xml,application/pdf,text/plain,text/markdown,text/csv,application/json';
 const ACCEPTED_TYPE_SET = new Set(ACCEPTED_TYPES.split(','));
 
+// Keep in sync with the `max-h-[200px]` Tailwind class on the textarea below —
+// Tailwind's static scanner can't see a value built from this constant.
+const MAX_TEXTAREA_HEIGHT = 200;
+
 /**
  * Chat input bar with textarea, model picker, send button, and user-upload
  * support (FRE-369): file picker, drag-drop, paste-image.
@@ -41,7 +45,9 @@ const ACCEPTED_TYPE_SET = new Set(ACCEPTED_TYPES.split(','));
  * Behaviour:
  * - Cmd+Enter (macOS) or Ctrl+Enter (Win/Linux) sends; Enter inserts a newline.
  * - Paste: image files trigger upload; text falls through to the textarea.
- * - The textarea auto-grows up to 5 lines.
+ * - Two-row composer (FRE-1263): the textarea spans the full width on its own
+ *   row, starting at 3 lines and auto-growing up to ~8 before it scrolls;
+ *   the model picker, attach, and send/stop controls sit on the row beneath.
  * - Footer padding accounts for iOS home-indicator via safe-area-inset-bottom.
  * - Send is blocked while any upload is in-progress (status !== 'complete').
  * - Attachments carry no local/cloud override (ADR-0121 T5): vision is a
@@ -154,7 +160,7 @@ export function ChatInput({
     setText(e.target.value);
     const el = e.target;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
   };
 
   const handlePaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -179,7 +185,7 @@ export function ChatInput({
     requestAnimationFrame(() => {
       el.selectionStart = el.selectionEnd = start + plain.length;
       el.style.height = 'auto';
-      el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+      el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
     });
   };
 
@@ -266,117 +272,133 @@ export function ChatInput({
 
       <form
         onSubmit={handleSubmit}
-        className="flex items-center gap-2 px-4 pt-3"
+        className="px-4 pt-3"
         style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.5rem)' }}
       >
-        <ModelPicker
-          candidates={candidates}
-          selectedKey={selectedModelKey}
-          hydrated={modelHydrated}
-          onSelect={onModelChange}
-        />
-
-        {/* Hidden file input */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept={ACCEPTED_TYPES}
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files) {
-              handleFiles(e.target.files);
-              e.target.value = '';
-            }
-          }}
-        />
-
-        {/* Paperclip attach button */}
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          aria-label="Attach file"
-          className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors"
+        {/*
+          Two-row composer (FRE-1263): the textarea's own wrapper holds nothing
+          else, so it stays out of the controls' flex row entirely — the fix
+          is structural, not just a wider textarea (see AC-1 in the ticket).
+        */}
+        <div
+          data-testid="composer-container"
+          className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 focus-within:border-slate-500 focus-within:ring-1 focus-within:ring-slate-500/30 transition-colors duration-150"
         >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-            className="w-4 h-4"
-          >
-            <path
-              fillRule="evenodd"
-              d="M15.621 4.379a3 3 0 00-4.242 0l-7 7a1.5 1.5 0 002.122 2.121L13.243 7a.75.75 0 011.06 1.061l-6.742 6.5A3 3 0 013.318 9.379l7-7a4.5 4.5 0 016.364 6.364l-7 7A6 6 0 011.19 7.257l6.5-6.5a.75.75 0 011.06 1.061l-6.5 6.5a4.5 4.5 0 006.364 6.363l7-7a3 3 0 000-4.242z"
-              clipRule="evenodd"
+          <div>
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              placeholder={placeholder}
+              rows={3}
+              className="
+                w-full resize-none rounded-t-2xl px-4 pt-3 pb-1 text-base leading-6
+                bg-transparent border-0
+                text-slate-100 placeholder-slate-500
+                focus:outline-none
+                disabled:opacity-50 disabled:cursor-not-allowed
+                transition-colors duration-150
+                min-h-[96px] max-h-[200px]
+              "
             />
-          </svg>
-        </button>
+          </div>
 
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={placeholder}
-          rows={1}
-          className={`
-            flex-1 resize-none rounded-2xl px-4 py-3 text-sm
-            bg-slate-800 border border-slate-700
-            text-slate-100 placeholder-slate-500
-            focus:outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500/30
-            disabled:opacity-50 disabled:cursor-not-allowed
-            transition-colors duration-150
-            min-h-[44px] max-h-[140px]
-          `}
-        />
+          <div className="flex items-center gap-2 px-3 pb-2 pt-1">
+            <ModelPicker
+              candidates={candidates}
+              selectedKey={selectedModelKey}
+              hydrated={modelHydrated}
+              onSelect={onModelChange}
+            />
 
-        {isStreaming ? (
-          <button
-            type="button"
-            onClick={() => onStop?.()}
-            aria-label="Stop generating"
-            className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-all duration-150 bg-white hover:bg-slate-100 text-slate-900 cursor-pointer"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-              className="w-4 h-4"
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ACCEPTED_TYPES}
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) {
+                  handleFiles(e.target.files);
+                  e.target.value = '';
+                }
+              }}
+            />
+
+            {/* Paperclip attach button */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Attach file"
+              className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors"
             >
-              <rect x="5" y="5" width="10" height="10" rx="1.5" />
-            </svg>
-          </button>
-        ) : (
-          <button
-            type="submit"
-            disabled={!canSend}
-            aria-label="Send message"
-            title="Send (⌘+Enter)"
-            className={`
-              flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center
-              transition-all duration-150
-              ${
-                canSend
-                  ? 'bg-white hover:bg-slate-100 text-slate-900 cursor-pointer'
-                  : 'bg-slate-700 text-slate-500 cursor-not-allowed'
-              }
-            `}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-              className="w-5 h-5"
-            >
-              <path
-                fillRule="evenodd"
-                d="M10 17a.75.75 0 01-.75-.75V5.612L5.29 9.77a.75.75 0 01-1.08-1.04l5.25-5.5a.75.75 0 011.08 0l5.25 5.5a.75.75 0 11-1.08 1.04L10.75 5.612V16.25A.75.75 0 0110 17z"
-                clipRule="evenodd"
-              />
-            </svg>
-          </button>
-        )}
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                className="w-4 h-4"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M15.621 4.379a3 3 0 00-4.242 0l-7 7a1.5 1.5 0 002.122 2.121L13.243 7a.75.75 0 011.06 1.061l-6.742 6.5A3 3 0 013.318 9.379l7-7a4.5 4.5 0 016.364 6.364l-7 7A6 6 0 011.19 7.257l6.5-6.5a.75.75 0 011.06 1.061l-6.5 6.5a4.5 4.5 0 006.364 6.363l7-7a3 3 0 000-4.242z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            </button>
+
+            <div className="flex-1" />
+
+            {isStreaming ? (
+              <button
+                type="button"
+                onClick={() => onStop?.()}
+                aria-label="Stop generating"
+                className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-all duration-150 bg-white hover:bg-slate-100 text-slate-900 cursor-pointer"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  className="w-4 h-4"
+                >
+                  <rect x="5" y="5" width="10" height="10" rx="1.5" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!canSend}
+                aria-label="Send message"
+                title="Send (⌘+Enter)"
+                className={`
+                  flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center
+                  transition-all duration-150
+                  ${
+                    canSend
+                      ? 'bg-white hover:bg-slate-100 text-slate-900 cursor-pointer'
+                      : 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                  }
+                `}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  className="w-5 h-5"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M10 17a.75.75 0 01-.75-.75V5.612L5.29 9.77a.75.75 0 01-1.08-1.04l5.25-5.5a.75.75 0 011.08 0l5.25 5.5a.75.75 0 11-1.08 1.04L10.75 5.612V16.25A.75.75 0 0110 17z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
       </form>
     </div>
   );

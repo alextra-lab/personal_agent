@@ -72,9 +72,16 @@ export function serverSend(ws: WebSocketRoute, payload: object): void {
 // contrast, so these only run against a real Playwright page.
 // ---------------------------------------------------------------------------
 
-/** Parse an `rgb(r, g, b)` / `rgba(r, g, b, a)` string into channel values. */
+/**
+ * Parse an `rgb(r, g, b)` / `rgba(r, g, b, a)` string into channel values.
+ * Accepts both the legacy comma-separated syntax getComputedStyle() returns
+ * for standard properties, and the space-separated (optionally `/alpha`)
+ * CSS Color 4 syntax Tailwind's `--tw-ring-color` custom property carries
+ * verbatim (custom properties aren't re-serialized by the CSSOM the way
+ * standard properties are).
+ */
 export function parseRgb(color: string): [number, number, number] {
-  const m = color.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)/);
+  const m = color.match(/rgba?\(([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/);
   if (!m) throw new Error(`Unparseable colour: ${color}`);
   return [Number(m[1]), Number(m[2]), Number(m[3])];
 }

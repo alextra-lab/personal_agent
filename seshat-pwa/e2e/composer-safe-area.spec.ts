@@ -14,7 +14,13 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { TEST_SESSION, stubRest, stubWebSocket, overrideSafeAreaBottom } from './helpers';
+import {
+  TEST_SESSION,
+  stubRest,
+  stubWebSocket,
+  overrideSafeAreaBottom,
+  contrastRatio,
+} from './helpers';
 
 const CHAT_URL = `/c/${TEST_SESSION}`;
 const VIEWPORT_HEIGHT = 844;
@@ -104,5 +110,33 @@ test.describe('Composer safe-area inset (FRE-1267)', () => {
       (el) => getComputedStyle(el).paddingBottom,
     );
     expect(containerPaddingBottom).toBe('0px'); // var(--safe-bottom, 0px) at zero inset.
+  });
+
+  test('the focus ring meets 3:1 non-text UI contrast now the border is gone', async ({
+    page,
+  }) => {
+    // Dropping the resting border (item 2 of the ticket) left the
+    // focus-within ring as the only focus affordance for the composer. A
+    // codex plan-review caught that the originally-proposed 30%-opacity
+    // ring computed to well under the WCAG 3:1 UI-component threshold; the
+    // shipped fix uses a full-opacity ring instead — this asserts that directly
+    // rather than trusting the token math, matching this repo's established
+    // pattern (theme.spec.ts / theme-extended.spec.ts) of measuring real
+    // rendered contrast rather than reasoning about it.
+    await stubRest(page);
+    await stubWebSocket(page);
+    await page.goto(CHAT_URL);
+
+    const textarea = page.locator('[placeholder="Message Seshat..."]');
+    await textarea.waitFor();
+    await textarea.focus();
+
+    const container = page.getByTestId('composer-container');
+    const ringColor = await container.evaluate((el) =>
+      getComputedStyle(el).getPropertyValue('--tw-ring-color').trim(),
+    );
+    const pageBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+
+    expect(contrastRatio(ringColor, pageBg)).toBeGreaterThanOrEqual(3);
   });
 });

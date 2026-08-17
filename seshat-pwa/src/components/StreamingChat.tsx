@@ -229,11 +229,12 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
 
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    // block: 'nearest' — the default 'start' walks every scrollable ancestor
-    // in the chain, including the document itself, even though the nested
-    // message list (`main`, overflow-y-auto) already fully contains this
-    // target once it scrolls. 'nearest' scrolls only the ancestor that
-    // actually needs it, so the document itself never moves (FRE-1266 AC-1).
+    // block: 'nearest' — the default 'start' computes a nonzero scroll delta
+    // for every scrollable ancestor in the chain, including the document
+    // itself. 'nearest' still walks the same chain, but for an ancestor
+    // where the target is already (or becomes, after the nested message
+    // list scrolls) within view, it computes zero movement — so in practice
+    // the document itself never moves (FRE-1266 AC-1).
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [messages, activeTools, phases, pendingConstraint, classifiedError]);
 

@@ -72,9 +72,16 @@ export function serverSend(ws: WebSocketRoute, payload: object): void {
 // contrast, so these only run against a real Playwright page.
 // ---------------------------------------------------------------------------
 
-/** Parse an `rgb(r, g, b)` / `rgba(r, g, b, a)` string into channel values. */
+/**
+ * Parse an `rgb(r, g, b)` / `rgba(r, g, b, a)` string into channel values.
+ * Accepts both the legacy comma-separated syntax getComputedStyle() returns
+ * for standard properties, and the space-separated (optionally `/alpha`)
+ * CSS Color 4 syntax Tailwind's `--tw-ring-color` custom property carries
+ * verbatim (custom properties aren't re-serialized by the CSSOM the way
+ * standard properties are).
+ */
 export function parseRgb(color: string): [number, number, number] {
-  const m = color.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)/);
+  const m = color.match(/rgba?\(([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/);
   if (!m) throw new Error(`Unparseable colour: ${color}`);
   return [Number(m[1]), Number(m[2]), Number(m[3])];
 }
@@ -101,4 +108,19 @@ export function contrastRatio(a: string, b: string): number {
 export async function sendChatMessage(page: Page, text: string): Promise<void> {
   await page.fill('[placeholder="Message Seshat..."]', text);
   await page.click('[aria-label="Send message"]');
+}
+
+// ---------------------------------------------------------------------------
+// Safe-area inset override (FRE-1267)
+// ---------------------------------------------------------------------------
+
+/**
+ * Force the `--safe-bottom` custom property (globals.css) to a fixed pixel
+ * value so a non-zero `env(safe-area-inset-bottom)` can be exercised in a
+ * headless Chromium run, where the real env() value is always 0. Call after
+ * `page.goto()` — the `!important` root declaration wins the cascade and
+ * `var()` resolution updates on the next layout, no reload needed.
+ */
+export async function overrideSafeAreaBottom(page: Page, px: number): Promise<void> {
+  await page.addStyleTag({ content: `:root { --safe-bottom: ${px}px !important; }` });
 }

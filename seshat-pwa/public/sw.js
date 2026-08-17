@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v44-shell-viewport-fix';
+const CACHE_NAME = 'seshat-v45-composer-inset-fix';
 
 const PRECACHE_URLS = [
   '/',

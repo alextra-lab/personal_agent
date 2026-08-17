@@ -1,81 +1,75 @@
-# Last session — 2026-08-12/15 (four guards that reported green without guarding)
+# Last session — 2026-08-16/17 (four acceptance criteria that measured the wrong thing)
 
 ## Doing / discussing
 
-Nothing in flight: no open PR, nothing in Awaiting Deploy, all gated work closed out. **build1 is free
-and needs feeding** — the strongest unassessed candidate is FRE-1216, unchecked for criteria. build2 and
-adr are mid-ticket. Four owner decisions are parked and listed at the bottom; none blocks work.
+**FRE-1269 is the only open work and it is parked on an owner action, not on us.** The owner must run a
+live experiment on their phone — 5 taps on the header title opens a diagnostic overlay, then a button
+applies a candidate `100vh` fix as an inline style and self-reverts. Their screenshot decides whether
+the fix ships or is ruled out. Everything else from two days is Done and deployed. Do not close FRE-1269
+on a green suite; that gate is the owner's and it is the whole point of the ticket.
 
 ## What was decided and why
 
-**The session's real finding is a pattern, not any one ticket: a guard whose name outruns what it
-checks, four times.** An ast-grep rule matched only when another argument followed the retired kwarg,
-so it caught 2 of 4 seeded cases. A vocabulary check asserted subset while its class name, docstring and
-handoff all said equality. The ADR-0074 identity hook tests that a `trace_id` kwarg is *present*, never
-that its value survives to the emitted document. The SDK-confinement guard matched only litellm while
-its failure message claimed to confine "the model SDK" generally. **The unifying cause is that a clean
-tree cannot distinguish a working guard from a vacuous one** — so every guard needs a seeded negative
-proving it fires. FRE-1262 established that for its own instance; whether to generalise it is
-dispositioned as an `adr` candidate, deliberately not settled inside one guard's repair.
+**Four of master's acceptance criteria failed the same way, and the build seats implemented each one
+faithfully.** FRE-1263's AC-4 specified a three-row textarea, which was simply wrong against the
+reference. FRE-1264 carried nine criteria and not one measured geometry — it verified palettes, fonts,
+contrast and cache names while never asserting the page fits on the screen. FRE-1266's AC-4 named the
+`footer`, which was already flush, instead of the card inside it. FRE-1267's AC-1 named the right element
+but forced a synthetic 34px inset in a harness that reports zero. **Every one checked the source, or a
+synthetic condition, rather than the rendered result on the owner's device.** Do not read the repeated
+PWA bounces as build-seat quality; the specs were the defect.
 
-**Master's own instruments were wrong three times, and re-measuring is what caught each.** A CI waiter
-reported settled against a still-empty check rollup — an empty set satisfies a universal quantifier. A
-post-deploy check found 1,504 documents carrying no retired field names, which measured nothing: every
-one was background housekeeping and none of the affected event types had fired. And the miscount that
-mattered most — the standalone gateway app was described to the owner as having *two* unique dormant
-routers when it had one, because a stale inline comment called a WebSocket router an SSE endpoint and
-that comment was read instead of the router. **The owner formed a view from that wrong summary**, so it
-was corrected on the record before the retirement was scoped. Prior session logged the same lesson;
-two sessions running makes it a property of the work, not an incident.
+**Nothing in this repository can observe the mode the owner actually runs.** Headless Chromium reports
+`env(safe-area-inset-bottom)` as 0 and cannot emulate standalone `display-mode`, so a headless screenshot
+is flush by construction whether or not the bug is present. This was stated plainly rather than papered
+over, and it is why three green attempts shipped nothing. The owner **declined** an iOS device harness
+when offered — correctly; a device cloud is not what this project should grow. Their screenshots are the
+instrument. Do not re-propose the harness.
 
-**A criterion written at dispatch can be invalidated by a ticket that merges before the build starts.**
-FRE-1261's AC-5 said the SDK allowlist should end up empty — true when written, false ninety minutes
-later once FRE-1262 added a second entry waiving a real, live, correctly cost-tracked import. Building
-to the original wording would have turned the guard red on an unrelated module. Corrected before pickup.
-Worth carrying: re-read a queued ticket's criteria against anything that merged since they were written.
+**Instructions in ticket comments do not get executed.** The seeded-negative requirement was written into
+ticket comments twice and dropped both times; the identical instruction on a **PR/bounce comment** landed
+immediately. Lifecycle-rules designates ticket comments read-for-context and never instructions — the
+contract was working and master was using the wrong channel. This was misread as seat indiscipline for a
+day and a half before the channel was identified as the variable.
 
-**Escalation waivers should be sized by measured source surface, and the measurement hides the risk.**
-Four escalated diffs were waived this session after sizing. The method that worked: take a
-whitespace-blind diff to separate reindentation from logic — one 800-line diff was 271 real lines — and
-then check the thing that measurement *conceals*. Wrapping existing writes in `try/finally` is a
-control-flow change that presents as pure reindentation, so the useful check was counting genuinely new
-`except` handlers (there were none) rather than trusting the reduced line count.
+**The seeded-negative practice paid for itself on FRE-1266 and is now evidence-backed rather than
+theoretical.** Master's diagnosis there (missing `min-h-0`) was necessary but not load-bearing; the
+required pre-change test kept failing after it, which surfaced the real cause — `sr-only` spans resolving
+their containing block to the root div and inflating the document's own `scrollHeight`. No amount of
+source reading produces that. FRE-1255 remains the natural vehicle for making the rule structural.
 
-**An acceptance criterion decidable from a ticket's own deliverable will never ask whether anything
-reaches the code.** FRE-1231 named an owner, carried four decidable criteria, passed every gate, and
-instrumented an endpoint no deployment serves. This is the mirror of what ADR-0137 D3 now catches from
-the other side, and it is why FRE-1205 was held at dispatch rather than built: same dormant module.
-
-**Guard-before-deletion was sequenced deliberately, not stylistically.** The dormant module was the only
-living violation of the SDK guard. Deleting it first would have left the widened guard passing cleanly
-over a tree with no violations, making the hole invisible; fixing the guard first meant it could be
-proven against a real violation. Widening it immediately surfaced a second live import nobody knew about.
+**A GitHub 503 reported a merge as failed that had actually applied server-side.** During an outage, check
+PR state rather than trusting the command's exit code — blindly retrying would have made a mess.
 
 ## Worktrees — anything special
 
-**adr** carries `context:keep` for FRE-1254 — that seat authored ADR-0137 and T1 is a transcription of
-its Decision section into four contract documents, where paraphrase is the failure mode. Do not clear it.
-**build1** is free and clean. **build2** is mid-ticket, nothing unusual.
+**build1** holds the full FRE-1269 context: the WebKit-301994 research, the codex review transcript, and
+the diagnostic tooling design. Its own handoff asks to **keep** that context if the next pickup is the
+owner's experiment round. Re-deriving it cold would be wasteful. build2 and adr are idle and clean.
 
 ## Sequence position + drift
 
-The console's Observability directive governed the first half. The gateway-retirement arc that followed
-was **owner-directed and off that directive** — a deliberate deviation, taken because the dormancy was
-discovered at a gate and the owner decided retirement on the spot. No console write this session; the
-file sits at 41 of its 60-line bound.
+**The entire two days ran off the console's Observability directive, deliberately and at the owner's
+direction** — the PWA arc began with "i want Seshat's UI to have the same layout and font size/design as
+Claude Code" and never returned to Observability. That is an owner-directed deviation, not drift. No
+console write this session; the file sits at 41 of its 60-line bound and carries no commits from these
+two days.
 
 ## Answers for the fresh start
 
-- **Why is build1 empty?** Its chain finished. Not a stall — feed it.
-- **Why was an ADR contradicted by the session that commissioned it?** FRE-1221 asserted no ticket
-  inherited the OTLP-ingress obligation. False: the FRE-1043 mapping owns it at row D5.d with proving
-  criteria named. The check that ticket proposed was a presence test, and a presence test passes that
-  case. ADR-0137's split and sufficiency rules are what actually catch it. Do not re-litigate.
-- **Why does FRE-1223 still sit In Progress since 2026-08-10?** Mac-side bookkeeping lag; closing it on
-  FRE-1230's evidence has been recommended twice and not answered. Still the recommendation.
-- **Is the Anthropic SDK really gone?** Yes — verified in the running container, not just the tree. One
-  model-call path remains, through `llm_client/`, which is what makes the cost boundary meaningful.
-- **Open for the owner:** FRE-1223 closure · the ADR status-drift sweep (ADR-0133 reads Proposed while
-  its children shipped; ADR-0093's own text admits its status line is stale) · the PR #905
-  security-review anomaly, where tool output carried an embedded instruction to withhold information ·
-  whether the four-instance guard pattern above wants one generalised rule.
+- **Why is FRE-1269 sitting in Awaiting Deploy?** Deliberately. It is merged and deployed; the owner's
+  screenshot validation is the closing condition, and it is an owner action that cannot be done for them.
+  The exact experiment steps are in its ticket comments.
+- **Why is the owner's app in a worse state than this morning?** Master advised re-adding the home-screen
+  icon to activate standalone mode. It worked — and our layout handles standalone worse than the broken
+  state it replaced. Master caused that; the Safari-tab path still renders correctly and is the working
+  fallback. Say so plainly if asked rather than reframing it.
+- **Is the 62px gap ours?** Unresolved, and that is the live question. Measured on device: viewport 812,
+  screen 874, composer and footer both at 812 — so the layout is flush to a viewport that stops short of
+  the screen. `100vh` alone reports 874. Codex's objection is that a probe proves the unit *resolves*,
+  not that content painted there is *visible* — WebKit 301994's own distinction. The experiment settles it.
+- **Why three diagnostic PRs and no fix on FRE-1269?** Each was gated on that reasoning, not dithering.
+  The third added a live toggle so the owner tests without a deploy cycle.
+- **Open for the owner, unchanged:** FRE-1255 (ADR-0137 mapping re-audit, and the vehicle for the
+  seeded-negative rule) · FRE-1268 (flaky ModelPicker contrast assertion, Backlog) · whether
+  screenshot-validation becomes a standing console directive for PWA visual work.

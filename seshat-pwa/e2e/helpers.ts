@@ -66,6 +66,37 @@ export function serverSend(ws: WebSocketRoute, payload: object): void {
   ws.send(JSON.stringify(payload));
 }
 
+// ---------------------------------------------------------------------------
+// Contrast helpers (FRE-1264 AC-7 / FRE-1265 AC-2) — real rendered CSS is
+// required here since jsdom can't resolve custom properties or compute
+// contrast, so these only run against a real Playwright page.
+// ---------------------------------------------------------------------------
+
+/** Parse an `rgb(r, g, b)` / `rgba(r, g, b, a)` string into channel values. */
+export function parseRgb(color: string): [number, number, number] {
+  const m = color.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)/);
+  if (!m) throw new Error(`Unparseable colour: ${color}`);
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+/** WCAG relative luminance (sRGB, 0..1). */
+export function relativeLuminance([r, g, b]: [number, number, number]): number {
+  const chan = (c: number) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  const [rl, gl, bl] = [chan(r), chan(g), chan(b)];
+  return 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
+}
+
+/** WCAG contrast ratio between two colours, each 4.5:1-testable either order. */
+export function contrastRatio(a: string, b: string): number {
+  const la = relativeLuminance(parseRgb(a));
+  const lb = relativeLuminance(parseRgb(b));
+  const [lighter, darker] = la > lb ? [la, lb] : [lb, la];
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 /** Type a message and click Send (waits for Send button to be enabled). */
 export async function sendChatMessage(page: Page, text: string): Promise<void> {
   await page.fill('[placeholder="Message Seshat..."]', text);

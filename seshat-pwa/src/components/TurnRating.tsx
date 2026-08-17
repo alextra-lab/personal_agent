@@ -84,10 +84,14 @@ const CHIPS: readonly Chip[] = [
 
 /** Muted resting style for a chip that is not the selected rating. */
 const UNSELECTED_CLASS =
-  'bg-transparent border-transparent text-slate-500 hover:text-slate-300 hover:border-slate-600';
+  'bg-transparent border-transparent text-ink-muted hover:text-ink hover:border-line';
 
-/** Legacy-low treatment on the error chip when a stored value of 1 hydrates. */
-const LEGACY_CLASS = 'bg-transparent border-red-800/60 text-red-400/80';
+/**
+ * Legacy-low treatment on the error chip when a stored value of 1 hydrates.
+ * bg-transparent — bare text/border directly on the page background, so
+ * (unlike the filled CHIPS above) it needs the light/dark split for contrast.
+ */
+const LEGACY_CLASS = 'bg-transparent border-red-300/60 dark:border-red-800/60 text-red-700/80 dark:text-red-400/80';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Component

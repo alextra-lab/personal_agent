@@ -54,7 +54,7 @@ export function ModelPicker({
         disabled={disabled}
         aria-label="Choose model"
         aria-expanded={isOpen}
-        className="flex-shrink-0 flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200 transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed max-w-[9rem]"
+        className="flex-shrink-0 flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-surface border border-line text-ink-muted hover:border-ink-muted hover:text-ink transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed max-w-[9rem]"
         title={selected?.summary ?? 'Choose model'}
       >
         <span
@@ -68,10 +68,10 @@ export function ModelPicker({
       {isOpen && (
         <div
           role="listbox"
-          className="absolute bottom-full mb-2 left-0 z-40 w-72 max-h-80 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 shadow-xl py-1"
+          className="absolute bottom-full mb-2 left-0 z-40 w-72 max-h-80 overflow-y-auto rounded-xl border border-line bg-surface shadow-xl py-1"
         >
           {candidates.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-slate-500">No models available</p>
+            <p className="px-3 py-2 text-xs text-ink-muted">No models available</p>
           ) : (
             candidates.map((c) => (
               <button
@@ -84,7 +84,7 @@ export function ModelPicker({
                   setIsOpen(false);
                 }}
                 className={`flex flex-col items-start gap-0.5 w-full px-3 py-2 text-left text-xs transition-colors ${
-                  c.key === selectedKey ? 'bg-blue-900/30' : 'hover:bg-slate-800'
+                  c.key === selectedKey ? 'ring-1 ring-inset ring-accent/40' : 'hover:bg-line/40'
                 }`}
               >
                 <span className="flex items-center gap-1.5 w-full">
@@ -93,18 +93,21 @@ export function ModelPicker({
                       c.placement === 'local' ? 'bg-emerald-400' : 'bg-amber-400'
                     }`}
                   />
-                  <span className="font-medium text-slate-100">{c.key}</span>
+                  <span className="font-medium text-ink">{c.key}</span>
                   {c.key === selectedKey && (
-                    <span className="ml-auto text-blue-400 text-[10px] font-medium">Selected</span>
+                    // dark:text-accent-hover (not accent) — plain accent measured
+                    // 3.87:1 against bg-surface dark, just under WCAG AA; the
+                    // lighter hover shade clears it (FRE-1265 e2e contrast check).
+                    <span className="ml-auto text-accent dark:text-accent-hover text-[10px] font-medium">Selected</span>
                   )}
                 </span>
-                <span className="text-slate-500 pl-3">
+                <span className="text-ink-muted pl-3">
                   {c.placement} · {Math.round(c.context_length / 1000)}K context
                   {c.input_cost_per_token != null
                     ? ` · $${(c.input_cost_per_token * 1_000_000).toFixed(2)}/M in`
                     : ''}
                 </span>
-                {c.summary && <span className="text-slate-600 pl-3 line-clamp-1">{c.summary}</span>}
+                {c.summary && <span className="text-ink-muted pl-3 line-clamp-1">{c.summary}</span>}
               </button>
             ))
           )}

@@ -150,7 +150,7 @@ export function ArtifactViewer({
         aria-modal="true"
         aria-label={displayTitle}
         className={[
-          'fixed z-50 bg-slate-900 border-slate-700 shadow-2xl flex flex-col',
+          'fixed z-50 bg-surface border-line shadow-2xl flex flex-col',
           // Mobile: bottom sheet
           'inset-x-0 bottom-0 max-h-[90vh] rounded-t-2xl border-t',
           // Desktop: right-side drawer
@@ -159,18 +159,21 @@ export function ArtifactViewer({
         ].join(' ')}
       >
         {/* Header */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-700 flex-shrink-0">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-line flex-shrink-0">
           {/* Drag handle — mobile affordance */}
-          <div className="md:hidden absolute top-2 left-1/2 -translate-x-1/2 w-10 h-1 rounded-full bg-slate-600" />
+          <div className="md:hidden absolute top-2 left-1/2 -translate-x-1/2 w-10 h-1 rounded-full bg-line" />
 
           <span
-            className="text-xs font-mono px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 flex-shrink-0"
+            // text-ink (not ink-muted) — ink-muted on a bg-line fill measured
+            // under WCAG AA in both themes (3.80/3.44:1); matches ArtifactCard's
+            // own content-type chip, which already used text-ink correctly.
+            className="text-xs font-mono px-1.5 py-0.5 rounded bg-line text-ink flex-shrink-0"
             aria-label={`Content type: ${contentType}`}
           >
             {label}
           </span>
 
-          <h2 className="flex-1 text-sm font-semibold text-slate-100 truncate">
+          <h2 className="flex-1 text-sm font-semibold text-ink truncate">
             {displayTitle}
           </h2>
 
@@ -183,7 +186,7 @@ export function ArtifactViewer({
             target="_blank"
             rel="noopener noreferrer"
             onClick={handleStandaloneClick}
-            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded text-slate-400 hover:text-blue-400 hover:bg-slate-700/40 transition-colors flex-shrink-0"
+            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded text-ink-muted hover:text-accent hover:bg-line/40 transition-colors flex-shrink-0"
             aria-label="Open standalone in new tab"
           >
             Open ↗
@@ -193,7 +196,7 @@ export function ArtifactViewer({
             ref={closeRef}
             onClick={onClose}
             aria-label="Close viewer"
-            className="flex items-center justify-center w-6 h-6 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-700/60 transition-colors flex-shrink-0"
+            className="flex items-center justify-center w-6 h-6 rounded text-ink-muted hover:text-ink hover:bg-line/60 transition-colors flex-shrink-0"
           >
             ✕
           </button>

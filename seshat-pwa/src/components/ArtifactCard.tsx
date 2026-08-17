@@ -74,12 +74,12 @@ function contentTypeLabel(ct: string): string {
 
 function CardSkeleton() {
   return (
-    <div className="inline-flex flex-col gap-1.5 rounded-xl border border-slate-700/60 bg-slate-800/60 px-3 py-2.5 my-1 w-full max-w-sm animate-pulse">
+    <div className="inline-flex flex-col gap-1.5 rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5 my-1 w-full max-w-sm animate-pulse">
       <div className="flex items-center gap-2">
-        <div className="h-4 w-10 rounded bg-slate-700" />
-        <div className="h-4 flex-1 rounded bg-slate-700" />
+        <div className="h-4 w-10 rounded bg-line" />
+        <div className="h-4 flex-1 rounded bg-line" />
       </div>
-      <div className="h-3 w-4/5 rounded bg-slate-700/70" />
+      <div className="h-3 w-4/5 rounded bg-line/70" />
     </div>
   );
 }
@@ -138,7 +138,7 @@ export function ArtifactCard({ artifactId, fallbackHref, sessionId }: ArtifactCa
         href={fallbackHref}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-blue-400 underline underline-offset-2 hover:text-blue-300"
+        className="text-accent underline underline-offset-2 hover:text-accent-hover"
       >
         {fallbackHref}
       </a>
@@ -155,23 +155,23 @@ export function ArtifactCard({ artifactId, fallbackHref, sessionId }: ArtifactCa
   return (
     <>
       {/* Inline card */}
-      <div className="inline-flex flex-col gap-1 rounded-xl border border-slate-700/60 bg-slate-800/60 px-3 py-2.5 my-1 w-full max-w-sm">
+      <div className="inline-flex flex-col gap-1 rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5 my-1 w-full max-w-sm">
         {/* Header row: type chip + title */}
         <div className="flex items-center gap-2">
           <span
-            className="text-xs font-mono font-semibold tracking-wide px-1.5 py-0.5 rounded bg-slate-600 text-slate-100 flex-shrink-0"
+            className="text-xs font-mono font-semibold tracking-wide px-1.5 py-0.5 rounded bg-line text-ink flex-shrink-0"
             aria-label={`Content type: ${meta.content_type}`}
           >
             {label}
           </span>
-          <span className="text-sm font-medium text-slate-100 truncate">
+          <span className="text-sm font-medium text-ink truncate">
             {meta.title ?? meta.slug ?? 'Artifact'}
           </span>
         </div>
 
         {/* Summary */}
         {meta.summary && (
-          <p className="text-xs text-slate-400 leading-relaxed line-clamp-2">
+          <p className="text-xs text-ink-muted leading-relaxed line-clamp-2">
             {meta.summary}
           </p>
         )}
@@ -180,7 +180,7 @@ export function ArtifactCard({ artifactId, fallbackHref, sessionId }: ArtifactCa
         <div className="flex items-center gap-2 mt-0.5">
           <button
             onClick={handleExpand}
-            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:text-blue-400 hover:bg-slate-700/40 text-slate-400 transition-colors"
+            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:text-accent hover:bg-line/40 text-ink-muted transition-colors"
           >
             Expand
           </button>
@@ -189,7 +189,7 @@ export function ArtifactCard({ artifactId, fallbackHref, sessionId }: ArtifactCa
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => postCardClick(artifactId, 'standalone', sessionId)}
-            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:text-blue-400 hover:bg-slate-700/40 text-slate-400 transition-colors"
+            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:text-accent hover:bg-line/40 text-ink-muted transition-colors"
           >
             Open ↗
           </a>

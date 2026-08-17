@@ -62,13 +62,13 @@ function contentTypeLabel(ct: string): string {
 
 function ListSkeleton() {
   return (
-    <div className="divide-y divide-slate-800">
+    <div className="divide-y divide-line">
       {Array.from({ length: 5 }).map((_, i) => (
         <div key={i} className="flex items-center gap-3 px-4 py-3 animate-pulse">
-          <div className="h-4 w-10 rounded bg-slate-700 flex-shrink-0" />
-          <div className="h-4 w-40 rounded bg-slate-700 flex-shrink-0" />
-          <div className="h-3 flex-1 rounded bg-slate-700/60" />
-          <div className="h-3 w-8 rounded bg-slate-700/40 flex-shrink-0" />
+          <div className="h-4 w-10 rounded bg-line flex-shrink-0" />
+          <div className="h-4 w-40 rounded bg-line flex-shrink-0" />
+          <div className="h-3 flex-1 rounded bg-line/60" />
+          <div className="h-3 w-8 rounded bg-line/40 flex-shrink-0" />
         </div>
       ))}
     </div>
@@ -94,7 +94,7 @@ export function ArtifactsIndex() {
   }, []);
 
   return (
-    <div className="min-h-full bg-slate-900 text-slate-100 flex flex-col">
+    <div className="min-h-full bg-bg text-ink flex flex-col">
       {/* Viewer overlay */}
       {viewing?.public_url && (
         <ArtifactViewer
@@ -107,17 +107,17 @@ export function ArtifactsIndex() {
       )}
 
       {/* Header */}
-      <header className="flex items-center gap-3 px-4 border-b border-slate-700 bg-slate-900/80 backdrop-blur-sm flex-shrink-0"
+      <header className="flex items-center gap-3 px-4 border-b border-line bg-bg/80 backdrop-blur-sm flex-shrink-0"
         style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)', paddingBottom: '0.75rem' }}
       >
         <Link
           href="/"
-          className="flex items-center gap-1 text-sm text-slate-400 hover:text-slate-100 transition-colors"
+          className="flex items-center gap-1 text-sm text-ink-muted hover:text-ink transition-colors"
         >
           ← Conversations
         </Link>
-        <span className="text-slate-700">|</span>
-        <h1 className="text-sm font-semibold text-slate-100">Artifacts</h1>
+        <span className="text-line" aria-hidden="true">|</span>
+        <h1 className="text-sm font-semibold text-ink">Artifacts</h1>
       </header>
 
       {/* List */}
@@ -125,39 +125,39 @@ export function ArtifactsIndex() {
         {loading && <ListSkeleton />}
 
         {error && (
-          <p className="px-4 py-6 text-sm text-red-400">{error}</p>
+          <p className="px-4 py-6 text-sm text-red-700 dark:text-red-400">{error}</p>
         )}
 
         {!loading && !error && items.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-24 text-slate-500">
+          <div className="flex flex-col items-center justify-center py-24 text-ink-muted">
             <p className="text-sm">No artifacts yet — ask the agent to make you one.</p>
           </div>
         )}
 
         {!loading && !error && items.length > 0 && (
-          <div className="divide-y divide-slate-800/60">
+          <div className="divide-y divide-line/60">
             {items.map((item) => (
               <div
                 key={item.artifact_id}
-                className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-800/40 transition-colors"
+                className="flex items-center gap-3 px-4 py-2.5 hover:bg-line/40 transition-colors"
               >
                 {/* Type chip */}
-                <span className="text-xs font-mono font-semibold tracking-wide px-1.5 py-0.5 rounded bg-slate-600 text-slate-100 flex-shrink-0 w-10 text-center">
+                <span className="text-xs font-mono font-semibold tracking-wide px-1.5 py-0.5 rounded bg-line text-ink flex-shrink-0 w-10 text-center">
                   {contentTypeLabel(item.content_type)}
                 </span>
 
                 {/* Title — fixed width, truncated */}
-                <span className="text-sm font-medium text-slate-100 truncate w-40 flex-shrink-0">
+                <span className="text-sm font-medium text-ink truncate w-40 flex-shrink-0">
                   {item.title ?? item.slug ?? 'Artifact'}
                 </span>
 
                 {/* Summary — fills remaining space */}
-                <span className="text-xs text-slate-500 truncate flex-1 hidden sm:block">
+                <span className="text-xs text-ink-muted truncate flex-1 hidden sm:block">
                   {item.summary ?? ''}
                 </span>
 
                 {/* Timestamp */}
-                <span className="text-xs text-slate-600 flex-shrink-0 w-8 text-right">
+                <span className="text-xs text-ink-muted flex-shrink-0 w-8 text-right">
                   {relativeTime(item.created_at)}
                 </span>
 
@@ -166,7 +166,7 @@ export function ArtifactsIndex() {
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <button
                       onClick={() => setViewing(item)}
-                      className="text-xs text-slate-400 hover:text-blue-400 transition-colors"
+                      className="text-xs text-ink-muted hover:text-accent transition-colors"
                     >
                       Expand
                     </button>
@@ -174,7 +174,7 @@ export function ArtifactsIndex() {
                       href={item.public_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs text-slate-400 hover:text-blue-400 transition-colors"
+                      className="text-xs text-ink-muted hover:text-accent transition-colors"
                     >
                       Open ↗
                     </a>

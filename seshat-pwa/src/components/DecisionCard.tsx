@@ -84,10 +84,10 @@ export function DecisionCard({ pending, onDecide, builderCandidates }: DecisionC
     <div
       role="group"
       aria-label={title}
-      className="rounded-lg border border-sky-300 bg-sky-50 p-4 text-sky-900 dark:border-sky-400/45 dark:bg-[#0a1b29] dark:text-slate-100"
+      className="rounded-lg border border-sky-300 bg-sky-50 p-4 text-sky-900 dark:border-sky-400/45 dark:bg-[#0a1b29] dark:text-ink"
     >
       <div className="font-semibold dark:text-sky-50">{title}</div>
-      <div className="mt-1 text-sm dark:text-slate-300">{context}</div>
+      <div className="mt-1 text-sm dark:text-ink-muted">{context}</div>
 
       <div className="mt-3 flex flex-wrap gap-2">
         {options.map((actionId, i) => {
@@ -120,7 +120,11 @@ export function DecisionCard({ pending, onDecide, builderCandidates }: DecisionC
                   {formatBuilderDetail(candidate)}
                 </span>
                 {candidate.summary && (
-                  <span className="text-xs text-sky-600 dark:text-sky-500 pl-3 line-clamp-1">
+                  // text-sky-700 (not -600) — same bg-sky-50 card context as
+                  // the countdown text above; consistent fix, not directly
+                  // asserted by an e2e check (this artifact_builder candidate
+                  // path isn't exercised by FRE-1265's test scenario).
+                  <span className="text-xs text-sky-700 dark:text-sky-500 pl-3 line-clamp-1">
                     {candidate.summary}
                   </span>
                 )}
@@ -135,7 +139,10 @@ export function DecisionCard({ pending, onDecide, builderCandidates }: DecisionC
               onClick={() => decide(actionId)}
               className={
                 i === 0
-                  ? 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-sky-600 text-white hover:bg-sky-500'
+                  // bg-sky-700 (not -600) — white-on-sky-600 measured 4.10:1,
+                  // just under WCAG AA (pre-existing, surfaced by FRE-1265's
+                  // e2e contrast check; -700 clears 5.93:1).
+                  ? 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-sky-700 text-white hover:bg-sky-600'
                   : 'px-3 py-1.5 rounded-lg text-sm font-semibold border border-sky-400 text-sky-800 hover:bg-sky-100 dark:border-sky-600 dark:text-sky-200 dark:hover:bg-sky-900'
               }
             >
@@ -162,7 +169,10 @@ export function DecisionCard({ pending, onDecide, builderCandidates }: DecisionC
             style={{ width: `${pct}%` }}
           />
         </div>
-        <div className="mt-1 text-[11px] font-mono text-sky-600 dark:text-sky-400">
+        {/* text-sky-700 (not -600) — measured 3.84:1 against the card's
+            bg-sky-50, just under WCAG AA (pre-existing, surfaced by
+            FRE-1265's e2e contrast check; -700 clears 5.57:1). */}
+        <div className="mt-1 text-[11px] font-mono text-sky-700 dark:text-sky-400">
           {countdown > 0 ? `default in ${countdown}s` : 'applying default…'}
         </div>
       </div>

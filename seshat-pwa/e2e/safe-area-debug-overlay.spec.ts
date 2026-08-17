@@ -38,4 +38,41 @@ test.describe('SafeAreaDebugOverlay (FRE-1269, temporary diagnostic)', () => {
     expect(text).toContain('100dvh probe');
     expect(text).toContain('display-mode: standalone');
   });
+
+  test('5 rapid taps on the header title toggles the overlay open, then closed again', async ({
+    page,
+  }) => {
+    await stubRest(page);
+    await stubWebSocket(page);
+    await page.goto(CHAT_URL);
+
+    const title = page.getByTestId('header-title');
+    await title.waitFor();
+    const overlay = page.getByTestId('safe-area-debug-overlay');
+    await expect(overlay).toHaveCount(0);
+
+    for (let i = 0; i < 5; i++) {
+      await title.click();
+    }
+    await expect(overlay).toBeVisible();
+
+    for (let i = 0; i < 5; i++) {
+      await title.click();
+    }
+    await expect(overlay).toHaveCount(0);
+  });
+
+  test('4 taps is not enough to trigger the gesture', async ({ page }) => {
+    await stubRest(page);
+    await stubWebSocket(page);
+    await page.goto(CHAT_URL);
+
+    const title = page.getByTestId('header-title');
+    await title.waitFor();
+
+    for (let i = 0; i < 4; i++) {
+      await title.click();
+    }
+    await expect(page.getByTestId('safe-area-debug-overlay')).toHaveCount(0);
+  });
 });

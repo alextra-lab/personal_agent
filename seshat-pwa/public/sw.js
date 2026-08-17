@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v46-apple-web-app-meta';
+const CACHE_NAME = 'seshat-v47-safe-area-gesture';
 
 const PRECACHE_URLS = [
   '/',

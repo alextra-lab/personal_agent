@@ -13,6 +13,7 @@ import { useSessionConfig } from '@/hooks/useSessionConfig';
 
 import { resolutionLabel } from '@/lib/constraint-options';
 import { isTurnCollapsed } from '@/lib/phase-summary';
+import { toggleSafeAreaDebugOverlay } from '@/lib/safeAreaDebug';
 
 import { ApprovalModal } from './ApprovalModal';
 import { BudgetDeniedCard } from './BudgetDeniedCard';
@@ -28,6 +29,13 @@ import { TurnStatusBar } from './TurnStatusBar';
 
 // FRE-575 (fold-in to FRE-573): per-session key for last completed engagement tool state.
 const toolStateKey = (sid: string) => `seshat-tool-state-${sid}`;
+
+// FRE-1269 follow-up: gesture trigger for the safe-area debug overlay, for
+// launch modes (standalone home-screen PWA) with no URL bar to carry
+// ?debug=safearea. 5 taps within 3s — deliberately unlikely to fire from
+// normal title taps, which don't otherwise do anything.
+const DEBUG_GESTURE_TAP_COUNT = 5;
+const DEBUG_GESTURE_WINDOW_MS = 3000;
 
 interface StreamingChatProps {
   /** Session ID sourced from the /c/[sessionId] URL param. */
@@ -79,6 +87,19 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [isDrawerOpen]);
+
+  const debugGestureTaps = useRef<number[]>([]);
+  const handleTitleTap = useCallback(() => {
+    const now = Date.now();
+    const recent = debugGestureTaps.current.filter((t) => now - t < DEBUG_GESTURE_WINDOW_MS);
+    recent.push(now);
+    if (recent.length >= DEBUG_GESTURE_TAP_COUNT) {
+      debugGestureTaps.current = [];
+      toggleSafeAreaDebugOverlay();
+    } else {
+      debugGestureTaps.current = recent;
+    }
+  }, []);
 
   const handleModelChange = useCallback(
     (key: string) => {
@@ -350,7 +371,14 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
           </svg>
         </button>
 
-        <div className="flex flex-col items-center min-w-0 px-2">
+        {/* onClick: FRE-1269 follow-up debug-overlay gesture (5 taps/3s) —
+            see handleTitleTap. No visual affordance by design; a normal tap
+            or two does nothing. */}
+        <div
+          data-testid="header-title"
+          className="flex flex-col items-center min-w-0 px-2"
+          onClick={handleTitleTap}
+        >
           <h1 className="text-sm font-semibold text-ink truncate max-w-[55vw]">
             {sessionTitle ?? 'New conversation'}
           </h1>

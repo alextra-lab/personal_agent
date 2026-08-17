@@ -121,11 +121,11 @@ export function ObserveView() {
                       <span className="text-ink-muted truncate">
                         {entry.resolved}
                         {entry.provenance && (
-                          <span className="text-ink-muted/70"> · {entry.provenance}</span>
+                          <span className="text-ink-muted"> · {entry.provenance}</span>
                         )}
                       </span>
                     ) : (
-                      <span className="text-ink-muted/70">—</span>
+                      <span className="text-ink-muted">—</span>
                     )}
                   </div>
                 ))}
@@ -151,8 +151,8 @@ export function ObserveView() {
                     />
                     <span className="font-medium text-ink w-28 flex-shrink-0 truncate">{p.key}</span>
                     <span className="text-ink-muted w-16 flex-shrink-0">{p.placement}</span>
-                    <span className="text-ink-muted/70 flex-1 truncate hidden sm:block">{p.summary}</span>
-                    <span className="text-ink-muted/70 text-xs flex-shrink-0">
+                    <span className="text-ink-muted flex-1 truncate hidden sm:block">{p.summary}</span>
+                    <span className="text-ink-muted text-xs flex-shrink-0">
                       max {p.max_concurrency}
                     </span>
                   </div>

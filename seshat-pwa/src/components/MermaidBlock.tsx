@@ -364,7 +364,7 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
         <div>
           {status === 'error' && (
             <div className="px-3 pt-2 border-l-2 border-rose-700/60 dark:border-rose-400/60">
-              <p className="text-xs text-rose-700/80 dark:text-rose-300/80">{errorMsg}</p>
+              <p className="text-xs text-rose-700 dark:text-rose-300">{errorMsg}</p>
             </div>
           )}
           <pre className="m-0 p-3 overflow-x-auto text-xs leading-relaxed bg-[#0d1117]">

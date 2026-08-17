@@ -74,8 +74,17 @@ async function assertTextContrast(
       );
       const hidden = node.closest('[aria-hidden="true"]') !== null;
       if (hasOwnText && !hidden) {
-        const fg = getComputedStyle(node).color;
         const bg = compositedBackground(node);
+        // Foreground text color may itself be translucent (e.g. text-ink-muted/70)
+        // — composite it over bg (always fully opaque) before comparing, or a
+        // translucent fg reads as its full-strength, never-actually-rendered
+        // color and silently passes a contrast check it should fail.
+        const [fr, fg_, fb, fa] = parseRgba(getComputedStyle(node).color);
+        const [br, bgG, bb] = parseRgba(bg);
+        const fg =
+          fa >= 1
+            ? `rgb(${fr}, ${fg_}, ${fb})`
+            : `rgb(${fr * fa + br * (1 - fa)}, ${fg_ * fa + bgG * (1 - fa)}, ${fb * fa + bb * (1 - fa)})`;
         out.push({ text: (node.textContent ?? '').trim().slice(0, 40), fg, bg });
       }
       node = walker.nextNode() as Element | null;

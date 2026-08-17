@@ -91,7 +91,7 @@ const UNSELECTED_CLASS =
  * bg-transparent — bare text/border directly on the page background, so
  * (unlike the filled CHIPS above) it needs the light/dark split for contrast.
  */
-const LEGACY_CLASS = 'bg-transparent border-red-300/60 dark:border-red-800/60 text-red-700/80 dark:text-red-400/80';
+const LEGACY_CLASS = 'bg-transparent border-red-300/60 dark:border-red-800/60 text-red-700 dark:text-red-400';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Component

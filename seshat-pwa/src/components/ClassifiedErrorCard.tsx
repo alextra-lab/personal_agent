@@ -70,7 +70,7 @@ export function ClassifiedErrorCard({
           <div className="mt-1 text-sm text-red-900 dark:text-ink-muted">{error.reason}</div>
           <div className="mt-1 text-sm text-red-800 dark:text-ink-muted">{error.next_step}</div>
           {error.partial && (
-            <div className="mt-2 text-xs text-red-700/80 dark:text-ink-muted/70 italic">
+            <div className="mt-2 text-xs text-red-700 dark:text-ink-muted italic">
               Partial results from this turn were salvaged above.
             </div>
           )}

@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v45-composer-inset-fix';
+const CACHE_NAME = 'seshat-v46-apple-web-app-meta';
 
 const PRECACHE_URLS = [
   '/',

@@ -205,8 +205,17 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
         left: 0,
         right: 0,
         zIndex: 9999,
-        background: 'rgba(0,0,0,0.85)',
+        // Near-opaque background used to paint over whatever's underneath —
+        // including the header this round is specifically trying to
+        // inspect, and (depending on content length) the composer at the
+        // bottom of the screen too. A round-8 screenshot meant to check the
+        // header's position showed no header at all, because this overlay
+        // was covering it. Kept deliberately translucent instead, with a
+        // strong text-shadow for legibility, so a single screenshot can show
+        // both the numbers and whatever real UI is behind them.
+        background: 'rgba(0,0,0,0.35)',
         color: '#0f0',
+        textShadow: '0 0 3px #000, 0 0 3px #000, 0 1px 2px #000',
         fontFamily: 'monospace',
         fontSize: '11px',
         lineHeight: 1.4,
@@ -218,7 +227,14 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
       }}
     >
       {experimentOn && (
-        <div style={{ color: '#ff0', fontWeight: 'bold', marginBottom: '4px' }}>
+        <div
+          style={{
+            color: '#ff0',
+            fontWeight: 'bold',
+            marginBottom: '4px',
+            textShadow: '0 0 3px #000, 0 0 3px #000, 0 1px 2px #000',
+          }}
+        >
           100vh EXPERIMENT ACTIVE — not the shipped behavior
         </div>
       )}

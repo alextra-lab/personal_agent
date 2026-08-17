@@ -288,8 +288,8 @@ export function ChatInput({
           true screen edge — the owner found a fully edge-to-edge panel felt
           oversized; this is intentionally much smaller than the pre-FRE-1267
           gap, which was an unreserved, unreachable dead zone, not a margin.
-          The controls row's own pb-2 (tap-comfort padding, independent of
-          the inset) is untouched.
+          The controls row's own vertical padding (pt-1 pb-2 -> pt-0.5 pb-1.5)
+          was tightened in the same pass, independent of the inset handling.
         */}
         <div
           data-testid="composer-container"

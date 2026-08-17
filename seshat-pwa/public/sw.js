@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v49-standalone-100vh-fix';
+const CACHE_NAME = 'seshat-v50-keyboard-pan-diagnostic';
 
 const PRECACHE_URLS = [
   '/',

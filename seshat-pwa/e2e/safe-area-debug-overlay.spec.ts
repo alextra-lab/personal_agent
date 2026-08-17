@@ -5,11 +5,12 @@
  * so this overlay exists to let the owner capture real numbers from their
  * own device. These tests only guard: (a) it stays invisible by default —
  * no accidental UX regression — (b) it renders the expected measurement
- * rows when explicitly requested, and (c) it never blocks interaction with
- * whatever's underneath (it's read-only — see round-9's history for why a
- * previous interactive version of this overlay needed that guarded
- * explicitly: a since-retired experiment toggle button's hit-box briefly
- * overlapped and stole taps from the header's hamburger control).
+ * rows when explicitly requested, (c) the round-10 keyboard-pan-fix toggle
+ * applies/reverts its candidate style changes correctly, and (d) nothing in
+ * the overlay ever blocks interaction with whatever's underneath it (a
+ * since-retired round-7 toggle button's hit-box once overlapped and stole
+ * taps from the header's hamburger control — that's why every interactive
+ * element here gets its own obstruction check, not just the header title).
  */
 
 import { test, expect } from '@playwright/test';
@@ -58,6 +59,75 @@ test.describe('SafeAreaDebugOverlay (FRE-1269, temporary diagnostic)', () => {
     // No force: true — a real, unobstructed click is the whole point.
     await page.getByRole('button', { name: 'Open session list' }).click();
     await expect(page.getByText('Artifacts')).toBeVisible();
+  });
+
+  test('the keyboard-pan-fix toggle applies and reverts overflow + height overrides', async ({
+    page,
+  }) => {
+    await stubRest(page);
+    await stubWebSocket(page);
+    await page.goto(`${CHAT_URL}?debug=safearea`);
+
+    await page.getByTestId('safe-area-debug-overlay').waitFor();
+
+    const before = await page.evaluate(() => ({
+      overflow: document.documentElement.style.overflow,
+      height: document.documentElement.style.height,
+    }));
+    expect(before.overflow).toBe('');
+    expect(before.height).toBe('');
+
+    const toggle = page.getByTestId('safe-area-keyboard-fix-toggle');
+    await toggle.click();
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.style.overflow))
+      .toBe('hidden');
+    const bodyOverflowOn = await page.evaluate(() => document.body.style.overflow);
+    expect(bodyOverflowOn).toBe('hidden');
+
+    await toggle.click();
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.style.overflow))
+      .toBe('');
+    const bodyOverflowOff = await page.evaluate(() => document.body.style.overflow);
+    expect(bodyOverflowOff).toBe('');
+  });
+
+  test('the keyboard-pan-fix toggle button does not block the hamburger menu button', async ({
+    page,
+  }) => {
+    await stubRest(page);
+    await stubWebSocket(page);
+    await page.goto(`${CHAT_URL}?debug=safearea`);
+
+    await page.getByTestId('safe-area-debug-overlay').waitFor();
+    await page.getByTestId('safe-area-keyboard-fix-toggle').click();
+
+    // No force: true — a real, unobstructed click is the whole point.
+    await page.getByRole('button', { name: 'Open session list' }).click();
+    await expect(page.getByText('Artifacts')).toBeVisible();
+  });
+
+  test('closing the overlay reverts an active keyboard-pan fix', async ({ page }) => {
+    await stubRest(page);
+    await stubWebSocket(page);
+    await page.goto(`${CHAT_URL}?debug=safearea`);
+
+    const overlay = page.getByTestId('safe-area-debug-overlay');
+    await overlay.waitFor();
+    await page.getByTestId('safe-area-keyboard-fix-toggle').click();
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.style.overflow))
+      .toBe('hidden');
+
+    const title = page.getByTestId('header-title');
+    for (let i = 0; i < 5; i++) {
+      await title.click();
+    }
+    await expect(overlay).toHaveCount(0);
+
+    const overflowAfterClose = await page.evaluate(() => document.documentElement.style.overflow);
+    expect(overflowAfterClose).toBe('');
   });
 
   test('5 rapid taps on the header title toggles the overlay open, then closed again', async ({

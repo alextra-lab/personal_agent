@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
+import { SAFE_AREA_DEBUG_TOGGLE_EVENT } from '@/lib/safeAreaDebug';
+
 interface SafeAreaMeasurements {
   screenHeight: number;
   innerHeight: number;
@@ -64,8 +66,13 @@ function measure(): SafeAreaMeasurements {
  * Temporary on-device diagnostic for FRE-1269 — surfaces the exact viewport
  * measurements a real iOS standalone launch can't be read from a Mac-less
  * phone otherwise (no headless harness can emulate this; see the ticket).
- * Invisible unless the URL carries ?debug=safearea. Remove once the
- * standalone bottom-gap mechanism is confirmed and fixed.
+ *
+ * Two independent triggers, both required: a standalone home-screen PWA has
+ * no URL bar, so ?debug=safearea alone is unreachable in exactly the launch
+ * mode this diagnostic exists to inspect (FRE-1269 follow-up). The header's
+ * 5-rapid-tap gesture (StreamingChat.tsx) works there too, via
+ * SAFE_AREA_DEBUG_TOGGLE_EVENT. Remove all of this once the standalone
+ * bottom-gap mechanism is confirmed and fixed.
  */
 export function SafeAreaDebugOverlay(): React.JSX.Element | null {
   const [enabled, setEnabled] = useState(false);
@@ -73,9 +80,18 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('debug') !== 'safearea') return;
-    setEnabled(true);
+    if (params.get('debug') === 'safearea') setEnabled(true);
 
+    const toggle = () => setEnabled((prev) => !prev);
+    window.addEventListener(SAFE_AREA_DEBUG_TOGGLE_EVENT, toggle);
+    return () => window.removeEventListener(SAFE_AREA_DEBUG_TOGGLE_EVENT, toggle);
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) {
+      setData(null);
+      return;
+    }
     const update = () => setData(measure());
     update();
     window.addEventListener('resize', update);
@@ -84,7 +100,7 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
       window.removeEventListener('resize', update);
       window.visualViewport?.removeEventListener('resize', update);
     };
-  }, []);
+  }, [enabled]);
 
   if (!enabled || !data) return null;
 

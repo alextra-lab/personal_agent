@@ -270,21 +270,21 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
   const canAct = status === 'rendered';
 
   return (
-    <div className="relative my-3 rounded-lg overflow-hidden border border-slate-800/70 ring-1 ring-inset ring-slate-700/30">
+    <div className="relative my-3 rounded-lg overflow-hidden border border-line ring-1 ring-inset ring-line/30">
       {/* Header — lighter chrome than CodeBlock so the diagram gets the visual weight */}
-      <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-slate-800/80 border-b border-slate-800/60">
-        <div className="flex items-center gap-1.5 text-slate-500 shrink-0">
+      <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-surface/80 border-b border-line/60">
+        <div className="flex items-center gap-1.5 text-ink-muted shrink-0">
           <DiamondIcon />
           <span className="text-xs font-mono">figure</span>
         </div>
         {canAct && (
-          <div className="flex items-center gap-1 text-slate-500">
+          <div className="flex items-center gap-1 text-ink-muted">
             <button
               type="button"
               onClick={handleDownloadSvg}
               title="Download SVG"
               aria-label="Download as SVG"
-              className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:text-seshat-accent hover:bg-slate-700/40 transition-colors"
+              className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:text-seshat-accent hover:bg-line/40 transition-colors"
             >
               {feedback === 'svg' ? <CheckIcon /> : <DownloadIcon />}
               <span className="hidden sm:inline">svg</span>
@@ -294,7 +294,7 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
               onClick={handleDownloadPng}
               title="Download PNG"
               aria-label="Download as PNG"
-              className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:text-seshat-accent hover:bg-slate-700/40 transition-colors"
+              className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:text-seshat-accent hover:bg-line/40 transition-colors"
             >
               {feedback === 'png' ? <CheckIcon /> : <DownloadIcon />}
               <span className="hidden sm:inline">png</span>
@@ -304,56 +304,67 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
               onClick={handleCopySource}
               title="Copy SVG markup"
               aria-label="Copy SVG markup"
-              className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:text-seshat-accent hover:bg-slate-700/40 transition-colors"
+              className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:text-seshat-accent hover:bg-line/40 transition-colors"
             >
               {feedback === 'copy' ? <CheckIcon /> : <CopyIcon />}
               <span className="hidden sm:inline">copy</span>
             </button>
-            <span className="mx-1 h-3 w-px bg-slate-700/60" aria-hidden />
+            <span className="mx-1 h-3 w-px bg-line/60" aria-hidden />
             <button
               type="button"
               onClick={() => setView(isSource ? 'diagram' : 'source')}
-              className="text-xs px-1.5 py-0.5 rounded hover:text-seshat-accent hover:bg-slate-700/40 transition-colors"
+              className="text-xs px-1.5 py-0.5 rounded hover:text-seshat-accent hover:bg-line/40 transition-colors"
             >
               {isSource ? 'view diagram' : 'view source'}
             </button>
           </div>
         )}
         {status === 'error' && (
-          <span className="text-xs text-slate-600">source</span>
+          <span className="text-xs text-ink-muted">source</span>
         )}
       </div>
 
       {/* Loading state — three pulsing dots, reuses the tailwind.config pulse keyframe */}
       {status === 'loading' && (
-        <div className="flex items-center justify-center gap-1.5 min-h-[120px] bg-slate-900/40">
+        <div className="flex items-center justify-center gap-1.5 min-h-[120px] bg-surface/40">
           {[0, 200, 400].map((delay) => (
             <span
               key={delay}
-              className="w-1.5 h-1.5 rounded-full bg-slate-600 animate-pulse-dot"
+              className="w-1.5 h-1.5 rounded-full bg-line animate-pulse-dot"
               style={{ animationDelay: `${delay}ms` }}
             />
           ))}
         </div>
       )}
 
-      {/* SVG container — always mounted so the ref is available to the effect */}
-      <div
-        ref={containerRef}
-        className={[
-          'flex items-center justify-center p-6 sm:p-8',
-          'bg-gradient-to-b from-slate-900/60 to-slate-900/20',
-          'overflow-x-auto',
-          status !== 'rendered' || isSource ? 'hidden' : '',
-        ].join(' ')}
-      />
+      {/* SVG container — always mounted so the ref is available to the effect. */}
+      {
+        // palette-allowlist:start — the rendered diagram stays a fixed dark
+        // island in both themes (FRE-1265, same rationale as CodeBlock's own
+        // exemption above): mermaid.initialize's themeVariables (hardcoded
+        // hex, not a Tailwind utility so untouched by this ticket's regex
+        // either way) assume a dark backdrop, and re-theming the diagram
+        // itself means either re-initializing mermaid on every theme toggle
+        // or shipping a second theme — real work ungated by any AC here.
+        <div
+          ref={containerRef}
+          className={[
+            'flex items-center justify-center p-6 sm:p-8',
+            'bg-gradient-to-b from-slate-900/60 to-slate-900/20',
+            'overflow-x-auto',
+            status !== 'rendered' || isSource ? 'hidden' : '',
+          ].join(' ')}
+        />
+        // palette-allowlist:end
+      }
 
-      {/* Source / error fallback */}
+      {/* Source / error fallback — reuses CodeBlock's bg-[#0d1117] dark
+          syntax-highlight background directly (not a slate/blue utility). */}
       {status !== 'loading' && isSource && (
         <div>
           {status === 'error' && (
-            <div className="px-3 pt-2 border-l-2 border-rose-400/60">
-              <p className="text-xs text-rose-300/80">{errorMsg}</p>
+            <div className="px-3 pt-2 border-l-2 border-rose-700/60 dark:border-rose-400/60">
+              <p className="text-xs text-rose-700 dark:text-rose-300">{errorMsg}</p>
             </div>
           )}
           <pre className="m-0 p-3 overflow-x-auto text-xs leading-relaxed bg-[#0d1117]">

@@ -28,10 +28,10 @@ function PhaseRow({ node, now, children }: { node: PhaseNode; now: number; child
 
   return (
     <div data-testid={`phase-${node.phaseId}`} data-state={node.state} className="flex flex-col gap-1">
-      <div className="flex items-center gap-2 text-xs text-slate-400">
+      <div className="flex items-center gap-2 text-xs text-ink-muted">
         {node.state === 'running' && (
           <svg
-            className="animate-spin h-3.5 w-3.5 text-amber-400 flex-shrink-0"
+            className="animate-spin h-3.5 w-3.5 text-amber-700 dark:text-amber-400 flex-shrink-0"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
             viewBox="0 0 24 24"
@@ -46,7 +46,7 @@ function PhaseRow({ node, now, children }: { node: PhaseNode; now: number; child
         )}
         {node.state === 'completed' && (
           <svg
-            className="h-3.5 w-3.5 text-emerald-400 flex-shrink-0"
+            className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400 flex-shrink-0"
             xmlns="http://www.w3.org/2000/svg"
             viewBox="0 0 20 20"
             fill="currentColor"
@@ -58,18 +58,18 @@ function PhaseRow({ node, now, children }: { node: PhaseNode; now: number; child
             />
           </svg>
         )}
-        {node.state === 'cancelled' && <span className="text-slate-500 flex-shrink-0">■</span>}
-        {node.state === 'error' && <span className="text-red-400 flex-shrink-0">✕</span>}
+        {node.state === 'cancelled' && <span className="text-ink-muted flex-shrink-0">■</span>}
+        {node.state === 'error' && <span className="text-red-700 dark:text-red-400 flex-shrink-0">✕</span>}
 
         <span
           className={
             node.state === 'running'
-              ? 'font-mono text-amber-400'
+              ? 'font-mono text-amber-700 dark:text-amber-400'
               : node.state === 'completed'
-                ? 'font-mono text-emerald-400'
+                ? 'font-mono text-emerald-700 dark:text-emerald-400'
                 : node.state === 'error'
-                  ? 'font-mono text-red-400'
-                  : 'font-mono text-slate-500'
+                  ? 'font-mono text-red-700 dark:text-red-400'
+                  : 'font-mono text-ink-muted'
           }
         >
           {labelFor(node)}
@@ -79,7 +79,7 @@ function PhaseRow({ node, now, children }: { node: PhaseNode; now: number; child
           {node.state === 'cancelled' ? 'cancelled' : node.state === 'error' ? 'failed' : formatElapsed(elapsed)}
         </span>
       </div>
-      {showCandour && <div className="pl-5 text-[11px] text-slate-500">{ESCALATION_TEXT}</div>}
+      {showCandour && <div className="pl-5 text-[11px] text-ink-muted">{ESCALATION_TEXT}</div>}
       {children}
     </div>
   );
@@ -117,7 +117,7 @@ export function PhaseIndicator({ phases }: PhaseIndicatorProps) {
         return (
           <PhaseRow key={node.phaseId} node={node} now={now}>
             {kids.length > 0 && (
-              <div className="pl-5 flex flex-col gap-1 border-l border-slate-800">
+              <div className="pl-5 flex flex-col gap-1 border-l border-line">
                 {kids.map((child) => (
                   <PhaseRow key={child.phaseId} node={child} now={now} />
                 ))}

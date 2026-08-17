@@ -6,38 +6,13 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { TEST_SESSION, stubRest, stubWebSocket } from './helpers';
+import { TEST_SESSION, stubRest, stubWebSocket, contrastRatio, parseRgb } from './helpers';
 
 const CHAT_URL = `/c/${TEST_SESSION}`;
 const THEME_STORAGE_KEY = 'seshat-theme-override';
 
 async function bodyBackground(page: import('@playwright/test').Page): Promise<string> {
   return page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-}
-
-/** Parse an `rgb(r, g, b)` / `rgba(r, g, b, a)` string into channel values. */
-function parseRgb(color: string): [number, number, number] {
-  const m = color.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)/);
-  if (!m) throw new Error(`Unparseable colour: ${color}`);
-  return [Number(m[1]), Number(m[2]), Number(m[3])];
-}
-
-/** WCAG relative luminance (sRGB, 0..1). */
-function relativeLuminance([r, g, b]: [number, number, number]): number {
-  const chan = (c: number) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-  };
-  const [rl, gl, bl] = [chan(r), chan(g), chan(b)];
-  return 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
-}
-
-/** WCAG contrast ratio between two colours, each 4.5:1-testable either order. */
-function contrastRatio(a: string, b: string): number {
-  const la = relativeLuminance(parseRgb(a));
-  const lb = relativeLuminance(parseRgb(b));
-  const [lighter, darker] = la > lb ? [la, lb] : [lb, la];
-  return (lighter + 0.05) / (darker + 0.05);
 }
 
 test.describe('Theme layer (FRE-1264 AC-1, AC-2, AC-7)', () => {

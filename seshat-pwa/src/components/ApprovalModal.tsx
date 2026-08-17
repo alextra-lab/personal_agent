@@ -66,11 +66,14 @@ function secondsRemaining(expiresAt: string): number {
 function riskChipClasses(risk: ToolApprovalRequestData['risk_level']): string {
   switch (risk) {
     case 'low':
-      return 'bg-green-900/40 text-green-400 border border-green-700/50';
+      return 'bg-green-100 text-green-800 border border-green-300 dark:bg-green-900/40 dark:text-green-400 dark:border-green-700/50';
     case 'medium':
-      return 'bg-yellow-900/40 text-yellow-400 border border-yellow-700/50';
+      return 'bg-yellow-100 text-yellow-800 border border-yellow-300 dark:bg-yellow-900/40 dark:text-yellow-400 dark:border-yellow-700/50';
     case 'high':
-      return 'bg-red-900/40 text-red-400 border border-red-700/50';
+      // dark:text-red-300 (not -400) — composited against bg-red-900/40 over
+      // the modal's bg-surface, -400 measured 4.26:1 (just under WCAG AA);
+      // -300 clears it (FRE-1265 e2e contrast check).
+      return 'bg-red-100 text-red-800 border border-red-300 dark:bg-red-900/40 dark:text-red-300 dark:border-red-700/50';
   }
 }
 
@@ -129,16 +132,16 @@ export function ApprovalModal({ data, onApprove, onDeny }: ApprovalModalProps): 
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
     >
       {/* Modal card */}
-      <div className="w-full max-w-lg rounded-2xl bg-slate-800 border border-slate-700 shadow-2xl p-6 flex flex-col gap-4">
+      <div className="w-full max-w-lg rounded-2xl bg-surface border border-line shadow-2xl p-6 flex flex-col gap-4">
 
         {/* Header row: tool name + risk chip */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2
             id="approval-modal-title"
-            className="text-base font-semibold text-slate-100 truncate"
+            className="text-base font-semibold text-ink truncate"
           >
             Tool approval required:{' '}
-            <span className="font-mono text-violet-300">{data.tool}</span>
+            <span className="font-mono text-violet-700 dark:text-violet-300">{data.tool}</span>
           </h2>
           <span className={`px-2 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide flex-shrink-0 ${riskChipClasses(data.risk_level)}`}>
             {data.risk_level}
@@ -146,13 +149,13 @@ export function ApprovalModal({ data, onApprove, onDeny }: ApprovalModalProps): 
         </div>
 
         {/* Reason */}
-        <p className="text-sm text-slate-300 leading-relaxed">
+        <p className="text-sm text-ink-muted leading-relaxed">
           {data.reason}
         </p>
 
         {/* Collapsible args */}
         <details className="group">
-          <summary className="cursor-pointer text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors select-none list-none flex items-center gap-1.5">
+          <summary className="cursor-pointer text-xs font-medium text-ink-muted hover:text-ink transition-colors select-none list-none flex items-center gap-1.5">
             <svg
               className="w-3 h-3 transition-transform group-open:rotate-90"
               viewBox="0 0 12 12"
@@ -162,15 +165,15 @@ export function ApprovalModal({ data, onApprove, onDeny }: ApprovalModalProps): 
             </svg>
             Arguments
           </summary>
-          <pre className="mt-2 p-3 rounded-lg bg-slate-900 text-xs text-slate-300 overflow-x-auto font-mono leading-relaxed">
+          <pre className="mt-2 p-3 rounded-lg bg-bg text-xs text-ink-muted overflow-x-auto font-mono leading-relaxed">
             {prettyArgs}
           </pre>
         </details>
 
         {/* Countdown */}
-        <p className="text-xs text-slate-500 text-right">
+        <p className="text-xs text-ink-muted text-right">
           Auto-denies in{' '}
-          <span className={countdown <= 10 ? 'text-red-400 font-semibold' : 'text-slate-400'}>
+          <span className={countdown <= 10 ? 'text-red-700 dark:text-red-300 font-semibold' : 'text-ink-muted'}>
             {countdown}s
           </span>
         </p>
@@ -180,13 +183,13 @@ export function ApprovalModal({ data, onApprove, onDeny }: ApprovalModalProps): 
           <button
             ref={denyRef}
             onClick={onDeny}
-            className="px-4 py-2 rounded-lg text-sm font-semibold border border-red-600 text-red-400 hover:bg-red-900/30 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-slate-800 transition-colors"
+            className="px-4 py-2 rounded-lg text-sm font-semibold border border-red-600 text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/30 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-surface transition-colors"
           >
             Deny
           </button>
           <button
             onClick={onApprove}
-            className="px-4 py-2 rounded-lg text-sm font-semibold bg-green-700 text-white hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:ring-offset-slate-800 transition-colors"
+            className="px-4 py-2 rounded-lg text-sm font-semibold bg-green-700 text-white hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:ring-offset-surface transition-colors"
           >
             Approve
           </button>

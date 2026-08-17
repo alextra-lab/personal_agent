@@ -54,18 +54,23 @@ export function ClassifiedErrorCard({
   };
 
   return (
+    // Fixed dark-red alert card in dark mode (#1b1416/#9f2d22 — not a token
+    // value, a deliberate saturated-error look) paired with an explicit
+    // light-mode red-tinted card, same two-palette pattern as DecisionCard's
+    // sky treatment (FRE-1265) — the old plain `text-slate-*` on this fixed
+    // dark background would render as near-black-on-dark-red in light mode.
     <div
       role="alert"
-      className="rounded-lg border border-red-500/30 bg-[#1b1416] p-4 text-slate-200"
+      className="rounded-lg border border-red-300 bg-red-50 p-4 text-red-950 dark:border-red-500/30 dark:bg-[#1b1416] dark:text-ink-muted"
     >
       <div className="flex items-start gap-2">
-        <span aria-hidden="true" className="mt-0.5 text-red-400">⚠</span>
+        <span aria-hidden="true" className="mt-0.5 text-red-600 dark:text-red-400">⚠</span>
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-slate-100">{title}</div>
-          <div className="mt-1 text-sm text-slate-300">{error.reason}</div>
-          <div className="mt-1 text-sm text-slate-400">{error.next_step}</div>
+          <div className="font-semibold text-red-950 dark:text-ink">{title}</div>
+          <div className="mt-1 text-sm text-red-900 dark:text-ink-muted">{error.reason}</div>
+          <div className="mt-1 text-sm text-red-800 dark:text-ink-muted">{error.next_step}</div>
           {error.partial && (
-            <div className="mt-2 text-xs text-slate-500 italic">
+            <div className="mt-2 text-xs text-red-700 dark:text-ink-muted italic">
               Partial results from this turn were salvaged above.
             </div>
           )}
@@ -82,7 +87,7 @@ export function ClassifiedErrorCard({
               className={
                 i === 0
                   ? 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-[#9f2d22] text-red-100 hover:bg-[#b3362a] transition-colors'
-                  : 'px-3 py-1.5 rounded-lg text-sm font-semibold border border-slate-600 text-slate-300 hover:bg-slate-800 transition-colors'
+                  : 'px-3 py-1.5 rounded-lg text-sm font-semibold border border-line text-ink-muted hover:bg-line/40 transition-colors'
               }
             >
               {ACTION_LABELS[actionId] ?? actionId}

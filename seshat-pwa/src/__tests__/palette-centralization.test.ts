@@ -38,11 +38,30 @@ const CONVERTED_FILES = [
   'components/SessionList.tsx',
   'components/ChatInput.tsx',
   'components/TurnSummaryPanel.tsx',
+  // FRE-1265 — the remaining hardcoded-dark surfaces.
+  'components/ApprovalModal.tsx',
+  'components/DecisionCard.tsx',
+  'components/ClassifiedErrorCard.tsx',
+  'components/ModelPicker.tsx',
+  'components/PhaseIndicator.tsx',
+  'components/TurnRating.tsx',
+  'components/LocationConsent.tsx',
+  'components/ArtifactViewer.tsx',
+  'components/ArtifactExportMenu.tsx',
+  'components/ArtifactCard.tsx',
+  'components/ArtifactsIndex.tsx',
+  'components/ObserveView.tsx',
+  'components/MermaidBlock.tsx',
 ];
 
-// Matches bg-/text-/border- slate or blue utilities, with an optional
-// Tailwind opacity suffix (e.g. `border-slate-700/50`).
-const DIRECT_PALETTE_UTILITY = /\b(?:bg|text|border)-(?:slate|blue)-\d{2,3}(?:\/\d{1,3})?\b/g;
+// Matches bg-/text-/border-/ring-/divide-/from-/to- slate or blue utilities,
+// with an optional Tailwind opacity suffix (e.g. `border-slate-700/50`).
+// ring-/divide-/from-/to- added in FRE-1265 (MermaidBlock.tsx's
+// ring-slate-700/30 and from-slate-900/60 to-slate-900/20, ArtifactsIndex's
+// divide-slate-800/60) — none of the FRE-1264 CONVERTED_FILES use these
+// prefixes, confirmed before widening so this doesn't regress them.
+const DIRECT_PALETTE_UTILITY =
+  /\b(?:bg|text|border|ring|divide|from|to)-(?:slate|blue)-\d{2,3}(?:\/\d{1,3})?\b/g;
 
 function stripAllowlistedRegions(source: string): string {
   return source.replace(
@@ -64,6 +83,21 @@ describe('AC-3 — palette centralization', () => {
     // markers stop bracketing any slate usage, they're dead weight and the
     // real exemption might have leaked outside them undetected.
     const source = readFileSync(resolve(SRC_ROOT, 'components/MarkdownContent.tsx'), 'utf-8');
+    const region = source.match(
+      /\/\/\s*palette-allowlist:start[\s\S]*?\/\/\s*palette-allowlist:end/,
+    )?.[0];
+    expect(region).toBeDefined();
+    expect(region!.match(DIRECT_PALETTE_UTILITY)?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('the MermaidBlock allowlist region actually contains what it exists to exempt', () => {
+    // Same guard as above (FRE-1265): the rendered diagram canvas stays a
+    // fixed-dark island — mermaid's own theme (hardcoded hex passed to
+    // mermaid.initialize, not a Tailwind utility) assumes a dark backdrop.
+    // The source/error fallback reuses CodeBlock's bg-[#0d1117] arbitrary
+    // value directly and needs no allowlist — it was never a slate/blue
+    // utility to begin with.
+    const source = readFileSync(resolve(SRC_ROOT, 'components/MermaidBlock.tsx'), 'utf-8');
     const region = source.match(
       /\/\/\s*palette-allowlist:start[\s\S]*?\/\/\s*palette-allowlist:end/,
     )?.[0];

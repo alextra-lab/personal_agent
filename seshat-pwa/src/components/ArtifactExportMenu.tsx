@@ -95,7 +95,7 @@ export function ArtifactExportMenu({ artifactId, filename }: ArtifactExportMenuP
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Export artifact"
-        className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded text-slate-400 hover:text-blue-400 hover:bg-slate-700/40 transition-colors disabled:opacity-60"
+        className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded text-ink-muted hover:text-accent hover:bg-line/40 transition-colors disabled:opacity-60"
       >
         {busy ? 'Exporting…' : 'Export ▾'}
       </button>
@@ -103,27 +103,27 @@ export function ArtifactExportMenu({ artifactId, filename }: ArtifactExportMenuP
       {open && (
         <div
           role="menu"
-          className="absolute right-0 top-full mt-1 z-50 w-56 rounded-md border border-slate-700 bg-slate-800 shadow-xl py-1"
+          className="absolute right-0 top-full mt-1 z-50 w-56 rounded-md border border-line bg-surface shadow-xl py-1"
         >
           <button
             type="button"
             role="menuitem"
             onClick={() => handleExport('inline')}
             disabled={busy}
-            className="w-full text-left px-3 py-2 hover:bg-slate-700/60 transition-colors disabled:opacity-60"
+            className="w-full text-left px-3 py-2 hover:bg-line/60 transition-colors disabled:opacity-60"
           >
-            <span className="block text-xs font-medium text-slate-100">Offline (portable)</span>
-            <span className="block text-[11px] text-slate-400">Self-contained, opens anywhere</span>
+            <span className="block text-xs font-medium text-ink">Offline (portable)</span>
+            <span className="block text-[11px] text-ink-muted">Self-contained, opens anywhere</span>
           </button>
           <button
             type="button"
             role="menuitem"
             onClick={() => handleExport('substitute')}
             disabled={busy}
-            className="w-full text-left px-3 py-2 hover:bg-slate-700/60 transition-colors disabled:opacity-60"
+            className="w-full text-left px-3 py-2 hover:bg-line/60 transition-colors disabled:opacity-60"
           >
-            <span className="block text-xs font-medium text-slate-100">Online (lean)</span>
-            <span className="block text-[11px] text-slate-400">CDN refs + SRI, needs internet</span>
+            <span className="block text-xs font-medium text-ink">Online (lean)</span>
+            <span className="block text-[11px] text-ink-muted">CDN refs + SRI, needs internet</span>
           </button>
         </div>
       )}

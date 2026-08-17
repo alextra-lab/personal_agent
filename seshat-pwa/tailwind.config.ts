@@ -18,13 +18,16 @@ const config: Config = {
         // custom properties in globals.css, which flip under `.dark`.
         // Additive: does not touch the `seshat` / `slate` / `blue` overrides
         // below, which keep not-yet-converted components' dark look intact.
-        bg: 'var(--bg)',
-        surface: 'var(--surface)',
-        line: 'var(--line)',
-        ink: 'var(--ink)',
-        'ink-muted': 'var(--ink-muted)',
-        accent: 'var(--accent)',
-        'accent-hover': 'var(--accent-hover)',
+        // rgb(var(--x) / <alpha-value>) (not a bare var(--x)) so Tailwind can
+        // apply opacity modifiers (bg-accent/15 etc.) — globals.css stores
+        // these as RGB triplets, not hex, to match (FRE-1265).
+        bg: 'rgb(var(--bg) / <alpha-value>)',
+        surface: 'rgb(var(--surface) / <alpha-value>)',
+        line: 'rgb(var(--line) / <alpha-value>)',
+        ink: 'rgb(var(--ink) / <alpha-value>)',
+        'ink-muted': 'rgb(var(--ink-muted) / <alpha-value>)',
+        accent: 'rgb(var(--accent) / <alpha-value>)',
+        'accent-hover': 'rgb(var(--accent-hover) / <alpha-value>)',
         seshat: {
           dark: '#1e2940',            // was #0f172a
           surface: '#2b3a55',         // was #1e293b

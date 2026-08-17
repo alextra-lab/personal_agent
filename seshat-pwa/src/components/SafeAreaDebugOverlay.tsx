@@ -185,7 +185,14 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
       data-testid="safe-area-debug-overlay"
       style={{
         position: 'fixed',
-        top: 0,
+        // Starts below the header's own control zone (hamburger left, New
+        // button right, title center) rather than at top:0 — self-review
+        // found the experiment button's pointerEvents:'auto' hit-box
+        // otherwise overlaps and steals taps from the hamburger button.
+        // Matches the header's own safe-area-aware offset (StreamingChat.tsx)
+        // so it clears the taller real-device header too, not just the
+        // zero-inset headless/CI case.
+        top: 'calc(env(safe-area-inset-top, 0px) + 4rem)',
         left: 0,
         right: 0,
         zIndex: 9999,

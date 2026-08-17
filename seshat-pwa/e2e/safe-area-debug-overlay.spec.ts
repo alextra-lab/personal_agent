@@ -89,13 +89,29 @@ test.describe('SafeAreaDebugOverlay (FRE-1269, temporary diagnostic)', () => {
     const overlay = page.getByTestId('safe-area-debug-overlay');
     await overlay.waitFor();
 
-    // The overlay's non-button area sits on top of the header (fixed, top:0)
-    // — closing via the same 5-tap gesture must still work while it's open.
+    // No force: true — a real, unobstructed click is the whole point of
+    // this test. The overlay starts below the header (see its `top` style)
+    // specifically so the experiment button's pointerEvents:'auto' hit-box
+    // can never steal taps meant for the header's own controls.
     const title = page.getByTestId('header-title');
     for (let i = 0; i < 5; i++) {
-      await title.click({ force: true });
+      await title.click();
     }
     await expect(overlay).toHaveCount(0);
+  });
+
+  test('the hamburger menu button stays clickable while the overlay is open', async ({ page }) => {
+    // Self-review (round 7) caught the experiment button's hit-box
+    // overlapping the header's own hamburger control when the overlay
+    // started at top:0 — this asserts the actual regression, not just the
+    // title's own gesture.
+    await stubRest(page);
+    await stubWebSocket(page);
+    await page.goto(`${CHAT_URL}?debug=safearea`);
+
+    await page.getByTestId('safe-area-debug-overlay').waitFor();
+    await page.getByRole('button', { name: 'Open session list' }).click();
+    await expect(page.getByText('Artifacts')).toBeVisible();
   });
 
   test('closing the overlay reverts an active experiment', async ({ page }) => {
@@ -112,7 +128,7 @@ test.describe('SafeAreaDebugOverlay (FRE-1269, temporary diagnostic)', () => {
 
     const title = page.getByTestId('header-title');
     for (let i = 0; i < 5; i++) {
-      await title.click({ force: true });
+      await title.click();
     }
     await expect(overlay).toHaveCount(0);
 

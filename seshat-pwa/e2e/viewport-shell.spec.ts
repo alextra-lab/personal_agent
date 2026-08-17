@@ -112,12 +112,13 @@ test.describe('Shell viewport containment (FRE-1266)', () => {
     await stubWebSocket(page);
     await page.goto(CHAT_URL);
 
-    // The footer is the pinned region — its own 0.5rem bottom padding (form
-    // padding, for safe-area clearance and tap comfort around the rounded
-    // input card) is deliberate and stays even after this fix; it's the
-    // `composer-container` card inside it that carries that breathing room.
-    // What must never happen is the *footer itself* floating away from the
-    // true viewport bottom, which is what the owner circled.
+    // The footer is the pinned region. FRE-1267 moved the safe-area-inset
+    // clearance from the <form>'s own paddingBottom into the
+    // `composer-container` card itself, so the card's fill now reaches the
+    // true viewport bottom instead of floating above it — see
+    // composer-safe-area.spec.ts for that geometry. What this test still
+    // guards is that the *footer itself* never floats away from the true
+    // viewport bottom, which is what the owner originally circled.
     const footer = page.locator('footer');
     await footer.waitFor();
     // The mount-time auto-scroll-to-latest-message runs `{behavior: 'smooth'}`

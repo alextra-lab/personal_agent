@@ -102,3 +102,18 @@ export async function sendChatMessage(page: Page, text: string): Promise<void> {
   await page.fill('[placeholder="Message Seshat..."]', text);
   await page.click('[aria-label="Send message"]');
 }
+
+// ---------------------------------------------------------------------------
+// Safe-area inset override (FRE-1267)
+// ---------------------------------------------------------------------------
+
+/**
+ * Force the `--safe-bottom` custom property (globals.css) to a fixed pixel
+ * value so a non-zero `env(safe-area-inset-bottom)` can be exercised in a
+ * headless Chromium run, where the real env() value is always 0. Call after
+ * `page.goto()` — the `!important` root declaration wins the cascade and
+ * `var()` resolution updates on the next layout, no reload needed.
+ */
+export async function overrideSafeAreaBottom(page: Page, px: number): Promise<void> {
+  await page.addStyleTag({ content: `:root { --safe-bottom: ${px}px !important; }` });
+}

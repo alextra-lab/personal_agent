@@ -271,19 +271,24 @@ export function ChatInput({
         </div>
       )}
 
-      <form
-        onSubmit={handleSubmit}
-        className="px-4 pt-3"
-        style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.5rem)' }}
-      >
+      <form onSubmit={handleSubmit} className="px-4 pt-3">
         {/*
           Two-row composer (FRE-1263): the textarea's own wrapper holds nothing
           else, so it stays out of the controls' flex row entirely — the fix
           is structural, not just a wider textarea (see AC-1 in the ticket).
         */}
+        {/*
+          Filled panel, no border (FRE-1267): the safe-area-inset-bottom lives
+          here as the container's own paddingBottom — internal space below the
+          controls row — rather than on the <form> as space outside the card,
+          so the card's fill reaches the true viewport bottom instead of
+          floating above it. The controls row's own pb-2 (tap-comfort padding,
+          independent of the inset) is untouched.
+        */}
         <div
           data-testid="composer-container"
-          className="flex flex-col rounded-2xl border border-line bg-surface focus-within:border-ink-muted focus-within:ring-1 focus-within:ring-ink-muted/30 transition-colors duration-150"
+          className="flex flex-col rounded-2xl bg-surface focus-within:ring-2 focus-within:ring-ink-muted transition-colors duration-150"
+          style={{ paddingBottom: 'var(--safe-bottom, 0px)' }}
         >
           <div>
             <textarea
@@ -306,7 +311,7 @@ export function ChatInput({
             />
           </div>
 
-          <div className="flex items-center gap-2 px-3 pb-2 pt-1">
+          <div data-testid="composer-controls" className="flex items-center gap-2 px-3 pb-2 pt-1">
             <ModelPicker
               candidates={candidates}
               selectedKey={selectedModelKey}

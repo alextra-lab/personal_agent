@@ -380,7 +380,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
 
       {/* Message list */}
       {/* relative: without it, this scroll container is `position: static` while
-          its ancestor (the root div, two levels up) is `position: relative` —
+          its direct parent (this component's root div) is `position: relative` —
           so any `position: absolute` descendant (e.g. the sr-only labels in
           ChatMessage) is contained by that ancestor instead of by this clipped
           scroller, and its static-position offset (based on the message's

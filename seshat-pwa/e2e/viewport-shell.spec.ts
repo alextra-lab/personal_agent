@@ -6,10 +6,14 @@
  * only be proven against a real rendered page.
  *
  * AC-1 and AC-4 are the discriminating pair: both regressed on `main` before
- * this fix (missing `min-h-0` on the scrolling `<main>`, and a 3-row-tall
- * composer that pushed the shell past 100vh). See the FRE-1266 ticket
- * handoff comment for the seeded-negative pre-fix values these tests
- * recorded against the pre-fix code.
+ * this fix. The regression had three contributing causes, only two of which
+ * the ticket named: missing `min-h-0` on the scrolling `<main>`; a 3-row-tall
+ * composer; and (found via these tests' own seeded-negative failures, not
+ * named in the ticket) `<main>` being `position: static` while its parent is
+ * `position: relative`, letting `position: absolute` sr-only descendants
+ * escape the scroll clip and inflate the *document's* scrollHeight. See the
+ * FRE-1266 ticket handoff comment for the seeded-negative pre-fix values
+ * these tests recorded against the pre-fix code.
  */
 
 import { test, expect } from '@playwright/test';
@@ -125,10 +129,11 @@ test.describe('Shell viewport containment (FRE-1266)', () => {
     expect(box).not.toBeNull();
 
     // env(safe-area-inset-bottom) is 0 in headless chromium, so the footer
-    // bottom should land within 2px of the viewport bottom.
+    // bottom should land within 2px of the viewport bottom, in either
+    // direction — a gap remaining (positive) is the band the owner circled;
+    // overflowing past the viewport bottom (negative) would be a new defect.
     const gap = 844 - (box!.y + box!.height);
-    // Fails if any gap remains — that is the band the owner circled.
-    expect(gap).toBeLessThanOrEqual(2);
+    expect(Math.abs(gap)).toBeLessThanOrEqual(2);
   });
 
   test('AC-5: the textarea starts at one row and grows to the 200px ceiling', async ({ page }) => {
@@ -153,5 +158,18 @@ test.describe('Shell viewport containment (FRE-1266)', () => {
 
     const maxHeightPx = await textarea.evaluate((el) => parseFloat(getComputedStyle(el).maxHeight));
     expect(maxHeightPx).toBe(200);
+
+    // Long enough to actually exceed the 200px ceiling (not just wrap a few
+    // lines) — proves the cap is real and the overflow scrolls internally,
+    // not just that the CSS property says 200.
+    await textarea.fill('word '.repeat(400));
+    const cappedBox = await textarea.boundingBox();
+    expect(cappedBox).not.toBeNull();
+    expect(cappedBox!.height).toBeCloseTo(200, 0);
+    const { scrollHeight, clientHeight } = await textarea.evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+    expect(scrollHeight).toBeGreaterThan(clientHeight);
   });
 });

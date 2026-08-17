@@ -67,11 +67,6 @@ function measure(): SafeAreaMeasurements {
     svh100,
     dvh100,
     displayModeStandalone: window.matchMedia('(display-mode: standalone)').matches,
-    // Round-7 additions (codex adversarial review): a 100vh probe reading
-    // the physical screen height proves CSS unit *resolution*, not that
-    // content is actually *paintable* there (WebKit 301994's own report
-    // draws exactly this distinction) — scroll state and visualViewport
-    // offsets are what can actually tell the two apart.
     scrollY: window.scrollY,
     htmlScrollHeight: html.scrollHeight,
     bodyScrollHeight: body.scrollHeight,
@@ -88,74 +83,40 @@ function measure(): SafeAreaMeasurements {
  *
  * Two independent triggers, both required: a standalone home-screen PWA has
  * no URL bar, so ?debug=safearea alone is unreachable in exactly the launch
- * mode this diagnostic exists to inspect (FRE-1269 follow-up). The header's
- * 5-rapid-tap gesture (StreamingChat.tsx) works there too, via
- * SAFE_AREA_DEBUG_TOGGLE_EVENT.
+ * mode this diagnostic exists to inspect. The header's 5-rapid-tap gesture
+ * (StreamingChat.tsx) works there too, via SAFE_AREA_DEBUG_TOGGLE_EVENT.
  *
- * Round-7 addition: a live "100vh experiment" toggle applies the candidate
- * fix (html/body height:100vh, via inline style — no rebuild needed) on the
- * already-deployed page so the owner can screenshot the *actual rendered
- * result*, not just a hidden probe's CSS resolution — codex's adversarial
- * review found the probe alone can't distinguish a value WebKit resolves
- * from one it actually paints (WebKit bug 301994's own framing). Reverts
- * automatically when the overlay closes, so it can never persist unnoticed.
- *
- * Remove all of this once the standalone bottom-gap mechanism is confirmed
- * and fixed.
+ * The real standalone-scoped fix has since shipped (globals.css). A
+ * round-7/8 live "100vh experiment" toggle that lived here — used to
+ * validate the fix on-device before committing to it — is retired now that
+ * the fix is real: reverting it in standalone mode would no longer restore
+ * old (broken) behavior, since removing the inline override just reveals
+ * the same shipped CSS rule underneath. Kept as read-only measurements for
+ * this deploy in case the owner's final validation surfaces something an
+ * orientation change, keyboard, or background/resume cycle exposes that
+ * the single-screenshot experiment didn't cover. Remove entirely once AC-2
+ * closes.
  */
 export function SafeAreaDebugOverlay(): React.JSX.Element | null {
   const [enabled, setEnabled] = useState(false);
-  const [experimentOn, setExperimentOn] = useState(false);
   const [data, setData] = useState<SafeAreaMeasurements | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('debug') === 'safearea') setEnabled(true);
 
-    const toggle = () =>
-      setEnabled((prev) => {
-        const next = !prev;
-        if (!next) setExperimentOn(false);
-        return next;
-      });
+    const toggle = () => setEnabled((prev) => !prev);
     window.addEventListener(SAFE_AREA_DEBUG_TOGGLE_EVENT, toggle);
     return () => window.removeEventListener(SAFE_AREA_DEBUG_TOGGLE_EVENT, toggle);
   }, []);
 
-  // Applies/reverts the candidate fix via inline style (higher specificity
-  // than the .h-full Tailwind class — no rebuild needed to test it), THEN
-  // re-measures in the same effect so ordering is guaranteed — style change
-  // lands before the read. Previously the measurement effect only depended
-  // on [enabled], so toggling the experiment changed the DOM but never
-  // refreshed the displayed numbers, showing stale pre-toggle figures (a
-  // real bug: the owner's round-7 screenshot never demonstrated the
-  // experiment's effect at all because of this). The cleanup runs on every
-  // dependency change AND unmount, so closing the overlay (enabled -> false)
-  // or the component ever unmounting always reverts it — an experiment can
-  // never be left silently applied.
   useEffect(() => {
-    const html = document.documentElement;
-    const body = document.body;
-    if (enabled && experimentOn) {
-      html.style.height = '100vh';
-      body.style.height = '100vh';
-    } else {
-      html.style.removeProperty('height');
-      body.style.removeProperty('height');
+    if (!enabled) {
+      setData(null);
+      return;
     }
-    setData(enabled ? measure() : null);
-    return () => {
-      html.style.removeProperty('height');
-      body.style.removeProperty('height');
-    };
-  }, [enabled, experimentOn]);
-
-  // Keeps the numbers live across real environmental changes (keyboard,
-  // rotation) while the overlay stays open with the experiment state
-  // unchanged — independent of the toggle above.
-  useEffect(() => {
-    if (!enabled) return;
     const update = () => setData(measure());
+    update();
     window.addEventListener('resize', update);
     window.visualViewport?.addEventListener('resize', update);
     return () => {
@@ -194,25 +155,19 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
       data-testid="safe-area-debug-overlay"
       style={{
         position: 'fixed',
-        // Starts below the header's own control zone (hamburger left, New
-        // button right, title center) rather than at top:0 — self-review
-        // found the experiment button's pointerEvents:'auto' hit-box
-        // otherwise overlaps and steals taps from the hamburger button.
-        // Matches the header's own safe-area-aware offset (StreamingChat.tsx)
-        // so it clears the taller real-device header too, not just the
-        // zero-inset headless/CI case.
+        // Starts below the header's own control zone rather than top:0 —
+        // matches the header's own safe-area-aware offset so it clears the
+        // taller real-device header too, not just the zero-inset
+        // headless/CI case.
         top: 'calc(env(safe-area-inset-top, 0px) + 4rem)',
         left: 0,
         right: 0,
         zIndex: 9999,
-        // Near-opaque background used to paint over whatever's underneath —
-        // including the header this round is specifically trying to
-        // inspect, and (depending on content length) the composer at the
-        // bottom of the screen too. A round-8 screenshot meant to check the
-        // header's position showed no header at all, because this overlay
-        // was covering it. Kept deliberately translucent instead, with a
-        // strong text-shadow for legibility, so a single screenshot can show
-        // both the numbers and whatever real UI is behind them.
+        // Translucent, not opaque — a round-8 screenshot meant to check the
+        // header's position showed no header at all, because an earlier,
+        // near-opaque background was painting over it. Kept translucent
+        // with a text-shadow for legibility, so a screenshot can show both
+        // the numbers and whatever real UI is behind them.
         background: 'rgba(0,0,0,0.35)',
         color: '#0f0',
         textShadow: '0 0 3px #000, 0 0 3px #000, 0 1px 2px #000',
@@ -220,42 +175,12 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
         fontSize: '11px',
         lineHeight: 1.4,
         padding: '8px',
-        // Lets taps reach whatever is underneath (e.g. the header's own
-        // close gesture) everywhere except the experiment button below,
-        // which explicitly re-enables pointer events on itself.
+        // Read-only — nothing in here is interactive, so it never blocks
+        // taps on whatever's underneath (e.g. the header's own close
+        // gesture).
         pointerEvents: 'none',
       }}
     >
-      {experimentOn && (
-        <div
-          style={{
-            color: '#ff0',
-            fontWeight: 'bold',
-            marginBottom: '4px',
-            textShadow: '0 0 3px #000, 0 0 3px #000, 0 1px 2px #000',
-          }}
-        >
-          100vh EXPERIMENT ACTIVE — not the shipped behavior
-        </div>
-      )}
-      <button
-        type="button"
-        data-testid="safe-area-experiment-toggle"
-        onClick={() => setExperimentOn((prev) => !prev)}
-        style={{
-          pointerEvents: 'auto',
-          background: experimentOn ? '#ff0' : '#333',
-          color: experimentOn ? '#000' : '#0f0',
-          border: '1px solid #0f0',
-          borderRadius: '4px',
-          padding: '4px 8px',
-          marginBottom: '6px',
-          fontFamily: 'monospace',
-          fontSize: '11px',
-        }}
-      >
-        {experimentOn ? 'Revert 100vh experiment' : 'Try 100vh experiment (live, reversible)'}
-      </button>
       {rows.map(([label, value]) => (
         <div key={label}>
           {label}: {value}

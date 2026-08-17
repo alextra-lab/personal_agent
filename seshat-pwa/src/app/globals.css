@@ -83,6 +83,26 @@ body {
   overscroll-behavior: none; /* prevent bounce on iOS Safari in standalone mode */
 }
 
+/* FRE-1269: iOS standalone-launch WebKit bug — innerHeight, clientHeight,
+   visualViewport.height, 100dvh and 100svh all get stuck reporting a stale,
+   undersized viewport at launch (measured 62px short of the true screen on
+   an affected device), while 100vh alone reports the correct physical
+   height and forcing a layout recalculation against it corrects the stuck
+   values too. Confirmed via a live on-device toggle before shipping this:
+   composer/footer reach the true screen bottom with no overshoot, no
+   scroll/overflow introduced, and no change to the header's position.
+   Scoped to display-mode:standalone only — the Safari-tab launch path
+   already renders correctly and 100vh carries its own separate, unrelated
+   bugs there. `html.h-full`/`body.h-full` (not the bare type selector)
+   because Tailwind's .h-full utility (specificity 0,1,0) otherwise wins
+   over a plain `html, body` rule (0,0,1) regardless of source order. */
+@media (display-mode: standalone) {
+  html.h-full,
+  body.h-full {
+    height: 100vh;
+  }
+}
+
 /* Safe-area insets for iPhone notch / home indicator */
 :root {
   --safe-top: env(safe-area-inset-top, 0px);

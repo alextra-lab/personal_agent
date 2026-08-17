@@ -37,6 +37,103 @@ test.describe('SafeAreaDebugOverlay (FRE-1269, temporary diagnostic)', () => {
     expect(text).toContain('footer bottom');
     expect(text).toContain('100dvh probe');
     expect(text).toContain('display-mode: standalone');
+    // FRE-1269 round-7 additions — codex flagged the original probe set as
+    // insufficient to distinguish CSS-resolution from actual paintability,
+    // and the 62px gap's split (safe-area vs unexplained) was unproven
+    // without also measuring the top inset.
+    expect(text).toContain('--safe-top');
+    expect(text).toContain('scrollY');
+    expect(text).toContain('html.scrollHeight');
+    expect(text).toContain('visualViewport.offsetTop');
+    expect(text).toContain('visualViewport.pageTop');
+    expect(text).toContain('activeElement');
+  });
+
+  test('the 100vh live-experiment toggle applies and reverts an inline height override', async ({
+    page,
+  }) => {
+    await stubRest(page);
+    await stubWebSocket(page);
+    await page.goto(`${CHAT_URL}?debug=safearea`);
+
+    const overlay = page.getByTestId('safe-area-debug-overlay');
+    await overlay.waitFor();
+
+    const heightBefore = await page.evaluate(() => document.documentElement.style.height);
+    expect(heightBefore).toBe('');
+
+    const toggle = page.getByTestId('safe-area-experiment-toggle');
+    await toggle.click();
+
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.style.height))
+      .toBe('100vh');
+    const bodyHeightOn = await page.evaluate(() => document.body.style.height);
+    expect(bodyHeightOn).toBe('100vh');
+
+    await toggle.click();
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.style.height))
+      .toBe('');
+    const bodyHeightOff = await page.evaluate(() => document.body.style.height);
+    expect(bodyHeightOff).toBe('');
+  });
+
+  test('the experiment toggle button does not block the header gesture underneath it', async ({
+    page,
+  }) => {
+    await stubRest(page);
+    await stubWebSocket(page);
+    await page.goto(`${CHAT_URL}?debug=safearea`);
+
+    const overlay = page.getByTestId('safe-area-debug-overlay');
+    await overlay.waitFor();
+
+    // No force: true — a real, unobstructed click is the whole point of
+    // this test. The overlay starts below the header (see its `top` style)
+    // specifically so the experiment button's pointerEvents:'auto' hit-box
+    // can never steal taps meant for the header's own controls.
+    const title = page.getByTestId('header-title');
+    for (let i = 0; i < 5; i++) {
+      await title.click();
+    }
+    await expect(overlay).toHaveCount(0);
+  });
+
+  test('the hamburger menu button stays clickable while the overlay is open', async ({ page }) => {
+    // Self-review (round 7) caught the experiment button's hit-box
+    // overlapping the header's own hamburger control when the overlay
+    // started at top:0 — this asserts the actual regression, not just the
+    // title's own gesture.
+    await stubRest(page);
+    await stubWebSocket(page);
+    await page.goto(`${CHAT_URL}?debug=safearea`);
+
+    await page.getByTestId('safe-area-debug-overlay').waitFor();
+    await page.getByRole('button', { name: 'Open session list' }).click();
+    await expect(page.getByText('Artifacts')).toBeVisible();
+  });
+
+  test('closing the overlay reverts an active experiment', async ({ page }) => {
+    await stubRest(page);
+    await stubWebSocket(page);
+    await page.goto(`${CHAT_URL}?debug=safearea`);
+
+    const overlay = page.getByTestId('safe-area-debug-overlay');
+    await overlay.waitFor();
+    await page.getByTestId('safe-area-experiment-toggle').click();
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.style.height))
+      .toBe('100vh');
+
+    const title = page.getByTestId('header-title');
+    for (let i = 0; i < 5; i++) {
+      await title.click();
+    }
+    await expect(overlay).toHaveCount(0);
+
+    const heightAfterClose = await page.evaluate(() => document.documentElement.style.height);
+    expect(heightAfterClose).toBe('');
   });
 
   test('5 rapid taps on the header title toggles the overlay open, then closed again', async ({

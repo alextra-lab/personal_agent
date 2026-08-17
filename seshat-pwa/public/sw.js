@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v47-safe-area-gesture';
+const CACHE_NAME = 'seshat-v48-safe-area-experiment';
 
 const PRECACHE_URLS = [
   '/',

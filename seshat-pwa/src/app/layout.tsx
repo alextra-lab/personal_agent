@@ -4,6 +4,7 @@ import Script from 'next/script';
 import './globals.css';
 import { RegisterSW } from '@/components/RegisterSW';
 import { RuntimeConfigProvider } from '@/components/RuntimeConfigProvider';
+import { SafeAreaDebugOverlay } from '@/components/SafeAreaDebugOverlay';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 // Curated artifact toolkit alignment (FRE-532): bundle our own pinned copies of
 // the toolkit's chat-render stylesheets, ordered after Tailwind layers.
@@ -19,6 +20,14 @@ export const metadata: Metadata = {
     capable: true,
     statusBarStyle: 'black-translucent',
     title: 'Seshat',
+  },
+  // Next.js 15's appleWebApp API stopped emitting the Apple-prefixed
+  // apple-mobile-web-app-capable tag (only the generic W3C
+  // mobile-web-app-capable one — vercel/next.js#70272/#74524). Apple's own
+  // docs state apple-mobile-web-app-status-bar-style (above) has no effect
+  // without this tag present, so restore it explicitly (FRE-1269).
+  other: {
+    'apple-mobile-web-app-capable': 'yes',
   },
   formatDetection: {
     telephone: false,
@@ -83,6 +92,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
       </head>
       <body className="h-full bg-bg text-ink antialiased">
         <RegisterSW />
+        <SafeAreaDebugOverlay />
         <RuntimeConfigProvider seshatUrl={seshatUrl} gatewayToken={gatewayToken}>
           {children}
         </RuntimeConfigProvider>

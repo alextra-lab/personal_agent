@@ -45,9 +45,10 @@ const MAX_TEXTAREA_HEIGHT = 200;
  * Behaviour:
  * - Cmd+Enter (macOS) or Ctrl+Enter (Win/Linux) sends; Enter inserts a newline.
  * - Paste: image files trigger upload; text falls through to the textarea.
- * - Two-row composer (FRE-1263): the textarea spans the full width on its own
- *   row, starting at 3 lines and auto-growing up to ~8 before it scrolls;
- *   the model picker, attach, and send/stop controls sit on the row beneath.
+ * - Two-row composer (FRE-1263, corrected FRE-1266): the textarea spans the
+ *   full width on its own row, starting at a single line and auto-growing up
+ *   to the 200px ceiling before it scrolls; the model picker, attach, and
+ *   send/stop controls sit on the row beneath.
  * - Footer padding accounts for iOS home-indicator via safe-area-inset-bottom.
  * - Send is blocked while any upload is in-progress (status !== 'complete').
  * - Attachments carry no local/cloud override (ADR-0121 T5): vision is a
@@ -292,7 +293,7 @@ export function ChatInput({
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder={placeholder}
-              rows={3}
+              rows={1}
               className="
                 w-full resize-none rounded-t-2xl px-4 pt-3 pb-1 text-base leading-6
                 bg-transparent border-0
@@ -300,7 +301,7 @@ export function ChatInput({
                 focus:outline-none
                 disabled:opacity-50 disabled:cursor-not-allowed
                 transition-colors duration-150
-                min-h-[96px] max-h-[200px]
+                max-h-[200px]
               "
             />
           </div>

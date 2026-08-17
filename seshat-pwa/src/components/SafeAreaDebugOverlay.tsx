@@ -122,13 +122,40 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
     return () => window.removeEventListener(SAFE_AREA_DEBUG_TOGGLE_EVENT, toggle);
   }, []);
 
+  // Applies/reverts the candidate fix via inline style (higher specificity
+  // than the .h-full Tailwind class — no rebuild needed to test it), THEN
+  // re-measures in the same effect so ordering is guaranteed — style change
+  // lands before the read. Previously the measurement effect only depended
+  // on [enabled], so toggling the experiment changed the DOM but never
+  // refreshed the displayed numbers, showing stale pre-toggle figures (a
+  // real bug: the owner's round-7 screenshot never demonstrated the
+  // experiment's effect at all because of this). The cleanup runs on every
+  // dependency change AND unmount, so closing the overlay (enabled -> false)
+  // or the component ever unmounting always reverts it — an experiment can
+  // never be left silently applied.
   useEffect(() => {
-    if (!enabled) {
-      setData(null);
-      return;
+    const html = document.documentElement;
+    const body = document.body;
+    if (enabled && experimentOn) {
+      html.style.height = '100vh';
+      body.style.height = '100vh';
+    } else {
+      html.style.removeProperty('height');
+      body.style.removeProperty('height');
     }
+    setData(enabled ? measure() : null);
+    return () => {
+      html.style.removeProperty('height');
+      body.style.removeProperty('height');
+    };
+  }, [enabled, experimentOn]);
+
+  // Keeps the numbers live across real environmental changes (keyboard,
+  // rotation) while the overlay stays open with the experiment state
+  // unchanged — independent of the toggle above.
+  useEffect(() => {
+    if (!enabled) return;
     const update = () => setData(measure());
-    update();
     window.addEventListener('resize', update);
     window.visualViewport?.addEventListener('resize', update);
     return () => {
@@ -136,24 +163,6 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
       window.visualViewport?.removeEventListener('resize', update);
     };
   }, [enabled]);
-
-  // Applies/reverts the candidate fix via inline style (higher specificity
-  // than the .h-full Tailwind class — no rebuild needed to test it). The
-  // cleanup runs on every dependency change AND unmount, so closing the
-  // overlay (enabled -> false) or the component ever unmounting always
-  // reverts it — an experiment can never be left silently applied.
-  useEffect(() => {
-    const html = document.documentElement;
-    const body = document.body;
-    if (enabled && experimentOn) {
-      html.style.height = '100vh';
-      body.style.height = '100vh';
-    }
-    return () => {
-      html.style.removeProperty('height');
-      body.style.removeProperty('height');
-    };
-  }, [enabled, experimentOn]);
 
   if (!enabled || !data) return null;
 

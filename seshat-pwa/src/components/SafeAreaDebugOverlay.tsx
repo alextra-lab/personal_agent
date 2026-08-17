@@ -86,26 +86,33 @@ function measure(): SafeAreaMeasurements {
  * mode this diagnostic exists to inspect. The header's 5-rapid-tap gesture
  * (StreamingChat.tsx) works there too, via SAFE_AREA_DEBUG_TOGGLE_EVENT.
  *
- * The real standalone-scoped fix has since shipped (globals.css). A
- * round-7/8 live "100vh experiment" toggle that lived here — used to
- * validate the fix on-device before committing to it — is retired now that
- * the fix is real: reverting it in standalone mode would no longer restore
- * old (broken) behavior, since removing the inline override just reveals
- * the same shipped CSS rule underneath. Kept as read-only measurements for
- * this deploy in case the owner's final validation surfaces something an
- * orientation change, keyboard, or background/resume cycle exposes that
- * the single-screenshot experiment didn't cover. Remove entirely once AC-2
- * closes.
+ * Round 10: the shipped 100vh fix (globals.css) is static and doesn't
+ * shrink for the on-screen keyboard, so with no overflow constraint on
+ * html/body, WebKit falls back to panning the whole page to keep the
+ * focused input visible — confirmed on-device (a screenshot showed this
+ * fixed-position overlay itself get dragged off-screen when the keyboard
+ * opened). A codex review found overflow:hidden alone unproven to stop
+ * that pan without a real device test, so this toggle applies the
+ * candidate fix (overflow:hidden + a visualViewport-driven live height)
+ * directly on the deployed page for the owner to test with the keyboard,
+ * without needing another deploy first. Fully reversible; reverts
+ * automatically when the overlay closes. Remove entirely once AC-2 closes.
  */
 export function SafeAreaDebugOverlay(): React.JSX.Element | null {
   const [enabled, setEnabled] = useState(false);
+  const [keyboardFixOn, setKeyboardFixOn] = useState(false);
   const [data, setData] = useState<SafeAreaMeasurements | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('debug') === 'safearea') setEnabled(true);
 
-    const toggle = () => setEnabled((prev) => !prev);
+    const toggle = () =>
+      setEnabled((prev) => {
+        const next = !prev;
+        if (!next) setKeyboardFixOn(false);
+        return next;
+      });
     window.addEventListener(SAFE_AREA_DEBUG_TOGGLE_EVENT, toggle);
     return () => window.removeEventListener(SAFE_AREA_DEBUG_TOGGLE_EVENT, toggle);
   }, []);
@@ -124,6 +131,43 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
       window.visualViewport?.removeEventListener('resize', update);
     };
   }, [enabled]);
+
+  // Candidate keyboard-pan fix, live and reversible. overflow:hidden blocks
+  // the browser's own pan-to-reveal-focused-input fallback; the
+  // visualViewport-driven height lets the shell shrink for the keyboard
+  // instead, once panning is no longer its only option. Deliberately does
+  // NOT set the height on mount — innerHeight/visualViewport.height are
+  // known to report a stale, undersized value at initial standalone launch
+  // (this same ticket) — only trusted once a real resize event fires.
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    if (!(enabled && keyboardFixOn)) {
+      html.style.removeProperty('overflow');
+      body.style.removeProperty('overflow');
+      html.style.removeProperty('height');
+      body.style.removeProperty('height');
+      return;
+    }
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    const update = () => {
+      const h = window.visualViewport?.height ?? window.innerHeight;
+      html.style.height = `${h}px`;
+      body.style.height = `${h}px`;
+      setData(measure());
+    };
+    window.visualViewport?.addEventListener('resize', update);
+    window.addEventListener('resize', update);
+    return () => {
+      window.visualViewport?.removeEventListener('resize', update);
+      window.removeEventListener('resize', update);
+      html.style.removeProperty('overflow');
+      body.style.removeProperty('overflow');
+      html.style.removeProperty('height');
+      body.style.removeProperty('height');
+    };
+  }, [enabled, keyboardFixOn]);
 
   if (!enabled || !data) return null;
 
@@ -186,6 +230,36 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
           {label}: {value}
         </div>
       ))}
+      {keyboardFixOn && (
+        <div
+          style={{
+            color: '#ff0',
+            fontWeight: 'bold',
+            marginTop: '4px',
+            textShadow: '0 0 3px #000, 0 0 3px #000, 0 1px 2px #000',
+          }}
+        >
+          KEYBOARD-PAN FIX ACTIVE — not the shipped behavior
+        </div>
+      )}
+      <button
+        type="button"
+        data-testid="safe-area-keyboard-fix-toggle"
+        onClick={() => setKeyboardFixOn((prev) => !prev)}
+        style={{
+          pointerEvents: 'auto',
+          background: keyboardFixOn ? '#ff0' : '#333',
+          color: keyboardFixOn ? '#000' : '#0f0',
+          border: '1px solid #0f0',
+          borderRadius: '4px',
+          padding: '4px 8px',
+          marginTop: '6px',
+          fontFamily: 'monospace',
+          fontSize: '11px',
+        }}
+      >
+        {keyboardFixOn ? 'Revert keyboard-pan fix' : 'Try keyboard-pan fix (live, reversible)'}
+      </button>
     </div>
   );
 }

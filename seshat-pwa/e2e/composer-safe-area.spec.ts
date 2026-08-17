@@ -1,16 +1,24 @@
 /**
  * Playwright e2e tests for the composer's safe-area-inset-bottom handling
- * (FRE-1267). FRE-1266 fixed the document-scroll regression but its own
- * AC-4 measured the `footer` element, which was already flush — not the
- * `composer-container` card inside it, which floats above the true viewport
- * bottom by the inset amount because `ChatInput.tsx`'s `<form>` wrapper
- * carried that inset as `paddingBottom` *outside* the card. That gap is
- * invisible to any harness that measures at `env(safe-area-inset-bottom) ===
- * 0`, which is what headless Chromium always reports — so these tests force
- * a non-zero inset via `overrideSafeAreaBottom` (a CSS custom-property
- * override; Playwright/CDP cannot emulate env(safe-area-inset-*) directly)
- * to make the defect measurable at all. See the FRE-1267 ticket handoff for
- * the seeded-negative before/after numbers this file produced.
+ * (FRE-1267, revised FRE-1269 round 11). FRE-1266 fixed the document-scroll
+ * regression but its own AC-4 measured the `footer` element, which was
+ * already flush — not the `composer-container` card inside it, which
+ * floated above the true viewport bottom by the inset amount because
+ * `ChatInput.tsx`'s `<form>` wrapper carried that inset as `paddingBottom`
+ * *outside* the card, with nothing reserving that space at all.
+ *
+ * FRE-1267 fixed that by making the card itself absorb the inset and reach
+ * fully flush to the true bottom. Once shipped for real (FRE-1269), the
+ * owner found a fully edge-to-edge panel felt oversized — round 11
+ * reintroduces a small, deliberate `CARD_GAP_PX` gap (the form's own
+ * `pb-3`), explicitly NOT the same defect FRE-1267 fixed: this gap is a
+ * fixed, intentional margin, not an unreserved dead zone that grows with
+ * the device's safe-area inset (the difference AC-1/AC-4 below assert).
+ *
+ * These tests force a non-zero inset via `overrideSafeAreaBottom` (a CSS
+ * custom-property override; Playwright/CDP cannot emulate
+ * env(safe-area-inset-*) directly) since headless Chromium always reports
+ * `env(safe-area-inset-bottom) === 0`.
  */
 
 import { test, expect } from '@playwright/test';
@@ -25,11 +33,12 @@ import {
 const CHAT_URL = `/c/${TEST_SESSION}`;
 const VIEWPORT_HEIGHT = 844;
 const TEST_INSET_PX = 34; // iPhone home-indicator safe-area-inset-bottom in standalone mode.
+const CARD_GAP_PX = 12; // form's pb-3 (0.75rem) — the round-11 deliberate gap.
 
-test.describe('Composer safe-area inset (FRE-1267)', () => {
+test.describe('Composer safe-area inset (FRE-1267, revised FRE-1269 round 11)', () => {
   test.use({ viewport: { width: 390, height: VIEWPORT_HEIGHT } });
 
-  test('AC-1: the composer container reaches the viewport bottom with a real inset present', async ({
+  test('AC-1: the composer container sits a small, fixed gap above the viewport bottom, regardless of inset size', async ({
     page,
   }) => {
     await stubRest(page);
@@ -42,8 +51,12 @@ test.describe('Composer safe-area inset (FRE-1267)', () => {
 
     const box = await container.boundingBox();
     expect(box).not.toBeNull();
+    // A fixed gap, not one that scales with the inset — distinguishes this
+    // deliberate margin from the pre-FRE-1267 defect (an unreserved dead
+    // zone the size of the inset itself).
     const gap = VIEWPORT_HEIGHT - (box!.y + box!.height);
-    expect(Math.abs(gap)).toBeLessThanOrEqual(2);
+    expect(gap).toBeGreaterThanOrEqual(CARD_GAP_PX - 2);
+    expect(gap).toBeLessThanOrEqual(CARD_GAP_PX + 2);
   });
 
   test('AC-2: the inset is still respected as internal space above the controls row', async ({
@@ -79,7 +92,7 @@ test.describe('Composer safe-area inset (FRE-1267)', () => {
     expect(containerToControls).toBeLessThanOrEqual(TEST_INSET_PX + 4);
   });
 
-  test('AC-4: zero-inset behaviour does not regress — the panel still reaches the bottom and the tap-comfort padding survives', async ({
+  test('AC-4: zero-inset behaviour does not regress — the deliberate gap and tap-comfort padding survive', async ({
     page,
   }) => {
     await stubRest(page);
@@ -94,17 +107,20 @@ test.describe('Composer safe-area inset (FRE-1267)', () => {
 
     const box = await container.boundingBox();
     expect(box).not.toBeNull();
+    // At zero inset, the only gap present is the round-11 fixed CARD_GAP_PX
+    // (the form's pb-3) — there's no inset left to also reserve.
     const gap = VIEWPORT_HEIGHT - (box!.y + box!.height);
-    expect(Math.abs(gap)).toBeLessThanOrEqual(2);
+    expect(gap).toBeGreaterThanOrEqual(CARD_GAP_PX - 2);
+    expect(gap).toBeLessThanOrEqual(CARD_GAP_PX + 2);
 
     // Guards against the fallback tap-comfort padding being silently
     // dropped rather than genuinely preserved: assert the actual computed
-    // values, not just that the container happens to be flush (which would
-    // also be true if the padding were deleted outright).
+    // values, not just that the container happens to sit the right distance
+    // away (which would also be true if the padding were deleted outright).
     const controlsPaddingBottom = await controls.evaluate(
       (el) => getComputedStyle(el).paddingBottom,
     );
-    expect(controlsPaddingBottom).toBe('8px'); // Tailwind pb-2 = 0.5rem, untouched by this fix.
+    expect(controlsPaddingBottom).toBe('6px'); // Tailwind pb-1.5 = 0.375rem (round 11, was pb-2).
 
     const containerPaddingBottom = await container.evaluate(
       (el) => getComputedStyle(el).paddingBottom,

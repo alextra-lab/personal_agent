@@ -271,7 +271,7 @@ export function ChatInput({
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="px-4 pt-3">
+      <form onSubmit={handleSubmit} className="px-4 pt-2 pb-3">
         {/*
           Two-row composer (FRE-1263): the textarea's own wrapper holds nothing
           else, so it stays out of the controls' flex row entirely — the fix
@@ -281,9 +281,15 @@ export function ChatInput({
           Filled panel, no border (FRE-1267): the safe-area-inset-bottom lives
           here as the container's own paddingBottom — internal space below the
           controls row — rather than on the <form> as space outside the card,
-          so the card's fill reaches the true viewport bottom instead of
-          floating above it. The controls row's own pb-2 (tap-comfort padding,
-          independent of the inset) is untouched.
+          so the card absorbs the physical home-indicator clearance rather
+          than floating above it with nothing reserving that space at all.
+          FRE-1269 (round 11): the form's own pb-3 (below, separate from this
+          padding) restores a small deliberate gap between the card and the
+          true screen edge — the owner found a fully edge-to-edge panel felt
+          oversized; this is intentionally much smaller than the pre-FRE-1267
+          gap, which was an unreserved, unreachable dead zone, not a margin.
+          The controls row's own vertical padding (pt-1 pb-2 -> pt-0.5 pb-1.5)
+          was tightened in the same pass, independent of the inset handling.
         */}
         <div
           data-testid="composer-container"
@@ -300,7 +306,7 @@ export function ChatInput({
               placeholder={placeholder}
               rows={1}
               className="
-                w-full resize-none rounded-t-2xl px-4 pt-3 pb-1 text-base leading-6
+                w-full resize-none rounded-t-2xl px-4 pt-2 pb-1 text-base leading-6
                 bg-transparent border-0
                 text-ink placeholder-ink-muted
                 focus:outline-none
@@ -311,7 +317,7 @@ export function ChatInput({
             />
           </div>
 
-          <div data-testid="composer-controls" className="flex items-center gap-2 px-3 pb-2 pt-1">
+          <div data-testid="composer-controls" className="flex items-center gap-2 px-3 pb-1.5 pt-0.5">
             <ModelPicker
               candidates={candidates}
               selectedKey={selectedModelKey}

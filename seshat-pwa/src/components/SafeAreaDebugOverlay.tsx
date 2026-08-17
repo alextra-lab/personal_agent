@@ -11,6 +11,7 @@ interface SafeAreaMeasurements {
   visualViewportHeight: number | null;
   htmlHeight: number;
   bodyHeight: number;
+  safeTopVar: string;
   safeBottomVar: string;
   composerBottom: number | null;
   footerBottom: number | null;
@@ -18,6 +19,12 @@ interface SafeAreaMeasurements {
   svh100: number;
   dvh100: number;
   displayModeStandalone: boolean;
+  scrollY: number;
+  htmlScrollHeight: number;
+  bodyScrollHeight: number;
+  visualViewportOffsetTop: number | null;
+  visualViewportPageTop: number | null;
+  activeElementTag: string | null;
 }
 
 function measure(): SafeAreaMeasurements {
@@ -52,6 +59,7 @@ function measure(): SafeAreaMeasurements {
     visualViewportHeight: window.visualViewport?.height ?? null,
     htmlHeight: html.getBoundingClientRect().height,
     bodyHeight: body.getBoundingClientRect().height,
+    safeTopVar: getComputedStyle(html).getPropertyValue('--safe-top').trim(),
     safeBottomVar: getComputedStyle(html).getPropertyValue('--safe-bottom').trim(),
     composerBottom: composer ? composer.getBoundingClientRect().bottom : null,
     footerBottom: footer ? footer.getBoundingClientRect().bottom : null,
@@ -59,6 +67,17 @@ function measure(): SafeAreaMeasurements {
     svh100,
     dvh100,
     displayModeStandalone: window.matchMedia('(display-mode: standalone)').matches,
+    // Round-7 additions (codex adversarial review): a 100vh probe reading
+    // the physical screen height proves CSS unit *resolution*, not that
+    // content is actually *paintable* there (WebKit 301994's own report
+    // draws exactly this distinction) — scroll state and visualViewport
+    // offsets are what can actually tell the two apart.
+    scrollY: window.scrollY,
+    htmlScrollHeight: html.scrollHeight,
+    bodyScrollHeight: body.scrollHeight,
+    visualViewportOffsetTop: window.visualViewport?.offsetTop ?? null,
+    visualViewportPageTop: window.visualViewport?.pageTop ?? null,
+    activeElementTag: document.activeElement?.tagName ?? null,
   };
 }
 
@@ -71,18 +90,34 @@ function measure(): SafeAreaMeasurements {
  * no URL bar, so ?debug=safearea alone is unreachable in exactly the launch
  * mode this diagnostic exists to inspect (FRE-1269 follow-up). The header's
  * 5-rapid-tap gesture (StreamingChat.tsx) works there too, via
- * SAFE_AREA_DEBUG_TOGGLE_EVENT. Remove all of this once the standalone
- * bottom-gap mechanism is confirmed and fixed.
+ * SAFE_AREA_DEBUG_TOGGLE_EVENT.
+ *
+ * Round-7 addition: a live "100vh experiment" toggle applies the candidate
+ * fix (html/body height:100vh, via inline style — no rebuild needed) on the
+ * already-deployed page so the owner can screenshot the *actual rendered
+ * result*, not just a hidden probe's CSS resolution — codex's adversarial
+ * review found the probe alone can't distinguish a value WebKit resolves
+ * from one it actually paints (WebKit bug 301994's own framing). Reverts
+ * automatically when the overlay closes, so it can never persist unnoticed.
+ *
+ * Remove all of this once the standalone bottom-gap mechanism is confirmed
+ * and fixed.
  */
 export function SafeAreaDebugOverlay(): React.JSX.Element | null {
   const [enabled, setEnabled] = useState(false);
+  const [experimentOn, setExperimentOn] = useState(false);
   const [data, setData] = useState<SafeAreaMeasurements | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('debug') === 'safearea') setEnabled(true);
 
-    const toggle = () => setEnabled((prev) => !prev);
+    const toggle = () =>
+      setEnabled((prev) => {
+        const next = !prev;
+        if (!next) setExperimentOn(false);
+        return next;
+      });
     window.addEventListener(SAFE_AREA_DEBUG_TOGGLE_EVENT, toggle);
     return () => window.removeEventListener(SAFE_AREA_DEBUG_TOGGLE_EVENT, toggle);
   }, []);
@@ -102,6 +137,24 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
     };
   }, [enabled]);
 
+  // Applies/reverts the candidate fix via inline style (higher specificity
+  // than the .h-full Tailwind class — no rebuild needed to test it). The
+  // cleanup runs on every dependency change AND unmount, so closing the
+  // overlay (enabled -> false) or the component ever unmounting always
+  // reverts it — an experiment can never be left silently applied.
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    if (enabled && experimentOn) {
+      html.style.height = '100vh';
+      body.style.height = '100vh';
+    }
+    return () => {
+      html.style.removeProperty('height');
+      body.style.removeProperty('height');
+    };
+  }, [enabled, experimentOn]);
+
   if (!enabled || !data) return null;
 
   const rows: Array<[string, string]> = [
@@ -111,6 +164,7 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
     ['visualViewport.height', String(data.visualViewportHeight)],
     ['html rect height', String(data.htmlHeight)],
     ['body rect height', String(data.bodyHeight)],
+    ['--safe-top', data.safeTopVar],
     ['--safe-bottom', data.safeBottomVar],
     ['composer bottom', String(data.composerBottom)],
     ['footer bottom', String(data.footerBottom)],
@@ -118,6 +172,12 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
     ['100svh probe', String(data.svh100)],
     ['100dvh probe', String(data.dvh100)],
     ['display-mode: standalone', String(data.displayModeStandalone)],
+    ['scrollY', String(data.scrollY)],
+    ['html.scrollHeight', String(data.htmlScrollHeight)],
+    ['body.scrollHeight', String(data.bodyScrollHeight)],
+    ['visualViewport.offsetTop', String(data.visualViewportOffsetTop)],
+    ['visualViewport.pageTop', String(data.visualViewportPageTop)],
+    ['activeElement', String(data.activeElementTag)],
   ];
 
   return (
@@ -135,9 +195,35 @@ export function SafeAreaDebugOverlay(): React.JSX.Element | null {
         fontSize: '11px',
         lineHeight: 1.4,
         padding: '8px',
+        // Lets taps reach whatever is underneath (e.g. the header's own
+        // close gesture) everywhere except the experiment button below,
+        // which explicitly re-enables pointer events on itself.
         pointerEvents: 'none',
       }}
     >
+      {experimentOn && (
+        <div style={{ color: '#ff0', fontWeight: 'bold', marginBottom: '4px' }}>
+          100vh EXPERIMENT ACTIVE — not the shipped behavior
+        </div>
+      )}
+      <button
+        type="button"
+        data-testid="safe-area-experiment-toggle"
+        onClick={() => setExperimentOn((prev) => !prev)}
+        style={{
+          pointerEvents: 'auto',
+          background: experimentOn ? '#ff0' : '#333',
+          color: experimentOn ? '#000' : '#0f0',
+          border: '1px solid #0f0',
+          borderRadius: '4px',
+          padding: '4px 8px',
+          marginBottom: '6px',
+          fontFamily: 'monospace',
+          fontSize: '11px',
+        }}
+      >
+        {experimentOn ? 'Revert 100vh experiment' : 'Try 100vh experiment (live, reversible)'}
+      </button>
       {rows.map(([label, value]) => (
         <div key={label}>
           {label}: {value}

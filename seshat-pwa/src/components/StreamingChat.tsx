@@ -229,7 +229,12 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
 
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // block: 'nearest' — the default 'start' walks every scrollable ancestor
+    // in the chain, including the document itself, even though the nested
+    // message list (`main`, overflow-y-auto) already fully contains this
+    // target once it scrolls. 'nearest' scrolls only the ancestor that
+    // actually needs it, so the document itself never moves (FRE-1266 AC-1).
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [messages, activeTools, phases, pendingConstraint, classifiedError]);
 
   const handleSend = (text: string, attachments: UploadedAttachment[]) => {
@@ -373,7 +378,15 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
       </header>
 
       {/* Message list */}
-      <main className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+      {/* relative: without it, this scroll container is `position: static` while
+          its ancestor (the root div, two levels up) is `position: relative` —
+          so any `position: absolute` descendant (e.g. the sr-only labels in
+          ChatMessage) is contained by that ancestor instead of by this clipped
+          scroller, and its static-position offset (based on the message's
+          unclipped flow position, which can be thousands of px into a long
+          conversation) escapes the clip and pushes the *document* itself into
+          overflow even though nothing is visibly out of place (FRE-1266 AC-1). */}
+      <main className="relative flex-1 min-h-0 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
         {/* FRE-236: reconnecting banner — shown when WS was lost mid-turn */}
         {isReconnecting && (
           <div className="sticky top-0 z-10 px-4 py-2 bg-amber-900/80 backdrop-blur-sm text-amber-200 text-xs text-center border-b border-amber-800/50">

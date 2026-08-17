@@ -47,12 +47,10 @@ test.describe('Composer two-row layout (FRE-1263)', () => {
     );
     expect(fontSizePx).toBeGreaterThanOrEqual(16);
 
-    // AC-4: the empty textarea renders at least 3 text lines tall, and the
-    // max-height it can grow to is taller than the old 140px ceiling.
-    const lineHeightPx = await textarea.evaluate((el) =>
-      parseFloat(getComputedStyle(el).lineHeight),
-    );
-    expect(textareaBox!.height).toBeGreaterThanOrEqual(lineHeightPx * 3 - 1);
+    // AC-4: the max-height the textarea can grow to is taller than the old
+    // 140px ceiling. (The empty-state row count this AC originally asserted —
+    // "at least 3 text lines tall" — was corrected by FRE-1266: the textarea
+    // now starts at a single row, not 3. See viewport-shell.spec.ts AC-5.)
     const maxHeightPx = await textarea.evaluate((el) =>
       parseFloat(getComputedStyle(el).maxHeight),
     );

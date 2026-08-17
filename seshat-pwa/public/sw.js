@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v43-theme-visual-system';
+const CACHE_NAME = 'seshat-v44-shell-viewport-fix';
 
 const PRECACHE_URLS = [
   '/',

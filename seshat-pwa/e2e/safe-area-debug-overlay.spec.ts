@@ -79,6 +79,34 @@ test.describe('SafeAreaDebugOverlay (FRE-1269, temporary diagnostic)', () => {
     expect(bodyHeightOff).toBe('');
   });
 
+  test('toggling the experiment re-measures rather than showing stale numbers', async ({
+    page,
+  }) => {
+    // Regression test for a real bug: the measurement effect used to only
+    // depend on [enabled], so toggling the experiment changed the DOM but
+    // never refreshed the *displayed* numbers — the owner's round-7
+    // screenshot never actually proved anything either way because of this.
+    // headless Chromium can't reproduce the real WebKit viewport bug (see
+    // this file's header comment), so a height number can't tell "stale"
+    // from "correctly re-measured but numerically unchanged" apart here —
+    // activeElement can, since it's fully environment-independent.
+    await stubRest(page);
+    await stubWebSocket(page);
+    await page.goto(`${CHAT_URL}?debug=safearea`);
+
+    const overlay = page.getByTestId('safe-area-debug-overlay');
+    await overlay.waitFor();
+    await expect(overlay).toContainText('activeElement: BODY');
+
+    // Clicking a button focuses it (standard browser behavior) — so the
+    // toggle click itself moves activeElement from BODY to BUTTON. A stale
+    // display would still show the mount-time BODY; only a fresh
+    // re-measurement at toggle time picks up BUTTON.
+    await page.getByTestId('safe-area-experiment-toggle').click();
+
+    await expect(overlay).toContainText('activeElement: BUTTON');
+  });
+
   test('the experiment toggle button does not block the header gesture underneath it', async ({
     page,
   }) => {

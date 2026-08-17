@@ -124,7 +124,7 @@ test.describe('Composer safe-area inset (FRE-1267, revised FRE-1269 rounds 11-12
     const controlsPaddingBottom = await controls.evaluate(
       (el) => getComputedStyle(el).paddingBottom,
     );
-    expect(controlsPaddingBottom).toBe('4px'); // Tailwind pb-1 = 0.25rem (round 12, was pb-2).
+    expect(controlsPaddingBottom).toBe('4px'); // Tailwind pb-1 = 0.25rem (round 12, was pb-1.5; originally pb-2 pre-round-11).
 
     const containerPaddingBottom = await container.evaluate(
       (el) => getComputedStyle(el).paddingBottom,

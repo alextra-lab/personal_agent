@@ -243,6 +243,71 @@ class TestEntityManagement:
         assert record["access_count"] == 0
         assert record["context"] == "created"
 
+    @pytest.mark.asyncio
+    async def test_create_entity_writes_native_datetime_first_last_seen(
+        self, memory_service, clean_test_data
+    ):
+        """FRE-1216 AC-3: create_entity writes first_seen/last_seen as native DATE_TIME.
+
+        Live-graph data shows a large historical cohort with first_seen/
+        last_seen stored as ISO strings (compared lexicographically, not
+        chronologically, by any range query). This proves the *current*
+        write path is already correct — the historical rows need a data
+        migration, not an application code change.
+        """
+        unique_name = f"TemporalType_{uuid.uuid4().hex[:8]}"
+        entity = Entity(name=unique_name, entity_type="TEST_TYPE")
+
+        entity_id = await memory_service.create_entity(entity)
+        assert entity_id is not None
+
+        async with memory_service.driver.session() as session:
+            result = await session.run(
+                "MATCH (e:Entity {name: $name}) "
+                "RETURN apoc.meta.cypher.type(e.first_seen) AS fs_type, "
+                "apoc.meta.cypher.type(e.last_seen) AS ls_type",
+                name=unique_name,
+            )
+            record = await result.single()
+
+        assert record is not None
+        assert record["fs_type"] == "DATE_TIME"
+        assert record["ls_type"] == "DATE_TIME"
+
+    @pytest.mark.asyncio
+    async def test_mention_path_writes_native_datetime_first_last_seen(
+        self, memory_service, clean_test_data
+    ):
+        """FRE-1216 AC-3: the DISCUSSES-mention entity-creation path also writes native DATE_TIME.
+
+        Separate write site from create_entity (memory/service.py's turn-
+        processing MERGE), same invariant.
+        """
+        unique_name = f"MentionTemporal_{uuid.uuid4().hex[:8]}"
+        conversation = ConversationNode(
+            conversation_id=str(uuid.uuid4()),
+            timestamp=datetime.now(),
+            user_message=f"Tell me about {unique_name}",
+            assistant_response=f"{unique_name} is a test entity.",
+            key_entities=[unique_name],
+        )
+
+        success = await memory_service.create_conversation(conversation)
+        assert success
+
+        async with memory_service.driver.session() as session:
+            result = await session.run(
+                "MATCH (e:Entity {name: $name}) "
+                "RETURN apoc.meta.cypher.type(e.first_seen) AS fs_type, "
+                "apoc.meta.cypher.type(e.last_seen) AS ls_type",
+                name=unique_name,
+            )
+            record = await result.single()
+
+        assert record is not None
+        assert record["fs_type"] == "DATE_TIME"
+        assert record["ls_type"] == "DATE_TIME"
+
 
 class TestRelationships:
     """Test relationship creation between nodes."""
@@ -324,6 +389,86 @@ class TestRelationships:
         assert record["last_accessed_at"] is not None
         assert record["last_access_context"] == "created"
         assert record["weight"] == 0.8
+
+    @pytest.mark.asyncio
+    async def test_create_relationship_normalizes_type_casing(
+        self, memory_service, clean_test_data
+    ):
+        """FRE-1216 AC-2: a mixed-case relationship_type is written canonical-cased.
+
+        create_relationship is the only write path that creates a relationship
+        with a dynamically-typed label (apoc.merge.relationship). Without
+        normalization, a lowercase/mixed-case type (e.g. from LLM extraction
+        drift) creates a distinct relationship type that every canonical-cased
+        traversal silently misses (the live-graph `USEs` vs `USES` defect).
+        This regresses if the normalization is ever removed from
+        create_relationship.
+        """
+        source_name = f"Source_{uuid.uuid4().hex[:8]}"
+        target_name = f"Target_{uuid.uuid4().hex[:8]}"
+
+        await memory_service.create_entity(Entity(name=source_name, entity_type="TEST"))
+        await memory_service.create_entity(Entity(name=target_name, entity_type="TEST"))
+
+        relationship = Relationship(
+            source_id=source_name,
+            target_id=target_name,
+            relationship_type="UsEs",
+        )
+        rel_id = await memory_service.create_relationship(relationship)
+        assert rel_id is not None
+
+        async with memory_service.driver.session() as session:
+            result = await session.run(
+                "MATCH (s {name: $source_name})-[r]->(t {name: $target_name}) "
+                "RETURN type(r) AS rel_type",
+                source_name=source_name,
+                target_name=target_name,
+            )
+            record = await result.single()
+
+        assert record is not None
+        assert record["rel_type"] == "USES"
+
+    @pytest.mark.asyncio
+    async def test_check_relationship_type_casing_variants_detects_regression(
+        self, memory_service, clean_test_data
+    ):
+        """FRE-1216 AC-2 guard: flags a casing variant regardless of how it was written.
+
+        create_relationship's normalization only guards its own write path.
+        This is the independent invariant check the AC actually names ("a
+        guard fails on a newly introduced casing variant") — it queries live
+        relationship types directly, so it catches a variant introduced by
+        any future write path, not just this one. Seeds the variant directly
+        via Cypher, bypassing create_relationship entirely, to prove that.
+        """
+        source_name = f"Source_{uuid.uuid4().hex[:8]}"
+        target_name = f"Target_{uuid.uuid4().hex[:8]}"
+        await memory_service.create_entity(Entity(name=source_name, entity_type="TEST"))
+        await memory_service.create_entity(Entity(name=target_name, entity_type="TEST"))
+
+        async with memory_service.driver.session() as session:
+            await session.run(
+                "MATCH (s {name: $source_name}), (t {name: $target_name}) "
+                "CALL apoc.merge.relationship(s, 'CasingProbeRel', {}, {}, t) YIELD rel "
+                "RETURN rel",
+                source_name=source_name,
+                target_name=target_name,
+            )
+            await session.run(
+                "MATCH (s {name: $source_name}), (t {name: $target_name}) "
+                "CALL apoc.merge.relationship(s, 'CASINGPROBEREL', {}, {}, t) YIELD rel "
+                "RETURN rel",
+                source_name=source_name,
+                target_name=target_name,
+            )
+
+        variants = await memory_service.check_relationship_type_casing_variants()
+
+        assert any("CasingProbeRel" in v and "CASINGPROBEREL" in v for v in variants), (
+            f"expected the seeded casing collision to be flagged, got: {variants}"
+        )
 
 
 class TestMemoryQueries:

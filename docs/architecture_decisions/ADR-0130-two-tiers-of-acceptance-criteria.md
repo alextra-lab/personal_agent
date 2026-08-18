@@ -1,6 +1,6 @@
 # ADR-0130: Two Tiers of Acceptance Criteria — A Sub-Ticket Proves Its Own Work, One Seam Ticket Proves the ADR
 
-**Status:** Accepted
+**Status:** Superseded (2026-08-18, owner-directed process streamline)
 **Date:** 2026-07-31
 **Deciders:** project owner (FRE-1078)
 **Tags:** process, delivery, acceptance-criteria, lifecycle, skills
@@ -482,6 +482,18 @@ Status Updates.
 ---
 
 ## Status Updates
+
+### 2026-08-18 — Superseded (owner-directed process streamline)
+
+**Changed By:** master session, at the owner's direction (2026-08-18)
+**Reason:** The owner directed a streamlining of the delivery process: the governance surface had
+grown to the point where it generated more tickets than it resolved (seam tickets, remediation
+tickets, provisioning tickets, cutover splits) and blocked dispatch behind multi-check gates. This ADR's seam-ticket machinery was the largest single generator of that meta-work.
+What survives: an implementation ticket still carries its own outcome-level acceptance criteria,
+and a diff must still implement its backing ADR as designed. What is retired: the seam ticket, its six-state lifecycle, the criterion-inheritance severance doctrine, and the per-red-verdict remediation-ticket requirement.
+ADRs now reach `Implemented` when master observes the chain merged and working — a one-line status
+note, not a commissioned adjudication.
+
 
 ### 2026-07-31 — Proposed
 

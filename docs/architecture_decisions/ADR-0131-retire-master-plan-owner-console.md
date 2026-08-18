@@ -460,6 +460,17 @@ restates or discharges any of these criteria.
 
 ## Status Updates
 
+### 2026-08-18 — Process streamline: console + ladder contract unchanged; seam-linked obligations retired
+
+**Changed By:** master session, at the owner's direction (2026-08-18)
+**Reason:** The owner directed a streamlining of the delivery process. This ADR's core — the owner
+console, the trust ladder as the single source of standing authority, one writer per store — remains
+in force and is restated in the slimmed `lifecycle-rules.md`. Retired alongside ADR-0130: the
+seam-adjudication linkage and D1's "file it or drop it" pressure toward Backlog filing (the new
+default for a non-actionable observation is to drop it). Remediation tickets FRE-1275/FRE-1276,
+filed from this ADR's own seam adjudication, are cancelled as part of the same directive.
+
+
 ### 2026-07-31 - Proposed
 **Changed By:** adr session (with the owner, FRE-1082)
 **Reason:** Initial proposal following the FRE-1082 exploration: measurement of the file's content

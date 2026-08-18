@@ -465,3 +465,91 @@ restates or discharges any of these criteria.
 **Reason:** Initial proposal following the FRE-1082 exploration: measurement of the file's content
 classes, the trust-graduation reframing of the delivery process, and the owner's partnership model
 (owner reads, master informs, owner decides, master acts).
+
+### 2026-08-18 - Seam adjudicated (FRE-1087) — 3 green, 2 red; stays Accepted
+**Changed By:** adr session (FRE-1087, the seam ticket)
+**Reason:** Adjudication of AC-1..AC-5 at the close of observation window W. **Status remains
+`Accepted`** — an ADR never reaches `Implemented` on a red criterion (lifecycle-rules § Seam tickets).
+
+**Window W, recomputed from git rather than inherited:** opens at FRE-1085's merge `43ccc8f1`
+(2026-07-31T12:58:12Z), closes at the later of +14 days and the third session-reset marker. The third
+marker landed 2026-08-02; +14 days is later, so **W = 2026-07-31T12:58:12Z .. 2026-08-14T12:58:12Z**,
+containing 14 reset markers against a required 3. (The activation comment on FRE-1087 stated the third
+marker as 2026-08-04 and counted 15 markers; both are slightly off, and neither changes W's end.)
+
+**AC-1 — RED.** Sub-checks (a) and (c) pass; (b) fails.
+- *(a) green* — all six manifest classes have exactly one ladder row. One additional owner-added row
+  ("Observe the other sessions", 2026-08-06) is outside the manifest and is not a defect.
+- *(c) green* — per-class closure review over six classes × `.claude/skills/*/SKILL.md`,
+  `lifecycle-rules.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, seeded by the ADR's grep and extended with a
+  second sweep for phrasings that pattern misses (`never deploy`, `explicit OK`, `sole gateway`,
+  `authoriz*`, `at will`). Every autonomy-setting statement defers to the console — `lifecycle-rules`
+  § Deploy states "the autonomy level for each class lives in the trust ladder … the ladder wins";
+  `master` SKILL Step 6 states "look the row up in the ladder, then act on its level"; `prime-master`
+  states "read it off the ladder, not from here". Two benign edges recorded, neither a grant: the
+  fail-closed defaults ("anything you cannot confidently place in a class → treat as ask-first" /
+  "the stricter row"), and the worker-boundary denials, which state role rather than level.
+- *(b) red* — against a real `/clear` + `/prime-master` (2026-08-18), the primed authority table does
+  **not** match the ladder 1:1: seven ladder rows are presented as five, collapsing *merge-to-main*
+  with *on-merge board transition*, and — materially — the two **distinct** deploy classes into a
+  single "Deploy — reversible and everything else" line. Every stated *level* agreed with the console;
+  the granularity did not. Collapsing the deploy classes erases exactly the distinction the manifest
+  fixes, and is the same seam through which AC-4's defect below travelled.
+- *Coverage gap surfaced by the primed session itself, outside the manifest:* there is **no ladder row
+  for applying a `stream:` label**, so under D3's iff-rule master holds no recorded authority to
+  dispatch. Master correctly treated it as ask-first rather than assuming. The manifest did not
+  enumerate this class, so AC-1(a) still passes — the gap is in the manifest, not in the console.
+
+**AC-2 — GREEN.** At W's end and today: `OWNER_CONSOLE.md` 41 lines against its stated 60-line bound
+(peak across W: 41 — never exceeded); `LAST_SESSION.md` 83 at W's end and 79 today against its stated
+90-line bound in `prepare-reset` §2 (peak exactly 90, never over). `git log 43ccc8f1..HEAD
+--diff-filter=A -- docs/plans/` prints nothing, in W and since — no successor coordination file. No
+compaction commit: the largest net removal in W is −13% (`LAST_SESSION.md`, which is overwritten by
+design each reset) and −5% (the console), both far under the 25% definition, and every console removal
+cites its met retirement condition in the commit subject. The detector was validated against a known
+positive — it fires on MASTER_PLAN's −100% deletion and stays correctly silent at −22%.
+
+**AC-3 — GREEN on substance; the criterion's stated method (b) is defective and must be rewritten.**
+- *(b) is not decidable as written.* It asks for "zero … mutations … actuated by the GitHub-integration
+  actor". Reading the FRE-1036 specimen's own history shows the corrupting transitions carry
+  `botActor = None` and are attributed to the owner's user id — the same id every session writes under.
+  **The integration is not a distinguishable actor**, so no census can separate it from master or any
+  worker. The ADR's scope note conceded that *master-vs-worker* attribution is contractual, but assumed
+  the *integration* half was mechanically assertable. It is not. A criterion no evidence can falsify
+  verifies nothing, so this one was unfalsifiable from the day it was written.
+- *Substitute instrument, and it discriminates.* The corruption's real signature is a control-plane
+  mutation landing within seconds of a merge on a ticket the PR does not implement. Measured across
+  every merged PR naming a foreign ticket id: **8 such mutations in the 2.5 days before W** — all
+  landing on `Awaiting Deploy`/`In Progress`, including PR #741 moving FRE-1036 at **+2s** — against
+  **0 in W's 14 days** (tightest 9s) and **0 since**, on a larger merge volume. The trigger is dead.
+- *(a)* was adjudicated on this natural replay (37 in-W PRs naming foreign tickets, all elapsed well
+  beyond 24h) rather than a synthetic test ticket, which the natural sample strictly dominates.
+
+**AC-4 — RED.** The schema half passes: all 7 directives and all 7 ladder rows validate (dated,
+attributed, with objectively decidable retirement events); the validator was proved to reject five
+seeded malformed records and accept a known-good control. **The owner-confirmation half failed.**
+Presented with the two ladder rows granted inside W, the owner confirmed "Observe the other sessions"
+and **rejected** the deploy row: the 2026-08-06 promotion of *Deploy — everything else* was granted
+**for the Observability Foundations spike only**, and the console recorded it as an unconditional
+`standing-approved` whose sole exit was "a standing-class deploy causes an incident". Master had
+therefore been reading blanket standing approval to rebuild the gateway, reindex ES, run Postgres
+migrations and deploy cost/governance changes. The git history shows the drift path: the owner's
+2026-08-05 scoped grant was transcribed correctly *as a directive carrying its scope*, retired when
+that chain finished, and the general *ladder row* was promoted the following day with the scope
+dropped. This is the ADR's own named failure — "master has authored" — and it is exactly the class
+**no mechanical check could catch**: every schema check passed the over-grant, because a faithful
+transcription and an invented one are textually identical. The criterion that required the owner is
+the criterion that found the live defect.
+
+**AC-5 — GREEN.** During the same fresh prime, the primed session's stated NEXT per stream was diffed
+against `next_resolver --eligible --json` run inside that prime: `adr` → occupied by FRE-1087's busy
+guard; `build1` → nothing carries the label; `build2` → nothing eligible. All three agree with the
+resolver's empty sets. The comparison was **not** vacuous: FRE-1120 is `Approved`, High and labelled
+`stream:build2`, so it presents as build2's head to a careless reader, and the primed session correctly
+declined to name it — tracing the chain to FRE-1118 and on to the unlabelled real head FRE-1122.
+
+**Adjudication summary:** AC-2, AC-3, AC-5 green · AC-1, AC-4 red. Per the seam contract this ADR
+**stays `Accepted`**. Two remediations follow from the reds and one from AC-3's method defect: the
+console's deploy row (corrected in this PR at the owner's direct instruction, which is why it is not
+left for a remediation ticket), the prime's authority-table granularity, and a rewrite of AC-3(b) into
+a check that can actually fail.

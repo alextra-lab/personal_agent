@@ -81,15 +81,23 @@ async def _canonical_edge_element_id(
     driver: object, source_element_id: str, target_element_id: str, canonical_type: str
 ) -> str | None:
     async with driver.session() as session:  # type: ignore[attr-defined]
+        # Match on any relationship type and filter with type(canon) = $canonical_type — not an
+        # f-string-interpolated MATCH pattern. canonical_type originates from a live type(r) read
+        # (relationship_type is unconstrained free text upstream, from LLM extraction — see
+        # models.py's Relationship.relationship_type), so it must never be embedded in Cypher
+        # syntax; a bound parameter is the only safe way to compare against it (self-review,
+        # security-review).
         result = await session.run(
-            f"""
-            MATCH (a)-[canon:{canonical_type}]->(b)
+            """
+            MATCH (a)-[canon]->(b)
             WHERE elementId(a) = $source_id AND elementId(b) = $target_id
+              AND type(canon) = $canonical_type
             RETURN elementId(canon) AS canon_id
             LIMIT 1
             """,
             source_id=source_element_id,
             target_id=target_element_id,
+            canonical_type=canonical_type,
         )
         rec = await result.single()
     return rec["canon_id"] if rec else None

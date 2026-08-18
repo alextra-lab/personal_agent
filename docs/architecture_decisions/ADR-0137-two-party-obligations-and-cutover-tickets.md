@@ -1,6 +1,6 @@
 # ADR-0137: A Two-Party Obligation Is Split at Authoring, and a Cutover Is Two Tickets — the Dispatch Question Is Only the Backstop
 
-**Status:** Accepted
+**Status:** Superseded (2026-08-18, owner-directed process streamline)
 **Date:** 2026-08-13
 **Deciders:** project owner (FRE-1221)
 **Tags:** process, delivery, acceptance-criteria, lifecycle, skills, integration
@@ -628,6 +628,18 @@ first advance-dispatch on or after the due date.
 ---
 
 ## Status Updates
+
+### 2026-08-18 — Superseded (owner-directed process streamline)
+
+**Changed By:** master session, at the owner's direction (2026-08-18)
+**Reason:** The owner directed a streamlining of the delivery process: the governance surface had
+grown to the point where it generated more tickets than it resolved (seam tickets, remediation
+tickets, provisioning tickets, cutover splits) and blocked dispatch behind multi-check gates. This ADR's dispatch-time path-assumption and cutover checks were part of the pre-label gauntlet being removed.
+What survives: an implementation ticket still carries its own outcome-level acceptance criteria,
+and a diff must still implement its backing ADR as designed. What is retired: the dispatch-time path-assumption check (D3), the mandatory two-ticket cutover split and its gate (D4), and the three-row obligation-splitting doctrine (D1/D2) as mandatory process — the provisioning insight (assign an obligation to whoever provisions the thing) survives as a one-line authoring guideline in the adr skill.
+ADRs now reach `Implemented` when master observes the chain merged and working — a one-line status
+note, not a commissioned adjudication.
+
 
 ### 2026-08-13 — Proposed
 

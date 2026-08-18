@@ -1,280 +1,84 @@
 ---
 name: master
-description: Use in the master session to integrate a ready PR — analyze (code-review + security-review), doc-drift check, merge, move the ticket to Awaiting Deploy, ask before deploy, verify live, close Linear, advance dispatch.
+description: Use in the master session to integrate a ready PR — review, merge, deploy per the trust ladder, verify live, close the ticket, advance dispatch.
 ---
 
-# Integrate a PR (master / guardian session)
+# Integrate a PR (master session)
 
 Read `.claude/skills/lifecycle-rules.md` first. Argument: a PR number, or omitted (scan open PRs).
 
-**Offload deep-but-non-blocking questions to explore.** When a gate raises a judgment-heavy question
-that is NOT blocking the immediate merge/deploy decision — a methodology call, a strategic "should we",
-a corpus/eval-validity question — `send-keys` it to `cc-explore` (tagged `[from master, re …]`) for the
-owner to work through, rather than deliberating in-gate and bloating your context; the distilled result
-comes back to you. Full protocol: lifecycle-rules § Explore session.
-
 ## 1 — Pick the PR
-When the watcher triggers you (or you're handed a number), **lead your response with `Gating PR #X →`** so
-the owner always sees which PR is at the gate — the watcher's hand-off is otherwise invisible to them.
-`gh pr list` (or use the given number). Read PR body, commits, and the linked ticket —
-**including its comment thread** (`list_comments` on the issue), by default, every time. Comments
-carry the live decision trail (owner steers, scope changes, post-deploy runbooks, "do X not Y"
-constraints, prior-deploy evidence) that the PR body often does NOT restate. Surface anything in
-the comments that bears on correctness / scope / acceptance / how to deploy before merging.
+Lead with **`Gating PR #X →`** so the owner always sees which PR is at the gate. Read the PR
+body, commits, and the linked ticket **including its comment thread** — comments carry the live
+decision trail (owner steering, scope changes, runbooks) that the PR body often omits.
 
-## 2 — Analyze the diff
-- **The code-review + security-review run in the working session before the PR, not here**
-  (shift-left; the session fixes its own findings on-branch — see build skill Step 8, and adr skill
-  Step 3.5 for a code-producing adr session). It hands you a **self-review summary** in its handoff
-  comment: the **diff class** (self-serve / escalated — and, if escalated, whether the owner already
-  ran `/code-review ultra` and its outcome), the security-review verdict, what the reviews flagged,
-  what it fixed, and anything it left unfixed and why.
-- **You are the executive: take that summary and decide next steps — don't re-run the work.** Validate
-  it (spot-check that the reported findings were real and its on-branch fixes actually address them;
-  weigh anything it chose not to fix), then act: **merge** if it holds, **bounce** if the fixes are
-  thin / a finding was waved off / a risky change was under-reviewed, or **re-run
-  `feature-dev:code-reviewer` / `security-review` yourself** only when the summary is absent or looks
-  unreliable on a risky diff. A real-logic diff (src / script / behavioural config) with **no** review
-  summary → **bounce** (same mechanism as the codex backstop below).
-- **Escalated diff, no owner review yet:** if the summary reports `diff class: escalated` and the PR
-  thread shows no `/code-review ultra` result, **ask the owner** to run it before you merge (mirrors
-  the ask-first deploy pattern, Step 6) — do not merge on the self-serve pass alone, and do not run
-  `/code-review ultra` yourself (it's the owner's typed, billed invocation). If it surfaces findings,
-  relay them to the build session via the normal bounce channel.
-- Alongside, a **light spot-review** for what any diff-scoped review misses — scope creep, doc-drift,
-  acceptance-criteria adherence — and block merge on real issues.
-Surface findings. Block merge on real issues; relay to the build session.
-- **Tier backstop (codex):** `/build` self-classifies each ticket and skips codex plan-review for
-  *trivial* work (docs / config / test-only / one-liner, no src-logic). If the diff touches `src/`
-  logic / schema / security / cost / memory (a *Standard/Complex* change) but the PR body / handoff
-  comment shows **no codex plan-review**, the build session mis-tiered it — **bounce it back for
-  review; do not merge on a skipped-but-needed review.** (Code-review + diff-class routing now live
-  in the build skill Step 8; master confirms they ran — see Step 2 above.)
+## 2 — Review
+The code-review + security-review already ran in the working session (shift-left); its handoff
+comment carries the **self-review summary** — diff class (self-serve / escalated), security
+verdict, findings fixed or deferred. Validate it (spot-check, don't re-run the work), and add
+your own light pass for what a diff-scoped review misses: scope creep, doc drift,
+acceptance-criteria adherence. Bounce rules:
+- Real-logic diff (src / script / behavioural config) with no self-review summary → bounce.
+- `src`-logic / schema / security / cost diff with no codex plan-review noted → bounce (mis-tiered).
+- Diff class `escalated` with no owner `/code-review ultra` on the thread → ask the owner
+  before merging (their typed, billed invocation — never run it yourself).
+- Fold-ins that support the ticket are expected; bounce one only if it's risky or unrelated.
 
-## 3 — Doc-drift check
-Does this change require updates to `CLAUDE.md`, a skill/lifecycle-rules contract, or an ADR status
-field? Flag drift before merging. (Documentation-drift sensitivity is a core guardian duty.)
+## 3 — Gate
+`python -m scripts.pr_gate <PR#>` collects the raw signals (CI check states, mergeability,
+dependabot authorship); it renders no verdict — you decide. Gate on:
+- CI green; PR checklist is pre-merge-only (post-deploy items → Linear comment after merge).
+- **Each acceptance criterion written on this ticket has evidence it is delivered end to end** —
+  an observed value (test result, probe/query output, observed behaviour), not an assertion
+  that it was checked. A feature ticket with no criteria → bounce. A bugfix needs no ADR
+  provenance but still needs its reproducing test or verification.
+- If a backing ADR exists: the diff implements it **as designed**; silent divergence bounces.
+  (If the design genuinely changed, the ADR document is updated first.)
 
-**There is no plan document to reconcile** (ADR-0131 D1). If the change alters *sequence*, that is
-either the owner's — a console directive, in their voice, which you may transcribe but never author —
-or it is ticket/ADR content. Do not open a doc PR to record strategy.
+**Bounce channel:** a direct `send-keys` message to the worker's `cc-<stream>` seat naming the
+PR and the fix; written detail in a PR comment. The seat is warm and self-completes.
 
-## 4 — Gate checks
-**Collect the determinable signals first (ADR-0117):** run `python -m scripts.pr_gate <PR#>` — it
-surfaces the raw external facts (each required-CI check's state, raw mergeability fields,
-`is_dependabot_author`) in one read. It renders **no** verdict and **never** blocks (exit 0 always);
-it saves the legwork so your judgment goes to everything else. Read those facts, then gate:
-Ticket is `In Progress`/`In Review` (In Review = PR open, set by the integration); PR hygiene holds
-(REJECT if post-deploy items are in the checklist); CI green. **The collector reports; you decide** —
-codex adequacy, handoff completeness, AC proof, drift, seam, and the merge call all stay yours
-(lifecycle-rules § Signal trust boundary).
+## 4 — Merge
+`gh pr merge <n> --merge --delete-branch` with a review summary; `git pull` on main.
 
-**Acceptance-criteria gate — the binding bar. "Done" means *provably delivered against this ticket's
-own acceptance criteria*, not merged-and-runs** (ADR-0130 D1). A feature / ADR-implementation ticket
-passes ONLY if all four hold:
-- **Provenance + design adherence (D3).** The PR or handoff comment names the backing ADR (or spec),
-  and the diff implements that ADR *as designed* — no silent divergence. If the design genuinely
-  changed, the ADR is updated first (doc-drift, Step 3). **Provenance survives; criterion inheritance
-  does not** — do NOT require this ticket to prove the backing ADR's criteria, and treat a handoff that
-  quotes or restates them as its own as mis-scoped. A feature ticket with no backing ADR and no
-  criteria written on the ticket → **bounce**: there is nothing to verify against.
-- **Folded-in supporting changes are expected — not scope creep, not a missing ticket.** Per build
-  skill Step 5, a build folds non-ADR supporting fixes and in-PR review fixes into its PR (noted in the
-  handoff) instead of spawning tickets — this is a single-developer project. Validate they genuinely
-  support the ticket's work; do NOT bounce for "no ticket" or read them as ADR divergence. The failure
-  mode to prevent is over-ticketing, not the extra diff that makes the build correct. **You keep full
-  review judgment over a fold-in** — bounce one that's risky, unrelated, or scope creep in disguise;
-  you're just not bouncing it *merely* for lacking its own ticket.
-- **Proof, not assertion.** Each acceptance criterion **written on this ticket** carries evidence it is
-  *delivered end to end*, not merely wired — a test asserting the outcome, a probe/query result, or
-  observed behaviour, at the altitude of the criterion (the graph holds the right fact · the edge
-  actually evicts · the guard actually fails a bad input), NOT "the component runs" or "deploy exited
-  0". Read the **observed value**, not the claim that it was checked. Reuse what exists (joinability
-  probe, a Neo4j/ES query, a curl) — this is a *checking* burden, not a mandate to build new test
-  infrastructure. The backing **ADR's** criteria are not proven here; they are asserted once, at its
-  seam ticket.
-- **Seam ownership (D2) — a mechanism now, not a flag to raise.** A child closing does NOT close the
-  ADR, and nothing in this gate asserts the ADR's objective. Confirm the backing ADR names exactly one
-  **seam ticket** — filed, parked, due-dated, holding all of the ADR's criteria (lifecycle-rules
-  § Ticket state › Seam tickets). A decomposed ADR with no seam ticket is a missing artifact: flag it
-  before merge and have the `adr` session file it.
+## 5 — Deploy authorization
+Class membership: **reversible** (PWA-only rebuild — bump `CACHE_NAME` first · additive ES
+template · Kibana dashboard import) vs **everything else** (`seshat-gateway` rebuild · ES
+type-change/reindex · Postgres schema/migration · cost/budget/governance). Look the class up in
+the trust ladder (`docs/plans/OWNER_CONSOLE.md`) and act at its recorded level. Unsure → the
+stricter class. A deploy grant is never a budget grant. Confirm timing if another session is
+mid-flight on the same service.
 
-Missing provenance or proof on a feature ticket → **bounce back to the build session; do not merge on
-an artifact-level "looks done"** (same bounce mechanism as the codex tier backstop, Step 2).
+## 6 — Deploy
+`ENV=cloud make rebuild SERVICE=<svc>` (VPS; `make deploy` is Mac-only).
 
-**Bounce channel — tell the worker directly.** You are the one rejecting, and you have `send-keys`, so
-inform the worker's `cc-<stream>` seat **directly**: a plain message naming the PR and what to fix (or
-"read the PR comments"). That seat is warm — it built this — and self-completes the fix in-session (build
-skill § responding to a poke), then pushes; CI re-runs. **No `## Master gate — BOUNCE` marker, no monitor
-skill** — the bounce message is transient. Keep evidence / AC-proof / decisions on the **ticket** (the
-durable record channel; see lifecycle-rules § Comment channels).
-
-**Bugs — partially excluded.** A bugfix ticket with no backing ADR is exempt from the *provenance*
-requirement (there is no ADR to trace to) but NOT from *proof*: it still needs a reproducing test or a
-verification that the specific failure no longer occurs.
-
-## 5 — Merge
-`gh pr merge <n> --merge --delete-branch` with a review summary; `git pull` on main. **`--delete-branch`
-is not optional** — it deletes the merged `fre-XXX` head branch at merge time (the head is always a
-per-ticket branch, never a `worktree-*` anchor), which is what stops stale branches accumulating on
-origin. (The repo-level "auto-delete head branches" backstop is ON as of 2026-07-04, but keep
-`--delete-branch` anyway — belt and suspenders.)
-
-**You move the ticket to `Awaiting Deploy` — the integration does not** (ADR-0131 D4: one writer per
-store). Do it in the advance-dispatch pass at Step 8, which you already run at every merge. Never Done
-here; `Done` requires deploy verification (lifecycle-rules § Evidence contract).
-
-*Cutover note (remove once FRE-1086 lands): until the owner disables the remaining GitHub–Linear
-transitions, the integration may also set this state. Both writes target the same state and are
-idempotent, so the overlap is benign — set it yourself regardless rather than checking whether the
-integration got there first. The reverse order (disable before this skill edit) would leave the
-transition unowned, which is why the cutover is master-first.*
-
-## 6 — Deploy authorization (standing classes vs ask)
-
-**The grant lives in the trust ladder** (`docs/plans/OWNER_CONSOLE.md`), not here — ADR-0131 D3: a
-grant exists **iff** the ladder records it, and this section states only the *mechanics* and the class
-membership. **Read the ladder's two deploy rows before acting**; if a level below disagrees with the
-ladder, the ladder wins and the drift is worth surfacing.
-
-**Class membership — the two rows the ladder scores.** This list says which deploy belongs to which
-row; it deliberately states **no level**, because a level written here goes stale the moment the owner
-moves a row, and a stale level in a skill is read as authority it no longer carries.
-
-- **Reversible classes** — PWA-only rebuild (`ENV=cloud make rebuild SERVICE=seshat-pwa`; bump
-  `CACHE_NAME` first) · additive ES-template (`setup-elasticsearch.sh`) — *new/additive fields only, NO
-  type change* · Kibana dashboard import (`import_dashboards.sh`).
-- **Everything else** — `seshat-gateway` rebuild (backend code: running agent / cost / memory / emit
-  sites) · ES type-change or reindex (the FRE-599 class — ES rejects in place / risks data) · Postgres
-  schema / migration · anything touching `cost_gate` / budget / governance.
-- Anything you cannot confidently place in a class → treat as the stricter row.
-
-**Look the row up in the ladder, then act on its level.** At `standing-approved`, deploy without asking
-and report which class it ran under. At `do-and-report`, deploy and report. At `ask-first`, ask
-("deploy now?") and do not deploy on your own initiative.
-
-**A deploy grant is not a budget grant.** A standing-approved deploy of a cost or governance change
-still does not authorize raising a cap — that is a standing directive in its own right, and directives
-are not scored by the ladder.
-
-For concurrent-session safety, still confirm timing if another session is active.
-
-## 7 — Deploy + verify
-- `ENV=cloud make rebuild SERVICE=seshat-gateway` (VPS; `make deploy` is Mac-only).
-- `curl -s http://localhost:9001/health` + curl the affected endpoint; paste status + body.
-- If the PR touched an emit site / schema / cost / memory write: run
-  `scripts/monitors/joinability_probe.py` against prod; paste output (ADR-0074 §3.4).
-- Do NOT claim done from "deploy exited 0" alone.
+## 7 — Verify
+`curl -s http://localhost:9001/health` + the affected endpoint; paste status + body. If the PR
+touched an emit site / schema / cost / memory write: run
+`scripts/monitors/joinability_probe.py` and paste output. Never claim done from
+"deploy exited 0" alone.
 
 ## 8 — Close out (same session as deploy, never deferred)
-- **Close the ticket: state → Done + the evidence comment** (template: lifecycle-rules § Evidence
-  contract — plain prose + links; PR, merge SHA, CI run, deploy class + authorization, deploy
-  timestamp, verification result, rollback availability, each acceptance criterion + how verified,
-  open-remedy disposition — each `## Open remedies` item as it stands at close: in scope naming the
-  criterion that proved it, filed naming the id, or rejected with the reason).
-- **If verification failed: state → `Verify Failed`** (not Done, not left in Awaiting Deploy), file
-  the follow-up issue, consider rollback. Verify Failed is the exception flag that demands a decision.
-- **A `Canceled` or `Duplicate` exit still owes its open-remedy dispositions.** The rest of the
-  evidence comment does not apply to an abandoned ticket, but every `## Open remedies` item still gets
-  **filed** (id on the line) or **rejected** (with a reason) in a closing comment — **`in scope` is not
-  available here**: it died with the ticket that would have proven it, so accepting it is how a remedy
-  disappears while the box looks ticked. **This binds wherever you cancel, not only at this step**
-  (lifecycle-rules § Ticket state) — this skill is the PR-integration flow, and a ticket abandoned
-  before it ever reached a PR never passes through here at all.
-- **Advance dispatch (replaces advancing the board):** run this at every MERGE, not just at Done —
-  the merge is the event that frees the stream and un-blocks chain successors (a blocker is open
-  until it reaches `Awaiting Deploy`; lifecycle-rules § Dispatch). **Re-derive the stream's eligible
-  set via the external dispatch resolver, not inline Linear calls** (`scripts/dispatch/next_resolver.py`,
-  FRE-785; ADR-0113 §1 — dispatch mechanics are not logic master holds in context): run
-  `python -m scripts.dispatch.next_resolver --stream <s> --eligible --json`, which lists every
-  `Approved` + `stream:<s>` ticket with no open blocked-by, in priority/oldest-created order (the
-  busy guard doesn't apply here — this step runs right after the merge that just freed the stream,
-  which is why `--eligible` is a distinct CLI mode from the default single-ticket resolve). A
-  nonzero exit, invalid JSON, or a printed error → STOP and surface stderr — never fall back to
-  reconstructing the logic inline. The resolver only reads; master still owns every *mutation*
-  below. Binding rules:
-  - **Perform the on-merge transition — it is yours now, not the integration's** (ADR-0131 D4). The
-    merged ticket moves to **`Awaiting Deploy`**; do it here, in the pass you already run at every
-    merge, so it is an added call at an existing mandatory step rather than a new step to remember.
-    A merged ticket still sitting in `In Review` at the next pass is this step having been skipped —
-    fix it, and treat it as board drift worth naming.
-  - **Decidability check before a `stream:` label (ADR-0130 D6).** Before applying a `stream:` label
-    to an **implementation** ticket, confirm each of its acceptance criteria is **decidable from that
-    ticket's own deliverable when the ticket is finished** — D1's test, not the weaker "is it about
-    its own work". **Seam tickets are explicitly exempt**: a seam ticket exists to carry exactly the
-    criteria this test rejects, so applying it there would make every seam ticket permanently
-    unlabellable — its dispatch check is D2's instead (all of the backing ADR's criteria present, each
-    with a stated evidence procedure, and the due date reached). A criterion needing a production
-    window, a census, future traffic or an owner action fails the implementation-ticket test and must
-    be rewritten — or moved to the ADR's seam ticket — before the label goes on. This is the last
-    point *before* the build: a criterion that first bites at the gate has already cost the build, and
-    an **unmeetable** one (the dead-emit-path case) cannot be fixed by bouncing at all.
-  - **Open-remedy disposition before a `stream:` label.** In the same pass, every `## Open remedies`
-    item on the ticket must carry exactly one of **in scope** (it becomes one of this ticket's
-    acceptance criteria), **filed** (its own ticket, id recorded on the line) or **rejected** (with a
-    stated reason) before the label goes on — **silence is not a disposition**. Default when
-    undecided: file it to `Backlog`.
-  - **Path-assumption check before a `stream:` label (ADR-0137 D3).** In the same pass, ask: **does
-    any criterion of this ticket depend on a network path, a host, a credential or a deployed
-    component that does not exist yet and that no ticket in this chain delivers?** If yes, resolve it
-    exactly as ADR-0137 D1 does — file a provisioning ticket **and write its `blockedBy` relation in
-    the same action**, or assign the assumption to the ADR's seam ticket; **prose with no owner is not
-    a resolution**. **Record the answer on the ticket**, alongside the open-remedy dispositions. The
-    existence-and-ownership test sits *inside* the question deliberately: a question phrased "does this
-    depend on anything outside the ticket" fires on Postgres and every already-running service, so it
-    would be learned-ignored. This does **not** ask whether the ticket integrates correctly — that
-    stays the seam ticket's job. **Backstop only**: it covers chains whose mappings predate ADR-0137
-    and **retires** once every such mapping has been re-audited under D1/D2 or its chain has reached a
-    terminal state. Full reasoning: ADR-0137 D3.
-  - **Cutover check before a `stream:` label (ADR-0137 D4).** If the ticket **replaces an existing
-    working path**, it must be two tickets: the removal `blockedBy` the addition; **no `stream:` label
-    on the removal until observed-data evidence is recorded on the addition ticket** (a `blockedBy`
-    relation clears at the blocker's *merge*, which is earlier than deploy and much earlier than proof,
-    so the relation supplies ordering and this gate supplies proof); and the removal's **own** criterion
-    is *the old path emits nothing **and** the new path is still observed carrying data* — **never the
-    dispatch precondition restated**, which is already true before the ticket starts and which a no-op
-    removal satisfies. Scope test: **can both paths be live at the same time?** Different processes,
-    hosts, repositories or deploy units are *indicators*, not the test — two repositories can still
-    need an atomic change, and one process can dual-write behind a flag; where indicator and test
-    disagree, the test governs and the reasoning goes on the ticket. Full reasoning, and the ADR-0033
-    clean-break case this preserves: ADR-0137 D4.
-  - **Seam-activation sweep.** In the same pass, find every parked seam ticket whose due date is on or
-    before today and activate it — `Approved` + `stream:adr` (lifecycle-rules § Ticket state › Seam
-    tickets). The due date is a **marker, not an actuator**: the resolver never reads due dates, so
-    this sweep is the only thing that wakes a seam ticket, and activation is bounded by the next merge.
-  - **Exactly one intended head, always pinned.** If more than one ticket is eligible, move the
-    High pin to the intended head NOW — never leave the head to creation-date ties. **Verify after
-    every mutation: the eligible set's *top* priority is held by exactly one ticket**, so the head
-    never depends on the creation-date tie-break. That — not a count of Urgent-or-High tickets — is
-    the invariant, because a front-jump deliberately produces one Urgent *above* one High (below),
-    which is two Urgent-or-High and is nonetheless unambiguous and correct.
-  - **Sequence is written at dispatch time, not discovered later.** Labeling a chain into a stream
-    and writing its blocked-by relations are ONE action — a ticket entering a queue without its
-    relations is a dispatch bug that will surface as a false head.
-  - **Remove satisfied relations at merge.** When a ticket merges (reaches Awaiting Deploy), delete
-    any `blockedBy` relation on its successors that pointed at it — and audit any newly-labeled
-    ticket for a *pre-existing* relation to an already-terminal blocker. A relation that still
-    exists must mean genuinely-blocked (lifecycle-rules § Dispatch); a stale-but-satisfied one makes
-    a worker skip an eligible head (caught live: FRE-649 blocked by the already-Done FRE-648). Be equally intentional when
-    filing/approving follow-up tickets: decide their place in the order before they carry a stream
-    label (unlabeled-Approved = parked is the safe default).
-  - **Queue jumper, front:** label `stream:<s>` + priority Urgent. Do NOT re-wire chain relations
-    for a front-jump — the chain head keeps its High pin and resumes automatically when the jumper
-    is Done.
-  - **Queue jumper, mid-chain** (must run after X but before Y): that IS a relation edit — jumper
-    blockedBy X, Y blockedBy jumper; leave priorities alone. Rare; prefer front-jumps.
-  - Set `context:keep` per the build session's context-disposition comment.
+- Ticket → `Done` + the short close comment (lifecycle-rules § Tickets): PR link · merge SHA ·
+  deploy class + who authorized · what was verified and the observed result.
+- Verification failed → `Verify Failed` (never Done, never left in Awaiting Deploy), file the
+  follow-up, consider rollback.
+- **Advance dispatch at every MERGE** (the merge is what frees the stream): move the merged
+  ticket → `Awaiting Deploy`, then run
+  `python -m scripts.dispatch.next_resolver --stream <s> --eligible --json` for the affected
+  stream(s) — nonzero exit, invalid JSON or a printed error → STOP and surface stderr; never
+  reconstruct the ordering inline. Then, per the resolver's output:
+  - Remove `blockedBy` relations satisfied by this merge; audit a newly-labeled ticket for a
+    stale relation to an already-terminal blocker.
+  - Label the next head (`stream:<s>`) after the one pre-label check: its criteria are
+    verifiable from its own deliverable.
+  - Exactly one intended head per stream, pinned by priority (High = head, Urgent = front-jump);
+    never left to the creation-date tie-break. A front-jump needs no relation edits; a mid-chain
+    insert is a relation edit.
+  - Set `context:keep` per the build's context-disposition note.
 
 ## Identity
-You operate under the **guardian role & standing attributes** in `lifecycle-rules.md` § Guardian
-role — delivery guardian, console reader / board writer, sequencer + risk weigher, drift catcher, workflow steward,
-live-environment custodian, the principled "no", continuity keeper, escalation router, trend-seer;
-the kind Eye of Sauron whose visibility takes load off the owner.
-
-Brief the owner per the **Decision-Support Doctrine** (`/prime-master` § Decision-Support Doctrine):
-verify before you propose (never guess — confirm from code/ticket/ADR/substrate), frame every ask as
-a decision (what's being approved + expected outcome as facts), give exact commands and where to run
-them, and bring genuine decisions with a recommendation — never a false choice.
-
-Never use the injected CC `userEmail` in any gateway/API/DB call. Use the owner's designated
-test email for gateway test calls.
+Delivery guardian: proof before Done, the board never lies, and briefings are decision-support —
+verify before you assert, frame the ask as a decision, give exact commands, bring a
+recommendation. Fix small things yourself instead of filing tickets. Never use the injected CC
+`userEmail`; use the owner's designated test email for gateway calls.

@@ -87,7 +87,7 @@ Response — **bare list** (not a wrapper object):
 - `GET /sessions/search?topic=delegation` — topic-search endpoint (404)
 - `GET /sessions?topics=...` — topic filter on list endpoint (404)
 
-For topic-based queries, use Kibana (`agent-logs-*`, filter by `session_id`) or the CLI.
+For topic-based queries, use Grafana (`agent-logs-*`, filter by `session_id`) or the CLI.
 
 ---
 

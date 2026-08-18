@@ -107,7 +107,7 @@ _TOOL_INTENT_PATTERNS: re.Pattern[str] = re.compile(
     r"(?:logs?|errors?|telemetry|traces?|metrics?|events?))"
     # "query the telemetry/logs/metrics/…"
     r"|(?:query\s+(?:the\s+|my\s+|your\s+)?"
-    r"(?:telemetry|logs?|elasticsearch|kibana|neo4j|memory|metrics?|traces?))"
+    r"(?:telemetry|logs?|elasticsearch|kibana|grafana|neo4j|memory|metrics?|traces?))"
     # Health / status / diagnostics (noun can be any word preceding a health term)
     r"|(?:health\s*check)"
     r"|(?:(?:check|inspect|monitor|diagnose|confirm|verify|report\s+on)\s+"
@@ -117,7 +117,7 @@ _TOOL_INTENT_PATTERNS: re.Pattern[str] = re.compile(
     r"(?:the\s+|my\s+|your\s+)?(?:health|status|errors?|logs?|infra(?:structure)?|performance|services?))"
     r"|(?:(?:run|do|perform)\s+(?:a\s+)?(?:health|status|diagnostic|infra)\s*(?:check|report|scan)?)"
     # Bare-noun error/log observation — no leading verb (e.g. "errors in elasticsearch")
-    r"|(?:\berrors?\s+(?:in|from|within)\s+(?:elasticsearch|kibana|the\s+logs?|telemetry|traces?))"
+    r"|(?:\berrors?\s+(?:in|from|within)\s+(?:elasticsearch|kibana|grafana|the\s+logs?|telemetry|traces?))"
     r"|(?:what\s+errors?\s+(?:are\s+)?(?:in|from)\s+(?:the\s+)?(?:logs?|elasticsearch|telemetry))"
     # Artifact / build intent (FRE-469). See _ARTIFACT_BUILD_REGEX_STR above for rationale.
     r"|" + _ARTIFACT_BUILD_REGEX_STR,

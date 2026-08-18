@@ -162,7 +162,7 @@ Originally, the Personal Agent Service was designed to run on port 8000. However
 - **9000**: Personal Agent Service (FastAPI)
 - **5432**: PostgreSQL
 - **9200**: Elasticsearch
-- **5601**: Kibana
+- **3000**: Grafana
 - **7474/7687**: Neo4j
 
 ## Startup Order

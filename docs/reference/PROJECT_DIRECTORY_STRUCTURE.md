@@ -13,12 +13,12 @@ Superseded v0.1 specs and old session logs live in **`docs/archive/`** (see `PRE
 ```
 personal_agent/
 ├── config/                    # Runtime YAML (gitignored except templates); see config/*.template
-├── docker/                    # compose services: postgres, elasticsearch, kibana, searxng, …
+├── docker/                    # compose services: postgres, elasticsearch, grafana, searxng, …
 ├── docs/
 │   ├── architecture/          # Living conceptual docs (HOMEOSTASIS_MODEL, …); README points to Redesign v2
 │   ├── architecture_decisions/  # ADRs, HYPOTHESIS_LOG, experiments/, captains_log/, …
 │   ├── archive/               # Historical v0.1 + router-era material (not primary reading)
-│   ├── guides/                # How-tos (CONFIGURATION, MCP, Kibana, …)
+│   ├── guides/                # How-tos (CONFIGURATION, MCP, …)
 │   ├── plans/                 # OWNER_CONSOLE, LAST_SESSION, sessions/, completed/
 │   ├── reference/             # Standards, directory structure (this file), PATH_PRIVACY
 │   ├── research/              # Eval reports, research notes, context_management_research.md

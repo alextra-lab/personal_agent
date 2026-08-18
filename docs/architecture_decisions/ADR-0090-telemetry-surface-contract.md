@@ -90,39 +90,33 @@ Each template carries a `_meta` block — `managed_by: scripts/setup-elasticsear
 
 ### D3 — Dashboards are version-controlled files; the live dashboard platform is downstream
 
-> **Amended 2026-08-08 (FRE-1213): the platform is Grafana, not Kibana — directed, not yet realized.**
+> **Amended 2026-08-08 (FRE-1213): the platform is Grafana, not Kibana.**
 > The *decision* — dashboards are version-controlled artifacts in git, and the live UI is reconstructed
-> from them, never the reverse — is unchanged and is the whole point of D3. What changes is its
-> realization: the canonical location **becomes `config/grafana/dashboards/*.json`**, provisioned from
-> files as ADR-0129 D6 requires, once `config/kibana/dashboards/*.ndjson` is deleted by FRE-1214.
+> from them, never the reverse — is unchanged and is the whole point of D3. What changed is its
+> realization: the canonical location **is `config/grafana/dashboards/*.json`**, provisioned from
+> files as ADR-0129 D6 requires.
 >
-> **State of play as this is written, because an amendment that describes a migration as finished is
-> the same defect ADR-0129's own amendment was careful to avoid.** `config/grafana/dashboards/*.json`
-> **exists and is committed**; `config/kibana/dashboards/` **also still exists**, and D5's checker
-> still defaults to it (`scripts/audit/telemetry_surface_check.py`, `DEFAULT_DASHBOARDS_DIR`), with CI
-> still running the reconciliation against Kibana NDJSON. **Both corners are live today.** This
-> amendment is therefore **forward-binding** — it fixes which platform the contract points at, so that
-> FRE-1214's deletion does not falsify this ADR — and it is **not** a report that the move is done.
-> Until T8.1 lands, a reader checking the repo will find the Kibana path still wired, and that is
-> expected rather than drift.
+> **State of play (updated 2026-08-18, FRE-1214).** The migration is complete. The reconciliation
+> checker was repointed at Grafana panel JSON by FRE-1208 (`scripts/audit/telemetry_surface_check.py`,
+> `DEFAULT_DASHBOARDS_DIR = config/grafana/dashboards`), and `config/kibana/` — the directory this ADR
+> once named as the sole dashboard location — was deleted by FRE-1214. **Grafana is the sole live
+> corner; Kibana is gone from the repo.**
 >
-> **The one dependency, stated rather than assumed.** This amendment presumes the reconciliation
-> checker is **repointed** at Grafana panel JSON (`panels[].targets[].{query,metrics[].field,
-> bucketAggs[].field}`) — option (a) of the FRE-1203 program's T8.1. If that ticket instead **removes**
-> the dashboard corner from the triangle (option (b)), D1's three-cornered contract is reduced to two
-> and this ADR needs a larger amendment than this one, not a smaller one. **Option (b) is not
-> authorized by this amendment.**
+> **The one dependency, resolved.** This amendment presumed the reconciliation checker would be
+> **repointed** at Grafana panel JSON (`panels[].targets[].{query,metrics[].field,
+> bucketAggs[].field}`) — option (a) of the FRE-1203 program's T8.1. FRE-1208 took option (a): D1's
+> three-cornered contract is intact. Option (b) — removing the dashboard corner from the triangle —
+> was not taken.
 >
-> **This amendment strengthens D3 rather than merely relocating it** — but only once realized: Grafana's
-> file provisioning makes git → live automatic *and* removes the manual re-export loop that was D3's
-> known weak point (below), so the asymmetry D5 was written to make checkable stops existing rather
-> than staying checkable.
+> **This amendment strengthens D3 rather than merely relocating it.** Grafana's file provisioning
+> makes git → live automatic *and* removes the manual re-export loop that was D3's known weak point
+> (below), so the asymmetry D5 was written to make checkable no longer exists.
 
-The git artifact is the **source of truth**; the live dashboard platform is reconstructed from it. The **import direction (git → live) is automated today** via `config/kibana/import_dashboards.sh`. The **export direction (live → git) is manual today** — a hand-run `curl …/_export` plus a per-dashboard reconstruction step the README still flags as planned work ("see FRE-313 plan", `config/kibana/dashboards/README.md:32-43`). Closing that asymmetry (so an edit made in live Kibana reliably round-trips to committed NDJSON) is exactly what D5 makes checkable. Consequences:
+The git artifact is the **source of truth**; the live dashboard platform is reconstructed from it. **Grafana provisions the live UI from the committed files** (ADR-0129 D6) — the import direction (git → live) is automatic, and there is no export direction to close: a panel edited in the UI is not the source of truth and cannot silently become one. Consequences:
 
-- **One canonical location.** All dashboards live under **`config/grafana/dashboards/`** (amended 2026-08-08; previously `config/kibana/dashboards/`). A second location is itself drift — the clause that caught the stray `docker/kibana/dashboards/prompt-cost-cache.ndjson` (FRE-535), and it binds unchanged on the new platform. **During the migration there are legitimately two trees**; "one canonical location" resumes binding as an *invariant* once FRE-1214 deletes the Kibana one, and until then it states which of the two is canonical rather than asserting the other is gone.
+- **One canonical location.** All dashboards live under **`config/grafana/dashboards/`**. A second location is itself drift — the clause that once caught the stray `docker/kibana/dashboards/prompt-cost-cache.ndjson` (FRE-535) binds unchanged on the new platform. `config/kibana/` was deleted by FRE-1214: "one canonical location" is now an *invariant*, not a during-migration statement of which of two trees is canonical.
 - **Git ↔ live drift is a defect.** A panel that exists in the live UI but not in git, or references a field the reconciliation table marks missing, is a finding to fix, not a state to tolerate.
-- ~~**The re-export loop is the sync discipline**~~ — **retired 2026-08-08, by removal of its cause, effective as the Kibana tree goes.** Under Kibana, git → live was scripted but live → git was a hand-run `curl …/_export` plus a per-dashboard reconstruction step, and D5 existed partly to make "did you re-export?" checkable. Grafana provisions dashboards *from files* (ADR-0129 D6), so a panel edited in the UI is not the source of truth and cannot silently become one. **The discipline is not merely relocated — the asymmetry it policed ceases to exist**, for Grafana dashboards immediately and altogether once FRE-1214 removes the Kibana tree. What remains is the ordinary loop: edit the committed JSON, redeploy.
+- ~~**The re-export loop is the sync discipline**~~ — **retired 2026-08-08.** Under Kibana, git → live was scripted but live → git was a hand-run `curl …/_export` plus a per-dashboard reconstruction step, and D5 existed partly to make "did you re-export?" checkable. Grafana provisions dashboards *from files*, so that asymmetry no longer exists. What remains is the ordinary loop: edit the committed JSON, redeploy.
 
 ### D4 — The reconciliation table is a standing artifact, not a one-off audit
 
@@ -136,7 +130,7 @@ D1–D4 are enforced by a **checkable reconciliation**, not by review alone (mat
 
 **Decided floor — the mandatory CI check (both corners are fully in-repo, no live stack needed):**
 
-- **Mapping ↔ dashboard, statically.** Parse the family templates (`docker/elasticsearch/*.json`) and the committed dashboard files — **`config/grafana/dashboards/*.json` once T8.1 repoints the checker (amended 2026-08-08); `config/kibana/dashboards/*.ndjson` is what it still reads today.** The field-extraction walk changes shape with the platform: Grafana panels expose their field references as `panels[].targets[].{query,metrics[].field,bucketAggs[].field}` rather than Kibana's `visState` / `kibanaSavedObjectMeta` / `attributes.state`, which is why the repoint is real schema work rather than a path edit. Assert every field a panel references is explicitly mapped in its family's template (no panel reading a never-mapped field → silent-empty), and report mapped-but-never-referenced fields. Both corners are committed files, so this runs in a **hermetic CI job** with no Elasticsearch.
+- **Mapping ↔ dashboard, statically.** Parse the family templates (`docker/elasticsearch/*.json`) and the committed dashboard files — **`config/grafana/dashboards/*.json`, since FRE-1208 repointed the checker.** The field-extraction walk reads Grafana panels' field references as `panels[].targets[].{query,metrics[].field,bucketAggs[].field}`, in place of Kibana's `visState` / `kibanaSavedObjectMeta` / `attributes.state` shape the checker read before the repoint. Assert every field a panel references is explicitly mapped in its family's template (no panel reading a never-mapped field → silent-empty), and report mapped-but-never-referenced fields. Both corners are committed files, so this runs in a **hermetic CI job** with no Elasticsearch.
 - **Trap-class mapping lint.** For every template, assert numeric/float/ratio/cost and long-text/error/digest fields named by the family's allowlist are explicitly typed (not left to a numeric inference), join keys are `keyword`, and the `_meta` block is present (D2). Pure static lint over the template JSON.
 
 **Additional checks (run where the environment allows, not part of the hermetic floor):**
@@ -160,14 +154,14 @@ A **new or changed** field, index family, or dashboard is **not shippable-to-def
 
 - **The two documented silent failures (2026-05-10, FRE-411) become a checked-against class**, not a recurring surprise — the trap (numeric `0.0`→`long`, long-text truncation, `text` join keys) is named and gated.
 - **Every `agent-*` family is governed-mapped** — the three dynamic-mapped families are closed; new families inherit the discipline by the done-bar rather than re-discovering the trap.
-- **Dashboards have a single source of truth** — git NDJSON, one location, reconstructable; the live/repo drift that hid behind manual re-export becomes a CI finding.
+- **Dashboards have a single source of truth** — committed Grafana JSON under `config/grafana/dashboards/`, one canonical location; the platform provisions the live UI from these files, so drift is a CI finding, not a hand-run export step.
 - **Reconciliation is three-way and standing** — the structural blind spot (each corner edited independently) is closed by an artifact that is regenerated, not audited once.
 - **Clean complement to ADR-0088** — emission (0088) and surface (0090) are separately owned but compose into one L0 done-bar; neither re-implements the other.
 - **Self-describing surface** — `_meta` on every template means the mapping corner explains its own choices and points back to its source path.
 
 ### Negative / tradeoffs
 
-- **A checker to build and maintain (D5).** Walking emit-grep ↔ mapping ↔ committed dashboard files is heuristic at the emit corner (grep/registry, not a runtime hook) and will have edge cases; it is a build-time guard, weaker than a mechanical invariant — acknowledged, not hidden. **Added 2026-08-08:** the checker is coupled to a *dashboard schema*, so a platform change rewrites its field-extraction walk. That cost is real and is **owed, not yet paid** — FRE-1203's T8.1 is the ticket that pays it, and until it lands the checker still walks Kibana NDJSON. A second platform change would charge it again.
+- **A checker to build and maintain (D5).** Walking emit-grep ↔ mapping ↔ committed dashboard files is heuristic at the emit corner (grep/registry, not a runtime hook) and will have edge cases; it is a build-time guard, weaker than a mechanical invariant — acknowledged, not hidden. **Added 2026-08-08:** the checker is coupled to a *dashboard schema*, so a platform change rewrites its field-extraction walk. That cost was real and was **paid by FRE-1208** (T8.1), which repointed the checker's field-extraction walk to Grafana panel JSON. A second platform change would charge it again.
 - ~~**Re-export discipline is now load-bearing.**~~ **Retired 2026-08-08** — Grafana provisions dashboards from files, so there is no live → git export step to remember. See D3.
 - **Up-front mapping cost.** Mandatory-explicit numeric/long-text fields mean a new field needs a template edit before it is safely queryable — slightly slower than emit-and-see, deliberately (emit-and-see is exactly what failed twice).
 - **Scoped to the Elasticsearch surface.** Postgres/Neo4j substrate observability is out of scope; the contract *shape* generalizes but is not realized for them here, so "telemetry surface" is not yet portfolio-complete. *(Amended 2026-08-08 — read "Scoped to ES/Kibana" before that date; the exclusion is unchanged.)*
@@ -181,7 +175,7 @@ A **new or changed** field, index family, or dashboard is **not shippable-to-def
 - A synthetic doc with a new float field first valued `0.0` lands as `double`/`float` (not `long`) for any family under the contract; a >1024-char error/digest field is searchable/aggregatable, not silently dropped.
 - A term join on `trace_id`/`span_id` returns rows for every family (no `text` join key) — the FRE-411 failure mode is absent.
 - The reconciliation checker (D5) run against the live stack passes; a deliberately introduced drift (a panel referencing an unmapped field; a numeric field emitted but left to inference; a live mapping diverging from the repo template) **fails** it with the specific row.
-- **`config/grafana/dashboards/` is the sole dashboard location in git** (no second tree); Grafana's file provisioning reconstructs the live UI from it; a live-only panel is reported as drift. *(Amended 2026-08-08 — this line named `config/kibana/dashboards/` and `import_dashboards.sh` before that date; it is the line FRE-1214 would otherwise have falsified by deleting the directory it asserts on.* **This verification step is not satisfiable until FRE-1214 lands** *— both trees exist today, so a run against the current repo correctly reports the Kibana tree as the second location. That is the migration, not a defect.)*
+- **`config/grafana/dashboards/` is the sole dashboard location in git** (no second tree); Grafana's file provisioning reconstructs the live UI from it; a live-only panel is reported as drift. *(Amended 2026-08-08 — this line named `config/kibana/dashboards/` and `import_dashboards.sh` before that date.* **Satisfied as of FRE-1214** *— `config/kibana/` is deleted, so the checker's "no second tree" assertion holds against the live repo.)*
 - The `docs/research/` reconciliation table (FRE-533) classifies every `(field, family)`; every ⚠️ row carries a one-line resolution direction; FRE-534/535 execute mechanically off it.
 
 ## Settled decisions
@@ -223,13 +217,14 @@ corners.
 discipline, D4's standing table, D5's checker and D6's done-bar all stand exactly as written. The
 canonical dashboard location becomes `config/grafana/dashboards/*.json`.
 
-**This amendment is forward-binding, not a report of a completed migration** — and that distinction is
-recorded because adversarial review caught the first draft asserting the move as done. As this is
-written, `config/grafana/dashboards/*.json` is committed **and** `config/kibana/dashboards/` still
-exists, with D5's checker still defaulting to the Kibana tree and CI still reconciling against it. The
-amendment fixes which platform the contract *points at*, so FRE-1214's deletion cannot falsify this
-ADR; it does not claim the wiring has moved. A reader finding the Kibana path still live has found the
-migration in progress, not drift.
+**This amendment was forward-binding, not a report of a completed migration** — and that distinction is
+recorded because adversarial review caught the first draft asserting the move as done. As this was
+written (2026-08-08), `config/grafana/dashboards/*.json` was committed **and** `config/kibana/dashboards/`
+still existed, with D5's checker still defaulting to the Kibana tree and CI still reconciling against it.
+The amendment fixed which platform the contract *points at*, so FRE-1214's later deletion could not
+falsify this ADR; it did not itself claim the wiring had moved. **Resolved 2026-08-18 (FRE-1214):** the
+checker was repointed by FRE-1208 and `config/kibana/` is deleted — the migration this paragraph
+describes as in-progress is now finished; see the updated D3 state-of-play above.
 
 **One clause is retired by removal of its cause, not relocated.** D3's re-export loop existed because
 Kibana's git → live direction was scripted while live → git was a hand-run export plus a
@@ -242,9 +237,9 @@ carry the discipline across unexamined.
 **One new cost is recorded honestly.** D5's checker is coupled to a *dashboard schema*: Kibana's
 `visState` / `kibanaSavedObjectMeta` / `attributes.state` become Grafana's
 `panels[].targets[].{query,metrics[].field,bucketAggs[].field}`. A platform change therefore rewrites
-the field-extraction walk. That cost is **owed rather than paid** — T8.1 is the ticket that pays it —
-and a second platform change would charge it again. It is now stated in Negative Consequences, where
-it was not visible before.
+the field-extraction walk. That cost was **owed at the time this was written** — T8.1 (FRE-1208) is the
+ticket that paid it, since landed — and a second platform change would charge it again. It is stated in
+Negative Consequences.
 
 **This amendment has exactly one dependency and it is named rather than assumed.** It presumes the
 FRE-1203 program's T8.1 takes option **(a)** — repoint the checker at Grafana panel JSON. If T8.1
@@ -258,3 +253,22 @@ layout, the second-location drift and the manual re-export as they stood in 2026
 evidence D3 was decided on, and rewriting it to match the current platform would destroy the record of
 why the decision was made. **ADR-0134's pending D6 amendment to this ADR's done-bar is orthogonal** and
 is applied by its own ticket; the two must not be merged into one edit.
+
+### 2026-08-18 — Migration finished: config/kibana/ deleted (FRE-1214)
+**Changed By:** `build` session (FRE-1214).
+**Reason:** FRE-1213's 2026-08-08 amendment above was deliberately forward-binding — it named the
+target platform without claiming the migration was done, because both `config/grafana/dashboards/`
+and `config/kibana/dashboards/` existed at the time. FRE-1214 deletes `config/kibana/` and its compose
+service, closing that gap. Left uncorrected, this ADR would have gone on describing an in-progress
+migration after the thing it was waiting on had landed — the same defect its own 2026-08-08 amendment
+was written to avoid on the other side of the migration.
+
+**What changed:** D3's state-of-play paragraph, the D3 consequences bullet on canonical location, D5's
+mapping↔dashboard clause, the Negative Consequences checker-cost bullet, and the Verification bullet on
+sole dashboard location are updated from forward-binding ("will be true once T8.1/FRE-1214 land") to
+past-tense fact (T8.1/FRE-1208 landed 2026-08-11; FRE-1214 lands with this entry). The 2026-08-08
+Status Update above is left in place with inline resolution notes rather than rewritten, so the
+migration's own history stays legible.
+
+**Not touched:** the *measured* state table in Context (still 2026-06 evidence, per the note above);
+ADR-0134's separate D6 amendment.

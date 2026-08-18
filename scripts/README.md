@@ -53,7 +53,7 @@ Environment variable: `ES_URL` (default: http://localhost:9200)
 |---------|-----|-------------|
 | PostgreSQL | `localhost:5432` | user: `agent`, db: `personal_agent` |
 | Elasticsearch | http://localhost:9200 | No auth (dev mode) |
-| Kibana | http://localhost:5601 | No auth |
+| Grafana | http://localhost:3000 | admin / `GRAFANA_ADMIN_PASSWORD` |
 | Neo4j Browser | http://localhost:7474 | user: `neo4j`, pass: from env |
 | Neo4j Bolt | `bolt://localhost:7687` | user: `neo4j`, pass: from env |
 | FastAPI Service | http://localhost:8000 | None |

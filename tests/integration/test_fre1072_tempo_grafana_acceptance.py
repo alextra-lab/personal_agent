@@ -478,9 +478,9 @@ class TestAC4DurationPanel:
         assert frames, "expected a non-empty p50/p95 series once fixture spans exist"
 
 
-class TestAC5GrafanaOnlineAndKibanaRetained:
-    """AC-5 — Grafana is online and serving real query results, and Kibana is deliberately
-    retained and healthy. Two separable checks per the ticket's own text.
+class TestAC5GrafanaOnlineAndKibanaRetired:
+    """AC-5 — Grafana is online and serving real query results, and Kibana is retired
+    (FRE-1214). Two separable checks per the ticket's own text.
     """
 
     def test_grafana_health_endpoint(self) -> None:
@@ -544,17 +544,16 @@ class TestAC5GrafanaOnlineAndKibanaRetained:
             f"fixture marker not found: {source_col}"
         )
 
-    def test_kibana_still_declared_in_cloud_compose(self) -> None:
+    def test_kibana_not_declared_in_cloud_compose(self) -> None:
         compose_path = Path(__file__).resolve().parents[2] / "docker-compose.cloud.yml"
         doc = yaml.safe_load(compose_path.read_text())
-        assert "kibana" in doc["services"], (
-            "Kibana retention is a deliberate design decision (ADR-0129 D6) — must stay declared"
+        assert "kibana" not in doc["services"], (
+            "Kibana is retired (ADR-0129 D6 amendment, FRE-1214) — must not be declared"
         )
 
     @pytest.mark.skipif(
         not Path("/opt/seshat").is_dir(), reason="requires /opt/seshat (this VPS only)"
     )
-    def test_kibana_status_available_live(self) -> None:
-        r = requests.get("http://localhost:5601/api/status", timeout=10)
-        assert r.status_code == 200
-        assert '"level":"available"' in r.text
+    def test_kibana_not_available_live(self) -> None:
+        with pytest.raises(requests.exceptions.ConnectionError):
+            requests.get("http://localhost:5601/api/status", timeout=10)

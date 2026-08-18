@@ -432,7 +432,7 @@ def render_report(
     empty_events = eh["es"]["proactive_memory_suggest_empty_events"]
     lines.append(
         f"- `proactive_memory_suggest_empty` events (last {days}d): {empty_events} "
-        "(superset; filter by `reason=zero_embedding` in Kibana to isolate the "
+        "(superset; filter by `reason=zero_embedding` in Grafana Explore to isolate the "
         "embedding-degradation slice)"
     )
     if empty_events > 0:
@@ -503,7 +503,7 @@ async def run_survey(*, days: int, out_dir: Path) -> Path:
     report_path = out_dir / "report.md"
 
     queries = TelemetryQueries()
-    memory_service = MemoryService()  # fre-375-allow: read-only MemoryService, post-FRE-375 settings-driven
+    memory_service = MemoryService()  # fre-375-allow: read-only, FRE-375-driven
     monitor = ConsolidationQualityMonitor(memory_service=memory_service, telemetry_queries=queries)
 
     try:

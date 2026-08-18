@@ -145,6 +145,24 @@ class TestToolUse:
             f"{message!r} → {result.task_type.value} (signals={result.signals})"
         )
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # FRE-1214: Kibana is retired, but the word must still route (a user may
+            # still say it out of habit) — grafana was added alongside kibana, not
+            # in place of it.
+            "Query the kibana dashboard for recent errors.",
+            "Query the grafana dashboard for recent errors.",
+            "Errors in grafana just now.",
+        ],
+    )
+    def test_tool_use_kibana_and_grafana_both_route(self, message: str) -> None:
+        """Both 'kibana' and 'grafana' phrasings classify as TOOL_USE (FRE-1214)."""
+        result = classify_intent(message)
+        assert result.task_type == TaskType.TOOL_USE, (
+            f"{message!r} → {result.task_type.value} (signals={result.signals})"
+        )
+
 
 class TestArtifactBuild:
     """Artifact/build intent (FRE-469) must route to TOOL_USE, not CONVERSATIONAL.

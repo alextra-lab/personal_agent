@@ -43,7 +43,7 @@ PR and the fix; written detail in a PR comment. The seat is warm and self-comple
 
 ## 5 — Deploy authorization
 Class membership: **reversible** (PWA-only rebuild — bump `CACHE_NAME` first · additive ES
-template · Kibana dashboard import) vs **everything else** (`seshat-gateway` rebuild · ES
+template · Grafana dashboard import) vs **everything else** (`seshat-gateway` rebuild · ES
 type-change/reindex · Postgres schema/migration · cost/budget/governance). Look the class up in
 the trust ladder (`docs/plans/OWNER_CONSOLE.md`) and act at its recorded level. Unsure → the
 stricter class. A deploy grant is never a budget grant. Confirm timing if another session is

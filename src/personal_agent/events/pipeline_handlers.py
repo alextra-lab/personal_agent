@@ -607,7 +607,7 @@ def build_error_pattern_captain_log_handler(manager: Any | None = None) -> Any:
                     f"by {event.component}."
                 ),
                 how=(
-                    "1) Open representative traces in Kibana to understand the "
+                    "1) Open representative traces in Grafana to understand the "
                     "immediate cause.\n"
                     "2) Decide whether the fix is a retry/backoff policy, a guard, "
                     "a schema change, or a tool description update.\n"
@@ -743,7 +743,7 @@ def build_compaction_quality_captain_log_handler(manager: Any | None = None) -> 
                     "references."
                 ),
                 how=(
-                    "1) Inspect the Captain's Log entry's trace_id in Kibana "
+                    "1) Inspect the Captain's Log entry's trace_id in Grafana "
                     "for the full compaction record.\n"
                     "2) Decide whether the trim ordering needs entity-priority "
                     "logic, or whether the budget ceiling itself is too tight.\n"

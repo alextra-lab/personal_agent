@@ -7,7 +7,7 @@
 All logs and metrics are now automatically sent to Elasticsearch in addition to file/console output. This provides:
 - Centralized log aggregation
 - Searchable metrics history
-- Real-time monitoring via Kibana
+- Real-time monitoring via Grafana
 - Correlation via trace_id
 
 ## Architecture
@@ -21,7 +21,7 @@ ElasticsearchHandler (async)
     ↓
 Elasticsearch (daily indices: agent-logs-YYYY.MM.DD)
     ↓
-Kibana (visualization & search)
+Grafana (visualization & search)
 ```
 
 **Key Components:**
@@ -75,15 +75,15 @@ log.info("task_started", task_id="123", trace_id="abc")
 log.info(SYSTEM_METRICS_SNAPSHOT, cpu_percent=45.2, memory_percent=62.5)
 ```
 
-### Querying via Kibana
+### Querying via Grafana
 
-1. Open Kibana: http://localhost:5601
-2. Create index pattern: `agent-logs-*`
+1. Open Grafana: http://localhost:3000
+2. Go to Explore, select the es-agent-logs datasource (`agent-logs-*`)
 3. Search by:
    - Event type: `event_type: "task_started"`
    - Trace ID: `trace_id: "your-trace-id"`
    - Component: `component: "orchestrator"`
-   - Time range: Use Kibana's time picker
+   - Time range: Use Grafana's time picker
 
 ### Querying Programmatically
 
@@ -208,7 +208,7 @@ per-family retention windows.
 - ✅ Centralized log aggregation
 - ✅ Full-text search across all logs
 - ✅ Trace ID correlation (find all events for a request)
-- ✅ Real-time monitoring in Kibana
+- ✅ Real-time monitoring in Grafana
 - ✅ Time-series analysis of metrics
 - ✅ Dashboards and visualizations
 - ✅ Alerting capabilities (future)
@@ -233,7 +233,7 @@ per-family retention windows.
    curl http://localhost:9200/agent-logs-*/_search?size=10 | jq
    ```
 
-4. Check Kibana: http://localhost:5601
+4. Check Grafana: http://localhost:3000
 
 ### Verify Metrics Are Being Sent
 
@@ -242,7 +242,7 @@ per-family retention windows.
    curl -X POST "http://localhost:9000/chat?message=Hello"
    ```
 
-2. Search for metrics in Kibana:
+2. Search for metrics in Grafana:
    - Event type: `system_metrics_snapshot`
    - Component: `sensors` or `request_monitor`
 
@@ -289,7 +289,7 @@ curl http://localhost:9200/_cat/indices/agent-logs-*?v&h=index,store.size
 
 ## Future Enhancements
 
-- [ ] Metrics aggregation dashboards in Kibana
+- [ ] Metrics aggregation dashboards in Grafana
 - [ ] Alerting rules for threshold violations
 - [ ] Structured metrics (separate from logs) in Elasticsearch time-series data streams
 - [ ] Performance metrics (P50, P95, P99 latencies)

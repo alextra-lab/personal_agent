@@ -1,6 +1,6 @@
 ---
 name: seshat-observations
-description: Query execution traces, telemetry data, cost metrics, and performance observations via Kibana or API.
+description: Query execution traces, telemetry data, cost metrics, and performance observations via Grafana or API.
 when_to_use: When you need to inspect performance metrics, cost data, or execution telemetry from an external agent context.
 ---
 
@@ -15,9 +15,10 @@ Query execution traces, telemetry data, cost metrics, and performance observatio
 
 ## Works Now
 
-### Kibana (local, no auth)
+### Grafana (local, no auth)
 
-Open **Kibana** at `http://localhost:5601` → **Discover** → select index pattern **`agent-logs-*`**.
+Open **Grafana** at `http://localhost:3000` → **Explore** → select the `es-agent-logs` datasource
+(index pattern **`agent-logs-*`**).
 
 > **Correct index:** `agent-logs-*` — **not** `elasticsearch-observations-*` (that pattern does not exist).
 
@@ -34,7 +35,7 @@ Key fields in `agent-logs-*`:
 | `prompt_tokens`, `completion_tokens` | long | Token counts |
 | `success` | boolean | Operation outcome |
 
-Sample Kibana queries:
+Sample queries (Lucene syntax, same as Grafana Explore's query field):
 
 ```
 level: "error"
@@ -128,7 +129,7 @@ curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
 
 ### Execution-topology ES projection (`agent-topology-*`, FRE-548 / FRE-545)
 
-The seam also projects each completed turn's route-trace row to a dedicated, Kibana-readable
+The seam also projects each completed turn's route-trace row to a dedicated, Grafana-readable
 index **`agent-topology-*`** (one doc per `(trace_id, task_id)`): the turn-level row
 (`role: primary`, no `task_id`) plus one per sub-agent (`role: sub_agent`). Explicit schema
 (`dynamic: false`): `trace_id`/`task_id`/`session_id`/`topology`/`role`/`gateway_label`/
@@ -171,7 +172,7 @@ curl "http://elasticsearch:9200/agent-monitors-projector-health-*/_search?q=obse
 - `GET /observations?type=...` — filter-by-type query param (404)
 - `GET /observations/health` — system health metrics endpoint (404)
 
-Use `agent-logs-*` in Kibana or the ES API (`bash curl http://elasticsearch:9200/agent-logs-*/_search`) for filter-based queries.
+Use `agent-logs-*` in Grafana or the ES API (`bash curl http://elasticsearch:9200/agent-logs-*/_search`) for filter-based queries.
 
 ---
 
@@ -179,7 +180,7 @@ Use `agent-logs-*` in Kibana or the ES API (`bash curl http://elasticsearch:9200
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| Kibana not available | Elasticsearch down | `./scripts/init-services.sh` |
+| Grafana not available | Elasticsearch down | `./scripts/init-services.sh` |
 | `401 Unauthorized` | Missing token | `export SESHAT_API_TOKEN="..."` |
 | `404` on observations endpoint | Wrong path or unimplemented | Use `/api/v1/observations/recent` |
 | Empty results | No data in time range | Widen the time window |

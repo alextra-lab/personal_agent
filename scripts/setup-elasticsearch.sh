@@ -446,4 +446,4 @@ if [[ "$failures" -gt 0 ]]; then
 fi
 
 echo "=== Elasticsearch setup complete ==="
-echo "View logs at: http://localhost:5601 (Kibana)"
+echo "View logs at: http://localhost:3000 (Grafana)"

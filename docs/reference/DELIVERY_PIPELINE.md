@@ -30,7 +30,7 @@ role-scoped Claude Code sessions plus the CI gate stack. **Merge ≠ deploy ≠ 
   against a label. (A third — a hand-maintained plan document — was retired by ADR-0131 precisely
   because a copy of computable state rots by construction.)
 - **Deploy-class gating** — a standing owner-approved allowlist of low-risk, reversible deploys
-  (PWA rebuild · additive ES-template · Kibana dashboard import) runs without asking. **Everything
+  (PWA rebuild · additive ES-template · Grafana dashboard import) runs without asking. **Everything
   else** (gateway rebuild, ES type-change/reindex, Postgres schema/migration, cost/budget/governance)
   is **ask-first**, even after a PR is approved. Approving a fix ≠ authorizing a deploy.
 - **PR-gate loop** — a 10-minute cron polls open PRs so nothing sits unreviewed; it surfaces a merge

@@ -1,7 +1,7 @@
 # ruff: noqa: D103
 """FRE-1072 / ADR-0129 D6 — the grafana compose service's shape, security config, and image pin.
 
-Two layers, same pattern as test_kibana_compose_service.py: a source-only class that parses the
+Two layers, same pattern as test_tempo_compose_service.py: a source-only class that parses the
 committed YAML directly and always runs, and a render class exercising `docker compose config`'s
 actual resolution (skipped without docker), passing the shared gateway override fixture for any
 docker-compose.cloud.yml render.

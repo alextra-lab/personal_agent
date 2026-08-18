@@ -74,7 +74,7 @@ Mechanics and class membership here; **authority lives in the trust ladder**
 (`docs/plans/OWNER_CONSOLE.md`): a grant exists iff the ladder records it, and the ladder wins
 on any conflict.
 
-- Reversible classes: PWA-only rebuild · additive ES template (no type change) · Kibana
+- Reversible classes: PWA-only rebuild · additive ES template (no type change) · Grafana
   dashboard import.
 - Everything else: `seshat-gateway` rebuild · ES type-change/reindex · Postgres
   schema/migration · cost, budget or governance. Unsure → the stricter class.

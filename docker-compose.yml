@@ -35,21 +35,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Kibana 8.19 (must match Elasticsearch version)
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.19.0
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-      # Redundant with kibana.yml; kept for clarity
-      - TELEMETRY_OPTIN=false
-    volumes:
-      - ./docker/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
-    ports:
-      - "5601:5601"
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-
   # Neo4j 5.26 LTS for memory graph
   neo4j:
     image: neo4j:5.26-community

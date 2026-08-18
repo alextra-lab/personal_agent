@@ -8,7 +8,6 @@
 #   cgroup cpu.stat showed it was the most CPU-throttled container on the host)
 # - Neo4j Community: 1536MB RAM, 1.0 CPU
 # - Elasticsearch: 2048MB RAM, 1.0 CPU
-# - Kibana: 1024MB RAM, 0.5 CPU
 # - Redis: 128MB RAM, 0.25 CPU
 # - Seshat API Gateway: 256MB RAM, 0.5 CPU
 # - Caddy reverse proxy: 64MB RAM, 0.25 CPU
@@ -152,49 +151,6 @@ services:
       - cloud-sim
     restart: unless-stopped
 
-  # Kibana 8.19 — log/trace dashboards behind a monitoring.<domain> Cloudflare Tunnel host
-  # Purpose: Dashboard UI for Elasticsearch telemetry (agent logs, Captain's Log, insights)
-  # Access: CF Zero Trust backend_admin policy (lextra@gmail.com only, 1h session)
-  # Tunnel: monitoring.<domain> → http://kibana:5601 (bypasses Caddy)
-  # Resource limit: 1024MB RAM, 0.5 CPU
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.19.0
-    container_name: cloud-sim-kibana
-    # ADR-0134: the saved-objects encryption key (required for alerting/actions APIs)
-    # lives HERE and only here. A separate file from /opt/seshat/.env precisely because
-    # the gateway imports that one wholesale via env_file — a shared file would put an
-    # unrelated secret in the application process for no reason, same problem ADR-0132
-    # D1 solved for the Cloudflare Access pair below. required: false so a host without
-    # the file (a fresh clone, CI running `compose config`, a deployment that hasn't
-    # enabled alerting) still parses. A missing file is not silent: Kibana's own startup
-    # log emits the encryptedSavedObjects/actions/alerting disabled-key warnings, and
-    # the actions API returns HTTP 500 — a visible failure, not a broken compose command.
-    env_file:
-      - path: /opt/seshat/.env.kibana
-        required: false
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-      - TELEMETRY_OPTIN=false
-    volumes:
-      - ./docker/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
-    ports:
-      # Localhost only — use SSH tunnel: ssh -L 5601:localhost:5601 <your-vps-ssh-alias>
-      - "127.0.0.1:5601:5601"
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:5601/api/status | grep -q '\"level\":\"available\"'"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 60s
-    mem_limit: 1024m
-    cpus: 0.5
-    networks:
-      - cloud-sim
-    restart: unless-stopped
-
   # Tempo 2.10.7 — trace storage/query backend (ADR-0129 D6). Internal only, no tunnel host —
   # Grafana is the UI; nothing external talks to Tempo directly. No Docker healthcheck: the
   # image is distroless (no shell, no wget, no self-check flag — verified live) so no
@@ -231,11 +187,11 @@ services:
     restart: unless-stopped
 
   # Grafana 13.1.3 — trace/log visualization UI behind an observe Cloudflare Tunnel host
-  # Purpose: Dashboard UI for Tempo traces + Elasticsearch logs (ADR-0129 D6). Kibana is
-  # retained, not replaced — see the kibana block above and ADR-0129 D6's 2026-08-07 amendment.
+  # Purpose: Dashboard UI for Tempo traces + Elasticsearch logs. Kibana retired (ADR-0129 D6's
+  # 2026-08-08 amendment, FRE-1214) — Grafana is the sole dashboard UI.
   # Access: CF Zero Trust backend_admin policy, scoped to the owner alone (runbook action, not
   # decided in this repo — ADR-0129 D6's own AC-10 text)
-  # Tunnel: observe → http://grafana:3000 (bypasses Caddy, follows Kibana's topology, not Caddy's)
+  # Tunnel: observe → http://grafana:3000 (bypasses Caddy — a direct Cloudflare Tunnel host)
   # Resource limit: 512MB RAM, 0.5 CPU
   grafana:
     image: grafana/grafana:13.1.3

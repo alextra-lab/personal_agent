@@ -19,7 +19,7 @@ Complete guide to using Personal Agent for common tasks.
 ./scripts/init-services.sh
 ```
 
-This starts PostgreSQL, Elasticsearch, Kibana, and Neo4j.
+This starts PostgreSQL, Elasticsearch, Grafana, and Neo4j.
 
 ### 2. Start SLM Server
 
@@ -453,7 +453,7 @@ models:
 - **Logs**: Structured JSON logs in `telemetry/logs/` or Elasticsearch
 - **Metrics**: PostgreSQL `metrics` table or Elasticsearch
 - **Traces**: Elasticsearch with trace_id correlation
-- **Kibana**: http://localhost:5601 for log visualization
+- **Grafana**: http://localhost:3000 for log/trace visualization
 
 ## Next Steps
 

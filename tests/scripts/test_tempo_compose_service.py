@@ -1,11 +1,11 @@
 # ruff: noqa: D103
 """FRE-1072 / ADR-0129 D6 — the tempo compose service's shape and image pin.
 
-Two layers, same pattern as test_kibana_compose_service.py: a source-only class that parses the
+Two layers, same pattern as test_grafana_compose_service.py: a source-only class that parses the
 committed YAML directly and always runs, and a render class that exercises `docker compose
 config`'s actual resolution (skipped without docker), passing the shared gateway override fixture
 for any docker-compose.cloud.yml render (the bug FRE-1187's own Step-8 review caught on the
-Kibana test — not to be reintroduced here).
+now-retired Kibana test — not to be reintroduced here).
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ class TestTempoComposeServiceSource:
     def test_no_healthcheck_declared(self, compose_file: str) -> None:
         """The image is distroless (no shell, no wget, no --health flag — verified live against
         the pinned image); a `healthcheck:` block here would be unusable by construction. Guards
-        against a future contributor adding one back (e.g. copying the Kibana/Grafana pattern).
+        against a future contributor adding one back (e.g. copying the Grafana pattern).
         """
         assert "healthcheck" not in self._tempo_service(compose_file)
 
@@ -80,7 +80,7 @@ class TestTempoComposeServiceSource:
 
     def test_cloud_service_has_no_port_exposed(self) -> None:
         """Tempo is internal-only in the cloud deployment — Grafana is the UI; nothing external
-        talks to Tempo directly, and it carries no tunnel host (unlike Kibana/Grafana).
+        talks to Tempo directly, and it carries no tunnel host (unlike Grafana).
         """
         assert "ports" not in self._tempo_service("docker-compose.cloud.yml")
 

@@ -19,6 +19,7 @@ keywords:
   - agent-log
   - trace_id
   - kibana
+  - grafana
   - query_elasticsearch
   - loop gate
   - litellm

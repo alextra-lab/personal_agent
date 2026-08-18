@@ -25,7 +25,7 @@ This is the canonical configuration inventory that seeds ADR-0099's role matrix 
 | Governance | `config/governance/{budget,modes,safety,tools}.yaml` | §5 |
 | Env template | `.env.example`, `docker/mcp/mcp-secrets.env.example` | §1, §7 |
 | Compose `environment:` | `docker-compose{,.cloud,.eval,.test}.yml` | §6 |
-| Other `config/` | `gateway_access.yaml`, `cloud-sim/Caddyfile`, `kibana/*`, `artifact_lib_*.json` | §5 (noted) |
+| Other `config/` | `gateway_access.yaml`, `cloud-sim/Caddyfile`, `grafana/*`, `artifact_lib_*.json` | §5 (noted) |
 
 **⚠️ Reconciliation — ADR-0099's Context table is already stale (a finding in itself):**
 
@@ -600,7 +600,7 @@ Profiles swap only the inference brain (`primary`/`sub_agent`) — ADR-0099's *l
 
 _Note: `config/governance/tools.yaml.backup` is an untracked-style backup file colocated with the live policy — candidate cleanup (not config)._
 
-**Other `config/` (not parameter surfaces, listed for completeness):** `gateway_access.yaml` (gateway ACL), `cloud-sim/Caddyfile` (deploy-target reverse proxy), `kibana/dashboards/*.ndjson` (dashboard definitions), `artifact_lib_manifest.json` + `artifact_lib_substitution_map.json` (ADR-0089 curated `/lib/`).
+**Other `config/` (not parameter surfaces, listed for completeness):** `gateway_access.yaml` (gateway ACL), `cloud-sim/Caddyfile` (deploy-target reverse proxy), `grafana/dashboards/*.json` (dashboard definitions), `artifact_lib_manifest.json` + `artifact_lib_substitution_map.json` (ADR-0089 curated `/lib/`).
 
 ---
 

@@ -43,7 +43,6 @@ All project documentation, organized by purpose.
 - [GPU Metrics Setup](guides/GPU_METRICS_SETUP.md)
 - [GPU Metrics Security](guides/GPU_METRICS_SECURITY.md)
 - [macmon GPU Metrics](guides/MACMON_GPU_METRICS.md)
-- [Kibana Dashboards](guides/KIBANA_DASHBOARDS.md)
 - [Metrics Storage Guide](guides/METRICS_STORAGE_GUIDE.md)
 - [Telemetry ES Integration](guides/TELEMETRY_ELASTICSEARCH_INTEGRATION.md)
 - [Implementation Quick Reference](guides/IMPLEMENTATION_QUICK_REFERENCE.md)

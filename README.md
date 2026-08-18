@@ -89,7 +89,7 @@ See the [`docs/research/`](docs/research/) directory for research notes and anal
 - **Knowledge Graph**: Neo4j-based persistent memory with entity extraction
 - **Service Architecture**: FastAPI-based persistent service (port 9000)
 - **Session Management**: PostgreSQL storage with async SQLAlchemy
-- **Structured Logging**: Elasticsearch with Kibana dashboards
+- **Structured Logging**: Elasticsearch with Grafana dashboards
 - **Local LLM Inference**: Multi-model routing via SLM Server (MLX-optimized)
 - **MCP Gateway**: Tool discovery and execution
 - **Brainstem**: Homeostasis loop, sensors, consolidation scheduler, quality monitoring
@@ -121,7 +121,7 @@ See the [`docs/research/`](docs/research/) directory for research notes and anal
    ./scripts/init-services.sh
    ```
 
-   This starts PostgreSQL, Elasticsearch, Kibana, and Neo4j.
+   This starts PostgreSQL, Elasticsearch, Grafana, and Neo4j.
 
 3. **Start SLM Server** (separate terminal)
 
@@ -171,7 +171,7 @@ open http://localhost:9000/docs
 | Personal Agent API | <http://localhost:9000> | Main service endpoints |
 | API Documentation | <http://localhost:9000/docs> | Swagger UI |
 | SLM Server | <http://localhost:8000> | LLM inference |
-| Kibana | <http://localhost:5601> | Log visualization |
+| Grafana | <http://localhost:3000> | Log/trace visualization |
 | Neo4j Browser | <http://localhost:7474> | Knowledge graph (Phase 2.2) |
 
 ## Usage Examples
@@ -226,7 +226,7 @@ curl -X POST http://localhost:9000/memory/query \
   }'
 ```
 
-This emits `memory_query_quality_metrics` events to Elasticsearch (`agent-logs-*`) for Kibana analysis.
+This emits `memory_query_quality_metrics` events to Elasticsearch (`agent-logs-*`) for Grafana analysis.
 
 ## Configuration
 

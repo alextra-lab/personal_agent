@@ -1,9 +1,9 @@
 ---
 name: create-visualization
-description: Use when a task includes creating or changing a data visualization — a Grafana panel or a Kibana dashboard widget / Lens chart, over any datasource (Postgres, Elasticsearch, Tempo). Build the viz in the tool's own UI driven by Playwright, export a stable artifact, then run it through the create → scrutinize → iterate loop. NEVER hand-author visualization JSON. Triggers — "create a widget", "add a panel", "add a Grafana panel", "Grafana dashboard", "Kibana chart", "Lens visualization", "visualize <telemetry>", "Postgres datasource panel".
+description: Use when a task includes creating or changing a data visualization — a Grafana panel, over any datasource (Postgres, Elasticsearch, Tempo). Build the viz in the tool's own UI driven by Playwright, export a stable artifact, then run it through the create → scrutinize → iterate loop. NEVER hand-author visualization JSON. Triggers — "create a widget", "add a panel", "add a Grafana panel", "Grafana dashboard", "visualize <telemetry>", "Postgres datasource panel".
 ---
 
-# Create a Visualization (Grafana panel / Kibana widget)
+# Create a Visualization (Grafana panel)
 
 A rendering chart can still be wrong, useless, or misleading. So the deliverable is never "a chart
 exists" — it is **a human reaches the correct conclusion from real data.**
@@ -22,9 +22,9 @@ the reference for "correct" — they may be the broken artifact.
 
 Two worked instances of the same failure, in two different tools:
 
-- **Kibana / Lens.** A Lens saved object needs `attributes.visualizationType` (e.g. `lnsXY`), which is
-  *optional at import but required at render* — hand-authored objects omit it, persist fine, and never
-  draw (FRE-406/593/702).
+- **Kibana / Lens** (retired, FRE-1214 — kept as evidence for the rule). A Lens saved object needed
+  `attributes.visualizationType` (e.g. `lnsXY`), which was *optional at import but required at render*
+  — hand-authored objects omitted it, persisted fine, and never drew (FRE-406/593/702).
 - **Grafana.** FRE-1072 shipped 16 dashboards and 68 panels of hand-authored JSON. Measured against
   `config/grafana/dashboards/*.json`: **all 68 panels carry exactly one key set** —
   `datasource, description, gridPos, id, targets, title, type` — and **zero** carry `fieldConfig`,
@@ -53,14 +53,9 @@ behavior and schema differ by version.
 - The unit ids are **not** in the docs — they are the `id` fields in
   `packages/grafana-data/src/valueFormats/categories.ts` at the matching tag. Read them there.
 
-**Kibana / Lens (running 8.19):**
-- Lens: https://www.elastic.co/docs/explore-analyze/visualize/lens
-- Dashboards & controls: https://www.elastic.co/docs/explore-analyze/dashboards
-- Saved objects (export/import): https://www.elastic.co/guide/en/kibana/8.19/managing-saved-objects.html
-
-This is the exact failure that created FRE-702: two Lens dashboards shipped broken because nobody checked
-the docs — the fix was one documented attribute. When in doubt, go to the docs; do not make the reviewer
-push you there.
+This is the exact failure that created FRE-702 (on the now-retired Kibana/Lens arm): two dashboards
+shipped broken because nobody checked the docs — the fix was one documented attribute. When in doubt,
+go to the docs; do not make the reviewer push you there.
 
 ## Step 0 — Inspect the raw data (and confirm the viz mechanics in the docs) first (non-negotiable)
 
@@ -75,10 +70,6 @@ Before drawing anything, read the actual rows/events/docs you will visualize:
 - **What the number's unit actually is.** You cannot set a unit in Step 1 that you did not establish here.
 
 ## Step 1 — CREATE (build owns)
-
-Pick the arm for your tool. The arms differ only in mechanics; Steps 0, 2 and 3 are shared.
-
-### Arm A — Grafana
 
 **Read this first, or the loop will not work.** Every fact below was verified live against the running
 instance; each is a place the obvious approach silently fails.
@@ -173,8 +164,8 @@ reachable through the Cloudflare tunnel, so that is a live security-posture chan
    raw-data cross-check against that; tear it down after. Only a build session working directly in
    `/opt/seshat` itself (not a worktree) can skip this and use `cloud-sim-grafana` directly.
 
-**Grafana render-assert** (Kibana's `data-ech-render-complete` does not exist here; these two selector
-names are the vendor's own, from `grafana-e2e-selectors` at the matching tag):
+**Grafana render-assert** (these two selector names are the vendor's own, from `grafana-e2e-selectors`
+at the matching tag):
 ```js
 document.querySelectorAll('[data-testid="data-testid panel content"]').length          // must equal the panel count
 document.querySelectorAll('[data-testid="data-testid Panel status error"]').length     // must be 0
@@ -182,28 +173,7 @@ document.querySelectorAll('[data-testid="data-testid Panel status error"]').leng
 **This assertion passes on all 68 of today's unconfigured panels.** It is gate 1 and nothing more.
 Never report it as evidence the panel is good.
 
-### Arm B — Kibana / Lens
-
-Full firsthand technique note (read it — it is the reliable primitive):
-`docs/research/2026-07-01-kibana-lens-playwright-build-findings.md`.
-
-Condensed recipe (drive `http://localhost:5601` with the Playwright MCP, **local cloud-sim only**):
-1. **Seed** ~40-50 sample docs carrying the new field into a *deletable local* index
-   (`agent-logs-<ticket>-sample`, `POST /_bulk?refresh=true`, `:9200` local only). A field with zero docs
-   hides under "Empty fields" and cannot be added. **Never seed prod; never fire a gateway turn to
-   manufacture data.** Delete the index when done.
-2. Build the chart in the Lens UI: add field → **fix the aggregation** (default is Median; you usually
-   want **Sum**) → **fix the chart type** (default is Bar; e.g. **Area stacked**) → set the KQL filter →
-   name each metric.
-3. Save to library → add to a dashboard → **export deep** (`_export`, `includeReferencesDeep:true`).
-4. **Stabilize ids:** global **string-replace** the volatile export UUIDs → stable committed ids over the
-   *serialized* object, so re-import overwrites in place (no duplicate). A structured `references[].id`
-   rewrite MISSES `panelsJSON.savedObjectId` (a JSON-encoded string) → renders locally, breaks on prod.
-   Assert the old UUIDs appear nowhere. Do NOT rewrite reference `name`s / panelIndex / layerId.
-5. Commit the exported ndjson to `config/kibana/dashboards/`; keep it registered in `import_dashboards.sh`.
-6. Assert `data-ech-render-complete="true"` + a chart canvas — **do not eyeball a screenshot.**
-
-**Playwright input rules (both arms — the biggest time sink):**
+**Playwright input rules (the biggest time sink):**
 - Titles / search boxes (gate a submit or filter): **real keyboard** — click → Ctrl+A → Delete → type.
   The native-value-setter desyncs React state and the submit silently no-ops.
 - Inline commit-on-change fields (dimension name): native-value-setter + dispatched `input`/`change`.

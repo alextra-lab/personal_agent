@@ -497,7 +497,7 @@ def _write_report_md(
         "",
         "Fill in the Quality column:  ✅ = correct/complete  ⚠️ = partial/extra turns  ❌ = wrong/missing",
         "",
-        "Session IDs and full token breakdowns are in results.json — use them to look up traces in Kibana.",
+        "Session IDs and full token breakdowns are in results.json — use them to look up traces in Grafana.",
     ]
 
     path = output_dir / "report.md"

@@ -154,7 +154,7 @@ A **new or changed** field, index family, or dashboard is **not shippable-to-def
 
 - **The two documented silent failures (2026-05-10, FRE-411) become a checked-against class**, not a recurring surprise — the trap (numeric `0.0`→`long`, long-text truncation, `text` join keys) is named and gated.
 - **Every `agent-*` family is governed-mapped** — the three dynamic-mapped families are closed; new families inherit the discipline by the done-bar rather than re-discovering the trap.
-- **Dashboards have a single source of truth** — git NDJSON, one location, reconstructable; the live/repo drift that hid behind manual re-export becomes a CI finding.
+- **Dashboards have a single source of truth** — committed Grafana JSON under `config/grafana/dashboards/`, one canonical location; the platform provisions the live UI from these files, so drift is a CI finding, not a hand-run export step.
 - **Reconciliation is three-way and standing** — the structural blind spot (each corner edited independently) is closed by an artifact that is regenerated, not audited once.
 - **Clean complement to ADR-0088** — emission (0088) and surface (0090) are separately owned but compose into one L0 done-bar; neither re-implements the other.
 - **Self-describing surface** — `_meta` on every template means the mapping corner explains its own choices and points back to its source path.

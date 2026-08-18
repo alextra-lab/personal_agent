@@ -1,8 +1,8 @@
 # Seshat Cloud Deployment Guide
 
-> **Last updated**: 2026-04-16  
+> **Last updated**: 2026-08-18 (FRE-1244 — retired the private-network IP route)  
 > **Target**: your VPS  
-> **Access**: Cloudflare WARP private network → `172.25.0.10`
+> **Access**: Cloudflare Tunnel hostname ingress (`{$AGENT_HOST}`) — no container is addressed by IP
 
 This guide covers the complete Seshat cloud stack: infrastructure provisioning, Docker Compose services, reverse proxy configuration, Cloudflare tunnel, Terraform firewall, and deployment operations.
 
@@ -16,7 +16,7 @@ This guide covers the complete Seshat cloud stack: infrastructure provisioning, 
 4. [Terraform: OVH Network Firewall](#4-terraform-ovh-network-firewall)
 5. [Service Stack: Docker Compose](#5-service-stack-docker-compose)
 6. [Caddy Reverse Proxy](#6-caddy-reverse-proxy)
-7. [Cloudflare WARP Tunnel](#7-cloudflare-warp-tunnel)
+7. [Cloudflare Tunnel Access](#7-cloudflare-tunnel-access)
 8. [Environment Variables](#8-environment-variables)
 9. [Model Configuration](#9-model-configuration)
 10. [Execution Profiles](#10-execution-profiles)
@@ -28,17 +28,17 @@ This guide covers the complete Seshat cloud stack: infrastructure provisioning, 
 ## 1. Architecture Overview
 
 ```
-Phone / Mac (WARP enrolled)
+Phone / Mac / browser (WARP enrolled or not — both reach the same hostname)
     │
-    │ Cloudflare WARP private network (172.25.0.0/16)
+    │ Cloudflare Tunnel, Host: {$AGENT_HOST}
     ▼
-172.25.0.10  ←─ Caddy (Docker, static IP)
+Caddy (Docker, no fixed address — reached by hostname, not IP)
     │
     ├─ /api/*  /chat  /chat/stream  /stream/*
     │     └─→  seshat-gateway:9001   (FastAPI — full service/app.py)
     │
     └─ /*
-          └─→  seshat-pwa:3000       (Next.js PWA, static IP 172.25.0.11)
+          └─→  seshat-pwa:3000       (Next.js PWA, no fixed address)
 
 seshat-gateway dependencies (all on cloud-sim bridge network):
   postgres:5432        (pgvector — sessions, history, metrics)
@@ -51,9 +51,10 @@ seshat-gateway external dependencies (managed endpoints):
   Voyage AI            (rerank-2.5 — ranked retrieval)
   Anthropic/OpenAI     (Claude Sonnet/Haiku — cloud profiles)
 
-Network: cloud-sim bridge, subnet 172.25.0.0/16
+Network: cloud-sim bridge, subnet 172.25.0.0/16 (address space only — no service is pinned to a
+fixed address within it; see FRE-1244)
 OVH firewall: SSH (custom port), HTTP/80, HTTPS/443, ICMP only
-Cloudflare: WARP Zero Trust + cloudflared tunnel (HTTP/2)
+Cloudflare: cloudflared tunnel (HTTP/2), public hostname ingress
 ```
 
 ---
@@ -204,13 +205,16 @@ File: `docker-compose.cloud.yml`
 | `seshat-gateway` | seshat-seshat-gateway | 9001 | 768 MB | Full service app (FastAPI) |
 | `seshat-pwa` | seshat-seshat-pwa | 3000 | 256 MB | Next.js PWA |
 | `caddy` | caddy:2-alpine | 80/443 | 64 MB | Reverse proxy |
-| `cloudflared` | cloudflare/cloudflared | — | — | WARP tunnel |
+| `cloudflared` | cloudflare/cloudflared | — | — | Cloudflare Tunnel |
 
 **Total RAM budget**: ~5.3 GB (comfortably within 24 GB)
 
 ### Network
 
-All services share the `cloud-sim` bridge network (`172.25.0.0/16`). Static IPs assigned only to Caddy (`172.25.0.10`) and the PWA (`172.25.0.11`) — these are the addresses WARP routes to.
+All services share the `cloud-sim` bridge network (`172.25.0.0/16`) and reach each other by service
+name via Docker's internal DNS. No service declares a fixed address (FRE-1244 — a static-holder being
+squatted by a free-floating service on recreation made Caddy fail to start, taking external ingress
+down for the duration).
 
 Debug ports are bound to `127.0.0.1` only (SSH tunnel to access):
 ```bash
@@ -268,7 +272,6 @@ handle {
 ### Site blocks
 
 - `localhost` — HTTPS with local self-signed cert (for SSH tunnel dev access)
-- `http://172.25.0.10` — Plain HTTP (for WARP device access)
 
 ### Reloading Caddy config
 
@@ -285,39 +288,34 @@ Do **not** use `caddy reload` after a git pull — it reads the stale inode.
 
 ---
 
-## 7. Cloudflare WARP Tunnel
+## 7. Cloudflare Tunnel Access
 
-Seshat uses Cloudflare Zero Trust + WARP for private network access. WARP-enrolled devices route `172.25.0.0/16` through a Cloudflare tunnel to the VPS Docker network.
+**Retired 2026-08-18 (FRE-1244)**: Seshat previously used a Cloudflare Zero Trust WARP split-tunnel
+route (`172.25.0.0/16` in "include" mode) so WARP-enrolled devices could reach Caddy directly by its
+Docker-assigned IP. That mechanism required Caddy to hold a stable, known-in-advance address — the same
+requirement that let a free-floating service squat the address whenever Caddy was recreated while
+stopped, taking external ingress down. The private-IP route has been removed; no container in
+`cloud-sim` is addressed by IP any more (see the Network section above).
 
-### Architecture
+Phone/Mac access now goes through the same Cloudflare Tunnel hostname ingress (`{$AGENT_HOST}`) as any
+other client — a publicly tunneled hostname needs no private-network CIDR routing to be reachable from a
+WARP-enrolled device.
 
-```
-WARP device
-  → Cloudflare Zero Trust (routes 172.25.0.0/16)
-    → cloudflared (Docker container on VPS)
-      → Docker bridge network (cloud-sim)
-        → Caddy at 172.25.0.10
-```
+**Manual follow-up, not tracked as code in this repo**: if the Cloudflare Zero Trust dashboard still has
+a Split Tunnel route for `172.25.0.0/16` (Settings → WARP Client → Device settings), it is now vestigial
+and should be removed by whoever owns Cloudflare Access — this repo has no Terraform for that setting.
 
 ### Setup
 
-1. **Cloudflare Zero Trust dashboard** → Settings → WARP Client → Device settings
-2. Create a Split Tunnel with `172.25.0.0/16` in "include" mode
-3. Create a Cloudflare Tunnel:
+1. Create a Cloudflare Tunnel:
    - Tunnels → Create tunnel → Docker
    - Copy the `cloudflared` run command token
    - Add to `.env` as `CLOUDFLARE_TUNNEL_TOKEN=<token>`
 
-4. **OVH firewall note**: QUIC (UDP port 443) is blocked by OVH's datacenter firewall. Force HTTP/2 in the cloudflared command:
+2. **OVH firewall note**: QUIC (UDP port 443) is blocked by OVH's datacenter firewall. Force HTTP/2 in the cloudflared command:
    ```yaml
    command: tunnel --no-autoupdate --protocol http2 run
    ```
-
-### Enrolling a device
-
-1. Install Cloudflare WARP app (macOS/iOS/Android)
-2. Settings → Account → Login with Zero Trust org
-3. Once enrolled, `172.25.0.10` is reachable
 
 ---
 

@@ -23,7 +23,7 @@ longer *grant* authority. Levels: `ask-first` → `do-and-report` → `standing-
 | Action class | Level | Granted | Promotes when | Demotes when |
 |---|---|---|---|---|
 | **Deploy — reversible classes**: PWA-only rebuild · additive ES template (no type change) · Kibana dashboard import | `standing-approved` | 2026-06-26 · owner | — (top of ladder) | a standing-class deploy causes an incident |
-| **Deploy — everything else**: `seshat-gateway` rebuild · ES type-change or reindex · Postgres schema/migration · cost, budget or governance | `standing-approved` | 2026-08-06 · owner | — (top of ladder) | a standing-class deploy causes an incident |
+| **Deploy — everything else**: `seshat-gateway` rebuild · ES type-change or reindex · Postgres schema/migration · cost, budget or governance | `standing-approved` **for the Observability Foundations spike only**; `ask-first` outside that spike | 2026-08-06 · owner · scope corrected 2026-08-18 · owner | — (scoped grant; does not promote) | the Observability Foundation project reaches Done in Linear, or a standing-class deploy causes an incident |
 | **Observe the other sessions** — read seat panes, worktrees and dispatch state | `standing-approved` | 2026-08-06 · owner | — (top of ladder) | observation is used to actuate a seat outside the dispatch contract |
 | **Dispatch actuation posture** — daemon on/off + mode | `do-and-report` | 2026-07-31 · owner | dispatch runs a sustained period needing no owner correction | an unreported flip, or a flip that strands a seat |
 | **On-merge board transition** — merged ticket → `Awaiting Deploy` | `standing-approved` | 2026-07-31 · owner | — (top of ladder) | a transition is missed and the board drifts |

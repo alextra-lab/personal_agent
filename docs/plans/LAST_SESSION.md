@@ -1,74 +1,88 @@
-# Last session — 2026-08-17
+# Last session — 2026-08-18
 
 ## Doing / discussing  (≤5 sentences)
 
-Gated the tail of the FRE-1269 PWA arc — rounds 9 through 12 — and closed it Done on the owner's
-words, "The results are acceptable." Nothing is in flight: no open PRs, no unconsumed triggers,
-build1 idle, adr's head is the newly-activated FRE-1087 seam. Four tickets were filed on the way
-out and all sit unlabelled, so none of them is dispatched. The next session starts clean and should
-read the console's sequencing directive rather than continuing the PWA thread.
+The owner escalated that he had lost control of his own dev process, and the whole session went to
+fixing that: cutting the rule surface, retiring the seam machinery, widening master's autonomy, and
+emptying the approval queue. Nothing is in flight — no open PRs, no Awaiting Deploy, no In Review,
+Needs Approval is at zero for the first time. The next session inherits a board where every open
+ticket is either Approved-and-parked or a deliberate Backlog note, and its first real job is
+labelling the next head into a build stream per the console's sequence.
 
 ## What was decided and why
 
-**I escalated a keyboard regression that does not exist, four times, and the owner corrected me.**
-Build1 reported the owner had hit a keyboard-pan bug and measured `scrollY: 376` with the shell
-height unchanged. I filed it Urgent (FRE-1272), raised it in four consecutive briefings, and offered
-a production revert. The owner: "There is no keyboard regression." Two errors, both mine. The
-owner's *actual* words were "the input is too tall by default" — a composer-height complaint, which
-rounds 11 and 12 fixed. Build1 layered a keyboard-pan theory on top and I acted on the layer without
-reading back to the source. Second, a page scrolling when the keyboard opens is ordinary iOS
-behaviour; I treated a number that was anomalous against my model as a defect. **A seat's paraphrase
-of the owner is not the owner.** FRE-1272 is Canceled and carries the reasoning; the standing lesson
-went to memory.
+**The owner's diagnosis was right and the cause was structural, not behavioural.** He said "master
+creates more tickets than it resolves" and "rules block tasks." Measured: the process had *by
+construction* five mandatory ticket-generators (a seam per ADR, a remediation per non-green verdict,
+a provisioning ticket per path-assumption hit, a two-ticket cutover split, "file it or drop it"
+pushing observations into Backlog) against a single closing path that required merge + deploy +
+live-verify + a nine-field evidence comment. Input rate exceeded output rate as a design property.
+That is why the fix was deletion rather than discipline — no amount of care makes a generator/consumer
+imbalance converge.
 
-**FRE-1267's shipped behaviour was deliberately reversed, and that is not drift.** That ticket's AC-1
-asserted the composer reaches the true screen bottom. Once it actually shipped, the owner found
-edge-to-edge oversized, and rounds 11–12 put a fixed gap back (12px, then 20px). Anyone reading
-FRE-1267's closed criteria against today's app will find them contradicted. It is owner-driven and
-recorded on FRE-1269.
+**Every incident had become a permanent rule, and none had a retirement condition.** lifecycle-rules
+cited FRE-649, FRE-777, FRE-1015, FRE-1086 inline as standing justifications. The file had only ever
+grown. Standing guidance now needs the owner to ask for it; a session does not get to add a rule
+because something went wrong once.
 
-**I merged round 9 knowing codex had flagged keyboard interaction as unvalidated**, and let nine
-rounds of ship-it pressure outweigh the flag. The fix was right; the gate judgment was thin. Ironically
-the "regression" that seemed to vindicate the worry was not real — but the gate lesson stands on its own.
+**The seam machinery was retired, not paused.** ADR-0130 and ADR-0137 are Superseded, and 11 seam /
+remediation tickets are cancelled. The judgment: an ADR's objective still matters, but master
+observing "the chain merged and it works" is enough, and a commissioned adjudication that spawns
+remediation tickets costs more than it catches. FRE-1087's own adjudication the night before is the
+worked example — it produced two meta-tickets about ADR criteria and zero product value.
 
-**Round 11's tests are the shape to copy.** One `CARD_GAP_PX` constant feeds both a forced-34px-inset
-assertion and a zero-inset one. Same expected value under two conditions is what makes the pair
-*discriminate*; a retune that pointed each test at whatever number it produced would look identically
-green while testing nothing. That property survived round 12's retune — I checked, and it is the
-reason both merged quickly.
+**What was deliberately NOT cut**, because the owner's complaint was bureaucracy and these are not:
+the dispatcher/resolver, the watcher, the session boundaries (build/adr stop at PR; only master
+merges and deploys), the Approved gate, and master's core PR gate. The explore skill's evidence
+method (the three admissibility arms) was left fully intact — it is contract-tested and it encodes a
+real measurement failure, not process.
+
+**The trust ladder moved twice, on the owner's word given conversationally in this session.** All
+deploy classes became `do-and-report` (the ask-first tier is gone), and a new row lets master approve
+and dispatch Tier-3/mechanical tickets directly. Both are transcribed dated 2026-08-18. Features and
+architecture still need the owner. This was master's console write this session, and it is the
+stenographer path, not authoring.
+
+**prepare-reset's console-audit step was cut on my recommendation, and the owner accepted the
+reasoning**: console changes land via PRs now, so an illegal write surfaces at the gate where it
+happens; auditing for it at every wind-down was the old check-everything-everywhere reflex.
+
+**One overlap the owner should decide on eventually, not now:** `.remember/` (harness-local buffer)
+and LAST_SESSION.md both answer "what did the last session decide." They don't collide today because
+one is terse and machine-local and the other is committed reasoning. Revisit only if they disagree.
 
 ## Worktrees — anything special
 
-`build` is on `fre-1269-keyboard-regression`, which carried rounds 10, 11 and 12 and is merged. Its
-local branch survived every `--delete-branch` (worktree holds it); the remote is gone. Not mine to
-clean up.
+build2 holds FRE-1216 In Progress and is genuinely mid-build — that state predates this session and
+is the worker's to resume, not master's to reconcile. Two merged local branches
+(`process-streamline-2026-08-18`, `prepare-reset-trim`) survive in the primary repo because
+`git branch -d` refuses after a squash merge; both PRs are confirmed merged, and force-deleting on a
+`-d` refusal is exactly the shortcut worth not taking. Harmless.
 
 ## Sequence position + drift
 
-Full session on one PWA bugfix, against the console's standing sequence (telemetry residuals →
-Configuration Management → Linear async feedback → Seshat Inference, then Observability). That is
-deliberate, not drift: a defect the owner was looking at every day outranks queue order, and it is
-now closed. The console was not written this session and is 41/60 lines. No stream was labelled,
-so nothing was dispatched behind any of it.
+Full session off the console's standing sequence (telemetry residuals → Configuration Management →
+Linear async feedback → Seshat Inference), and that is correct rather than drift: the owner
+interrupted with a process emergency, and a process that generates more work than it finishes
+outranks queue order. The sequence is untouched and resumes now. No stream was labelled this
+session, so nothing was dispatched behind the streamline.
 
 ## Answers for the fresh start
 
-**Why are four tickets sitting unlabelled?** FRE-1271 (watcher stale re-gate), FRE-1272 (Canceled),
-FRE-1273 (Backlog — should screenshot validation become standing?), FRE-1274 (remove the diagnostic
-overlay, still deployed). Approval is the owner's and none has it. Do not label them into a stream
-to be helpful.
+**Why is Needs Approval empty — did someone bulk-cancel real work?** No. 137 tickets were triaged in
+one owner-approved pass: 72 cancelled (each with a one-line reason on the ticket), 68 Approved and
+parked, 10 to Backlog as umbrellas, 5 folded as duplicates. Read the reason comment before
+re-filing anything that looks missing.
 
-**Is the diagnostic overlay still in production?** Yes — 5 taps on the header title, or
-`?debug=safearea`. It is scaffolding that outlived its purpose; FRE-1274 removes it. It is also the
-only instrument here that can observe real iOS standalone behaviour, so losing it has a cost worth
-naming when that ticket runs.
+**Why are 68 tickets Approved with no stream label?** That is the intended parked state. Approval
+authorizes the work; the stream label schedules it. Labelling them in sequence is master's next job.
 
-**Was the watcher misfiring?** Yes, and it is real: it sends `/master <PR#>` into a busy pane, the
-keystrokes queue, and the invocation lands after the PR is already merged. Its own obsolescence check
-runs two minutes too late. Twice observed. FRE-1271. Note the trap — the trigger ledger's
-`--unconsumed` view is empty once consumed, so a watcher-sent invocation is indistinguishable from
-owner-typed after the fact. I concluded "manual" from that and was wrong.
+**Can I really deploy the gateway without asking now?** Yes — do-and-report, granted 2026-08-18.
+Verify and report which class it ran under. The grant demotes on any incident, and a deploy grant is
+still not a budget grant.
 
-**Why is FRE-1087 suddenly the adr head?** Its due date arrived; the seam sweep activated it. Its
-observation window genuinely closed 2026-08-14 (15 reset markers against a required 3), so the
-picking-up session does not need to recompute or re-park it.
+**FRE-1244 and FRE-1243 are Approved and look urgent — jump them?** They are live-environment hazards
+(static-IP squatting can make Caddy unstartable; a Caddy recreate silently blinds the access-log
+pipeline). Reasonable front-jump candidates, but that is a judgment call, not a standing instruction.
+
+**Is anything owed to the owner?** No. Nothing is pending his decision.

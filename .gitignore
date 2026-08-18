@@ -172,10 +172,15 @@ docker/mcp/mcp-secrets.env
 # VPS/cloud env override (canonical secrets live in .env; this is a safety net)
 .env.cloud
 
-# Per-service secret file scoped away from the gateway's wholesale .env import
-# (ADR-0132 D1) — did not match any existing .env.* pattern above, which was a
-# latent gap FRE-1187 found and fixed.
+# Per-service secret files scoped away from the gateway's wholesale .env import
+# (ADR-0132 D1, ADR-0134) — neither matched any existing .env.* pattern above,
+# which was a latent gap for .env.caddy (FRE-1187 found and fixed it).
+# .env.kibana stays listed until the Kibana remnants are actually gone: the file
+# still exists on the VPS holding the saved-objects encryption key, and the
+# encrypted .kibana* indices it protects are still in Elasticsearch. The ignore
+# rule is the last thing to remove, not the first (owner ruling 2026-08-18).
 .env.caddy
+.env.kibana
 
 # FRE-433/434 cache A/B harness run outputs (regeneratable telemetry)
 telemetry/evaluation/fre433-cache-ab/

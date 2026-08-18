@@ -3799,6 +3799,14 @@ class MemoryService:
             log.warning("neo4j_not_connected", trace_id=trace_id)
             return None
 
+        # Canonical-cased before it ever reaches Cypher (FRE-1216): this is the
+        # only write path that creates a relationship with a dynamic type
+        # label, so a casing variant introduced here (e.g. LLM extraction
+        # drift) would create a distinct relationship type that every
+        # canonical-cased traversal silently misses — the live `USEs` vs
+        # `USES` defect.
+        relationship_type = relationship.relationship_type.upper()
+
         try:
             async with self.driver.session() as session:
                 # Use APOC to create a relationship with a dynamic type label.
@@ -3830,7 +3838,7 @@ class MemoryService:
                     """,
                     source_id=relationship.source_id,
                     target_id=relationship.target_id,
-                    relationship_type=relationship.relationship_type,
+                    relationship_type=relationship_type,
                     weight=relationship.weight,
                     visibility=visibility,
                 )
@@ -3841,7 +3849,7 @@ class MemoryService:
                     "relationship_created",
                     source=relationship.source_id,
                     target=relationship.target_id,
-                    type=relationship.relationship_type,
+                    type=relationship_type,
                     element_id=eid_str,
                     trace_id=trace_id,
                 )
@@ -3854,6 +3862,36 @@ class MemoryService:
                 trace_id=trace_id,
             )
             return None
+
+    async def check_relationship_type_casing_variants(self) -> list[str]:
+        """Detect relationship types that differ only by case (FRE-1216 AC-2 guard).
+
+        Independent of ``create_relationship``'s own normalization — queries
+        live relationship types directly, so it catches a casing variant
+        introduced by *any* write path (present or future), not only the one
+        dynamic-type writer this module knows about.
+
+        Returns:
+            One string per collision group, formatted as
+            ``"<lowercase>: <variant1>, <variant2>, ..."``. Empty when no
+            two relationship types differ only by case.
+        """
+        if not self.connected or not self.driver:
+            return []
+
+        async with self.driver.session() as session:
+            result = await session.run(
+                """
+                MATCH ()-[r]->()
+                WITH DISTINCT type(r) AS relType
+                WITH toLower(relType) AS lowerType, collect(DISTINCT relType) AS variants
+                WHERE size(variants) > 1
+                RETURN lowerType, variants
+                """
+            )
+            records = [record async for record in result]
+
+        return [f"{r['lowerType']}: {', '.join(sorted(r['variants']))}" for r in records]
 
     async def fetch_turn_discusses_relationship_element_ids(
         self, turn_id: str, trace_id: str | None = None

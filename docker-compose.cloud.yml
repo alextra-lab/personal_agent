@@ -480,6 +480,7 @@ services:
       - ./config/cloud-sim/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      - caddy_logs_cloud:/var/log/caddy
     depends_on:
       seshat-gateway:
         condition: service_healthy
@@ -498,20 +499,21 @@ services:
       - cloud-sim
     restart: unless-stopped
 
-  # Filebeat sidecar — ships cloud-sim-caddy's access logs to caddy-access-*
-  # (FRE-1146 / ADR-0132 D3). Resolves caddy's container ID itself at startup
-  # (see Dockerfile.filebeat / config/filebeat/resolve-caddy-container.sh) by
-  # reading config.v2.json under the read-only containers mount below —
-  # deliberately NOT /var/run/docker.sock, which would grant full Docker
-  # Engine API access (host-mount container creation) rather than the
-  # read-only log access this sidecar actually needs.
+  # Filebeat sidecar — ships Caddy's access logs to caddy-access-*
+  # (FRE-1146 / ADR-0132 D3; fixed-path mechanism FRE-1243). Tails the fixed
+  # path Caddy writes its access log to, shared via caddy_logs_cloud below —
+  # no container-ID resolution, no /var/lib/docker/containers mount, no
+  # /var/run/docker.sock (which would grant full Docker Engine API access —
+  # host-mount container creation — rather than the read-only log access this
+  # sidecar actually needs). Recreating Caddy alone never changes this path,
+  # so it needs no companion Filebeat action (FRE-1243).
   filebeat:
     build:
       context: .
       dockerfile: Dockerfile.filebeat
     container_name: cloud-sim-filebeat
     volumes:
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - caddy_logs_cloud:/var/log/caddy:ro
       - filebeat_registry_cloud:/usr/share/filebeat/data
     depends_on:
       caddy:
@@ -576,6 +578,12 @@ volumes:
   caddy_data:
     driver: local
   caddy_config:
+    driver: local
+
+  # Caddy's access log at a fixed path, shared read-write with caddy /
+  # read-only with filebeat (FRE-1243) — removes the container-ID
+  # indirection that went stale on every Caddy recreate.
+  caddy_logs_cloud:
     driver: local
 
   # Filebeat's filestream registry (FRE-1146 / ADR-0132 D3) — persists read

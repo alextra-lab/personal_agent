@@ -240,20 +240,25 @@ redundant — once both actually exist.
 
 ### D3 — Caddy access logs are captured into Elasticsearch, in scope, not a follow-up
 
-A Filebeat sidecar container ships the caddy container's logs to a `caddy-access-*`
-index with an index template and ILM policy from day one (monthly rollover per the
-FRE-1036 convention), using the currently supported mechanism — a `filestream` input
-with the `container` parser over the Docker json-file logs, a stable input `id`, and a
-**persistent registry volume** so a Filebeat recreation does not re-ingest already
-shipped lines *(reasoned from current Filebeat documentation; the legacy `container`
-input type is deprecated)*. The delivery guarantee is stated honestly:
-**at-least-once after harvest, not lossless across arbitrary recreation.** The registry
-preserves read offsets, not unread content — recreating the caddy container deletes its
-json-file logs, so lines Filebeat has not yet harvested in that window are gone
-*(reasoned from Filebeat's documented harvesting model)*. That loss window (harvest lag,
-typically sub-second) is accepted; what the decision guarantees, and AC-3 asserts, is
-that **once ingested, evidence survives recreation of both containers, without
-duplication** — which is precisely what the 30 MB ring buffer cannot do.
+**Amended 2026-08-23 (FRE-1243).** A Filebeat sidecar container ships Caddy's access log
+to a `caddy-access-*` index with an index template and ILM policy from day one (monthly
+rollover per the FRE-1036 convention). The original mechanism — a `filestream` input
+with the `container` parser over the Docker json-file logs, keyed on Caddy's
+Docker-assigned container ID resolved once at Filebeat startup — went stale on every
+Caddy recreate (FRE-1239, then again FRE-1244) and silently stopped shipping until
+Filebeat was restarted by hand; **FRE-1243 replaced it.** Caddy now writes its access
+log directly to a fixed path (`/var/log/caddy/access.log`) in a Docker named volume
+shared read-only with Filebeat, which tails that fixed path — no container-ID
+resolution, no `/var/lib/docker/containers` mount. A **persistent registry volume**
+still means a Filebeat recreation does not re-ingest already-shipped lines. The delivery
+guarantee is now **stronger than originally stated**: **at-least-once after harvest,
+surviving recreation of Caddy alone** — not only "both containers together" as
+originally written, and not erased by a Caddy recreate at all, only bounded by Caddy's
+own rotation retention (`roll_keep`/`roll_keep_for`, defaults ~10 backups / ~90 days) for
+however long Filebeat itself might separately be down. The registry preserves read
+offsets, not unread content beyond that retention window *(reasoned from Filebeat's
+documented harvesting model)*; that residual, deliberately generous bound is accepted,
+the same shape D3 already accepted for harvest lag.
 
 The owner's stated benefit of the chokepoint — one place to look when connectivity is
 troubled — does not exist while the only record is a thirty-megabyte ring buffer that
@@ -441,7 +446,7 @@ quo.
 |------|----------|------------|
 | Proxy buffers or times out a long streamed turn | High | SSE auto-flush relied on + no body-duration timeout + load-bearing comment in the block; AC-1 measures per-event cadence and full-duration survival on a real turn |
 | Phase 2 silently breaks an artifact/memory feature | High | Regression checks for all six affected features are in-scope for the phase-2 tickets; AC-2's wire-level evidence covers the artifact origin too |
-| Filebeat dies silently and evidence goes dark again | Medium | AC-3 asserts correlated capture across recreation of both containers; Filebeat gets a compose healthcheck; absence of fresh `caddy-access-*` docs is alertable in Kibana |
+| Filebeat dies silently and evidence goes dark again | Medium | The fixed-path volume (FRE-1243) buffers unread content — the active file plus uncompressed rotated backups — across a Filebeat outage, bounded by Caddy's rotation retention, rather than being erased outright by a Caddy recreate as before; Filebeat gets a compose healthcheck; absence of fresh `caddy-access-*` docs is queryable in Elasticsearch/Grafana (Kibana retired, FRE-1214) |
 | Orphaned `CF_ACCESS_*` env vars linger on the gateway | Low | Compose env split (D1) + config-guard orphan-env check (measured above); AC-2 checks the runtime env for raw and prefixed names |
 | Caddyfile edit breaks the egress block along with inbound blocks | Medium | Egress blocks are separate sites; the chain **adds** `caddy validate` to CI for Caddyfile-touching changes (none exists today, measured above) |
 | Guard wiring regresses a call path (new failure mode on the hot path) | Medium | Guard wiring ships behind its own ticket with tests through production wiring (AC-5); guard `off` mode remains the escape hatch |
@@ -458,9 +463,10 @@ quo.
 - **Compose** (`docker-compose.cloud.yml`): CF pair moves to a Caddy-only env source
   and **out of the file the gateway's blanket `env_file` imports** (split or
   allowlist — the gateway currently receives every `.env` var, measured above); new
-  `filebeat` service — `filestream` input + `container` parser, stable input `id`,
-  persistent registry volume, healthcheck; egress listeners exposed on the compose
-  network only.
+  `filebeat` service — `filestream` input over a fixed path shared with `caddy` via a
+  named volume (no `container` parser, no container-ID resolution — FRE-1243), stable
+  input `id`, persistent registry volume, healthcheck; egress listeners exposed on the
+  compose network only.
 - **Application deletions (phased per D1)**: Phase 1 — construction logic in
   `llm_client/client.py`, `slm_health/scheduler_runner.py`,
   `llm_client/provider_health.py`; forwarding through `slm_health/probe.py`; the
@@ -527,8 +533,12 @@ D1/D2). Each can fail; a half-finished implementation fails at least one.
   the pair under any name, the negative control is *not* rejected (barrier silently
   off), or the logged incoming request shows a CF header.
 - **AC-3 — Ingested evidence survives what used to erase it, without replay.** (The
-  guarantee under test is D3's stated one: at-least-once after harvest — not lossless
-  recreation, which the mechanism cannot provide.) · **Check:** send a uniquely-tagged
+  guarantee under test is D3's stated one, strengthened by FRE-1243: at-least-once after
+  harvest, not lossless across an outage exceeding Caddy's configured rotation
+  retention — but a Caddy-only recreate no longer erases anything at all, so this
+  criterion's own `--force-recreate caddy filebeat` remains sufficient but is no longer
+  necessary; FRE-1148 owns re-verifying this criterion against the new mechanism,
+  including a Caddy-only variant.) · **Check:** send a uniquely-tagged
   request through the egress block (unique path/query marker) and **confirm its
   document is queryable in `caddy-access-*` first**; then `docker compose up -d
   --force-recreate caddy filebeat`; then send a second uniquely-tagged request. Query

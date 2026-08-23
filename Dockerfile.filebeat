@@ -1,16 +1,14 @@
-# Filebeat sidecar shipping cloud-sim-caddy's access logs to caddy-access-*
-# (FRE-1146 / ADR-0132 D3). Config and the container-ID resolver are baked in
-# at build time (root-owned, 0644/0755) rather than bind-mounted, so
-# Filebeat's --strict.perms check (the default) passes without weakening it.
+# Filebeat sidecar shipping Caddy's access logs to caddy-access-*
+# (FRE-1146 / ADR-0132 D3, fixed-path mechanism FRE-1243). Config is baked in
+# at build time (root-owned, 0644) rather than bind-mounted, so Filebeat's
+# --strict.perms check (the default) passes without weakening it.
 FROM docker.elastic.co/beats/filebeat:8.19.0
 
 USER root
 
 COPY config/filebeat/filebeat.yml /usr/share/filebeat/filebeat.yml
-COPY config/filebeat/resolve-caddy-container.sh /usr/local/bin/resolve-caddy-container.sh
 
-RUN chown root:root /usr/share/filebeat/filebeat.yml /usr/local/bin/resolve-caddy-container.sh \
-    && chmod 0644 /usr/share/filebeat/filebeat.yml \
-    && chmod 0755 /usr/local/bin/resolve-caddy-container.sh
+RUN chown root:root /usr/share/filebeat/filebeat.yml \
+    && chmod 0644 /usr/share/filebeat/filebeat.yml
 
-ENTRYPOINT ["/usr/local/bin/resolve-caddy-container.sh"]
+ENTRYPOINT ["filebeat", "-e", "-c", "/usr/share/filebeat/filebeat.yml"]

@@ -446,7 +446,7 @@ quo.
 |------|----------|------------|
 | Proxy buffers or times out a long streamed turn | High | SSE auto-flush relied on + no body-duration timeout + load-bearing comment in the block; AC-1 measures per-event cadence and full-duration survival on a real turn |
 | Phase 2 silently breaks an artifact/memory feature | High | Regression checks for all six affected features are in-scope for the phase-2 tickets; AC-2's wire-level evidence covers the artifact origin too |
-| Filebeat dies silently and evidence goes dark again | Medium | The fixed-path volume (FRE-1243) buffers unread content — the active file plus uncompressed rotated backups — across a Filebeat outage, bounded by Caddy's rotation retention, rather than being erased outright by a Caddy recreate as before; Filebeat gets a compose healthcheck; absence of fresh `caddy-access-*` docs is alertable in Kibana |
+| Filebeat dies silently and evidence goes dark again | Medium | The fixed-path volume (FRE-1243) buffers unread content — the active file plus uncompressed rotated backups — across a Filebeat outage, bounded by Caddy's rotation retention, rather than being erased outright by a Caddy recreate as before; Filebeat gets a compose healthcheck; absence of fresh `caddy-access-*` docs is queryable in Elasticsearch/Grafana (Kibana retired, FRE-1214) |
 | Orphaned `CF_ACCESS_*` env vars linger on the gateway | Low | Compose env split (D1) + config-guard orphan-env check (measured above); AC-2 checks the runtime env for raw and prefixed names |
 | Caddyfile edit breaks the egress block along with inbound blocks | Medium | Egress blocks are separate sites; the chain **adds** `caddy validate` to CI for Caddyfile-touching changes (none exists today, measured above) |
 | Guard wiring regresses a call path (new failure mode on the hot path) | Medium | Guard wiring ships behind its own ticket with tests through production wiring (AC-5); guard `off` mode remains the escape hatch |
@@ -463,9 +463,10 @@ quo.
 - **Compose** (`docker-compose.cloud.yml`): CF pair moves to a Caddy-only env source
   and **out of the file the gateway's blanket `env_file` imports** (split or
   allowlist — the gateway currently receives every `.env` var, measured above); new
-  `filebeat` service — `filestream` input + `container` parser, stable input `id`,
-  persistent registry volume, healthcheck; egress listeners exposed on the compose
-  network only.
+  `filebeat` service — `filestream` input over a fixed path shared with `caddy` via a
+  named volume (no `container` parser, no container-ID resolution — FRE-1243), stable
+  input `id`, persistent registry volume, healthcheck; egress listeners exposed on the
+  compose network only.
 - **Application deletions (phased per D1)**: Phase 1 — construction logic in
   `llm_client/client.py`, `slm_health/scheduler_runner.py`,
   `llm_client/provider_health.py`; forwarding through `slm_health/probe.py`; the

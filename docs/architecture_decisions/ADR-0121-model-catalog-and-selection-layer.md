@@ -965,6 +965,13 @@ that turns *I cannot verify* into *you are wrong* manufactures outages. `provide
 returns three values for that reason. A binding to a provider that truly carries no lever stays
 closed without a third check: undeclared it fails the safety check, declared it fails the policy one.
 
+The same rule cuts the other way, and self-review caught it: *unknown* is not *verified* either.
+A CI runner that cannot reach the map would otherwise produce zero findings for every
+Anthropic-bound deployment and go green having checked nothing — the very
+declared-but-never-reaches-the-wire failure this guard exists to catch, escaping boot and CI at
+once. So an unverifiable declaration is **reported** (`reasoning_declaration_unverified`, policy)
+rather than skipped.
+
 At runtime `LiteLLMClient` applies the same distinction — if litellm holds no capability record for
 the bound model it omits the declared effort and logs `reasoning_declaration_undeliverable` at
 error level, rather than failing every background producer over an infrastructure condition that CI

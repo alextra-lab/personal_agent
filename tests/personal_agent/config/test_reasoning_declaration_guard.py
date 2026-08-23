@@ -17,6 +17,7 @@ which is why the guard asks the transformation rather than a human.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -25,9 +26,21 @@ from personal_agent.config.config_guard import (
     check_reasoning_declaration,
     run_all_checks,
 )
+from tests._helpers.litellm_capability import pinned_litellm_capabilities
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture(autouse=True)
+def _pin_capabilities() -> Iterator[None]:
+    """Litellm's capability map is fetched from GitHub; these assertions must not be.
+
+    Without this, every reasoning-shape assertion below silently tests whether the
+    CI host had egress at process start rather than what it claims to test.
+    """
+    with pinned_litellm_capabilities():
+        yield
 
 
 def _checks(root: Path, name: str) -> list[str]:
@@ -121,6 +134,31 @@ class TestUnknownIsNotTheSameAsForbidden:
             for finding in check_reasoning_declaration(_FIXTURES / fixture):
                 if finding.check in network_dependent:
                     assert finding.severity == "policy", finding
+
+    def test_inability_to_verify_is_reported_rather_than_passing_silently(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A green check that verified nothing is worse than a red one.
+
+        On a CI runner that cannot reach litellm's capability map, every
+        Anthropic-bound deployment would otherwise produce zero findings and the
+        run would go green having checked nothing — the same
+        declared-but-never-reaches-the-wire failure this guard exists to catch,
+        escaping boot and CI at once.
+        """
+        import personal_agent.config.config_guard as guard
+
+        monkeypatch.setattr(
+            guard, "_check_one_reasoning_declaration", guard._check_one_reasoning_declaration
+        )
+        monkeypatch.setattr(
+            "personal_agent.llm_client.reasoning.provider_reasoning_support",
+            lambda model_id, provider: None,
+        )
+        findings = check_reasoning_declaration(_REPO_ROOT)
+        unverified = [f for f in findings if f.check == "reasoning_declaration_unverified"]
+        assert unverified, "an unverifiable declaration must be reported, not skipped"
+        assert all(f.severity == "policy" for f in unverified), "must never block a boot"
 
     def test_missing_declaration_stays_safety_so_it_does_block_boot(self) -> None:
         """The ticket's core demand survives the severity split."""

@@ -1040,16 +1040,28 @@ def _check_one_reasoning_declaration(
     if provider_reasoning_support(model_id, litellm_provider) is None:
         # litellm holds no capability record for this model, so its transformation
         # cannot be trusted either way — it reports every reasoning parameter
-        # unsupported, `thinking` included. Verifying is CI's job and CI has the
-        # map; concluding anything here would be inventing a fact. Deliberately
-        # NOT a finding — see provider_reasoning_support's docstring for the boot
-        # failure that reading it as "forbidden" caused.
+        # unsupported, `thinking` included. Concluding "forbidden" from that is
+        # what refused to boot the application (see provider_reasoning_support).
         #
-        # A binding to a provider that genuinely carries no lever is still closed,
-        # without a third check: with no declaration it fails
-        # `reasoning_declaration_missing` above (safety), and with one it fails
-        # `reasoning_declaration_rejected` below in CI.
-        return findings
+        # But *unknown* is not *verified* either, and saying nothing here would be
+        # the worse mistake: on a CI runner that cannot reach the capability map,
+        # every Anthropic-bound deployment would silently produce zero findings
+        # and the run would go green having checked nothing — the same
+        # declared-but-never-reaches-the-wire failure this guard exists to catch,
+        # escaping boot and CI at once. So the inability to verify is reported
+        # rather than skipped, at policy class so it blocks CI and never a boot.
+        return [
+            *findings,
+            Finding(
+                "reasoning_declaration_unverified",
+                "policy",
+                f"{where} declares reasoning_effort={effort!r}, but litellm holds no "
+                f"capability record for {model_id!r}, so this run could not verify that the "
+                "value reaches the provider. litellm fetches that map from GitHub at import "
+                "— re-run with network access to it. Reported rather than skipped: a green "
+                "check that verified nothing is worse than a red one (FRE-1007).",
+            ),
+        ]
 
     # ── Verification (policy class, deliberately) ────────────────────────────
     # These two ask litellm what the declared value BECOMES, which depends on a

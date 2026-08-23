@@ -17,16 +17,26 @@ the door FRE-1007 says the digest would have failed, so it is the one worth prov
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests._helpers.litellm_capability import pinned_litellm_capabilities
+
 from personal_agent.config import load_model_config
 from personal_agent.config.config_guard import reasoning_wire_shape
 from personal_agent.llm_client.types import ModelRole
 from tests._helpers.trace import make_test_ctx
+
+
+@pytest.fixture(autouse=True)
+def _pin_capabilities() -> Iterator[None]:
+    """See the guard test: litellm's capability map must not decide these results."""
+    with pinned_litellm_capabilities():
+        yield
 
 
 def _make_mock_response() -> MagicMock:

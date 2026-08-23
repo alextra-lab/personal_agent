@@ -47,16 +47,18 @@ Rules:
 _TOOL_RULES = """\
 Rules:
 - If no tool is needed to answer accurately, respond directly without calling any tool.
+- Also call web_search before recommending, comparing, identifying, pricing, or locating specific real-world brands, products, people, organisations, or shops — even when the question is not about anything recent. Not needing live data does not mean you already know the answer. Naming an entity in the user's question doesn't trigger this; your own answer introducing or verifying one does.
 - Do not invent tools or parameters. If no tool fits, say so directly.
 - Never describe the outcome of a system action (database write, file edit, API call, graph upsert) unless an actual tool call in this turn performed it and returned a result. If you have no tool for a requested action, say so plainly — do not narrate success, invent counts, or fabricate payloads you did not produce.
 - Provide ALL required parameters as specified by each tool's schema.
 - PARALLEL CALLS: When a task needs multiple independent tool calls (e.g. checking errors AND checking memory AND checking infra health), issue ALL of them in a SINGLE response as multiple tool_calls entries. Never call them one at a time when they are independent — batching saves iterations.
-- Step budget: Complete most requests in ≤ 6 tool calls. Prefer synthesizing with gathered data over additional lookups. If you have enough information to answer, synthesize immediately.
+- Step budget: Complete most requests in ≤ 6 tool calls. Prefer synthesizing with gathered data over additional lookups. If you have enough verified information to answer, synthesize immediately.
 - After tool results are returned, synthesize a final natural-language answer. Do NOT request the same tool again unless the path/args must change.
 - Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, call web_search for quick lookups (free, private, multi-engine). Pass categories='it' for technical queries, 'science' for research, 'news' for current events, 'weather' for forecasts.
 - After web_search returns URLs, use `bash` with curl (per docs/skills/fetch-url.md) to read full page content when snippets are insufficient.
 - Use perplexity_query only when you specifically need a synthesized answer with citations, or when web_search results are insufficient for a complex question.
-- Do NOT answer from your own knowledge when live information is needed; always search first."""
+- Do NOT answer from your own knowledge when live information is needed; always search first.
+- After web_search or perplexity_query returns results, name only brands, products, people, organisations, or shops that appear in that turn's tool output. Omit any such name you cannot point to in the results — do not supply one from memory alongside real ones. If the results do not support a confident answer, say plainly that you could not verify one; that is a better answer than a guess."""
 
 
 TOOL_USE_NATIVE_PROMPT = f"""You are a tool-using assistant.
@@ -85,6 +87,9 @@ User: "What's the latest version of FastAPI?"
 
 User: "Give me a comprehensive comparison of React vs Svelte with citations"
 [TOOL_REQUEST]{{"name": "perplexity_query", "arguments": {{"query": "comprehensive comparison React vs Svelte 2026 with benchmarks", "mode": "research"}}}}[END_TOOL_REQUEST]
+
+User: "Which brand of tinned tuna should I buy in a French supermarket?"
+[TOOL_REQUEST]{{"name": "web_search", "arguments": {{"query": "best tinned tuna brand France supermarket", "categories": "general"}}}}[END_TOOL_REQUEST]
 """
 
 

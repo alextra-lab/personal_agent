@@ -1,6 +1,6 @@
 # ADR-0138: The Model May Generate, But It May Not Assert — Verified Citations as Seshat's Grounding Contract, Tier-Invariant and Enforced by Measured Compliance
 
-**Status:** Proposed
+**Status:** Accepted — 2026-08-23 (owner)
 **Date:** 2026-08-23
 **Deciders:** Project owner (design), `adr` session (drafting)
 **Tags:** grounding, hallucination, citations, retrieval, model-routing, memory, prompts
@@ -711,8 +711,8 @@ form of D5's tier-invariance claim, and fail if any enabled model is exempt.
 
 ## Status Updates
 
-### 2026-08-23 - Proposed
-**Changed By:** `adr` session (owner-directed design)
+### 2026-08-23 - Accepted
+**Changed By:** Project owner (accepted); `adr` session (drafting)
 **Reason:** Drafted from FRE-1279 after a multi-round design discussion with the owner. The owner
 supplied the central move (verified citations in place of self-assessed confidence) and the
 boundary that makes it enforceable (the model is not a knowledge source outside coding), and
@@ -757,7 +757,7 @@ escalate to inline entailment at an accepted cost. Valid-parsing code was also s
 **Review disposition.** Four rounds were run; in each of the first three, the fix applied introduced
 the next round's defect, and round 4 continued the pattern. The findings narrowed in scope across
 rounds — round 2 re-architected D1 and D5, round 4 touched three clauses — but did not reach zero.
-This ADR is therefore offered as **Proposed** with its review history recorded rather than as a
-defect-free document, on the view that an ADR records a decision and its known weaknesses, and that
-the remaining risk sits in specification detail that implementation tickets and their acceptance
-bars are the right instrument to close.
+The ADR is therefore **Accepted with its review history recorded** rather than as a defect-free
+document — an ADR records a decision and its known weaknesses, and the remaining risk sits in
+specification detail that implementation tickets and their acceptance bars are the right instrument
+to close. Owner accepted 2026-08-23 after round 4, declining a fifth round.

@@ -118,12 +118,19 @@ what need not be is finite.
 
 | Region | Rule |
 |---|---|
-| **Code** | Code, **except dependency declarations** — imports, package manifests, install commands — which are verified against the package registry or documentation. This preserves the anti-squatting property that motivated covering coding turns at all, without demanding a citation for every symbol in a generated function. The exemption attaches to *code*, **not to fencing**: prose placed inside a fence is prose. A fence claiming a natural-language or unrecognized type, or one whose content does not parse as the declared language, is not an exempt region. |
+| **Code** | Code, **except dependency declarations** — imports, package manifests, install commands — which are verified against the package registry or documentation. This preserves the anti-squatting property that motivated covering coding turns at all, without demanding a citation for every symbol in a generated function. The exemption attaches to *code*, **not to fencing**: prose placed inside a fence is prose. A fence claiming a natural-language or unrecognized type, or one whose content does not parse as the declared language, is not an exempt region — **and neither is natural-language content embedded inside otherwise valid code.** `print("Paris has 9 million residents")` parses cleanly as Python; a parse check alone would exempt it, making a string literal a delivery channel for an uncited assertion. String literals, comments and docstrings whose content is a world-fact claim are subject to the contract like any other prose. The exemption covers code the user is being *offered to run*, never text the model is *delivering as its answer*. |
 | **Prose about code** | Not exempt. `httpx.AsyncClient` *used* in code is a proposal to be executed and tested; the prose claim *"`httpx.AsyncClient` accepts `timeout=`"* is an assertion requiring a documentation source. Use versus assert is the line. |
 | **Derived arithmetic** | Exempt when every input is itself cited. Computing `5` from a cited `2` and a cited `3` introduces no new world fact. |
 | **Attributed restatement** | Repeating the user's own words **with attribution** — *"you asked about X"*. Exempt because the claim is about what the user said, which the turn record holds. Presenting the same content as the model's own recommendation is **not** restatement and is not exempt. |
 | **Connective and narrowly-evaluative text** | The model's judgement over cited material, **only where it introduces no externally checkable predicate of its own**. Comparatives and orderings over cited attributes qualify. Predicates such as *well regarded*, *safe*, *popular*, *recommended*, *reliable* do **not** — each is an externally checkable claim about the world and requires a source, however evaluative it sounds. An earlier draft used *"are both well regarded"* as the exemplar of exempt evaluation; that was wrong, and it was the common-knowledge trap reappearing one level down. |
 | **System-record statements** | Claims about *this turn's own execution* — what was searched, what was retrieved, that nothing was found. Their referent is the turn record, not the world, so they are not world-fact claims. This is the exemption that makes D4's terminal state reachable; it is deliberately narrow and covers no claim whose truth depends on anything outside the turn record. |
+
+**Ambiguous classification resolves to assertion.** Where a labeller or extractor cannot decide
+whether a span is exempt evaluation or a checkable claim — *"A is better value than B"* reads as
+either an ordering over cited prices or a market-value claim — it is treated as an **assertion** and
+requires a source. Default-deny governs its own edge cases; adjudication guidance for recurring
+ambiguities lives with the labelled corpus (AC-7), where it can be versioned and measured, not in
+this document.
 
 **Precedence on overlap is one-directional: non-exempt wins.** Where a span falls under both an
 exempt region and the default-deny rule — the user supplying `pip install some-package` and asking
@@ -174,7 +181,22 @@ The model's weights are not on the list.
 **vacuously**. There is nothing to re-fetch: the recorded result *is* the durable artifact, held in
 the turn record, and reachability is not-applicable rather than failed. Verification for these
 resolves against the recorded result, never against a re-execution, so a non-deterministic tool
-cannot invalidate a citation after the fact. Turns citing only such sources enter the D5 compliance metric on the same
+cannot invalidate a citation after the fact.
+
+**Independence requirement — a tool result is a source only where it is not the model's own words
+returning.** A tool result is admissible **only to the extent its content is not derived from the
+model's own arguments to that call.** Without this, D2 is bypassed in a single round-trip: the model
+runs `printf 'Paris has 9 million residents'`, cites the shell output, and a claim originating
+entirely in its weights passes all three checks. The rule is mechanical — content traceable to the
+tool-call arguments is not evidence:
+
+- `curl <url>` — the fetched **page** is a source; the URL the model chose is not.
+- a database query — the returned **rows** are a source; the SQL the model wrote is not.
+- `printf`, `echo`, or any call whose output is a function of model-authored input — yields **no**
+  admissible source at all.
+
+This is the same principle as D2 itself, applied one layer down: a tool that returns what the model
+told it to say is the model, wearing a tool's identifier. Turns citing only such sources enter the D5 compliance metric on the same
 footing as any other. This keeps D3's "all three" invariant literally true rather than
 carrying a silent exception.
 
@@ -196,12 +218,24 @@ to an invented claim. Without (c), reachability alone is nearly worthless agains
 a valid URL proves a page exists, not that it mentions the thing asserted.
 
 **Containment unit.** The check is not "some token from the span appears". For each atomic-claim
-span, **every entity and every figure it contains** must be present in the cited source; connective
-and function words are ignored. For *"Paris has 2.1 million residents"*, both `Paris` and the
-quantity must appear — matching `Paris` alone would recreate exactly the citation theatre D3(c)
-exists to close, while demanding every non-stopword would manufacture refusals. Fixing this unit is
-a decision, not a tuning parameter, because AC-8's false-rejection measurement can only be taken
-once the matching rule is settled.
+span, **every entity, every figure, and every predicate content word** must be present in the cited
+source; connective and function words are ignored. For *"Paris has 2.1 million residents"*, both
+`Paris` and the quantity must appear — matching `Paris` alone would recreate exactly the citation
+theatre D3(c) exists to close, while demanding every non-stopword would manufacture refusals.
+
+**The predicate is part of the unit, not an afterthought.** An earlier draft required only entities
+and figures, which was **vacuous for precisely the class D1's inversion was introduced to catch**:
+*"this fish is high in mercury"* contains neither, so the condition held over an empty set and any
+source whatever passed. Requiring predicate content words (`mercury`) closes the direct form.
+
+**Spans with no entity and no figure escalate to inline entailment.** For that class, containment
+alone remains too weak to be meaningful — a page mentioning `mercury` does not thereby support
+*"this fish is high in mercury"* — so D3(d) runs **inline for these spans** rather than offline.
+This is a deliberate cost: the entity-free predicate class is the expensive one, and it is a
+minority of spans, but the expense is real and is accepted here rather than discovered later.
+
+Fixing this unit is a decision, not a tuning parameter, because AC-8's false-rejection measurement
+can only be taken once the matching rule is settled.
 
 **Normalization contract.** Containment is matched on **token boundaries**, never raw substring —
 `Ham` must not match inside `Birmingham`, and boilerplate in navigation or footers is excluded from
@@ -543,6 +577,13 @@ while the *invariants and their failure conditions* live here: an ADR settles wh
 what would falsify it; calibrating a threshold against a corpus that does not yet exist would be
 inventing a number, not deciding something.
 
+**Preregistration alone is not enough, so a floor principle binds the tickets.** Recording a bar
+before seeing results prevents post-hoc tuning but not a vacuous bar — 0% per-class recall,
+preregistered, satisfies the timing rule and means nothing. Every bar must therefore be justified
+against the failure it prevents, and **demonstrated to reject a deliberately broken baseline**: a
+bar that a known-broken implementation would pass is not a bar. That constraint is decidable at
+ticket-review time without this ADR inventing a number it cannot ground.
+
 **Coverage requirement.** The held-out set spans, at minimum: retrievable and non-retrievable
 questions; each exempt region in D1 (code bodies, dependency declarations, derived arithmetic,
 restatement, connective text); factual claims **with and without** named entities — the latter
@@ -610,9 +651,10 @@ form of D5's tier-invariance claim, and fail if any enabled model is exempt.
   citations, **or** a dependency or prose API claim ships uncited, **or** the unrelated-but-reachable
   citation passes, **or** a non-existent package is dropped silently rather than refused — which is
   D4's ban on silent stripping, asserted here because round 2 showed a passing implementation could
-  violate it. The set additionally includes **prose placed inside a fence** (a `text` fence, or one
-  whose content does not parse as its declared language), which must be verified as prose: *fails if*
-  fencing alone buys exemption.
+  violate it. The set additionally includes **prose placed inside a fence** (a `text` fence, one whose
+  content does not parse as its declared language, **and valid-parsing code carrying a world-fact
+  claim in a string literal or comment**, e.g. `print("Paris has 9 million residents")`), all of
+  which must be verified as prose: *fails if* fencing or mere parseability buys exemption.
 
 - **AC-6 — No hedged guesses, and honesty is not a special case of empty retrieval.** On held-out
   probes covering **both** empty retrieval **and** non-empty-but-insufficient retrieval, the response
@@ -638,7 +680,10 @@ form of D5's tier-invariance claim, and fail if any enabled model is exempt.
   decimal precision, units, registered aliases, case and Unicode). Containment-unverifiable outcomes
   are distinguished in telemetry from true no-source outcomes. **Paired arm:** the false-*acceptance*
   rate — unsupported assertions whose citation nonetheless passes (a)(b)(c) — is at or below its own
-  stated bar over a set of deliberately mismatched source/claim pairs. · **Check:** variance-class
+  stated bar over a set of deliberately mismatched source/claim pairs, which **must include
+  entity-free and figure-free predicate claims** (the class an entities-and-figures-only containment
+  rule passed vacuously) **and model-authored tool output** (`printf`-style laundering, per D2's
+  independence requirement). · **Check:** variance-class
   probe set for rejections, mismatched-pair set for acceptances, both against known ground truth. ·
   *Fails if* either rate exceeds bar — the paired arm is what stops an accept-everything containment
   check from acing this criterion on zero false rejections — **or** the two outcome kinds are
@@ -692,3 +737,27 @@ made explicit by output format, the D2 reachability exemption was resolved as a 
 D4's terminal refusal was shown compliant by provenance rather than exemption. All acceptance
 criteria moved to **held-out probe sets with coverage and rate bars**, because round 2 demonstrated
 that any criterion naming its own probe can be satisfied by special-casing that probe.
+
+Codex review round 3 closed three exemption leaks — evaluative text laundering checkable predicates,
+the code exemption attaching to fencing rather than code, and D4's terminal state argued from
+provenance where a narrow system-record exemption was needed — plus the containment unit, overlap
+precedence and span atomicity.
+
+Codex review round 4 (narrow, scoped to the round-3 delta, run past the skill's three-round cap at
+the owner's offer) found the round-3 fixes had themselves introduced two full bypasses. **Turn-local
+tool evidence had no independence requirement**, so `printf '<claim>'` cited as shell output
+laundered parametric knowledge into an admissible source in one round-trip; D2 now admits a tool
+result only where its content is not derived from the model's own arguments to the call. **The new
+containment unit was vacuous for entity-free claims** — "every entity and figure must be present"
+holds over an empty set for *"this fish is high in mercury"*, the exact class D1's inversion existed
+to catch — so the unit now includes predicate content words, and spans carrying no entity or figure
+escalate to inline entailment at an accepted cost. Valid-parsing code was also still a prose channel
+(`print("...")`), now closed and probed by AC-5.
+
+**Review disposition.** Four rounds were run; in each of the first three, the fix applied introduced
+the next round's defect, and round 4 continued the pattern. The findings narrowed in scope across
+rounds — round 2 re-architected D1 and D5, round 4 touched three clauses — but did not reach zero.
+This ADR is therefore offered as **Proposed** with its review history recorded rather than as a
+defect-free document, on the view that an ADR records a decision and its known weaknesses, and that
+the remaining risk sits in specification detail that implementation tickets and their acceptance
+bars are the right instrument to close.

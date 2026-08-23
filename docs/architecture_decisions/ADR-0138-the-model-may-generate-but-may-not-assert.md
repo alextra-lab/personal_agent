@@ -103,31 +103,49 @@ down.
 
 ### D1 — The model may generate; it may not assert
 
-The unit of classification is the **span**, not the sentence and not the turn. A span is an
-**assertion** if it matches the enumerated assertion class below; everything else is
-**generation**.
+**The default is deny.** Outside the exempt regions below, any span making a claim about the
+world requires a verified citation. The default follows directly from D2: if parametric knowledge
+is not a source, then a world-fact claim with no source has no admissible provenance, whatever
+grammatical form it takes.
 
-| Class | Examples | Citation required |
-|---|---|---|
-| **Assertion span** | named entities, brands, organisations, people, product names, package/library names, API symbols and signatures, version numbers, URLs, statistics and figures, dates, quotations | **Yes — verified** |
-| **Generation** | code bodies, reasoning, the connective and evaluative text of a synthesis, restating the user, arithmetic over cited figures, instruction-following | No |
+An earlier draft inverted this — enumerating an *assertion* class and treating everything else as
+generation. That under-covers, and the gap is not marginal: *"this fish is high in mercury"* is a
+checkable factual claim containing no named entity, and would have escaped a
+named-entity-triggered rule entirely. Enumerating what must be cited is unbounded; enumerating
+what need not be is finite.
 
-**Precedence is explicit and one-directional: if a span matches the assertion class, it requires
-a citation regardless of the sentence it sits in.** Synthesis does not launder its constituents.
-In *"Ortiz and Nardin are both well regarded"*, the spans `Ortiz` and `Nardin` are assertions and
-each needs a source; *"are both well regarded"* is the model's judgement over cited material and
-needs none. There is no sentence-level classification and therefore no judgement call about
-whether a sentence "is synthesis".
+**Exempt regions** (no citation required):
 
-The boundary is on the **kind of span**, not the **topic of the turn**. A coding turn is not
-exempt: a function body is generation, but `httpx.AsyncClient` and the claim that it accepts
-`timeout=` are assertion spans and require a documentation source. This is deliberate —
-hallucinated package names are among the most exploited coding failure modes, and a topic-scoped
-exemption would license exactly that.
+| Region | Rule |
+|---|---|
+| **Code bodies** | Everything inside a code fence, **except dependency declarations** — imports, package manifests, install commands — which are verified against the package registry or documentation. This preserves the anti-squatting property that motivated including coding turns at all, without demanding a citation for every symbol in a generated function. |
+| **Prose about generated code** | Not exempt. `httpx.AsyncClient` *used* in a code body is a proposal to be executed and tested; the prose claim *"`httpx.AsyncClient` accepts `timeout=`"* is an assertion and requires a documentation source. Use versus assert is the line. |
+| **Derived arithmetic** | Exempt when every input is itself cited. Computing `5` from a cited `2` and a cited `3` introduces no new world fact. |
+| **Restating the user** | Content traceable to the user's words this conversation (D2 item 4). |
+| **Connective and evaluative text** | The model's judgement over cited material — *"…are both well regarded"* — carries no citation of its own; the spans it ranges over do. |
 
-The contract is enforced on **spans present in the output**, never on the model's declared mode.
-There is no clean separation inside a model between recalling and reasoning, so a turn that
-labels itself "reasoning" earns no exemption.
+**Span classification is a named component, not a regex.** This is the honest position, and it
+replaces the previous draft's claim of syntactic determinism, which did not survive review. No
+regular expression partitions "world-fact claim" from "generation." Classification is performed by
+an explicit **span extractor** — a small model or a structured-output pass — and its quality is
+therefore a bounded, measurable property of the system rather than an assumption:
+
+- The contract's strength is bounded by **extraction recall**: a claim the extractor misses is a
+  claim the contract never sees.
+- **Extraction precision** bounds usability: false positives block legitimate generation.
+- Both are measured against a labelled probe set and carry a stated bar (AC-7). Extraction quality
+  is a first-class risk, recorded in the risk table, not a detail deferred to implementation.
+
+This is still a far weaker dependency than the one it replaces. Deciding *"is this span a claim
+about the world?"* is a labelling task with ground truth and a measurable error rate. Deciding
+*"do I actually know this?"* is calibration, has no ground truth, and is the capability that
+scales worst. The design trades an unmeasurable dependency for a measured one.
+
+**Citation binding is explicit by construction.** Each non-exempt span carries its own adjacent
+citation marker in the output format. Binding is not inferred from proximity, clause or sentence
+boundaries — `Ortiz [S1] is better than Nardin [S2]`, never `Ortiz is better than Nardin [S1]`
+leaving it ambiguous which source covers what. An unbound or multiply-bound span is a format
+violation and takes the D4 path.
 
 ### D2 — Parametric knowledge is never a source
 
@@ -136,10 +154,15 @@ The admissible source set is:
 1. the **memory graph** (entities, episodes, claims);
 2. **tool and web results** retrieved during this turn;
 3. **documentation** (context7 and equivalents) retrieved during this turn;
-4. **the user's own words in this conversation** — which satisfy D3(a) by being present in the
-   turn's assembled context, and are exempt from D3(b) reachability, having no external referent.
+4. **the user's own words in this conversation** — present in the turn's assembled context.
 
 The model's weights are not on the list.
+
+**Sources with no external referent** (the user's words; memory nodes resolved by id) satisfy
+D3(b) **vacuously** — there is nothing to fetch, so reachability is not-applicable and counts as
+passed, not as skipped. Turns citing only such sources enter the D5 compliance metric on the same
+footing as any other. This keeps D3's "all three" invariant literally true rather than
+carrying a silent exception.
 
 ### D3 — Three deterministic checks inline; entailment sampled offline
 
@@ -150,12 +173,28 @@ Every assertion span must carry a citation that passes **all three** of:
 - **(b) Reachability** — the source is real and retrievable. A URL returning non-2xx after
   redirects, a soft-404, or an auth wall counts as **unreachable**. Memory citations resolve
   against the node id.
-- **(c) Containment** — the asserted token appears in the cited source's **retrieved content**.
+- **(c) Containment** — the asserted token appears in the cited source's **retrieved content**,
+  under the normalization contract below.
 
-**(c) is not optional and is not entailment.** It is substring/normalized-token presence, costs
-nothing, and closes the largest hole in a citation regime: a real, reachable, entirely unrelated
-source attached to an invented claim. Without (c), reachability alone is nearly worthless against
-citation theatre — a valid URL proves a page exists, not that it mentions the thing asserted.
+**(c) is not optional and is not entailment.** It is normalized token presence, costs nothing, and
+closes the largest hole in a citation regime: a real, reachable, entirely unrelated source attached
+to an invented claim. Without (c), reachability alone is nearly worthless against citation theatre —
+a valid URL proves a page exists, not that it mentions the thing asserted.
+
+**Normalization contract.** Containment is matched on **token boundaries**, never raw substring —
+`Ham` must not match inside `Birmingham`, and boilerplate in navigation or footers is excluded from
+the matched content. The comparison must tolerate, at minimum: case and Unicode normalization;
+digit-group separators and decimal-precision variance (`1,000` ≡ `1000`, `3.0` ≡ `3`); common unit
+expressions of the same quantity; and registered aliases (`IBM` ≡ `International Business
+Machines`) where an alias table exists.
+
+**False rejections are a first-class cost, not an implementation detail.** A containment miss on a
+legitimate assertion forces the D4 no-source path and produces a refusal the user did not deserve.
+The tolerated variance classes above are therefore stated here, and the false-rejection rate carries
+its own measured bar (AC-8). Where normalization is genuinely ambiguous — paraphrase, translation,
+an unregistered alias — the span is recorded as **unverifiable-by-containment** and routed to D4
+with that reason distinguished in telemetry from a true no-source outcome, so the two failure modes
+never blur in the compliance metric.
 
 All three run **inline and blocking, on every turn, at every enforcement level** (see D5).
 
@@ -171,7 +210,12 @@ An assertion span failing (a), (b) or (c) blocks the turn and triggers a retry w
 forced, bounded by a configured maximum attempt count.
 
 On exhausting the bound, the terminal state is an **explicit statement that no source was found,
-naming what was searched**. This state always exists, so the loop always terminates.
+naming what was searched**.
+
+That statement is itself contract-compliant by **provenance**, not by exemption: its content is
+drawn only from the turn's own record — the search terms actually issued (a tool-result fact, D2
+item 2) and the user's own words (D2 item 4). It introduces no new world-fact span, so it cannot
+recurse into another verification failure, and the loop always terminates.
 
 It is **never** a hedged guess. A guess with a disclaimer is parametric knowledge wearing a
 disclaimer, and under D2 it is not admissible. Stripping the claim silently is equally rejected:
@@ -196,17 +240,36 @@ entailment check D3(d).
 | **Light** | measured compliance ≥ threshold | The model generates first and cites as it goes. D3(a)(b)(c) verify the output; failures take the D4 path. |
 | **Heavy** | measured compliance < threshold, **or unmeasured** | Retrieval is forced *before* generation, so the model cannot compose an assertion without a source set already in hand. D3(a)(b)(c) still verify the output identically. |
 
-**Compliance metric.** Numerator: turns on that model in which every assertion span carried a
-citation passing (a)(b)(c) **on first generation**, with no D4 retry. Denominator: turns on that
-model containing at least one assertion span. Evaluated over a rolling window of configured size,
-with a configured **minimum sample count**.
+**Compliance metric — measured only where it is not confounded.** Numerator: turns in which every
+non-exempt span carried a citation passing (a)(b)(c) **on first generation**, with no D4 retry.
+Denominator: turns containing at least one non-exempt span.
 
-**Bootstrap and hysteresis — the default is fail-safe.** A model with fewer than the minimum
-sample count is **unmeasured**, and unmeasured means **heavy**. A model is promoted to light only
-after sustaining the threshold across a full window at or above minimum sample; it is demoted to
-heavy on a single window evaluation below threshold. The asymmetry is deliberate: promotion is
-slow and evidence-bound, demotion is immediate, and a model that has never been observed pays the
-strict path rather than being trusted on a guess.
+**The metric counts only turns where retrieval was *not* pre-forced.** Heavy enforcement supplies
+sources before generation, so first-generation compliance measured under heavy enforcement is
+largely a measurement of the enforcement, not of the model. Scoring those turns would let a model
+that only complies when spoon-fed earn promotion, fail under light, be demoted, recover under
+heavy, and oscillate indefinitely.
+
+**Probation sampling breaks the resulting deadlock.** If only light-path turns count, an unmeasured
+model — which is heavy by default — would never accrue observations. So a configured small fraction
+of a heavy model's turns are routed to the light path specifically to generate unconfounded
+observations. Probation turns are fully verified like any other; only the pre-generation forcing is
+withheld.
+
+**Bootstrap, band and cooldown — the default is fail-safe.**
+
+- A model with fewer than the configured **minimum sample count** of unconfounded observations is
+  **unmeasured**, and unmeasured means **heavy**.
+- Promotion and demotion use **separate thresholds** (a hysteresis band), never one value, so a
+  model sitting near the line does not flap.
+- Promotion requires sustaining the upper threshold across a full window at or above minimum
+  sample; demotion follows a single window below the lower threshold.
+- A demoted model serves a configured **cooldown** before it is eligible for promotion again.
+- **Window staleness closes the frozen-denominator hole.** Turns with no non-exempt span are
+  excluded from the denominator, so a model that stops producing recognized spans would otherwise
+  coast indefinitely on a stale favourable window. A window that ages past a configured maximum
+  without sufficient new observations reverts the model to **unmeasured**, hence heavy. Compliance
+  must be continuously re-earned, never banked.
 
 Enforcement level is keyed on the **computed rate**, never on a model name, provider, or
 hand-maintained tier list. A new model is measured under heavy enforcement and earns its way out.
@@ -379,9 +442,14 @@ measures the residual. Promotion to inline is a future decision informed by that
 - **New machinery to maintain**: a per-turn source registry with stable identifiers across four
   source kinds, a three-check verification pass, a bounded retry loop, and a compliance
   measurement surface with windowing and hysteresis.
-- **Span extraction becomes a correctness-relevant component.** D1's determinism depends on
-  reliably identifying assertion spans; a weak extractor under-covers (assertions escape) or
-  over-covers (generation gets blocked). This is now on the critical path.
+- **Span extraction is on the critical path and bounds the whole contract.** D1 depends on a
+  classifier, not a regex — the syntactic-determinism claim did not survive review. A weak extractor
+  under-covers (claims escape the contract) or over-covers (generation is blocked). Its recall and
+  precision are measured (AC-7) rather than assumed, but the contract can never be stronger than its
+  recall.
+- **False refusals are a new user-visible failure mode.** A containment miss on a legitimate
+  assertion produces a refusal the user did not deserve, and at scale would read as the system
+  becoming useless rather than honest. Bounded by AC-8 and kept distinguishable in telemetry.
 
 ### Risks and Mitigations
 
@@ -389,7 +457,10 @@ measures the residual. Promotion to inline is a future decision informed by that
 |------|----------|------------|
 | Citation theatre — a real, reachable, unrelated source attached to an invented claim | **High** | D3(c) containment makes this deterministically detectable at zero model cost; verification runs on output structurally, never as a prompt request; failures cost the turn (D4); AC-2 seeds a fabricated citation and AC-5 seeds an unrelated-but-reachable one to prove both bite |
 | Junk retrieval becomes cited truth | **High** | Recorded as the primary residual risk (D7); source quality explicitly deferred, not assumed solved; AC-6 requires empty retrieval to yield the explicit no-source statement rather than a guess |
-| Span extractor under- or over-covers | **High** | Enumerated syntactic classes rather than semantic judgement (D1); AC-5 fails in both directions — blocked code generation *and* an uncited package name |
+| Span extractor under- or over-covers, bounding the contract | **High** | Default-deny with a finite exempt list rather than an unbounded assertion enumeration (D1); recall reported per class including entity-free factual claims, with a stated bar (AC-7); AC-5 fails in both directions — blocked code generation *and* an uncited dependency |
+| False refusals from containment misses on legitimate assertions | **High** | Normalization contract fixes the variance classes that must be tolerated (D3c); rate bounded and measured (AC-8); containment-unverifiable distinguished from true no-source in telemetry so a wave of false refusals cannot read as honesty |
+| Enforcement oscillation — heavy preloads sources, inflating the rate that earns promotion | **High** | The metric counts only non-pre-forced turns; probation sampling supplies unconfounded observations without deadlock; separate promote/demote thresholds plus cooldown (D5) |
+| Compliance banked on a stale window while the model degrades | Medium | Window staleness reverts a model to unmeasured, hence heavy (D5) |
 | Retry loop oscillates or never terminates | Medium | Configured maximum attempt count (D4); terminal state is the explicit no-source statement, which always exists |
 | Compliance threshold becomes a hand-tuned tier list by the back door | Medium | AC-3 requires the rate to move in response to *observed* turns and enforcement to follow it, and fails if selection keys on model name, provider or a static list |
 | Unmeasured model is trusted by default | Medium | D5 makes unmeasured ≡ heavy; promotion requires a full window at minimum sample, demotion is immediate |
@@ -430,68 +501,103 @@ anything has not been shown to work.
 
 > **Note on adjudication:** ADR-0130's seam-ticket machinery is **Superseded** (2026-08-18,
 > owner-directed process streamline), so this ADR files no seam ticket. These criteria are
-> adjudicated on the umbrella, **FRE-1279**, once the implementation chain has landed and
-> deployed.
+> adjudicated on the umbrella, **FRE-1279**, once the implementation chain has landed and deployed.
 
-**AC-1, AC-2 and AC-6 must hold on *every* enabled primary model, not merely on one** — that is
-the observable form of D5's tier-invariance claim, and it fails if any enabled model is exempt.
+**Probes are drawn from a held-out set, not enumerated here.** Review round 2 established that any
+criterion naming its own probe can be satisfied by special-casing that probe — supporting exactly
+the one package the test uses, templating exactly the one refusal it checks. So every criterion
+below is adjudicated against a **held-out probe set** maintained outside this document, sampled at
+adjudication time, with stated coverage and a pass-rate bar rather than a single instance. An
+implementation cannot special-case probes it has not seen.
 
-- **AC-1 — The original failure does not reproduce, and the system has not simply gone mute.**
-  *(negative)* The FRE-1278 probe ("which tinned tuna should I buy in France") replayed on the
-  deployed stack yields either a response whose every named brand, shop and product carries a
-  citation passing D3(a)(b)(c), or the explicit no-source statement. *(positive)* A companion probe
-  whose answer **is** retrievable returns a substantive answer carrying at least one verified
-  citation. · **Check:** two live turns; cross-reference every proper noun against that turn's
-  evidence source ids and content. · *Fails if* any named brand, shop or product appears with no
-  passing citation, **or** the companion probe returns a refusal — which is how "disable retrieval
-  and refuse everything" is caught.
+**Coverage requirement.** The held-out set spans, at minimum: retrievable and non-retrievable
+questions; each exempt region in D1 (code bodies, dependency declarations, derived arithmetic,
+restatement, connective text); factual claims **with and without** named entities — the latter
+because the "high in mercury" class is exactly what the previous draft's rule missed; and each
+source kind in D2.
 
-- **AC-2 — Verification rejects the bad and admits the good.** *(negative)* Two structurally
-  different fabricated citation identifiers, injected into model output, are each blocked and never
-  delivered, with the recorded rejection reason being unresolved-identifier. *(positive)* The same
-  turn carrying a genuine citation passes and is delivered. · **Check:** seeded-negative test with
-  two synthetic id shapes plus a positive control. · *Fails if* either fabricated citation passes,
-  **or** the genuine citation is rejected — which is how a reject-everything guard is caught — **or**
-  rejection is traceable to a test-specific special case rather than the general rule.
+**AC-1, AC-2 and AC-6 must hold on *every* enabled primary model**, which is the observable form of
+D5's tier-invariance claim, and fail if any enabled model is exempt.
 
-- **AC-3 — The rate is computed from observed turns, and enforcement follows it.** *(computation)*
-  Running a batch of deliberately non-compliant turns on a model drives its recorded compliance
-  down; running compliant turns drives it back up. *(behaviour)* Crossing the threshold downward
-  moves that model to forced-retrieval-before-generation on its next turn, and crossing back up
-  returns it to the light path after the promotion window. · **Check:** drive the rate with real
-  turns in both directions and observe both the recorded value and the enforcement path; inspect
-  the selection input. · *Fails if* the rate is static or settable only by hand, **or** enforcement
-  is invariant to it, **or** the selection reads a model name, provider or hand-maintained tier
-  list.
+- **AC-1 — Grounded when it can be, honest when it cannot, and not merely mute.** Over a held-out
+  sample of ≥30 factual questions split between retrievable and non-retrievable: every response
+  either carries citations passing D3(a)(b)(c) for all non-exempt spans, or is the explicit
+  no-source statement — **and** the retrievable half is answered substantively at or above a stated
+  rate. · **Check:** live turns; every non-exempt span cross-referenced against that turn's evidence
+  source ids and content. · *Fails if* any uncited non-exempt span ships, **or** the retrievable
+  half's substantive-answer rate falls below bar — which is how "refuse everything" is caught, since
+  blanket refusal passes the honesty arm and fails this one.
 
-- **AC-4 — Empty relevance is expressible, and memory still works.** *(negative)* On a probe whose
-  subject has no entity or episode in the graph, the memory section is absent or explicitly marked
-  as holding nothing relevant, and the response does not imply recall. *(positive)* On a probe whose
-  subject **is** verified present in Neo4j, the memory section is populated and the response uses it
-  with a citation. · **Check:** two probes, subjects verified present/absent by direct graph query;
-  inspect assembled context and response. · *Fails if* the absent-subject section is populated purely
-  by recency-floor admissions or the response implies prior discussion, **or** the present-subject
-  probe returns nothing — which is how "disable proactive memory globally" is caught.
+- **AC-2 — Each of the three checks independently rejects, and valid citations still pass.**
+  Randomly generated (not fixed) citation identifiers exercise three distinct negatives: one failing
+  **(a)** only (unresolvable id), one passing (a) but failing **(b)** (resolvable id, unreachable
+  source), and one passing (a)(b) but failing **(c)** (real reachable source not containing the
+  asserted token). Each is blocked, with the recorded rejection reason naming the specific check.
+  A positive control citation passes and is delivered. · **Check:** seeded-negative suite with
+  per-check attribution plus positive control. · *Fails if* any of the three negatives passes —
+  which is how "implement only id-membership and skip reachability and containment" is caught —
+  **or** the positive control is rejected, **or** rejection reasons do not distinguish which check
+  fired.
 
-- **AC-5 — Generation is not blocked, assertions are, and the source must actually mention the
-  thing.** On a coding probe naming one real and one non-existent library: *(i)* generated code is
-  emitted without per-line citations; *(ii)* the real package and its asserted API symbol carry a
-  documentation citation whose **retrieved content contains those tokens**; *(iii)* the non-existent
-  package is not asserted. *(seeded negative)* A citation pointing at a real, reachable
-  documentation page that does **not** mention the asserted package is rejected. · **Check:** coding
-  probe plus an injected unrelated-but-reachable citation. · *Fails if* code generation is blocked
-  pending citations (over-application), **or** a package or API symbol is asserted with no
-  documentation source (topic-scoped exemption leaking back in), **or** the unrelated-but-reachable
-  citation passes — which is the citation-theatre hole D3(c) exists to close.
+- **AC-3 — The metric measures what it claims, and enforcement follows it.** *(validity)* Compliance
+  computed by the system agrees, within a stated tolerance, with independent labelling of the same
+  held-out turns — where a turn counts compliant only if **every** non-exempt span passes, not if
+  any citation is merely present. *(unconfounded)* The metric is computed only from non-pre-forced
+  turns, demonstrated by showing heavy-enforcement turns absent from the denominator. *(behaviour)*
+  Driving real compliance below the lower threshold demotes the model on its next turn; sustained
+  recovery above the upper threshold promotes it only after the window and cooldown elapse. ·
+  **Check:** labelled ground-truth comparison, denominator inspection, and threshold crossings driven
+  in both directions. · *Fails if* system-computed compliance diverges from labelling beyond
+  tolerance — which is how "score compliant when ≥1 citation exists" is caught — **or** pre-forced
+  turns appear in the denominator, **or** enforcement selection reads a model name, provider or
+  static tier list, **or** a model promotes without serving cooldown.
 
-- **AC-6 — No hedged guesses, and the refusal is informative.** On a factual probe engineered so
-  retrieval returns empty, the response *(i)* is non-empty, *(ii)* contains the explicit no-source
-  statement naming what was searched, and *(iii)* introduces no proper noun, figure or date beyond
-  those in the user's own message. · **Check:** force empty retrieval; assert all three properties.
-  · *Fails if* the response is empty or generic filler, **or** omits what was searched, **or** offers
-  a "best guess", a hedged suggestion or any named candidate.
+- **AC-4 — Empty relevance is expressible, and recall still works across its kinds.** Over a
+  held-out set spanning entities, episodes and alias-reached subjects, with presence or absence
+  verified by direct graph query: absent subjects yield a memory section that is absent or explicitly
+  marked empty and a response that does not imply recall; present subjects yield a populated section
+  used with a citation, at or above a stated rate **for each kind**. · **Check:** graph-verified
+  probes per kind; inspect assembled context and response. · *Fails if* absent-subject sections are
+  populated by recency-floor admissions or responses imply prior discussion, **or** any kind falls
+  below bar — which is how "disable recall and implement exact entity lookup only" is caught, since
+  episodes and aliases fail it.
 
----
+- **AC-5 — Generation flows, assertions are checked, and refusal is visible.** Over a held-out set
+  of coding probes: generated code emits without per-span citations; dependency declarations are
+  verified against registry or documentation; prose claims about APIs carry documentation citations
+  whose retrieved content contains the asserted tokens; and a **non-existent package is refused
+  explicitly, naming the failure** — not silently omitted. A seeded citation pointing at a real,
+  reachable page not mentioning the asserted package is rejected. · **Check:** coding probe set plus
+  the unrelated-but-reachable seeded negative. · *Fails if* code generation is blocked pending
+  citations, **or** a dependency or prose API claim ships uncited, **or** the unrelated-but-reachable
+  citation passes, **or** a non-existent package is dropped silently rather than refused — which is
+  D4's ban on silent stripping, asserted here because round 2 showed a passing implementation could
+  violate it.
+
+- **AC-6 — No hedged guesses, and honesty is not a special case of empty retrieval.** On held-out
+  probes covering **both** empty retrieval **and** non-empty-but-insufficient retrieval, the response
+  is non-empty, names what was searched, and introduces no proper noun, figure or date beyond the
+  user's own message and the retrieved sources. · **Check:** both retrieval conditions across the
+  held-out set. · *Fails if* the response is empty or generic filler, **or** omits what was searched,
+  **or** offers a best guess, hedged suggestion or named candidate, **or** the honest behaviour appears
+  only under empty retrieval — which is how "template the empty case and leave everything else
+  unverified" is caught.
+
+- **AC-7 — Span extraction is good enough to carry the contract, and is known to be.** Extraction
+  recall and precision are measured against a labelled held-out corpus and meet stated bars, with
+  recall reported **per class** including factual claims carrying no named entity. · **Check:**
+  labelled-corpus scoring, reported per class. · *Fails if* either metric is below bar, **or** any
+  class is unreported — since the contract's strength is bounded by recall, an unmeasured extractor
+  makes every other criterion unfalsifiable.
+
+- **AC-8 — Verification does not manufacture refusals.** The false-rejection rate — legitimate,
+  genuinely-supported assertions forced onto the D4 path — is at or below a stated bar over a
+  held-out set that deliberately includes the D3 normalization variance classes (digit grouping,
+  decimal precision, units, registered aliases, case and Unicode). Containment-unverifiable outcomes
+  are distinguished in telemetry from true no-source outcomes. · **Check:** variance-class probe set;
+  compare system outcome against known-supported ground truth. · *Fails if* the rate exceeds bar,
+  **or** the two outcome kinds are conflated — which would let a wave of false refusals read as
+  honest not-knowing.
 
 ## References
 
@@ -522,7 +628,22 @@ supplied the central move (verified citations in place of self-assessed confiden
 boundary that makes it enforceable (the model is not a knowledge source outside coding), and
 accepted the tier-invariant contract with enforcement keyed on measured compliance. Revised after
 Codex review round 1: the D3/D5 verification contradiction resolved (verification is invariant;
-pre-generation forcing is what varies), D5's bootstrap closed (unmeasured ≡ heavy, with an
-asymmetric promotion/demotion rule), D1's boundary made span-level and syntactic, a third inline
-containment check added as D3(c), and every acceptance criterion given a positive arm so that a
-degenerate implementation fails rather than passes.
+pre-generation forcing is what varies), D5's bootstrap closed (unmeasured ≡ heavy), a third inline
+containment check added as D3(c), and every acceptance criterion given a positive arm.
+
+Codex review round 2, which materially changed the design rather than tightening it. **D1's claim
+of syntactic determinism did not hold** — the enumerated assertion classes required semantic
+judgement and, worse, under-covered: a factual claim carrying no named entity escaped the contract
+entirely. D1 was inverted to **default-deny with a finite exempt list**, and span classification is
+now an explicit measured component (AC-7) rather than an assumed-deterministic rule. The precedence
+rule was scoped so it no longer blocks legitimate code generation, splitting *use* of a symbol from
+*assertion* about it, and narrowing the in-code obligation to dependency declarations. **The D5
+compliance metric was confounded by its own enforcement level** — heavy enforcement preloads
+sources, so a model that complies only when spoon-fed would have oscillated between tiers forever;
+the metric now counts only non-pre-forced turns, with probation sampling to avoid deadlock, a
+hysteresis band, cooldown, and window staleness to stop compliance being banked. D3(c) gained a
+normalization contract with a measured false-rejection bound (AC-8), citation-to-span binding was
+made explicit by output format, the D2 reachability exemption was resolved as a vacuous pass, and
+D4's terminal refusal was shown compliant by provenance rather than exemption. All acceptance
+criteria moved to **held-out probe sets with coverage and rate bars**, because round 2 demonstrated
+that any criterion naming its own probe can be satisfied by special-casing that probe.

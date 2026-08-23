@@ -27,7 +27,10 @@
 		reverse_proxy seshat-pwa:3000
 	}
 	log {
-		output stdout
+		output file /var/log/caddy/access.log {
+			mode 644
+			roll_uncompressed
+		}
 		format json
 	}
 	handle_errors {
@@ -79,7 +82,10 @@ localhost {
 		reverse_proxy neo4j:7474
 	}
 	log {
-		output stdout
+		output file /var/log/caddy/access.log {
+			mode 644
+			roll_uncompressed
+		}
 		format json
 	}
 }
@@ -97,7 +103,10 @@ http://{$ES_HOST:es.example.com}:80 {
 	}
 	respond "Forbidden" 403
 	log {
-		output stdout
+		output file /var/log/caddy/access.log {
+			mode 644
+			roll_uncompressed
+		}
 		format json
 	}
 }
@@ -128,7 +137,10 @@ http://{$OTLP_HOST:otlp.example.com}:80 {
 	}
 	respond "Forbidden" 403
 	log {
-		output stdout
+		output file /var/log/caddy/access.log {
+			mode 644
+			roll_uncompressed
+		}
 		format filter {
 			request>headers>Cf-Access-Jwt-Assertion delete
 			request>headers>Cf-Access-Client-Id delete
@@ -153,7 +165,10 @@ http://{$OTLP_HOST:otlp.example.com}:80 {
 		}
 	}
 	log {
-		output stdout
+		output file /var/log/caddy/access.log {
+			mode 644
+			roll_uncompressed
+		}
 		format json
 	}
 	handle_errors {
@@ -231,7 +246,10 @@ http://{$OTLP_HOST:otlp.example.com}:80 {
 	}
 	respond "Forbidden" 403
 	log egress_slm {
-		output stdout
+		output file /var/log/caddy/access.log {
+			mode 644
+			roll_uncompressed
+		}
 		format json
 	}
 }
@@ -261,7 +279,10 @@ http://{$OTLP_HOST:otlp.example.com}:80 {
 	}
 	respond "Forbidden" 403
 	log egress_artifacts {
-		output stdout
+		output file /var/log/caddy/access.log {
+			mode 644
+			roll_uncompressed
+		}
 		format json
 	}
 }

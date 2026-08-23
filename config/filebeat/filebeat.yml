@@ -1,13 +1,16 @@
-# Filebeat config for the caddy-access sidecar (FRE-1146 / ADR-0132 D3).
+# Filebeat config for the caddy-access sidecar (FRE-1146 / ADR-0132 D3, fixed-path
+# mechanism FRE-1243).
 #
-# Ships the cloud-sim-caddy container's Docker json-file access logs into
-# caddy-access-*. No Docker autodiscover / no /var/run/docker.sock mount: the
-# caddy container's ID (needed to locate its log file, since Docker assigns
-# it dynamically) is resolved by resolve-caddy-container.sh at startup by
-# reading config.v2.json under the read-only /var/lib/docker/containers mount
-# — filesystem access only, no Docker API surface. See the entrypoint script
-# and Dockerfile.filebeat for that resolution step; ${CADDY_CONTAINER_ID} is
-# exported by it before Filebeat starts.
+# Ships Caddy's access log into caddy-access-*. Caddy writes its own JSON
+# access log directly to a fixed path (/var/log/caddy/access.log) in a Docker
+# named volume shared with this container (see docker-compose.cloud.yml and
+# config/cloud-sim/Caddyfile's `log { output file ... }` blocks) — there is no
+# container-ID resolution step and no /var/lib/docker/containers mount:
+# recreating Caddy never changes the path Filebeat tails, so no companion
+# Filebeat action is needed on a Caddy-only recreate (FRE-1243). The second
+# `paths` glob picks up Caddy's rolled-backup files (`roll_uncompressed` in
+# the Caddyfile keeps them plain-text-readable) in case Filebeat was down
+# across a rotation and would otherwise never see that segment.
 #
 # The index template + ILM policy (caddy-access-*) are owned by
 # scripts/setup-elasticsearch.sh (ADR-0128's single sanctioned mapping path)
@@ -17,22 +20,31 @@ filebeat.inputs:
   - type: filestream
     id: caddy-access
     paths:
-      - /var/lib/docker/containers/${CADDY_CONTAINER_ID}/*.log
-    parsers:
-      - container:
-          stream: stdout
+      - /var/log/caddy/access.log
+      - /var/log/caddy/access-*.log
 
 processors:
-  # Caddy's container-parser message is a raw JSON string; decode it under
-  # caddy.* so it doesn't collide with Filebeat's own log.*/container.* fields.
+  # Caddy's JSON access-log line is decoded under caddy.* so it doesn't
+  # collide with Filebeat's own log.*/agent.* fields.
   - decode_json_fields:
       fields: ["message"]
       target: "caddy"
       overwrite_keys: true
       add_error_key: true
+  # A plain filestream input has no notion of the log's own event time —
+  # @timestamp would otherwise default to Filebeat's harvest time, which
+  # only matches the real event time for live tailing and silently drifts
+  # (and can misfile into the wrong monthly index, since the output index
+  # name is date-based) for any backlog Filebeat catches up on after being
+  # down. Caddy's own recorded time (`ts`, Unix seconds) is the source of
+  # truth.
+  - timestamp:
+      field: caddy.ts
+      layouts:
+        - UNIX
   # Defensive second filter: keep only decoded records that are actually an
   # access-log entry (named or default Caddy access logger), in case a
-  # non-access-log JSON line ever reaches stdout.
+  # non-access-log JSON line ever reaches the file.
   - drop_event:
       when:
         not:

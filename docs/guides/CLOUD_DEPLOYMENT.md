@@ -286,6 +286,27 @@ docker compose -f docker-compose.cloud.yml restart caddy
 
 Do **not** use `caddy reload` after a git pull — it reads the stale inode.
 
+### Access-log shipping (Filebeat)
+
+Caddy writes its JSON access log to a fixed path (`/var/log/caddy/access.log`), in a Docker
+named volume (`caddy_logs_cloud`) shared read-only with the `filebeat` sidecar, which ships it to
+`caddy-access-*` in Elasticsearch (ADR-0132 D3). Recreating Caddy — a `SERVICE=caddy` rebuild, a
+`--force-recreate`, anything — never requires any companion Filebeat action; the path Filebeat
+tails never changes (FRE-1243). For debugging, `docker exec cloud-sim-caddy tail -f
+/var/log/caddy/access.log` replaces `docker logs cloud-sim-caddy` for access-log visibility
+specifically — Caddy's other runtime logs (startup, TLS, errors) are still on stdout, only the
+access log moved.
+
+**One-time migration note (only relevant to the deploy that first lands FRE-1243):** a plain
+`make deploy` (pull + restart, no image rebuild) recreates `filebeat`'s container because its
+compose-level volume list changed, but reuses whatever `cloud-sim-filebeat` image is already
+built — if that's the pre-FRE-1243 image, its entrypoint still expects the now-removed
+`/var/lib/docker/containers` mount and will crash-loop. That first deploy must rebuild `filebeat`
+before recreating it: `docker compose -f docker-compose.cloud.yml build filebeat && docker
+compose -f docker-compose.cloud.yml up -d --force-recreate caddy filebeat` (or `make
+build-full`) — not a plain `make deploy`. Every deploy after that first one is back to the normal
+no-coordination-needed behavior described above.
+
 ---
 
 ## 7. Cloudflare Tunnel Access

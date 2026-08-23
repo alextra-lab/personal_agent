@@ -1,0 +1,22 @@
+{
+  "caddy_leaf_fields": [
+    "bytes_read",
+    "duration",
+    "level",
+    "logger",
+    "msg",
+    "request.client_ip",
+    "request.headers",
+    "request.host",
+    "request.method",
+    "request.proto",
+    "request.remote_ip",
+    "request.remote_port",
+    "request.uri",
+    "resp_headers",
+    "size",
+    "status",
+    "ts",
+    "user_id"
+  ]
+}

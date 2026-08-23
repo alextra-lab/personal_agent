@@ -1,0 +1,15 @@
+# FRE-1243 — minimal harness Caddyfile exercising the exact `log` directive shape
+# config/cloud-sim/Caddyfile uses post-fix: a fixed file path, not stdout.
+{
+	admin off
+}
+:80 {
+	respond "ok" 200
+	log {
+		output file /var/log/caddy/access.log {
+			mode 644
+			roll_uncompressed
+		}
+		format json
+	}
+}

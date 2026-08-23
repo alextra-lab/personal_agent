@@ -1,0 +1,52 @@
+# FRE-1243 — throwaway, isolated harness proving the post-fix mechanism (AC-1, AC-3):
+# recreating Caddy alone must not require any Filebeat action, and the shipped `caddy.*`
+# evidence shape must match the pre-fix baseline. Uses the REAL, unmodified
+# Dockerfile.filebeat / config/filebeat/filebeat.yml so this proves the shipped artifact,
+# not a reimplementation. Never touches the live cloud-sim-* stack: distinct container
+# names, distinct host ports, no `cloud-sim` network name, brought up under its own
+# compose project name (`-p fre1243-harness`).
+#
+# Bring up:
+#   docker compose -p fre1243-harness \
+#     -f tests/scripts/fixtures/fre1243_harness/docker-compose.harness.yml up -d --build
+# Tear down:
+#   docker compose -p fre1243-harness \
+#     -f tests/scripts/fixtures/fre1243_harness/docker-compose.harness.yml down -v
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: fre1243-harness-caddy
+    volumes:
+      - ./Caddyfile.harness:/etc/caddy/Caddyfile:ro
+      - fre1243_harness_caddy_logs:/var/log/caddy
+    ports:
+      - "18080:80"
+
+  filebeat:
+    build:
+      context: ../../../..
+      dockerfile: Dockerfile.filebeat
+    container_name: fre1243-harness-filebeat
+    volumes:
+      - fre1243_harness_caddy_logs:/var/log/caddy:ro
+      - fre1243_harness_registry:/usr/share/filebeat/data
+    depends_on:
+      - caddy
+      - elasticsearch
+
+  # Service name MUST be `elasticsearch` — hardcoded in filebeat.yml's
+  # output.elasticsearch.hosts.
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    container_name: fre1243-harness-es
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms256m -Xmx256m"
+    ports:
+      - "19200:9200"
+
+volumes:
+  fre1243_harness_caddy_logs:
+  fre1243_harness_registry:

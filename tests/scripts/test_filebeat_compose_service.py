@@ -1,10 +1,12 @@
 # ruff: noqa: D103
-"""FRE-1146 / ADR-0132 D3 — the filebeat compose service.
+"""FRE-1146 / ADR-0132 D3 / FRE-1243 — the filebeat compose service.
 
 Renders the actual docker-compose.cloud.yml through `docker compose config` (not just parses
 the source), matching test_gateway_depends_on.py's pattern, so the assertion matches what
 `docker compose up` reads at runtime. Guards the codex plan-review requirement that no
-/var/run/docker.sock mount ever reappears on this service.
+/var/run/docker.sock mount ever reappears on this service, and (FRE-1243) that the old
+per-recreate container-ID resolution coupling — the /var/lib/docker/containers mount — never
+reappears either.
 """
 
 from __future__ import annotations
@@ -78,12 +80,29 @@ class TestFilebeatComposeService:
         assert registry_mounts[0]["target"] == "/usr/share/filebeat/data"
         assert "filebeat_registry_cloud" in compose["volumes"]
 
-    def test_containers_dir_mounted_read_only(self) -> None:
+    def test_caddy_log_volume_shared_fixed_path(self) -> None:
+        """FRE-1243: caddy writes /var/log/caddy (rw); filebeat only tails it (ro)."""
+        compose = _render_compose()
+        caddy_volumes = compose["services"]["caddy"]["volumes"]
+        filebeat_volumes = compose["services"]["filebeat"]["volumes"]
+
+        caddy_mounts = [v for v in caddy_volumes if v.get("source") == "caddy_logs_cloud"]
+        assert len(caddy_mounts) == 1
+        assert caddy_mounts[0]["target"] == "/var/log/caddy"
+        assert not caddy_mounts[0].get("read_only")
+
+        filebeat_mounts = [v for v in filebeat_volumes if v.get("source") == "caddy_logs_cloud"]
+        assert len(filebeat_mounts) == 1
+        assert filebeat_mounts[0]["target"] == "/var/log/caddy"
+        assert filebeat_mounts[0]["read_only"] is True
+
+        assert "caddy_logs_cloud" in compose["volumes"]
+
+    def test_containers_dir_no_longer_mounted(self) -> None:
+        """FRE-1243: the old per-recreate container-ID resolution coupling is gone for good."""
         compose = _render_compose()
         volumes = compose["services"]["filebeat"]["volumes"]
-        containers_mounts = [v for v in volumes if v.get("source") == "/var/lib/docker/containers"]
-        assert len(containers_mounts) == 1
-        assert containers_mounts[0]["read_only"] is True
+        assert not any(v.get("source") == "/var/lib/docker/containers" for v in volumes)
 
     def test_no_docker_socket_mount_anywhere(self) -> None:
         """The blocking finding from the first codex plan-review round: no docker.sock, ever."""

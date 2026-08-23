@@ -898,6 +898,259 @@ def check_budget_role_coverage(root: Path) -> list[Finding]:
     ]
 
 
+# ── Mandatory reasoning declaration (FRE-1007, ADR-0121 Layer 2/3) ───────────
+
+#: Deployment fields that carry a reasoning declaration on the LOCAL dispatch
+#: path. LocalLLMClient sends these through ``extra_body`` as chat-template
+#: arguments (client.py -> adapters.py); ``reasoning_effort`` is never sent there.
+_LOCAL_REASONING_FIELDS: tuple[str, ...] = ("disable_thinking", "thinking_budget_tokens")
+
+#: Deployment fields forwarded to litellm alongside the effort, which can make an
+#: otherwise-valid effort illegal. Mirrors
+#: :data:`personal_agent.llm_client.reasoning.WIRE_COMPANION_FIELDS`, restated here
+#: rather than imported so reading the catalog never pulls the litellm SDK onto the
+#: settings-import path. Kept to one name so the two cannot drift unnoticed.
+_WIRE_COMPANION_FIELDS: tuple[str, ...] = ("temperature",)
+
+
+def reasoning_wire_shape(
+    model_id: str,
+    provider: str,
+    companion_params: Mapping[str, object],
+    effort: str | None,
+) -> tuple[JSONDict, str | None]:
+    """Ask litellm what a declared reasoning effort becomes on the wire.
+
+    Thin re-export of
+    :func:`personal_agent.llm_client.reasoning.reasoning_wire_shape`, imported
+    lazily. The implementation lives under ``llm_client/`` because it touches the
+    litellm SDK, which the topology guard confines to that package
+    (``tests/observability/topology/test_ci_teeth.py``) — a config check is not a
+    good reason to make an exception to that rule. Lazy for the second reason
+    too: ``config_guard`` is imported at settings-import time and must not pull
+    litellm eagerly (mirrors :func:`check_budget_role_coverage`'s lazy
+    ``cost_gate`` import).
+
+    Args:
+        model_id: The provider's own model id (e.g. ``"claude-sonnet-5"``).
+        provider: The litellm provider name (e.g. ``"anthropic"``).
+        companion_params: Other declared parameters forwarded on the same call,
+            which can make an otherwise-valid effort illegal.
+        effort: The declared effort, or ``None`` to probe the undeclared baseline.
+
+    Returns:
+        ``(transformed_params, error_message)`` — see the implementation's own
+        docstring for the contract.
+    """
+    from personal_agent.llm_client.reasoning import (  # noqa: PLC0415 — SDK stays behind the seam
+        reasoning_wire_shape as _probe,
+    )
+
+    return _probe(model_id, provider, companion_params, effort)
+
+
+def _effective_reasoning(deployment: JSONDict, binding: JSONDict) -> JSONDict:
+    """Merge a Layer-3 binding's per-use overrides onto its deployment.
+
+    Mirrors :func:`~personal_agent.config.model_loader.resolve_role_target`'s rule
+    — a binding value overrides only when it is not ``None`` — so the guard checks
+    the same effective configuration the runtime will build.
+    """
+    merged: JSONDict = dict(deployment)
+    for field in (*_LOCAL_REASONING_FIELDS, "reasoning_effort", *_WIRE_COMPANION_FIELDS):
+        value = binding.get(field)
+        if value is not None:
+            merged[field] = value
+    return merged
+
+
+def _check_one_reasoning_declaration(
+    role: str, deployment_key: str, effective: JSONDict, provider_def: JSONDict
+) -> list[Finding]:
+    """Validate one role-bound deployment's effective reasoning declaration."""
+    findings: list[Finding] = []
+    where = f"role '{role}' -> deployment '{deployment_key}'"
+    placement = provider_def.get("placement")
+    effort = effective.get("reasoning_effort")
+    declares_local = effective.get("disable_thinking") is True or (
+        effective.get("thinking_budget_tokens") is not None
+    )
+
+    if placement == "local":
+        if effort is not None:
+            findings.append(
+                Finding(
+                    "reasoning_vocabulary_mismatch",
+                    "safety",
+                    f"{where} declares reasoning_effort={effort!r}, which the local dispatch "
+                    "path never sends (LocalLLMClient forwards chat-template arguments via "
+                    "extra_body). It would read as configured while doing nothing — declare "
+                    f"one of {list(_LOCAL_REASONING_FIELDS)} instead (FRE-1007).",
+                )
+            )
+        if not declares_local:
+            findings.append(
+                Finding(
+                    "reasoning_declaration_missing",
+                    "safety",
+                    f"{where} declares no reasoning configuration. A local producer must "
+                    f"declare one of {list(_LOCAL_REASONING_FIELDS)} — running at the "
+                    "backend's default by omission is a convention, not a choice (FRE-1007).",
+                )
+            )
+        return findings
+
+    # ── Cloud dispatch (LiteLLMClient) ───────────────────────────────────────
+    model_id = str(effective.get("id") or deployment_key)
+    litellm_provider = str(effective.get("provider") or "")
+    companions = {
+        field: effective[field]
+        for field in _WIRE_COMPANION_FIELDS
+        if effective.get(field) is not None
+    }
+
+    if declares_local and _uses_tools(effective):
+        findings.append(
+            Finding(
+                "thinking_disable_on_tool_model",
+                "safety",
+                f"{where} disables thinking on a tool-using deployment dispatched through "
+                "litellm. That configuration can emit a tool call as visible text — the turn "
+                "completes, the call never runs, and no error is raised. The supported cost "
+                "lever is a lower reasoning_effort with thinking left on (FRE-1007).",
+            )
+        )
+
+    if effort is None:
+        return [
+            *findings,
+            Finding(
+                "reasoning_declaration_missing",
+                "safety",
+                f"{where} declares no reasoning_effort, so the provider's own default "
+                "applies at call time — chosen by omission rather than by anyone. Declare "
+                "one explicitly; 'none' is the deliberate no-reasoning choice (FRE-1007).",
+            ),
+        ]
+
+    from personal_agent.llm_client.reasoning import (  # noqa: PLC0415 — SDK stays behind the seam
+        provider_reasoning_support,
+    )
+
+    if provider_reasoning_support(model_id, litellm_provider) is None:
+        # litellm holds no capability record for this model, so its transformation
+        # cannot be trusted either way — it reports every reasoning parameter
+        # unsupported, `thinking` included. Verifying is CI's job and CI has the
+        # map; concluding anything here would be inventing a fact. Deliberately
+        # NOT a finding — see provider_reasoning_support's docstring for the boot
+        # failure that reading it as "forbidden" caused.
+        #
+        # A binding to a provider that genuinely carries no lever is still closed,
+        # without a third check: with no declaration it fails
+        # `reasoning_declaration_missing` above (safety), and with one it fails
+        # `reasoning_declaration_rejected` below in CI.
+        return findings
+
+    # ── Verification (policy class, deliberately) ────────────────────────────
+    # These two ask litellm what the declared value BECOMES, which depends on a
+    # model-capability map fetched from GitHub at import. That makes them exactly
+    # right for CI/pre-commit, where the map is present and a wrong declaration is
+    # caught before deploy — and exactly wrong for the boot path, where a network
+    # condition would otherwise take the application down over a config file that
+    # never changed. ADR-0099 D4's tiering already draws this line: safety blocks
+    # boot, policy blocks CI.
+    shape, error = reasoning_wire_shape(model_id, litellm_provider, companions, str(effort))
+    if error is not None:
+        findings.append(
+            Finding(
+                "reasoning_declaration_rejected",
+                "policy",
+                f"{where} declares reasoning_effort={effort!r}, which litellm REJECTS for "
+                f"this model alongside its declared {sorted(companions)}: {error[:200]}",
+            )
+        )
+    elif not shape:
+        findings.append(
+            Finding(
+                "reasoning_declaration_ineffective",
+                "policy",
+                f"{where} declares reasoning_effort={effort!r}, but litellm drops it for "
+                "this model — the request sends nothing and the provider's default still "
+                "applies. A declaration that never reaches the wire is the same omission "
+                "wearing a value (FRE-1007).",
+            )
+        )
+    return findings
+
+
+def _uses_tools(deployment: JSONDict) -> bool:
+    """Whether a deployment presents tools to the model (ADR-0121 / FRE-1007)."""
+    strategy = deployment.get("tool_calling_strategy")
+    if isinstance(strategy, str):
+        return strategy != "disabled"
+    return deployment.get("supports_function_calling", True) is True
+
+
+def check_reasoning_declaration(root: Path) -> list[Finding]:
+    """FRE-1007 — every role-bound llm deployment declares its reasoning depth, effectively.
+
+    The ticket's rule: a scheduled or background model call with no declared
+    reasoning configuration must refuse to start — not warn, not default. The
+    subtlety this check exists for is that *declaring* is not enough. Two real
+    values pass review on sight and still leave the producer running at the
+    provider's default:
+
+    * an effort litellm **drops** for that model (``'none'`` on Anthropic), and
+    * an effort litellm **rejects** for that model given the deployment's other
+      declared parameters (any effort beside ``gpt-5.4-mini``'s pinned
+      ``temperature: 0.0``, which would be an outage rather than a cost change).
+
+    So the check runs the declared value through litellm's own transformation for
+    that exact model and requires a non-empty, non-raising result. Non-``llm``
+    deployments (embedding, reranker) have no reasoning concept and are skipped by
+    kind; deployments no role binds are out of scope, since this is about
+    producers rather than the catalog at large.
+
+    Args:
+        root: Repository (or fixture) root holding ``config/``.
+
+    Returns:
+        One **safety** finding per violation — this fails CI and refuses boot,
+        rather than warning. Empty when every bound producer has declared.
+    """
+    catalog = _load_yaml(root / "config" / "models.yaml")
+    matrix = load_matrix(root)
+    models = catalog.get("models")
+    providers = catalog.get("providers")
+    bindings = matrix.get("bindings")
+    if not isinstance(models, dict) or not isinstance(bindings, dict):
+        return []
+    provider_rows: JSONDict = providers if isinstance(providers, dict) else {}
+
+    findings: list[Finding] = []
+    for role, binding in sorted(bindings.items()):
+        if not isinstance(binding, dict):
+            continue
+        deployment_key = binding.get("deployment")
+        if not isinstance(deployment_key, str):
+            continue
+        deployment = models.get(deployment_key)
+        if not isinstance(deployment, dict):
+            # A dangling binding is check_dangling_model_references' finding.
+            continue
+        if deployment.get("kind", "llm") != "llm":
+            continue
+        provider_def = provider_rows.get(str(deployment.get("provider") or ""))
+        if not isinstance(provider_def, dict):
+            continue
+        findings.extend(
+            _check_one_reasoning_declaration(
+                role, deployment_key, _effective_reasoning(deployment, binding), provider_def
+            )
+        )
+    return findings
+
+
 def run_all_checks(root: Path) -> list[Finding]:
     """Run every check against *root* and return all findings."""
     matrix = load_matrix(root)
@@ -916,4 +1169,5 @@ def run_all_checks(root: Path) -> list[Finding]:
     findings.extend(check_dev_test_profile_isolation(root))
     findings.extend(check_embedding_fallback_identity())
     findings.extend(check_budget_role_coverage(root))
+    findings.extend(check_reasoning_declaration(root))
     return findings

@@ -1,0 +1,7 @@
+# Fixture (FRE-1007): session_summary binds a producer that disables thinking on a tool-using model.
+roles:
+  session_summary: { all: claude_sonnet }
+required_secrets:
+  local: []
+bindings:
+  session_summary: { deployment: claude_sonnet }

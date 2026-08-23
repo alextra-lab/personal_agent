@@ -1,0 +1,14 @@
+# Fixture (FRE-1007): a role-bound cloud producer declaring no reasoning depth.
+# The provider default applies at call time, chosen by omission.
+providers:
+  anthropic: { auth_env: anthropic_api_key, placement: cloud, max_concurrency: 50 }
+  openai:    { auth_env: openai_api_key,    placement: cloud, max_concurrency: 50 }
+  ovhcloud:  { auth_env: managed_embedding_token, placement: cloud, max_concurrency: 50 }
+  slm_local: { auth: none, placement: local, max_concurrency: 2 }
+models:
+  claude_sonnet:
+    id: "claude-sonnet-5"
+    provider: "anthropic"
+    context_length: 200000
+    max_concurrency: 10
+    default_timeout: 180

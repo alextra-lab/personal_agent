@@ -81,6 +81,12 @@ def _build_client(
             provider=model_def.provider or "anthropic",
             max_tokens=model_def.max_tokens or 8192,
             budget_role=budget_role,
+            # FRE-1007: both doors into this function pass an EFFECTIVE definition
+            # — role-resolved (binding overrides merged) or key-resolved — so the
+            # declared reasoning depth travels with the client either way. This is
+            # the seam that makes the declaration effective for producers that
+            # never named an effort at their call site.
+            reasoning_effort=model_def.reasoning_effort,
         )
 
     from personal_agent.llm_client.client import LocalLLMClient

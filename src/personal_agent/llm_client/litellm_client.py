@@ -286,6 +286,7 @@ class LiteLLMClient:
         max_tokens: int = 8192,
         *,
         budget_role: str,
+        reasoning_effort: str | None = None,
     ) -> None:
         """Initialize LiteLLMClient with model and provider configuration.
 
@@ -293,6 +294,16 @@ class LiteLLMClient:
             model_id: Provider model identifier (e.g., ``claude-sonnet-4-6``).
             provider: Provider name for LiteLLM dispatch.
             max_tokens: Default maximum output tokens.
+            reasoning_effort: The deployment's **declared** reasoning depth
+                (FRE-1007), applied to every call this client makes unless a
+                call site overrides it. Carried on the client rather than left
+                to call sites because the producers that most needed it passed
+                nothing: the digest and insights both dispatch through
+                ``get_llm_client_for_key`` and never named an effort, so the
+                declaration sat in ``config/models.yaml`` and never reached the
+                request. ``None`` means the deployment declared none — which
+                ``config_guard.check_reasoning_declaration`` refuses for any
+                role-bound deployment.
             budget_role: Cost-gate role this client reserves against
                 (``main_inference``, ``entity_extraction``, etc.). **Required
                 and keyword-only** — it has no default by design (FRE-989
@@ -310,6 +321,7 @@ class LiteLLMClient:
         self.provider = provider
         self.max_tokens = max_tokens
         self.budget_role = budget_role
+        self.reasoning_effort = reasoning_effort
         # LiteLLM model string: "provider/model_id"
         self._litellm_model = f"{provider}/{model_id}"
 
@@ -465,13 +477,40 @@ class LiteLLMClient:
             litellm_kwargs["response_format"] = response_format
         if temperature is not None:
             litellm_kwargs["temperature"] = temperature
-        if reasoning_effort is not None:
-            # FRE-766: forward the discrete effort hint (low/medium/high/xhigh) to the
-            # provider. Previously declared but never wired, so it was silently dropped;
-            # litellm routes it to the reasoning models that accept it. drop_params is
-            # left off so a model that rejects the value surfaces an error (the eval
-            # smoke gate classifies it) rather than masking it.
-            litellm_kwargs["reasoning_effort"] = reasoning_effort
+        # FRE-766 wired the per-call hint; FRE-1007 added the deployment's declared
+        # value beneath it, because the producers that most needed one passed nothing.
+        # Per-call still wins — an explicit argument is a deliberate override of the
+        # declaration, not a competitor to it. drop_params is left off so a model that
+        # rejects the value surfaces an error rather than masking it; the config guard
+        # is what keeps a rejected combination from ever being declared.
+        effective_reasoning_effort = (
+            reasoning_effort if reasoning_effort is not None else self.reasoning_effort
+        )
+        if effective_reasoning_effort is not None:
+            from personal_agent.llm_client.reasoning import provider_reasoning_support
+
+            if provider_reasoning_support(self.model_id, self.provider) is None:
+                # litellm holds no capability record for this model, so it would
+                # reject EVERY reasoning parameter — including `thinking`. That is
+                # an infrastructure condition, not a configuration error: the map
+                # is fetched from GitHub at import, and a host whose egress reaches
+                # the provider but not GitHub lands here with a config file that
+                # was verified in CI and never changed. Dropping every background
+                # producer's call over it is disproportionate, so the declared
+                # depth is omitted and the omission is made loud instead of silent
+                # — which is the property FRE-1007 actually cares about.
+                log.error(
+                    "reasoning_declaration_undeliverable",
+                    model=self._litellm_model,
+                    declared_reasoning_effort=effective_reasoning_effort,
+                    reason="litellm_has_no_capability_record_for_model",
+                    remedy="ensure the litellm model cost map is reachable at import",
+                    role=role.value,
+                    trace_id=trace_id,
+                    component="litellm_client",
+                )
+            else:
+                litellm_kwargs["reasoning_effort"] = effective_reasoning_effort
         if timeout_s is not None:
             litellm_kwargs["timeout"] = timeout_s
         if max_retries is not None:

@@ -1,0 +1,7 @@
+# Fixture (FRE-1007): a local binding declaring the cloud vocabulary.
+roles:
+  primary: { all: qwen3.6-35b-thinking }
+required_secrets:
+  local: []
+bindings:
+  primary: { deployment: qwen3.6-35b-thinking }

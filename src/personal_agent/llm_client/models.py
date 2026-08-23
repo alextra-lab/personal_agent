@@ -156,7 +156,7 @@ class RoleBinding(BaseModel):
     max_tokens: int | None = Field(None, ge=1, description="Per-use output cap override")
     temperature: float | None = Field(None, ge=0.0, le=2.0, description="Per-use temperature")
     disable_thinking: bool | None = Field(None, description="Per-use thinking disable")
-    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = Field(
+    reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = Field(
         None, description="Per-use reasoning-effort hint"
     )
     default_timeout: int | None = Field(None, ge=1, description="Per-use timeout override")
@@ -293,13 +293,21 @@ class ModelDefinition(BaseModel):
         le=2.0,
         description="Default sampling temperature for this model (None uses backend default).",
     )
-    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = Field(
+    reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = Field(
         default=None,
         description=(
-            "FRE-766: discrete reasoning-effort hint for reasoning models (GPT-5 family). "
-            "One of low/medium/high/xhigh; None uses the provider default (medium for GPT-5). "
-            "Forwarded to litellm.acompletion by LiteLLMClient. Claude uses adaptive thinking, "
-            "not this hint — leave None for Anthropic models."
+            "Declared reasoning depth for this deployment (FRE-766; made mandatory for "
+            "role-bound llm deployments by FRE-1007). ``None`` is not 'the default' — it "
+            "means nobody chose, and the provider's own default applies at call time. "
+            "``'none'`` (FRE-1007) is the DELIBERATE no-reasoning choice, and it is a real "
+            "wire value only where litellm forwards it: on OpenAI it sends "
+            "reasoning_effort='none', on Anthropic litellm drops it, so there it declares "
+            "nothing and config_guard rejects it. What each value becomes on the wire is "
+            "per MODEL, not per vendor — claude-sonnet-5 maps effort onto adaptive thinking "
+            "plus output_config, while claude-haiku-4-5 takes litellm's legacy path and "
+            "rewrites max_tokens. config_guard.check_reasoning_declaration verifies the "
+            "declared value against litellm's own transformation rather than assuming a "
+            "vendor's shape."
         ),
     )
     top_p: float | None = Field(

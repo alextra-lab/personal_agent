@@ -1,0 +1,8 @@
+# Fixture (FRE-1007): binding the role is what is forbidden — exempting the
+# deployment instead would reopen the omission this guard closes.
+roles:
+  insights: { all: qwen3.6-27b-ovh }
+required_secrets:
+  local: []
+bindings:
+  insights: { deployment: qwen3.6-27b-ovh }

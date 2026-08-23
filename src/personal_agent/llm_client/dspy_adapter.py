@@ -163,11 +163,23 @@ def configure_dspy_lm(
             component="dspy_adapter",
         )
 
+        # FRE-1007: forward the deployment's declared reasoning depth. DSPy builds
+        # its own litellm call, so without this the declaration reached every cloud
+        # client EXCEPT this one — and this is Captain's Log reflection's *primary*
+        # path (the manual client below is only its fallback), so the producer the
+        # ticket cites as "the one that declares anything" was in fact running
+        # undeclared here. Passed as a plain kwarg; dspy.LM forwards its extra
+        # kwargs to litellm.
+        lm_kwargs: dict[str, Any] = {}
+        if model_def.reasoning_effort is not None:
+            lm_kwargs["reasoning_effort"] = model_def.reasoning_effort
+
         return dspy.LM(
             model=litellm_model,
             api_key=api_key,
             model_type="chat",
             timeout=effective_timeout,
+            **lm_kwargs,
         )
 
     # ── Local model path (existing behaviour) ────────────────────────────────

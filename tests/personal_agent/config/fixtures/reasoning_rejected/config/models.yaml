@@ -1,0 +1,16 @@
+# Fixture (FRE-1007): litellm REJECTS temperature=0.0 together with any effort
+# above 'none' on the gpt-5 family. This is an outage, not a cost change.
+providers:
+  anthropic: { auth_env: anthropic_api_key, placement: cloud, max_concurrency: 50 }
+  openai:    { auth_env: openai_api_key,    placement: cloud, max_concurrency: 50 }
+  ovhcloud:  { auth_env: managed_embedding_token, placement: cloud, max_concurrency: 50 }
+  slm_local: { auth: none, placement: local, max_concurrency: 2 }
+models:
+  gpt-5.4-mini:
+    id: "gpt-5.4-mini"
+    provider: "openai"
+    context_length: 128000
+    max_concurrency: 10
+    default_timeout: 60
+    temperature: 0.0
+    reasoning_effort: medium

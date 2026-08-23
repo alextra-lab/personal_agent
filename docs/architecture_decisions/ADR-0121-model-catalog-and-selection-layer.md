@@ -896,6 +896,95 @@ gate.
 
 ---
 
+## Addendum B — The reasoning declaration is mandatory, and verified per model (FRE-1007)
+
+**Status:** Implemented — 2026-08-23.
+
+Layer 2 has carried `reasoning_effort`, `disable_thinking` and `thinking_budget_tokens` since
+FRE-766, all optional and all defaulting to `None`. That made "this producer runs at a chosen
+reasoning depth" a convention rather than a type: nothing rejected a producer that declared
+nothing, and two of the three background producers declared nothing. `None` is not "the default"
+— it means nobody chose, and the provider's own default applies at call time.
+
+**Decision.** Every `kind: llm` deployment that a role binds to must declare its reasoning depth,
+in the vocabulary its dispatch path can carry. A violation is a **safety** finding: it fails
+CI/pre-commit *and* refuses boot (`settings.enforce_reasoning_declaration`, called from
+`load_app_config()` beside `enforce_required_secrets`). Not a warning, not a default.
+
+**The declaration lives on the deployment, not the binding.** Two producers — the digest
+(`second_brain/session_summary.py`) and insights (`captains_log/feedback.py`) — dispatch through
+`get_llm_client_for_key`, the trusted-key door, which resolves `config.models[key]` and never
+consults a Layer-3 binding. A binding-only declaration would sit in configuration and never reach
+the request. Bindings remain valid as per-use overrides on the role door.
+
+**What is checked is what litellm actually forwards.** The guard does not hold a table of vendor
+rules; it runs the declared value through litellm's own transformation for that exact model,
+together with the deployment's other declared parameters, and requires a non-empty, non-raising
+result. Measured against litellm 1.89.2:
+
+| model (provider) | omitted | `none` | `high` |
+|---|---|---|---|
+| `claude-sonnet-5` (anthropic) | `{}` | `{}` — **dropped** | `thinking:{adaptive}` + `output_config:{effort:high}` |
+| `claude-haiku-4-5` (anthropic) | `{}` | `{}` — **dropped** | `thinking:{enabled,budget:4096}` + **`max_tokens→8192`** |
+| `gpt-5.4-mini` (openai, `temperature: 0.0`) | — | `reasoning_effort:"none"` | **`UnsupportedParamsError`** |
+| `Qwen3.6-27B` (ovhcloud) | `{}` | **`UnsupportedParamsError`** | **`UnsupportedParamsError`** |
+
+Three consequences follow from that table, none of which a hand-written rule would have produced:
+
+1. **The split is per *model*, not per vendor.** `claude-sonnet-5` advertises
+   `supports_output_config` and maps effort onto adaptive thinking; `claude-haiku-4-5` advertises
+   only `supports_reasoning`, so litellm takes its legacy path — converting effort into an explicit
+   thinking budget *and rewriting `max_tokens`*. One vendor, two vocabularies.
+2. **`none` is a declaration on OpenAI and a silence on Anthropic.** litellm forwards it as a real
+   parameter for the former and drops it for the latter, so on Anthropic it would satisfy the rule
+   while sending nothing. The guard therefore rejects `none` there and accepts it on OpenAI —
+   a distinction only the transformation knows.
+3. **A declaration can be an outage rather than a cost change.** `gpt-5.4-mini` pins
+   `temperature: 0.0` (FRE-758), and litellm rejects that alongside any effort above `none`.
+
+**Vocabulary by dispatch path.** Local (`LocalLLMClient` → `extra_body` chat-template arguments):
+`disable_thinking` or `thinking_budget_tokens` required, `reasoning_effort` rejected — it is never
+sent there. Cloud (`LiteLLMClient` → litellm): `reasoning_effort` required, the local fields
+rejected.
+
+**Severity is split, and the split is load-bearing.** litellm's per-model capability flags come
+from a model-cost map **fetched from GitHub at import**, with a bundled fallback that does not list
+newer models — it has no entry for `claude-sonnet-5` today, and in that state litellm reports every
+reasoning parameter unsupported, `thinking` included. So:
+
+* *Is a declaration present, in the right vocabulary for the dispatch path?* — locally decidable
+  from the catalog alone. **Safety**: fails CI and refuses boot.
+* *Does the declared value survive litellm's transformation?* — depends on that map. **Policy**:
+  fails CI/pre-commit, where the map is present and a wrong declaration is caught before deploy,
+  and never refuses a boot.
+
+Making the second class boot-blocking is not hypothetical: it refused to start the application on
+a host whose egress reached Anthropic but not GitHub. The corollary is a rule for the checker
+itself — **"litellm has no record of this model" is not "the provider forbids this"**, and a guard
+that turns *I cannot verify* into *you are wrong* manufactures outages. `provider_reasoning_support`
+returns three values for that reason. A binding to a provider that truly carries no lever stays
+closed without a third check: undeclared it fails the safety check, declared it fails the policy one.
+
+At runtime `LiteLLMClient` applies the same distinction — if litellm holds no capability record for
+the bound model it omits the declared effort and logs `reasoning_declaration_undeliverable` at
+error level, rather than failing every background producer over an infrastructure condition that CI
+already verified against.
+
+**Prohibition.** An effective `disable_thinking: true` on a tool-using deployment dispatched
+through litellm is a safety finding: that configuration can emit a tool call as visible text, with
+the turn completing, the call never running, and no error raised. The local Qwen chat-template flag
+(`qwen3.6-35b-instruct`) is the mechanism this prohibition protects, not an instance of it. The
+supported cost lever is a lower effort with thinking left on.
+
+**Type change.** `reasoning_effort` gains `"none"` on both `ModelDefinition` and `RoleBinding`.
+Without it the deliberate no-reasoning choice was unrepresentable, which forced every declarer
+toward an expensive value — the original defect one level deeper.
+
+**Scope.** The declaration half only. Per-producer roles, per-role counters and per-producer caps
+(the attribution half) remain with ADR-0120, still Proposed.
+
+---
+
 ## References
 
 - ADR-0029 — provider-type concurrency control (the capacity concern re-homed onto providers)

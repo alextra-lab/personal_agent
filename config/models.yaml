@@ -260,6 +260,25 @@ models:
     provider: "anthropic"
     max_tokens: 128000        # provider ceiling; policy clamp is settings.artifact_draft_max_tokens
     context_length: 200000
+    # FRE-1007: MANDATORY for a role-bound llm deployment — config_guard's
+    # check_reasoning_declaration refuses to boot without it. Omission is not
+    # "the default": it means nobody chose, and the provider's own default
+    # applies at call time. Every producer bound here (captains_log,
+    # session_summary, insights, artifact_builder, vision) was inheriting
+    # exactly that.
+    #
+    # `high` is DECLARED, not tuned: it is the value these calls were already
+    # silently receiving, so this states the choice without changing behaviour.
+    # Measured against litellm 1.89.2 -> {"thinking": {"type": "adaptive"},
+    # "output_config": {"effort": "high"}}. Tuning a cheaper depth for the
+    # digest's faithfulness task is FRE-993's, per FRE-1007's RELATED section.
+    #
+    # `none` would NOT be a declaration here: litellm drops it for Anthropic, so
+    # the request would go out bare and the provider default would still apply.
+    # The guard rejects it for that reason. On gpt-5.4-mini below, the same value
+    # IS a real wire parameter — which is why the rule is verified per model
+    # against litellm rather than written once in one vendor's vocabulary.
+    reasoning_effort: high
     min_concurrency: 1
     max_concurrency: 10
     default_timeout: 180
@@ -298,6 +317,24 @@ models:
     # the prod entity extractor (the two catalogs agreed here before FRE-916
     # phase 2 collapsed them into this file).
     temperature: 0.0
+    # FRE-1007: MANDATORY declaration (see claude_sonnet above). `none` is the
+    # DELIBERATE no-reasoning choice, and it is the only value this deployment
+    # can carry — both facts are measured, not assumed:
+    #
+    #  1. Behaviour-preserving. scripts/eval/fre630_extraction_quality/cells.py
+    #     measured 2026-07-03 that gpt-5.4-mini with the hint unset produces ZERO
+    #     reasoning tokens, identical to explicit 'none'. (FRE-1007's own premise
+    #     that the GPT-5 default is 'medium' is wrong; that eval is the evidence.)
+    #  2. Any HIGHER value would be an outage, not a cost change. litellm rejects
+    #     temperature != 1 together with any effort above 'none' on the gpt-5
+    #     family, and `temperature: 0.0` above is the FRE-758 pin. Measured
+    #     against litellm 1.89.2: reasoning_effort='medium' + temperature=0.0 ->
+    #     UnsupportedParamsError. entity_extraction and compressor both bind here.
+    #
+    # 'none' reaching the wire as a real parameter (reasoning_effort: "none") is
+    # what makes this a declaration rather than a silence — the guard verifies
+    # exactly that, and rejects the same value on Anthropic where it is dropped.
+    reasoning_effort: none
     input_cost_per_token: 0.00000075    # $0.75/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
     output_cost_per_token: 0.0000045    # $4.50/MTok
 

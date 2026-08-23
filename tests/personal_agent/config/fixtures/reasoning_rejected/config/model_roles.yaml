@@ -1,0 +1,8 @@
+# Fixture (FRE-1007): entity_extraction binds the deployment whose declared
+# effort the provider refuses alongside its pinned temperature.
+roles:
+  entity_extraction: { all: gpt-5.4-mini }
+required_secrets:
+  local: []
+bindings:
+  entity_extraction: { deployment: gpt-5.4-mini }

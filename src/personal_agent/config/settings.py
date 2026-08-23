@@ -2892,6 +2892,60 @@ def _log_active_substrate_profile(config: "AppConfig") -> None:
 _settings: AppConfig | None = None
 
 
+def enforce_reasoning_declaration(config: "AppConfig", *, root: Path | None = None) -> None:
+    """Refuse to boot a producer whose reasoning depth nobody declared (FRE-1007).
+
+    The ticket's rule, verbatim: "any scheduled or background model call with no
+    declared role, model binding, budget and reasoning configuration refuses to
+    start. Not a warning and not a default." The findings this raises on are
+    *safety* class — an undeclared producer runs at whatever the provider chose,
+    and the digest was doing exactly that in the most expensive configuration
+    available, discovered on a spend graph rather than at boot.
+
+    A plain function called from :func:`load_app_config` rather than an
+    ``AppConfig`` ``model_validator``, for the reason
+    :func:`enforce_required_secrets` already documents: ad-hoc ``AppConfig()``
+    construction is pervasive across the test suite, and a validator would fire
+    on every incidental one. ``config`` is accepted (and unused) to match that
+    sibling's signature, so the boot path reads as one list of enforcements.
+
+    Args:
+        config: The constructed ``AppConfig``. Present for signature parity with
+            the sibling enforcement functions; the declaration lives in the
+            catalog, not in ``AppConfig``.
+        root: Repo (or fixture) root override (test seam); defaults to
+            :func:`~personal_agent.config.config_guard.repo_root`.
+
+    Raises:
+        ValueError: When any role-bound ``kind: llm`` deployment declares no
+            reasoning configuration, or declares one the provider drops or
+            rejects.
+    """
+    from personal_agent.config.config_guard import (  # noqa: PLC0415 — avoid import cycle
+        check_reasoning_declaration,
+    )
+
+    resolved_root = root if root is not None else repo_root()
+    # SAFETY findings only. The policy-class half of this check asks litellm what a
+    # declared value becomes, and litellm's per-model capability map is fetched from
+    # GitHub at import — so on a host whose egress reaches the provider but not
+    # GitHub, that half reports every Anthropic reasoning parameter unsupported.
+    # Raising on it here would let a network condition refuse to boot the
+    # application over a config file that had not changed. CI/pre-commit runs the
+    # same check with the map present and blocks the deploy instead (ADR-0099 D4:
+    # safety blocks boot, policy blocks CI).
+    findings = [f for f in check_reasoning_declaration(resolved_root) if f.severity == "safety"]
+    if not findings:
+        return
+    detail = "\n  ".join(str(finding) for finding in findings)
+    raise ValueError(
+        "Refusing to start: a background producer's reasoning configuration is "
+        f"undeclared or ineffective (FRE-1007).\n  {detail}\n"
+        "Declare it on the deployment in config/models.yaml. Run "
+        "`uv run python scripts/check_config.py` for the same report."
+    )
+
+
 def enforce_slm_endpoint_declared(config: AppConfig) -> None:
     """Require a real DEPLOYMENT to declare its SLM endpoint (ADR-0132 D4).
 
@@ -2956,6 +3010,7 @@ def load_app_config() -> AppConfig:
         config = AppConfig()
         enforce_required_secrets(config)
         enforce_slm_endpoint_declared(config)
+        enforce_reasoning_declaration(config)
         _log_active_substrate_profile(config)
         log.info(
             "app_config_loaded",

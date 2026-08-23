@@ -1,0 +1,17 @@
+# Fixture (FRE-1007): reasoning_effort is never sent on the local dispatch path
+# (LocalLLMClient forwards chat-template args via extra_body), so declaring it
+# here reads as configured while doing nothing.
+providers:
+  anthropic: { auth_env: anthropic_api_key, placement: cloud, max_concurrency: 50 }
+  openai:    { auth_env: openai_api_key,    placement: cloud, max_concurrency: 50 }
+  ovhcloud:  { auth_env: managed_embedding_token, placement: cloud, max_concurrency: 50 }
+  slm_local: { auth: none, placement: local, max_concurrency: 2 }
+models:
+  qwen3.6-35b-thinking:
+    id: "unsloth/qwen3.6-35-A3B"
+    provider: slm_local
+    context_length: 131072
+    max_concurrency: 1
+    default_timeout: 600
+    thinking_budget_tokens: 32768
+    reasoning_effort: high

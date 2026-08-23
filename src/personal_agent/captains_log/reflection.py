@@ -544,7 +544,11 @@ async def generate_reflection_entry(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,  # Lower temperature for structured output
             max_tokens=3000,  # Increased for reasoning models with thinking process
-            reasoning_effort="medium",  # LM Studio /v1/responses: minimal/low/medium/high
+            # FRE-1007: the hard-coded reasoning_effort="medium" that stood here is
+            # removed — the depth is declared on the deployment now, so this fallback
+            # and reflection's primary DSPy path finally agree. They did not before:
+            # this path sent medium while the DSPy path sent nothing and inherited the
+            # provider's default. Both now carry the declared value.
             trace_ctx=SystemTraceContext.new("captains_log_reflection", session_id=session_id),
             priority=InferencePriority.BACKGROUND,
             priority_timeout=30.0,

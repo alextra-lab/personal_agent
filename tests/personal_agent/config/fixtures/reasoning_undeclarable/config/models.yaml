@@ -1,0 +1,14 @@
+# Fixture (FRE-1007): litellm's ovhcloud provider rejects reasoning_effort
+# outright, so a producer bound here has an undeclarable reasoning depth.
+providers:
+  anthropic: { auth_env: anthropic_api_key, placement: cloud, max_concurrency: 50 }
+  openai:    { auth_env: openai_api_key,    placement: cloud, max_concurrency: 50 }
+  ovhcloud:  { auth_env: managed_embedding_token, placement: cloud, max_concurrency: 50 }
+  slm_local: { auth: none, placement: local, max_concurrency: 2 }
+models:
+  qwen3.6-27b-ovh:
+    id: "Qwen3.6-27B"
+    provider: "ovhcloud"
+    context_length: 262144
+    max_concurrency: 25
+    default_timeout: 300

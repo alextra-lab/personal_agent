@@ -181,6 +181,24 @@ def test_registration_helpers_no_op_without_a_registry() -> None:
     _log_source_registry_snapshot(ctx)
 
 
+def test_snapshot_failure_does_not_escape_into_the_turn() -> None:
+    """The seeded negative for the guard, because it runs from a turn-scoped `finally`.
+
+    An exception escaping here propagates past ``return ctx`` in ``execute_task`` and is
+    caught by ``execute_task_safe``, which would report a turn that actually succeeded as
+    failed. A clean tree proves nothing about a guard; this makes the registry raise.
+    """
+
+    class _ExplodingRegistry:
+        def sources(self) -> tuple[object, ...]:
+            raise RuntimeError("registry unavailable")
+
+    ctx = _context()
+    ctx.source_registry = _ExplodingRegistry()  # type: ignore[assignment]
+
+    _log_source_registry_snapshot(ctx)  # must not raise
+
+
 def test_snapshot_logs_identifiers_without_content(caplog: Any) -> None:
     """The observable surface for AC-1, and it must not carry retrieved text.
 

@@ -1412,6 +1412,12 @@ def _log_source_registry_snapshot(ctx: ExecutionContext) -> None:
     any PII it carries into a text-indexed store. This is the surface that makes the
     registry observable before anything consumes it (FRE-1280 AC-1).
 
+    Best-effort like its two siblings, and more load-bearing than either: this runs from
+    the turn-scoped ``finally`` in :func:`execute_task`, so an exception escaping here
+    would propagate past ``return ctx`` and be caught by ``execute_task_safe``, reporting a
+    turn that actually *succeeded* as failed. An unwritten observability line is worth
+    nothing next to that.
+
     Args:
         ctx: Execution context.
     """
@@ -1419,17 +1425,29 @@ def _log_source_registry_snapshot(ctx: ExecutionContext) -> None:
     if registry is None:
         return
 
-    sources = registry.sources()
-    log.info(
-        "source_registry_snapshot",
-        trace_id=ctx.trace_id,
-        session_id=ctx.session_id,
-        source_count=len(sources),
-        sources=[
-            {"identifier": s.identifier, "kind": s.kind.value, "label": s.label, "origin": s.origin}
-            for s in sources
-        ],
-    )
+    try:
+        sources = registry.sources()
+        log.info(
+            "source_registry_snapshot",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            source_count=len(sources),
+            sources=[
+                {
+                    "identifier": s.identifier,
+                    "kind": s.kind.value,
+                    "label": s.label,
+                    "origin": s.origin,
+                }
+                for s in sources
+            ],
+        )
+    except Exception:
+        log.exception(
+            "source_registry_snapshot_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
 
 
 async def _populate_operator_identity(

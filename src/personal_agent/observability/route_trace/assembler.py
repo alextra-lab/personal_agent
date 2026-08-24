@@ -284,6 +284,17 @@ def assemble_route_trace(
         cost_live = float(authoritative_cost_usd)
     orchestration_event = classify_orchestration_event(ctx)
 
+    # FRE-1291: ctx.loaded_skills is written only by model_decided's pre-load path and the
+    # read_skill tool handler — it is also the dedup key those two paths (and the hybrid/
+    # keyword get_skill_bodies() call) read to suppress re-injecting an already-loaded body,
+    # so hybrid/keyword must never write to it. The FRE-1004 evidence record already carries
+    # what those two modes injected, gated on proof the block reached the model
+    # (turn_evidence.py's block_reached_input) — union it in rather than duplicating that
+    # gating here.
+    _turn_evidence = getattr(ctx, "turn_evidence", None)
+    _assembled_context = getattr(_turn_evidence, "assembled_context", None)
+    _evidence_skill_bodies = getattr(_assembled_context, "skill_bodies", None) or []
+
     return RouteTraceRow(
         trace_id=_to_uuid(getattr(ctx, "trace_id", None)),  # type: ignore[arg-type]
         session_id=_to_uuid(getattr(ctx, "session_id", None)),
@@ -311,7 +322,9 @@ def assemble_route_trace(
         # Tools / skills
         tool_iteration_count=int(getattr(ctx, "tool_iteration_count", 0) or 0),
         tools_used=_tools_from_steps(getattr(ctx, "steps", None) or []),
-        skills_loaded=tuple(sorted(getattr(ctx, "loaded_skills", None) or set())),
+        skills_loaded=tuple(
+            sorted((getattr(ctx, "loaded_skills", None) or set()) | set(_evidence_skill_bodies))
+        ),
         # Delegation
         sub_agent_count=len(subs),
         sub_agents=_sub_agent_records(subs, final_reply),

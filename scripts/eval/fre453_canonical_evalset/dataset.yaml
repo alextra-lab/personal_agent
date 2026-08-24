@@ -295,7 +295,7 @@ cases:
       orchestration_event: primary_handled
       pedagogical_outcomes: [cross_connection_made]
       tools_used_nonempty: true
-      skills: [fetch-url]
+      skills: [fetch-url, web-search]
       tools_any_of: [web_search, perplexity_query]
     rubric:
       - "Claims carry citations / sources I can check."

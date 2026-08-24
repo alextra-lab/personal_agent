@@ -70,6 +70,21 @@ class TestRouteSkillsHappyPath:
         assert result == ["query-elasticsearch"]
 
     @pytest.mark.asyncio
+    async def test_web_search_skill_survives_validation(self) -> None:
+        """FRE-1290: when the router selects 'web-search', it passes the registered-name
+        filter (mocked here since the live routing model was unreachable — Anthropic
+        account usage limit — during this ticket's own measurement run; this is the
+        piece of that path this ticket's changes actually touch).
+        """
+        assert "web-search" in get_all_skills()
+        client = _mock_routing_client('["web-search"]')
+        result = await route_skills(
+            user_message="Which brand of olive oil should I buy?",
+            routing_client=client,
+        )
+        assert result == ["web-search"]
+
+    @pytest.mark.asyncio
     async def test_empty_array_returns_empty_list(self) -> None:
         """Router judging no skills relevant returns []."""
         client = _mock_routing_client("[]")

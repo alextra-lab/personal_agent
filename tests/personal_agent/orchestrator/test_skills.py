@@ -143,17 +143,20 @@ class TestFlagGating:
 class TestKeywordRouting:
     """Test 4: Keyword-based routing injects the correct skill doc."""
 
-    @pytest.mark.parametrize("msg", [
-        "show me logs",
-        "check your logs",
-        "check the logs",
-        "app logs",
-        "agent logs",
-        "any recent errors",
-        "show me traces",
-        "what happened last hour",
-        "show me agent-logs from last 24 hour",
-    ])
+    @pytest.mark.parametrize(
+        "msg",
+        [
+            "show me logs",
+            "check your logs",
+            "check the logs",
+            "app logs",
+            "agent logs",
+            "any recent errors",
+            "show me traces",
+            "what happened last hour",
+            "show me agent-logs from last 24 hour",
+        ],
+    )
     def test_es_keywords_inject_es_skill(self, msg: str, monkeypatch: pytest.MonkeyPatch) -> None:
         """Natural user phrasing triggers the query-elasticsearch skill."""
         monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
@@ -163,9 +166,7 @@ class TestKeywordRouting:
             "query-elasticsearch.md keywords are too restrictive."
         )
 
-    def test_no_keyword_match_returns_bash_only(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_no_keyword_match_returns_bash_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A message with no matching keywords returns only the bash skill body."""
         monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
         result = get_skill_block(message="what is the meaning of life")
@@ -173,9 +174,7 @@ class TestKeywordRouting:
         # ES-specific content should NOT be present
         assert "agent-logs-YYYY.MM.DD" not in result
 
-    def test_none_message_returns_bash_only(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_none_message_returns_bash_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Passing message=None returns only the bash skill block."""
         monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
         result = get_skill_block(message=None)
@@ -186,8 +185,12 @@ class TestKeywordRouting:
 class TestSkillNudgeParser:
     """Test 5: _load_all_skills() parses the optional nudge: frontmatter field."""
 
-    def _write_skill(self, tmp_path: Path, name: str, extra_fm: str = "", body: str = "# body") -> None:
-        content = f"---\nname: {name}\ndescription: desc\nwhen_to_use: always\n{extra_fm}---\n\n{body}"
+    def _write_skill(
+        self, tmp_path: Path, name: str, extra_fm: str = "", body: str = "# body"
+    ) -> None:
+        content = (
+            f"---\nname: {name}\ndescription: desc\nwhen_to_use: always\n{extra_fm}---\n\n{body}"
+        )
         (tmp_path / f"{name}.md").write_text(content, encoding="utf-8")
 
     def test_nudge_field_parsed_from_frontmatter(self, tmp_path: Path) -> None:
@@ -212,9 +215,7 @@ class TestSkillNudgeParser:
         assert "Line one." in nudge
         assert "Line two." in nudge
 
-    def test_two_calls_return_identical_result(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_two_calls_return_identical_result(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Repeated calls with the same message return the same value."""
         monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
         first = get_skill_block(message="show me logs")
@@ -277,6 +278,7 @@ class TestMtimeCache:
         )
         # Force mtime to differ (touch with offset to be safe on fast filesystems)
         import os
+
         stat = skill_file.stat()
         os.utime(skill_file, (stat.st_atime, stat.st_mtime + 1.0))
 
@@ -302,3 +304,34 @@ class TestGetSkillBodies:
 
         monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
         assert get_skill_bodies(message="show me logs") == ("", ())
+
+
+class TestWebSearchSkill:
+    """FRE-1290: docs/skills/web-search.md loads and routes outward-facing questions."""
+
+    def test_loaded_with_required_fields(self) -> None:
+        skills = get_all_skills()
+        assert "web-search" in skills, "'web-search' skill not found"
+        doc = skills["web-search"]
+        assert doc.description
+        assert doc.when_to_use
+        assert doc.nudge
+        assert doc.keywords
+        assert tuple(doc.tools) == ("web_search",)
+
+    def test_name_appears_in_compact_index(self) -> None:
+        from personal_agent.orchestrator.skills import assemble_skill_index
+
+        index = assemble_skill_index()
+        assert "web-search" in index, (
+            "web-search skill missing from assemble_skill_index() output — this is the "
+            "only field model_decided routing sees (name + description), so a missing "
+            "index entry means the router can never select it"
+        )
+
+    def test_keyword_routes_a_brand_question(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from personal_agent.orchestrator.skills import get_skill_block
+
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        block = get_skill_block(message="Which brand of olive oil should I buy?")
+        assert "web-search" in block or "SKILL: web-search" in block

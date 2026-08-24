@@ -458,7 +458,7 @@
       "reranker_fallback": 120,
       "session_summary": 180,
       "skill_routing": 120,
-      "span_extraction": 60,
+      "span_extraction": 180,
       "study": 120,
       "sub_agent": 90,
       "vision": 180

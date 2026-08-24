@@ -1,0 +1,37 @@
+{
+  "degraded_documents": 9,
+  "documents": 156,
+  "failed_documents": [],
+  "metrics": {
+    "decomposition.boundary_f1": 0.7725321888412017,
+    "fp_rate.class.attributed_restatement": 0.0,
+    "fp_rate.class.code_body": 0.03333333333333333,
+    "fp_rate.class.connective_evaluative": 0.23333333333333334,
+    "fp_rate.class.derived_arithmetic": 0.0,
+    "fp_rate.class.system_record": 0.0,
+    "precision.overall": 0.8754325259515571,
+    "recall.class.checkable_evaluative": 0.8461538461538461,
+    "recall.class.dependency_declaration": 1.0,
+    "recall.class.factual_bare_predicate": 0.9285714285714286,
+    "recall.class.factual_entity": 0.717948717948718,
+    "recall.class.nl_in_code": 1.0,
+    "recall.class.prose_about_code": 1.0,
+    "recall.class.prose_in_fence": 1.0,
+    "recall.class.unattributed_restatement": 0.9,
+    "recall.overall": 0.9166666666666666
+  },
+  "model_key": "claude_sonnet",
+  "partition": null,
+  "per_sample_recall": [
+    0.9021739130434783,
+    0.9239130434782609,
+    0.9239130434782609
+  ],
+  "run_id": "full-sonnet-3x-20260824",
+  "samples": 3,
+  "unmet_bars": [
+    "recall.class.checkable_evaluative",
+    "recall.class.factual_entity",
+    "fp_rate.class.connective_evaluative"
+  ]
+}

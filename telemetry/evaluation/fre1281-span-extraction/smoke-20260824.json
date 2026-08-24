@@ -1,0 +1,39 @@
+{
+  "degraded_documents": 1,
+  "documents": 4,
+  "failed_documents": [],
+  "metrics": {
+    "decomposition.boundary_f1": 0.8799999999999999,
+    "fp_rate.class.attributed_restatement": null,
+    "fp_rate.class.code_body": null,
+    "fp_rate.class.connective_evaluative": null,
+    "fp_rate.class.derived_arithmetic": null,
+    "fp_rate.class.system_record": null,
+    "precision.overall": 0.8461538461538461,
+    "recall.class.checkable_evaluative": null,
+    "recall.class.dependency_declaration": null,
+    "recall.class.factual_bare_predicate": 0.8333333333333334,
+    "recall.class.factual_entity": 1.0,
+    "recall.class.nl_in_code": null,
+    "recall.class.prose_about_code": null,
+    "recall.class.prose_in_fence": null,
+    "recall.class.unattributed_restatement": null,
+    "recall.overall": 0.9166666666666666
+  },
+  "partition": "dev",
+  "run_id": "smoke-20260824",
+  "unmet_bars": [
+    "recall.class.checkable_evaluative",
+    "recall.class.dependency_declaration",
+    "recall.class.factual_bare_predicate",
+    "recall.class.nl_in_code",
+    "recall.class.prose_about_code",
+    "recall.class.prose_in_fence",
+    "recall.class.unattributed_restatement",
+    "fp_rate.class.attributed_restatement",
+    "fp_rate.class.code_body",
+    "fp_rate.class.connective_evaluative",
+    "fp_rate.class.derived_arithmetic",
+    "fp_rate.class.system_record"
+  ]
+}

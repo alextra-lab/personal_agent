@@ -1,4 +1,4 @@
-"""I/O driver — run the real extractor over the corpus and score it (FRE-1281).
+r"""I/O driver — run the real extractor over the corpus and score it (FRE-1281).
 
 Run as a module so ``scripts`` resolves as a package::
 
@@ -28,23 +28,56 @@ the driver needing a model.
 
 from __future__ import annotations
 
-import argparse
-import asyncio
-import json
-from pathlib import Path
+import os
 
-import structlog
-from scripts.eval.fre1281_span_extraction.corpus import (
+# FRE-375: point the cost substrate at the TEST stack BEFORE importing any personal_agent
+# code — ``settings`` is a cached import-time singleton, so assigning later is too late.
+# The classification calls go to the real provider; what is redirected is the cost ledger
+# they reserve against, which must never be production's. ``setdefault`` leaves any
+# caller-supplied override in place.
+_TEST_SUBSTRATE_ENV = {
+    "APP_ENV": "test",
+    "AGENT_NEO4J_URI": "bolt://localhost:7688",
+    "AGENT_ELASTICSEARCH_URL": "http://localhost:9201",
+    "AGENT_DATABASE_URL": (
+        "postgresql+asyncpg://agent:agent_dev_password@localhost:5433/personal_agent"
+    ),
+    # The admin and sysgraph DSNs are separate settings and the FRE-375 startup guard
+    # checks all three. Redirecting only AGENT_DATABASE_URL leaves two pointing at :5432
+    # and AppConfig refuses to construct — correctly, and it is worth leaving that guard
+    # loud rather than reaching for AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE.
+    "AGENT_DATABASE_ADMIN_URL": (
+        "postgresql+asyncpg://agent:agent_dev_password@localhost:5433/personal_agent"
+    ),
+    "AGENT_SYSGRAPH_DATABASE_URL": (
+        "postgresql+asyncpg://agent:agent_dev_password@localhost:5433/personal_agent"
+    ),
+    "AGENT_ELASTICSEARCH_INDEX_PREFIX": "agent-logs-test",
+    "AGENT_CAPTAINS_LOG_INDEX_PREFIX": "agent-captains-test",
+}
+for _key, _value in _TEST_SUBSTRATE_ENV.items():
+    os.environ.setdefault(_key, _value)
+
+import argparse  # noqa: E402
+import asyncio  # noqa: E402
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import structlog  # noqa: E402
+from scripts.eval.fre1281_span_extraction.corpus import (  # noqa: E402
     DEFAULT_CORPUS_PATH,
     GoldDocument,
     Partition,
     load_corpus,
 )
-from scripts.eval.fre1281_span_extraction.metrics import score_document
-from scripts.eval.fre1281_span_extraction.report import aggregate, render_markdown
+from scripts.eval.fre1281_span_extraction.metrics import score_document  # noqa: E402
+from scripts.eval.fre1281_span_extraction.report import (  # noqa: E402
+    aggregate,
+    render_markdown,
+)
 
-from personal_agent.grounding.extractor import ModelSpanExtractor
-from personal_agent.grounding.spans import SpanExtraction
+from personal_agent.grounding.extractor import ModelSpanExtractor  # noqa: E402
+from personal_agent.grounding.spans import SpanExtraction  # noqa: E402
 
 log = structlog.get_logger(__name__)
 
@@ -75,7 +108,13 @@ async def _classify(
 
 
 async def run(
-    *, run_id: str, partition: Partition | None, corpus_path: Path, limit: int | None
+    *,
+    run_id: str,
+    partition: Partition | None,
+    corpus_path: Path,
+    limit: int | None,
+    samples: int,
+    model_key: str | None,
 ) -> int:
     """Score the extractor over the corpus and write the report.
 
@@ -84,6 +123,18 @@ async def run(
         partition: Restrict to one partition, or ``None`` for the whole corpus.
         corpus_path: Which corpus file to load.
         limit: Score at most this many documents (smoke runs).
+        model_key: Override the deployment the ``span_extraction`` role resolves to.
+            Present so "does this classifier need a stronger model?" is answerable by a
+            measurement rather than an argument — AC-7 exists to inform exactly that
+            choice. Overriding here rather than editing the role matrix keeps an
+            experiment from leaving config churn behind.
+        samples: Classify each document this many times. A single pass is a poor
+            estimator here: with ~10 gold spans in a class, one span moves a per-class
+            figure by 0.10, and three same-prompt dev runs during this build swung
+            ``factual_entity`` across 0.50-0.80 and ``prose_in_fence`` across 0.60-1.00
+            without the prompt touching either. Scoring every sample into one ratio-of-
+            sums shrinks that; the per-sample spread is reported so the residual noise
+            stays visible rather than being averaged out of sight.
 
     Returns:
         Process exit code — nonzero when a preregistered bar was not met, so a failing
@@ -97,21 +148,55 @@ async def run(
     if not documents:
         raise SystemExit(f"no documents for partition {partition}")
 
+    from personal_agent.config import resolve_role_model_key  # noqa: PLC0415
+    from personal_agent.config.settings import get_settings  # noqa: PLC0415
+    from personal_agent.cost_gate import (  # noqa: PLC0415
+        CostGate,
+        load_budget_config,
+        set_default_gate,
+    )
     from personal_agent.llm_client.factory import get_llm_client_for_key  # noqa: PLC0415
 
-    extractor = ModelSpanExtractor(get_llm_client_for_key("span_extraction"))
-    semaphore = asyncio.Semaphore(CONCURRENCY)
-    results = await asyncio.gather(
-        *(_classify(extractor, document, semaphore) for document in documents)
-    )
+    # A standalone script has no application startup, so nothing has registered the cost
+    # gate and every paid call refuses. Registering it here is what makes the budget lane
+    # actually bind — an unmetered corpus run is exactly what a lane exists to prevent.
+    # It reserves against the TEST substrate redirected at the top of this module.
+    gate = CostGate(config=load_budget_config(), db_url=get_settings().database_url)
+    await gate.connect()
+    set_default_gate(gate)
 
-    scored = [
-        score_document(document, extraction.spans)
-        for document, extraction in results
-        if extraction is not None
-    ]
-    failed = [document.doc_id for document, extraction in results if extraction is None]
-    degraded = sum(1 for _, extraction in results if extraction is not None and extraction.degraded)
+    # budget_role is explicit rather than resolved through the role-name door: FRE-989
+    # showed a silent default is indistinguishable from a correct mapping at every
+    # downstream layer. It matches role_map.py's entry for this role.
+    # The factory keys on a MODEL key, not a role name, so the role matrix resolves it
+    # first (ADR-0099 D1 stage 2). budget_role is explicit rather than left to the
+    # role-name door: FRE-989 showed a silent default is indistinguishable from a
+    # correct mapping at every downstream layer.
+    resolved_key = model_key or resolve_role_model_key("span_extraction")
+    extractor = ModelSpanExtractor(
+        get_llm_client_for_key(resolved_key, budget_role="entity_extraction")
+    )
+    semaphore = asyncio.Semaphore(CONCURRENCY)
+    scored = []
+    failed: list[str] = []
+    degraded = 0
+    per_sample_recall: list[float | None] = []
+
+    for _sample in range(samples):
+        results = await asyncio.gather(
+            *(_classify(extractor, document, semaphore) for document in documents)
+        )
+        sample_scores = [
+            score_document(document, extraction.spans)
+            for document, extraction in results
+            if extraction is not None
+        ]
+        scored.extend(sample_scores)
+        failed.extend(d.doc_id for d, extraction in results if extraction is None)
+        degraded += sum(1 for _, e in results if e is not None and e.degraded)
+        per_sample_recall.append(
+            aggregate(sample_scores, partition=partition).metrics["recall.overall"]
+        )
 
     report = aggregate(scored, partition=partition, degraded_documents=degraded)
 
@@ -121,8 +206,16 @@ async def run(
         # The held-out contract: per-document detail is never passed for that partition.
         scores=scored if partition is not Partition.HELDOUT else None,
         run_id=run_id,
-        extractor="span_extraction role (config/model_roles.yaml)",
+        extractor=f"span_extraction role -> {resolved_key}",
     )
+    spread = [r for r in per_sample_recall if r is not None]
+    if samples > 1 and spread:
+        markdown += (
+            f"\n> {samples} samples per document. Overall recall per sample: "
+            f"{', '.join(f'{r:.3f}' for r in spread)} "
+            f"(min {min(spread):.3f}, max {max(spread):.3f}). The bars above are scored "
+            f"over all samples pooled.\n"
+        )
     if failed:
         markdown += f"\n> {len(failed)} document(s) failed to classify and were excluded.\n"
 
@@ -133,6 +226,9 @@ async def run(
                 "run_id": run_id,
                 "partition": None if partition is None else partition.value,
                 "documents": len(scored),
+                "samples": samples,
+                "model_key": resolved_key,
+                "per_sample_recall": per_sample_recall,
                 "failed_documents": failed,
                 "degraded_documents": degraded,
                 "metrics": report.metrics,
@@ -158,6 +254,8 @@ def main() -> int:
     parser.add_argument("--partition", choices=[p.value for p in Partition], default=None)
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS_PATH)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--samples", type=int, default=1)
+    parser.add_argument("--model-key", default=None)
     args = parser.parse_args()
     return asyncio.run(
         run(
@@ -165,6 +263,8 @@ def main() -> int:
             partition=Partition(args.partition) if args.partition else None,
             corpus_path=args.corpus,
             limit=args.limit,
+            samples=args.samples,
+            model_key=args.model_key,
         )
     )
 

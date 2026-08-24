@@ -47,6 +47,7 @@ from personal_agent.grounding.spans import (
     SpanExtraction,
     SpanLabel,
 )
+from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 
 log = structlog.get_logger(__name__)
 
@@ -90,9 +91,11 @@ nest. "Paris is France's capital and has 2.1 million residents" is TWO segments.
 relative clause carrying its own checkable proposition is its own segment. Do not split \
 a single proposition across its own grammar.
 
-COVERAGE. You must cover EVERY character of every region you are given. Text that \
-asserts nothing — connectives, greetings, questions, offers to continue — is \
-"not_a_claim". That is a decision, not a gap: use it rather than leaving text out.
+COVERAGE. You must cover EVERY character of every region you are given, in order, with \
+no gaps between consecutive segments. Text that asserts nothing — connectives, \
+greetings, questions, offers to continue — is "not_a_claim". That is a decision, not a \
+gap: use it rather than leaving text out. Anything you leave uncovered is treated as \
+requiring a citation, so an omission is never the safe option.
 
 LABELS.
 - "claim_non_exempt": asserts something about the world, and no exempt region covers it.
@@ -111,11 +114,37 @@ externally checkable claim about the world, however evaluative it sounds.
 - "system_record": claims about THIS turn's own execution — what was searched, what was \
 retrieved, that nothing was found. Not about the world.
 
+CARRYING A CITATION DOES NOT MAKE A SEGMENT EXEMPT. This is the distinction to get \
+right. "claim_non_exempt" means *this needs a source*; a segment that already has one is \
+a compliant claim, still "claim_non_exempt". A citation marker such as [S1@...] next to a \
+factual claim is therefore NOT a reason to label it exempt, and never a reason to call it \
+"system_record". Label by what the segment asserts, never by whether it happens to be \
+sourced.
+
+WHAT THE TWO "OVER CITED MATERIAL" EXEMPTIONS ACTUALLY COVER. "derived_arithmetic" and \
+"connective_evaluative" cover the *new* sentence built on top of cited values — the sum, \
+the ordering, the comparison — never the cited values themselves. In "A costs 4 [S1] and \
+B costs 3 [S2], so the total is 7": the two prices are "claim_non_exempt" (each asserts a \
+price), and only "the total is 7" is exempt. Material counts as cited when a marker sits \
+next to it or the text states the value is cited or given; over material that is NOT \
+cited, the ordering or sum asserts the underlying values too and is "claim_non_exempt".
+
+RESTATEMENT IS ABOUT ATTRIBUTION, NOT ABOUT CONTENT. Repeating the user's own words WITH \
+attribution is exempt, and it stays exempt however much content it carries: "you \
+mentioned X", "you said you run Y and Z", "your budget is N, as you said" are all \
+"claim_exempt" with region "attributed_restatement". What is NOT exempt is the same \
+content offered as your own recommendation — "I'd recommend X", "use X", "go with X" — \
+because that newly claims X exists and suits the purpose. When a passage contains both, \
+segment them separately rather than labelling the whole passage one way.
+
 AMBIGUITY. If you cannot decide whether a segment is exempt evaluation or a checkable \
 claim, use "ambiguous" as the region. Do not guess.
 
-NOTE ON THE TEXT YOU RECEIVE. Regions may be fragments of code comments, string \
-literals, or prose lifted out of a code block. A world-fact claim inside a string \
+NOTE ON THE TEXT YOU RECEIVE. Everything reaching you has ALREADY failed a proof of \
+code-ness, so do not assume a region is code because it looks like it was inside a code \
+block. A region may be prose that was placed in a fence, a block whose declared language \
+it does not actually parse as, or a comment or string literal lifted out of real code. \
+Prose in a fence is prose, and judged as prose. A world-fact claim inside a string \
 literal or a comment is still a claim: `print("Paris has 9 million residents")` asserts \
 something about Paris. A comment that merely describes the code around it does not.
 
@@ -187,7 +216,13 @@ class SpanExtractor(Protocol):
     "spans out", not "which model".
     """
 
-    async def extract(self, output: str, *, user_message: str | None = None) -> SpanExtraction:
+    async def extract(
+        self,
+        output: str,
+        *,
+        user_message: str | None = None,
+        trace_ctx: TraceContext | None = None,
+    ) -> SpanExtraction:
         """Partition and classify one model output."""
         ...
 
@@ -333,12 +368,22 @@ class ModelSpanExtractor:
         """
         self._client = client
 
-    async def extract(self, output: str, *, user_message: str | None = None) -> SpanExtraction:
+    async def extract(
+        self,
+        output: str,
+        *,
+        user_message: str | None = None,
+        trace_ctx: TraceContext | None = None,
+    ) -> SpanExtraction:
         """Partition and classify one model output.
 
         Args:
             output: The assistant text to classify.
             user_message: The user's turn, for judging attributed restatement.
+            trace_ctx: The turn's trace context, threaded per ADR-0074 §3.6. A caller with
+                no user-facing request gets a minted system context rather than ``None`` —
+                the client requires one, and an untraceable classification on the turn
+                path would be invisible exactly where the compliance metric reads.
 
         Returns:
             The tightened extraction. Never raises on a bad reply: a failure degrades to
@@ -355,6 +400,7 @@ class ModelSpanExtractor:
 
         from personal_agent.llm_client.types import ModelRole  # noqa: PLC0415
 
+        effective_trace = trace_ctx or SystemTraceContext.new("span_extraction")
         response = await self._client.respond(
             role=ModelRole.SPAN_EXTRACTION,
             messages=[{"role": "user", "content": build_prompt(classifiable, user_message)}],
@@ -362,6 +408,7 @@ class ModelSpanExtractor:
             tools=[span_tool()],
             tool_choice=span_tool_choice(),
             max_tokens=MAX_OUTPUT_TOKENS,
+            trace_ctx=effective_trace,
         )
 
         payload = ""
@@ -370,9 +417,17 @@ class ModelSpanExtractor:
                 payload = str(call["arguments"])
                 break
 
-        spans, unanchored = parse_segments(payload, classifiable)
+        spans, unanchored = parse_segments(payload, classifiable, trace_id=effective_trace.trace_id)
         if unanchored:
-            log.warning("span_extractor_unanchored_quotes", count=unanchored)
+            # Not fatal, and deliberately not silent: layer 3 turns the hole each
+            # unanchorable quote leaves into a non-exempt span, so a rising count reads as
+            # the model drifting off the quote-exactly contract rather than as the turn
+            # becoming more careful.
+            log.warning(
+                "span_extractor_unanchored_quotes",
+                count=unanchored,
+                trace_id=effective_trace.trace_id,
+            )
         return apply_policy(output, regions, spans)
 
 

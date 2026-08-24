@@ -1,0 +1,11 @@
+{
+  "corpus_version": "2026-08-24.1",
+  "spans_compared": 156,
+  "raw_agreement": 0.8654,
+  "cohens_kappa": 0.7435,
+  "bar": 0.7,
+  "bar_met": true,
+  "labeller_a": "FRE-1281 build session, by hand, against ADJUDICATION.md v1",
+  "labeller_b": "independent model pass (claude_sonnet) driven by ADJUDICATION.md, not by the extractor's own prompt",
+  "note": "Agreement is on the exempt / non-exempt / not-a-claim decision over the gold spans. Segmentation agreement is a separate measurement, reported as the extractor's decomposition boundary F1."
+}

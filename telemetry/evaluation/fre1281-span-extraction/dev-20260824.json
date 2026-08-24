@@ -1,0 +1,32 @@
+{
+  "degraded_documents": 1,
+  "documents": 30,
+  "failed_documents": [],
+  "metrics": {
+    "decomposition.boundary_f1": 0.7906976744186047,
+    "fp_rate.class.attributed_restatement": 0.0,
+    "fp_rate.class.code_body": 0.0,
+    "fp_rate.class.connective_evaluative": 0.16666666666666666,
+    "fp_rate.class.derived_arithmetic": 0.0,
+    "fp_rate.class.system_record": 0.0,
+    "precision.overall": 0.8,
+    "recall.class.checkable_evaluative": 1.0,
+    "recall.class.dependency_declaration": 1.0,
+    "recall.class.factual_bare_predicate": 0.8571428571428571,
+    "recall.class.factual_entity": 0.8,
+    "recall.class.nl_in_code": 1.0,
+    "recall.class.prose_about_code": 1.0,
+    "recall.class.prose_in_fence": 0.6,
+    "recall.class.unattributed_restatement": 0.6666666666666666,
+    "recall.overall": 0.8627450980392157
+  },
+  "partition": "dev",
+  "run_id": "dev-20260824",
+  "unmet_bars": [
+    "recall.overall",
+    "recall.class.factual_entity",
+    "recall.class.prose_in_fence",
+    "recall.class.unattributed_restatement",
+    "fp_rate.class.connective_evaluative"
+  ]
+}

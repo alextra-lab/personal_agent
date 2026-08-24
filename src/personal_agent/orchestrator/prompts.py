@@ -101,6 +101,10 @@ TOOL_USE_SYSTEM_PROMPT = TOOL_USE_NATIVE_PROMPT
 _tool_awareness_cache: str | None = None
 _tool_awareness_cache_time: float = 0.0
 _TOOL_AWARENESS_CACHE_TTL = 60.0  # seconds
+# Safety valve, not a routine truncation path (FRE-1290) — every category in the
+# current registry is well under this; only a category that grows unboundedly
+# (e.g. "mcp" via user-configured server discovery) would ever hit it.
+_TOOL_AWARENESS_CATEGORY_CAP = 25
 
 
 def get_tool_awareness_prompt() -> str:
@@ -148,12 +152,23 @@ def get_tool_awareness_prompt() -> str:
             f"Available tools ({len(tools)} total):",
         ]
 
+        # FRE-1290: the old <= 3 cap hid whichever tools sorted past the third
+        # position — network's 8 tools (including web_search) collapsed to
+        # "first 3 + ...", tilting the model toward tools it could already see
+        # in full (memory) and away from the one it needed most (network). The
+        # full current registry is small enough that listing every name in
+        # every category costs little; _TOOL_AWARENESS_CATEGORY_CAP is a safety
+        # valve for a category that could grow unboundedly (e.g. "mcp", via
+        # user-configured MCP server discovery), not a routine truncation path.
         for category, tool_names in sorted(by_category.items()):
-            if len(tool_names) <= 3:
+            if len(tool_names) <= _TOOL_AWARENESS_CATEGORY_CAP:
                 lines.append(f"- {category}: {', '.join(tool_names)}")
             else:
-                examples = ", ".join(tool_names[:3])
-                lines.append(f"- {category} ({len(tool_names)}): {examples}, ...")
+                examples = ", ".join(tool_names[:_TOOL_AWARENESS_CATEGORY_CAP])
+                lines.append(
+                    f"- {category} ({len(tool_names)}): {examples}, "
+                    f"+{len(tool_names) - _TOOL_AWARENESS_CATEGORY_CAP} more"
+                )
 
         tool_names_lower = [t.name.lower() for t in tools]
         capabilities = []

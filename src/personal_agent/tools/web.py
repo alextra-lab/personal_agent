@@ -56,8 +56,10 @@ def _strip_weather_prefix_if_targeted(query: str, categories: str, engines: str 
 web_search_tool = ToolDefinition(
     name="web_search",
     description=(
-        "Search the web via a private self-hosted metasearch engine. "
-        "Returns titles, URLs, snippets, infoboxes, and plugin answers. "
+        "Search the live web when you need a fact about the real world that you are not "
+        "certain of from training data — a specific brand, product, shop, price, current "
+        "name, or availability. Returns titles, URLs, snippets, infoboxes, and plugin answers "
+        "from a private self-hosted metasearch engine."
         "\n\nPlugin capabilities (returned in the 'answers' field — no engine needed):\n"
         "  - Timezone: query 'time Berlin' or 'clock Tokyo' → current local time\n"
         "  - Unit conversion: query '20 °C in °F' or '10 EUR in USD' (use symbols, not words) → converted value\n"
@@ -65,8 +67,7 @@ web_search_tool = ToolDefinition(
         "\nWeather: use engines='openmeteo' or categories='weather' for current conditions + hourly forecast.\n"
         "\nCategories: general (default), it, science, news, weather, social_media, files, images, music, videos, recipes.\n"
         "Use 'it' for programming questions, 'science' for academic research, "
-        "'news' for current events, 'social_media' for Reddit/Lemmy discussions.\n"
-        "Prefer perplexity_query for synthesized answers with citations."
+        "'news' for current events, 'social_media' for Reddit/Lemmy discussions."
     ),
     category="network",
     parameters=[

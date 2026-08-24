@@ -87,6 +87,15 @@ def test_web_search_tool_definition() -> None:
     assert required[0].name == "query"
 
 
+def test_web_search_description_states_when_to_reach_for_it() -> None:
+    """Lead with when to use it, not read as a generic utility that redirects elsewhere."""
+    assert web_search_tool.description.startswith("Search the live web when")
+    assert "Prefer perplexity_query" not in web_search_tool.description
+    # Plugin/category detail is preserved, only the framing changes.
+    assert "Timezone" in web_search_tool.description
+    assert "Categories:" in web_search_tool.description
+
+
 # ── Executor happy-path tests ──────────────────────────────────────────────
 
 

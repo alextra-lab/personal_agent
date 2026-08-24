@@ -81,23 +81,24 @@ still come from documents whose individual failures were never inspected.
 
 ## Measured results — 2026-08-24
 
-Whole corpus, 3 samples (156 document-scorings), both models on the **shipping** prompt,
+Whole corpus, 3 samples (156 document-scorings), both models on the **shipping** code,
 extractor frozen before the run.
 
 | | `gpt-5.4-mini` | `claude_sonnet` |
 |---|---|---|
-| **bars met** | 11 / 16 | **15 / 16** |
-| overall recall | 0.873 | 0.935 |
-| overall precision | 0.820 | 0.849 |
-| decomposition boundary F1 | 0.756 | 0.791 |
-| factual-entity recall | 0.718 | 0.872 |
-| NL-in-code recall | 0.833 | 0.967 |
-| unattributed-restatement recall | 0.767 | 0.867 |
-| connective-evaluative sweep rate | 0.300 | 0.267 (bar 0.15) |
+| **bars met** | 13 / 16 | **15 / 16** |
+| overall recall | 0.906 | 0.953 |
+| overall precision | 0.831 | 0.862 |
+| decomposition boundary F1 | 0.765 | 0.804 |
+| factual-entity recall | **0.744** (bar 0.85) | 0.923 |
+| prose-in-fence recall | **0.833** (bar 0.85) | 0.967 |
+| connective-evaluative sweep rate | **0.300** (bar 0.15) | **0.267** (bar 0.15) |
 
-`claude_sonnet` meets **all eight per-class recall bars**; `gpt-5.4-mini` misses three of
-them plus overall recall. Per-sample overall recall for the shipping configuration:
-0.967 / 0.924 / 0.913.
+`claude_sonnet` meets **all eight per-class recall bars**, which is what ADR-0138 AC-7
+actually demands ("recall meeting the bar in every class — reporting alone is not
+sufficient"). `gpt-5.4-mini` clears the *overall* recall bar at 0.906 while missing two
+classes, which is precisely the class-shaped hole an overall figure conceals and the
+reason per-class bars exist.
 
 Cohen's κ between labeller A (hand) and labeller B (independent model pass driven by
 `ADJUDICATION.md`, **not** the extractor prompt): **0.744**, raw agreement 0.865, against a
@@ -114,9 +115,21 @@ cause is structural rather than a tuning miss: that exemption applies only "over
 material", and this ticket's extractor has no citation input, because FRE-1280's source
 registry and marker format are not wired in yet (FRE-1282). Most of the corpus's documents
 in that class express citedness in prose ("the two cited figures") rather than carrying
-markers, which is precisely the case the extractor cannot decide. It fails in the
-*safe* direction — an exempt span swept into the contract costs a citation, not a missed
-claim. The class becomes fully measurable after FRE-1282.
+markers, which is precisely the case the extractor cannot decide. It fails in the **safe**
+direction — an exempt span swept into the contract costs a citation, never a missed claim.
+The class becomes fully measurable after FRE-1282.
+
+## Known corpus gap — f-strings
+
+The `nl_in_code` class carries 10 gold spans and **not one of them uses an f-string**, so
+the corpus did not catch a full bypass that a code review did: PEP 701 means
+`print(f"Paris has 9 million residents")` tokenizes with no `STRING` token at all, and the
+first implementation left every f-string invisible to prose extraction. Fixed in
+`code_regions.py` and covered by unit tests, but the *corpus* should have found it.
+
+Deliberately **not** patched by adding documents now: the corpus is preregistered, and
+extending it after seeing results would change the denominator the bars were fixed
+against. FRE-1282 should add f-string cases when it next versions the corpus.
 
 ## Measurement noise — read before comparing two runs
 
@@ -126,7 +139,7 @@ same-prompt dev runs during this build swung `factual_entity` across 0.50–0.80
 `prose_in_fence` across 0.60–1.00 without the prompt touching either class — noise
 dominating signal, which is why `--samples` exists and why the report prints the
 per-sample spread instead of a single number. Pooled over three samples the overall recall
-spread narrowed to ±0.027 (0.913–0.967) for the shipping configuration.
+spread narrowed to ±0.027 (0.924–0.978) for the shipping configuration.
 
 Do not read a few-point per-class move as a change. Grow the corpus toward 300+ spans
 before treating one as real.

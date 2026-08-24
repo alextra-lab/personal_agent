@@ -133,6 +133,32 @@ def test_comment_and_docstring_in_valid_python_are_extracted() -> None:
     assert "The standard was published in 1988" in classified
 
 
+def test_fstring_content_is_extracted_like_any_other_literal() -> None:
+    """PEP 701 changed how f-strings tokenize, and the first draft missed it entirely.
+
+    Since Python 3.12 ``tokenize`` emits no ``STRING`` token for an f-string at all — it
+    emits ``FSTRING_START`` / ``FSTRING_MIDDLE`` / ``FSTRING_END``. Checking only for
+    ``STRING`` therefore left every f-string invisible to prose extraction, so
+    ``print(f"...")`` stayed inside PROVEN_CODE and was labelled exempt without the
+    classifier ever seeing it.
+
+    That is ADR-0138 D1's own named exemplar with the quote prefixed by one character,
+    and f-strings are the idiomatic way to write such a literal — the common case, not an
+    edge case. This project requires >=3.12, so the old behaviour was unreachable.
+    """
+    text = '```python\ndef banner() -> None:\n    print(f"Paris has 9 million residents")\n```\n'
+    classified = " ".join(_of_kind(text, RegionKind.CLASSIFY))
+    assert "Paris has 9 million residents" in classified
+    assert "Paris has 9 million residents" not in " ".join(_of_kind(text, RegionKind.PROVEN_CODE))
+
+
+def test_fstring_with_an_interpolation_still_yields_its_literal_text() -> None:
+    """The claim and the interpolation live in one f-string; the claim must still surface."""
+    text = '```python\nname = "x"\nprint(f"Basalt is denser than granite, {name}")\n```\n'
+    classified = " ".join(_of_kind(text, RegionKind.CLASSIFY))
+    assert "Basalt is denser than granite" in classified
+
+
 def test_code_around_an_extracted_literal_stays_proved_code() -> None:
     """Pulling out the prose must not surrender the surrounding code to the classifier."""
     text = '```python\nx = 1\nprint("Paris has 9 million residents")\ny = 2\n```\n'

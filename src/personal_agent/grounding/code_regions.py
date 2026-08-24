@@ -131,6 +131,22 @@ _LINE_COMMENT_MARKERS: dict[str, tuple[str, ...]] = {
     "makefile": ("#",),
 }
 
+_PROSE_TOKEN_TYPES = frozenset({tokenize.COMMENT, tokenize.STRING, tokenize.FSTRING_MIDDLE})
+"""Token types whose content is prose rather than code.
+
+``FSTRING_MIDDLE`` is the one that is easy to miss, and missing it is a full bypass of the
+contract. PEP 701 changed f-string tokenization in Python 3.12: ``tokenize`` no longer
+emits a ``STRING`` token for an f-string *at all*, interpolated or not — it emits
+``FSTRING_START`` / ``FSTRING_MIDDLE`` / ``FSTRING_END``. A check for ``STRING`` alone
+therefore leaves every f-string invisible, so ``print(f"Paris has 9 million residents")``
+stays inside proven code and ships exempt without the classifier ever seeing it. That is
+ADR-0138 D1's own named exemplar with one character added, and f-strings are the idiomatic
+way to write such a literal — the common case, not an edge case.
+
+This project requires Python >=3.12 (``pyproject.toml``), so there is no older
+tokenization to fall back to and no version guard to write.
+"""
+
 _FENCE_OPEN = re.compile(r"^[ \t]*```([^\n`]*)\n", re.MULTILINE)
 
 #: Install-command heads. Deliberately a small closed list of package managers rather
@@ -214,7 +230,7 @@ def _python_prose_and_dependencies(
         return prose, dependencies
 
     for token in tokens:
-        if token.type in {tokenize.COMMENT, tokenize.STRING}:
+        if token.type in _PROSE_TOKEN_TYPES:
             start = offset(token.start[0], token.start[1])
             end = offset(token.end[0], token.end[1])
             if end > start:

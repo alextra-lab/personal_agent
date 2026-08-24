@@ -209,6 +209,10 @@ telemetry/evaluation/fre778-multipath-ab/
 # FRE-1122 absence-probe fixture run outputs (raw runs never committed; personal subjects & text)
 telemetry/evaluation/fre1122-absence-probe/
 
+# FRE-1281 span-extraction run outputs (raw runs never committed; the numbers that
+# matter live in the ticket, the handoff and the README's results table)
+telemetry/evaluation/fre1281-span-extraction/
+
 # FRE-996 digest contract A/B/C run outputs (raw runs never committed; docs/research writeup is)
 telemetry/evaluation/fre996-digest-contract/
 

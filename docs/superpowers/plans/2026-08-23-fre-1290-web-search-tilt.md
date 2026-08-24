@@ -263,6 +263,47 @@ Run against current `origin/main` code (no `src/` edits yet), via the local dev 
 
 **Infra incident, questions 10-12:** the local model backend (`AGENT_SLM_BASE_URL=http://localhost:8600`, `unsloth/qwen3.6-35-A3B`) returned `503 Service Unavailable` for these three consecutive turns (confirmed in the dev-server log: `model_call_error`, `Server error 503`). The endpoint was healthy again within minutes (`curl .../v1/models` → 200) — a transient local-backend blip, not a code-path issue introduced by anything in scope here. Each turn still completed with `tool_iteration_count = 0` (no tool was attempted, which is the correct behavior for pure reasoning), but the final response text is an error message, not a real answer — so **AC-4's "answered correctly" cannot be evaluated from Set A's baseline for items 10-12**. Per the once-ever rule these three exact questions are not re-asked. AC-4's actual purpose — verifying this ticket's fix doesn't cause new false-positive searching on non-search questions — is fully answerable from **Set B's own reasoning controls** (post-change tool_iteration_count and correctness), which do not depend on a matching pre-change data point to be meaningful; Set A's compromised rows are disclosed here rather than silently omitted.
 
+## Set B (AC-2 post-change) — results, recorded 2026-08-24
+
+Run against the committed diff (`005d0729`), local dev process restarted cleanly on the new code, same substrate.
+
+| # | kind | question | `web_search` fired |
+|---|---|---|---|
+| 1 | entity | pre-ground coffee for moka pot | yes |
+| 2 | entity | vintage vinyl shop Amsterdam | yes |
+| 3 | entity | IKEA POÄNG chair current catalogue | yes |
+| 4 | entity | action camera for underwater diving | yes |
+| 5 | entity | sunscreen for sensitive skin | yes |
+| 6 | free | carrots and night vision | yes |
+| 7 | free | knuckle cracking and arthritis | no |
+| 8 | free | brown rice vs white rice | yes |
+| 9 | free | plants respond to talking | yes |
+| 10 | control | rectangle width | tool_iteration_count=0, **answer correct (6 cm)** |
+| 11 | control | 8² − 15 | tool_iteration_count=0, **answer correct (49)** |
+| 12 | control | zorb/fintle/warble syllogism | tool_iteration_count=0, **answer correct (No)** |
+
+**Entity-naming: 5/5 (100%). Entity-free: 3/4 (75%, up from 0/4). Aggregate factual (1-9): 8/9 (88.9%, up from 5/9 = 55.6%).**
+
+### AC-2 bar — all three conditions evaluated
+
+1. **Entity-naming floor (≥3/5):** 5/5 — **PASS**.
+2. **Entity-naming no-regression (post ≥ baseline):** 5/5 ≥ 5/5 — **PASS** (tied; baseline was already at ceiling, see Set A's note).
+3. **Aggregate (post > baseline over items 1-9):** 8/9 (88.9%) > 5/9 (55.6%) — **PASS**.
+
+**All three conditions pass — AC-2 is met.** The improvement is concentrated in the entity-free factual subset (0/4 → 3/4), which is exactly where the pre-existing recency-keyed trigger (unaffected by this PR) provides no coverage — consistent with the ticket's thesis that the *skill/awareness/description* tilt, not the recency trigger, was the larger gap for non-recency-phrased factual questions.
+
+**AC-4 (no regression on non-search questions): PASS.** All 3 reasoning controls: `tool_iteration_count = 0` and a correct final answer (verified by hand above).
+
+**AC-3 (skills_loaded non-empty): could not be measured live.** Server logs show `route_skills()` — the `model_decided` router, Anthropic `claude-haiku-4-5-20251001` under `budget_role=skill_routing` — failed on **every single call across both arms**, from the very first smoke test (2026-08-23T20:44) through the last Set B question, with `AnthropicException: "You have reached your specified API usage limits. You will regain access on 2026-09-01 at 00:00 UTC."` This is an **account-level Anthropic quota exhaustion**, unrelated to anything in this diff, and it affected Set A identically to Set B — so the `skills_loaded=[]` result on every one of the 24 probe turns is fully explained by this infra failure, not by whether the new skill exists. `route_skills()` fails open (`except Exception: return []`, `skills.py`) — by design, this degrades to "no pre-loaded skill" rather than blocking the turn, which is why `web_search` still fired via the (unrelated, pre-existing) recency trigger throughout.
+
+Given the live path was blocked, AC-3 is instead evidenced mechanistically: `tests/personal_agent/orchestrator/test_route_skills.py::test_web_search_skill_survives_validation` (committed `3913c1cd`) confirms `route_skills()` accepts `"web-search"` as a valid selection once the LLM call succeeds, and `executor.py:4283-4287` (unchanged by this PR, already covered by existing tests) unconditionally writes any such name into `ctx.loaded_skills`, which `assembler.py:314` copies into `route_traces.skills_loaded`. The wiring is correct; the live exercise of it is blocked by an operational condition outside this ticket's scope.
+
+**Operational finding worth flagging to master/owner (not fixed here — out of scope):** `model_decided` skill routing is currently silently degraded project-wide by this same Anthropic quota — any turn's skill pre-load is failing open to "no skills loaded" until 2026-09-01 (or until the account limit is otherwise addressed). This is a real, currently-live gap in production skill routing, separate from FRE-1290's three surfaces.
+
+## Outcome: FRE-1278 stays closed
+
+Per the pre-registered decision rule above: the full AC-2 conjunction (all three bar conditions) is met. **The tilt alone accounts for the measured improvement.** FRE-1278 stays closed (`Verify Failed`, PR #942 reverted) — no reintroduction of its reverted prompt changes is warranted by this evidence. State this explicitly when closing/commenting on FRE-1278.
+
 ## Risk tier
 
 **Standard/Complex** — touches `orchestrator/prompts.py` (prompt construction), `tools/web.py` (tool contract read by the model every turn), and involves live writes to the shared production-equivalent Neo4j/Postgres. Codex plan-review required before implementation.

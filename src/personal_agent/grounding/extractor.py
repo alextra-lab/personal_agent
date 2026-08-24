@@ -33,6 +33,7 @@ user pays.
 from __future__ import annotations
 
 import json
+import secrets
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
@@ -227,13 +228,35 @@ class SpanExtractor(Protocol):
         ...
 
 
-def build_prompt(regions: Sequence[Region], user_message: str | None) -> str:
+def new_delimiter_nonce() -> str:
+    """Mint the per-call token that makes region delimiters unspoofable.
+
+    Returns:
+        Eight hex characters from :mod:`secrets`.
+    """
+    return secrets.token_hex(4)
+
+
+def build_prompt(regions: Sequence[Region], user_message: str | None, *, nonce: str) -> str:
     """Render the classifiable regions as a numbered prompt.
+
+    **Delimiters carry a per-call nonce**, and that is a security property rather than
+    decoration. Everything rendered here is untrusted — assistant output and the user's
+    own words — and with a fixed ``<<<END REGION 0>>>`` marker either could close a region
+    early or open one of its own, steering the classifier over text it was never given.
+    An unguessable suffix removes the collision: the content cannot contain a token it
+    cannot predict.
+
+    Escaping the text instead was rejected. Anchoring re-finds each quote by offset in the
+    *original* region, so mutating what the model sees would desynchronise every span in
+    that region — safe, because layer 3 fails closed, but it would trade a real bug for
+    silent degradation.
 
     Args:
         regions: Layer 1's partition; only ``CLASSIFY`` regions are rendered.
         user_message: The user's turn, needed to judge attribution. Restatement is exempt
             because of the attribution, and attribution is undecidable without it.
+        nonce: Per-call delimiter token from :func:`new_delimiter_nonce`.
 
     Returns:
         The user-message body for one classification call.
@@ -242,11 +265,13 @@ def build_prompt(regions: Sequence[Region], user_message: str | None) -> str:
     if user_message:
         parts.append(
             "The user's own words this turn, for judging attributed restatement:\n"
-            f"<<<USER>>>\n{user_message}\n<<<END USER>>>\n"
+            f"<<<USER {nonce}>>>\n{user_message}\n<<<END USER {nonce}>>>\n"
         )
     parts.append("Regions to segment:\n")
     for index, region in enumerate(regions):
-        parts.append(f"<<<REGION {index}>>>\n{region.text}\n<<<END REGION {index}>>>\n")
+        parts.append(
+            f"<<<REGION {index} {nonce}>>>\n{region.text}\n<<<END REGION {index} {nonce}>>>\n"
+        )
     return "\n".join(parts)
 
 
@@ -403,7 +428,14 @@ class ModelSpanExtractor:
         effective_trace = trace_ctx or SystemTraceContext.new("span_extraction")
         response = await self._client.respond(
             role=ModelRole.SPAN_EXTRACTION,
-            messages=[{"role": "user", "content": build_prompt(classifiable, user_message)}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": build_prompt(
+                        classifiable, user_message, nonce=new_delimiter_nonce()
+                    ),
+                }
+            ],
             system_prompt=SYSTEM_PROMPT,
             tools=[span_tool()],
             tool_choice=span_tool_choice(),
@@ -438,6 +470,7 @@ __all__ = [
     "ModelSpanExtractor",
     "SpanExtractor",
     "build_prompt",
+    "new_delimiter_nonce",
     "parse_segments",
     "span_tool",
     "span_tool_choice",

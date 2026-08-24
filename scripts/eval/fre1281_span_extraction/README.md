@@ -81,16 +81,23 @@ still come from documents whose individual failures were never inspected.
 
 ## Measured results — 2026-08-24
 
-Whole corpus, 3 samples (156 document-scorings), extractor frozen before the run.
+Whole corpus, 3 samples (156 document-scorings), both models on the **shipping** prompt,
+extractor frozen before the run.
 
 | | `gpt-5.4-mini` | `claude_sonnet` |
 |---|---|---|
-| bars met | 11 / 16 | **15 / 16** |
-| overall recall | 0.891 | 0.953 |
-| overall precision | 0.863 | 0.865 |
-| decomposition boundary F1 | 0.783 | 0.794 |
-| prose-in-fence recall | 0.767 | 1.000 |
-| connective-evaluative sweep rate | 0.367 | 0.200 (bar 0.15) |
+| **bars met** | 11 / 16 | **15 / 16** |
+| overall recall | 0.873 | 0.935 |
+| overall precision | 0.820 | 0.849 |
+| decomposition boundary F1 | 0.756 | 0.791 |
+| factual-entity recall | 0.718 | 0.872 |
+| NL-in-code recall | 0.833 | 0.967 |
+| unattributed-restatement recall | 0.767 | 0.867 |
+| connective-evaluative sweep rate | 0.300 | 0.267 (bar 0.15) |
+
+`claude_sonnet` meets **all eight per-class recall bars**; `gpt-5.4-mini` misses three of
+them plus overall recall. Per-sample overall recall for the shipping configuration:
+0.967 / 0.924 / 0.913.
 
 Cohen's κ between labeller A (hand) and labeller B (independent model pass driven by
 `ADJUDICATION.md`, **not** the extractor prompt): **0.744**, raw agreement 0.865, against a
@@ -102,13 +109,14 @@ deployment, not a cost change — litellm rejects it alongside the `temperature:
 FRE-758 pin, and `entity_extraction` and `compressor` bind to the same deployment. So the
 choice is between models, and the contract's strength is bounded by extraction recall.
 
-**The one unmet bar.** `fp_rate.class.connective_evaluative` = 0.200 against 0.15 — two
-gold exempt spans swept per sample. The cause is structural rather than a tuning miss:
-that exemption applies only "over cited material", and this ticket's extractor has no
-citation input, because FRE-1280's source registry and marker format are not wired in yet
-(FRE-1282). Most of the corpus's documents in that class express citedness in prose
-("the two cited figures") rather than carrying markers, which is precisely the case the
-extractor cannot decide. The class becomes fully measurable after FRE-1282.
+**The one unmet bar.** `fp_rate.class.connective_evaluative` = 0.267 against 0.15. The
+cause is structural rather than a tuning miss: that exemption applies only "over cited
+material", and this ticket's extractor has no citation input, because FRE-1280's source
+registry and marker format are not wired in yet (FRE-1282). Most of the corpus's documents
+in that class express citedness in prose ("the two cited figures") rather than carrying
+markers, which is precisely the case the extractor cannot decide. It fails in the
+*safe* direction — an exempt span swept into the contract costs a citation, not a missed
+claim. The class becomes fully measurable after FRE-1282.
 
 ## Measurement noise — read before comparing two runs
 
@@ -118,7 +126,7 @@ same-prompt dev runs during this build swung `factual_entity` across 0.50–0.80
 `prose_in_fence` across 0.60–1.00 without the prompt touching either class — noise
 dominating signal, which is why `--samples` exists and why the report prints the
 per-sample spread instead of a single number. Pooled over three samples the overall recall
-spread narrowed to ±0.011.
+spread narrowed to ±0.027 (0.913–0.967) for the shipping configuration.
 
 Do not read a few-point per-class move as a change. Grow the corpus toward 300+ spans
 before treating one as real.

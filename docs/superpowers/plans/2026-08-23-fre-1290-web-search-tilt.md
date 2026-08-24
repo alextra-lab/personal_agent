@@ -240,6 +240,29 @@ Decided from the Set B result, not before:
 - If the full AC-2 conjunction (all three bar conditions above) is met: record that the tilt alone accounts for the behavior, leave FRE-1278 closed (already `Verify Failed`/reverted), state the evidence in this ticket's close.
 - If not met: record the miss, and note FRE-1278's revert-analysis hypothesis (the anti-over-triggering carve-out likely reads "entity named in the question → trigger doesn't apply" backwards on a 27B model) as a candidate follow-up — filed as a **separate** ticket only if genuinely warranted, not re-implemented inside this PR. Reintroducing a previously-reverted, regression-causing prompt change is its own design/measurement cycle, not a fold-in.
 
+## Set A (AC-1 baseline) — results, recorded 2026-08-23, appended after the pre-registration commit
+
+Run against current `origin/main` code (no `src/` edits yet), via the local dev process described above.
+
+| # | kind | question | `web_search` fired | notes |
+|---|---|---|---|---|
+| 1 | entity | olive oil for high-heat cooking | yes | |
+| 2 | entity | mechanical keyboard in Berlin | yes | |
+| 3 | entity | IKEA BILLY bookcase current catalogue | yes | |
+| 4 | entity | budget soldering iron | yes | + bash, perplexity_query |
+| 5 | entity | running shoe brand for flat feet | yes | + bash |
+| 6 | free | tinned tuna mercury | no | |
+| 7 | free | coffee dehydration | no | |
+| 8 | free | microwaving destroys nutrients | no | |
+| 9 | free | scurvy modern diet | no | |
+| 10 | control | train arrival time | tool_iteration_count=0 | **model-server 503, no real answer — see incident below** |
+| 11 | control | 15% of 240 | tool_iteration_count=0 | **model-server 503, no real answer** |
+| 12 | control | bloops/razzles/lazzles syllogism | tool_iteration_count=0 | **model-server 503, no real answer** |
+
+**Entity-naming baseline: 5/5 (100%).** **Aggregate factual (1-9) baseline: 5/9 (55.6%).** `skills_loaded` empty on all 12 (expected — no web-search skill exists pre-change). Every entity-naming question already triggered `web_search` via the *pre-existing* recency-keyed rule (`prompts.py:56`) — several of these questions' phrasing ("right now", "still... current catalogue") plausibly matches that rule independent of this ticket's fix, consistent with FRE-1278's own pre-revert baseline (5/6) and with the ADR-0138 finding that the recency trigger "is real but appears to be the smaller half." **This is a genuine ceiling effect the pre-registered bar did not anticipate**: baseline entity-naming is already at 5/5, so AC-2 condition 2 (no-regression) requires Set B to also reach 5/5 to pass, and condition 1's floor (≥3/5) is not the binding constraint. Recorded honestly rather than adjusted after the fact — the bar and both question sets were locked before this result was seen (commit `49424385`) and are not being edited now.
+
+**Infra incident, questions 10-12:** the local model backend (`AGENT_SLM_BASE_URL=http://localhost:8600`, `unsloth/qwen3.6-35-A3B`) returned `503 Service Unavailable` for these three consecutive turns (confirmed in the dev-server log: `model_call_error`, `Server error 503`). The endpoint was healthy again within minutes (`curl .../v1/models` → 200) — a transient local-backend blip, not a code-path issue introduced by anything in scope here. Each turn still completed with `tool_iteration_count = 0` (no tool was attempted, which is the correct behavior for pure reasoning), but the final response text is an error message, not a real answer — so **AC-4's "answered correctly" cannot be evaluated from Set A's baseline for items 10-12**. Per the once-ever rule these three exact questions are not re-asked. AC-4's actual purpose — verifying this ticket's fix doesn't cause new false-positive searching on non-search questions — is fully answerable from **Set B's own reasoning controls** (post-change tool_iteration_count and correctness), which do not depend on a matching pre-change data point to be meaningful; Set A's compromised rows are disclosed here rather than silently omitted.
+
 ## Risk tier
 
 **Standard/Complex** — touches `orchestrator/prompts.py` (prompt construction), `tools/web.py` (tool contract read by the model every turn), and involves live writes to the shared production-equivalent Neo4j/Postgres. Codex plan-review required before implementation.

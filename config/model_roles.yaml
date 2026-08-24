@@ -61,6 +61,10 @@ roles:
   insights:           { all: claude_sonnet }
   embedding:          { all: embedding }
   compressor:         { all: gpt-5.4-mini }
+  # ADR-0138 D1 (FRE-1281): span classification is "a named component, not a regex".
+  # Bound to the same small structured-output model as entity_extraction — same shape
+  # of task (segment a turn's text, emit a typed structure), same cost profile.
+  span_extraction:    { all: gpt-5.4-mini }
   reranker:           { all: reranker }
   reranker_fallback:  { all: reranker_fallback }
 
@@ -141,6 +145,7 @@ bindings:
   session_summary:    { deployment: claude_sonnet }
   insights:           { deployment: claude_sonnet }
   compressor:         { deployment: gpt-5.4-mini }
+  span_extraction:    { deployment: gpt-5.4-mini }
   embedding:          { deployment: embedding }
   reranker:           { deployment: reranker }
   reranker_fallback:  { deployment: reranker_fallback }

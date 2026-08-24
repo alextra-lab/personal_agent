@@ -92,6 +92,13 @@ BUDGET_ROLE_BY_FACTORY_NAME: dict[str, str] = {
     # budget.yaml lane exists for them; main_inference is correct, now explicit.
     "vision": "main_inference",
     "skill_routing": "skill_routing",
+    # FRE-1281: the ADR-0138 span classifier shares entity_extraction's lane rather than
+    # opening its own. Both are background structured-extraction passes over a turn's
+    # text, and a new lane would need an entry in the REAL budget.yaml, which is
+    # gitignored (FRE-1209) — so adding one here would pass CI against the .example and
+    # then fail validate_role_totality at startup on the deployed box. Splitting the
+    # attribution later is a config edit, not a code change.
+    "span_extraction": "entity_extraction",
     # FRE-989: the residue FRE-1037 left behind. study is capped in budget.yaml
     # ($5 daily / $7 weekly, FRE-839) but was absent here, so the role-name door
     # resolved it to main_inference and its isolation did not apply.

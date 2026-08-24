@@ -44,6 +44,7 @@ class ModelRole(str, Enum):
     RERANKER = "reranker"
     RERANKER_FALLBACK = "reranker_fallback"
     VISION = "vision"
+    SPAN_EXTRACTION = "span_extraction"  # ADR-0138 D1 span classifier (FRE-1281)
     SKILL_ROUTING = "skill_routing"  # matrix-independent — AppConfig.skill_routing_model_key
     STUDY = "study"  # matrix-independent — scripts/study/categorizer.py
 

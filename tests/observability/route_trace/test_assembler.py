@@ -96,6 +96,42 @@ def test_full_population_maps_fields() -> None:
     assert row.pedagogical_outcomes is None
 
 
+def test_skills_loaded_includes_evidence_skill_bodies() -> None:
+    """FRE-1291: hybrid/keyword routing never writes ctx.loaded_skills, but the FRE-1004
+    evidence pipeline (ctx.turn_evidence.assembled_context.skill_bodies) already records
+    what those modes injected, gated on proof the block reached the model. The assembler
+    must read it too, not just ctx.loaded_skills.
+    """
+    ctx = _base_ctx(
+        loaded_skills=set(),
+        turn_evidence=SimpleNamespace(
+            assembled_context=SimpleNamespace(skill_bodies=["web-search"])
+        ),
+    )
+    row = _assemble(ctx)
+    assert row.skills_loaded == ("web-search",)
+
+
+def test_skills_loaded_unions_loaded_skills_and_evidence_skill_bodies() -> None:
+    """model_decided's ctx.loaded_skills source and the evidence-record source both
+    contribute, sorted and deduplicated.
+    """
+    ctx = _base_ctx(
+        loaded_skills={"recall"},
+        turn_evidence=SimpleNamespace(
+            assembled_context=SimpleNamespace(skill_bodies=["web-search", "recall"])
+        ),
+    )
+    row = _assemble(ctx)
+    assert row.skills_loaded == ("recall", "web-search")
+
+
+def test_skills_loaded_handles_missing_turn_evidence() -> None:
+    """Pre-LLM-call / build-failure paths carry no turn_evidence — must not raise."""
+    row = _assemble(_base_ctx(loaded_skills={"recall"}, turn_evidence=None))
+    assert row.skills_loaded == ("recall",)
+
+
 def test_preview_gate_off_stores_hash_not_text() -> None:
     row = _assemble(_base_ctx(), store_preview=False)
     assert row.user_message_preview is None

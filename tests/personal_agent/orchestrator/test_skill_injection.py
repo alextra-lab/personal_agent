@@ -123,8 +123,8 @@ class TestSkillBlockFunctionalInjection:
         with (
             patch(
                 "personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=(_SENTINEL, ()),
-        ),
+                return_value=(_SENTINEL, ()),
+            ),
             patch(
                 "personal_agent.llm_client.factory.get_llm_client",
                 return_value=mock_llm,
@@ -169,8 +169,8 @@ class TestSkillBlockFunctionalInjection:
         with (
             patch(
                 "personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=("", ()),
-        ),
+                return_value=("", ()),
+            ),
             patch(
                 "personal_agent.llm_client.factory.get_llm_client",
                 return_value=mock_llm,
@@ -192,6 +192,96 @@ class TestSkillBlockFunctionalInjection:
         )
 
 
+class TestTurnEvidenceRecordsInjectedSkills:
+    """FRE-1291: a live turn under hybrid/keyword routing must leave a record of what it
+    injected on ctx.turn_evidence.assembled_context.skill_bodies — the source
+    route_traces.skills_loaded now reads in addition to ctx.loaded_skills (which hybrid/
+    keyword deliberately never write, since that field also drives get_skill_bodies /
+    read_skill dedup suppression).
+    """
+
+    @pytest.mark.asyncio
+    async def test_hybrid_mode_turn_evidence_records_injected_skill(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import settings
+        from personal_agent.telemetry.trace import TraceContext
+
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
+        monkeypatch.setattr(settings, "skill_routing_model_key", "")
+
+        ctx = _make_minimal_ctx()
+        trace_ctx = TraceContext.new_trace()
+        mock_llm = _make_mock_llm_client(_make_minimal_response())
+        mock_session = MagicMock()
+        mock_session.add_message = AsyncMock()
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        with (
+            patch(
+                "personal_agent.orchestrator.skills.get_skill_bodies",
+                return_value=(_SENTINEL, ("web-search",)),
+            ),
+            patch(
+                "personal_agent.llm_client.factory.get_llm_client",
+                return_value=mock_llm,
+            ),
+            patch(
+                "personal_agent.orchestrator.executor.get_default_registry",
+                return_value=MagicMock(get_tool_definitions_for_llm=MagicMock(return_value=[])),
+            ),
+        ):
+            from personal_agent.orchestrator.executor import step_llm_call
+
+            await step_llm_call(ctx, mock_session, trace_ctx)  # type: ignore[arg-type]
+
+        assert ctx.turn_evidence is not None
+        assert ctx.turn_evidence.assembled_context.skill_bodies == ["web-search"]
+        # Dedup key must stay untouched by the hybrid path.
+        assert ctx.loaded_skills == set()
+
+    @pytest.mark.asyncio
+    async def test_keyword_mode_turn_evidence_records_injected_skill(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import settings
+        from personal_agent.telemetry.trace import TraceContext
+
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        monkeypatch.setattr(settings, "skill_routing_mode", "keyword")
+        monkeypatch.setattr(settings, "skill_routing_model_key", "")
+
+        ctx = _make_minimal_ctx()
+        trace_ctx = TraceContext.new_trace()
+        mock_llm = _make_mock_llm_client(_make_minimal_response())
+        mock_session = MagicMock()
+        mock_session.add_message = AsyncMock()
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        with (
+            patch(
+                "personal_agent.orchestrator.skills.get_skill_bodies",
+                return_value=(_SENTINEL, ("web-search",)),
+            ),
+            patch(
+                "personal_agent.llm_client.factory.get_llm_client",
+                return_value=mock_llm,
+            ),
+            patch(
+                "personal_agent.orchestrator.executor.get_default_registry",
+                return_value=MagicMock(get_tool_definitions_for_llm=MagicMock(return_value=[])),
+            ),
+        ):
+            from personal_agent.orchestrator.executor import step_llm_call
+
+            await step_llm_call(ctx, mock_session, trace_ctx)  # type: ignore[arg-type]
+
+        assert ctx.turn_evidence is not None
+        assert ctx.turn_evidence.assembled_context.skill_bodies == ["web-search"]
+        assert ctx.loaded_skills == set()
+
+
 _INDEX_DIRECTIVE_SENTINEL = "<skill_index_directive>"
 _USAGE_DIRECTIVE_SENTINEL = "<skill_usage_directives>"
 
@@ -202,7 +292,8 @@ def _make_nudge_patches(
     usage_directives_return: str,
 ) -> tuple:
     return (
-        patch("personal_agent.orchestrator.skills.get_skill_bodies",
+        patch(
+            "personal_agent.orchestrator.skills.get_skill_bodies",
             return_value=(skill_injection, ()),
         ),
         patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
@@ -250,9 +341,10 @@ class TestSkillNudgeInjection:
         mock_session.get_messages = AsyncMock(return_value=[])
 
         with (
-            patch("personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=(_SENTINEL, ()),
-        ),
+            patch(
+                "personal_agent.orchestrator.skills.get_skill_bodies",
+                return_value=(_SENTINEL, ()),
+            ),
             patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
             patch(
                 "personal_agent.orchestrator.skills.assemble_skill_index_directive",
@@ -298,9 +390,10 @@ class TestSkillNudgeInjection:
         mock_session.get_messages = AsyncMock(return_value=[])
 
         with (
-            patch("personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=(_SENTINEL, ()),
-        ),
+            patch(
+                "personal_agent.orchestrator.skills.get_skill_bodies",
+                return_value=(_SENTINEL, ()),
+            ),
             patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
             patch(
                 "personal_agent.orchestrator.skills.assemble_skill_index_directive",
@@ -346,9 +439,10 @@ class TestSkillNudgeInjection:
         mock_session.get_messages = AsyncMock(return_value=[])
 
         with (
-            patch("personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=("", ()),
-        ),
+            patch(
+                "personal_agent.orchestrator.skills.get_skill_bodies",
+                return_value=("", ()),
+            ),
             patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
             patch(
                 "personal_agent.orchestrator.skills.assemble_skill_index_directive",

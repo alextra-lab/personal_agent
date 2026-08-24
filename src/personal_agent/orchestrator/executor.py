@@ -30,6 +30,7 @@ from personal_agent.captains_log.turn_evidence import (
 )
 from personal_agent.config import settings
 from personal_agent.config.env_loader import Environment
+from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.llm_client import ModelRole
 from personal_agent.llm_client.message_content import (
     MessageContent,
@@ -1306,6 +1307,129 @@ def _record_turn_evidence(
             trace_id=ctx.trace_id,
             session_id=ctx.session_id,
         )
+
+    # ADR-0138 D2 item 1 (FRE-1280): the memory half of the source registry, resolved
+    # from the record just built so admission is decided once for both surfaces.
+    _register_admitted_memory_sources(ctx)
+
+
+def _register_admitted_memory_sources(ctx: ExecutionContext) -> None:
+    """Register the memory items this turn actually admitted (ADR-0138 D2 item 1).
+
+    Reads admission from ``ctx.turn_evidence`` — the ADR-0125 record built moments earlier
+    at the same admission point — rather than forming a second opinion about what reached
+    the model. An item the evidence record says was dropped is not a source the turn can
+    cite, and two surfaces disagreeing about that is exactly the ambiguity ADR-0125 exists
+    to remove.
+
+    Best-effort: a registry that fails to populate must never break the turn.
+
+    Args:
+        ctx: Execution context. Requires ``ctx.source_registry`` and ``ctx.turn_evidence``.
+    """
+    registry = ctx.source_registry
+    if registry is None or ctx.turn_evidence is None or not ctx.memory_context:
+        return
+
+    admitted = set(ctx.turn_evidence.assembled_context.memory_identities)
+    if not admitted:
+        return
+
+    try:
+        for item in ctx.memory_context:
+            if not isinstance(item, Mapping):
+                continue
+            _, identity = memory_item_identity(item)
+            if identity in admitted:
+                registry.register_memory_item(item)
+    except Exception:
+        log.exception(
+            "source_registry_memory_registration_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+
+
+def _register_tool_source(
+    ctx: ExecutionContext,
+    *,
+    tool_name: str,
+    arguments: Mapping[str, object],
+    content: str,
+    success: bool,
+) -> None:
+    """Offer one tool result to this turn's source registry (ADR-0138 D2).
+
+    The registry decides admissibility; this only carries the call across. The arguments
+    matter as much as the content — D2 admits a tool result only to the extent it is not
+    the model's own arguments returning.
+
+    Best-effort, for the same reason as the memory half: an unregistered source costs a
+    citation, an exception here would cost the turn.
+
+    Args:
+        ctx: Execution context.
+        tool_name: The tool that ran.
+        arguments: The model's own arguments to the call.
+        content: The result as recorded for the model.
+        success: Whether the call succeeded.
+    """
+    registry = ctx.source_registry
+    if registry is None:
+        return
+
+    try:
+        registration = registry.register_tool_result(
+            tool_name=tool_name,
+            arguments=arguments,
+            content=content,
+            success=success,
+        )
+    except Exception:
+        log.exception(
+            "source_registry_tool_registration_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            tool_name=tool_name,
+        )
+        return
+
+    if registration.source is None:
+        log.debug(
+            "source_registry_tool_inadmissible",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            tool_name=tool_name,
+            admissibility=registration.admissibility.value,
+            reason=registration.reason,
+        )
+
+
+def _log_source_registry_snapshot(ctx: ExecutionContext) -> None:
+    """Emit what this turn could have cited, once, at the end of the turn.
+
+    Identifiers, kinds and labels only — never content, which would put retrieved text and
+    any PII it carries into a text-indexed store. This is the surface that makes the
+    registry observable before anything consumes it (FRE-1280 AC-1).
+
+    Args:
+        ctx: Execution context.
+    """
+    registry = ctx.source_registry
+    if registry is None:
+        return
+
+    sources = registry.sources()
+    log.info(
+        "source_registry_snapshot",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        source_count=len(sources),
+        sources=[
+            {"identifier": s.identifier, "kind": s.kind.value, "label": s.label, "origin": s.origin}
+            for s in sources
+        ],
+    )
 
 
 async def _populate_operator_identity(
@@ -2667,6 +2791,12 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         channel=ctx.channel.value,
     )
 
+    # ADR-0138 D2/D3(a) (FRE-1280): one registry per turn, created before any retrieval
+    # so every source this turn gathers has somewhere to land. The user's own words are
+    # D2's fourth admissible kind and are available right here, at turn start.
+    ctx.source_registry = SourceRegistry(turn_id=ctx.trace_id)
+    ctx.source_registry.register_user_message(ctx.user_message)
+
     # Start request-scoped metrics monitoring (ADR-0012)
     monitor = None
     if settings.request_monitoring_enabled:
@@ -3026,6 +3156,11 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
             # no resolution outlives this turn into a later async context (AC-10c).
             reset_artifact_builder_resolution(_builder_carrier_token)
             reset_decision_disclosures(_disclosure_carrier_token)
+
+            # ADR-0138 (FRE-1280): what this turn could have cited. In the `finally` so a
+            # failed turn is observable too — a turn that retrieved nothing before it
+            # broke is exactly the case worth being able to read back.
+            _log_source_registry_snapshot(ctx)
 
     return ctx
 
@@ -5511,6 +5646,16 @@ async def step_tool_execution(
                 # intra-turn digest sidecar and were dropped before the capture.
                 "arguments": plan["arguments"],
             }
+        )
+        # ADR-0138 D2 item 2/3 (FRE-1280). The arguments travel with the content: a tool
+        # result is a source only to the extent it is not the model's own arguments
+        # returning, and `content` alone cannot answer that.
+        _register_tool_source(
+            ctx,
+            tool_name=dr["tool_name"],
+            arguments=plan["arguments"],
+            content=content,
+            success=dr["success"],
         )
         ctx.steps.append(
             {

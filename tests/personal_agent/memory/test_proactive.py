@@ -141,7 +141,10 @@ def test_score_combination_non_empty(loose_proactive_settings: None) -> None:
     # episode floor admits the episode first — walk order is admission priority, not
     # presentation (the renderer partitions by kind), so assert membership, not rank.
     assert sorted(c.kind for c in out.candidates) == ["entity", "episode"]
-    assert out.candidates[0].relevance_score > 0.5
+    # FRE-1287: embedding is rescaled (orthogonal maps to 0.0, not 0.5), so the ceiling
+    # this real-overlap-plus-topic-hit case can reach dropped from ~0.56 to ~0.41. Still
+    # comfortably above min_score (0.3) on genuine signal, not on any floor.
+    assert out.candidates[0].relevance_score > 0.35
     assert out.query_embedding_ms == 12.5
 
 
@@ -250,5 +253,5 @@ def test_topic_subscore_empty_entity_name_no_artificial_hit() -> None:
         entity_name="",  # Episode: no entity name
         key_entities=[],  # No related entities
     )
-    # Should be no-hit (0.3), not artificial hit from empty-string containment
-    assert score == 0.3, f"Expected 0.3 (no-hit), got {score}"
+    # FRE-1287: no-hit is 0.0, not a 0.3 floor — should be no artificial hit either way.
+    assert score == 0.0, f"Expected 0.0 (no-hit), got {score}"

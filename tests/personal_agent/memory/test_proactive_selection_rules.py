@@ -16,13 +16,17 @@ Walk order is admission priority, not presentation — the renderer partitions i
 kind — so these tests assert set membership and gate attribution, not prompt order,
 except where the guarantee itself is the order (the floor consuming budget first).
 
-Scoring is deterministic as in ``test_proactive_discards.py``: ``timestamp_iso=None``
-pins recency at 0.5, no topic hint pins topic at 0.5, no session entities pins overlap
-at 0 — final score is ``0.45 * vector_score + 0.15`` under the deployed weights.
+Scoring is deterministic as in ``test_proactive_discards.py``: a same-instant
+timestamp pins recency at ~1.0 (FRE-1287 removed the 0.5 missing-timestamp fallback),
+no topic hint pins topic at 0.0 (also FRE-1287 — was 0.5), no session entities pins
+overlap at 0 — final score is ``0.45 * max(0, 2 * vector_score - 1) + 0.20`` under the
+deployed weights (FRE-1287 also rescaled the embedding subscore so orthogonal maps to
+0.0 rather than Neo4j's raw 0.5).
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -52,6 +56,11 @@ def deployed_scoring(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(s, name, value, raising=False)
 
 
+def _now_iso() -> str:
+    """A same-instant timestamp — recency ~1.0, deterministic to test-relevant precision."""
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _pair_row(name: str, turn_id: str, vector_score: float) -> dict[str, Any]:
     """A production-shaped dense row: entity fields AND best-turn fields."""
     return {
@@ -61,7 +70,7 @@ def _pair_row(name: str, turn_id: str, vector_score: float) -> dict[str, Any]:
         "vector_score": vector_score,
         "turn_id": turn_id,
         "session_id": "other",
-        "timestamp_iso": None,
+        "timestamp_iso": _now_iso(),
         "user_message": f"we discussed {name}",
         "summary": f"summary about {name}",
         "key_entities": [name],
@@ -160,9 +169,9 @@ class TestMentionedEntityPin:
         rows = [
             _entity_row("Associate0", 0.90),
             _entity_row("Associate1", 0.89),
-            _entity_row("M1", 0.50),
-            _entity_row("M2", 0.45),
-            _entity_row("M3", 0.40),
+            _entity_row("M1", 0.85),
+            _entity_row("M2", 0.80),
+            _entity_row("M3", 0.75),
         ]
 
         out = build_proactive_suggestions(
@@ -182,7 +191,7 @@ class TestEpisodeFloor:
     ) -> None:
         """AC-2: five entity rows outrank the only episode; the floor admits it anyway."""
         rows = [_entity_row(f"E{i}", 0.90 - i * 0.01) for i in range(5)] + [
-            _pair_row("Weak", "t-weak", 0.50)
+            _pair_row("Weak", "t-weak", 0.70)
         ]
 
         out = build_proactive_suggestions(rows, set(), None, "t-ac2", None)
@@ -206,7 +215,7 @@ class TestEpisodeFloor:
         rows = [
             _entity_row("M1", 0.90),
             _entity_row("M2", 0.89),
-            _pair_row("Weak", "t-weak", 0.50),
+            _pair_row("Weak", "t-weak", 0.70),
         ]
 
         out = build_proactive_suggestions(
@@ -221,11 +230,12 @@ class TestEpisodeFloor:
     def test_a_sub_floor_episode_is_not_reserved(self, deployed_scoring: None) -> None:
         """The quality guard: an episode below the diminishing floor earns no slot.
 
-        0.45 * 0.40 + 0.15 = 0.33 < 0.35 — today's floor-stop behaviour is preserved
-        exactly (this is also AC-4's shape: with no reservation and no pins, the walk
-        is the pre-FRE-1062 loop).
+        0.45 * max(0, 2*0.65-1) + 0.20 = 0.335 < 0.35 — both rows clear ``min_score``
+        (0.30) so they reach the floor check as real candidates, and both are cut by it
+        (this is also AC-4's shape: with no reservation and no pins, the walk is the
+        pre-FRE-1062 loop).
         """
-        rows = [_episode_row("t0", 0.40), _episode_row("t1", 0.38)]
+        rows = [_episode_row("t0", 0.65), _episode_row("t1", 0.63)]
 
         out = build_proactive_suggestions(rows, set(), None, "t-sub-floor", None)
 

@@ -263,7 +263,7 @@ def _patch_producer(
     """
     calls: list[dict[str, Any]] = []
 
-    async def fake_generate(captures, *, session_id, ended_at, trace_id="x"):
+    async def fake_generate(captures, *, session_id, ended_at, trace_id="x", tracer=None):
         calls.append({"session_id": session_id, "captures": list(captures), "ended_at": ended_at})
         return outcome or _generated()
 
@@ -532,7 +532,9 @@ async def test_write_refused_when_a_turn_lands_mid_generation(
     memory = _FakeMemory({"sess-1": _session(ended_minutes_ago=30)})
     scheduler.memory_service = memory  # type: ignore[assignment]
 
-    async def generate_then_a_turn_lands(captures, *, session_id, ended_at, trace_id="x"):
+    async def generate_then_a_turn_lands(
+        captures, *, session_id, ended_at, trace_id="x", tracer=None
+    ):
         memory.sessions[session_id]["ended_at"] = _now() - timedelta(minutes=1)
         return _generated()
 
@@ -1323,7 +1325,7 @@ async def test_a_refused_write_is_not_treated_as_a_store_outage(
     )
     scheduler.memory_service = memory
 
-    async def a_turn_lands_during_s1(captures, *, session_id, ended_at, trace_id="x"):
+    async def a_turn_lands_during_s1(captures, *, session_id, ended_at, trace_id="x", tracer=None):
         if session_id == "s1":
             memory.sessions["s1"]["ended_at"] += timedelta(seconds=1)
         return _generated()

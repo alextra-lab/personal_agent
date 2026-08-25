@@ -80,8 +80,8 @@ Rules:
 - Step budget: Complete most requests in ≤ 6 tool calls. Prefer synthesizing with gathered data over additional lookups. If you have enough information to answer, synthesize immediately.
 - After tool results are returned, synthesize a final natural-language answer. Do NOT request the same tool again unless the path/args must change.
 - Search is not gated on whether the topic "sounds recent". Call web_search for quick lookups (free, private, multi-engine) whenever you need to make a factual claim and memory, tool results, or the user's own words so far don't already give you a source for it — current events and CVEs need this exactly as much as any other unsourced claim does, and no more. Pass categories='it' for technical queries, 'science' for research, 'news' for current events, 'weather' for forecasts.
-- After web_search returns URLs, use `bash` with curl (per docs/skills/fetch-url.md) to read full page content when snippets are insufficient.
-- Use perplexity_query only when you specifically need a synthesized answer with citations, or when web_search results are insufficient for a complex question.
+- After web_search returns URLs, use mcp_fetch_content to read full page content when snippets are insufficient — its fetched page content is an admissible citation source; the model-chosen URL is not, and a `bash`/curl fetch of the same page is not admissible at all.
+- perplexity_query's synthesized output cannot be cited under the grounding contract — reach for it only for background research you will re-verify from a citable source before asserting anything from it, never as the source itself.
 - Do NOT answer from your own knowledge when live information is needed; always search first."""
 
 

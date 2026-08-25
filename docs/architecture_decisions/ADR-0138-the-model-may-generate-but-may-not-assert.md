@@ -1,6 +1,9 @@
 # ADR-0138: The Model May Generate, But It May Not Assert — Verified Citations as Seshat's Grounding Contract, Tier-Invariant and Enforced by Measured Compliance
 
-**Status:** Accepted — 2026-08-23 (owner)
+**Status:** Accepted — 2026-08-23 (owner); amended 2026-08-25 — D2's `curl` illustration
+corrected to the typed fetch tool (FRE-1283 review: `bash`+`curl` yields no admissible
+source at all under the shipped independence rule, not the partial page-yes/URL-no case
+the original illustration described)
 **Date:** 2026-08-23
 **Deciders:** Project owner (design), `adr` session (drafting)
 **Tags:** grounding, hallucination, citations, retrieval, model-routing, memory, prompts
@@ -190,7 +193,11 @@ runs `printf 'Paris has 9 million residents'`, cites the shell output, and a cla
 entirely in its weights passes all three checks. The rule is mechanical — content traceable to the
 tool-call arguments is not evidence:
 
-- `curl <url>` — the fetched **page** is a source; the URL the model chose is not.
+- `mcp_fetch_content(url=...)` — the fetched **page** is a source; the URL the model chose is not.
+  (`curl` run through `bash` is not this case at all — `bash` is a fully-excluded
+  arbitrary-code tool per D2's independence rule below, so it yields no admissible
+  source, not even the page. FRE-1283 points the tool-use prompt at the typed fetch
+  tool for exactly this reason.)
 - a database query — the returned **rows** are a source; the SQL the model wrote is not.
 - `printf`, `echo`, or any call whose output is a function of model-authored input — yields **no**
   admissible source at all.

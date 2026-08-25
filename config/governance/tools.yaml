@@ -578,10 +578,14 @@ tools:
     # timeout_seconds: 30
 
   # Auto-discovered: 2026-01-18T20:34:06.948747
-  # Fetch and parse content from a webpage URL. — DISABLED: superseded by bash curl + fetch-url skill (FRE-265)
+  # Fetch and parse content from a webpage URL. — re-enabled (FRE-1283, ADR-0138 D2):
+  # `bash` + `curl` registers no admissible citation source (arbitrary model-authored
+  # command line), so the fetch-url skill (FRE-265) no longer covers a turn that needs
+  # to cite a fetched page. This is the typed fetch path the grounding contract prompt
+  # now points at — fetched page content is admissible, the model-chosen URL is not.
   mcp_fetch_content:
     category: "mcp"
-    allowed_in_modes: []
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:

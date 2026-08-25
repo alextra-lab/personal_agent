@@ -44,9 +44,16 @@ def _overlap_subscore(session_entities: set[str], candidate_entities: list[str])
 
 
 def _recency_subscore(timestamp_iso: str | None, half_life_days: float) -> float:
-    """Exponential decay with half-life in days (1.0 at t=0)."""
+    """Exponential decay with half-life in days (1.0 at t=0).
+
+    A missing or unparseable timestamp carries no recency evidence and scores 0.0, not
+    a neutral guess (FRE-1287, ADR-0138). The prior 0.5 fallback let an unknown-age
+    memory buy half credit for a signal it never supplied — combined with the other
+    subscores' floors, that was enough for a same-day, otherwise-irrelevant memory to
+    clear the admission bar on recency alone.
+    """
     if not timestamp_iso or half_life_days <= 0:
-        return 0.5
+        return 0.0
     try:
         raw = timestamp_iso.replace("Z", "+00:00")
         ts = datetime.fromisoformat(raw)
@@ -56,7 +63,7 @@ def _recency_subscore(timestamp_iso: str | None, half_life_days: float) -> float
         age_days = max(0.0, (now - ts).total_seconds() / 86400.0)
         return float(math.exp(-math.log(2) * age_days / half_life_days))
     except (ValueError, TypeError, OSError):
-        return 0.5
+        return 0.0
 
 
 def _topic_subscore(
@@ -64,12 +71,18 @@ def _topic_subscore(
     entity_name: str,
     key_entities: list[str],
 ) -> float:
-    """MVP topic proxy: keyword overlap with entity names (ADR-0039 stub)."""
+    """MVP topic proxy: keyword overlap with entity names (ADR-0039 stub).
+
+    No hint, no tokens, or zero keyword hits all score 0.0, not a neutral or partial
+    guess (FRE-1287, ADR-0138). "No evidence this candidate is on-topic" is not
+    evidence that it is — the prior 0.5/0.3 fallbacks handed a floor to exactly the
+    subscore meant to measure relevance, and it was the one most often outvoted.
+    """
     if not session_topic_hint or not session_topic_hint.strip():
-        return 0.5
+        return 0.0
     tokens = {w for w in session_topic_hint.lower().split() if len(w) > 2}
     if not tokens:
-        return 0.5
+        return 0.0
     names = {e.lower() for e in ([entity_name] if entity_name else []) + key_entities if e}
     hits = 0
     for name in names:
@@ -78,13 +91,22 @@ def _topic_subscore(
                 hits += 1
                 break
     if hits == 0:
-        return 0.3
+        return 0.0
     return min(1.0, hits / 2.0)
 
 
 def _normalize_vector_score(score: float) -> float:
-    """Neo4j vector index scores are typically cosine-like; clamp to [0,1]."""
-    return max(0.0, min(1.0, float(score)))
+    """Rescale Neo4j's ``(1 + cos) / 2`` embedding score so orthogonal maps to 0.0.
+
+    Neo4j's vector index normalizes cosine similarity into [0,1] via ``(1 + cos) / 2``,
+    so a candidate with *no* directional relation to the query (cos=0) still scores
+    0.5, not 0.0 — a floor on the one subscore meant to carry the actual relevance
+    signal (FRE-1287, ADR-0138). Undoing that normalization recovers cosine in
+    [-1,1] and clamps non-positive similarity (orthogonal or opposed) to 0.0: no
+    positive embedding evidence, no embedding credit.
+    """
+    clamped = max(0.0, min(1.0, float(score)))
+    return max(0.0, 2.0 * clamped - 1.0)
 
 
 def _combine_scores(

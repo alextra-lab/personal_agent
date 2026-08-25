@@ -10,13 +10,17 @@ the split: a pair row yields **two** candidates, deduped by kind-appropriate ide
 with every FRE-1060 gate and accounting invariant intact over the candidate population.
 
 Scoring is deterministic the same way `test_proactive_discards.py` makes it so:
-``timestamp_iso=None`` pins recency at 0.5, ``session_topic_hint=None`` pins topic at
-0.5, no session entities pins overlap at 0 — every final score is
-``0.45 * vector_score + 0.15`` under the deployed weights.
+a same-instant timestamp pins recency at ~1.0 (FRE-1287 removed the 0.5
+missing-timestamp fallback, so a real "now" timestamp is used instead),
+``session_topic_hint=None`` pins topic at 0.0, no session entities pins overlap at 0 —
+every final score is ``0.45 * max(0, 2 * vector_score - 1) + 0.20`` under the deployed
+weights (FRE-1287 also rescaled the embedding subscore so an orthogonal candidate maps
+to 0.0, not Neo4j's raw 0.5).
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -49,6 +53,11 @@ def deployed_scoring(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(s, name, value, raising=False)
 
 
+def _now_iso() -> str:
+    """A same-instant timestamp — recency ~1.0, deterministic to test-relevant precision."""
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _pair_row(
     *,
     name: str | None = "Melon",
@@ -67,7 +76,7 @@ def _pair_row(
         "vector_score": vector_score,
         "turn_id": turn_id,
         "session_id": "other-session",
-        "timestamp_iso": None,
+        "timestamp_iso": _now_iso(),
         "user_message": user_message,
         "summary": summary,
         "key_entities": key_entities if key_entities is not None else [name] if name else [],

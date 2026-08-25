@@ -18,15 +18,20 @@ catches that, so only survivor equality can guard the clause.
 
 :class:`TestGateAttribution` then asserts each discard names the gate that removed it.
 
-Scoring is made deterministic by removing the two time- and text-dependent subscores
-rather than by freezing a clock: ``timestamp_iso=None`` makes ``_recency_subscore``
-return exactly 0.5, and ``session_topic_hint=None`` makes ``_topic_subscore`` return
-exactly 0.5. With no session entities the overlap term is 0, so with the deployed
-weights every final score is ``0.45 * vector_score + 0.15``.
+Scoring is made deterministic by removing the two text-dependent subscores and pinning
+recency, rather than by freezing a clock: a same-instant timestamp makes
+``_recency_subscore`` return ~1.0 (FRE-1287 removed the 0.5 missing-timestamp
+fallback, so a real "now" timestamp is used to get a stable, non-floor value), and
+``session_topic_hint=None`` makes ``_topic_subscore`` return exactly 0.0 (also
+FRE-1287 — the prior no-hint fallback was 0.5). With no session entities the overlap
+term is 0, so with the deployed weights every final score is
+``0.45 * max(0, 2 * vector_score - 1) + 0.20`` — FRE-1287 also rescaled the embedding
+subscore so Neo4j's raw 0.5 (orthogonal) maps to 0.0 rather than passing through.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -35,16 +40,17 @@ import personal_agent.memory.proactive as proactive_mod
 from personal_agent.captains_log.turn_evidence import DropReason
 from personal_agent.memory.proactive import build_proactive_suggestions
 
-#: ``0.45 * vector_score + 0.15`` under the fixture below — stated so a reader can check
-#: a case's expectations without running the scorer.
+#: ``0.45 * max(0, 2 * vector_score - 1) + 0.20`` under the fixture below — stated so a
+#: reader can check a case's expectations without running the scorer. Any vector_score
+#: at or below 0.5 (no positive embedding evidence) clamps to the flat 0.20 floor.
 SCORES: dict[float, float] = {
-    0.90: 0.555,
-    0.80: 0.510,
-    0.70: 0.465,
-    0.60: 0.420,
-    0.50: 0.375,
-    0.40: 0.330,
-    0.20: 0.240,
+    0.90: 0.56,
+    0.80: 0.47,
+    0.70: 0.38,
+    0.60: 0.29,
+    0.50: 0.20,
+    0.40: 0.20,
+    0.20: 0.20,
 }
 
 
@@ -72,11 +78,19 @@ def deployed_scoring(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(s, name, value, raising=False)
 
 
-def _episode(turn_id: str, vector_score: float) -> dict[str, Any]:
-    """An episode row whose only live subscore is the embedding.
+def _now_iso() -> str:
+    """A same-instant timestamp — recency ~1.0, deterministic to test-relevant precision."""
+    return datetime.now(timezone.utc).isoformat()
 
-    ``timestamp_iso`` is omitted deliberately: a real timestamp would make the recency
-    subscore a function of wall-clock time and the oracle would drift.
+
+def _episode(turn_id: str, vector_score: float) -> dict[str, Any]:
+    """An episode row whose only live, freely-chosen subscore is the embedding.
+
+    Recency is pinned to ~1.0 via a same-instant timestamp rather than left at a
+    fallback: FRE-1287 removed the missing-timestamp fallback (was 0.5, now 0.0), so
+    the oracle needs real recency evidence to keep the scoring range usable while
+    staying deterministic (age is milliseconds at test run time, so decay is
+    negligible regardless of when the suite runs).
     """
     return {
         "turn_id": turn_id,
@@ -84,7 +98,7 @@ def _episode(turn_id: str, vector_score: float) -> dict[str, Any]:
         "summary": f"summary {turn_id}",
         "key_entities": [],
         "vector_score": vector_score,
-        "timestamp_iso": None,
+        "timestamp_iso": _now_iso(),
     }
 
 
@@ -100,7 +114,7 @@ def _entity(
         "entity_type": "Thing",
         "description": description,
         "vector_score": vector_score,
-        "timestamp_iso": None,
+        "timestamp_iso": _now_iso(),
     }
 
 
@@ -173,7 +187,10 @@ class TestSelectionUnchanged:
         """A payload larger than the whole budget is stepped over; later rows survive.
 
         This is the loop's only ``continue`` branch, and it is why the oversized drop
-        cannot be attributed to the terminal gate.
+        cannot be attributed to the terminal gate. ``t2``'s score is chosen so the gap
+        from ``t0`` (the oversized ``t1`` is skipped without updating ``prev_score``)
+        stays under 0.15 — a steeper drop would trigger the gap gate instead and this
+        case would silently test that.
         """
         monkeypatch.setattr(proactive_mod.settings, "proactive_memory_max_tokens", 500)
         monkeypatch.setattr(
@@ -181,29 +198,32 @@ class TestSelectionUnchanged:
             "_estimate_payload_tokens",
             lambda p: 900 if p.get("conversation_id") == "t1" else 100,
         )
-        rows = [_episode("t0", 0.90), _episode("t1", 0.80), _episode("t2", 0.70)]
+        rows = [_episode("t0", 0.90), _episode("t1", 0.80), _episode("t2", 0.75)]
 
         assert _selected(_run(rows, "t-oversized")) == ["t0", "t2"]
 
     def test_score_floor_is_terminal(self, deployed_scoring: None) -> None:
         """``diminishing_score_floor=0.35`` stops the loop below 0.35.
 
-        The scores are chosen so the *gap* gate cannot fire first: 0.375 then 0.330 is a
-        drop of 0.045, well inside the 0.15 gap, so the floor is the binding gate. A
+        The scores are chosen so the *gap* gate cannot fire first: 0.38 then 0.344 is a
+        drop of 0.036, well inside the 0.15 gap, so the floor is the binding gate. A
         steeper pair would break on the gap and this case would silently test that
-        instead — which is exactly the gate confusion the ticket is about.
+        instead — which is exactly the gate confusion the ticket is about. ``t1``'s own
+        score (0.344) still clears ``min_score`` (0.30), so it reaches the floor check
+        as a real candidate rather than being cut earlier at the threshold gate.
         """
-        rows = [_episode("t0", 0.50), _episode("t1", 0.40)]
+        rows = [_episode("t0", 0.70), _episode("t1", 0.66)]
 
         assert _selected(_run(rows, "t-floor")) == ["t0"]
 
     def test_score_gap_is_terminal(self, deployed_scoring: None) -> None:
         """A drop over ``diminishing_score_gap=0.15`` vs the previous pick stops the loop.
 
-        0.555 then 0.375 is a gap of 0.18. The floor does not fire here (0.375 > 0.35),
-        so this isolates the gap gate.
+        0.56 then 0.38 is a gap of 0.18. The floor does not fire here (0.38 > 0.35), so
+        this isolates the gap gate — ``t1``'s own score would pass the floor on its own
+        merits; only the gap from ``t0`` stops it.
         """
-        rows = [_episode("t0", 0.90), _episode("t1", 0.50)]
+        rows = [_episode("t0", 0.90), _episode("t1", 0.70)]
 
         assert _selected(_run(rows, "t-gap")) == ["t0"]
 
@@ -214,8 +234,13 @@ class TestSelectionUnchanged:
         assert _selected(_run(rows, "t-threshold")) == ["t0"]
 
     def test_duplicate_turn_ids_collapse_to_the_first(self, deployed_scoring: None) -> None:
-        """Dedupe keeps the first row per ``turn_id``; vector order is best-first."""
-        rows = [_episode("t0", 0.90), _episode("t0", 0.80), _episode("t1", 0.70)]
+        """Dedupe keeps the first row per ``turn_id``; vector order is best-first.
+
+        ``t1``'s score (0.85 -> 0.515) stays within the 0.15 gap of ``t0`` (0.56) so the
+        gap gate does not interfere with what this test isolates: the duplicate ``t0``
+        row is dropped by dedupe, never by a score gate.
+        """
+        rows = [_episode("t0", 0.90), _episode("t0", 0.80), _episode("t1", 0.85)]
 
         assert _selected(_run(rows, "t-dupe")) == ["t0", "t1"]
 
@@ -289,11 +314,11 @@ class TestGateAttribution:
     def test_score_floor_and_gap_are_distinguished(self, deployed_scoring: None) -> None:
         """Two score gates, two reasons — they demand different remedies.
 
-        Note how close the inputs are: 0.50/0.40 breaks on the floor and 0.90/0.50 on the
+        Note how close the inputs are: 0.70/0.66 breaks on the floor and 0.90/0.70 on the
         gap. Before this ticket both reported as one unnamed trim.
         """
-        floor_out = _run([_episode("t0", 0.50), _episode("t1", 0.40)], "t-f")
-        gap_out = _run([_episode("t0", 0.90), _episode("t1", 0.50)], "t-g")
+        floor_out = _run([_episode("t0", 0.70), _episode("t1", 0.66)], "t-f")
+        gap_out = _run([_episode("t0", 0.90), _episode("t1", 0.70)], "t-g")
 
         assert [d.drop_reason for d in floor_out.discarded] == [DropReason.RECALL_SCORE_FLOOR]
         assert [d.drop_reason for d in gap_out.discarded] == [DropReason.RECALL_SCORE_GAP]
@@ -382,13 +407,13 @@ class TestEmptyDescriptionGate:
         """FRE-1062 pins bypass rank, not emptiness -- an empty mentioned entity must
         not ride the pin past this gate either.
 
-        ``Other1``'s score (0.60) is chosen well clear of ``diminishing_score_floor``
+        ``Other1``'s score (0.75) is chosen well clear of ``diminishing_score_floor``
         (0.35): with ``Empty1`` gone before scoring, no episode floor candidate exists
         to head the walk, so ``Other1`` is judged by the ordinary floor/gap checks like
         any rest-region candidate -- this isolates the pin behaviour under test from
         that unrelated gate.
         """
-        rows = [_entity("Empty1", 0.50, ""), _entity("Other1", 0.60, "x")]
+        rows = [_entity("Empty1", 0.50, ""), _entity("Other1", 0.75, "x")]
 
         out = build_proactive_suggestions(
             rows, set(), None, "t-empty-pin", None, mentioned_entity_names=["Empty1"]
@@ -465,8 +490,13 @@ class TestConservation:
                 100_000,
                 20,
             ),
-            ("score_floor", [_episode("t0", 0.50), _episode("t1", 0.40)], 100_000, 5),
-            ("score_gap", [_episode("t0", 0.90), _episode("t1", 0.50)], 100_000, 5),
+            # Values mirror TestSelectionUnchanged.test_score_floor_is_terminal /
+            # test_score_gap_is_terminal (FRE-1287): under the rescaled embedding
+            # subscore, any vector_score <= 0.5 clamps to 0.0, so 0.50/0.40 would both
+            # land below min_score (0.30) at the threshold gate, not the floor/gap
+            # gates these cases are named for.
+            ("score_floor", [_episode("t0", 0.70), _episode("t1", 0.66)], 100_000, 5),
+            ("score_gap", [_episode("t0", 0.90), _episode("t1", 0.70)], 100_000, 5),
             (
                 "threshold",
                 [_episode("t0", 0.90), _episode("t1", 0.20), _episode("t2", 0.20)],

@@ -43,7 +43,7 @@ tool's identifier, and no static analysis of its argument bounds that.
 
 **Consequence, stated plainly: a ``curl`` run through ``bash`` is not citable in v1.**
 Grounding is channelled through the typed retrieval tools instead
-(``mcp_fetch_content`` for ``curl``, ``read`` for ``cat``). This is stricter than ADR-0138
+(``fetch_url`` for ``curl``, ``read`` for ``cat``). This is stricter than ADR-0138
 D2's illustration, which uses ``curl`` as its example of an admissible fetch; it preserves
 the principle that illustration teaches — the page is a source, the model-chosen URL is not
 — while dropping an instrument that is not mechanically decidable. Source *quality*
@@ -206,7 +206,7 @@ TYPED_RETRIEVAL_TOOLS: frozenset[str] = frozenset(
         # Web and search
         "web_search",
         "mcp_search",
-        "mcp_fetch_content",
+        "fetch_url",
         # Local state, addressed by typed parameters
         "read",
         "read_skill",

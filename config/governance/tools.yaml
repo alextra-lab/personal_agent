@@ -61,6 +61,16 @@ tools:
     timeout_seconds: 10
     rate_limit_per_hour: 60
 
+  # Native full-page fetch, finishing ADR-0028 Phase 3 for ADR-0138 D2 (FRE-1297).
+  # Fetched page content is citable; the model-chosen url argument is not.
+  fetch_url:
+    category: "network"
+    allowed_in_modes: ["NORMAL", "DEGRADED"]
+    risk_level: "low"
+    requires_approval: false
+    timeout_seconds: 30
+    rate_limit_per_hour: 100
+
   write_file:
     category: "system_write"
     allowed_in_modes: ["NORMAL"]
@@ -584,7 +594,8 @@ tools:
   # gateway's `mcp_gateway_initialized` log lists only mcp_resolve-library-id,
   # mcp_sequentialthinking, mcp_query-docs. This entry is a fossil with nothing behind
   # it; enabling it would tell the model to call a tool it is never actually offered.
-  # Provisioning a fetch MCP server is a separate, deploy-scoped decision — see FRE-1297.
+  # FRE-1297 (2026-08-25): the real fix is the native `fetch_url` tool above, not this
+  # MCP server. Left disabled rather than deleted — no live gateway tool behind it.
   mcp_fetch_content:
     category: "mcp"
     allowed_in_modes: []

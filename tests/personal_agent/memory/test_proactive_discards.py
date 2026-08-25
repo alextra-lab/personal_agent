@@ -490,8 +490,13 @@ class TestConservation:
                 100_000,
                 20,
             ),
-            ("score_floor", [_episode("t0", 0.50), _episode("t1", 0.40)], 100_000, 5),
-            ("score_gap", [_episode("t0", 0.90), _episode("t1", 0.50)], 100_000, 5),
+            # Values mirror TestSelectionUnchanged.test_score_floor_is_terminal /
+            # test_score_gap_is_terminal (FRE-1287): under the rescaled embedding
+            # subscore, any vector_score <= 0.5 clamps to 0.0, so 0.50/0.40 would both
+            # land below min_score (0.30) at the threshold gate, not the floor/gap
+            # gates these cases are named for.
+            ("score_floor", [_episode("t0", 0.70), _episode("t1", 0.66)], 100_000, 5),
+            ("score_gap", [_episode("t0", 0.90), _episode("t1", 0.70)], 100_000, 5),
             (
                 "threshold",
                 [_episode("t0", 0.90), _episode("t1", 0.20), _episode("t2", 0.20)],

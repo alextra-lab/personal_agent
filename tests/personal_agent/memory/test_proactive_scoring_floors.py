@@ -284,6 +284,66 @@ class TestAC4AbsentSubjectYieldsNoFloorAdmissions:
         assert all(d.drop_reason is DropReason.RECALL_SCORE_THRESHOLD for d in out.discarded)
 
 
+class TestLexicalArmPlaceholderInteraction:
+    """Codex review (this ticket): the lexical arm's synthetic ``vector_score``
+    also runs through the rescaled embedding subscore, and that is correct, not
+    an oversight.
+
+    ``MemoryService._augment_proactive_with_lexical`` (``memory/service.py``) has no
+    real embedding for a lexical-only hit, so it assigns ``vector_score =
+    recall_similarity_floor`` (deployed 0.60) — explicitly documented there as "the
+    noise-guard baseline score" so the row "remain[s] subject to proactive's own
+    min-score/budget gates" like any other candidate. That value lives on the same
+    Neo4j ``(1 + cos) / 2`` scale real vector-arm scores do (``recall_similarity_floor``
+    is compared directly against ``db.index.vector.queryNodes`` output in
+    ``dense_recall_arm``), so it is not a "no evidence" sentinel exempt from the
+    rescale — it is a real, if weak, claimed cosine similarity (0.60 raw ~ cos 0.20),
+    and ``_normalize_vector_score`` correctly deflates its embedding credit from 0.27
+    to 0.09 rather than treating a bare floor-pass as strong evidence.
+
+    The consequence: a lexical hit with *no other* supporting evidence (no overlap, no
+    topic hit, no usable timestamp) now needs real corroboration to admit — it no
+    longer coasts in on an inflated embedding term. ``test_proactive_melon_regression.py``
+    already exercises the production shape with real corroborating evidence (recency,
+    entity-hint overlap, a genuine topic-hint match) and every one of its assertions
+    still holds unchanged; this class pins the bare, uncorroborated case explicitly so
+    the interaction is documented rather than only implicit in the rescale.
+    """
+
+    def test_a_bare_lexical_hit_with_no_other_evidence_is_not_admitted(
+        self, deployed_scoring: None
+    ) -> None:
+        row = _entity_row(
+            name="LexicalOnly",
+            vector_score=0.60,  # recall_similarity_floor placeholder, deployed value
+            timestamp_iso=None,  # lexical hits may carry no resolvable turn timestamp
+            key_entities=["LexicalOnly"],
+        )
+        out = build_proactive_suggestions([row], set(), None, "t-lexical-bare", None)
+        assert out.candidates == []
+        assert out.discarded[0].drop_reason is DropReason.RECALL_SCORE_THRESHOLD
+
+    def test_a_lexical_hit_with_real_recency_overlap_and_topic_still_admits(
+        self, deployed_scoring: None
+    ) -> None:
+        """The production shape: a keyword match corroborated by other real signal.
+
+        Matches ``test_proactive_melon_regression.py``'s "with the resolved entity
+        hint" case — a mentioned-entity hint (overlap) plus a genuine topic-hint match
+        is what let the melon entity win its rank race, not the bare lexical floor.
+        """
+        row = _entity_row(
+            name="LexicalMatch",
+            vector_score=0.60,
+            timestamp_iso="2026-08-25T00:00:00+00:00",
+            key_entities=["LexicalMatch"],
+        )
+        out = build_proactive_suggestions(
+            [row], {"LexicalMatch"}, "tell me about lexicalmatch", "t-lexical-corroborated", None
+        )
+        assert len(out.candidates) == 1
+
+
 class TestAC5NoRowsLostToAccounting:
     """AC-5 — the scoring change touches only which rows admit, never how many are
     accounted for. Every deduplicated candidate is either selected or discarded.

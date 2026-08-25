@@ -72,6 +72,7 @@ class PromptIdentity:
 
 
 PROMPT_COMPONENT_TAXONOMY: tuple[str, ...] = (
+    "grounding_contract",
     "tool_awareness",
     "deployment_context",
     "operator_stanza",

@@ -2674,8 +2674,7 @@ def _render_memory_section_with_ids(
         section += (
             "\n\nThese are entities drawn from earlier conversations, including other "
             "people; they record what was discussed, not who you are speaking with. "
-            "Use them to answer questions about what the user has previously discussed. "
-            "Do NOT say you have no memory."
+            "Use them to answer questions about what the user has previously discussed."
         )
         sections.append(section)
 
@@ -4331,13 +4330,18 @@ async def step_llm_call(
         # Continuation — use previously selected role
         model_role = ctx.selected_model_role
 
-    system_prompt: str | None = None
+    # ADR-0138 D1/D2/D6 (FRE-1283): the grounding contract applies to any world-fact
+    # claim, not only to tool-using turns, so it seeds system_prompt unconditionally
+    # rather than living behind the "if tools" branch below with the tool-use rules.
+    from personal_agent.orchestrator.prompts import GROUNDING_CONTRACT_PROMPT
+
+    system_prompt: str | None = GROUNDING_CONTRACT_PROMPT
 
     # Inject deployment context so the model doesn't try to access host-only paths.
     # Tool-name hints are appended later, only when tools are actually being passed
     # — otherwise the model sees named tools it can't call and hallucinates pseudo-code.
     if settings.environment == Environment.PRODUCTION:
-        system_prompt = (
+        _deployment_context = (
             "## Deployment Context\n"
             "You are running inside a Docker container on a cloud VPS.\n"
             "- App code is at `/app` — the host's repo mount point is NOT accessible from here\n"
@@ -4350,6 +4354,9 @@ async def step_llm_call(
             "- All backend services are reachable via Docker internal DNS:\n"
             "    postgres:5432  |  neo4j:7687 (bolt) / neo4j:7474 (HTTP)  |  elasticsearch:9200\n"
             "    redis:6379"
+        )
+        system_prompt = (
+            f"{system_prompt}\n\n{_deployment_context}" if system_prompt else _deployment_context
         )
 
     # Operator identity stanza (FRE-213 / ADR-0052) — populated in step_init.
@@ -4883,6 +4890,10 @@ async def step_llm_call(
         # The volatile memory tail is appended after this capture point.
         _static_prefix = inner_system_before_memory
         _component_ids: list[str] = []
+        # ADR-0138 (FRE-1283): unconditional, unlike every other entry below — recorded
+        # anyway so the audit trail names every component actually spliced in, not only
+        # the conditional ones.
+        _component_ids.append("grounding_contract")
         if tool_awareness:
             _component_ids.append("tool_awareness")
         if settings.environment == Environment.PRODUCTION:

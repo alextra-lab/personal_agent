@@ -19,6 +19,7 @@ from uuid import UUID
 
 from personal_agent.captains_log.turn_evidence import RecallCandidateRecord, TurnEvidence
 from personal_agent.governance.models import Mode
+from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.loop_gate import ToolLoopGate
 from personal_agent.request_gateway.types import GatewayOutput
@@ -331,6 +332,13 @@ class ExecutionContext:
     # record, built once at the admission point and read by TaskCapture.
     recall_candidates: tuple["RecallCandidateRecord", ...] = ()
     turn_evidence: "TurnEvidence | None" = None
+    # ADR-0138 D2/D3(a) (FRE-1280): the sources this turn retrieved, each with the stable
+    # identifier a citation resolves against. Turn-scoped by construction — one registry
+    # per context — so "present in *this* turn's source set" is a property of the object.
+    # None on paths that never enter execute_task (sub-agents); every registration helper
+    # no-ops rather than raising. Nothing consumes it to block a turn yet: verification
+    # (FRE-1282) and the prompt that makes the model emit markers (FRE-1283) come later.
+    source_registry: "SourceRegistry | None" = None
 
     # ADR-0129 D3 (FRE-1067): set by step_tool_execution just before it returns,
     # reset to 0 at its own entry — the driver loop's step-span closure reads

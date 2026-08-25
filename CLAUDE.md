@@ -131,6 +131,7 @@ Expansion paths:
 | `gateway/` | Seshat API Gateway — FastAPI router factory over storage only (Neo4j, Postgres, ES); mounted onto the main service app in local mode (`settings.gateway_mount_local`) |
 | `storage/` | R2-backed artifact store (ADR-0069); async S3-protocol wrapper for Cloudflare R2; owns key layout and artifact lifecycle |
 | `cost_gate/` | Atomic Postgres budget reservation gate (ADR-0065); transactional reserve/commit/refund lifecycle replacing advisory checks in `LiteLLMClient` |
+| `grounding/` | Citation contract (ADR-0138) — per-turn source registry with stable identifiers, D2 admissibility, and the per-span citation format; plus span extraction, which decides *what* needs a citation (D1 default-deny). Output side of grounding; `captains_log/turn_evidence.py` (ADR-0125) is the input side |
 
 ### Tool integration tiers (ADR-0028)
 

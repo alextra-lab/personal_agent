@@ -197,10 +197,49 @@ class TestCitationEmissionInstruction:
         assert parse.violations == ()
         assert [span.identifier for span in parse.spans] == [source.identifier]
 
-    def test_example_marker_in_the_instruction_matches_the_real_pattern(self) -> None:
-        """The worked example inside the instruction text is itself well-formed."""
-        example = "[S1@a3f91c2b7d4e6f80]"
+    def test_worked_example_in_the_instruction_segments_as_two_atomic_claims(self) -> None:
+        """The worked example must not teach a bad segmentation.
+
+        D1's own canonical example is ``Ortiz [S1] is better than Nardin [S2]`` — two
+        distinct sourced claims in one comparison, each binding its own adjacent marker.
+        The instruction must use exactly this shape, not attach a marker to a bare noun
+        phrase (e.g. "Paris [S1]...") that is not itself an atomic claim.
+        """
+        example = "Ortiz [S1@a3f91c2b7d4e6f80] is better than Nardin [S2@c4d8e1f2a9b07653]"
         assert example in GROUNDING_CONTRACT_PROMPT
-        parse = parse_citations(f"claim {example}")
+
+        parse = parse_citations(example)
         assert parse.violations == ()
-        assert parse.spans[0].identifier == "S1@a3f91c2b7d4e6f80"
+        assert [(span.text, span.identifier) for span in parse.spans] == [
+            ("Ortiz", "S1@a3f91c2b7d4e6f80"),
+            ("is better than Nardin", "S2@c4d8e1f2a9b07653"),
+        ]
+
+    def test_exemptions_do_not_overclaim_beyond_d1(self) -> None:
+        """D1 exempts code offered to run — not string literals/comments/docstrings
+        presented as the answer — and only narrowly-evaluative judgement, not
+        judgement in general. The instruction must not state the exemption more
+        broadly than that (a broader exemption would license exactly the confabulation
+        D1 exists to close).
+        """
+        assert "does not apply to code," not in GROUNDING_CONTRACT_PROMPT
+        assert "code you're offering the user to run" in GROUNDING_CONTRACT_PROMPT
+        assert "your own judgement" not in GROUNDING_CONTRACT_PROMPT
+        assert "adds no new factual claim of its own" in GROUNDING_CONTRACT_PROMPT
+
+    @pytest.mark.asyncio
+    async def test_grounding_contract_appears_exactly_once(self) -> None:
+        """Regression guard for the splice restructuring: no duplicate insertion."""
+        system_prompt = await _assembled_system_prompt(with_tools=True)
+        assert system_prompt.count("## Grounding") == 1
+
+    @pytest.mark.asyncio
+    async def test_grounding_contract_present_in_the_static_prefix_alongside_tool_rules(
+        self,
+    ) -> None:
+        """Both STATIC blocks land in the same assembled prompt when tools are offered —
+        the splice must not have silently dropped one or the other.
+        """
+        system_prompt = await _assembled_system_prompt(with_tools=True)
+        assert "## Grounding" in system_prompt
+        assert "You are a tool-using assistant" in system_prompt

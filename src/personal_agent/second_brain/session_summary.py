@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import orjson
 
@@ -67,7 +67,11 @@ from personal_agent.memory.session_digest_wire import (
     digest_tool_choice,
 )
 from personal_agent.telemetry import get_logger
-from personal_agent.telemetry.trace import SystemTraceContext
+from personal_agent.telemetry.spans import close_root_span, open_root_span
+from personal_agent.telemetry.trace import SystemTraceContext, read_or_mint_trace_id
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Tracer
 
 log = get_logger(__name__)
 
@@ -575,63 +579,93 @@ async def _call_model(
     role_name: str,
     provider: str | None,
     session_id: str,
+    tracer: "Tracer | None" = None,
 ) -> str:
     """Dispatch one generation call. Raises on any client-level failure.
+
+    Args:
+        prompt: The fully-rendered prompt to send.
+        role_name: Resolved model config key for the ``session_summary`` role.
+        provider: Cloud provider, or ``None`` to dispatch to the local SLM.
+        session_id: The session this digest is being generated for.
+        tracer: Tracer to open this call's per-session root span with
+            (FRE-1295). Defaults to the process-wide tracer; the scheduler's
+            sweep passes its own tracer through so tests can inject an
+            in-memory exporter.
 
     Raises:
         OutputTruncated: If the reply was cut off at the output ceiling.
     """
-    if provider is not None:
-        from personal_agent.llm_client.factory import get_llm_client_for_key  # noqa: PLC0415
+    # FRE-1295: the sweep tick keeps one root span open for its whole run
+    # (FRE-1069/ADR-0129 D3); SystemTraceContext.new below reads whatever span
+    # is CURRENT, so without a per-session span here every session swept in one
+    # tick would mint the SAME trace id on its cost reservation — collapsing N
+    # sessions onto one trace and breaking ADR-0074 §8c joinability.
+    # open_root_span forces a genuine fresh root (context=Context()) regardless
+    # of the tick's span already being current, so this call's model call, its
+    # trace_ctx, and its budget_reservations row all agree on one new id.
+    parent_trace_id = read_or_mint_trace_id()
+    child_span, child_token, child_cv_tokens = open_root_span("session_summary", tracer=tracer)
+    try:
+        log.info(
+            "batch_child_trace_opened",
+            trace_id=read_or_mint_trace_id(),
+            parent_trace_id=parent_trace_id,
+            session_id=session_id,
+        )
+        if provider is not None:
+            from personal_agent.llm_client.factory import get_llm_client_for_key  # noqa: PLC0415
 
-        # The contract is applied on the cloud path only. The local path forwards tools
-        # to llama-server, but that behaviour is outside FRE-996's evidence and the
-        # deployed session_summary role is cloud — so no unverified claim ships here.
-        use_contract = get_settings().session_digest_structured_output
+            # The contract is applied on the cloud path only. The local path forwards tools
+            # to llama-server, but that behaviour is outside FRE-996's evidence and the
+            # deployed session_summary role is cloud — so no unverified claim ships here.
+            use_contract = get_settings().session_digest_structured_output
 
-        # budget_role stays captains_log: ADR-0124 D2 defers splitting cost
-        # attribution as a separate, smaller decision.
-        cloud_client = get_llm_client_for_key(role_name, budget_role="captains_log")
-        response: dict[str, Any] = await cloud_client.respond(
+            # budget_role stays captains_log: ADR-0124 D2 defers splitting cost
+            # attribution as a separate, smaller decision.
+            cloud_client = get_llm_client_for_key(role_name, budget_role="captains_log")
+            response: dict[str, Any] = await cloud_client.respond(
+                role=ModelRole.SESSION_SUMMARY,
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=_system_prompt(),
+                # Held to the schema as a forced tool rather than a `response_format`:
+                # for the deployed claude-sonnet-5, litellm turns `response_format` into a
+                # synthetic forced tool AND overwrites the provider's stop_reason with
+                # "stop", which would hide truncation entirely. See session_digest_wire.
+                tools=[digest_tool()] if use_contract else None,
+                tool_choice=digest_tool_choice() if use_contract else None,
+                # Without this the client falls back to the deployment's max_tokens
+                # (128k) for an artifact bounded at 400 rendered tokens, and the cost gate
+                # reserves against that ceiling on every call — exhausting a shared
+                # budget lane far faster than the actual spend warrants.
+                max_tokens=_MAX_OUTPUT_TOKENS,
+                trace_ctx=SystemTraceContext.new("session_summary", session_id=session_id),
+            )
+            _reject_if_truncated(response)
+            return _reply_payload(response)
+
+        from personal_agent.llm_client.concurrency import InferencePriority  # noqa: PLC0415
+
+        local_client = LocalLLMClient()
+        llm_response = await local_client.respond(
             role=ModelRole.SESSION_SUMMARY,
-            messages=[{"role": "user", "content": prompt}],
-            system_prompt=_system_prompt(),
-            # Held to the schema as a forced tool rather than a `response_format`:
-            # for the deployed claude-sonnet-5, litellm turns `response_format` into a
-            # synthetic forced tool AND overwrites the provider's stop_reason with
-            # "stop", which would hide truncation entirely. See session_digest_wire.
-            tools=[digest_tool()] if use_contract else None,
-            tool_choice=digest_tool_choice() if use_contract else None,
-            # Without this the client falls back to the deployment's max_tokens
-            # (128k) for an artifact bounded at 400 rendered tokens, and the cost gate
-            # reserves against that ceiling on every call — exhausting a shared
-            # budget lane far faster than the actual spend warrants.
+            messages=[
+                {"role": "system", "content": _system_prompt()},
+                {"role": "user", "content": prompt},
+            ],
+            system_prompt=None,
+            tools=None,
             max_tokens=_MAX_OUTPUT_TOKENS,
+            max_retries=0,
+            timeout_s=120.0,
+            priority=InferencePriority.BACKGROUND,
+            priority_timeout=120.0,
             trace_ctx=SystemTraceContext.new("session_summary", session_id=session_id),
         )
-        _reject_if_truncated(response)
-        return _reply_payload(response)
-
-    from personal_agent.llm_client.concurrency import InferencePriority  # noqa: PLC0415
-
-    local_client = LocalLLMClient()
-    llm_response = await local_client.respond(
-        role=ModelRole.SESSION_SUMMARY,
-        messages=[
-            {"role": "system", "content": _system_prompt()},
-            {"role": "user", "content": prompt},
-        ],
-        system_prompt=None,
-        tools=None,
-        max_tokens=_MAX_OUTPUT_TOKENS,
-        max_retries=0,
-        timeout_s=120.0,
-        priority=InferencePriority.BACKGROUND,
-        priority_timeout=120.0,
-        trace_ctx=SystemTraceContext.new("session_summary", session_id=session_id),
-    )
-    _reject_if_truncated(llm_response)
-    return llm_response.get("content", "") or ""
+        _reject_if_truncated(llm_response)
+        return llm_response.get("content", "") or ""
+    finally:
+        close_root_span(child_span, child_token, child_cv_tokens)
 
 
 def _failed(
@@ -669,6 +703,7 @@ async def generate_session_digest(
     session_id: str,
     ended_at: datetime,
     trace_id: str = "session_summary_sweep",
+    tracer: "Tracer | None" = None,
 ) -> SessionSummaryOutcome:
     """Generate a session's label and structured digest from its captures.
 
@@ -683,6 +718,10 @@ async def generate_session_digest(
         ended_at: The session's last-turn timestamp. Stamped onto unresolved items
             so a consumer can say "as of that session, X was open" rather than
             asserting the present tense.
+        tracer: Tracer to open this call's per-session root span with
+            (FRE-1295). Defaults to the process-wide tracer; the scheduler's
+            sweep passes its own tracer through so tests can inject an
+            in-memory exporter.
         trace_id: Trace identifier for log correlation.
 
     Returns:
@@ -742,7 +781,11 @@ async def generate_session_digest(
     for attempt in range(1, _MAX_GENERATION_ATTEMPTS + 1):
         try:
             content = await _call_model(
-                prompt, role_name=role_name, provider=provider, session_id=session_id
+                prompt,
+                role_name=role_name,
+                provider=provider,
+                session_id=session_id,
+                tracer=tracer,
             )
         except BudgetDenied as e:
             # Never terminal: transient by nature, so the session stays retryable. Paced

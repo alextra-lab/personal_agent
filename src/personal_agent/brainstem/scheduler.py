@@ -817,7 +817,11 @@ class BrainstemScheduler:
             return None
 
         outcome = await generate_session_digest(
-            captures, session_id=session_id, ended_at=expected_ended_at, trace_id=trace_id
+            captures,
+            session_id=session_id,
+            ended_at=expected_ended_at,
+            trace_id=trace_id,
+            tracer=self._tracer,
         )
 
         if outcome.status is SessionSummaryStatus.FAILED:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import orjson
@@ -20,7 +20,11 @@ from personal_agent.cost_gate import BudgetDenied
 from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, LocalLLMClient, ModelRole
 from personal_agent.memory.weight import AssertedBy
 from personal_agent.telemetry import get_logger
-from personal_agent.telemetry.trace import SystemTraceContext
+from personal_agent.telemetry.spans import close_root_span, open_root_span
+from personal_agent.telemetry.trace import SystemTraceContext, read_or_mint_trace_id
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Tracer
 
 log = get_logger(__name__)
 
@@ -908,6 +912,7 @@ async def extract_entities_and_relationships(
     turn_timestamp: datetime | None = None,
     model_override: ExtractionModelOverride | None = None,
     call_stats_sink: list[dict[str, Any]] | None = None,
+    tracer: "Tracer | None" = None,
 ) -> dict[str, Any]:
     """Extract entities and relationships from conversation.
 
@@ -938,6 +943,9 @@ async def extract_entities_and_relationships(
             concurrently without global-config mutation. ``None`` in production.
         call_stats_sink: FRE-766 eval-only. When provided, per-call usage / reasoning
             tokens / cost / error_class are appended for the benchmark. ``None`` in production.
+        tracer: Tracer to open this call's per-capture root span with (FRE-1295).
+            Defaults to the process-wide tracer; the consolidator passes its own
+            tracer through so tests can inject an in-memory exporter.
 
     Returns:
         Dict with entities, relationships, entity_names, summary, and — new in
@@ -990,114 +998,138 @@ async def extract_entities_and_relationships(
 
     try:
         # Call appropriate LLM and extract content
-        if provider is not None:
-            # Cloud path: any provider via LiteLLM
-            if model_override is not None:
-                from personal_agent.llm_client.litellm_client import LiteLLMClient
-
-                cloud_client = LiteLLMClient(
-                    model_id=model_override.model_id,
-                    provider=model_override.provider,
-                    max_tokens=model_override.max_tokens,
-                    budget_role="entity_extraction",
-                )
-            else:
-                from personal_agent.llm_client.factory import get_llm_client_for_key
-
-                cloud_client = get_llm_client_for_key(
-                    entity_extraction_role, budget_role="entity_extraction"
-                )
-            log.debug(
-                "entity_extraction_using_cloud",
-                model=eff_model_id,
-                provider=provider,
-                trace_id=trace_id_str,
+        # FRE-1295: the batch tick (consolidation) keeps one root span open
+        # for its whole run (FRE-1069/ADR-0129 D3); SystemTraceContext.new
+        # below reads whatever span is CURRENT, so without a per-capture span
+        # here every capture processed in one tick would mint the SAME trace
+        # id on its cost reservation -- collapsing N sessions onto one trace
+        # and breaking ADR-0074 §8c joinability. open_root_span forces a
+        # genuine fresh root (context=Context()) regardless of the tick's span
+        # already being current, so this capture's model call, its trace_ctx,
+        # and its budget_reservations row all agree on one new id.
+        parent_trace_id = read_or_mint_trace_id()
+        child_span, child_token, child_cv_tokens = open_root_span(
+            "entity_extraction", tracer=tracer
+        )
+        try:
+            log.info(
+                "batch_child_trace_opened",
+                trace_id=read_or_mint_trace_id(),
+                parent_trace_id=parent_trace_id,
+                session_id=session_id,
             )
+            if provider is not None:
+                # Cloud path: any provider via LiteLLM
+                if model_override is not None:
+                    from personal_agent.llm_client.litellm_client import LiteLLMClient
 
-            cloud_response = await cloud_client.respond(
-                role=ModelRole.ENTITY_EXTRACTION,
-                messages=[{"role": "user", "content": prompt}],
-                system_prompt=_EXTRACTION_SYSTEM_PROMPT,
-                temperature=eff_temperature,
-                reasoning_effort=eff_reasoning_effort,
-                trace_ctx=SystemTraceContext.new("entity_extraction", session_id=session_id),
-            )
-            content = cloud_response["content"]
-            model_used = eff_model_id
-            # FRE-766: surface per-call usage/cost for the benchmark (eval-only; the
-            # sink is None in production). error_class=None marks a clean call so the
-            # smoke classifier can tell a provider rejection from a parse/empty miss.
-            if call_stats_sink is not None:
-                _usage = dict(cloud_response.get("usage") or {})
-                call_stats_sink.append(
-                    {
-                        "usage": _usage,
-                        "reasoning_tokens": _usage.get("reasoning_tokens"),
-                        "cost_usd": cloud_response.get("cost_usd"),
-                        "error_class": None,
-                    }
-                )
-        else:
-            # Local SLM path
-            local_client = LocalLLMClient()
-            model_role = ModelRole.ENTITY_EXTRACTION
+                    cloud_client = LiteLLMClient(
+                        model_id=model_override.model_id,
+                        provider=model_override.provider,
+                        max_tokens=model_override.max_tokens,
+                        budget_role="entity_extraction",
+                    )
+                else:
+                    from personal_agent.llm_client.factory import get_llm_client_for_key
 
-            log.debug(
-                "entity_extraction_calling_local_llm",
-                entity_extraction_role=entity_extraction_role,
-                role=model_role.value,
-                max_tokens=10000,
-                trace_id=trace_id_str,
-            )
-
-            # Add system prompt to messages
-            messages = [
-                {
-                    "role": "system",
-                    "content": _EXTRACTION_SYSTEM_PROMPT,
-                },
-                {"role": "user", "content": prompt},
-            ]
-
-            try:
-                from personal_agent.llm_client.concurrency import InferencePriority
-
-                llm_response = await local_client.respond(
-                    role=model_role,
-                    messages=messages,
-                    system_prompt=None,  # Already in messages
-                    tools=None,
-                    max_tokens=10000,  # thinking_budget_tokens (≤3000) + JSON response headroom
-                    max_retries=0,  # No retries: a timeout means the model is overloaded;
-                    # retrying queues more work and blocks consolidation for ~27min
-                    timeout_s=float(settings.entity_extraction_timeout_seconds),
-                    priority=InferencePriority.BACKGROUND,
-                    priority_timeout=60.0,
-                    trace_ctx=SystemTraceContext.new("entity_extraction", session_id=session_id),
-                )
-            except (LLMTimeout, InferenceSlotTimeout) as e:
-                log.warning(
-                    "entity_extraction_timeout",
-                    error=str(e),
-                    error_type=type(e).__name__,
-                    timeout_seconds=settings.entity_extraction_timeout_seconds,
-                    message="Returning empty entities to avoid blocking consolidation.",
+                    cloud_client = get_llm_client_for_key(
+                        entity_extraction_role, budget_role="entity_extraction"
+                    )
+                log.debug(
+                    "entity_extraction_using_cloud",
+                    model=eff_model_id,
+                    provider=provider,
                     trace_id=trace_id_str,
                 )
-                return _default_extraction_result(user_message)
 
-            # LLMResponse is a TypedDict - use dict access
-            content = llm_response["content"]
-            model_used = entity_extraction_role
+                cloud_response = await cloud_client.respond(
+                    role=ModelRole.ENTITY_EXTRACTION,
+                    messages=[{"role": "user", "content": prompt}],
+                    system_prompt=_EXTRACTION_SYSTEM_PROMPT,
+                    temperature=eff_temperature,
+                    reasoning_effort=eff_reasoning_effort,
+                    trace_ctx=SystemTraceContext.new("entity_extraction", session_id=session_id),
+                )
+                content = cloud_response["content"]
+                model_used = eff_model_id
+                # FRE-766: surface per-call usage/cost for the benchmark (eval-only; the
+                # sink is None in production). error_class=None marks a clean call so the
+                # smoke classifier can tell a provider rejection from a parse/empty miss.
+                if call_stats_sink is not None:
+                    _usage = dict(cloud_response.get("usage") or {})
+                    call_stats_sink.append(
+                        {
+                            "usage": _usage,
+                            "reasoning_tokens": _usage.get("reasoning_tokens"),
+                            "cost_usd": cloud_response.get("cost_usd"),
+                            "error_class": None,
+                        }
+                    )
+            else:
+                # Local SLM path
+                local_client = LocalLLMClient()
+                model_role = ModelRole.ENTITY_EXTRACTION
 
-            log.debug(
-                "entity_extraction_llm_response_received",
-                model=model_used,
-                response_len=len(content),
-                input_tokens=llm_response.get("usage", {}).get("prompt_tokens"),
-                output_tokens=llm_response.get("usage", {}).get("completion_tokens"),
-                trace_id=trace_id_str,
-            )
+                log.debug(
+                    "entity_extraction_calling_local_llm",
+                    entity_extraction_role=entity_extraction_role,
+                    role=model_role.value,
+                    max_tokens=10000,
+                    trace_id=trace_id_str,
+                )
+
+                # Add system prompt to messages
+                messages = [
+                    {
+                        "role": "system",
+                        "content": _EXTRACTION_SYSTEM_PROMPT,
+                    },
+                    {"role": "user", "content": prompt},
+                ]
+
+                try:
+                    from personal_agent.llm_client.concurrency import InferencePriority
+
+                    llm_response = await local_client.respond(
+                        role=model_role,
+                        messages=messages,
+                        system_prompt=None,  # Already in messages
+                        tools=None,
+                        max_tokens=10000,  # thinking_budget_tokens (≤3000) + JSON response headroom
+                        max_retries=0,  # No retries: a timeout means the model is overloaded;
+                        # retrying queues more work and blocks consolidation for ~27min
+                        timeout_s=float(settings.entity_extraction_timeout_seconds),
+                        priority=InferencePriority.BACKGROUND,
+                        priority_timeout=60.0,
+                        trace_ctx=SystemTraceContext.new(
+                            "entity_extraction", session_id=session_id
+                        ),
+                    )
+                except (LLMTimeout, InferenceSlotTimeout) as e:
+                    log.warning(
+                        "entity_extraction_timeout",
+                        error=str(e),
+                        error_type=type(e).__name__,
+                        timeout_seconds=settings.entity_extraction_timeout_seconds,
+                        message="Returning empty entities to avoid blocking consolidation.",
+                        trace_id=trace_id_str,
+                    )
+                    return _default_extraction_result(user_message)
+
+                # LLMResponse is a TypedDict - use dict access
+                content = llm_response["content"]
+                model_used = entity_extraction_role
+
+                log.debug(
+                    "entity_extraction_llm_response_received",
+                    model=model_used,
+                    response_len=len(content),
+                    input_tokens=llm_response.get("usage", {}).get("prompt_tokens"),
+                    output_tokens=llm_response.get("usage", {}).get("completion_tokens"),
+                    trace_id=trace_id_str,
+                )
+        finally:
+            close_root_span(child_span, child_token, child_cv_tokens)
 
         if not content:
             log.warning("extraction_empty_response", model=model_used, trace_id=trace_id_str)

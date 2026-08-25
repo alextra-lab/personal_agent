@@ -606,6 +606,7 @@ class SecondBrainConsolidator:
                 session_id=capture.session_id,
                 attempt_number=attempt_number,
                 turn_timestamp=capture.timestamp,
+                tracer=self._tracer,
             )
         except BudgetDenied as budget_exc:
             await record_consolidation_attempt(

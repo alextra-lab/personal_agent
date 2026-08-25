@@ -472,6 +472,9 @@ class TestRendererEmbedsCitationIdentifiers:
         assert ids == ("stance:Python",)
         (source,) = registry.sources()
         assert f"[{source.identifier}]" in text
+        # Found in review: the registered source must actually carry the affect text,
+        # or the citation resolves to a source that can never pass D3(c) containment.
+        assert "prefers over Java" in source.content
 
     def test_behavioural_stance_line_carries_its_registered_identifier(self) -> None:
         from personal_agent.grounding.source_registry import SourceRegistry
@@ -485,6 +488,7 @@ class TestRendererEmbedsCitationIdentifiers:
         assert ids == ("behavioural_stance:Artifact",)
         (source,) = registry.sources()
         assert f"[{source.identifier}]" in text
+        assert "prefers explicit request before creation" in source.content
 
     def test_mixed_set_gives_each_item_its_own_distinct_identifier(self) -> None:
         from personal_agent.grounding.source_registry import SourceRegistry

@@ -1357,7 +1357,7 @@ def _register_tool_source(
     arguments: Mapping[str, object],
     content: str,
     success: bool,
-) -> None:
+) -> str | None:
     """Offer one tool result to this turn's source registry (ADR-0138 D2).
 
     The registry decides admissibility; this only carries the call across. The arguments
@@ -1373,10 +1373,15 @@ def _register_tool_source(
         arguments: The model's own arguments to the call.
         content: The result as recorded for the model.
         success: Whether the call succeeded.
+
+    Returns:
+        The registered source's identifier (ADR-0138 D3(a), FRE-1296), so the caller
+        can splice it into the content the model reads. None when nothing was
+        admissible or no registry is attached to this turn.
     """
     registry = ctx.source_registry
     if registry is None:
-        return
+        return None
 
     try:
         registration = registry.register_tool_result(
@@ -1392,7 +1397,7 @@ def _register_tool_source(
             session_id=ctx.session_id,
             tool_name=tool_name,
         )
-        return
+        return None
 
     if registration.source is None:
         log.debug(
@@ -1403,6 +1408,36 @@ def _register_tool_source(
             admissibility=registration.admissibility.value,
             reason=registration.reason,
         )
+        return None
+
+    return registration.source.identifier
+
+
+def _with_citation_marker(content: str, identifier: str) -> str:
+    """Splice a citation marker into tool content the model is about to read.
+
+    JSON object content gets the marker as a top-level field — the same shape the
+    ``_gate_warning`` advisory injection already uses a few lines above this
+    function's call site — so a structured result stays valid JSON rather than
+    gaining trailing prose after its closing brace. Anything else (plain text, a
+    JSON array, an unparseable string) gets the marker appended as text.
+
+    Args:
+        content: The tool result as the executor recorded it.
+        identifier: This result's registered source identifier (ADR-0138 D3(a)).
+
+    Returns:
+        ``content`` with the ``[S{n}@{digest}]`` marker spliced in.
+    """
+    marker = f"[{identifier}]"
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        parsed = None
+    if isinstance(parsed, dict):
+        parsed["_citation"] = marker
+        return json.dumps(parsed)
+    return f"{content}\n\n{marker}" if content else marker
 
 
 def _log_source_registry_snapshot(ctx: ExecutionContext) -> None:
@@ -2535,7 +2570,7 @@ FRE-674's, not this ticket's).
 """
 
 
-def _entity_line(item: dict[str, Any]) -> str:
+def _entity_line(item: dict[str, Any], identifier: str | None = None) -> str:
     """Render one described entity.
 
     A description that says "the user" is disambiguated in place (FRE-1150), so a fact
@@ -2549,6 +2584,11 @@ def _entity_line(item: dict[str, Any]) -> str:
     fabricated "(mentioned 1x)" for every gateway-sourced entity. When neither key is
     present the clause is omitted rather than defaulted — an absent count is absent,
     not one.
+
+    Args:
+        item: The entity item to render.
+        identifier: This entity's citation identifier (ADR-0138 D3(a), FRE-1296), or
+            None to render without one — the entity was never registered as a source.
     """
     description = mark_truncated((item.get("description") or "").strip(), _MAX_ITEM_CHARS)
     if _DEICTIC_USER_RE.search(description):
@@ -2557,6 +2597,8 @@ def _entity_line(item: dict[str, Any]) -> str:
     count = item.get("mention_count", item.get("mentions"))
     if count is not None:
         line += f" (mentioned {count}x)"
+    if identifier:
+        line += f" [{identifier}]"
     return line
 
 
@@ -2575,7 +2617,7 @@ def _episode_text(item: dict[str, Any]) -> str:
     return mark_truncated(raw, _MAX_ITEM_CHARS)
 
 
-def _stance_line(item: dict[str, Any]) -> str:
+def _stance_line(item: dict[str, Any], identifier: str | None = None) -> str:
     """Render one current stance -- topic-scoped (ADR-0126 T1) or curated behavioural (T2).
 
     Both item shapes carry only ``target``/``affect``, so one renderer serves both
@@ -2583,14 +2625,23 @@ def _stance_line(item: dict[str, Any]) -> str:
     mastery is correctly null on every live topic-scoped stance (a pure
     preference/intention, not a stated skill level) -- the curated behavioural set is
     likewise preference-only.
+
+    Args:
+        item: The stance item to render.
+        identifier: This stance's citation identifier (ADR-0138 D3(a), FRE-1296), or
+            None to render without one — the stance was never registered as a source.
     """
     target = item.get("target", "")
     affect = mark_truncated((item.get("affect") or "").strip(), _MAX_ITEM_CHARS)
-    return f"- {target}: {affect}"
+    line = f"- {target}: {affect}"
+    if identifier:
+        line += f" [{identifier}]"
+    return line
 
 
 def _render_memory_section_with_ids(
     items: list[dict[str, Any]],
+    registry: "SourceRegistry | None" = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Render recalled memory for the volatile tail, dispatching **per item kind**.
 
@@ -2613,6 +2664,13 @@ def _render_memory_section_with_ids(
 
     Args:
         items: Memory-context items of any kind, in upstream relevance order.
+        registry: This turn's source registry (ADR-0138 D2, FRE-1296). When given,
+            every item that renders a line is also registered as a source, and its
+            identifier is appended to that line so the model has something to copy
+            (D1's citation binding). None renders every line without an identifier —
+            the pre-FRE-1296 behaviour, still exercised where no registry is attached
+            (e.g. sub-agent paths, ``ExecutionContext.source_registry`` defaults to
+            None).
 
     Returns:
         Tuple of (section string, identities that actually rendered content). Both
@@ -2655,16 +2713,20 @@ def _render_memory_section_with_ids(
     sections: list[str] = []
     rendered_ids: list[str] = []
 
+    def _identifier_for(item: dict[str, Any]) -> str | None:
+        """This item's citation identifier, registering it as a source if needed."""
+        return registry.register_memory_item(item).identifier if registry is not None else None
+
     if behavioural:
         rendered_ids.extend(memory_item_identity(m)[1] for m in behavioural)
         section = "\n\n## Standing Behavioural Preferences\n"
-        section += "\n".join(_stance_line(m) for m in behavioural)
+        section += "\n".join(_stance_line(m, _identifier_for(m)) for m in behavioural)
         sections.append(section)
 
     if described:
         rendered_ids.extend(memory_item_identity(m)[1] for m in described)
         section = "\n\n## Your Memory Graph — Known Entities\n"
-        section += "\n".join(_entity_line(m) for m in described)
+        section += "\n".join(_entity_line(m, _identifier_for(m)) for m in described)
         # FRE-1150: the previous wording — "use this list to directly answer questions
         # about what the user has previously discussed" — licensed exactly the failure
         # that shipped: an entity describing a *third party* ("Susan: the user's stated
@@ -2683,7 +2745,9 @@ def _render_memory_section_with_ids(
         section = "\n\n## Relevant Past Conversations\n"
         section += "The following past conversations may be relevant to the current request:\n\n"
         for index, item in enumerate(recalled, 1):
-            section += f"{index}. {_episode_text(item)}\n"
+            identifier = _identifier_for(item)
+            section += f"{index}. {_episode_text(item)}"
+            section += f" [{identifier}]\n" if identifier else "\n"
             if item.get("key_entities"):
                 section += f"   Entities: {', '.join(item['key_entities'][:5])}\n"
         section += (
@@ -2694,7 +2758,7 @@ def _render_memory_section_with_ids(
     if stances:
         rendered_ids.extend(memory_item_identity(m)[1] for m in stances)
         section = "\n\n## What The User Thinks About Related Topics\n"
-        section += "\n".join(_stance_line(m) for m in stances)
+        section += "\n".join(_stance_line(m, _identifier_for(m)) for m in stances)
         sections.append(section)
 
     return "".join(sections), tuple(rendered_ids)
@@ -4755,7 +4819,7 @@ async def step_llm_call(
         _rendered_memory_ids: tuple[str, ...] = ()
         if ctx.memory_context:
             _section_text, _rendered_memory_ids = _render_memory_section_with_ids(
-                ctx.memory_context
+                ctx.memory_context, ctx.source_registry
             )
             memory_section = _section_text or None
             if memory_section is None:
@@ -5679,13 +5743,18 @@ async def step_tool_execution(
         # ADR-0138 D2 item 2/3 (FRE-1280). The arguments travel with the content: a tool
         # result is a source only to the extent it is not the model's own arguments
         # returning, and `content` alone cannot answer that.
-        _register_tool_source(
+        _citation_identifier = _register_tool_source(
             ctx,
             tool_name=dr["tool_name"],
             arguments=plan["arguments"],
             content=content,
             success=dr["success"],
         )
+        # ADR-0138 D3(a) (FRE-1296): the identifier is only citable if the model can
+        # see it. FRE-1280 minted it and stopped there — nothing rendered it into the
+        # content the model actually reads.
+        if _citation_identifier:
+            content = _with_citation_marker(content, _citation_identifier)
         ctx.steps.append(
             {
                 "type": "tool_call",

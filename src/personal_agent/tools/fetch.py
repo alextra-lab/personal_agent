@@ -10,9 +10,11 @@ new dependency required.
 
 from __future__ import annotations
 
+import asyncio
 import html
 import ipaddress
 import re
+import socket
 from html.parser import HTMLParser
 from typing import Any
 
@@ -32,51 +34,66 @@ _DEFAULT_MAX_CHARS = 10_000
 _MAX_CHARS_CAP = 50_000
 _TIMEOUT = 20.0
 
-_BLOCKED_HOSTNAMES = frozenset({"localhost"})
 
-
-def _is_private_or_internal_host(hostname: str) -> bool:
-    """Whether ``hostname`` is a loopback/private/link-local/reserved address or 'localhost'.
+async def _resolves_to_private_or_internal(hostname: str) -> bool:
+    """Whether ``hostname`` resolves to a loopback/private/link-local/reserved address.
 
     ``fetch_url`` is the one tool whose target host is fully model-chosen — every other
     ``create_guarded_http_client`` consumer (web_search, context7, the SLM health probe, …)
     hits a fixed, operator-configured base URL, some of them deliberately loopback/internal
     (e.g. the local model server). ``DomainGuard``'s blocklist mode only checks hostnames
     against a malicious-domain feed, so it does not stop a model-chosen URL from reaching an
-    internal service or a cloud metadata endpoint. Rather than narrow ``DomainGuard`` itself
-    (shared by seams that legitimately target internal addresses), this tool rejects such
-    targets on its own.
+    internal service. Rather than narrow ``DomainGuard`` itself (shared by seams that
+    legitimately target internal addresses), this tool rejects such targets on its own.
 
-    IP-literal and 'localhost' only — no DNS resolution, so a hostname that *resolves* to a
-    private address (DNS rebinding) is not caught here. This closes the direct, most likely
-    shape (an IP literal or 'localhost' in the model-chosen URL), not every SSRF variant.
+    Resolves via DNS rather than only testing whether the host *string* parses as an IP
+    literal — this deployment's internal services (``elasticsearch``, ``postgres``,
+    ``neo4j``, ``redis``, …) are plain Docker service-name hostnames on a flat network
+    (FRE-362), not IP literals, and an IP-literal-only check let them through (PR #957
+    bounce). An unresolvable hostname is treated as not-internal here — the connection
+    attempt itself then fails with a clear "cannot connect", rather than a DNS failure
+    being misclassified as a security block.
+
+    Residual gap, stated rather than claimed closed: the resolved address is used only to
+    decide reachability here, not pinned for the request itself, so a DNS answer that
+    changes between this check and the actual connect (rebinding) is not closed by this
+    alone.
     """
-    if hostname.lower() in _BLOCKED_HOSTNAMES:
-        return True
     try:
-        addr = ipaddress.ip_address(hostname)
-    except ValueError:
+        loop = asyncio.get_running_loop()
+        infos = await loop.getaddrinfo(hostname, None)
+    except socket.gaierror:
         return False
-    return (
-        addr.is_private
-        or addr.is_loopback
-        or addr.is_link_local
-        or addr.is_reserved
-        or addr.is_unspecified
-    )
+
+    for info in infos:
+        raw_addr = info[4][0]
+        try:
+            addr = ipaddress.ip_address(raw_addr)
+        except ValueError:
+            continue
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_unspecified
+        ):
+            return True
+    return False
 
 
 async def _reject_private_targets(request: httpx.Request) -> None:
-    """Request hook: refuse a private/internal target before it is sent.
+    """Request hook: refuse a target that resolves to a private/internal address.
 
     Installed alongside ``create_guarded_http_client``'s own ``DomainGuard`` hook, so it
     fires on the initial request and on every redirect (same hook mechanism ADR-0132 D2
     relies on for the domain-blocklist check).
     """
     hostname = request.url.host
-    if _is_private_or_internal_host(hostname):
+    if await _resolves_to_private_or_internal(hostname):
         raise ToolExecutionError(
-            f"URL host '{hostname}' is a private or internal address and cannot be fetched."
+            f"URL host '{hostname}' resolves to a private or internal address and cannot "
+            "be fetched."
         )
 
 
@@ -159,7 +176,17 @@ fetch_url_tool = ToolDefinition(
             json_schema=None,
         ),
     ],
-    risk_level="low",
+    # risk_level is "medium" (the `network` category's own default), not web_search's
+    # "low" override — deliberately not inherited. web_search's target is a single
+    # fixed, operator-configured proxy (SearXNG); fetch_url's target host is fully
+    # model-chosen and unbounded, so it does not earn the same override even with the
+    # private-target guard above in place (PR #957 bounce). requires_approval stays
+    # False: the concrete exploit that motivated raising this (unauthenticated internal
+    # services reachable by Docker service name) is closed by the guard, not by adding
+    # approval friction — gating every call behind human approval would reintroduce the
+    # friction ADR-0138 built fetch_url to remove, for a residual risk (arbitrary
+    # public-host content entering context) already accepted, unapproved, for web_search.
+    risk_level="medium",
     allowed_modes=["NORMAL", "DEGRADED"],
     requires_approval=False,
     requires_sandbox=False,

@@ -7,6 +7,8 @@ is covered separately by ``tests/test_security/test_egress_seams.py``.
 
 from __future__ import annotations
 
+import asyncio
+import socket
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -15,12 +17,18 @@ import pytest
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.fetch import (
-    _is_private_or_internal_host,
+    _resolves_to_private_or_internal,
     fetch_url_executor,
     fetch_url_tool,
 )
 
 _CTX = TraceContext.new_trace()
+
+
+def _addrinfo(ip: str) -> list[tuple[object, ...]]:
+    """Build a minimal ``getaddrinfo``-shaped result for one IP address."""
+    family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+    return [(family, socket.SOCK_STREAM, 6, "", (ip, 0))]
 
 
 def _mock_html_response(
@@ -51,7 +59,10 @@ def test_tool_definition() -> None:
     """Tool has correct metadata and is Tier-1 (no MCP dependency)."""
     assert fetch_url_tool.name == "fetch_url"
     assert fetch_url_tool.category == "network"
-    assert fetch_url_tool.risk_level == "low"
+    # "medium" (the network category's own default), not web_search's "low" override —
+    # fetch_url's target host is fully model-chosen and unbounded, unlike web_search's
+    # fixed SearXNG proxy (PR #957 bounce).
+    assert fetch_url_tool.risk_level == "medium"
     assert "NORMAL" in fetch_url_tool.allowed_modes
     param_names = {p.name for p in fetch_url_tool.parameters}
     assert {"url", "max_chars"} <= param_names
@@ -183,9 +194,16 @@ async def test_timeout_raises() -> None:
             await fetch_url_executor(url="https://example.com", ctx=_CTX)
 
 
-# ── SSRF guard: private/internal hosts ─────────────────────────────────────
+# ── SSRF guard: resolve-then-check, not IP-literal-only (PR #957 bounce) ────
+#
+# The first version of this guard tested only whether the host *string* parsed as an
+# IP literal, which missed the case that matters on this deployment: Docker service
+# names (elasticsearch, postgres, neo4j, redis, …) are plain hostnames on a flat
+# network (FRE-362) that resolve to private addresses. `_resolves_to_private_or_internal`
+# resolves via DNS and checks the resolved address instead.
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "hostname",
     [
@@ -200,17 +218,43 @@ async def test_timeout_raises() -> None:
         "0.0.0.0",
     ],
 )
-def test_private_or_internal_hosts_are_flagged(hostname: str) -> None:
-    assert _is_private_or_internal_host(hostname) is True
+async def test_ip_literal_and_localhost_targets_are_flagged(hostname: str) -> None:
+    """IP literals and 'localhost' resolve locally — no DNS mocking needed."""
+    assert await _resolves_to_private_or_internal(hostname) is True
 
 
-@pytest.mark.parametrize("hostname", ["example.com", "caddy", "8.8.8.8", "github.com"])
-def test_public_hosts_are_not_flagged(hostname: str) -> None:
-    """Paired positive — the check must not deny ordinary public hosts or the
-    docker-network hostnames other egress seams (e.g. the SLM health probe)
-    legitimately target.
+@pytest.mark.asyncio
+async def test_docker_service_hostname_resolving_to_private_address_is_flagged() -> None:
+    """The exact regression from the PR #957 bounce: 'elasticsearch' is a plain
+    hostname, not an IP literal, but resolves to a private address on this
+    deployment's flat Docker network — reachable, unauthenticated (FRE-361), and
+    with no network segmentation to fall back on (FRE-362). An IP-literal-only check
+    let this through; resolving first catches it.
     """
-    assert _is_private_or_internal_host(hostname) is False
+    loop = asyncio.get_running_loop()
+    with patch.object(loop, "getaddrinfo", AsyncMock(return_value=_addrinfo("172.20.0.5"))):
+        assert await _resolves_to_private_or_internal("elasticsearch") is True
+
+
+@pytest.mark.asyncio
+async def test_public_hostname_resolving_publicly_is_not_flagged() -> None:
+    """Paired positive — an ordinary public hostname resolving to a public address
+    must not be denied.
+    """
+    loop = asyncio.get_running_loop()
+    with patch.object(loop, "getaddrinfo", AsyncMock(return_value=_addrinfo("93.184.216.34"))):
+        assert await _resolves_to_private_or_internal("example.com") is False
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_hostname_is_not_flagged() -> None:
+    """A DNS failure is not a security block — the connection attempt itself then
+    fails with a clear 'cannot connect', rather than misclassifying resolution
+    failure as a guard hit.
+    """
+    loop = asyncio.get_running_loop()
+    with patch.object(loop, "getaddrinfo", AsyncMock(side_effect=socket.gaierror("not known"))):
+        assert await _resolves_to_private_or_internal("this-host-does-not-exist.invalid") is False
 
 
 @pytest.mark.asyncio
@@ -238,3 +282,22 @@ async def test_metadata_endpoint_refused_before_connection() -> None:
     ):
         with pytest.raises(ToolExecutionError, match="private or internal address"):
             await fetch_url_executor(url="http://169.254.169.254/latest/meta-data/", ctx=_CTX)
+
+
+@pytest.mark.asyncio
+async def test_docker_service_name_refused_before_connection() -> None:
+    """End-to-end proof for the bounce's own example: ``fetch_url_executor`` refuses
+    a hostname (not an IP literal) that resolves to a private address, before any
+    connection is attempted.
+    """
+    loop = asyncio.get_running_loop()
+    with (
+        patch.object(loop, "getaddrinfo", AsyncMock(return_value=_addrinfo("172.20.0.5"))),
+        patch.object(
+            httpx.AsyncHTTPTransport,
+            "handle_async_request",
+            AsyncMock(side_effect=AssertionError("transport reached — SSRF guard did not refuse")),
+        ),
+    ):
+        with pytest.raises(ToolExecutionError, match="resolves to a private or internal address"):
+            await fetch_url_executor(url="http://elasticsearch:9200/_cat/indices", ctx=_CTX)

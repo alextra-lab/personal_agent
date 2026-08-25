@@ -36,6 +36,32 @@ Rules:
 
 
 # ============================================================================
+# Grounding Contract (ADR-0138 D1/D2/D6, FRE-1283)
+#
+# Unconditional — spliced into every turn's system prompt regardless of whether
+# tools are offered, because the citation obligation applies to any world-fact
+# claim, not only to tool-using turns. See executor.py's system_prompt assembly.
+# ============================================================================
+
+GROUNDING_CONTRACT_PROMPT = """## Grounding
+Any claim you make about the world needs a source. Where content in this prompt or in a \
+tool result carries a citation identifier like `[S1@a3f91c2b7d4e6f80]`, and you use that \
+content to support a claim, copy its exact marker immediately after the claim it supports \
+— one marker per claim, never left implicit by proximity: \
+`Ortiz [S1@a3f91c2b7d4e6f80] is better than Nardin [S2@c4d8e1f2a9b07653]`, never \
+`Ortiz is better than Nardin [S1@a3f91c2b7d4e6f80]` leaving it ambiguous which source covers \
+what. Admissible sources are: the memory graph, tool and web results retrieved this turn, \
+documentation retrieved this turn, and the user's own words in this conversation. Your own \
+background knowledge is not a source, however confident you are in it.
+If you have no source for a claim, say so plainly instead of asserting it — "I don't have \
+a source for that" is a correct answer, not a forbidden one. This does not apply to code \
+you're offering the user to run (package and dependency names still need a source), to a \
+comparison or ordering over material you did cite that adds no new factual claim of its \
+own, or to statements about what you searched for or found this turn.
+"""
+
+
+# ============================================================================
 # Tool Use Prompts (ADR-0008 / ADR-0032)
 #
 # Two variants selected by ToolCallingStrategy:
@@ -53,9 +79,9 @@ Rules:
 - PARALLEL CALLS: When a task needs multiple independent tool calls (e.g. checking errors AND checking memory AND checking infra health), issue ALL of them in a SINGLE response as multiple tool_calls entries. Never call them one at a time when they are independent — batching saves iterations.
 - Step budget: Complete most requests in ≤ 6 tool calls. Prefer synthesizing with gathered data over additional lookups. If you have enough information to answer, synthesize immediately.
 - After tool results are returned, synthesize a final natural-language answer. Do NOT request the same tool again unless the path/args must change.
-- Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, call web_search for quick lookups (free, private, multi-engine). Pass categories='it' for technical queries, 'science' for research, 'news' for current events, 'weather' for forecasts.
-- After web_search returns URLs, use `bash` with curl (per docs/skills/fetch-url.md) to read full page content when snippets are insufficient.
-- Use perplexity_query only when you specifically need a synthesized answer with citations, or when web_search results are insufficient for a complex question.
+- Search is not gated on whether the topic "sounds recent". Call web_search for quick lookups (free, private, multi-engine) whenever you need to make a factual claim and memory, tool results, or the user's own words so far don't already give you a source for it — current events and CVEs need this exactly as much as any other unsourced claim does, and no more. Pass categories='it' for technical queries, 'science' for research, 'news' for current events, 'weather' for forecasts.
+- web_search results are directly citable. If snippets are insufficient, you may still use `bash` with curl (per docs/skills/fetch-url.md) to read the full page, but that page's content is not citable under the grounding contract — anything you assert from it needs its own citable source (another search, or say plainly you don't have one).
+- perplexity_query's synthesized output cannot be cited under the grounding contract — reach for it only for background research you will re-verify from a citable source before asserting anything from it, never as the source itself.
 - Do NOT answer from your own knowledge when live information is needed; always search first."""
 
 

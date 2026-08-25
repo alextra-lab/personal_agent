@@ -208,8 +208,10 @@ class TestCompetingClaimSurvives:
 
         assert "directly answer questions about what the user" not in section
         assert "not who you are speaking with" in section
-        # The legitimate half of the old instruction survives.
-        assert "Do NOT say you have no memory." in section
+        # ADR-0138 D6 / FRE-1283: the prohibition is deleted outright — under the
+        # citation contract "I have no source for that" is the correct output, not
+        # a forbidden one — but the FRE-1150 wording it used to trail survives.
+        assert "Do NOT say you have no memory." not in section
 
     def test_competing_claim_reaches_the_wire_alongside_the_stanza(self) -> None:
         """End-to-end on the artifact the model receives: the volatile block is

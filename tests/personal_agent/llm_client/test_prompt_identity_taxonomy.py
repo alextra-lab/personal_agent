@@ -29,6 +29,7 @@ class TestPromptComponentTaxonomy:
         # These are the component IDs appended in executor.py:2521-2538.
         # Update this list when the executor gains a new component.
         executor_component_ids = {
+            "grounding_contract",
             "tool_awareness",
             "deployment_context",
             "operator_stanza",
@@ -64,6 +65,7 @@ class TestPromptComponentTaxonomy:
         )
         source = executor_path.read_text()
         for component_id in (
+            "grounding_contract",
             "tool_awareness",
             "deployment_context",
             "operator_stanza",

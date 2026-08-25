@@ -579,6 +579,12 @@ tools:
 
   # Auto-discovered: 2026-01-18T20:34:06.948747
   # Fetch and parse content from a webpage URL. — DISABLED: superseded by bash curl + fetch-url skill (FRE-265)
+  # FRE-1283 round 2 (2026-08-25): considered re-enabling this for ADR-0138 D2 citation
+  # admissibility, but the fetch MCP server that backed this entry is gone — the live
+  # gateway's `mcp_gateway_initialized` log lists only mcp_resolve-library-id,
+  # mcp_sequentialthinking, mcp_query-docs. This entry is a fossil with nothing behind
+  # it; enabling it would tell the model to call a tool it is never actually offered.
+  # Provisioning a fetch MCP server is a separate, deploy-scoped decision — see FRE-1297.
   mcp_fetch_content:
     category: "mcp"
     allowed_in_modes: []

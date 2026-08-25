@@ -49,9 +49,10 @@ class TestModelRole:
         role_values = {role.value for role in ModelRole}
         assert _MATRIX_INDEPENDENT_ROLES <= role_values
 
-    def test_model_role_fourteen_members(self) -> None:
-        """ModelRole has exactly fourteen members post-FRE-1037 widening."""
-        assert len(list(ModelRole)) == 14
+    def test_model_role_fifteen_members(self) -> None:
+        """ModelRole has fifteen members: fourteen from FRE-1037, plus FRE-1281's."""
+        assert len(list(ModelRole)) == 15
+        assert ModelRole.SPAN_EXTRACTION == "span_extraction"
         assert ModelRole.COMPRESSOR == "compressor"
         assert ModelRole.ARTIFACT_BUILDER == "artifact_builder"
         assert ModelRole.ENTITY_EXTRACTION == "entity_extraction"

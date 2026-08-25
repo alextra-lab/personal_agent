@@ -1,0 +1,1003 @@
+# FRE-1281 — labelled span-extraction corpus (ADR-0138 D1, AC-7)
+#
+# Labelled by hand against ADJUDICATION.md v1, BEFORE any extractor existed. The commit
+# introducing this file precedes the first line of personal_agent.grounding; git log is
+# the artifact history the ticket's AC-5 asks for.
+#
+# Labelling is COMPLETE OVER CLAIMS: every claim in every document is labelled. Text
+# carrying no span makes no claim about the world — that is what makes precision
+# measurable, since a prediction over unlabelled text is a false positive rather than a
+# labelling gap. A handful of NOT_A_CLAIM spans are recorded explicitly where the call is
+# interesting enough to be worth pinning.
+#
+# Documents are grounded but invented — no transcripts, no PII, no deployment
+# identifiers (public repo; test_fre1281_corpus.py enforces the denylist).
+#
+# partition: dev documents may be inspected per-document while iterating; heldout
+# documents are reported in aggregate only (report.py cannot emit their diffs).
+
+schema_version: 1
+corpus_version: "2026-08-24.1"
+
+documents:
+
+  # ── factual claims, with and without named entities ──────────────────────────
+
+  - doc_id: d01-tuna-brands
+    partition: dev
+    user_message: "Which tinned tuna should I buy in France?"
+    text: |
+      Ortiz is a Spanish brand sold in most French supermarkets, and its yellowfin is
+      packed in olive oil. Yellowfin generally carries less mercury than bigeye. I'd
+      recommend it if you can find it.
+    spans:
+      - text: "Ortiz is a Spanish brand sold in most French supermarkets"
+        label: claim_non_exempt
+        span_class: factual_entity
+      - text: "its yellowfin is\npacked in olive oil"
+        label: claim_non_exempt
+        span_class: factual_entity
+      - text: "Yellowfin generally carries less mercury than bigeye"
+        label: claim_non_exempt
+        span_class: factual_entity
+        note: "A comparative, but over UNCITED attributes — not connective_evaluative."
+
+  - doc_id: d02-mercury-bare
+    partition: dev
+    user_message: "Is this fish safe to eat weekly?"
+    text: |
+      That one is high in mercury, so weekly is probably too often. The smaller species
+      accumulate far less of it. Eating it once a month is fine for most adults.
+    spans:
+      - text: "That one is high in mercury"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+        note: "No named entity and no numeral — invisible to an entity-or-figure trigger."
+      - text: "The smaller species\naccumulate far less of it"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+      - text: "Eating it once a month is fine for most adults"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+
+  - doc_id: d03-storage-bare
+    partition: heldout
+    text: |
+      the leaves keep longer if you store them unwashed. washing them first breaks down
+      the outer cells and they spoil within a day or two. a paper towel in the container
+      absorbs the excess moisture.
+    spans:
+      - text: "the leaves keep longer if you store them unwashed"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+      - text: "washing them first breaks down\nthe outer cells"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+      - text: "they spoil within a day or two"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+      - text: "a paper towel in the container\nabsorbs the excess moisture"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+
+  - doc_id: d04-city-conjunction
+    partition: dev
+    user_message: "Tell me about Paris."
+    text: |
+      Paris is France's capital and has 2.1 million residents. The city sits on the Seine.
+    spans:
+      - text: "Paris is France's capital"
+        label: claim_non_exempt
+        span_class: factual_entity
+        note: "AC-1's own example: the conjunction must yield two spans, not one."
+      - text: "has 2.1 million residents"
+        label: claim_non_exempt
+        span_class: factual_entity
+      - text: "The city sits on the Seine"
+        label: claim_non_exempt
+        span_class: factual_entity
+
+  - doc_id: d05-rainfall
+    partition: heldout
+    text: |
+      The station recorded 84 mm of rain in October, which is above the ten-year average
+      of 71 mm. Most of it fell in a single week.
+    spans:
+      - text: "The station recorded 84 mm of rain in October"
+        label: claim_non_exempt
+        span_class: factual_entity
+      - text: "the ten-year average\nof 71 mm"
+        label: claim_non_exempt
+        span_class: factual_entity
+      - text: "Most of it fell in a single week"
+        label: claim_non_exempt
+        span_class: factual_entity
+
+  - doc_id: d06-bare-predicates-cooking
+    partition: heldout
+    text: |
+      resting the dough overnight makes it easier to shape. the flour absorbs water
+      slowly, and a cold rise develops more flavour than a warm one.
+    spans:
+      - text: "resting the dough overnight makes it easier to shape"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+      - text: "the flour absorbs water\nslowly"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+      - text: "a cold rise develops more flavour than a warm one"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+
+  - doc_id: d07-bare-predicate-mixed
+    partition: dev
+    text: |
+      the coating is not dishwasher safe. it degrades above medium heat, and the pan
+      warps if you run it under cold water while hot.
+    spans:
+      - text: "the coating is not dishwasher safe"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+      - text: "it degrades above medium heat"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+      - text: "the pan\nwarps if you run it under cold water while hot"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+
+  # ── code bodies, dependency declarations, NL inside code ─────────────────────
+
+  - doc_id: d08-httpx-client
+    partition: dev
+    user_message: "Show me how to fetch a URL asynchronously."
+    text: |
+      Here's a minimal async fetch:
+
+      ```python
+      import httpx
+
+
+      async def fetch(url: str) -> str:
+          async with httpx.AsyncClient() as client:
+              response = await client.get(url, timeout=10.0)
+              return response.text
+      ```
+
+      `AsyncClient.get` accepts a `timeout=` argument in seconds.
+    spans:
+      - text: "import httpx"
+        label: claim_non_exempt
+        span_class: dependency_declaration
+      - text: "async with httpx.AsyncClient() as client:"
+        label: claim_exempt
+        span_class: code_body
+      - text: "response = await client.get(url, timeout=10.0)"
+        label: claim_exempt
+        span_class: code_body
+      - text: "`AsyncClient.get` accepts a `timeout=` argument in seconds"
+        label: claim_non_exempt
+        span_class: prose_about_code
+        note: "Use versus assert: the call above is a proposal to run; this is a claim about the API."
+
+  - doc_id: d09-print-paris
+    partition: dev
+    text: |
+      ```python
+      def banner() -> None:
+          print("Paris has 9 million residents")
+      ```
+    spans:
+      - text: "def banner() -> None:"
+        label: claim_exempt
+        span_class: code_body
+      - text: "Paris has 9 million residents"
+        label: claim_non_exempt
+        span_class: nl_in_code
+        note: "Parses cleanly as Python; a parse check alone would exempt it (ADR-0138 D1)."
+
+  - doc_id: d10-comment-claims
+    partition: dev
+    text: |
+      ```python
+      # ISO 8601 requires a leading zero on single-digit months
+      def normalise(month: int) -> str:
+          """Pad a month. The standard was published in 1988."""
+          return f"{month:02d}"
+      ```
+    spans:
+      - text: "# ISO 8601 requires a leading zero on single-digit months"
+        label: claim_non_exempt
+        span_class: nl_in_code
+      - text: "The standard was published in 1988."
+        label: claim_non_exempt
+        span_class: nl_in_code
+      - text: "return f\"{month:02d}\""
+        label: claim_exempt
+        span_class: code_body
+
+  - doc_id: d11-js-comment
+    partition: heldout
+    text: |
+      ```js
+      // Node has shipped fetch by default since version 18
+      export async function get(url) {
+        const res = await fetch(url);
+        return res.json();
+      }
+      ```
+    spans:
+      - text: "// Node has shipped fetch by default since version 18"
+        label: claim_non_exempt
+        span_class: nl_in_code
+        note: "No JS parser here — the region is handed to the classifier rather than exempted."
+      - text: "const res = await fetch(url);"
+        label: claim_exempt
+        span_class: code_body
+
+  - doc_id: d12-install-commands
+    partition: dev
+    user_message: "How do I add this to my project?"
+    text: |
+      Install it with:
+
+      ```bash
+      uv add fastapi-turbo
+      pip install httpx
+      ```
+
+      Then import it as shown below.
+    spans:
+      - text: "uv add fastapi-turbo"
+        label: claim_non_exempt
+        span_class: dependency_declaration
+      - text: "pip install httpx"
+        label: claim_non_exempt
+        span_class: dependency_declaration
+
+  - doc_id: d13-manifest
+    partition: heldout
+    text: |
+      ```toml
+      [project]
+      name = "demo"
+      dependencies = ["httpx>=0.27", "pydantic>=2.9"]
+      ```
+    spans:
+      - text: "\"httpx>=0.27\""
+        label: claim_non_exempt
+        span_class: dependency_declaration
+      - text: "\"pydantic>=2.9\""
+        label: claim_non_exempt
+        span_class: dependency_declaration
+      - text: "name = \"demo\""
+        label: claim_exempt
+        span_class: code_body
+
+  - doc_id: d14-imports-many
+    partition: heldout
+    text: |
+      ```python
+      from collections.abc import Sequence
+
+      import structlog
+      from pydantic import BaseModel
+
+      log = structlog.get_logger(__name__)
+      ```
+    spans:
+      - text: "from collections.abc import Sequence"
+        label: claim_non_exempt
+        span_class: dependency_declaration
+      - text: "import structlog"
+        label: claim_non_exempt
+        span_class: dependency_declaration
+      - text: "from pydantic import BaseModel"
+        label: claim_non_exempt
+        span_class: dependency_declaration
+      - text: "log = structlog.get_logger(__name__)"
+        label: claim_exempt
+        span_class: code_body
+
+  - doc_id: d15-sql-body
+    partition: dev
+    text: |
+      ```sql
+      SELECT id, created_at
+      FROM sessions
+      WHERE created_at > now() - interval '7 days'
+      ORDER BY created_at DESC;
+      ```
+
+      Postgres evaluates `now()` once per statement, not once per row.
+    spans:
+      - text: "SELECT id, created_at"
+        label: claim_exempt
+        span_class: code_body
+      - text: "WHERE created_at > now() - interval '7 days'"
+        label: claim_exempt
+        span_class: code_body
+      - text: "Postgres evaluates `now()` once per statement, not once per row"
+        label: claim_non_exempt
+        span_class: prose_about_code
+
+  - doc_id: d16-code-body-only
+    partition: heldout
+    text: |
+      ```python
+      def merge(left: list[int], right: list[int]) -> list[int]:
+          out: list[int] = []
+          while left and right:
+              out.append(left.pop(0) if left[0] <= right[0] else right.pop(0))
+          return out + left + right
+      ```
+    spans:
+      - text: "def merge(left: list[int], right: list[int]) -> list[int]:"
+        label: claim_exempt
+        span_class: code_body
+      - text: "out: list[int] = []"
+        label: claim_exempt
+        span_class: code_body
+      - text: "while left and right:"
+        label: claim_exempt
+        span_class: code_body
+      - text: "return out + left + right"
+        label: claim_exempt
+        span_class: code_body
+
+  - doc_id: d17-yaml-body
+    partition: dev
+    text: |
+      ```yaml
+      services:
+        api:
+          image: demo-api:0.1
+          ports:
+            - "9000:9000"
+      ```
+    spans:
+      - text: "image: demo-api:0.1"
+        label: claim_exempt
+        span_class: code_body
+      - text: "- \"9000:9000\""
+        label: claim_exempt
+        span_class: code_body
+
+  # ── prose inside fences ──────────────────────────────────────────────────────
+
+  - doc_id: d18-text-fence
+    partition: dev
+    text: |
+      Here is the summary:
+
+      ```text
+      The library was released in 2019 and is maintained by a single author.
+      It has more downloads than its nearest alternative.
+      ```
+    spans:
+      - text: "The library was released in 2019"
+        label: claim_non_exempt
+        span_class: prose_in_fence
+      - text: "is maintained by a single author"
+        label: claim_non_exempt
+        span_class: prose_in_fence
+      - text: "It has more downloads than its nearest alternative."
+        label: claim_non_exempt
+        span_class: prose_in_fence
+
+  - doc_id: d19-mislabelled-fence
+    partition: heldout
+    text: |
+      ```python
+      The parser was rewritten last year and now handles nested quotes.
+      Most distributions ship the older build.
+      ```
+    spans:
+      - text: "The parser was rewritten last year"
+        label: claim_non_exempt
+        span_class: prose_in_fence
+        note: "Declared python, does not parse as python — fencing buys no exemption."
+      - text: "now handles nested quotes"
+        label: claim_non_exempt
+        span_class: prose_in_fence
+      - text: "Most distributions ship the older build."
+        label: claim_non_exempt
+        span_class: prose_in_fence
+
+  - doc_id: d20-unfenced-language
+    partition: dev
+    text: |
+      ```brainfuck
+      The specification has never been formally standardised.
+      Its author released it as a curiosity rather than a tool.
+      ```
+    spans:
+      - text: "The specification has never been formally standardised."
+        label: claim_non_exempt
+        span_class: prose_in_fence
+      - text: "Its author released it as a curiosity rather than a tool."
+        label: claim_non_exempt
+        span_class: prose_in_fence
+
+  - doc_id: d21-fence-mixed
+    partition: heldout
+    text: |
+      ```markdown
+      The endpoint was deprecated in the March release.
+      Clients should migrate before the next major version.
+      ```
+    spans:
+      - text: "The endpoint was deprecated in the March release."
+        label: claim_non_exempt
+        span_class: prose_in_fence
+      - text: "Clients should migrate before the next major version."
+        label: claim_non_exempt
+        span_class: prose_in_fence
+
+  # ── prose about code ─────────────────────────────────────────────────────────
+
+  - doc_id: d22-api-claims
+    partition: dev
+    user_message: "Does requests support connection pooling?"
+    text: |
+      `requests.Session` reuses the underlying TCP connection across calls. The pool size
+      defaults to 10 per host. Setting `stream=True` defers reading the body.
+    spans:
+      - text: "`requests.Session` reuses the underlying TCP connection across calls"
+        label: claim_non_exempt
+        span_class: prose_about_code
+      - text: "The pool size\ndefaults to 10 per host"
+        label: claim_non_exempt
+        span_class: prose_about_code
+      - text: "Setting `stream=True` defers reading the body"
+        label: claim_non_exempt
+        span_class: prose_about_code
+
+  - doc_id: d23-api-claims-two
+    partition: heldout
+    text: |
+      `json.dumps` escapes non-ASCII by default. Passing `ensure_ascii=False` turns that
+      off. The separator argument takes a two-tuple.
+    spans:
+      - text: "`json.dumps` escapes non-ASCII by default"
+        label: claim_non_exempt
+        span_class: prose_about_code
+      - text: "Passing `ensure_ascii=False` turns that\noff"
+        label: claim_non_exempt
+        span_class: prose_about_code
+      - text: "The separator argument takes a two-tuple."
+        label: claim_non_exempt
+        span_class: prose_about_code
+
+  - doc_id: d24-api-claims-three
+    partition: dev
+    text: |
+      Pydantic v2 validates on assignment only when the model opts in. The `frozen=True`
+      setting makes instances hashable.
+    spans:
+      - text: "Pydantic v2 validates on assignment only when the model opts in"
+        label: claim_non_exempt
+        span_class: prose_about_code
+      - text: "The `frozen=True`\nsetting makes instances hashable"
+        label: claim_non_exempt
+        span_class: prose_about_code
+
+  # ── evaluative text: checkable versus connective ─────────────────────────────
+
+  - doc_id: d25-well-regarded
+    partition: dev
+    user_message: "Which of these two HTTP libraries should I pick?"
+    text: |
+      Both are well regarded. The first is more popular, and the second is generally
+      considered safe for untrusted input.
+    spans:
+      - text: "Both are well regarded."
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+        note: "The ADR's own retracted exemplar — this was wrongly exempt in an earlier draft."
+      - text: "The first is more popular"
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+      - text: "the second is generally\nconsidered safe for untrusted input"
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+
+  - doc_id: d26-recommended
+    partition: heldout
+    text: |
+      This one is the recommended option for new projects. It is reliable under load and
+      the maintainers are responsive.
+    spans:
+      - text: "This one is the recommended option for new projects."
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+      - text: "It is reliable under load"
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+      - text: "the maintainers are responsive"
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+
+  - doc_id: d27-standard-approach
+    partition: dev
+    text: |
+      This is the standard approach. It is widely adopted, and most teams find it
+      maintainable.
+    spans:
+      - text: "This is the standard approach."
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+        note: "ADJUDICATION.md worked disagreement 1 — 'standard' is externally checkable."
+      - text: "It is widely adopted"
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+      - text: "most teams find it\nmaintainable"
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+
+  - doc_id: d28-connective-over-cited
+    partition: dev
+    user_message: "Compare the two tins you found."
+    text: |
+      The first is priced at EUR 4.20 [S1@aaaaaaaaaaaaaaaa] and the second at EUR 3.80
+      [S2@bbbbbbbbbbbbbbbb], so the second is cheaper. That makes it the better value of
+      the two on price alone.
+    spans:
+      - text: "The first is priced at EUR 4.20"
+        label: claim_non_exempt
+        span_class: factual_entity
+      - text: "the second at EUR 3.80"
+        label: claim_non_exempt
+        span_class: factual_entity
+      - text: "the second is cheaper"
+        label: claim_exempt
+        span_class: connective_evaluative
+        note: "An ordering over two cited prices — introduces no new checkable predicate."
+      - text: "That makes it the better value of\nthe two on price alone."
+        label: claim_exempt
+        span_class: connective_evaluative
+        note: "Scoped to price by the sentence itself, so it stays an ordering rather than a market claim."
+
+  - doc_id: d29-connective-more
+    partition: heldout
+    text: |
+      Given the two figures above, the second run took longer. It is therefore the slower
+      of the two, and the gap widened as the input grew.
+    spans:
+      - text: "the second run took longer"
+        label: claim_exempt
+        span_class: connective_evaluative
+      - text: "It is therefore the slower\nof the two"
+        label: claim_exempt
+        span_class: connective_evaluative
+      - text: "the gap widened as the input grew"
+        label: claim_exempt
+        span_class: connective_evaluative
+
+  - doc_id: d30-connective-ordering
+    partition: dev
+    text: |
+      Of the three cited measurements, the middle one is closest to the mean. The first
+      is the largest and the last is the smallest.
+    spans:
+      - text: "the middle one is closest to the mean"
+        label: claim_exempt
+        span_class: connective_evaluative
+      - text: "The first\nis the largest"
+        label: claim_exempt
+        span_class: connective_evaluative
+      - text: "the last is the smallest"
+        label: claim_exempt
+        span_class: connective_evaluative
+
+  # ── restatement, attributed and not ──────────────────────────────────────────
+
+  - doc_id: d31-restatement-overlap
+    partition: dev
+    user_message: "I'm using fastapi-turbo for the API layer."
+    text: |
+      You mentioned fastapi-turbo, so I'll work with that. For this use case I'd
+      recommend fastapi-turbo — it fits the shape of what you're building.
+    spans:
+      - text: "You mentioned fastapi-turbo"
+        label: claim_exempt
+        span_class: attributed_restatement
+      - text: "I'd\nrecommend fastapi-turbo"
+        label: claim_non_exempt
+        span_class: unattributed_restatement
+        note: "AC-4's probe. Non-exempt wins: the restatement exemption does not travel with the string."
+
+  - doc_id: d32-restatement-plain
+    partition: dev
+    user_message: "I run Debian on the server and macOS on the laptop."
+    text: |
+      You said you run Debian on the server and macOS on the laptop. You also asked about
+      the tunnel earlier.
+    spans:
+      - text: "You said you run Debian on the server and macOS on the laptop."
+        label: claim_exempt
+        span_class: attributed_restatement
+      - text: "You also asked about\nthe tunnel earlier."
+        label: claim_exempt
+        span_class: attributed_restatement
+
+  - doc_id: d33-restatement-more
+    partition: heldout
+    user_message: "My budget is 40 euros and I need it by Friday."
+    text: |
+      Your budget is 40 euros, as you said, and you need it by Friday. Going on that, the
+      cheaper option is the one that fits.
+    spans:
+      - text: "Your budget is 40 euros, as you said"
+        label: claim_exempt
+        span_class: attributed_restatement
+      - text: "you need it by Friday"
+        label: claim_exempt
+        span_class: attributed_restatement
+      - text: "the\ncheaper option is the one that fits"
+        label: claim_exempt
+        span_class: connective_evaluative
+
+  - doc_id: d34-unattributed
+    partition: heldout
+    user_message: "A colleague suggested I try pgbouncer-lite."
+    text: |
+      I'd suggest pgbouncer-lite here. It handles this pattern well and is the usual
+      choice for pooling.
+    spans:
+      - text: "I'd suggest pgbouncer-lite here."
+        label: claim_non_exempt
+        span_class: unattributed_restatement
+      - text: "It handles this pattern well"
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+      - text: "is the usual\nchoice for pooling"
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+
+  - doc_id: d35-unattributed-more
+    partition: dev
+    user_message: "Someone told me to look at the redis-stream approach."
+    text: |
+      Use the redis-stream approach for this. My recommendation is the redis-stream
+      consumer-group pattern in particular.
+    spans:
+      - text: "Use the redis-stream approach for this."
+        label: claim_non_exempt
+        span_class: unattributed_restatement
+      - text: "My recommendation is the redis-stream\nconsumer-group pattern in particular."
+        label: claim_non_exempt
+        span_class: unattributed_restatement
+
+  - doc_id: d36-restatement-mixed
+    partition: heldout
+    user_message: "I've been using duckdb-async and it works fine."
+    text: |
+      You told me duckdb-async has been working for you. You also mentioned the batch job.
+      I'd stick with duckdb-async. Honestly duckdb-async is what I'd pick too.
+    spans:
+      - text: "You told me duckdb-async has been working for you."
+        label: claim_exempt
+        span_class: attributed_restatement
+      - text: "You also mentioned the batch job."
+        label: claim_exempt
+        span_class: attributed_restatement
+      - text: "I'd stick with duckdb-async."
+        label: claim_non_exempt
+        span_class: unattributed_restatement
+      - text: "Honestly duckdb-async is what I'd pick too."
+        label: claim_non_exempt
+        span_class: unattributed_restatement
+
+  - doc_id: d37-unattributed-three
+    partition: dev
+    user_message: "My teammate mentioned litestar and msgspec."
+    text: |
+      Go with litestar for the routing layer. Pair it with msgspec for serialisation.
+      Those are the two I'd choose.
+    spans:
+      - text: "Go with litestar for the routing layer."
+        label: claim_non_exempt
+        span_class: unattributed_restatement
+      - text: "Pair it with msgspec for serialisation."
+        label: claim_non_exempt
+        span_class: unattributed_restatement
+      - text: "Those are the two I'd choose."
+        label: claim_non_exempt
+        span_class: unattributed_restatement
+
+  # ── derived arithmetic over cited inputs ─────────────────────────────────────
+
+  - doc_id: d38-arithmetic
+    partition: dev
+    text: |
+      The first invoice is 240 euros [S1@cccccccccccccccc] and the second is 185 euros
+      [S2@dddddddddddddddd], so the total is 425 euros. That is 212.50 euros each if you
+      split it evenly.
+    spans:
+      - text: "The first invoice is 240 euros"
+        label: claim_non_exempt
+        span_class: factual_entity
+      - text: "the second is 185 euros"
+        label: claim_non_exempt
+        span_class: factual_entity
+      - text: "the total is 425 euros"
+        label: claim_exempt
+        span_class: derived_arithmetic
+      - text: "That is 212.50 euros each if you\nsplit it evenly."
+        label: claim_exempt
+        span_class: derived_arithmetic
+
+  - doc_id: d39-arithmetic-more
+    partition: heldout
+    text: |
+      With 12 units cited at 9 euros each, that comes to 108 euros. Adding the cited
+      14-euro delivery brings it to 122 euros. Over three months that is 366 euros.
+    spans:
+      - text: "that comes to 108 euros"
+        label: claim_exempt
+        span_class: derived_arithmetic
+      - text: "brings it to 122 euros"
+        label: claim_exempt
+        span_class: derived_arithmetic
+      - text: "Over three months that is 366 euros."
+        label: claim_exempt
+        span_class: derived_arithmetic
+
+  - doc_id: d40-arithmetic-three
+    partition: dev
+    text: |
+      The two cited durations are 45 and 75 seconds, so the run took 120 seconds in all.
+      That averages 60 seconds per stage. The difference between them is 30 seconds.
+    spans:
+      - text: "the run took 120 seconds in all"
+        label: claim_exempt
+        span_class: derived_arithmetic
+      - text: "That averages 60 seconds per stage."
+        label: claim_exempt
+        span_class: derived_arithmetic
+      - text: "The difference between them is 30 seconds."
+        label: claim_exempt
+        span_class: derived_arithmetic
+
+  # ── system-record statements ─────────────────────────────────────────────────
+
+  - doc_id: d41-no-source
+    partition: dev
+    user_message: "Which tinned tuna should I buy in France?"
+    text: |
+      I searched the web for French supermarket tuna listings and checked the memory graph
+      for anything you'd said about brands. Nothing relevant came back, so I don't have a
+      source for a recommendation here.
+    spans:
+      - text: "I searched the web for French supermarket tuna listings"
+        label: claim_exempt
+        span_class: system_record
+      - text: "checked the memory graph\nfor anything you'd said about brands"
+        label: claim_exempt
+        span_class: system_record
+      - text: "Nothing relevant came back"
+        label: claim_exempt
+        span_class: system_record
+      - text: "I don't have a\nsource for a recommendation here"
+        label: claim_exempt
+        span_class: system_record
+
+  - doc_id: d42-system-record-more
+    partition: heldout
+    text: |
+      I ran the documentation lookup twice and retrieved three pages. None of them mention
+      the parameter you asked about. I did not search the changelog.
+    spans:
+      - text: "I ran the documentation lookup twice"
+        label: claim_exempt
+        span_class: system_record
+      - text: "retrieved three pages"
+        label: claim_exempt
+        span_class: system_record
+      - text: "None of them mention\nthe parameter you asked about."
+        label: claim_exempt
+        span_class: system_record
+      - text: "I did not search the changelog."
+        label: claim_exempt
+        span_class: system_record
+
+  - doc_id: d43-system-record-vs-world
+    partition: dev
+    text: |
+      I found no results for that query. There is no reliable data on the mercury content
+      of that species.
+    spans:
+      - text: "I found no results for that query."
+        label: claim_exempt
+        span_class: system_record
+      - text: "There is no reliable data on the mercury content\nof that species"
+        label: claim_non_exempt
+        span_class: factual_bare_predicate
+        note: "ADJUDICATION.md worked disagreement 2 — the second is about the world, not the search."
+
+  # ── mixed documents, and text that claims nothing ────────────────────────────
+
+  - doc_id: d44-mixed-close
+    partition: dev
+    text: |
+      Let me know if you'd like me to look further. I can also pull the changelog if that
+      would help.
+    spans:
+      - text: "Let me know if you'd like me to look further."
+        label: not_a_claim
+      - text: "I can also pull the changelog if that\nwould help."
+        label: not_a_claim
+
+  - doc_id: d45-mixed-heavy
+    partition: heldout
+    user_message: "I use ruff already. What else should I add for typing?"
+    text: |
+      You said you already use ruff. Adding a type checker is the usual next step.
+
+      ```bash
+      uv add --dev mypy
+      ```
+
+      mypy reads its configuration from `pyproject.toml` under `[tool.mypy]`. It is
+      widely used. Shall I write a starting config?
+    spans:
+      - text: "You said you already use ruff."
+        label: claim_exempt
+        span_class: attributed_restatement
+      - text: "Adding a type checker is the usual next step."
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+      - text: "uv add --dev mypy"
+        label: claim_non_exempt
+        span_class: dependency_declaration
+      - text: "mypy reads its configuration from `pyproject.toml` under `[tool.mypy]`"
+        label: claim_non_exempt
+        span_class: prose_about_code
+      - text: "It is\nwidely used."
+        label: claim_non_exempt
+        span_class: checkable_evaluative
+      - text: "Shall I write a starting config?"
+        label: not_a_claim
+
+  # ── top-up documents, bringing every class to the ten-span floor ─────────────
+
+  - doc_id: d46-docstring-claims
+    partition: heldout
+    text: |
+      ```python
+      TIMEZONE_COUNT = 38
+
+
+      def offsets() -> dict[str, int]:
+          """Return UTC offsets.
+
+          India uses a half-hour offset from UTC.
+          """
+          # Nepal is the only country on a forty-five minute offset
+          return {"IST": 330}
+      ```
+    spans:
+      - text: "India uses a half-hour offset from UTC."
+        label: claim_non_exempt
+        span_class: nl_in_code
+      - text: "# Nepal is the only country on a forty-five minute offset"
+        label: claim_non_exempt
+        span_class: nl_in_code
+      - text: "TIMEZONE_COUNT = 38"
+        label: claim_exempt
+        span_class: code_body
+      - text: "return {\"IST\": 330}"
+        label: claim_exempt
+        span_class: code_body
+
+  - doc_id: d47-string-literal-claims
+    partition: dev
+    text: |
+      ```python
+      import click
+
+
+      @click.command()
+      def main() -> None:
+          click.echo("The euro replaced the franc in 2002")
+          click.echo("Basalt is denser than granite")
+      ```
+    spans:
+      - text: "import click"
+        label: claim_non_exempt
+        span_class: dependency_declaration
+      - text: "The euro replaced the franc in 2002"
+        label: claim_non_exempt
+        span_class: nl_in_code
+      - text: "Basalt is denser than granite"
+        label: claim_non_exempt
+        span_class: nl_in_code
+      - text: "@click.command()"
+        label: claim_exempt
+        span_class: code_body
+
+  - doc_id: d48-shell-comment
+    partition: dev
+    text: |
+      ```bash
+      # systemd replaced sysvinit as the default in most distributions
+      systemctl restart demo-api
+      ```
+    spans:
+      - text: "# systemd replaced sysvinit as the default in most distributions"
+        label: claim_non_exempt
+        span_class: nl_in_code
+      - text: "systemctl restart demo-api"
+        label: claim_exempt
+        span_class: code_body
+
+  - doc_id: d49-yaml-comment
+    partition: heldout
+    text: |
+      ```yaml
+      # the scheduler polls every thirty seconds by default
+      interval: 30
+      retries: 3
+      ```
+    spans:
+      - text: "# the scheduler polls every thirty seconds by default"
+        label: claim_non_exempt
+        span_class: nl_in_code
+      - text: "retries: 3"
+        label: claim_exempt
+        span_class: code_body
+
+  - doc_id: d50-restatement-and-record
+    partition: heldout
+    user_message: "I already tried the caching layer and it didn't help."
+    text: |
+      You said you already tried the caching layer and that it didn't help. You mentioned
+      the latency numbers too. I looked through this session's earlier turns and found no
+      profile output, and I did not run the profiler myself.
+    spans:
+      - text: "You said you already tried the caching layer and that it didn't help."
+        label: claim_exempt
+        span_class: attributed_restatement
+      - text: "You mentioned\nthe latency numbers too."
+        label: claim_exempt
+        span_class: attributed_restatement
+      - text: "I looked through this session's earlier turns and found no\nprofile output"
+        label: claim_exempt
+        span_class: system_record
+      - text: "I did not run the profiler myself"
+        label: claim_exempt
+        span_class: system_record
+
+  - doc_id: d51-arithmetic-and-ordering
+    partition: dev
+    text: |
+      The two cited line items are 60 and 90 euros, so together they come to 150 euros.
+      Taking the cited 20 percent discount leaves 120 euros. Of the two items the second
+      is the larger.
+    spans:
+      - text: "together they come to 150 euros"
+        label: claim_exempt
+        span_class: derived_arithmetic
+      - text: "Taking the cited 20 percent discount leaves 120 euros."
+        label: claim_exempt
+        span_class: derived_arithmetic
+      - text: "Of the two items the second\nis the larger."
+        label: claim_exempt
+        span_class: connective_evaluative
+
+  - doc_id: d52-unattributed-and-dep
+    partition: heldout
+    user_message: "A blog post recommended orjson."
+    text: |
+      I'd go with orjson here.
+
+      ```bash
+      uv add orjson
+      ```
+    spans:
+      - text: "I'd go with orjson here."
+        label: claim_non_exempt
+        span_class: unattributed_restatement
+      - text: "uv add orjson"
+        label: claim_non_exempt
+        span_class: dependency_declaration

@@ -291,6 +291,11 @@ def test_catalog_behaviour_matches_golden() -> None:
         f"Golden snapshot missing at {_GOLDEN}. Generate it on an unmodified "
         "tree with: python -m tests.personal_agent.config.test_catalog_snapshot --write"
     )
+    # CAUTION on --write (FRE-1281): run outside pytest it reads the deployment's own
+    # `.env`, so on a box where AGENT_SLM_BASE_URL differs from the committed value it
+    # bakes local endpoints into the golden — an unmodified *tree* is not enough, the
+    # *environment* has to match too. Check `git diff` on the golden and keep only the
+    # delta you meant to make; hand-editing one line is often the safer move.
     expected = json.loads(_GOLDEN.read_text())
     actual = build_snapshot()
 

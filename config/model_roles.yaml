@@ -61,6 +61,19 @@ roles:
   insights:           { all: claude_sonnet }
   embedding:          { all: embedding }
   compressor:         { all: gpt-5.4-mini }
+  # ADR-0138 D1 (FRE-1281): span classification is "a named component, not a regex".
+  # Bound to claude_sonnet on MEASURED grounds, not by preference. Scored over the
+  # FRE-1281 corpus, 3 samples, 156 document-scorings:
+  #   gpt-5.4-mini  11/16 preregistered bars met (recall 0.891, prose_in_fence 0.767)
+  #   claude_sonnet 15/16                        (recall 0.953, prose_in_fence 1.000)
+  # gpt-5.4-mini cannot be improved in place: reasoning_effort above `none` is an
+  # OUTAGE on that deployment, not a cost change (litellm rejects it with the
+  # `temperature: 0.0` FRE-758 pin), and entity_extraction and compressor bind there
+  # too. So this is a model choice, not a tuning knob. The contract's strength is
+  # bounded by extraction recall, which is why the stronger model is the right default
+  # here and why the cheaper one is a deliberate downgrade rather than a saving.
+  # Reproduce either figure with harness.py --model-key.
+  span_extraction:    { all: claude_sonnet }
   reranker:           { all: reranker }
   reranker_fallback:  { all: reranker_fallback }
 
@@ -141,6 +154,7 @@ bindings:
   session_summary:    { deployment: claude_sonnet }
   insights:           { deployment: claude_sonnet }
   compressor:         { deployment: gpt-5.4-mini }
+  span_extraction:    { deployment: claude_sonnet }
   embedding:          { deployment: embedding }
   reranker:           { deployment: reranker }
   reranker_fallback:  { deployment: reranker_fallback }

@@ -11,6 +11,7 @@ new dependency required.
 from __future__ import annotations
 
 import html
+import ipaddress
 import re
 from html.parser import HTMLParser
 from typing import Any
@@ -31,6 +32,53 @@ _DEFAULT_MAX_CHARS = 10_000
 _MAX_CHARS_CAP = 50_000
 _TIMEOUT = 20.0
 
+_BLOCKED_HOSTNAMES = frozenset({"localhost"})
+
+
+def _is_private_or_internal_host(hostname: str) -> bool:
+    """Whether ``hostname`` is a loopback/private/link-local/reserved address or 'localhost'.
+
+    ``fetch_url`` is the one tool whose target host is fully model-chosen — every other
+    ``create_guarded_http_client`` consumer (web_search, context7, the SLM health probe, …)
+    hits a fixed, operator-configured base URL, some of them deliberately loopback/internal
+    (e.g. the local model server). ``DomainGuard``'s blocklist mode only checks hostnames
+    against a malicious-domain feed, so it does not stop a model-chosen URL from reaching an
+    internal service or a cloud metadata endpoint. Rather than narrow ``DomainGuard`` itself
+    (shared by seams that legitimately target internal addresses), this tool rejects such
+    targets on its own.
+
+    IP-literal and 'localhost' only — no DNS resolution, so a hostname that *resolves* to a
+    private address (DNS rebinding) is not caught here. This closes the direct, most likely
+    shape (an IP literal or 'localhost' in the model-chosen URL), not every SSRF variant.
+    """
+    if hostname.lower() in _BLOCKED_HOSTNAMES:
+        return True
+    try:
+        addr = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_unspecified
+    )
+
+
+async def _reject_private_targets(request: httpx.Request) -> None:
+    """Request hook: refuse a private/internal target before it is sent.
+
+    Installed alongside ``create_guarded_http_client``'s own ``DomainGuard`` hook, so it
+    fires on the initial request and on every redirect (same hook mechanism ADR-0132 D2
+    relies on for the domain-blocklist check).
+    """
+    hostname = request.url.host
+    if _is_private_or_internal_host(hostname):
+        raise ToolExecutionError(
+            f"URL host '{hostname}' is a private or internal address and cannot be fetched."
+        )
+
 
 class _TextExtractor(HTMLParser):
     """Minimal HTML to plain text extractor using stdlib ``html.parser``."""
@@ -41,14 +89,26 @@ class _TextExtractor(HTMLParser):
         self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() in _SKIP_TAGS:
+        tag = tag.lower()
+        if tag in _SKIP_TAGS:
             self._skip_depth += 1
-        elif tag.lower() in _BLOCK_TAGS:
+        elif tag in _BLOCK_TAGS:
             self._parts.append("\n")
+        else:
+            # Inline tags (span, a, td, …) carry no separator of their own; without
+            # one, adjacent elements with no literal whitespace between them — a
+            # common shape in templated markup, e.g. <td>A</td><td>B</td> — extract
+            # as "AB" instead of "A B", corrupting the word boundary this tool's
+            # citation-content use depends on. get_text() collapses the resulting
+            # whitespace runs.
+            self._parts.append(" ")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() in _SKIP_TAGS:
+        tag = tag.lower()
+        if tag in _SKIP_TAGS:
             self._skip_depth = max(0, self._skip_depth - 1)
+        elif tag not in _BLOCK_TAGS:
+            self._parts.append(" ")
 
     def handle_data(self, data: str) -> None:
         if self._skip_depth == 0:
@@ -57,6 +117,7 @@ class _TextExtractor(HTMLParser):
     def get_text(self) -> str:
         """Return extracted text with collapsed whitespace."""
         raw = html.unescape("".join(self._parts))
+        raw = re.sub(r"[ \t]+", " ", raw)
         raw = re.sub(r"\n{3,}", "\n\n", raw)
         lines = [line.strip() for line in raw.splitlines()]
         return "\n".join(line for line in lines if line).strip()
@@ -144,6 +205,7 @@ async def fetch_url_executor(
             timeout=_TIMEOUT,
             follow_redirects=True,
             headers={"User-Agent": "personal-agent/0.1 (research bot)"},
+            event_hooks={"request": [_reject_private_targets]},
         ) as client:
             resp = await client.get(url)
             if resp.is_error:

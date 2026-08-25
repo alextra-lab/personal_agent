@@ -14,7 +14,11 @@ import pytest
 
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.executor import ToolExecutionError
-from personal_agent.tools.fetch import fetch_url_executor, fetch_url_tool
+from personal_agent.tools.fetch import (
+    _is_private_or_internal_host,
+    fetch_url_executor,
+    fetch_url_tool,
+)
 
 _CTX = TraceContext.new_trace()
 
@@ -109,6 +113,26 @@ async def test_basic_html_extraction() -> None:
 
 
 @pytest.mark.asyncio
+async def test_adjacent_inline_tags_get_a_word_boundary() -> None:
+    """Regression: <td>A</td><td>B</td> must extract as 'A B', not 'AB'.
+
+    Only block tags (br/p/div/h1-6/li/tr) inserted a separator; td/th/span/a and any
+    other inline tag did not, so two adjacent inline-tagged cells with no literal
+    whitespace between them ran together — corrupting the word boundary this tool's
+    citation-content use depends on.
+    """
+    html_body = "<table><tr><td>A</td><td>B</td></tr></table>"
+    resp = _mock_html_response(html_body)
+    with patch(
+        "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+    ):
+        result = await fetch_url_executor(url="https://example.com", ctx=_CTX)
+
+    assert "A B" in result["text"]
+    assert "AB" not in result["text"]
+
+
+@pytest.mark.asyncio
 async def test_truncation() -> None:
     """Long content is truncated to max_chars."""
     html_body = f"<p>{'x' * 20000}</p>"
@@ -157,3 +181,60 @@ async def test_timeout_raises() -> None:
     with patch("personal_agent.tools.fetch.create_guarded_http_client", return_value=client):
         with pytest.raises(ToolExecutionError, match="timed out"):
             await fetch_url_executor(url="https://example.com", ctx=_CTX)
+
+
+# ── SSRF guard: private/internal hosts ─────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "hostname",
+    [
+        "localhost",
+        "LOCALHOST",
+        "127.0.0.1",
+        "169.254.169.254",  # cloud metadata endpoint
+        "10.0.0.5",
+        "172.16.0.1",
+        "192.168.1.1",
+        "::1",
+        "0.0.0.0",
+    ],
+)
+def test_private_or_internal_hosts_are_flagged(hostname: str) -> None:
+    assert _is_private_or_internal_host(hostname) is True
+
+
+@pytest.mark.parametrize("hostname", ["example.com", "caddy", "8.8.8.8", "github.com"])
+def test_public_hosts_are_not_flagged(hostname: str) -> None:
+    """Paired positive — the check must not deny ordinary public hosts or the
+    docker-network hostnames other egress seams (e.g. the SLM health probe)
+    legitimately target.
+    """
+    assert _is_private_or_internal_host(hostname) is False
+
+
+@pytest.mark.asyncio
+async def test_private_ip_url_refused_before_connection() -> None:
+    """The request hook fires before any connection is attempted — a real
+    ``httpx.AsyncClient`` is used (not a mocked one), with the transport patched to
+    fail the test if reached, so this proves refusal happens pre-connection rather
+    than merely asserting the final exception type.
+    """
+    with patch.object(
+        httpx.AsyncHTTPTransport,
+        "handle_async_request",
+        AsyncMock(side_effect=AssertionError("transport reached — SSRF guard did not refuse")),
+    ):
+        with pytest.raises(ToolExecutionError, match="private or internal address"):
+            await fetch_url_executor(url="http://127.0.0.1:9200/_cat/indices", ctx=_CTX)
+
+
+@pytest.mark.asyncio
+async def test_metadata_endpoint_refused_before_connection() -> None:
+    with patch.object(
+        httpx.AsyncHTTPTransport,
+        "handle_async_request",
+        AsyncMock(side_effect=AssertionError("transport reached — SSRF guard did not refuse")),
+    ):
+        with pytest.raises(ToolExecutionError, match="private or internal address"):
+            await fetch_url_executor(url="http://169.254.169.254/latest/meta-data/", ctx=_CTX)

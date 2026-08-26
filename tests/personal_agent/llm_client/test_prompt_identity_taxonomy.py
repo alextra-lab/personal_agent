@@ -38,6 +38,7 @@ class TestPromptComponentTaxonomy:
             "memory_section",
             "salient_highlights",
             "artifact_builder_planning_note",
+            "current_datetime",
             "tool_use_rules",
             "decomposition_instructions",
         }
@@ -74,6 +75,7 @@ class TestPromptComponentTaxonomy:
             "memory_section",
             "salient_highlights",
             "artifact_builder_planning_note",
+            "current_datetime",
             "tool_use_rules",
             "decomposition_instructions",
         ):

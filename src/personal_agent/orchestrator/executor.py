@@ -4397,7 +4397,10 @@ async def step_llm_call(
     # ADR-0138 D1/D2/D6 (FRE-1283): the grounding contract applies to any world-fact
     # claim, not only to tool-using turns, so it seeds system_prompt unconditionally
     # rather than living behind the "if tools" branch below with the tool-use rules.
-    from personal_agent.orchestrator.prompts import GROUNDING_CONTRACT_PROMPT
+    from personal_agent.orchestrator.prompts import (
+        GROUNDING_CONTRACT_PROMPT,
+        render_current_datetime_block,
+    )
 
     system_prompt: str | None = GROUNDING_CONTRACT_PROMPT
 
@@ -4879,6 +4882,12 @@ async def step_llm_call(
         # what the static_prefix_hash covers (ADR-0081 D1 + D4).
         inner_system_before_memory = system_prompt or ""
 
+        # FRE-1298: current date/time, rendered from the timestamp captured once at
+        # request ingress (ctx.turn_started_at) so every model call in this turn
+        # — this assembly reruns per tool-loop iteration — renders the identical
+        # value. VOLATILE tail only; never spliced above this capture point.
+        _current_datetime_block = render_current_datetime_block(ctx.turn_started_at)
+
         # ADR-0081 §D2 (FRE-434): frozen append-only layout — the sole layout since
         # the cache_frozen_layout_enabled A/B flag was retired (FRE-941; frozen won
         # decisively, quality flat). Per-turn volatile (selected skill bodies +
@@ -4904,6 +4913,7 @@ async def step_llm_call(
                 memory_section or "",
                 ctx.salient_highlights,
                 ctx.artifact_builder_planning_note or "",
+                _current_datetime_block,
             )
             if p
         )
@@ -4986,6 +4996,9 @@ async def step_llm_call(
             # ADR-0122 §5/T6: distinct VOLATILE marker — turn-scoped, never enters
             # static_prefix_hash.
             _component_ids.append("artifact_builder_planning_note")
+        # FRE-1298: unconditional, like grounding_contract — the current-date/time
+        # block is always injected, every turn.
+        _component_ids.append("current_datetime")
         if tool_awareness:
             _component_ids.append("tool_use_rules")
         if _decomposition_added:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
@@ -316,6 +317,12 @@ class ExecutionContext:
     # tool-call count). Stamped at construction — in production this happens
     # immediately before execute_task_safe is invoked (orchestrator.py).
     turn_started_monotonic: float = field(default_factory=time.monotonic)
+    # FRE-1298: request-ingress instant for the current-date/time prompt block.
+    # Stamped once here — like turn_started_monotonic above — and reused verbatim
+    # for every model call in the turn (a tool loop calls step_llm_call repeatedly
+    # against this same ctx); rendering from this field rather than re-reading the
+    # wall clock per call is what keeps the value identical across those calls.
+    turn_started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     # Set True when the iteration limit fires so step_llm_call performs a no-tool synthesis pass
     force_synthesis_from_limit: bool = False
     # ADR-0076: extra iterations granted when the user picks "Continue" at a

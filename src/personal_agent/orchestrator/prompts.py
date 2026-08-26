@@ -11,7 +11,9 @@ Related:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -59,6 +61,46 @@ you're offering the user to run (package and dependency names still need a sourc
 comparison or ordering over material you did cite that adds no new factual claim of its \
 own, or to statements about what you searched for or found this turn.
 """
+
+
+# ============================================================================
+# Current Date & Time (FRE-1298)
+#
+# Unconditional, VOLATILE-tail-only (ADR-0081 D1) — never spliced into
+# system_prompt, which is the cached static prefix. Rendered from a timestamp
+# captured once at request ingress (ExecutionContext.turn_started_at) so a
+# turn making several sequential model calls renders the identical value in
+# every one, rather than redriving the wall clock per call.
+# ============================================================================
+
+_OWNER_TIMEZONE = ZoneInfo("Europe/Paris")
+
+
+def render_current_datetime_block(instant: datetime) -> str:
+    """Render the per-turn current-date/time block for the VOLATILE prompt tail.
+
+    ISO-8601 date and time, rendered in the owner's named IANA zone rather than
+    a fixed offset or an abbreviation — the zone name resolves the correct
+    CET/CEST offset for any instant, including across a DST boundary.
+
+    Args:
+        instant: The turn's captured timestamp (``ExecutionContext.turn_started_at``).
+            Callers must pass the same value for every model call within one turn.
+
+    Returns:
+        A Markdown block naming the current date, time, and timezone.
+    """
+    local = instant.astimezone(_OWNER_TIMEZONE)
+    raw_offset = local.strftime("%z")  # e.g. "+0200"
+    offset = f"{raw_offset[:3]}:{raw_offset[3:]}"
+    return (
+        "## Current Date & Time\n"
+        f"Current date: {local.date().isoformat()}\n"
+        f"Current time: {local.strftime('%H:%M:%S')}\n"
+        f"Timezone: {_OWNER_TIMEZONE.key} (UTC{offset})\n"
+        "Use this to interpret relative dates in the request — it is not a "
+        "guarantee of live status beyond this timestamp."
+    )
 
 
 # ============================================================================

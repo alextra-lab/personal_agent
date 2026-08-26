@@ -63,6 +63,7 @@ dependencies = [
   "opentelemetry-sdk>=1.44.0",
   "opentelemetry-exporter-otlp>=1.44.0",
   "opentelemetry-semantic-conventions==0.65b0",
+  "tzdata>=2024.1",  # FRE-1298 — python:3.12-slim has no system tz database; zoneinfo needs this
 ]
 
 [project.scripts]

@@ -127,6 +127,59 @@ class Admissibility(StrEnum):
     NO_CONTENT = "no_content"
 
 
+class Entitlement(StrEnum):
+    """Whether a source is *entitled* to make the claim it contains (ADR-0138 D2).
+
+    Verification confirms a claim was **copied from a source**; it never confirms the
+    source was **entitled to make it**. Where the source is the system's own earlier
+    confabulation, the loop closes and enforcement certifies the hallucination.
+
+    Observed live, 2026-08-26 (session ``a1a496fa``), and recorded on FRE-1282: an ``Event``
+    node reading *"Wednesday, July 1, 2026"* — a date the agent hallucinated in an earlier
+    session, which entity extraction then wrote to the graph as a fact — was recalled and
+    registered as an admissible memory source. Trace it through D3: resolution passes, it
+    is in the registry; reachability passes vacuously, a memory node has no external
+    referent; containment passes, because **the source is the false claim**. Three greens
+    on an eight-week date error. The graph holds 42 date-shaped ``Event`` entities.
+
+    This is D2's own independence rule one layer down. ``printf 'Paris has 9 million
+    residents'`` cited as shell output is the model's words wearing a tool's identifier; a
+    KG node written from an earlier agent utterance is the model's words wearing a memory
+    node's identifier. The shapes are identical and so is the remedy.
+    """
+
+    EXTERNAL = "external"
+    USER_STATED = "user_stated"
+    AGENT_DERIVED = "agent_derived"
+
+
+def _entitlement_of(item: Mapping[str, object]) -> Entitlement:
+    """Classify one memory item's authorship, denying by default.
+
+    ``asserted_by`` (FRE-1020, ADR-0098 D6) is the KG's existing co-authorship field:
+    ``"user"`` where the owner stated it, ``"agent"`` where the assistant asserted or
+    inferred it. It lives on ``Claim`` nodes and is **absent from most recall items
+    today**, because nothing threads it from Neo4j through recall into the memory-context
+    item this sees.
+
+    Absence therefore resolves to :attr:`Entitlement.AGENT_DERIVED`, not to a benefit of
+    the doubt. That is the same default-deny this module already applies to an
+    unclassified tool, and it fails in the only safe direction: an owner-stated fact that
+    is merely *unlabelled* loses its citation, where the alternative is the system
+    certifying its own errors. Threading the field through recall is separate,
+    sequenceable work and is ticketed.
+
+    Args:
+        item: A memory-context item.
+
+    Returns:
+        The entitlement this item's declared provenance supports.
+    """
+    return (
+        Entitlement.USER_STATED if item.get("asserted_by") == "user" else Entitlement.AGENT_DERIVED
+    )
+
+
 class RegisteredSource(BaseModel):
     """One item retrieved this turn, with the identifier a citation resolves to.
 
@@ -139,6 +192,17 @@ class RegisteredSource(BaseModel):
         content: The admissible content, with any model-authored portion already
             excluded. Bounded by :data:`MAX_SOURCE_CONTENT_CHARS`.
         origin: Where it came from — the tool name, or the memory item's identity.
+        entitlement: Whether this source is entitled to make the claim it contains. See
+            :class:`Entitlement`; the default denies, so a source registered by a path
+            that has not thought about authorship under-admits rather than launders.
+        referent: The external thing this source stands for — a URL — or None when it
+            has none. D3(b) reachability is keyed on this field and never on the tool
+            name: whether a source *has* something outside the turn to be reachable is a
+            property of the source, and a verifier comparing tool-name strings would
+            silently answer a different question every time the tool table changed.
+            None is the common case and means D3(b) passes vacuously (D2: turn-local
+            evidence, the user's words and memory nodes have no external referent — "the
+            recorded result *is* the durable artifact").
     """
 
     model_config = ConfigDict(frozen=True)
@@ -148,6 +212,8 @@ class RegisteredSource(BaseModel):
     label: str
     content: str
     origin: str
+    referent: str | None = None
+    entitlement: Entitlement = Entitlement.AGENT_DERIVED
 
 
 class ExcludedArgument(BaseModel):
@@ -283,6 +349,45 @@ browser evaluate tools), and a model-authored prompt handed to another generator
 though the default already denies them, because "this is structurally a laundering
 channel" and "nobody has classified this yet" call for different remedies.
 """
+
+
+REFERENT_ARGUMENTS: dict[str, str] = {
+    "fetch_url": "url",
+}
+"""Tools that address exactly one external referent, and the parameter naming it.
+
+The same parameter-schema boundary the rest of this module rests on, applied to a
+different question. A tool listed here retrieves *one* identified external thing, so its
+result stands for that thing and D3(b) has something to check. A tool whose parameters
+address a query rather than a referent — ``web_search`` — returns a result *set* that was
+itself retrieved this turn; under D2 that recorded set is the durable artifact, so it has
+no external referent of its own and reachability is not-applicable.
+
+**What that leaves open, recorded rather than discovered.** A search snippet naming a URL
+the model never fetched is citable and its reachability is vacuous. Closing it needs
+per-result referents out of the search tool, not a rule here; channelling grounding through
+``fetch_url`` — which registers a real referent — is v1's answer, and it is the same answer
+D2 already gives for ``curl``.
+"""
+
+
+def _referent_of(tool_name: str, arguments: Mapping[str, object]) -> str | None:
+    """Return the single external thing this call retrieved, if it had one.
+
+    Args:
+        tool_name: The tool that ran.
+        arguments: The model's arguments to it.
+
+    Returns:
+        The referent, or None when the tool addresses a query rather than a referent.
+        The model *chose* the URL and under D2 it is not evidence — but it remains the
+        correct address of what was fetched, which is what D3(b) checks.
+    """
+    parameter = REFERENT_ARGUMENTS.get(tool_name)
+    if parameter is None:
+        return None
+    value = arguments.get(parameter)
+    return value.strip() or None if isinstance(value, str) else None
 
 
 def _digest(turn_id: str, ordinal: int, kind: SourceKind, content: str) -> str:
@@ -425,6 +530,7 @@ class SourceRegistry:
             label="user message",
             content=text,
             origin="user_message",
+            entitlement=Entitlement.USER_STATED,
         )
 
     def register_memory_item(self, item: Mapping[str, object]) -> RegisteredSource:
@@ -462,6 +568,7 @@ class SourceRegistry:
             label=identity or "memory item",
             content=content,
             origin=identity,
+            entitlement=_entitlement_of(item),
         )
 
     def register_tool_result(
@@ -541,6 +648,8 @@ class SourceRegistry:
             label=tool_name,
             content=admissible,
             origin=tool_name,
+            entitlement=Entitlement.EXTERNAL,
+            referent=_referent_of(tool_name, arguments),
         )
         return ToolRegistration(
             source=source,
@@ -598,6 +707,8 @@ class SourceRegistry:
         label: str,
         content: str,
         origin: str,
+        entitlement: Entitlement,
+        referent: str | None = None,
     ) -> RegisteredSource:
         """Mint or reuse the identifier for one source.
 
@@ -610,6 +721,8 @@ class SourceRegistry:
             label: Short descriptor for rendering and telemetry.
             content: The admissible content.
             origin: The tool name or memory identity it came from.
+            entitlement: Whether this source is entitled to make the claim it holds.
+            referent: The single external thing it stands for, or None.
 
         Returns:
             The registered source, new or existing.
@@ -627,6 +740,8 @@ class SourceRegistry:
             label=label,
             content=bounded,
             origin=origin,
+            entitlement=entitlement,
+            referent=referent,
         )
         self._sources.append(source)
         self._by_identifier[source.identifier] = source

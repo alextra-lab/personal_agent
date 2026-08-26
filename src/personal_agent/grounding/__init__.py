@@ -28,10 +28,19 @@ the contract never sees:
 - :mod:`personal_agent.grounding.span_policy` — the deterministic post-pass that enforces
   D1's invariants and fails closed on any gap.
 
-The two halves do not yet meet: extraction decides *that* a span needs a citation, the
-registry decides *what* a citation may resolve to, and joining them is FRE-1282 — the
-D3(b)(c) checks and D4's block-retry-refuse loop. The prompt changes that make the model
-emit markers at all are FRE-1283.
+**Where the two halves meet** (FRE-1282) — extraction decides *that* a span needs a
+citation, the registry decides *what* a citation may resolve to, and these join them:
 
-**Nothing in this package blocks a turn today.**
+- :mod:`personal_agent.grounding.containment` — D3(c)'s unit and the normalization
+  contract: what a source must actually say for a claim to count as contained.
+- :mod:`personal_agent.grounding.verification` — the inline checks, plus D2's entitlement
+  gate, which is the one that stops the system citing its own earlier confabulation.
+- :mod:`personal_agent.grounding.enforcement` — D4: block, retry with retrieval forced,
+  then the explicit no-source statement.
+
+**Whether this blocks a turn is one setting.** ``grounding_verification_mode`` runs the
+pass and records every outcome by default (``observe``) and blocks on ``enforce``, which is
+the ADR-compliant value. It is a deploy valve and emphatically **not** D5's enforcement
+level: light/heavy varies whether retrieval is forced *before* generation (FRE-1285), while
+D3's checks are inline at every one of those levels.
 """

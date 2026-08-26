@@ -124,6 +124,33 @@ async def test_basic_html_extraction() -> None:
 
 
 @pytest.mark.asyncio
+async def test_navigation_and_footer_boilerplate_is_excluded() -> None:
+    """ADR-0138 D3(c): nav/footer text must not count as the page's content.
+
+    A site-wide nav listing every section name would otherwise satisfy containment for a
+    claim the article never makes — the citation-theatre shape D3(c) exists to close, one
+    layer down (FRE-1282).
+    """
+    html_body = """
+    <html><body>
+      <header><span>Mercury Weekly</span></header>
+      <nav><a>Health</a><a>Mercury</a><a>Products</a></nav>
+      <aside><p>Related: mercury in tuna</p></aside>
+      <main><p>The catch was landed in Bilbao.</p></main>
+      <footer><p>Contact us about mercury testing</p></footer>
+    </body></html>
+    """
+    resp = _mock_html_response(html_body)
+    with patch(
+        "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+    ):
+        result = await fetch_url_executor(url="https://example.com", ctx=_CTX)
+
+    assert "The catch was landed in Bilbao." in result["text"]
+    assert "mercury" not in result["text"].lower()
+
+
+@pytest.mark.asyncio
 async def test_adjacent_inline_tags_get_a_word_boundary() -> None:
     """Regression: <td>A</td><td>B</td> must extract as 'A B', not 'AB'.
 

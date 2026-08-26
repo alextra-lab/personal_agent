@@ -30,7 +30,20 @@ from personal_agent.captains_log.turn_evidence import (
 )
 from personal_agent.config import settings
 from personal_agent.config.env_loader import Environment
+from personal_agent.grounding.citations import parse_citations, strip_citation_markers
+from personal_agent.grounding.enforcement import (
+    TurnDecision,
+    build_no_source_statement,
+    build_retry_directive,
+    decide,
+)
 from personal_agent.grounding.source_registry import SourceRegistry
+from personal_agent.grounding.verification import (
+    TurnVerification,
+    build_grounding_record,
+    unavailable,
+    verify_turn,
+)
 from personal_agent.llm_client import ModelRole
 from personal_agent.llm_client.message_content import (
     MessageContent,
@@ -119,6 +132,15 @@ def _get_tool_loop_policy(tool_name: str) -> ToolLoopPolicy:
         return ToolLoopPolicy()
 
 
+GROUNDING_RETRY_TOOL_GRANT = 2
+"""Tool iterations reserved for each ADR-0138 D4 forced-retrieval retry (FRE-1282).
+
+Two: one to search, one to fetch what the search found — the shortest path from "you have
+no source" to "here is one". More would let a retry spend the turn's remaining wall clock
+on a claim the model was never going to source; fewer would not reach a page.
+"""
+
+
 def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
     """Return the effective max-tool-iterations ceiling for this request.
 
@@ -128,6 +150,13 @@ def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
     ``tool_iteration_bonus`` granted by a user "Continue" decision at a
     constraint pause (ADR-0076) is added on top, since the user explicitly
     opted to proceed past the original limit.
+
+    ADR-0138 D4's forced-retrieval retry gets its own grant on the same footing
+    (``grounding_retrieval_grant``, FRE-1282). Without it the retry is "forced" in name
+    only: a turn that spent its tool budget legitimately would be told to retrieve and
+    then have no iteration left to retrieve with, so the bound would be reached without
+    retrieval ever having been possible — a refusal caused by our accounting rather than
+    by the absence of a source.
     """
     global_max = settings.orchestrator_max_tool_iterations
     base = global_max
@@ -136,7 +165,7 @@ def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
         by_type = settings.orchestrator_max_tool_iterations_by_task_type
         if task_type_val in by_type:
             base = min(by_type[task_type_val], global_max)
-    return base + ctx.tool_iteration_bonus
+    return base + ctx.tool_iteration_bonus + ctx.grounding_retrieval_grant
 
 
 def _turn_deadline_remaining(ctx: "ExecutionContext") -> float:
@@ -1383,6 +1412,11 @@ def _register_tool_source(
     if registry is None:
         return None
 
+    # ADR-0138 D4 (FRE-1282): what this turn searched, recorded whether or not the result
+    # proved admissible. The terminal no-source statement names it, and a search that
+    # returned nothing citable is exactly the kind the user needs to hear about.
+    _describe_retrieval(ctx, tool_name, arguments)
+
     try:
         registration = registry.register_tool_result(
             tool_name=tool_name,
@@ -1438,6 +1472,169 @@ def _with_citation_marker(content: str, identifier: str) -> str:
         parsed["_citation"] = marker
         return json.dumps(parsed)
     return f"{content}\n\n{marker}" if content else marker
+
+
+_MAX_DESCRIBED_RETRIEVAL_CHARS = 120
+"""Bound on one recorded retrieval descriptor.
+
+The terminal statement is read by a person, and a model-authored query can be arbitrarily
+long. Bounded rather than dropped: naming a truncated search still names the search.
+"""
+
+
+def _describe_retrieval(
+    ctx: ExecutionContext, tool_name: str, arguments: Mapping[str, object]
+) -> None:
+    """Record one retrieval attempt for D4's terminal statement (FRE-1282).
+
+    The descriptor names the tool and its most salient argument. That the model *chose*
+    that argument is exactly why D2 refuses it as evidence — but a statement about what
+    this turn searched is a claim about the turn record, not about the world, so D1's
+    system-record exemption covers it and it is safe to say.
+
+    Args:
+        ctx: Execution context.
+        tool_name: The tool that ran.
+        arguments: The model's arguments to it.
+    """
+    salient = next(
+        (
+            str(arguments[key])
+            for key in ("query", "url", "path", "question", "search")
+            if isinstance(arguments.get(key), str) and str(arguments[key]).strip()
+        ),
+        "",
+    )
+    descriptor = f"{tool_name}({salient})" if salient else tool_name
+    if len(descriptor) > _MAX_DESCRIBED_RETRIEVAL_CHARS:
+        descriptor = f"{descriptor[: _MAX_DESCRIBED_RETRIEVAL_CHARS - 1]}…"
+    if descriptor not in ctx.retrieval_attempts:
+        ctx.retrieval_attempts.append(descriptor)
+
+
+async def _verify_grounding(ctx: ExecutionContext, trace_ctx: TraceContext) -> TurnVerification:
+    """Run ADR-0138 D3's inline checks over this turn's reply (FRE-1282).
+
+    Span extraction is a model call, so it is the one part of the pass that can fail for
+    reasons having nothing to do with the claim — a denied budget reservation, a provider
+    error. Those return :func:`~personal_agent.grounding.verification.unavailable` rather
+    than a verdict, and D4 delivers such a turn while recording it as unverified. A budget
+    denial is a fact about Seshat's accounting; refusing the user's turn over it would
+    punish them for our bookkeeping, and passing it silently would hide the malfunction.
+
+    Args:
+        ctx: Execution context, carrying the reply and this turn's source registry.
+        trace_ctx: The turn's trace context, threaded into the extractor call.
+
+    Returns:
+        The verification result, or an unavailable verdict naming what stopped it.
+    """
+    from personal_agent.grounding.extractor import ModelSpanExtractor  # noqa: PLC0415
+    from personal_agent.llm_client.factory import get_llm_client  # noqa: PLC0415
+
+    registry = ctx.source_registry
+    if registry is None or not ctx.final_reply:
+        return unavailable("no source registry or no reply on this turn")
+
+    try:
+        extractor = ModelSpanExtractor(get_llm_client(role_name=ModelRole.SPAN_EXTRACTION.value))
+        extraction = await extractor.extract(
+            ctx.final_reply, user_message=ctx.user_message, trace_ctx=trace_ctx
+        )
+    except Exception as exc:
+        log.warning(
+            "grounding_span_extraction_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return unavailable(f"span extraction failed: {type(exc).__name__}")
+
+    try:
+        return verify_turn(extraction, parse_citations(ctx.final_reply), registry)
+    except Exception as exc:
+        # The checks themselves parse attacker-influenced content — a fetched page's
+        # numeric tokens, its Unicode. A defect there must degrade to "unverified", never
+        # to a failed turn: this runs on the turn path for every reply, and the user's
+        # answer is not ours to lose over our own bug (security review).
+        log.exception(
+            "grounding_verification_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            error_type=type(exc).__name__,
+        )
+        return unavailable(f"verification failed: {type(exc).__name__}")
+
+
+def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mode: str) -> None:
+    """Attach and emit the output side of the evidence contract (AC-6).
+
+    The two failure families are counted apart on the record and on the log line, because
+    ADR-0138 D3 requires a normalizer limit and an honest no-source outcome never to blur:
+    a blended counter would let a wave of false refusals read as the model becoming candid.
+
+    Args:
+        ctx: Execution context.
+        verification: What the checks decided.
+        mode: The verification mode this turn ran under.
+    """
+    record = build_grounding_record(
+        verification,
+        mode=mode,
+        attempts=max(1, ctx.grounding_attempts),
+        retrieval_forced=ctx.grounding_attempts > 1,
+    )
+    ctx.grounding_record = record
+    log.info(
+        "grounding_verification_completed",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        mode=mode,
+        available=record.available,
+        unavailable_reason=record.unavailable_reason,
+        non_exempt_spans=record.non_exempt_count,
+        passed_spans=record.passed_count,
+        unverifiable_by_containment=record.unverifiable_count,
+        no_source=record.no_source_count,
+        degraded_extraction=record.degraded_extraction,
+        attempts=record.attempts,
+        first_generation_compliant=record.first_generation_compliant,
+        outcomes=[span.outcome for span in record.spans],
+    )
+
+
+def _strip_markers_from_turn(ctx: ExecutionContext) -> None:
+    """Remove citation markers from everything this turn will hand on (ADR-0138, FRE-1282).
+
+    Markers are protocol, not content: verification has consumed them by the time this
+    runs, and every path they survive into is a leak. There are **two**, and closing only
+    the obvious one leaves the worse one open:
+
+    - ``ctx.final_reply`` is what the user reads and what ``capture.py`` persists as
+      ``assistant_response``.
+    - ``ctx.messages`` is the session history, appended by ``step_llm_call`` *before*
+      ``final_reply`` is set and persisted by ``step_synthesis``. A marker left here comes
+      back on the next turn as conversation context, where — identifiers being turn-scoped
+      by construction (D3(a)) — it resolves to nothing and would manufacture a refusal on
+      a turn that did nothing wrong.
+
+    Runs in every verification mode, including ``off``: the leak exists because FRE-1283
+    instructs the model to emit markers and FRE-1296 gives it real ones to copy, which is
+    true whether or not anything verifies them.
+
+    Args:
+        ctx: Execution context.
+    """
+    if ctx.final_reply:
+        ctx.final_reply = strip_citation_markers(ctx.final_reply)
+
+    for message in ctx.messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            message["content"] = strip_citation_markers(content)
 
 
 def _log_source_registry_snapshot(ctx: ExecutionContext) -> None:
@@ -3097,6 +3294,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                             if ctx.turn_evidence
                             else None
                         ),
+                        grounding=ctx.grounding_record,
                         evidence_presence=derive_evidence_presence(
                             user_message=ctx.user_message,
                             assistant_response=ctx.final_reply,
@@ -4701,6 +4899,21 @@ async def step_llm_call(
         tools: list[dict[str, Any]] | None = None
         _prompt_injected_tool_text: str | None = None  # filled for PROMPT_INJECTED only
 
+        # ADR-0138 D4 (FRE-1282): a forced-retrieval retry must be able to retrieve.
+        # This clears any synthesis-forcing left over from the blocked generation — a
+        # retry told "do NOT call any more tools" is forced in name only — and its
+        # iteration grant was reserved when the retry was ordered.
+        if ctx.grounding_retry_pending:
+            ctx.grounding_retry_pending = False
+            ctx.force_synthesis_from_limit = False
+            log.info(
+                "grounding_forced_retrieval_retry",
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                attempt=ctx.grounding_attempts,
+                tool_iterations_remaining=_resolve_max_iterations(ctx) - ctx.tool_iteration_count,
+            )
+
         # Forced synthesis: iteration limit fired — disable tools and inject a synthesis prompt
         # so the LLM produces a real answer from gathered results instead of a useless fallback.
         if ctx.force_synthesis_from_limit:
@@ -5901,6 +6114,48 @@ async def step_synthesis(
     # Ensure final reply is set (should already be set from LLM call)
     if not ctx.final_reply:
         ctx.final_reply = "Task completed"  # Fallback
+
+    # ADR-0138 D3/D4 (FRE-1282): the inline checks, then D4's decision. Placed here
+    # because this is where the turn's reply is final and the registry is complete;
+    # a retry returns to LLM_CALL, which the driver loop already allows.
+    mode = settings.grounding_verification_mode
+    if mode != "off":
+        ctx.grounding_attempts += 1
+        verification = await _verify_grounding(ctx, trace_ctx)
+        _record_grounding(ctx, verification, mode)
+
+        if mode == "enforce":
+            decision = decide(
+                verification,
+                attempt=ctx.grounding_attempts,
+                max_attempts=settings.grounding_max_generation_attempts,
+            )
+            log.info(
+                "grounding_enforcement_decision",
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                decision=decision.decision.value,
+                attempt=decision.attempt,
+                max_attempts=decision.max_attempts,
+                blocking_outcomes=[o.value for o in decision.blocking_outcomes],
+            )
+            if decision.decision is TurnDecision.RETRY_WITH_FORCED_RETRIEVAL:
+                ctx.messages.append(
+                    {"role": "user", "content": build_retry_directive(verification)}
+                )
+                ctx.grounding_retry_pending = True
+                ctx.grounding_retrieval_grant += GROUNDING_RETRY_TOOL_GRANT
+                ctx.final_reply = None
+                return TaskState.LLM_CALL
+            if decision.decision is TurnDecision.TERMINAL_NO_SOURCE:
+                # D4's terminal state: built from the turn record, never generated, so it
+                # consists entirely of system-record spans (D1) and cannot recurse into
+                # another verification failure. That is what guarantees the loop ends.
+                ctx.final_reply = build_no_source_statement(verification, ctx.retrieval_attempts)
+
+    # Markers are protocol and verification has now consumed them — in every mode,
+    # since the leak predates the checks that read them.
+    _strip_markers_from_turn(ctx)
 
     # ADR-0101 §6 / FRE-690: guardrail alterations (downscale/drop) are disclosed
     # in the response, deterministically — never left to the model to relay.

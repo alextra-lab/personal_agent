@@ -13,9 +13,9 @@ decision.
 from __future__ import annotations
 
 import pytest
-from personal_agent.grounding.span_policy import CHECKABLE_PREDICATES, apply_policy
 
 from personal_agent.grounding.code_regions import Region, RegionKind, partition_output
+from personal_agent.grounding.span_policy import CHECKABLE_PREDICATES, apply_policy
 from personal_agent.grounding.spans import (
     ExemptRegion,
     NonExemptReason,

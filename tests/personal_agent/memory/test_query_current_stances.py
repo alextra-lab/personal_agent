@@ -68,8 +68,14 @@ def _fake_service(
     return service, recorder
 
 
-def _stance_row(target: str, affect: str, mastery: float | None = None) -> dict[str, Any]:
-    return {"target": target, "affect": affect, "mastery": mastery}
+def _stance_row(
+    target: str, affect: str, mastery: float | None = None, asserted_by: str | None = None
+) -> dict[str, Any]:
+    """``asserted_by`` defaults to None -- what a real RETURN gives back for a legacy edge
+    with no property (FRE-1299), so tests that don't care about authorship exercise the
+    same absence-denies path exactly.
+    """
+    return {"target": target, "affect": affect, "mastery": mastery, "asserted_by": asserted_by}
 
 
 @pytest.mark.asyncio
@@ -113,6 +119,31 @@ async def test_returns_current_stance_for_each_target() -> None:
 
     query, params = recorder[0]
     assert params["targets"] == ["Python", "Sorbet"]
+
+
+@pytest.mark.asyncio
+async def test_returns_and_canonicalizes_asserted_by() -> None:
+    """FRE-1299: the read path selects asserted_by and canonicalizes by exact match --
+    "user" stays "user", "agent" stays "agent", and a legacy row with no property at all
+    (None) denies the same as any off-vocabulary value, never passing through unclassified.
+    """
+    rows = [
+        _stance_row("Python", "prefers over Java", asserted_by="user"),
+        _stance_row("staging deploy", "wary of it", asserted_by="agent"),
+        _stance_row("legacy topic", "old stance"),  # asserted_by defaults to None
+    ]
+    service, recorder = _fake_service(rows=rows)
+
+    result = await service.query_current_stances(
+        ["Python", "staging deploy", "legacy topic"], authenticated=True
+    )
+
+    query, _ = recorder[0]
+    assert "s.asserted_by AS asserted_by" in query
+    by_target = {r["target"]: r for r in result}
+    assert by_target["Python"]["asserted_by"] == "user"
+    assert by_target["staging deploy"]["asserted_by"] == "agent"
+    assert by_target["legacy topic"]["asserted_by"] == "agent"
 
 
 @pytest.mark.asyncio

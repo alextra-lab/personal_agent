@@ -106,7 +106,7 @@ class KnowledgeWeight(BaseModel):
         the agent asserted or inferred. ``asserted_by`` is derived in Python from the
         role-partitioned captured text and is never self-reported by the extraction model
         (ADR-0098 AC-9) — see
-        :func:`~personal_agent.second_brain.entity_extraction._attribute_claim_authorship`.
+        :func:`~personal_agent.second_brain.entity_extraction._attribute_authorship`.
 
         Anything other than ``"user"`` — including an absent or off-vocabulary value —
         yields the channel base, i.e. exactly the pre-FRE-1020 confidence, so an

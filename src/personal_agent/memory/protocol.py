@@ -321,6 +321,7 @@ class MemoryProtocol(Protocol):
             authenticated: Whether the caller is authenticated.
 
         Returns:
-            One dict per target carrying a current stance (``target``, ``affect``, ``mastery``).
+            One dict per target carrying a current stance (``target``, ``affect``,
+            ``mastery``, ``asserted_by`` -- FRE-1299, "user" or "agent").
         """
         ...

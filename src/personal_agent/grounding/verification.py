@@ -619,6 +619,9 @@ def build_grounding_record(
         passed_count=sum(1 for span in verification.spans if span.passed),
         unverifiable_count=len(verification.unverifiable),
         no_source_count=len(verification.true_no_source),
+        source_not_entitled_count=sum(
+            1 for span in verification.spans if span.outcome is CheckOutcome.SOURCE_NOT_ENTITLED
+        ),
         degraded_extraction=verification.degraded_extraction,
         entailment_checks=verification.entailment_checks,
         entailment_latency_ms=verification.entailment_latency_ms,

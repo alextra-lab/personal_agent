@@ -150,6 +150,27 @@ async def test_observe_mode_records_the_failure_and_still_delivers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_observe_mode_distinguishes_entitlement_failures_in_the_record() -> None:
+    """FRE-1299 AC-4: an entitlement-specific failure is countable on its own, not just
+    lumped into ``no_source_count`` alongside an uncited claim (the prior test's case).
+    """
+    registry = SourceRegistry(turn_id="trace-entitlement")
+    registry.register_memory_item({"name": "Paris population", "description": CLAIM})
+    reply = f"{CLAIM} [{registry.sources()[0].identifier}]."
+    ctx = _ctx(reply, registry)
+
+    with patch("personal_agent.orchestrator.executor.settings") as cfg:
+        cfg.grounding_verification_mode = "observe"
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        await _synthesize(ctx, reply)
+
+    assert ctx.grounding_record is not None
+    assert ctx.grounding_record.no_source_count == 1
+    assert ctx.grounding_record.source_not_entitled_count == 1
+
+
+@pytest.mark.asyncio
 async def test_off_mode_runs_nothing_but_still_strips_markers() -> None:
     """The leak predates the checks, so switching them off must not reopen it."""
     registry = SourceRegistry(turn_id="trace-off")

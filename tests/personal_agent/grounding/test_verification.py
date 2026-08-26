@@ -18,10 +18,12 @@ from personal_agent.grounding.spans import (
 from personal_agent.grounding.verification import (
     CheckOutcome,
     Reachability,
+    build_grounding_record,
     check_reachability,
     unavailable,
     verify_turn,
 )
+from personal_agent.memory.proactive import _split_row_payloads
 
 TURN = "trace-verify-0001"
 
@@ -210,6 +212,107 @@ def test_the_users_own_words_are_entitled() -> None:
 
     assert source is not None
     assert source.entitlement is Entitlement.USER_STATED
+
+
+# ── FRE-1299 — asserted_by threaded through recall (Stance items) ──────────────────
+
+
+def test_user_stated_stance_grounds_a_claim() -> None:
+    """AC-1 — a Stance whose asserted_by reached recall (FRE-1299) is citable."""
+    registry = SourceRegistry(turn_id=TURN)
+    source = registry.register_memory_item(
+        {
+            "type": "stance",
+            "target": "Ortiz bonito",
+            "affect": "loves Ortiz bonito",
+            "asserted_by": "user",
+        }
+    )
+    output = f"loves Ortiz bonito [{source.identifier}]."
+
+    result = verify_turn(
+        _non_exempt(output, "loves Ortiz bonito"), parse_citations(output), registry
+    )
+
+    assert source.entitlement is Entitlement.USER_STATED
+    assert result.spans[0].outcome is CheckOutcome.PASSED
+
+
+def test_agent_derived_stance_cannot_ground_a_claim() -> None:
+    """AC-3 — a Stance item with no asserted_by key (a legacy edge) still denies."""
+    registry = SourceRegistry(turn_id=TURN)
+    source = registry.register_memory_item(
+        {"type": "stance", "target": "staging deploy", "affect": "wary of staging deploy"}
+    )
+    output = f"You're wary of the staging deploy [{source.identifier}]."
+
+    result = verify_turn(
+        _non_exempt(output, "You're wary of the staging deploy"), parse_citations(output), registry
+    )
+
+    assert source.entitlement is Entitlement.AGENT_DERIVED
+    assert result.spans[0].outcome is CheckOutcome.SOURCE_NOT_ENTITLED
+
+
+def test_entity_payloads_never_carry_asserted_by() -> None:
+    """AC-2 regression guard — entities must stay denied by construction, not by luck.
+
+    Protects against future scope creep: if someone later adds authorship stamping to
+    entities the way FRE-1299 added it to stances, this fails loudly rather than
+    silently widening what counts as an owner-stated source.
+    """
+    row = {"name": "Wednesday, July 1, 2026", "entity_type": "Event", "description": "date"}
+
+    payloads = _split_row_payloads(row)
+
+    entity_payloads = [payload for kind, payload in payloads if kind == "entity"]
+    assert entity_payloads
+    for payload in entity_payloads:
+        assert "asserted_by" not in payload
+
+
+def test_source_not_entitled_count_is_a_subset_of_no_source_count() -> None:
+    """AC-4 — the new counter is a more specific view of an existing family, not a
+    fourth one (SOURCE_NOT_ENTITLED is already a _TRUE_NO_SOURCE member).
+    """
+    registry = SourceRegistry(turn_id=TURN)
+    entitled_denied = registry.register_memory_item(
+        {"type": "stance", "target": "staging deploy", "affect": "wary of staging deploy"}
+    )
+    output = (
+        f"You're wary of staging deploy [{entitled_denied.identifier}]. Lyon has 500,000 residents."
+    )
+
+    result = verify_turn(
+        SpanExtraction(
+            output=output,
+            spans=(
+                Span(
+                    start=output.index("You're wary of staging deploy"),
+                    end=output.index("You're wary of staging deploy")
+                    + len("You're wary of staging deploy"),
+                    text="You're wary of staging deploy",
+                    label=SpanLabel.CLAIM_NON_EXEMPT,
+                    reason=NonExemptReason.CLASSIFIED,
+                ),
+                Span(
+                    start=output.index("Lyon has 500,000 residents"),
+                    end=output.index("Lyon has 500,000 residents")
+                    + len("Lyon has 500,000 residents"),
+                    text="Lyon has 500,000 residents",
+                    label=SpanLabel.CLAIM_NON_EXEMPT,
+                    reason=NonExemptReason.CLASSIFIED,
+                ),
+            ),
+        ),
+        parse_citations(output),
+        registry,
+    )
+    record = build_grounding_record(result, mode="observe")
+
+    assert record.source_not_entitled_count == 1
+    assert record.no_source_count == 2
+    assert record.source_not_entitled_count <= record.no_source_count
 
 
 # ── D3(b) — vacuous where D2 says it is ─────────────────────────────────────────────

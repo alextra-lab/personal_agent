@@ -943,6 +943,11 @@ class GroundingRecord(BaseModel):
         passed_count: How many carried one that passed every gate.
         unverifiable_count: Failures our normalizer could not settle (AC-6).
         no_source_count: Failures where the turn had no admissible source (AC-6).
+        source_not_entitled_count: How many of ``no_source_count`` failed specifically on
+            entitlement (ADR-0138 D2, FRE-1299) rather than a missing or unresolved
+            citation. A subset of ``no_source_count``, not a fourth failure family --
+            the number that says whether ``enforce`` is safe to turn on for memory
+            citations without hand-aggregating ``spans[].outcome``.
         degraded_extraction: Whether span extraction had to fail closed.
         entailment_checks: Inline D3(d) judge calls this turn made (ADR-0138, FRE-1286).
         entailment_latency_ms: What the inline entailment pass cost in wall-clock, or None
@@ -968,6 +973,7 @@ class GroundingRecord(BaseModel):
     passed_count: int = 0
     unverifiable_count: int = 0
     no_source_count: int = 0
+    source_not_entitled_count: int = 0
     degraded_extraction: bool = False
     entailment_checks: int = 0
     entailment_latency_ms: float | None = None

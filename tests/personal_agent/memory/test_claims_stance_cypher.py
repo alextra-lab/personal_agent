@@ -264,3 +264,25 @@ async def test_assert_claim_skips_when_user_person_absent() -> None:
     ):
         claim_id = await service.assert_claim(claim, user_id=_USER_A)
     assert claim_id == ""
+
+
+@pytest.mark.asyncio
+async def test_assert_stance_persists_and_reads_back_authorship() -> None:
+    """FRE-1299: co-authorship is durable and auditable on the HAS_STANCE edge, like FRE-1020's
+
+    Claim equivalent (test_assert_claim_persists_and_reads_back_authorship above).
+    """
+    service, captured = _service_capturing()
+    stance = Stance(
+        target="sourdough baking",
+        affect="loves sourdough baking",
+        observed_at=_NOW,
+        extracted_at=_NOW,
+        asserted_by="user",
+    )
+
+    await service.assert_stance(stance, trace_id="trace-1299")
+
+    write_cypher, write_params = captured[0]
+    assert "asserted_by: $asserted_by" in write_cypher
+    assert write_params["asserted_by"] == "user"

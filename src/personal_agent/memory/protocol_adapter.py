@@ -374,7 +374,8 @@ class MemoryServiceAdapter:
             authenticated: Whether the caller is authenticated.
 
         Returns:
-            One dict per target carrying a current stance (`target`, `affect`, `mastery`).
+            One dict per target carrying a current stance (`target`, `affect`, `mastery`,
+            `asserted_by` -- FRE-1299, "user" or "agent").
         """
         return await self._service.query_current_stances(
             targets, authenticated=authenticated, trace_id=trace_id

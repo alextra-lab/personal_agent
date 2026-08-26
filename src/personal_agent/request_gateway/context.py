@@ -205,13 +205,20 @@ def _stance_context_items(
         stances: Current-stance rows from ``MemoryProtocol.get_current_stances``.
 
     Returns:
-        One ``{"type": "stance", "target": ..., "affect": ...}`` dict per entity that has
-        a current stance, in ``entity_names`` order. An entity with no stance contributes
-        nothing.
+        One ``{"type": "stance", "target": ..., "affect": ..., "asserted_by": ...}`` dict
+        per entity that has a current stance, in ``entity_names`` order. ``asserted_by``
+        (FRE-1299) is canonicalized by exact match, not merely carried through, so an
+        absent or off-vocabulary row value still denies entitlement. An entity with no
+        stance contributes nothing.
     """
     by_target = {s.get("target", ""): s for s in stances}
     return [
-        {"type": "stance", "target": name, "affect": by_target[name].get("affect", "")}
+        {
+            "type": "stance",
+            "target": name,
+            "affect": by_target[name].get("affect", ""),
+            "asserted_by": "user" if by_target[name].get("asserted_by") == "user" else "agent",
+        }
         for name in entity_names
         if name in by_target
     ]
@@ -247,9 +254,11 @@ def _behavioural_stance_context_items(stances: list[dict[str, Any]]) -> list[dic
             queried against the curated target list.
 
     Returns:
-        One ``{"type": "behavioural_stance", "target": ..., "affect": ...}`` dict per
-        curated target that has a current stance, in curated-set order. A curated
-        target with no current stance contributes nothing.
+        One ``{"type": "behavioural_stance", "target": ..., "affect": ..., "asserted_by":
+        ...}`` dict per curated target that has a current stance, in curated-set order.
+        ``asserted_by`` (FRE-1299) is canonicalized by exact match, same as
+        :func:`_stance_context_items`. A curated target with no current stance
+        contributes nothing.
     """
     by_target = {s.get("target", ""): s for s in stances}
     return [
@@ -257,6 +266,7 @@ def _behavioural_stance_context_items(stances: list[dict[str, Any]]) -> list[dic
             "type": "behavioural_stance",
             "target": target,
             "affect": by_target[target].get("affect", ""),
+            "asserted_by": "user" if by_target[target].get("asserted_by") == "user" else "agent",
         }
         for target in CURATED_BEHAVIOURAL_STANCE_TARGETS
         if target in by_target

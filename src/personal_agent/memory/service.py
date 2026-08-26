@@ -2830,8 +2830,12 @@ class MemoryService:
 
         Returns:
             Current claims ranked by descending similarity, each a dict with
-            ``claim_id``, ``content``, ``confidence``, ``knowledge_class``, and
-            ``observed_at`` — keys distinct from the entity/turn rows the tool
+            ``claim_id``, ``content``, ``confidence``, ``knowledge_class``,
+            ``observed_at``, and ``asserted_by`` (FRE-1302 -- "user" or "agent",
+            canonicalized by exact match so a legacy claim with no property, or any
+            off-vocabulary value, reads back "agent" rather than passing through
+            unclassified; mirrors :meth:`query_current_stances`'s FRE-1299
+            canonicalization) — keys distinct from the entity/turn rows the tool
             returns today (ADR-0126 AC-4).
         """
         if not self.connected or not self.driver:
@@ -2857,7 +2861,8 @@ class MemoryService:
                     "WHERE cl.valid_to IS NULL AND cl.invalid_at IS NULL\n"
                     "RETURN cl.claim_id AS claim_id, cl.content AS content,\n"
                     "       cl.confidence AS confidence, cl.class AS knowledge_class,\n"
-                    "       cl.observed_at AS observed_at, cl.embedding AS embedding",
+                    "       cl.observed_at AS observed_at, cl.embedding AS embedding,\n"
+                    "       cl.asserted_by AS asserted_by",
                     user_id=str(user_id),
                 )
                 scored: list[tuple[float, dict[str, Any]]] = []
@@ -2875,6 +2880,11 @@ class MemoryService:
                                 "confidence": float(row["confidence"] or 0.0),
                                 "knowledge_class": row["knowledge_class"] or "Personal",
                                 "observed_at": row["observed_at"],
+                                # FRE-1302: exact-match canonicalization -- a legacy claim
+                                # with no asserted_by property reads back None here, which
+                                # must deny like any other off-vocabulary value, not pass
+                                # through unclassified (mirrors query_current_stances).
+                                "asserted_by": "user" if row["asserted_by"] == "user" else "agent",
                             },
                         )
                     )
@@ -3078,8 +3088,9 @@ class MemoryService:
         Returns:
             The full chain for the best-matching fact-slot, oldest first, each a dict with
             ``claim_id``, ``content``, ``confidence``, ``observed_at``, ``valid_to``,
-            ``invalid_at``, ``superseded_by``, ``supersession_reason``, ``is_current``. Empty
-            list if nothing matches, or on any guard failure.
+            ``invalid_at``, ``superseded_by``, ``supersession_reason``, ``is_current``, and
+            ``asserted_by`` (FRE-1302 -- canonicalized the same way as :meth:`query_claims`).
+            Empty list if nothing matches, or on any guard failure.
         """
         if not self.connected or not self.driver:
             return []
@@ -3103,7 +3114,7 @@ class MemoryService:
                     "       cl.valid_to AS valid_to, cl.invalid_at AS invalid_at,\n"
                     "       cl.superseded_by AS superseded_by,\n"
                     "       cl.supersession_reason AS supersession_reason,\n"
-                    "       cl.embedding AS embedding",
+                    "       cl.embedding AS embedding, cl.asserted_by AS asserted_by",
                     user_id=str(user_id),
                 )
                 rows: dict[str, dict[str, Any]] = {}
@@ -3174,6 +3185,8 @@ class MemoryService:
                 "superseded_by": rows[cid]["superseded_by"],
                 "supersession_reason": rows[cid]["supersession_reason"],
                 "is_current": rows[cid]["valid_to"] is None,
+                # FRE-1302: same exact-match canonicalization as query_claims.
+                "asserted_by": "user" if rows[cid]["asserted_by"] == "user" else "agent",
             }
             for cid in chain_ids
         ]

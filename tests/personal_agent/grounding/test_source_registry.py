@@ -14,6 +14,7 @@ import pytest
 from personal_agent.grounding.source_registry import (
     IDENTIFIER_DIGEST_CHARS,
     Admissibility,
+    Entitlement,
     SourceKind,
     SourceRegistry,
 )
@@ -528,3 +529,196 @@ def test_resolve_rejects_malformed_and_empty_identifiers() -> None:
 
     for candidate in ("", "S1", "[S1@abcdef0123]", "S1@zzzzzzzzzz"):
         assert registry.resolve(candidate) is None
+
+
+# ── FRE-1302 — search_memory's Claims carry their own entitlement ────────────────
+
+
+def _claim(claim_id: str, content: str, asserted_by: str | None) -> dict[str, object]:
+    return {
+        "claim_id": claim_id,
+        "content": content,
+        "confidence": 0.8,
+        "knowledge_class": "Personal",
+        "observed_at": "2026-08-26T00:00:00Z",
+        "asserted_by": asserted_by,
+    }
+
+
+def _search_memory_content(**fields: object) -> str:
+    base = {
+        "matched_turns": [],
+        "entities_found": 0,
+        "total_turns": 0,
+        "query_path": "entity_match",
+    }
+    base.update(fields)
+    return json.dumps(base)
+
+
+def test_search_memory_with_no_claims_key_stays_external() -> None:
+    """The pre-fix behaviour for turns/entities-only results is unchanged."""
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    registration = registry.register_tool_result(
+        tool_name="search_memory",
+        arguments={"query_text": "tinned tuna"},
+        content=_search_memory_content(),
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.EXTERNAL
+
+
+def test_search_memory_with_empty_claims_stays_external() -> None:
+    """A well-formed empty claims list is not a malformed shape — still EXTERNAL."""
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    registration = registry.register_tool_result(
+        tool_name="search_memory",
+        arguments={"query_text": "tinned tuna"},
+        content=_search_memory_content(claims=[]),
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.EXTERNAL
+
+
+def test_search_memory_all_user_claims_is_user_stated() -> None:
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    registration = registry.register_tool_result(
+        tool_name="search_memory",
+        arguments={"query_text": "lease"},
+        content=_search_memory_content(
+            claims=[
+                _claim("c1", "the lease ends in june", "user"),
+                _claim("c2", "the deposit is 1200 euros", "user"),
+            ]
+        ),
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.USER_STATED
+
+
+def test_search_memory_one_agent_claim_denies_whole_result() -> None:
+    """AC-3: an agent-derived Claim over-entitled as EXTERNAL was the bug this closes.
+
+    The registry has no per-item entitlement (one source per call, FRE-1280), so the one
+    agent-derived row denies the whole call — the same default-deny direction the module
+    already applies everywhere else.
+    """
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    registration = registry.register_tool_result(
+        tool_name="search_memory",
+        arguments={"query_text": "lease"},
+        content=_search_memory_content(
+            claims=[
+                _claim("c1", "the lease ends in june", "user"),
+                _claim("c2", "the tenant seems unhappy", "agent"),
+            ]
+        ),
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.AGENT_DERIVED
+
+
+def test_search_memory_legacy_claim_with_no_asserted_by_denies() -> None:
+    """A pre-FRE-1302 Claim (no asserted_by property at all) denies like any unlabelled source."""
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    registration = registry.register_tool_result(
+        tool_name="search_memory",
+        arguments={"query_text": "lease"},
+        content=_search_memory_content(claims=[_claim("c1", "the lease ends in june", None)]),
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.AGENT_DERIVED
+
+
+def test_search_memory_claims_history_alone_denies() -> None:
+    """claims_history (include_history=True) is not a bypass of the claims-key check."""
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    registration = registry.register_tool_result(
+        tool_name="search_memory",
+        arguments={"query_text": "lease", "include_history": True},
+        content=_search_memory_content(
+            claims_history=[_claim("c1", "the lease used to end in march", "agent")]
+        ),
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.AGENT_DERIVED
+
+
+def test_search_memory_mixed_claims_and_claims_history_denies_on_either() -> None:
+    """The real production shape: claims (current) AND claims_history (on demand) together.
+
+    A current user-asserted claim alongside an agent-derived historical one must still deny
+    the whole call — an implementation checking only ``claims`` would pass this test's sibling
+    (``test_search_memory_all_user_claims_is_user_stated``) while missing this case entirely.
+    """
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    registration = registry.register_tool_result(
+        tool_name="search_memory",
+        arguments={"query_text": "lease", "include_history": True},
+        content=_search_memory_content(
+            claims=[_claim("c2", "the lease ends in june", "user")],
+            claims_history=[_claim("c1", "the lease used to end in march", "agent")],
+        ),
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.AGENT_DERIVED
+
+
+MALFORMED_SEARCH_MEMORY_SHAPES = [
+    pytest.param("not json at all {{{", id="unparsable"),
+    pytest.param(json.dumps(["a", "list", "not", "an", "object"]), id="top-level-array"),
+    pytest.param(json.dumps({"claims": "not a list"}), id="claims-not-a-list"),
+    pytest.param(
+        json.dumps({"claims": [{"asserted_by": "user"}, "not a mapping"]}), id="non-mapping-member"
+    ),
+]
+
+
+@pytest.mark.parametrize("content", MALFORMED_SEARCH_MEMORY_SHAPES)
+def test_search_memory_malformed_shapes_deny_rather_than_crash(content: str) -> None:
+    """Fails to AGENT_DERIVED, not EXTERNAL: EXTERNAL is an admitted tier, so a fallback to
+    it on a shape this function doesn't understand would readmit anything unaccounted for.
+    """
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    registration = registry.register_tool_result(
+        tool_name="search_memory",
+        arguments={"query_text": "lease"},
+        content=content,
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.AGENT_DERIVED
+
+
+def test_non_search_memory_tool_with_claims_shaped_content_is_unaffected() -> None:
+    """The Claim-aware path is scoped to search_memory by tool_name, not by content shape.
+
+    search_memory is the only current producer of a top-level "claims" key
+    (tools/memory_search.py); this pins that a lookalike payload from another typed
+    retrieval tool does not accidentally trip the stricter classification.
+    """
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    registration = registry.register_tool_result(
+        tool_name="web_search",
+        arguments={"query": "lease terms"},
+        content=json.dumps({"claims": [_claim("c1", "the tenant seems unhappy", "agent")]}),
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.EXTERNAL

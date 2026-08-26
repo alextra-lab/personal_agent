@@ -86,6 +86,7 @@ def _claim_row(
     superseded_by: str | None = None,
     supersession_reason: str | None = None,
     confidence: float = 0.8,
+    asserted_by: str | None = "agent",
 ) -> dict[str, Any]:
     return {
         "claim_id": claim_id,
@@ -97,6 +98,7 @@ def _claim_row(
         "superseded_by": superseded_by,
         "supersession_reason": supersession_reason,
         "embedding": embedding,
+        "asserted_by": asserted_by,
     }
 
 
@@ -269,6 +271,37 @@ async def test_dangling_superseded_by_pointer_does_not_raise() -> None:
     # "A" is the best (only) match; forward-walk to "missing" would KeyError if not guarded —
     # confirm it doesn't raise, and returns at least the matched row itself.
     assert any(c["claim_id"] == "A" for c in result)
+
+
+@pytest.mark.asyncio
+async def test_asserted_by_canonicalizes_to_user_or_agent() -> None:
+    """FRE-1302: exact-match canonicalization, mirroring query_claims/query_current_stances."""
+    rows = [
+        _claim_row(
+            "A",
+            "user fact",
+            [1.0, 0.0],
+            valid_to="t1",
+            invalid_at="t1",
+            superseded_by="B",
+            asserted_by="user",
+        ),
+        _claim_row(
+            "B",
+            "agent fact",
+            [1.0, 0.0],
+            observed_at=_T0 + timedelta(days=30),
+            asserted_by=None,  # pre-FRE-1302 row: no asserted_by property at all
+        ),
+    ]
+    service, recorder = _fake_service(rows=rows)
+    with patch("personal_agent.memory.service.generate_embedding", new=_mock_embed([1.0, 0.0])):
+        result = await service.query_claims_history("fact", user_id=_USER, authenticated=True)
+
+    by_id = {c["claim_id"]: c["asserted_by"] for c in result}
+    assert by_id == {"A": "user", "B": "agent"}
+    query, _ = recorder[0]
+    assert "cl.asserted_by AS asserted_by" in query
 
 
 @pytest.mark.asyncio

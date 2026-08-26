@@ -68,7 +68,11 @@ def _fake_service(
 
 
 def _claim_row(
-    claim_id: str, content: str, embedding: list[float], confidence: float = 0.8
+    claim_id: str,
+    content: str,
+    embedding: list[float],
+    confidence: float = 0.8,
+    asserted_by: str | None = "agent",
 ) -> dict[str, Any]:
     return {
         "claim_id": claim_id,
@@ -77,6 +81,7 @@ def _claim_row(
         "knowledge_class": "Personal",
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "embedding": embedding,
+        "asserted_by": asserted_by,
     }
 
 
@@ -192,8 +197,31 @@ async def test_result_shape_is_claim_specific() -> None:
         "confidence",
         "knowledge_class",
         "observed_at",
+        "asserted_by",
     }
     assert claim["content"] == "the lease ends in june"
+
+
+@pytest.mark.asyncio
+async def test_asserted_by_canonicalizes_to_user_or_agent() -> None:
+    """FRE-1302: exact-match canonicalization, mirroring query_current_stances (FRE-1299)."""
+    rows = [
+        _claim_row("u", "user fact", [1.0, 0.0], asserted_by="user"),
+        _claim_row("a", "agent fact", [0.9, 0.1], asserted_by="agent"),
+        _claim_row("legacy", "pre-fre-1302 fact", [0.8, 0.2], asserted_by=None),
+        _claim_row("weird", "off-vocabulary fact", [0.7, 0.3], asserted_by="owner"),
+    ]
+    service, recorder = _fake_service(rows=rows)
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(return_value=[1.0, 0.0]),
+    ):
+        result = await service.query_claims("fact", user_id=_USER, authenticated=True)
+
+    by_id = {c["claim_id"]: c["asserted_by"] for c in result}
+    assert by_id == {"u": "user", "a": "agent", "legacy": "agent", "weird": "agent"}
+    query, _ = recorder[0]
+    assert "cl.asserted_by AS asserted_by" in query
 
 
 @pytest.mark.asyncio

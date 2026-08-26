@@ -464,6 +464,77 @@ def _strip_argument_echo(content: str, arguments: Mapping[str, object]) -> str:
     return json.dumps(kept)
 
 
+_CLAIM_LIST_KEYS: tuple[str, ...] = ("claims", "claims_history")
+"""``search_memory`` result keys carrying Claim rows (ADR-0126 D4/D5, FRE-1302).
+
+Both are pull-only reads of the same ``:Claim`` nodes on the same tool call — ``claims`` is
+always present (``memory/service.py::query_claims``); ``claims_history`` joins it only when
+the caller passed ``include_history=True`` (``query_claims_history``). A Claim under either
+key carries the same authorship gap, so both feed :func:`_search_memory_entitlement`.
+"""
+
+
+def _search_memory_entitlement(content: str) -> Entitlement:
+    """Classify one ``search_memory`` tool result by its Claims' own authorship (FRE-1302).
+
+    ``search_memory`` registers as **one** source per call (FRE-1280): matched turns,
+    entities, and Claims share a single identifier and a single entitlement
+    (``orchestrator/executor.py`` calls :meth:`SourceRegistry.register_tool_result` once per
+    dispatched tool result). There is no per-item entitlement in this architecture, so a call
+    is only as entitled as its least-entitled Claim — the aggregate is the most restrictive
+    entitlement among every Claim row actually present, reusing :func:`_entitlement_of`
+    (the same function :meth:`SourceRegistry.register_memory_item` calls, so "user-asserted"
+    has exactly one definition) rather than re-deriving the rule here.
+
+    Turns and entities carry no ``asserted_by`` at all today, so a call returning none of
+    ``claims``/``claims_history`` keeps :attr:`Entitlement.EXTERNAL` — that gap is real but is
+    this fix's sibling work (FRE-1299 covered the push path only), not this one's job.
+
+    Fails to :attr:`Entitlement.AGENT_DERIVED`, never to :attr:`Entitlement.EXTERNAL`, on any
+    shape this function does not fully understand — unparsable content, a non-object top
+    level, a claim-bearing key holding something other than a list, or a list member that
+    isn't itself a mapping. ``EXTERNAL`` is an *admitted* tier (:func:`verify_turn` rejects
+    only ``AGENT_DERIVED``), so falling back to it on a malformed shape would readmit
+    anything this parse couldn't account for — the same default-deny direction
+    :func:`_entitlement_of` already documents for absent authorship. ``EXTERNAL`` is returned
+    only when the content is a well-formed object whose claim-bearing keys are absent or hold
+    an empty list.
+
+    Args:
+        content: The tool result exactly as registered — post argument-echo-strip, the same
+            text the registered source's own ``content`` field holds, so this function and
+            D3(c) containment reason about identical bytes.
+
+    Returns:
+        The entitlement this call's Claim rows support.
+    """
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return Entitlement.AGENT_DERIVED
+    if not isinstance(parsed, dict):
+        return Entitlement.AGENT_DERIVED
+
+    claims: list[object] = []
+    for key in _CLAIM_LIST_KEYS:
+        if key not in parsed:
+            continue
+        value = parsed[key]
+        if not isinstance(value, list):
+            return Entitlement.AGENT_DERIVED
+        claims.extend(value)
+
+    if not claims:
+        return Entitlement.EXTERNAL
+
+    if all(
+        isinstance(claim, Mapping) and _entitlement_of(claim) is Entitlement.USER_STATED
+        for claim in claims
+    ):
+        return Entitlement.USER_STATED
+    return Entitlement.AGENT_DERIVED
+
+
 class SourceRegistry:
     """The sources one turn retrieved, and the identifiers citations resolve against.
 
@@ -643,12 +714,22 @@ class SourceRegistry:
                 reason=f"{tool_name} returned no content to cite",
             )
 
+        # FRE-1302: search_memory is the one TYPED_RETRIEVAL_TOOLS member whose content can
+        # carry Claim rows with their own asserted_by authorship (ADR-0126 D4/D5) — every
+        # other member keeps the blanket EXTERNAL a typed, model-independent retrieval earns
+        # by default. A future tool that also surfaces Claims must route through the same
+        # _search_memory_entitlement rather than gaining an unqualified EXTERNAL by omission.
+        entitlement = (
+            _search_memory_entitlement(admissible)
+            if tool_name == "search_memory"
+            else Entitlement.EXTERNAL
+        )
         source = self._register(
             kind=kind,
             label=tool_name,
             content=admissible,
             origin=tool_name,
-            entitlement=Entitlement.EXTERNAL,
+            entitlement=entitlement,
             referent=_referent_of(tool_name, arguments),
         )
         return ToolRegistration(

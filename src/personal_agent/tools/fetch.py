@@ -28,7 +28,28 @@ from personal_agent.tools.types import ToolDefinition, ToolParameter
 log = get_logger(__name__)
 
 # Tags whose inner content should be skipped entirely.
-_SKIP_TAGS = frozenset(["script", "style", "noscript", "head", "meta", "link", "svg", "iframe"])
+#
+# The second row is boilerplate rather than markup plumbing, and it is here because
+# ADR-0138 D3(c) requires navigation and footer text to be **excluded from the matched
+# content**: a site-wide nav listing "Mercury", "Health", "Products" would otherwise let
+# a fetched page satisfy containment for a claim the article itself never makes. This is
+# the only layer that still has the DOM to make that cut correctly (FRE-1282).
+_SKIP_TAGS = frozenset(
+    [
+        "script",
+        "style",
+        "noscript",
+        "head",
+        "meta",
+        "link",
+        "svg",
+        "iframe",
+        "nav",
+        "footer",
+        "header",
+        "aside",
+    ]
+)
 _BLOCK_TAGS = frozenset(["br", "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr"])
 _DEFAULT_MAX_CHARS = 10_000
 _MAX_CHARS_CAP = 50_000

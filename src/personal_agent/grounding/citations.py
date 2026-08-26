@@ -230,6 +230,39 @@ def parse_citations(text: str) -> CitationParse:
     )
 
 
+def strip_citation_markers(text: str) -> str:
+    """Remove every citation marker from text, leaving the prose intact.
+
+    A marker is an artifact of the **verification protocol**, not content. Once
+    verification has consumed it, carrying it further is pure leakage — and the leak has
+    two mouths, both of which this closes at one point (FRE-1282):
+
+    - **The reader.** FRE-1283 instructs the model to emit markers and FRE-1296 renders
+      real identifiers for it to copy, so without a strip the user receives raw
+      ``[S1@a3f91c2b7d4e6f80]`` in the reply.
+    - **Storage, and through it recall.** ``captains_log/capture.py`` persists the
+      delivered reply as ``assistant_response``, and entity extraction reads captures. A
+      marker surviving into an entity description would be re-injected by a later turn's
+      recall, where — identifiers being turn-scoped by construction (D3(a)) — it would
+      resolve to nothing and manufacture a D4 refusal on a turn that did nothing wrong.
+
+    Adjacent whitespace is collapsed so removing a marker does not leave a double space or
+    a space before a full stop; the surrounding prose is otherwise untouched.
+
+    Args:
+        text: Model output, possibly carrying markers.
+
+    Returns:
+        The same text with every well-formed marker removed. Bracketed text that is not a
+        well-formed identifier is ordinary prose and is left alone, for the same reason
+        :data:`CITATION_MARKER_PATTERN` does not match it.
+    """
+    stripped = CITATION_MARKER_PATTERN.sub("", text)
+    stripped = re.sub(r"[ \t]{2,}", " ", stripped)
+    stripped = re.sub(r"[ \t]+([,.;:!?)\]])", r"\1", stripped)
+    return "\n".join(line.rstrip() for line in stripped.split("\n")).strip()
+
+
 def resolve_citations(parse: CitationParse, registry: SourceRegistry) -> tuple[SpanResolution, ...]:
     """Resolve each parsed span's citation against this turn's registry (D3(a)).
 

@@ -233,3 +233,31 @@ def test_unsupported_claims_are_never_accepted() -> None:
     ]
 
     assert accepted == []
+
+
+def test_a_bare_alias_key_in_the_source_satisfies_nothing() -> None:
+    """Self-review finding: alias matching must be claim-level, never per token.
+
+    ``who`` is an ordinary English word and appears on almost any page. Under a per-token
+    rule — "present if this token belongs to some expansion whose acronym is in the
+    source" — a page containing the pronoun would satisfy a required ``world``, ``health``
+    or ``organization`` in a claim it never makes. That is the check manufacturing the
+    citation theatre it exists to close.
+    """
+    result = check_containment(
+        "The World Health Organization revised the guidance",
+        "It is not clear who revised the guidance, or when.",
+    )
+
+    assert result.outcome is not ContainmentOutcome.CONTAINED
+    assert "world" in result.missing
+
+
+def test_a_real_acronym_in_the_source_still_satisfies_the_spelled_out_claim() -> None:
+    """The paired positive: fixing the leak must not disable alias matching."""
+    result = check_containment(
+        "The World Health Organization revised the guidance",
+        "The WHO revised the guidance the following spring.",
+    )
+
+    assert result.outcome is ContainmentOutcome.CONTAINED

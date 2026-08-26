@@ -674,26 +674,92 @@ def _contains_sequence(haystack: tuple[str, ...], needle: tuple[str, ...]) -> bo
     return any(haystack[i : i + span] == needle for i in range(len(haystack) - span + 1))
 
 
-def _present(token: str, source_tokens: tuple[str, ...], source_set: frozenset[str]) -> bool:
+_ACRONYM_PATTERN = re.compile(r"\b[A-Z]{2,}\b")
+
+
+def acronyms_in(text: str) -> frozenset[str]:
+    """Return the tokens ``text`` writes as acronyms, casefolded.
+
+    **Case is the only thing separating an acronym from its homograph**, and casefolding
+    happens early in the normalization contract, so alias matching cannot be driven off
+    normalized tokens. ``WHO`` is the World Health Organization; ``who`` is a pronoun that
+    appears on almost every English page. ``US``/``us`` and ``UN``/``un`` are the same
+    trap. Reading acronyms from the raw text, before :func:`_fold`, is what keeps an
+    ordinary word from standing in for an organisation.
+
+    Args:
+        text: Raw claim or source text, unnormalized.
+
+    Returns:
+        The casefolded acronym tokens, for lookup against :data:`ALIASES`.
+    """
+    return frozenset(match.group(0).casefold() for match in _ACRONYM_PATTERN.finditer(text))
+
+
+def _expansion_satisfied_tokens(
+    claim_tokens: tuple[str, ...], source_acronyms: frozenset[str]
+) -> frozenset[str]:
+    """Return claim tokens covered by an acronym the source uses instead.
+
+    The **claim-level** half of alias matching, and it has to be claim-level. A per-token
+    rule — "this token is present if it belongs to some expansion whose acronym is in the
+    source" — is a false-acceptance generator, because alias keys are ordinary words:
+    ``who`` appears in almost any English page, and under a per-token rule it would satisfy
+    a required ``world``, ``health`` *or* ``organization`` in a claim the page never makes.
+    That is precisely the citation theatre D3(c) exists to close, produced by the check
+    itself.
+
+    Two conditions together close it: the claim must spell the expansion out
+    **contiguously**, and the source must write the acronym **as an acronym**
+    (:func:`acronyms_in`, read from raw text before casefolding). So
+    ``The World Health Organization revised the guidance`` is satisfied by a page saying
+    ``the WHO revised the guidance`` and *not* by one asking ``who revised the guidance``.
+
+    Args:
+        claim_tokens: The claim's canonical tokens, in order and before deduplication —
+            contiguity is the whole guarantee, so the ordered form is required.
+        source_acronyms: Acronyms the source writes as such.
+
+    Returns:
+        The tokens an acronym in the source accounts for.
+    """
+    covered: set[str] = set()
+    for acronym, expansion in ALIASES.items():
+        if acronym in source_acronyms and _contains_sequence(claim_tokens, expansion):
+            covered.update(expansion)
+    return frozenset(covered)
+
+
+def _present(
+    token: str,
+    source_tokens: tuple[str, ...],
+    source_set: frozenset[str],
+    alias_covered: frozenset[str],
+    claim_acronyms: frozenset[str],
+) -> bool:
     """Whether one required token is present in the source, aliases included.
 
     Args:
         token: A canonical required token.
         source_tokens: The source's canonical tokens, in order.
         source_set: The same tokens as a set, for the common case.
+        alias_covered: Tokens :func:`_expansion_satisfied_tokens` accounted for.
+        claim_acronyms: Acronyms the *claim* writes as such — gating the expansion branch
+            on these is the mirror of the source-side rule, and for the same reason:
+            without it, ``us`` in ``give us the report`` would be satisfied by any page
+            mentioning the United States.
 
     Returns:
-        True when the token appears directly, when its registered expansion appears as a
-        contiguous run, or when it is itself part of an expansion whose acronym appears.
+        True when the token appears directly, when the claim used an acronym whose
+        registered expansion appears in the source as a contiguous run, or when the source
+        used an acronym for an expansion the claim spelled out.
     """
-    if token in source_set:
+    if token in source_set or token in alias_covered:
         return True
+    if token not in claim_acronyms:
+        return False
     expansion = ALIASES.get(token)
-    if expansion is not None and _contains_sequence(source_tokens, expansion):
-        return True
-    return any(
-        acronym in source_set and token in expansion for acronym, expansion in ALIASES.items()
-    )
+    return expansion is not None and _contains_sequence(source_tokens, expansion)
 
 
 def check_containment(span_text: str, source_content: str) -> ContainmentResult:
@@ -721,8 +787,15 @@ def check_containment(span_text: str, source_content: str) -> ContainmentResult:
             entity_free_predicate=unit.is_entity_free_predicate,
         )
 
+    claim_text = strip_attribution_frame(span_text)
+    alias_covered = _expansion_satisfied_tokens(
+        normalize_tokens(claim_text), acronyms_in(source_content)
+    )
+    claim_acronyms = acronyms_in(claim_text)
     missing = tuple(
-        token for token in unit.required if not _present(token, source_tokens, source_set)
+        token
+        for token in unit.required
+        if not _present(token, source_tokens, source_set, alias_covered, claim_acronyms)
     )
 
     if missing:
@@ -762,6 +835,7 @@ __all__ = [
     "MAGNITUDE_WORDS",
     "UNIT_SYNONYMS",
     "ClaimUnit",
+    "acronyms_in",
     "ContainmentOutcome",
     "ContainmentResult",
     "check_containment",

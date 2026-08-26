@@ -171,3 +171,36 @@ result readmit itself at the most-trusted tier. That direction is pinned by test
 
 **Diff class: escalated** — `register_tool_result` sits in the executor's turn path, which writes
 (Captain's Log, memory). Flagged for owner `/code-review ultra` before merge.
+
+---
+
+## 6 — What review changed (all three passes fed the shipped diff)
+
+**Codex plan review** — corrected two audit verdicts before any code was written: `get_location`
+takes a model-authored `session_notes` and returns a city extracted from it (my "No" was wrong),
+and `artifact_read` also serves `upload` rows carrying `created_by = 'user'` (the flat denial has
+a real cost, now stated and pinned rather than discovered later). It also caught that my
+"fields actually present" wording would have denied every production result, and that skipping
+security review was justified with a false claim.
+
+**`feature-dev:code-reviewer`** — no findings. Independently confirmed `notes_tools.py` hardcodes
+`created_by = 'agent'` on every write, which is the evidence behind the `notes_search` verdict.
+
+**Security review** — one MEDIUM, fixed: `mcp_get_document` is a Linear *workspace* read sitting
+in `DOCUMENTATION_TOOLS`, so an audit walking `TYPED_RETRIEVAL_TOOLS` structurally could not see
+it, while the kind-independent dispatch sent it to `EXTERNAL` anyway. Also drove the envelope
+allowlist and the honest statement of what the rule costs against real Turn data. It verified
+`_search_memory_entitlement` is byte-identical to `origin/main`.
+
+**Self-review, before either agent reported** — the turn-field check was a denylist, so an
+unrecognised field reached `USER_STATED` with unaudited content. The security pass independently
+confirmed this was load-bearing rather than cosmetic: against the pre-hardening commit,
+`{"turns":[{"user_message":"u","response":"AGENT PROSE"}]}` did return `USER_STATED`.
+
+## 7 — Environment note, not a finding
+
+Local `make test` reports 8 failures (`memory/test_hybrid_search.py`, `request_gateway/test_context.py`).
+They are **not mine and not a main regression**: identical at `origin/main` and at `e6759e2e`
+(before the recent grounding work), verified in this same worktree, and CI on `main` is green
+including the #963 merge. They fail in isolation, so not ordering — a local environment artifact.
+Recorded so the next seat does not re-derive it; no ticket.

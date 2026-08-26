@@ -99,6 +99,13 @@ BUDGET_ROLE_BY_FACTORY_NAME: dict[str, str] = {
     # then fail validate_role_totality at startup on the deployed box. Splitting the
     # attribution later is a config edit, not a code change.
     "span_extraction": "entity_extraction",
+    # FRE-1286: the ADR-0138 D3(d) entailment judge, on the same terms and for the same
+    # reason as span_extraction above — the REAL budget.yaml is gitignored (FRE-1209), so
+    # a dedicated lane declared here would pass CI against the .example and then fail
+    # validate_role_totality at startup on the deployed box. Both arms share the entry:
+    # the inline arm is on the turn path and the sampled arm is background, but a role
+    # name resolves to one lane, and splitting them is a config edit, not a code change.
+    "entailment": "entity_extraction",
     # FRE-989: the residue FRE-1037 left behind. study is capped in budget.yaml
     # ($5 daily / $7 weekly, FRE-839) but was absent here, so the role-name door
     # resolved it to main_inference and its isolation did not apply.

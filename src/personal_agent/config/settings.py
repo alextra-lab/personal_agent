@@ -2028,6 +2028,58 @@ class AppConfig(BaseSettings):
             "cannot absorb more than that."
         ),
     )
+    # ── D3(d) entailment (ADR-0138, FRE-1286) ────────────────────────────────
+    #
+    # These bind both arms of the entailment check. Nothing here runs while
+    # `grounding_verification_mode` is "off" — the inline arm only reaches spans D3(c)
+    # escalated, and the offline arm only reaches spans D3 verified.
+    grounding_entailment_max_inline_checks: int = Field(
+        default=8,
+        ge=1,
+        le=32,
+        description=(
+            "Bound on inline D3(d) judge calls per turn, CUMULATIVE across D4 generation "
+            "attempts. Cumulative rather than per-pass because a per-pass bound bounds "
+            "nothing when D4 may run the pass again: 8 per pass is 8 x attempts. Spans "
+            "past the bound fail closed as entailment_unavailable rather than passing."
+        ),
+    )
+    grounding_entailment_latency_budget_ms: int = Field(
+        default=4000,
+        ge=100,
+        le=60_000,
+        description=(
+            "Two jobs, deliberately. It is the per-call timeout every inline judge call "
+            "carries — the actual bound on added latency, since asyncio.gather is only as "
+            "fast as its slowest member — and it is the budget the measured wall-clock is "
+            "recorded against. Exceeding it is recorded and surfaced, never acted on: "
+            "with the timeout already bounding the worst case, aborting mid-flight would "
+            "only convert a slow provider into a refusal the user did not deserve."
+        ),
+    )
+    grounding_entailment_max_excerpt_chars: int = Field(
+        default=6000,
+        ge=500,
+        le=100_000,
+        description=(
+            "Window of a cited source handed to the entailment judge. The window is chosen "
+            "deterministically around the claim's own tokens, so raising this buys context "
+            "rather than correctness; a fetched page can be 200KB and sending it whole "
+            "would price the check out of the turn path."
+        ),
+    )
+    grounding_entailment_sample_rate: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Per-span rate for the OFFLINE arm (ADR-0087): an independent draw over spans "
+            "that passed containment and are not in the inline entity-free class. It runs "
+            "in the background after the turn is delivered and never blocks. 0.0 turns the "
+            "measurement off, which also turns off the evidence for promoting entailment "
+            "inline more generally."
+        ),
+    )
     proactive_memory_max_candidates: int = Field(
         default=10,
         ge=1,

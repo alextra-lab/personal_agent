@@ -374,6 +374,12 @@ class ExecutionContext:
     # record (a system-record span under D1), not about the world.
     retrieval_attempts: list[str] = field(default_factory=list)
 
+    # ADR-0138 D3(d) (FRE-1286). Inline entailment judge calls this turn has spent,
+    # accumulated ACROSS D4 attempts. The cap is cumulative for the same reason
+    # grounding_attempts is its own counter: a per-pass bound bounds nothing when the pass
+    # may run again, so a turn that retries would pay the cap once per generation.
+    grounding_entailment_checks: int = 0
+
     # ADR-0138's output side of the ADR-0125 evidence contract, attached for the capture.
     grounding_record: "GroundingRecord | None" = None
 

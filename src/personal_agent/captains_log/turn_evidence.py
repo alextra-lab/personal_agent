@@ -944,6 +944,12 @@ class GroundingRecord(BaseModel):
         unverifiable_count: Failures our normalizer could not settle (AC-6).
         no_source_count: Failures where the turn had no admissible source (AC-6).
         degraded_extraction: Whether span extraction had to fail closed.
+        entailment_checks: Inline D3(d) judge calls this turn made (ADR-0138, FRE-1286).
+        entailment_latency_ms: What the inline entailment pass cost in wall-clock, or None
+            when nothing escalated to it — which is the common turn.
+        entailment_budget_exceeded: Whether that cost exceeded the configured budget.
+            Recorded rather than acted on, so a latency regression on the entity-free
+            predicate class is visible instead of being absorbed silently (FRE-1286 AC-5).
         attempts: Generation attempts this turn made under D4.
         retrieval_forced: Whether retrieval was forced before this generation. FRE-1285
             sets it; FRE-1284's metric excludes such turns from its denominator, since
@@ -963,6 +969,9 @@ class GroundingRecord(BaseModel):
     unverifiable_count: int = 0
     no_source_count: int = 0
     degraded_extraction: bool = False
+    entailment_checks: int = 0
+    entailment_latency_ms: float | None = None
+    entailment_budget_exceeded: bool = False
     attempts: int = 1
     retrieval_forced: bool = False
     first_generation_compliant: bool = False

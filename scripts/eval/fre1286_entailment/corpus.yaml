@@ -1,0 +1,386 @@
+# Labelled entailment pairs — ADR-0138 D3(d), FRE-1286 AC-3/AC-6.
+#
+# Hand-authored. Every passage is written to be the *cited source* of its claim, so each
+# case reaches the judge in the shape a real turn produces: containment has already passed
+# (or would have), and the only remaining question is support.
+#
+# `class` is what the case tests; `expected` is the verdict a correct judge returns.
+# `partition: heldout` is scored ONCE, after the prompt is frozen — see corpus.py.
+#
+# Entity-free, figure-free claims are over-represented on purpose: that is the class D3(d)
+# judges INLINE and blocking, so the judge's error rate there is the one that costs a user
+# a refusal. The rest exercise the offline arm's residue.
+
+cases:
+  # ── supported ─────────────────────────────────────────────────────────────────────
+  - id: sup-mercury
+    class: supported
+    partition: dev
+    expected: supported
+    claim: this fish is high in mercury
+    passage: >-
+      Laboratory testing of bonito del norte found the species is high in mercury,
+      exceeding the weekly advisory level for adults.
+    note: The ADR's own example, in its positive form — the inline class's baseline.
+
+  - id: sup-paraphrase
+    class: supported
+    partition: dev
+    expected: supported
+    claim: the drive is recommended for cold storage
+    passage: >-
+      For archival use where the disk is powered down for long periods, this drive is the
+      one we would suggest.
+    note: Support survives paraphrase; requiring the source's exact wording is containment's job.
+
+  - id: sup-narrower-claim
+    class: supported
+    partition: dev
+    expected: supported
+    claim: the library supports async iteration
+    passage: >-
+      The library supports async iteration, async context managers and structured
+      concurrency out of the box.
+    note: A claim narrower than the passage is entailed by it.
+
+  - id: sup-figure-restated
+    class: supported
+    partition: dev
+    expected: supported
+    claim: Paris has 2.1 million residents
+    passage: The city of Paris counts 2,100,000 residents within its administrative limits.
+    note: Same quantity, different surface form — the judge must not treat notation as substance.
+
+  - id: sup-inference-one-step
+    class: supported
+    partition: dev
+    expected: supported
+    claim: the service was unavailable during the incident
+    passage: >-
+      Between 02:14 and 03:40 every request to the API returned HTTP 503 and no traffic
+      was served.
+    note: Direct entailment rather than restatement; refusing this would make the judge a matcher.
+
+  - id: sup-attributed
+    class: supported
+    partition: dev
+    expected: supported
+    claim: the compound is toxic to aquatic life
+    passage: >-
+      The agency classifies the compound as toxic to aquatic organisms with long-lasting
+      effects.
+    note: Frame differences do not change what is asserted about the world.
+
+  - id: sup-evaluative-grounded
+    class: supported
+    partition: heldout
+    expected: supported
+    claim: the process is energy intensive
+    passage: >-
+      Producing one tonne by this route consumes roughly four times the energy of the
+      conventional process, and energy dominates its operating cost.
+    note: An evaluative predicate the passage does establish — the class D1 refuses to exempt.
+
+  - id: sup-negation-matched
+    class: supported
+    partition: heldout
+    expected: supported
+    claim: the drug is not approved for children
+    passage: >-
+      Approval covers adults aged eighteen and over. Use in children has not been
+      authorised.
+    note: A negative claim supported by a negative passage; polarity must be read, not counted.
+
+  - id: sup-unit-variant
+    class: supported
+    partition: heldout
+    expected: supported
+    claim: the route is 12 km long
+    passage: The waymarked route runs for 12 kilometres from the harbour to the lighthouse.
+    note: Unit synonyms, already normalised by containment, must not confuse the judge either.
+
+  - id: sup-list-membership
+    class: supported
+    partition: heldout
+    expected: supported
+    claim: the framework ships a built-in test runner
+    passage: >-
+      Included in the distribution: a development server, a migration tool, a test runner
+      and a template engine.
+    note: Support carried by a list rather than a sentence.
+
+  - id: sup-temporal
+    class: supported
+    partition: heldout
+    expected: supported
+    claim: the standard was withdrawn
+    passage: The standard was withdrawn in March and replaced by its successor document.
+    note: A plain restatement, present so the class is not all hard cases.
+
+  - id: sup-degree-matched
+    class: supported
+    partition: heldout
+    expected: supported
+    claim: the material is more conductive than copper
+    passage: >-
+      Measured conductivity exceeds that of copper by about eight percent at room
+      temperature.
+    note: A comparative the passage actually makes.
+
+  # ── not_supported ─────────────────────────────────────────────────────────────────
+  - id: ns-mercury-mention
+    class: not_supported
+    partition: dev
+    expected: not_supported
+    claim: this fish is high in mercury
+    passage: >-
+      Bonito del norte is line-caught in the Bay of Biscay each summer. Mercury levels in
+      the wider Atlantic have been studied since the 1970s.
+    note: >-
+      ADR-0138's headline case. Every content word of the claim appears, so containment
+      passes; the passage still says nothing about this fish's mercury.
+
+  - id: ns-topical-only
+    class: not_supported
+    partition: dev
+    expected: not_supported
+    claim: the vaccine reduces transmission
+    passage: >-
+      The vaccine was authorised after trials measuring symptomatic disease. Transmission
+      was not an endpoint of those trials.
+    note: The passage explicitly declines to establish the claim without denying it.
+
+  - id: ns-different-subject
+    class: not_supported
+    partition: dev
+    expected: not_supported
+    claim: the second edition fixes the indexing bug
+    passage: The first edition fixed the indexing bug reported by readers of the preprint.
+    note: A near-miss on the subject; the shared vocabulary is the trap.
+
+  - id: ns-hedged-source
+    class: not_supported
+    partition: dev
+    expected: not_supported
+    claim: the additive causes headaches
+    passage: >-
+      Some researchers have proposed that the additive may contribute to headaches in
+      sensitive individuals; the evidence is inconclusive.
+    note: A hedge does not support a flat assertion — the "may" to "does" upgrade.
+
+  - id: ns-no-basis-for-degree
+    class: not_supported
+    partition: dev
+    expected: not_supported
+    claim: the survey was the largest of its kind
+    passage: The survey covered 14 countries across three continents over two years.
+    note: >-
+      The passage establishes scope but says nothing comparative; "largest" is a predicate
+      content word the source never supports.
+
+  - id: ns-plan-not-fact
+    class: not_supported
+    partition: heldout
+    expected: not_supported
+    claim: the line runs to the airport
+    passage: >-
+      An extension to the airport has been proposed and is awaiting funding approval.
+    note: A plan is not the thing; conflating the two is a common generation error.
+
+  - id: ns-scope-shift
+    class: not_supported
+    partition: heldout
+    expected: not_supported
+    claim: the tool is safe to run on production data
+    passage: >-
+      The tool has been tested extensively against the sample dataset bundled with the
+      repository.
+    note: Evidence about one scope offered for a claim about another.
+
+  - id: ns-reversed-direction
+    class: not_supported
+    partition: heldout
+    expected: not_supported
+    claim: rising costs caused the shortage
+    passage: The shortage has driven costs up sharply over the last two quarters.
+    note: Same two facts, opposite causal direction — the passage supports the converse.
+
+  - id: ns-absent-attribute
+    class: not_supported
+    partition: heldout
+    expected: not_supported
+    claim: the alloy is corrosion resistant
+    passage: >-
+      The alloy is valued for its high tensile strength and its low density, and is widely
+      used in aerospace fastenings.
+    note: The passage praises the material for other properties entirely.
+
+  - id: ns-future-tense
+    class: not_supported
+    partition: heldout
+    expected: not_supported
+    claim: the feature is available in the stable release
+    passage: The feature is available behind a flag in the nightly builds.
+    note: Availability under a different condition is not availability.
+
+  # ── contradicted ──────────────────────────────────────────────────────────────────
+  - id: con-sold-in-france
+    class: contradicted
+    partition: dev
+    expected: contradicted
+    claim: the product is sold in France
+    passage: The product is not sold in France; distribution is limited to Germany and Austria.
+    note: >-
+      ADR-0138's named residue. The passage contains every token of the claim and refutes
+      it — containment cannot see this, and only D3(d) can.
+
+  - id: con-figure-conflict
+    class: contradicted
+    partition: dev
+    expected: contradicted
+    claim: Paris has 9 million residents
+    passage: Paris counts 2,100,000 residents within the city limits.
+    note: A stated value against a different stated value is refutation, not silence.
+
+  - id: con-safety
+    class: contradicted
+    partition: dev
+    expected: contradicted
+    claim: this fish is safe to eat weekly
+    passage: >-
+      Because of its mercury content, this fish should be eaten no more than once a month,
+      and avoided during pregnancy.
+    note: Entity-free predicate, inline class, and the passage refutes rather than omits.
+
+  - id: con-deprecated
+    class: contradicted
+    partition: dev
+    expected: contradicted
+    claim: the endpoint is still supported
+    passage: The endpoint was removed in version 4 and requests to it now return 410 Gone.
+    note: Refutation carried by a described state rather than by an explicit "not".
+
+  - id: con-direction
+    class: contradicted
+    partition: dev
+    expected: contradicted
+    claim: emissions rose over the period
+    passage: Emissions fell by eleven percent between the first and last year of the period.
+    note: A reversed trend; the tokens overlap almost completely.
+
+  - id: con-attribution-flip
+    class: contradicted
+    partition: heldout
+    expected: contradicted
+    claim: the agency approved the merger
+    passage: The agency blocked the merger, citing concentration in the regional market.
+    note: One verb carries the whole refutation.
+
+  - id: con-exclusion
+    class: contradicted
+    partition: heldout
+    expected: contradicted
+    claim: the licence permits commercial use
+    passage: >-
+      The licence grants rights for research and teaching only. Commercial use requires a
+      separate agreement.
+    note: An explicit carve-out refuting the claim without using its words negatively.
+
+  - id: con-identity
+    class: contradicted
+    partition: heldout
+    expected: contradicted
+    claim: the compound is water soluble
+    passage: The compound is insoluble in water and is handled as a suspension.
+    note: Morphological negation — "insoluble" — rather than a negating particle.
+
+  - id: con-recall
+    class: contradicted
+    partition: heldout
+    expected: contradicted
+    claim: the model is available to all users
+    passage: Access was restricted to enterprise customers after the preview ended.
+    note: Availability refuted by a described restriction.
+
+  - id: con-order
+    class: contradicted
+    partition: heldout
+    expected: contradicted
+    claim: the treatment is given before surgery
+    passage: The treatment is administered only after the surgical resection is complete.
+    note: Temporal order reversed; every content word is present in the passage.
+
+  # ── quantifier_reversal ───────────────────────────────────────────────────────────
+  - id: quant-some-for-all
+    class: quantifier_reversal
+    partition: dev
+    expected: not_supported
+    claim: all of the samples contained the marker
+    passage: Some of the samples contained the marker.
+    note: >-
+      ADR-0138's second named residue, in its pure form. "Some" passes containment for
+      "all" because both are function words the normalizer drops. The passage must say
+      nothing about the remaining samples: adding "and the rest were clean" turns this
+      into an outright denial, which is quant-no-for-all's case, not this one.
+
+  - id: quant-no-for-all
+    class: quantifier_reversal
+    partition: dev
+    expected: contradicted
+    claim: all of the samples contained the marker
+    passage: None of the samples contained the marker.
+    note: >-
+      The other half of the class: a universal claim against a universal denial is
+      refutation, not mere non-support. A judge collapsing both to not_supported fails here.
+
+  - id: quant-most-for-all
+    class: quantifier_reversal
+    partition: dev
+    expected: not_supported
+    claim: every branch closes at six
+    passage: Most branches close at six.
+    note: >-
+      "Most" does not reach "every". The passage must not name a counterexample — that
+      would refute the claim rather than merely fail to support it.
+
+  - id: quant-one-for-many
+    class: quantifier_reversal
+    partition: dev
+    expected: not_supported
+    claim: the tool is used across the industry
+    passage: One large manufacturer adopted the tool for its European plants last year.
+    note: A single instance offered for a distributional claim.
+
+  - id: quant-all-for-some
+    class: quantifier_reversal
+    partition: heldout
+    expected: supported
+    claim: some of the tested units failed
+    passage: All of the tested units failed the drop test.
+    note: >-
+      The direction that DOES hold. Present so the class cannot be aced by a judge that
+      simply rejects every sentence containing a quantifier.
+
+  - id: quant-only
+    class: quantifier_reversal
+    partition: heldout
+    expected: contradicted
+    claim: the grant is open to postgraduate students
+    passage: The grant is open only to undergraduate students in their final year.
+    note: An "only" that narrows the set to one excluding the claim's.
+
+  - id: quant-few
+    class: quantifier_reversal
+    partition: heldout
+    expected: not_supported
+    claim: the side effect is common
+    passage: The side effect was reported by fewer than one in a thousand participants.
+    note: A frequency claim against a stated rarity; "common" is a predicate content word.
+
+  - id: quant-generic
+    class: quantifier_reversal
+    partition: heldout
+    expected: not_supported
+    claim: these batteries last five years
+    passage: Under laboratory conditions the best-performing cell retained capacity for five years.
+    note: A best case offered as the general case.

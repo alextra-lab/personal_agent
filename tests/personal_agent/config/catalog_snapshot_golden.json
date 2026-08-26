@@ -451,6 +451,7 @@
       "captains_log": 180,
       "compressor": 60,
       "embedding": 60,
+      "entailment": 180,
       "entity_extraction": 60,
       "insights": 180,
       "primary": 600,

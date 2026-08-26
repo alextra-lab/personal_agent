@@ -74,6 +74,13 @@ roles:
   # here and why the cheaper one is a deliberate downgrade rather than a saving.
   # Reproduce either figure with harness.py --model-key.
   span_extraction:    { all: claude_sonnet }
+  # ADR-0138 D3(d) (FRE-1286): the entailment judge. Bound to claude_sonnet because the
+  # ADR names the failure mode directly when rejecting Option 5 — "requires the
+  # verification model to be at least as capable as the primary, or it becomes the new
+  # weakest link". A judge weaker than the model it audits does not audit it. Its own
+  # error rate is measured against a labelled corpus rather than assumed
+  # (scripts/eval/fre1286_entailment), which is the other half of that rejection.
+  entailment:         { all: claude_sonnet }
   reranker:           { all: reranker }
   reranker_fallback:  { all: reranker_fallback }
 
@@ -155,6 +162,9 @@ bindings:
   insights:           { deployment: claude_sonnet }
   compressor:         { deployment: gpt-5.4-mini }
   span_extraction:    { deployment: claude_sonnet }
+  # FRE-1286: pinned — no `open: true`. The judge decides whether an assertion may be
+  # delivered, so binding it is a correctness decision rather than a user preference.
+  entailment:         { deployment: claude_sonnet }
   embedding:          { deployment: embedding }
   reranker:           { deployment: reranker }
   reranker_fallback:  { deployment: reranker_fallback }

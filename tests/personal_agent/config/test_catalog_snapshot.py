@@ -105,6 +105,24 @@ correction (fix/model-catalog-provider-ceilings).** One explicit, reviewed delta
    Sonnet (32768) and rise from 4096 to 32768 for Haiku — neither exceeds the
    operator ceiling already running in production. Owner-approved 2026-07-21.
 
+**Rebaselined a fourth time, deliberately, for ADR-0138 D3(d) (FRE-1286).** One
+explicit delta, and it is an addition rather than a change:
+
+1. **New role: ``entailment``**, pinned to ``claude_sonnet`` — D3(d)'s entailment
+   judge, added to ``config/model_roles.yaml``'s ``roles:`` and ``bindings:``.
+   The snapshot's ``timeouts`` map is built per ``ModelRole`` member, so a new
+   member necessarily adds a row: ``entailment: 180``, inherited from
+   ``claude_sonnet.default_timeout`` like every other role bound there. **No
+   existing row moved** — resolution, concurrency and pricing are byte-identical,
+   and the diff is the single added key.
+
+   Worth knowing when reading that 180: it is the *fallback* this role would use
+   if nobody passed a timeout. Nobody does — every judge call site passes
+   ``timeout_s`` explicitly from
+   ``settings.grounding_entailment_latency_budget_ms`` (4s), because an untimed
+   call on the turn path is an unbounded one. The 180 is what the catalog
+   declares, not what the judge waits.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

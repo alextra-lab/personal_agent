@@ -39,16 +39,27 @@ durable artifact", and reachability is not-applicable rather than failed.
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from enum import StrEnum
 
+import structlog
 from pydantic import BaseModel, ConfigDict
 
 from personal_agent.captains_log.turn_evidence import GroundedSpanRecord, GroundingRecord
 from personal_agent.grounding.citations import CitationParse, strip_citation_markers
 from personal_agent.grounding.containment import ContainmentOutcome, check_containment
+from personal_agent.grounding.entailment import (
+    EntailmentJudge,
+    EntailmentJudgement,
+    EntailmentVerdict,
+)
 from personal_agent.grounding.source_registry import Entitlement, RegisteredSource, SourceRegistry
 from personal_agent.grounding.spans import Span, SpanExtraction
+from personal_agent.telemetry.trace import TraceContext
+
+log = structlog.get_logger(__name__)
 
 SOFT_FAILURE_MAX_CHARS = 600
 """Longest extracted body a soft-404 or auth-wall pattern may condemn.
@@ -100,6 +111,9 @@ class CheckOutcome(StrEnum):
     NOT_CONTAINED = "not_contained"
     UNVERIFIABLE_BY_CONTAINMENT = "unverifiable_by_containment"
     ENTAILMENT_REQUIRED = "entailment_required"
+    NOT_ENTAILED = "not_entailed"
+    CONTRADICTED_BY_SOURCE = "contradicted_by_source"
+    ENTAILMENT_UNAVAILABLE = "entailment_unavailable"
 
 
 _TRUE_NO_SOURCE: frozenset[CheckOutcome] = frozenset(
@@ -109,6 +123,26 @@ _TRUE_NO_SOURCE: frozenset[CheckOutcome] = frozenset(
 
 ``SOURCE_NOT_ENTITLED`` belongs here rather than with the containment limits: the system
 citing its own earlier utterance *is* having no source, however well the tokens matched.
+
+**Not here: the rejection outcomes.** ``NOT_CONTAINED``, ``NOT_ENTAILED`` and
+``CONTRADICTED_BY_SOURCE`` are a third thing — a source that exists, is entitled and is
+reachable, caught not supporting the claim. That is the contract catching citation theatre,
+not the turn having nothing to stand on, and folding it in here would quietly change what
+``no_source_count`` means (FRE-1286 plan review).
+"""
+
+_MACHINE_UNDECIDED: frozenset[CheckOutcome] = frozenset(
+    {
+        CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT,
+        CheckOutcome.ENTAILMENT_REQUIRED,
+        CheckOutcome.ENTAILMENT_UNAVAILABLE,
+    }
+)
+"""Outcomes our own machinery could not settle.
+
+A normalizer that could not decide, an escalation no judge ran on, a judge that timed out
+or returned nothing. Named as a set beside :data:`_TRUE_NO_SOURCE` rather than left as a
+literal in one property, so the two families stay symmetrical as members are added.
 """
 
 
@@ -123,6 +157,12 @@ class SpanVerification(BaseModel):
         outcome: Which gate decided it.
         reachability: What D3(b) found, for the record even when a later gate decided.
         missing: Required tokens absent from the source, when containment ran.
+        entity_free_predicate: Whether containment placed this span in D3(d)'s escalated
+            class. Carried past the entailment pass on purpose: once
+            :func:`apply_entailment` turns a supported escalation into ``PASSED``, nothing
+            else distinguishes it from a span that passed containment outright, and the
+            offline arm would re-sample the class the inline arm already judged
+            (FRE-1286 plan review).
         detail: One line naming the rule that fired, for the turn record and for a reader
             of a turn that refused.
     """
@@ -136,6 +176,7 @@ class SpanVerification(BaseModel):
     outcome: CheckOutcome
     reachability: Reachability = Reachability.NOT_APPLICABLE
     missing: tuple[str, ...] = ()
+    entity_free_predicate: bool = False
     detail: str = ""
 
     @property
@@ -155,6 +196,13 @@ class TurnVerification(BaseModel):
         unavailable_reason: Set when verification could not run at all — an extractor
             failure, a denied budget reservation. Distinct from every span outcome,
             because it is a fact about Seshat's own machinery rather than about the claim.
+        entailment_checks: Judge calls D3(d) made on this pass (FRE-1286).
+        entailment_latency_ms: Wall-clock the inline entailment pass cost, or None when it
+            did not run. The common turn escalates nothing and pays nothing.
+        entailment_budget_exceeded: Whether that wall-clock exceeded the configured
+            budget. Recorded rather than acted on: with a per-call timeout already
+            bounding the worst case, aborting mid-flight would only convert a slow
+            provider into a refusal the user did not deserve (AC-5).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -162,6 +210,9 @@ class TurnVerification(BaseModel):
     spans: tuple[SpanVerification, ...] = ()
     degraded_extraction: bool = False
     unavailable_reason: str | None = None
+    entailment_checks: int = 0
+    entailment_latency_ms: float | None = None
+    entailment_budget_exceeded: bool = False
 
     @property
     def available(self) -> bool:
@@ -189,14 +240,14 @@ class TurnVerification(BaseModel):
 
     @property
     def unverifiable(self) -> tuple[SpanVerification, ...]:
-        """Failures our own normalizer could not decide (AC-6).
+        """Failures our own machinery could not decide (AC-6).
 
         Kept apart from :attr:`true_no_source` so a wave of false refusals can never read
-        as honest not-knowing.
+        as honest not-knowing. FRE-1286 widened this from the normalizer alone to
+        :data:`_MACHINE_UNDECIDED`: a judge that timed out is the same kind of fact about
+        Seshat as a normalizer that could not settle a paraphrase.
         """
-        return tuple(
-            span for span in self.spans if span.outcome is CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT
-        )
+        return tuple(span for span in self.spans if span.outcome in _MACHINE_UNDECIDED)
 
 
 def check_reachability(source: RegisteredSource) -> Reachability:
@@ -319,7 +370,7 @@ def _verify_span(span: Span, parse: CitationParse, registry: SourceRegistry) -> 
         ),
         CheckOutcome.ENTAILMENT_REQUIRED: (
             "the span names no entity and states no figure, so containment cannot settle "
-            "it and D3(d) must (FRE-1286, not yet available)"
+            "it and D3(d) must (FRE-1286)"
         ),
     }
 
@@ -331,6 +382,7 @@ def _verify_span(span: Span, parse: CitationParse, registry: SourceRegistry) -> 
         outcome=outcome,
         reachability=reachability,
         missing=containment.missing,
+        entity_free_predicate=containment.entity_free_predicate,
         detail=details[outcome],
     )
 
@@ -358,6 +410,158 @@ def verify_turn(
     )
 
 
+_VERDICT_OUTCOMES: dict[EntailmentVerdict, CheckOutcome] = {
+    EntailmentVerdict.SUPPORTED: CheckOutcome.PASSED,
+    EntailmentVerdict.NOT_SUPPORTED: CheckOutcome.NOT_ENTAILED,
+    EntailmentVerdict.CONTRADICTED: CheckOutcome.CONTRADICTED_BY_SOURCE,
+    EntailmentVerdict.UNDECIDED: CheckOutcome.ENTAILMENT_UNAVAILABLE,
+}
+
+
+def _entailed_span(span: SpanVerification, judgement: EntailmentJudgement) -> SpanVerification:
+    """Return one escalated span resolved by a verdict.
+
+    Args:
+        span: The span carrying ``ENTAILMENT_REQUIRED``.
+        judgement: What the judge decided.
+
+    Returns:
+        The resolved verdict. The judge's own reason is carried into the detail: under D4
+        it reaches the retry directive, and "the page only mentions mercury" tells the
+        model something that "not entailed" does not.
+    """
+    outcome = _VERDICT_OUTCOMES[judgement.verdict]
+    if outcome is CheckOutcome.PASSED:
+        return span.model_copy(update={"outcome": outcome, "detail": ""})
+    reason = judgement.reason or "the judge gave no reason"
+    return span.model_copy(
+        update={
+            "outcome": outcome,
+            "detail": f"{span.identifier} does not support the claim: {reason} (D3(d))",
+        }
+    )
+
+
+async def apply_entailment(
+    verification: TurnVerification,
+    registry: SourceRegistry,
+    judge: EntailmentJudge,
+    *,
+    max_checks: int,
+    budget_ms: int,
+    checks_already_used: int = 0,
+    trace_ctx: TraceContext | None = None,
+) -> TurnVerification:
+    """Settle D3(d)'s escalated class inline (ADR-0138 D3(d), FRE-1286).
+
+    Only spans carrying :attr:`CheckOutcome.ENTAILMENT_REQUIRED` are judged — the ones
+    containment reported it cannot decide, because they name no entity and state no
+    figure. Every other span is returned untouched, so a turn escalating nothing costs no
+    model call at all.
+
+    **Latency is bounded by construction, not by the measurement.** All escalated spans go
+    out in one :func:`asyncio.gather`, so the added cost is one round-trip rather than one
+    per assertion — the scaling that got ADR-0138's Option 5 rejected. The per-call timeout
+    lives on the judge; this function only records what the pass cost.
+
+    Args:
+        verification: What the deterministic gates decided.
+        registry: This turn's registry, for resolving each span's source.
+        judge: The entailment judge.
+        max_checks: Bound on judge calls, **cumulative across D4 attempts**. A per-pass
+            bound bounds nothing when D4 may run the pass again.
+        budget_ms: The latency budget the elapsed time is recorded against.
+        checks_already_used: Judge calls earlier attempts on this turn already spent.
+        trace_ctx: The turn's trace context, threaded into every judge call.
+
+    Returns:
+        The verification with each escalated span resolved. A span past the cap, and a
+        span whose judge could not answer, becomes ``ENTAILMENT_UNAVAILABLE`` — which
+        still blocks under D4, deliberately: before this ticket the same class blocked as
+        ``ENTAILMENT_REQUIRED``, so fail-closed is the behaviour being preserved.
+    """
+    pending = [
+        index
+        for index, span in enumerate(verification.spans)
+        if span.outcome is CheckOutcome.ENTAILMENT_REQUIRED
+    ]
+    if not pending:
+        return verification
+
+    allowance = max(0, max_checks - checks_already_used)
+    judged, over_cap = pending[:allowance], pending[allowance:]
+
+    started = time.perf_counter()
+    results: list[EntailmentJudgement | BaseException] = []
+    if judged:
+        results = list(
+            await asyncio.gather(
+                *(
+                    judge.judge(
+                        verification.spans[index].text,
+                        _source_content(registry, verification.spans[index]),
+                        trace_ctx=trace_ctx,
+                    )
+                    for index in judged
+                ),
+                return_exceptions=True,
+            )
+        )
+    elapsed_ms = (time.perf_counter() - started) * 1000
+
+    spans = list(verification.spans)
+    for index, result in zip(judged, results, strict=True):
+        if isinstance(result, BaseException):
+            # The judge is documented never to raise, so this is a defect in it rather
+            # than a provider failure. It still must not cost the user the turn.
+            log.warning(
+                "entailment_judge_raised",
+                error_type=type(result).__name__,
+                trace_id=trace_ctx.trace_id if trace_ctx else None,
+            )
+            result = EntailmentJudgement(
+                verdict=EntailmentVerdict.UNDECIDED,
+                reason=f"the entailment judge raised {type(result).__name__}",
+            )
+        spans[index] = _entailed_span(spans[index], result)
+
+    for index in over_cap:
+        spans[index] = spans[index].model_copy(
+            update={
+                "outcome": CheckOutcome.ENTAILMENT_UNAVAILABLE,
+                "detail": (
+                    f"this turn's inline entailment budget of {max_checks} checks was "
+                    "exhausted before this span (D3(d))"
+                ),
+            }
+        )
+
+    return verification.model_copy(
+        update={
+            "spans": tuple(spans),
+            "entailment_checks": len(judged),
+            "entailment_latency_ms": elapsed_ms,
+            "entailment_budget_exceeded": elapsed_ms > budget_ms,
+        }
+    )
+
+
+def _source_content(registry: SourceRegistry, span: SpanVerification) -> str:
+    """Return the cited source's content for one escalated span.
+
+    Args:
+        registry: This turn's registry.
+        span: The escalated span, whose identifier already resolved once.
+
+    Returns:
+        The content, or the empty string when the identifier no longer resolves — which
+        the judge reads as an unintelligible passage and reports as undecided, the
+        fail-closed direction.
+    """
+    source = registry.resolve(span.identifier) if span.identifier else None
+    return source.content if source is not None else ""
+
+
 def unavailable(reason: str) -> TurnVerification:
     """Return the verdict for a turn verification could not run on.
 
@@ -379,6 +583,7 @@ __all__ = [
     "Reachability",
     "SpanVerification",
     "TurnVerification",
+    "apply_entailment",
     "build_grounding_record",
     "check_reachability",
     "unavailable",
@@ -415,6 +620,9 @@ def build_grounding_record(
         unverifiable_count=len(verification.unverifiable),
         no_source_count=len(verification.true_no_source),
         degraded_extraction=verification.degraded_extraction,
+        entailment_checks=verification.entailment_checks,
+        entailment_latency_ms=verification.entailment_latency_ms,
+        entailment_budget_exceeded=verification.entailment_budget_exceeded,
         attempts=attempts,
         retrieval_forced=retrieval_forced,
         first_generation_compliant=verification.compliant and attempts == 1,

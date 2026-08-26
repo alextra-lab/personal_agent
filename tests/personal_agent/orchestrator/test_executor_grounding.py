@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from personal_agent.captains_log.background import wait_for_background_tasks
 from personal_agent.governance.models import Mode
 from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.grounding.spans import (
@@ -80,6 +81,20 @@ async def _synthesize(ctx: ExecutionContext, reply: str) -> TaskState:
         return await step_synthesis(ctx, session_manager, AsyncMock())
 
 
+def _entailment_off(cfg: object) -> None:
+    """Pin D3(d)'s knobs on a mock settings object (FRE-1286).
+
+    ``patch(...settings)`` hands back a ``MagicMock``, and a mock sampling rate compares
+    against a float rather than raising — so leaving these unset would not fail loudly,
+    it would silently exercise a configuration that cannot exist. Sampling is off here
+    because these tests are about the D3/D4 wiring; the offline arm has its own.
+    """
+    cfg.grounding_entailment_sample_rate = 0.0  # type: ignore[attr-defined]
+    cfg.grounding_entailment_max_inline_checks = 8  # type: ignore[attr-defined]
+    cfg.grounding_entailment_latency_budget_ms = 4000  # type: ignore[attr-defined]
+    cfg.grounding_entailment_max_excerpt_chars = 6000  # type: ignore[attr-defined]
+
+
 # ── Marker stripping — every mode, both surfaces ────────────────────────────────────
 
 
@@ -123,6 +138,7 @@ async def test_observe_mode_records_the_failure_and_still_delivers() -> None:
     with patch("personal_agent.orchestrator.executor.settings") as cfg:
         cfg.grounding_verification_mode = "observe"
         cfg.environment = "test"
+        _entailment_off(cfg)
         state = await _synthesize(ctx, reply)
 
     assert state is TaskState.COMPLETED
@@ -149,6 +165,7 @@ async def test_off_mode_runs_nothing_but_still_strips_markers() -> None:
     with patch("personal_agent.orchestrator.executor.settings") as cfg:
         cfg.grounding_verification_mode = "off"
         cfg.environment = "test"
+        _entailment_off(cfg)
         state = await _synthesize(ctx, reply)
 
     assert state is TaskState.COMPLETED
@@ -175,6 +192,7 @@ async def test_enforce_blocks_and_returns_to_llm_call_with_retrieval_forced() ->
         cfg.grounding_verification_mode = "enforce"
         cfg.grounding_max_generation_attempts = 2
         cfg.environment = "test"
+        _entailment_off(cfg)
         state = await _synthesize(ctx, reply)
 
     assert state is TaskState.LLM_CALL
@@ -197,6 +215,7 @@ async def test_enforce_reaches_the_terminal_statement_at_the_bound() -> None:
         cfg.grounding_verification_mode = "enforce"
         cfg.grounding_max_generation_attempts = 2
         cfg.environment = "test"
+        _entailment_off(cfg)
         state = await _synthesize(ctx, reply)
 
     assert state is TaskState.COMPLETED
@@ -223,6 +242,7 @@ async def test_enforce_delivers_a_turn_that_verified() -> None:
         cfg.grounding_verification_mode = "enforce"
         cfg.grounding_max_generation_attempts = 2
         cfg.environment = "test"
+        _entailment_off(cfg)
         state = await _synthesize(ctx, reply)
 
     assert state is TaskState.COMPLETED
@@ -251,6 +271,7 @@ async def test_a_turn_verification_could_not_run_on_is_delivered_and_recorded() 
         cfg.grounding_verification_mode = "enforce"
         cfg.grounding_max_generation_attempts = 2
         cfg.environment = "test"
+        _entailment_off(cfg)
         state = await step_synthesis(ctx, session_manager, AsyncMock())
 
     assert state is TaskState.COMPLETED
@@ -258,3 +279,77 @@ async def test_a_turn_verification_could_not_run_on_is_delivered_and_recorded() 
     assert ctx.grounding_record is not None
     assert ctx.grounding_record.available is False
     assert ctx.grounding_record.first_generation_compliant is False
+
+
+# ── D3(d)'s sampled offline arm on the turn path (FRE-1286 AC-4) ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_the_offline_arm_runs_after_delivery() -> None:
+    """AC-4 end to end: sampling actually happens, and it happens in the background.
+
+    The selector and the scorer are unit-tested on their own; what this pins is that
+    ``step_synthesis`` reaches them at all, with a real registry and a real verification —
+    the seam a unit test of either half cannot see.
+    """
+    registry = SourceRegistry(turn_id="trace-sampled")
+    registration = registry.register_tool_result(
+        tool_name="fetch_url",
+        arguments={"url": "https://example.com/paris"},
+        content="Paris counts 2,100,000 residents within the city limits.",
+    )
+    assert registration.source is not None
+    reply = f"{CLAIM} [{registration.source.identifier}]."
+    ctx = _ctx(reply, registry)
+    scored: list[object] = []
+
+    async def _score(samples, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        scored.extend(samples)
+
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.grounding.entailment_sampling.score_offline_samples", new=_score),
+        patch("personal_agent.orchestrator.executor._entailment_judge", return_value=object()),
+    ):
+        cfg.grounding_verification_mode = "enforce"
+        cfg.grounding_max_generation_attempts = 2
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        cfg.grounding_entailment_sample_rate = 1.0
+        state = await _synthesize(ctx, reply)
+        await wait_for_background_tasks()
+
+    assert state is TaskState.COMPLETED
+    assert [span.text for span in scored] == [CLAIM]  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_turn_is_not_sampled_on_the_generation_that_failed() -> None:
+    """The retry branch returns to ``LLM_CALL`` before the scheduling point.
+
+    Sampling a generation D4 threw away would measure text the user never saw, and would
+    bill a judge call for it. A turn that retries is sampled once, against its final reply.
+    """
+    registry = SourceRegistry(turn_id="trace-not-sampled")
+    reply = f"{CLAIM}."
+    ctx = _ctx(reply, registry)
+    scored: list[object] = []
+
+    async def _score(samples, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        scored.extend(samples)
+
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.grounding.entailment_sampling.score_offline_samples", new=_score),
+        patch("personal_agent.orchestrator.executor._entailment_judge", return_value=object()),
+    ):
+        cfg.grounding_verification_mode = "enforce"
+        cfg.grounding_max_generation_attempts = 2
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        cfg.grounding_entailment_sample_rate = 1.0
+        state = await _synthesize(ctx, reply)
+        await wait_for_background_tasks()
+
+    assert state is TaskState.LLM_CALL
+    assert scored == []

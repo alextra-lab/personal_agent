@@ -39,7 +39,9 @@ from personal_agent.grounding.enforcement import (
 )
 from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.grounding.verification import (
+    CheckOutcome,
     TurnVerification,
+    apply_entailment,
     build_grounding_record,
     unavailable,
     verify_turn,
@@ -993,6 +995,7 @@ _tool_execution_layer: ToolExecutionLayer | None = None
 
 if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.error_classification import ClassifiedError
+    from personal_agent.grounding.entailment import ModelEntailmentJudge
     from personal_agent.mcp.gateway import MCPGatewayAdapter
     from personal_agent.memory.service import MemoryService
     from personal_agent.orchestrator.cache_reset_scheduler import ResetDecision
@@ -1512,6 +1515,110 @@ def _describe_retrieval(
         ctx.retrieval_attempts.append(descriptor)
 
 
+def _entailment_judge() -> "ModelEntailmentJudge":
+    """Build the D3(d) judge, bound to its own role and its own timeout.
+
+    Returns:
+        The judge. The timeout is the latency budget: it is the actual bound on what this
+        can add to a turn, since the measurement taken afterwards cannot shorten a call
+        that already ran long.
+    """
+    from personal_agent.grounding.entailment import ModelEntailmentJudge  # noqa: PLC0415
+    from personal_agent.llm_client.factory import get_llm_client  # noqa: PLC0415
+
+    return ModelEntailmentJudge(
+        get_llm_client(role_name=ModelRole.ENTAILMENT.value),
+        timeout_s=settings.grounding_entailment_latency_budget_ms / 1000,
+        max_excerpt_chars=settings.grounding_entailment_max_excerpt_chars,
+    )
+
+
+async def _apply_inline_entailment(
+    ctx: ExecutionContext, verification: TurnVerification, trace_ctx: TraceContext
+) -> TurnVerification:
+    """Settle D3(d)'s escalated class, if this turn has one (FRE-1286).
+
+    Args:
+        ctx: Execution context, carrying the cumulative check count.
+        verification: What the deterministic gates decided.
+        trace_ctx: The turn's trace context.
+
+    Returns:
+        The verification, unchanged when nothing escalated — which is the common turn, and
+        which is why the judge is built lazily rather than per call.
+    """
+    registry = ctx.source_registry
+    if registry is None or not any(
+        span.outcome is CheckOutcome.ENTAILMENT_REQUIRED for span in verification.spans
+    ):
+        # A None registry cannot reach here — ``_verify_grounding`` returns ``unavailable``
+        # before verifying — so this narrows rather than handles. Written as a guard rather
+        # than an ``assert`` or a type: ignore because the escalated spans would otherwise
+        # resolve their sources against nothing, and silently failing them closed is a
+        # refusal built on our own bug.
+        return verification
+
+    settled = await apply_entailment(
+        verification,
+        registry,
+        _entailment_judge(),
+        max_checks=settings.grounding_entailment_max_inline_checks,
+        budget_ms=settings.grounding_entailment_latency_budget_ms,
+        checks_already_used=ctx.grounding_entailment_checks,
+        trace_ctx=trace_ctx,
+    )
+    ctx.grounding_entailment_checks += settled.entailment_checks
+    return settled
+
+
+def _schedule_offline_entailment(
+    ctx: ExecutionContext, verification: TurnVerification, trace_ctx: TraceContext
+) -> None:
+    """Hand this turn's sampled spans to the offline arm (ADR-0087, FRE-1286).
+
+    Called on the **delivery** branch only. D4's retry branch returns to ``LLM_CALL``
+    before this point, so a turn that retried is sampled once, against its final reply,
+    rather than once per generation.
+
+    Args:
+        ctx: Execution context, for the registry and the answering model.
+        verification: What the inline checks decided.
+        trace_ctx: The turn's trace context.
+    """
+    from personal_agent.captains_log.background import run_in_background  # noqa: PLC0415
+    from personal_agent.config.model_loader import resolve_role_target  # noqa: PLC0415
+    from personal_agent.config.selection import get_current_selection  # noqa: PLC0415
+    from personal_agent.grounding.entailment_sampling import (  # noqa: PLC0415
+        score_offline_samples,
+        select_offline_samples,
+    )
+
+    registry = ctx.source_registry
+    if registry is None:
+        return
+    samples = select_offline_samples(verification, rate=settings.grounding_entailment_sample_rate)
+    if not samples:
+        return
+
+    answering_role = (ctx.selected_model_role or ModelRole.PRIMARY).value
+    answering_model, _ = resolve_role_target(
+        answering_role, model_key=get_current_selection(answering_role)
+    )
+    judge_model, _ = resolve_role_target(ModelRole.ENTAILMENT.value)
+
+    run_in_background(
+        score_offline_samples(
+            samples,
+            registry,
+            _entailment_judge(),
+            answering_model=answering_model,
+            judge_model=judge_model,
+            max_excerpt_chars=settings.grounding_entailment_max_excerpt_chars,
+            trace_ctx=trace_ctx,
+        )
+    )
+
+
 async def _verify_grounding(ctx: ExecutionContext, trace_ctx: TraceContext) -> TurnVerification:
     """Run ADR-0138 D3's inline checks over this turn's reply (FRE-1282).
 
@@ -1552,7 +1659,8 @@ async def _verify_grounding(ctx: ExecutionContext, trace_ctx: TraceContext) -> T
         return unavailable(f"span extraction failed: {type(exc).__name__}")
 
     try:
-        return verify_turn(extraction, parse_citations(ctx.final_reply), registry)
+        verification = verify_turn(extraction, parse_citations(ctx.final_reply), registry)
+        return await _apply_inline_entailment(ctx, verification, trace_ctx)
     except Exception as exc:
         # The checks themselves parse attacker-influenced content — a fetched page's
         # numeric tokens, its Unicode. A defect there must degrade to "unverified", never
@@ -1598,6 +1706,9 @@ def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mod
         unverifiable_by_containment=record.unverifiable_count,
         no_source=record.no_source_count,
         degraded_extraction=record.degraded_extraction,
+        entailment_checks=record.entailment_checks,
+        entailment_latency_ms=record.entailment_latency_ms,
+        entailment_budget_exceeded=record.entailment_budget_exceeded,
         attempts=record.attempts,
         first_generation_compliant=record.first_generation_compliant,
         outcomes=[span.outcome for span in record.spans],
@@ -6152,6 +6263,14 @@ async def step_synthesis(
                 # consists entirely of system-record spans (D1) and cannot recurse into
                 # another verification failure. That is what guarantees the loop ends.
                 ctx.final_reply = build_no_source_statement(verification, ctx.retrieval_attempts)
+
+        # ADR-0138 D3(d)'s sampled offline arm (FRE-1286). Reached only on the delivery
+        # branch — the retry above already returned to LLM_CALL — so a turn that retried
+        # is sampled once, against its final reply. It runs in the background and never
+        # touches this turn: it measures the residue containment cannot see, and its
+        # miss rate is the evidence for any future decision to promote entailment inline
+        # more generally.
+        _schedule_offline_entailment(ctx, verification, trace_ctx)
 
     # Markers are protocol and verification has now consumed them — in every mode,
     # since the leak predates the checks that read them.

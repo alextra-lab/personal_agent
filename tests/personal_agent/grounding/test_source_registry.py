@@ -101,6 +101,32 @@ def test_all_four_kinds_registered_in_one_turn() -> None:
         assert any(fragment in source.content for source in sources), fragment
 
 
+def test_stance_item_content_is_its_affect_text() -> None:
+    """FRE-1296 (found in review): a stance/behavioural-stance item carries only
+    ``target``/``affect`` (executor.py's ``_stance_line`` docstring), and neither key
+    was in the extraction list — every such source registered with empty content.
+
+    Harmless while nothing rendered the identifier; FRE-1296 makes it citable, so a
+    registered-but-uncontained citation is a source that can never satisfy the D3(c)
+    containment check FRE-1282 adds (this function's own docstring names that check).
+    """
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    stance = registry.register_memory_item(
+        {"type": "stance", "target": "Python", "affect": "prefers it over Java"}
+    )
+    behavioural = registry.register_memory_item(
+        {
+            "type": "behavioural_stance",
+            "target": "Artifact",
+            "affect": "prefers explicit request before creation",
+        }
+    )
+
+    assert "prefers it over Java" in stance.content
+    assert "prefers explicit request before creation" in behavioural.content
+
+
 def test_identifiers_differ_across_turns_for_identical_content() -> None:
     """AC-1's stated failure: an identifier reused across turns for different content.
 

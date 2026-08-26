@@ -199,6 +199,52 @@ def test_snapshot_failure_does_not_escape_into_the_turn() -> None:
     _log_source_registry_snapshot(ctx)  # must not raise
 
 
+def test_register_tool_source_returns_the_minted_identifier() -> None:
+    """FRE-1296: the caller needs the identifier to splice it into the model's content.
+
+    FRE-1280 registered the source but discarded the return value entirely — the only
+    consumer was a debug log on the inadmissible path. Nothing could ever render it.
+    """
+    ctx = _context()
+
+    identifier = _register_tool_source(
+        ctx,
+        tool_name="web_search",
+        arguments={"query": "best tinned tuna france"},
+        content=json.dumps({"results": [{"content": "Ortiz is sold in Biarritz."}]}),
+        success=True,
+    )
+
+    assert identifier is not None
+    assert ctx.source_registry is not None
+    assert ctx.source_registry.resolve(identifier) is not None
+
+
+def test_register_tool_source_returns_none_when_inadmissible() -> None:
+    ctx = _context()
+
+    identifier = _register_tool_source(
+        ctx,
+        tool_name="bash",
+        arguments={"command": "printf 'Paris has 9 million residents'"},
+        content="Paris has 9 million residents",
+        success=True,
+    )
+
+    assert identifier is None
+
+
+def test_register_tool_source_returns_none_without_a_registry() -> None:
+    ctx = _context()
+    ctx.source_registry = None
+
+    identifier = _register_tool_source(
+        ctx, tool_name="web_search", arguments={"query": "x"}, content="{}", success=True
+    )
+
+    assert identifier is None
+
+
 def test_snapshot_logs_identifiers_without_content(caplog: Any) -> None:
     """The observable surface for AC-1, and it must not carry retrieved text.
 

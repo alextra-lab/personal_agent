@@ -447,7 +447,12 @@ class SourceRegistry:
         """
         _, identity = memory_item_identity(item)
         content = ""
-        for key in ("description", "summary", "content", "text", "user_message"):
+        # "affect" is last: a stance/behavioural-stance item (ADR-0126 T1/T2) carries
+        # only `target`/`affect` — no `description`, `summary`, `content` or `text` —
+        # so without this key every such source registered with empty content (found
+        # in FRE-1296 review). Harmless while nothing rendered the identifier; FRE-1296
+        # makes it citable, and an uncontained citation can never pass D3(c) (FRE-1282).
+        for key in ("description", "summary", "content", "text", "user_message", "affect"):
             value = item.get(key)
             if isinstance(value, str) and value.strip():
                 content = value.strip()

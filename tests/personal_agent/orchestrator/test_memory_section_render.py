@@ -254,6 +254,33 @@ class TestAcceptanceAtTheSeam:
         assert marker in _dispatched_user_text(client)
         assert marker not in (client.respond.call_args.kwargs.get("system_prompt") or "")
 
+    @pytest.mark.asyncio
+    async def test_entity_citation_identifier_resolves_against_the_turn_registry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-1296: an admitted entity's identifier must reach the model AND resolve.
+
+        FRE-1280 minted identifiers that nothing ever rendered — a citation the model
+        cannot see is a citation it can never copy. This proves the marker embedded in
+        the dispatched text is the same identifier the turn's registry resolves.
+        """
+        import re
+
+        from personal_agent.captains_log.turn_evidence import build_recall_candidates
+        from personal_agent.grounding.source_registry import SourceRegistry
+
+        memory = [_entity("Sorbet", "an icy dessert")]
+        ctx = _make_ctx(
+            memory_context=memory, recall_candidates=build_recall_candidates(memory, {})
+        )
+        ctx.source_registry = SourceRegistry(turn_id=ctx.trace_id)  # type: ignore[attr-defined]
+        client = await _run(ctx, monkeypatch)
+
+        text = _dispatched_user_text(client)
+        match = re.search(r"\[(S\d+@[0-9a-f]+)\]", text)
+        assert match is not None, text
+        assert ctx.source_registry.resolve(match.group(1)) is not None  # type: ignore[attr-defined]
+
 
 # ---------------------------------------------------------------------------
 # Unit — the renderer itself
@@ -397,6 +424,99 @@ class TestRendererDispatchesPerItemKind:
     def test_behavioural_stance_section_absent_when_only_item_is_filtered(self) -> None:
         text, _ = self._render([_behavioural_stance("Artifact", "")])
         assert "Standing Behavioural Preferences" not in text
+
+
+class TestRendererEmbedsCitationIdentifiers:
+    """FRE-1296: a registered source's identifier rides alongside its rendered line.
+
+    FRE-1280 shipped ``SourceRegistry.register_memory_item`` but nothing consumed the
+    returned identifier except a telemetry log line — the model had no marker to copy.
+    A ``registry`` argument is opt-in (default ``None``) so every pre-existing caller
+    and test above is unaffected.
+    """
+
+    def _render(
+        self, items: list[dict[str, Any]], registry: Any = None
+    ) -> tuple[str, tuple[str, ...]]:
+        from personal_agent.orchestrator.executor import _render_memory_section_with_ids
+
+        return _render_memory_section_with_ids(items, registry)
+
+    def test_entity_line_carries_its_registered_identifier(self) -> None:
+        from personal_agent.grounding.source_registry import SourceRegistry
+
+        registry = SourceRegistry(turn_id="trace-cite-entity")
+        text, ids = self._render([_entity("Sorbet", "icy")], registry)
+
+        assert ids == ("Sorbet",)
+        (source,) = registry.sources()
+        assert f"[{source.identifier}]" in text
+        assert registry.resolve(source.identifier) is source
+
+    def test_episode_line_carries_its_registered_identifier(self) -> None:
+        from personal_agent.grounding.source_registry import SourceRegistry
+
+        registry = SourceRegistry(turn_id="trace-cite-episode")
+        text, ids = self._render([_episode("t1", "we talked about desserts")], registry)
+
+        assert ids == ("t1",)
+        (source,) = registry.sources()
+        assert f"[{source.identifier}]" in text
+
+    def test_stance_line_carries_its_registered_identifier(self) -> None:
+        from personal_agent.grounding.source_registry import SourceRegistry
+
+        registry = SourceRegistry(turn_id="trace-cite-stance")
+        text, ids = self._render([_stance("Python", "prefers over Java")], registry)
+
+        assert ids == ("stance:Python",)
+        (source,) = registry.sources()
+        assert f"[{source.identifier}]" in text
+        # Found in review: the registered source must actually carry the affect text,
+        # or the citation resolves to a source that can never pass D3(c) containment.
+        assert "prefers over Java" in source.content
+
+    def test_behavioural_stance_line_carries_its_registered_identifier(self) -> None:
+        from personal_agent.grounding.source_registry import SourceRegistry
+
+        registry = SourceRegistry(turn_id="trace-cite-behavioural")
+        text, ids = self._render(
+            [_behavioural_stance("Artifact", "prefers explicit request before creation")],
+            registry,
+        )
+
+        assert ids == ("behavioural_stance:Artifact",)
+        (source,) = registry.sources()
+        assert f"[{source.identifier}]" in text
+        assert "prefers explicit request before creation" in source.content
+
+    def test_mixed_set_gives_each_item_its_own_distinct_identifier(self) -> None:
+        from personal_agent.grounding.source_registry import SourceRegistry
+
+        registry = SourceRegistry(turn_id="trace-cite-mixed")
+        text, _ids = self._render(
+            [_entity("Sorbet", "icy"), _episode("t1", "we talked about desserts")], registry
+        )
+
+        sources = registry.sources()
+        assert len(sources) == 2
+        assert len({s.identifier for s in sources}) == 2
+        for source in sources:
+            assert f"[{source.identifier}]" in text
+
+    def test_no_registry_renders_no_identifier_backward_compatible(self) -> None:
+        """The default (no registry) path must render byte-identical to before."""
+        text, _ids = self._render([_entity("Sorbet", "icy")])
+        assert "@" not in text
+
+    def test_blank_description_entity_is_never_registered(self) -> None:
+        """An item contributing no line must not mint an unused identifier either."""
+        from personal_agent.grounding.source_registry import SourceRegistry
+
+        registry = SourceRegistry(turn_id="trace-cite-blank")
+        self._render([_entity("Ghost", "")], registry)
+
+        assert registry.sources() == ()
 
 
 class TestRendererIsBoundedByStatedConstants:

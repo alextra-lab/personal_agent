@@ -20,6 +20,7 @@ from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.captains_log.turn_evidence import (
     AssembledContextRecord,
     EvidenceState,
+    GroundingRecord,
     RecallAdmissionRecord,
 )
 from personal_agent.config import get_settings as _get_settings
@@ -96,6 +97,11 @@ class TaskCapture(BaseModel):
     recall_admission: RecallAdmissionRecord | None = None
     # item 6: what the assembled context contained, at item-identity granularity.
     assembled_context: AssembledContextRecord | None = None
+    # ADR-0138 (FRE-1282) — the OUTPUT side of the contract: what the turn asserted,
+    # and whether each assertion carried a citation that passed verification. The
+    # ADR-0125 records above are the input side only; without this, "the model cited a
+    # source that did not support the claim" is not a question the corpus can be asked.
+    grounding: GroundingRecord | None = None
     # The state of all eight D3 records: an implicitly missing field is
     # indistinguishable from a capture gap, which is the failure the contract
     # exists to prevent. All three default so legacy on-disk captures still read.

@@ -18,7 +18,11 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
 
-from personal_agent.captains_log.turn_evidence import RecallCandidateRecord, TurnEvidence
+from personal_agent.captains_log.turn_evidence import (
+    GroundingRecord,
+    RecallCandidateRecord,
+    TurnEvidence,
+)
 from personal_agent.governance.models import Mode
 from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.llm_client import ModelRole
@@ -343,9 +347,35 @@ class ExecutionContext:
     # identifier a citation resolves against. Turn-scoped by construction — one registry
     # per context — so "present in *this* turn's source set" is a property of the object.
     # None on paths that never enter execute_task (sub-agents); every registration helper
-    # no-ops rather than raising. Nothing consumes it to block a turn yet: verification
-    # (FRE-1282) and the prompt that makes the model emit markers (FRE-1283) come later.
+    # no-ops rather than raising. FRE-1282 consumes it in step_synthesis: the inline D3
+    # checks resolve against it, and D4 blocks, retries or refuses on the result.
     source_registry: "SourceRegistry | None" = None
+
+    # ADR-0138 D4 (FRE-1282). Generation attempts this turn has made under the grounding
+    # contract, counting from 1 at the first verification. Its own counter, deliberately
+    # separate from tool_iteration_count: a forced-retrieval retry is a *generation*
+    # attempt, and folding it into the tool-loop bound would let a turn that used its tool
+    # budget legitimately lose its one chance to fix an unsourced claim.
+    grounding_attempts: int = 0
+
+    # Set when D4 orders a retry; step_llm_call reads it to guarantee the retry can
+    # actually retrieve — tools offered, retrieval demanded — rather than merely being
+    # asked to. Cleared as it is consumed.
+    grounding_retry_pending: bool = False
+
+    # Extra tool iterations reserved for D4's forced-retrieval retries, added to the
+    # ceiling in _resolve_max_iterations on the same footing as ADR-0076's user-granted
+    # bonus. Without it the retry is forced in name only: a turn that spent its tool
+    # budget legitimately would be told to retrieve with nothing left to retrieve with.
+    grounding_retrieval_grant: int = 0
+
+    # What this turn retrieved or tried to, in order, as human-readable descriptors.
+    # D4's terminal statement names what was searched, and that is a claim about the turn
+    # record (a system-record span under D1), not about the world.
+    retrieval_attempts: list[str] = field(default_factory=list)
+
+    # ADR-0138's output side of the ADR-0125 evidence contract, attached for the capture.
+    grounding_record: "GroundingRecord | None" = None
 
     # ADR-0129 D3 (FRE-1067): set by step_tool_execution just before it returns,
     # reset to 0 at its own entry — the driver loop's step-span closure reads

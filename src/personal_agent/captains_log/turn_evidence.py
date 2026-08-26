@@ -886,3 +886,84 @@ def derive_evidence_presence(
         "identifiers": identifiers,
         "model_and_params": (EvidenceState.PRESENT if llm_call_count > 0 else EvidenceState.EMPTY),
     }
+
+
+# ── The output side of the contract (ADR-0138, FRE-1282) ────────────────────────────
+
+
+class GroundedSpanRecord(BaseModel):
+    """One asserted span and what verification decided about it.
+
+    Attributes:
+        text: The span, citation markers removed and bounded.
+        identifier: The citation identifier bound to it, or None when it carried none.
+        outcome: The ``CheckOutcome`` member, as its string value. Kept as a plain string
+            so this module — the evidence contract — does not depend on the grounding
+            package, which depends on it.
+        detail: The one-line reason, bounded.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    text: str
+    identifier: str | None
+    outcome: str
+    detail: str = ""
+
+    @field_validator("text", "detail")
+    @classmethod
+    def _bound(cls, value: str) -> str:
+        """Bound recorded text on the record itself, not at the caller."""
+        return mark_truncated(value, _MAX_RECORDED_ASSERTION_CHARS)
+
+
+class GroundingRecord(BaseModel):
+    """What the turn **asserted**, and whether it was entitled to (ADR-0138).
+
+    ADR-0125's contract records what recall *offered*, what was *admitted*, and why the
+    rest *dropped* — the input side only. Nothing recorded what the turn asserted, which
+    is the gap this closes: without it, "the model cited a source that did not support the
+    claim" is not a question the corpus can be asked.
+
+    The two failure families are counted **separately and deliberately**
+    (ADR-0138 D3, FRE-1282 AC-6). ``unverifiable_count`` is a limit of our own normalizer;
+    ``no_source_count`` is the turn genuinely having nothing to stand on. A wave of the
+    first is a malfunction to fix, a wave of the second is the contract working — and a
+    single blended counter would let either read as the other, which is precisely how "a
+    wave of false refusals reads as honest not-knowing".
+
+    Attributes:
+        mode: The verification mode this turn ran under — ``off``, ``observe`` or
+            ``enforce``. Recorded because a passing turn under ``observe`` and a passing
+            turn under ``enforce`` are different facts.
+        available: Whether verification ran at all. False means an extractor failure or a
+            denied budget reservation, never that the turn verified cleanly.
+        unavailable_reason: What prevented it, when it did not run.
+        non_exempt_count: How many spans required a citation.
+        passed_count: How many carried one that passed every gate.
+        unverifiable_count: Failures our normalizer could not settle (AC-6).
+        no_source_count: Failures where the turn had no admissible source (AC-6).
+        degraded_extraction: Whether span extraction had to fail closed.
+        attempts: Generation attempts this turn made under D4.
+        retrieval_forced: Whether retrieval was forced before this generation. FRE-1285
+            sets it; FRE-1284's metric excludes such turns from its denominator, since
+            first-generation compliance measured under forcing measures the forcing.
+        first_generation_compliant: Whether every non-exempt span passed on the first
+            generation, with no D4 retry — FRE-1284's numerator.
+        spans: The per-span verdicts.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    mode: str
+    available: bool = True
+    unavailable_reason: str | None = None
+    non_exempt_count: int = 0
+    passed_count: int = 0
+    unverifiable_count: int = 0
+    no_source_count: int = 0
+    degraded_extraction: bool = False
+    attempts: int = 1
+    retrieval_forced: bool = False
+    first_generation_compliant: bool = False
+    spans: list[GroundedSpanRecord] = Field(default_factory=list)

@@ -50,10 +50,15 @@ Three reasons this is the right cut rather than stripping at the storage boundar
   own change closes; folded in, not ticketed.
 - Stripping at storage only would leave the marker in the text the user sees, which is worse.
 
-**Residual, stated not hidden:** the AG-UI streaming path emits tokens as they arrive, ahead of
-`step_synthesis`, so a marker can still reach a *streaming* client mid-stream. Verification and
-storage are unaffected. Recorded in the PR body; not fixed here (it needs a stream-level filter,
-which is its own change).
+**Two surfaces, not one.** A plan review flagged that stripping `ctx.final_reply` alone is
+insufficient: `step_llm_call` appends the assistant message to `ctx.messages` *before*
+`final_reply` is set, and `step_synthesis` persists `ctx.messages` to the session. A marker left
+there returns next turn as conversation context and would manufacture the very refusal this
+closes. `_strip_markers_from_turn` therefore cleans both.
+
+**Checked, not assumed:** the same review claimed the AG-UI path streams the reply ahead of
+`step_synthesis`, which would put markers past the strip. It does not — `send_text_delta` has no
+callers anywhere in `src/`, and the reply is delivered whole from `execute_task_safe`. No residual.
 
 ### 2.2 Master's gate note (FRE-1281): the span-extraction budget lane
 
@@ -81,23 +86,27 @@ Span extraction is attributed to `entity_extraction`'s lane (`cost_gate/role_map
 
 ### 3.1 Containment unit (D3(c)) — required tokens
 
-For each non-exempt span, the required set is **every content word**, where "content word" is
-"not in the closed function-word list" (determiners, auxiliaries, copulas, modals, prepositions,
-pronouns, conjunctions, common discourse adverbs). For an *atomic* claim — which D1 guarantees
-spans are — "every entity, every figure, and every predicate content word" and "every content
-word" name the same set. `Paris has 2.1 million residents` requires `paris`, `2100000`,
-`residents`; `has` is dropped.
+For each non-exempt span, the required set is **every content word of the claim itself**: not in
+the closed function-word list, not an evidential word, and not part of a leading attribution
+frame. `Paris has 2.1 million residents` requires `paris`, `2100000`, `residents`.
 
-Split of a miss into two outcomes, mechanically:
+**The frame is not the claim.** A plan review broke a plain "every content word" rule with
+*"According to the cited table, Paris has 2.1 million residents"* — a table that genuinely
+supports the claim would be rejected for not also containing `according`, `cited`, `table`. That
+is D3's own warning ("demanding every non-stopword would manufacture refusals") in the concrete.
+Two closed lists answer it and only two: `EVIDENTIAL_WORDS`, and `strip_attribution_frame`.
 
-| Matched | Outcome | Reading |
+Split of a miss — **by which unit is missing, never by how many tokens matched**:
+
+| Missing from the source | Outcome | Reading |
 |---|---|---|
-| all required tokens | `PASSED` | contained |
-| **none** matched | `NOT_CONTAINED` | the source is unrelated — citation theatre |
-| **some but not all** | `UNVERIFIABLE_BY_CONTAINMENT` | topically related; the miss is plausibly paraphrase / translation / unregistered alias |
+| nothing | `PASSED` | contained |
+| any **entity** or **figure**, or **everything** | `NOT_CONTAINED` | unsupported or unrelated — citation theatre |
+| only **predicate content words** | `UNVERIFIABLE_BY_CONTAINMENT` | plausibly paraphrase / translation / unregistered alias |
 
-This is the split ADR-0138 D3 asks telemetry to preserve, and it is decidable without a model.
-Both are failures and both take the D4 path; they differ only in what they are recorded as.
+The cardinality version was also broken in review: *"Paris has 9 million residents"* cited to a
+source saying *"2.1 million"* matches two of three tokens, so counting files a **contradicted
+figure** — the purest citation theatre there is — as our own normalization limitation.
 
 **Entity-free predicate spans** (no entity token, no figure token) run containment **and then**
 escalate: containment is *necessary but not sufficient* for that class. Since FRE-1286 has not
@@ -107,10 +116,18 @@ never mentioning mercury fails before escalation is even reached.
 
 ### 3.2 Reachability (D3(b)) — decided from the record, not a re-fetch
 
-**A source has an external referent iff it was retrieved by a call that addressed exactly one
-URL** — i.e. `fetch_url`. Everything else (memory, the user's words, `web_search` result sets,
-every other typed retrieval tool) is turn-local evidence and passes **vacuously**
-(`NOT_APPLICABLE`), which is D2's rule stated literally.
+**Reachability is keyed on a `referent` field carried by the source, never on a tool-name
+comparison in the verifier** (plan-review finding). `REFERENT_ARGUMENTS` — the same
+parameter-schema boundary the registry already rests on — declares which tools address exactly
+one external referent and by which parameter; today that is `fetch_url(url=…)`. Everything else
+(memory, the user's words, `web_search` result sets, every other typed retrieval tool) is
+turn-local evidence and passes **vacuously** (`NOT_APPLICABLE`), which is D2's rule stated
+literally.
+
+**Recorded residual:** a search snippet naming a URL the model never fetched is citable and its
+reachability is vacuous. Closing that needs per-result referents out of the search tool, not a
+rule in the verifier. Channelling grounding through `fetch_url` is v1's answer — the same answer
+D2 already gives for `curl`.
 
 For a `fetch_url` source, reachability is decided from the **recorded** result:
 
@@ -150,6 +167,32 @@ Applied to both the required tokens and the source content, producing comparable
 - **Boilerplate** — excluded at extraction: `nav`, `footer`, `header`, `aside` join `_SKIP_TAGS`
   in `tools/fetch.py`. One line, in the only place that has the DOM to do it correctly.
 
+### 3.3b D2 entitlement — the gate master's live evidence demands
+
+**Verification confirms a claim was copied from a source. It never confirms the source was
+entitled to make it.** Master's 2026-08-26 comment (session `a1a496fa`) traced a hallucinated
+date — stored by entity extraction as an `Event` node, recalled, registered — through all three
+D3 checks: resolution passes, reachability passes vacuously, and **containment passes because the
+source *is* the false claim**. Three greens on an eight-week error, with 42 date-shaped `Event`
+entities in the graph.
+
+This is D2's independence rule one layer down: a KG node written from an earlier agent utterance
+is the model's own words wearing a memory node's identifier, exactly as `printf` output is the
+model's words wearing a tool's identifier.
+
+**Decision — option (b) plus (a) from master's list: provenance on registry entries, default-deny.**
+`RegisteredSource.entitlement` is `EXTERNAL` (tools, docs), `USER_STATED` (the user's words; a
+memory item declaring `asserted_by == "user"`), or `AGENT_DERIVED`. An `AGENT_DERIVED` source
+fails with `SOURCE_NOT_ENTITLED`, counted with the **true-no-source** family, not the containment
+limits — the system citing itself *is* having no source.
+
+`asserted_by` (FRE-1020, ADR-0098 D6) exists on `Claim` nodes but **does not reach the recall item
+today**, so absence resolves to `AGENT_DERIVED`. That is deliberate: it is the same default-deny
+the registry already applies to an unclassified tool, and it fails in the only safe direction — an
+owner-stated fact that is merely *unlabelled* loses its citation, where the alternative is
+certifying our own errors. Threading the field through recall is separate, sequenceable work and
+is ticketed.
+
 ### 3.4 AC-4's bar — preregistered here, before any result is seen
 
 **Bar: false-rejection rate ≤ 5%** over the variance probe set (≥ 95% of genuinely-supported
@@ -160,10 +203,15 @@ spans pass containment), measured per variance class and in aggregate.
   rejections are a first-class cost"). At 5% roughly one turn in twenty carrying a cited claim
   would refuse spuriously — the highest rate at which the contract still reads as grounded
   rather than broken.
-- **Demonstrated to reject a broken baseline.** `test_broken_baseline_fails_the_bar` runs the
-  same probe set through exact-string matching with normalization disabled and asserts it lands
-  **above** the bar. A bar a known-broken implementation would pass is not a bar (ADR-0138,
-  "Governance of the set and the bars").
+- **Demonstrated to reject a broken baseline, in both directions.** `test_broken_baseline_fails_the_bar`
+  runs the same probe set through exact-string matching with normalization disabled and asserts it
+  lands **above** the bar. That alone binds only one way — a plan review pointed out that an
+  accept-everything containment scores a perfect 0% FRR and sails through it — so the bar is
+  **paired** with a false-acceptance arm: `UNSUPPORTED_PROBES`, claims their cited source does not
+  support, with a **FAR bar of zero**. Zero is not a calibration; under default-deny a single
+  false acceptance is a claim shipped with no admissible provenance.
+- **At this set's size (17 probes) the 5% bar admits zero false rejections**, which is the
+  strictest honest reading of it and is stated rather than glossed.
 
 The probe set lives in `tests/personal_agent/grounding/probes/containment_variance.py`, covering
 digit grouping, decimal precision, magnitude words, unit synonyms, registered aliases, case, and

@@ -29,6 +29,9 @@ async def test_report_turn_progress_publishes_event(monkeypatch: pytest.MonkeyPa
         trace_id=str(uuid4()),
         tool_iteration_count=2,
         tool_iteration_bonus=0,
+        # ADR-0138 D4 (FRE-1282): _resolve_max_iterations adds D4's forced-retrieval
+        # grant on the same footing as ADR-0076's bonus, so the stub carries it too.
+        grounding_retrieval_grant=0,
         gateway_output=None,
         messages=[],
         topology="hybrid_fanout",

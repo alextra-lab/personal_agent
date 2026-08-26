@@ -1991,6 +1991,43 @@ class AppConfig(BaseSettings):
         ge=1,
         description="Max estimated tokens for injected proactive memory payloads.",
     )
+
+    # ── Grounding contract (ADR-0138, FRE-1282) ──────────────────────────────
+    #
+    # ONE knob, three states, and it is deliberately not the D5 enforcement level.
+    # D5's light/heavy varies whether retrieval is forced *before* generation and is
+    # FRE-1285's; D3's checks are inline and blocking at every one of those levels.
+    # This is the deploy valve, and the ADR-compliant setting is "enforce". The default is
+    # "off" for one concrete reason, not out of caution: anything above off adds a
+    # span-extraction call to **every turn**, and span_extraction is still attributed to
+    # entity_extraction's budget lane (cost_gate/role_map.py). Master's FRE-1281 gate note
+    # named that mismatch precisely — an inline per-turn consumer sharing a ceiling with
+    # the background consumer it would starve — and splitting the lane is an edit to the
+    # gitignored live budget.yaml, which is master's to make, not this PR's.
+    #
+    # The sequence is therefore: split the lane → "observe" (records everything, blocks
+    # nothing, which is what FRE-1284's metric needs to bootstrap) → "enforce" once the
+    # measured false-rejection rate is seen. Shipping straight to "observe" would double
+    # per-turn model calls into a lane sized for something else on the first deploy.
+    grounding_verification_mode: Literal["off", "observe", "enforce"] = Field(
+        default="off",
+        description=(
+            "off: nothing runs. observe: the full pass runs and every outcome is "
+            "recorded, but nothing blocks — what FRE-1284's compliance metric needs to "
+            "bootstrap. enforce: D4 blocks, retries and refuses, as ADR-0138 D3 requires."
+        ),
+    )
+    grounding_max_generation_attempts: int = Field(
+        default=2,
+        ge=1,
+        le=4,
+        description=(
+            "ADR-0138 D4's bound on generation attempts per turn, including the first. "
+            "2 means one forced-retrieval retry. Capped at 4: each attempt is a full "
+            "primary call plus a span-extraction call, and a turn the user is waiting on "
+            "cannot absorb more than that."
+        ),
+    )
     proactive_memory_max_candidates: int = Field(
         default=10,
         ge=1,

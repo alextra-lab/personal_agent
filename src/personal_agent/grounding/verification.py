@@ -44,6 +44,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
+from personal_agent.captains_log.turn_evidence import GroundedSpanRecord, GroundingRecord
 from personal_agent.grounding.citations import CitationParse, strip_citation_markers
 from personal_agent.grounding.containment import ContainmentOutcome, check_containment
 from personal_agent.grounding.source_registry import Entitlement, RegisteredSource, SourceRegistry
@@ -378,7 +379,52 @@ __all__ = [
     "Reachability",
     "SpanVerification",
     "TurnVerification",
+    "build_grounding_record",
     "check_reachability",
     "unavailable",
     "verify_turn",
 ]
+
+
+def build_grounding_record(
+    verification: TurnVerification,
+    *,
+    mode: str,
+    attempts: int = 1,
+    retrieval_forced: bool = False,
+) -> GroundingRecord:
+    """Render one turn's verification as the ADR-0125 output-side record (AC-6).
+
+    Args:
+        verification: What the inline checks decided.
+        mode: The verification mode the turn ran under.
+        attempts: Generation attempts D4 made.
+        retrieval_forced: Whether retrieval was forced before this generation.
+
+    Returns:
+        The record. The two failure families are counted apart, which is the whole of
+        AC-6: a normalizer limit and an honest no-source outcome must never be reachable
+        from the same number.
+    """
+    return GroundingRecord(
+        mode=mode,
+        available=verification.available,
+        unavailable_reason=verification.unavailable_reason,
+        non_exempt_count=len(verification.spans),
+        passed_count=sum(1 for span in verification.spans if span.passed),
+        unverifiable_count=len(verification.unverifiable),
+        no_source_count=len(verification.true_no_source),
+        degraded_extraction=verification.degraded_extraction,
+        attempts=attempts,
+        retrieval_forced=retrieval_forced,
+        first_generation_compliant=verification.compliant and attempts == 1,
+        spans=[
+            GroundedSpanRecord(
+                text=span.text,
+                identifier=span.identifier,
+                outcome=span.outcome.value,
+                detail=span.detail,
+            )
+            for span in verification.spans
+        ],
+    )

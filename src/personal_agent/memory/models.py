@@ -95,6 +95,10 @@ class Stance(BaseModel):
         trace_id: Originating capture's trace_id (provenance).
         session_id: Originating capture's session_id (provenance).
         source_type: Origin channel; "conversation" for extracted stances.
+        asserted_by: Co-authorship (ADR-0098 D6, extended to Stance by FRE-1299) — "user"
+            when the owner's own words ground the ``affect`` text, "agent" otherwise.
+            Derived in Python from the captured turn, never self-reported by the
+            extractor. Defaults to "agent", the untrusted tier.
         observed_at: Turn time — the authoritative bitemporal ordering axis.
         extracted_at: Wall-clock when extraction ran (forensics only).
     """
@@ -108,6 +112,7 @@ class Stance(BaseModel):
     trace_id: str | None = None
     session_id: str | None = None
     source_type: str = "conversation"
+    asserted_by: str = "agent"
     observed_at: datetime
     extracted_at: datetime | None = None
 

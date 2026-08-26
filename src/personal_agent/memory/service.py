@@ -2537,6 +2537,7 @@ class MemoryService:
             "    affect: $affect, mastery: $mastery, review_due: $review_due,\n"
             "    class: 'Stance', valid_from: $valid_from, valid_to: null, invalid_at: null,\n"
             "    trace_id: $trace_id, session_id: $session_id, source_type: $source_type,\n"
+            "    asserted_by: $asserted_by,\n"
             "    observed_at: $observed_at, extracted_at: $extracted_at\n"
             "}]->(c)\n"
             "RETURN superseded"
@@ -2551,6 +2552,7 @@ class MemoryService:
             "trace_id": stance.trace_id or trace_id,
             "session_id": stance.session_id,
             "source_type": stance.source_type,
+            "asserted_by": stance.asserted_by,
             "observed_at": stance.observed_at.isoformat(),
             "extracted_at": stance.extracted_at.isoformat() if stance.extracted_at else None,
         }
@@ -2997,9 +2999,12 @@ class MemoryService:
 
         Returns:
             One dict per target with a current stance, each with ``target``, ``affect``,
-            ``mastery``. Targets with no current stance are simply absent -- never a
-            placeholder row. Order is not guaranteed to match ``targets``' order (callers
-            that need order-preservation must re-key by ``target`` themselves).
+            ``mastery``, ``asserted_by`` (FRE-1299 -- "user" or "agent", canonicalized by
+            exact match so a legacy edge with no property, or any off-vocabulary value,
+            reads back "agent" rather than passing through unclassified). Targets with no
+            current stance are simply absent -- never a placeholder row. Order is not
+            guaranteed to match ``targets``' order (callers that need order-preservation
+            must re-key by ``target`` themselves).
         """
         if not self.connected or not self.driver:
             return []
@@ -3014,7 +3019,8 @@ class MemoryService:
                     "UNWIND $targets AS target\n"
                     "MATCH (:Person {is_owner: true})-[s:HAS_STANCE]->(:Entity {name: target})\n"
                     "WHERE s.valid_to IS NULL AND s.invalid_at IS NULL\n"
-                    "RETURN target, s.affect AS affect, s.mastery AS mastery",
+                    "RETURN target, s.affect AS affect, s.mastery AS mastery,\n"
+                    "       s.asserted_by AS asserted_by",
                     targets=targets,
                 )
                 stances: list[dict[str, Any]] = []
@@ -3024,6 +3030,10 @@ class MemoryService:
                             "target": row["target"],
                             "affect": row["affect"] or "",
                             "mastery": row["mastery"],
+                            # FRE-1299: exact-match canonicalization -- a legacy edge with
+                            # no asserted_by property reads back None here, which must
+                            # deny like any other off-vocabulary value, not pass through.
+                            "asserted_by": "user" if row["asserted_by"] == "user" else "agent",
                         }
                     )
         except Exception as e:

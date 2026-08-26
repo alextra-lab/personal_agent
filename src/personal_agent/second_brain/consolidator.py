@@ -82,6 +82,10 @@ def _build_stance(data: dict[str, Any]) -> Stance | None:
     observed_at = _parse_provenance_dt(provenance, "observed_at")
     if not target or observed_at is None:
         return None
+    # FRE-1299: only ever "user"/"agent" on the production path (Python stamps it in
+    # _finalize_extraction, mirroring _build_claim); anything else resolves to the
+    # untrusted tier rather than silently reaching the entitlement gate as an unknown value.
+    asserted_by = "user" if data.get("asserted_by") == "user" else "agent"
     return Stance(
         target=target,
         affect=str(data.get("affect", "") or ""),
@@ -89,6 +93,7 @@ def _build_stance(data: dict[str, Any]) -> Stance | None:
         trace_id=provenance.get("trace_id"),
         session_id=provenance.get("session_id"),
         source_type=str(provenance.get("source_type", "conversation")),
+        asserted_by=asserted_by,
         observed_at=observed_at,
         extracted_at=_parse_provenance_dt(provenance, "extracted_at"),
     )

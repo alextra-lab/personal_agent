@@ -27,7 +27,7 @@ from personal_agent.memory.supersession import (
 from personal_agent.memory.weight import KnowledgeWeight
 from personal_agent.second_brain.consolidator import _build_claim
 from personal_agent.second_brain.entity_extraction import (
-    _attribute_claim_authorship,
+    _attribute_authorship,
     _finalize_extraction,
 )
 
@@ -75,20 +75,20 @@ def test_uplift_is_clamped_to_one() -> None:
 
 
 def test_user_grounded_claim_is_attributed_to_the_user() -> None:
-    assert _attribute_claim_authorship(_USER_CLAIM, _USER_MESSAGE, _ASSISTANT_RESPONSE) == "user"
+    assert _attribute_authorship(_USER_CLAIM, _USER_MESSAGE, _ASSISTANT_RESPONSE) == "user"
 
 
 def test_assistant_grounded_claim_is_attributed_to_the_agent() -> None:
-    assert _attribute_claim_authorship(_AGENT_CLAIM, _USER_MESSAGE, _ASSISTANT_RESPONSE) == "agent"
+    assert _attribute_authorship(_AGENT_CLAIM, _USER_MESSAGE, _ASSISTANT_RESPONSE) == "agent"
 
 
 def test_ungrounded_claim_falls_back_to_the_agent_tier() -> None:
     """Neither speaker's words support it — never award elevated authority."""
-    assert _attribute_claim_authorship("Something nobody said.", _USER_MESSAGE, "") == "agent"
+    assert _attribute_authorship("Something nobody said.", _USER_MESSAGE, "") == "agent"
 
 
 def test_empty_content_is_agent() -> None:
-    assert _attribute_claim_authorship("", _USER_MESSAGE, _ASSISTANT_RESPONSE) == "agent"
+    assert _attribute_authorship("", _USER_MESSAGE, _ASSISTANT_RESPONSE) == "agent"
 
 
 def test_accented_words_are_not_shredded_into_fragments() -> None:
@@ -100,14 +100,14 @@ def test_accented_words_are_not_shredded_into_fragments() -> None:
     """
     user_message = "I bought a crème brûlée torch in Forcalquier for my café setup."
     claim = "The user bought a crème brûlée torch in Forcalquier."
-    assert _attribute_claim_authorship(claim, user_message, "Noted.") == "user"
+    assert _attribute_authorship(claim, user_message, "Noted.") == "user"
 
 
 def test_accented_claim_grounded_in_assistant_is_not_awarded_to_user() -> None:
     user_message = "What is the weather?"
     assistant = "Météo France reports the user's Forcalquier crème brûlée festival is Saturday."
     claim = "The Forcalquier crème brûlée festival is on Saturday per Météo France."
-    assert _attribute_claim_authorship(claim, user_message, assistant) == "agent"
+    assert _attribute_authorship(claim, user_message, assistant) == "agent"
 
 
 # ------------------------------------------------------------------- producer path

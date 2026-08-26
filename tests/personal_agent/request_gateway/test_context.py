@@ -425,6 +425,63 @@ class TestGraphAnchoredEntityHints:
         mock_adapter.recall.assert_not_called()
 
 
+class TestStanceItemAuthorship:
+    """FRE-1299: the item-builder units, tested directly against the private functions
+    rather than through ``assemble_context`` -- ``TestStanceEnrichment`` and
+    ``TestBehaviouralStanceInjection``'s integration-level tests fail on a clean
+    ``origin/main`` checkout for a pre-existing, unrelated reason (confirmed via
+    baseline diff before this ticket touched anything), so asserting the
+    ``asserted_by``-threading behaviour at that layer would be un-provable independent
+    of that breakage.
+    """
+
+    def test_stance_item_carries_asserted_by_through(self) -> None:
+        items = ctx_module._stance_context_items(
+            ["Python"],
+            [{"target": "Python", "affect": "prefers over Java", "asserted_by": "user"}],
+        )
+        assert items[0]["asserted_by"] == "user"
+
+    def test_stance_item_canonicalizes_agent_value(self) -> None:
+        items = ctx_module._stance_context_items(
+            ["Python"],
+            [{"target": "Python", "affect": "prefers over Java", "asserted_by": "agent"}],
+        )
+        assert items[0]["asserted_by"] == "agent"
+
+    def test_stance_item_defaults_to_agent_when_asserted_by_absent(self) -> None:
+        """FRE-1299 AC-3: absence in the row must not pass through as absence in the item."""
+        items = ctx_module._stance_context_items(
+            ["Python"], [{"target": "Python", "affect": "prefers over Java"}]
+        )
+        assert items[0]["asserted_by"] == "agent"
+
+    def test_stance_item_denies_off_vocabulary_asserted_by(self) -> None:
+        items = ctx_module._stance_context_items(
+            ["Python"],
+            [{"target": "Python", "affect": "prefers over Java", "asserted_by": "superuser"}],
+        )
+        assert items[0]["asserted_by"] == "agent"
+
+    def test_behavioural_stance_item_carries_asserted_by_through(self) -> None:
+        items = ctx_module._behavioural_stance_context_items(
+            [
+                {
+                    "target": "Artifact",
+                    "affect": "prefers explicit request before creation",
+                    "asserted_by": "user",
+                }
+            ]
+        )
+        assert items[0]["asserted_by"] == "user"
+
+    def test_behavioural_stance_item_defaults_to_agent_when_absent(self) -> None:
+        items = ctx_module._behavioural_stance_context_items(
+            [{"target": "Artifact", "affect": "prefers explicit request before creation"}]
+        )
+        assert items[0]["asserted_by"] == "agent"
+
+
 class TestStanceEnrichment:
     """ADR-0126 T1 (FRE-1015): every recalled entity gets its current stance pushed into
     memory_context, enrichment on a selection recall already made -- not a new relevance

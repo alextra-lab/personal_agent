@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 import orjson
@@ -624,6 +624,16 @@ _USER_GROUNDING_MARGIN = 0.15
 # rows that would flip if the thresholds were retuned.
 _GROUNDING_BORDERLINE_BAND = 0.15
 
+# FRE-1299: a Stance's ``affect`` text is often 1-3 words ("loves it"), unlike a Claim's
+# self-contained declarative sentence — the corpus FRE-1020's thresholds were calibrated
+# against. A single coincidental word match against that short a phrase can clear both the
+# floor and the margin by chance, which would launder an agent-inferred stance as
+# user-asserted — the wrong direction for a default-deny gate. Requiring at least two
+# grounding terms before a stance can earn the user tier is a structural guard, not a
+# retuned threshold; it is a no-op for Claims, whose ``min_terms=1`` default never excludes
+# a non-empty term set.
+_MIN_STANCE_GROUNDING_TERMS = 2
+
 # Function words carry no grounding signal; they would float every claim's overlap toward
 # whichever message is longer.
 _GROUNDING_STOPWORDS = frozenset(
@@ -654,15 +664,24 @@ def _grounding_terms(text: str) -> set[str]:
     }
 
 
-def _attribute_claim_authorship(
+def _attribute_authorship(
     content: str,
     user_message: str,
     assistant_response: str,
     *,
+    subject_kind: Literal["claim", "stance"] = "claim",
+    min_terms: int = 1,
     trace_id: UUID | str | None = None,
     session_id: str | None = None,
 ) -> AssertedBy:
-    """Derive a Claim's co-authorship from the captured turn, in Python (FRE-1020).
+    """Derive a Claim's or Stance's co-authorship from the captured turn, in Python (FRE-1020).
+
+    Originally a Claim-only classifier (FRE-1020); FRE-1299 reuses it unmodified in its
+    matching logic for Stance ``affect`` text, adding only ``subject_kind`` (which failure
+    family the borderline telemetry belongs to) and ``min_terms`` (a stricter grounding-term
+    floor for the shorter Stance case — see :data:`_MIN_STANCE_GROUNDING_TERMS`). Both new
+    parameters default to the pre-FRE-1299 Claim behaviour, so the Claim call site is
+    unchanged.
 
     ADR-0098 D6 makes co-authorship the trust discriminator: the owner is the authority on
     their own life, so a fact they asserted outranks one the agent asserted or inferred.
@@ -689,17 +708,22 @@ def _attribute_claim_authorship(
     borderline rows there is no evidence on which to retune them.
 
     Args:
-        content: The claim's fact sentence.
+        content: The claim's fact sentence, or the stance's ``affect`` text.
         user_message: The turn's user message.
         assistant_response: The turn's assistant response.
+        subject_kind: ``"claim"`` or ``"stance"`` — only names the borderline-telemetry
+            event so the two failure families stay distinguishable in logs.
+        min_terms: Minimum grounding-term count before the user tier is reachable at all.
+            ``1`` (the default) never excludes a non-empty term set, so the Claim call site
+            is unaffected; Stance passes :data:`_MIN_STANCE_GROUNDING_TERMS`.
         trace_id: Originating capture's trace_id, for the borderline signal (ADR-0074 §I3).
         session_id: Originating capture's session_id, for the borderline signal.
 
     Returns:
-        ``"user"`` when the owner's own words clearly ground the claim, else ``"agent"``.
+        ``"user"`` when the owner's own words clearly ground the content, else ``"agent"``.
     """
     terms = _grounding_terms(content)
-    if not terms:
+    if len(terms) < min_terms:
         return "agent"
     user_overlap = len(terms & _grounding_terms(user_message)) / len(terms)
     agent_overlap = len(terms & _grounding_terms(assistant_response)) / len(terms)
@@ -710,7 +734,7 @@ def _attribute_claim_authorship(
         return "user"
     if user_overlap >= _USER_GROUNDING_FLOOR - _GROUNDING_BORDERLINE_BAND:
         log.info(
-            "claim_authorship_borderline",
+            f"{subject_kind}_authorship_borderline",
             user_overlap=round(user_overlap, 3),
             agent_overlap=round(agent_overlap, 3),
             resolved_to="agent",
@@ -825,9 +849,10 @@ def _finalize_extraction(
     This is the Python side of the ADR-0098 D5 + ADR-0115 D1 contract: the LLM emits
     the semantic content of stances/claims/entities; Python owns the ``class`` +
     ``output_kind`` defaulting, the provenance + timestamp (the model cannot know
-    real trace/session identity or wall-clock time), and each claim's ``asserted_by``
-    co-authorship — derived from the captured turn and always overwritten, never trusted
-    from the model (FRE-1020, ADR-0098 AC-9). Runs *after* Person
+    real trace/session identity or wall-clock time), and both stances' and claims'
+    ``asserted_by`` co-authorship — derived from the captured turn and always
+    overwritten, never trusted from the model (FRE-1020 for claims, FRE-1299 for
+    stances; ADR-0098 AC-9). Runs *after* Person
     supplementation so supplemented rows also receive a class and output_kind.
     Stances/claims are always *about* the user, so their ``output_kind`` is
     unconditionally ``knowledge`` — only entities can be System-natured and need the
@@ -839,8 +864,8 @@ def _finalize_extraction(
         trace_id: Originating capture's trace_id.
         session_id: Originating capture's session_id.
         turn_timestamp: The turn's timestamp for ``observed_at``.
-        user_message: The turn's user message — grounding evidence for claim
-            co-authorship (FRE-1020).
+        user_message: The turn's user message — grounding evidence for stance/claim
+            co-authorship (FRE-1020, FRE-1299).
         assistant_response: The turn's assistant response — the other half of that
             evidence.
     """
@@ -871,6 +896,18 @@ def _finalize_extraction(
         stance["mastery"] = _coerce_mastery(stance.get("mastery"))
         stance.setdefault("affect", "")
         stance.setdefault("description", "")
+        # FRE-1299: co-authorship (ADR-0098 D6, extended from Claim), the same axis
+        # register_memory_item's entitlement check reads. Always overwritten from the
+        # captured text, never read from the model's output — same rationale as claims.
+        stance["asserted_by"] = _attribute_authorship(
+            str(stance.get("affect", "")),
+            user_message,
+            assistant_response,
+            subject_kind="stance",
+            min_terms=_MIN_STANCE_GROUNDING_TERMS,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
         stance["provenance"] = dict(provenance)
     result["stances"] = stances
 
@@ -891,10 +928,11 @@ def _finalize_extraction(
         # adjudicates on. Always *overwritten* from the captured text, never read from the
         # model's output, so the extractor cannot self-attribute a claim to the user and
         # mint the trust uplift that would let it outrank a correct claim (ADR-0098 AC-9).
-        claim["asserted_by"] = _attribute_claim_authorship(
+        claim["asserted_by"] = _attribute_authorship(
             str(claim.get("content", "")),
             user_message,
             assistant_response,
+            subject_kind="claim",
             trace_id=trace_id,
             session_id=session_id,
         )

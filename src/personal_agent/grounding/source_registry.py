@@ -577,13 +577,31 @@ def _search_memory_entitlement(content: str) -> Entitlement:
     return Entitlement.AGENT_DERIVED
 
 
-_AGENT_AUTHORED_TURN_FIELDS: tuple[str, ...] = ("assistant_response", "summary", "entities")
+_AGENT_AUTHORED_TURN_FIELDS: frozenset[str] = frozenset(
+    {"assistant_response", "summary", "entities"}
+)
 """``recall_personal_history`` turn fields the agent authored (FRE-1303).
 
 ``assistant_response`` is the model's prior output verbatim; ``summary`` is generated; the
-``entities`` names come from extraction (ADR-0098). The remaining fields — ``turn_id``,
-``timestamp``, ``session_id``, ``topic_matched`` — are addresses and flags, not prose, and
-carry no authorship. ``user_message`` is deliberately absent: it is the owner's own words.
+``entities`` names come from extraction (ADR-0098). ``user_message`` is deliberately absent:
+it is the owner's own words, and keeping it citable is this fix's AC-2.
+"""
+
+_NEUTRAL_TURN_FIELDS: frozenset[str] = frozenset(
+    {"turn_id", "timestamp", "session_id", "topic_matched", "user_message"}
+)
+"""``recall_personal_history`` turn fields that carry no agent authorship.
+
+Addresses, a timestamp, a match flag, and the owner's own message — the rest of the dict
+literal ``tools/personal_history.py`` builds.
+
+Split out from :data:`_AGENT_AUTHORED_TURN_FIELDS` so the rule can work as an **allowlist**
+rather than a denylist. A denylist classifies an unrecognised field as harmless, which is the
+wrong default in a module whose whole posture is that an unaudited shape denies — and it is
+the precise way FRE-1302's premise went stale: a field added to the tool a quarter from now
+would silently carry unaudited content into ``USER_STATED``. Unreachable today, since the
+executor builds every turn from a fixed dict literal; the point is that it stays unreachable
+without anyone having to remember this rule exists.
 """
 
 
@@ -613,10 +631,13 @@ def _recall_personal_history_entitlement(content: str) -> Entitlement:
     ``search_memory`` with no Claims still returns matched turns and entities.
 
     Fails to :attr:`Entitlement.AGENT_DERIVED` on any shape it does not fully understand —
-    unparsable content, a non-object top level, a ``turns`` value that is not a list, or a member
-    that is not a mapping. The content is attacker-influenced (it is whatever the tool returned),
-    so falling back to ``EXTERNAL`` on a malformed shape would let a crafted result readmit
-    itself at the most-trusted tier.
+    unparsable content, a non-object top level, a ``turns`` value that is not a list, a member
+    that is not a mapping, or **a turn carrying a field this rule has not audited**. The content
+    is attacker-influenced (it is whatever the tool returned), so falling back to ``EXTERNAL``
+    on a malformed shape would let a crafted result readmit itself at the most-trusted tier.
+    The unknown-field clause is an allowlist rather than a denylist for the reason
+    :data:`_NEUTRAL_TURN_FIELDS` gives: a denylist treats a field nobody has classified as
+    harmless, which is how FRE-1302's premise went stale in the first place.
 
     Args:
         content: The tool result exactly as registered — post argument-echo-strip, the same text
@@ -639,6 +660,8 @@ def _recall_personal_history_entitlement(content: str) -> Entitlement:
 
     for turn in turns:
         if not isinstance(turn, Mapping):
+            return Entitlement.AGENT_DERIVED
+        if not turn.keys() <= (_AGENT_AUTHORED_TURN_FIELDS | _NEUTRAL_TURN_FIELDS):
             return Entitlement.AGENT_DERIVED
         if any(turn.get(field) for field in _AGENT_AUTHORED_TURN_FIELDS):
             return Entitlement.AGENT_DERIVED

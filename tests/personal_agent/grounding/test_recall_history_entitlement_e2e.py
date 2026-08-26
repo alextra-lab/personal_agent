@@ -256,6 +256,59 @@ def test_unparsable_recall_content_denies() -> None:
     assert registration.source.entitlement is Entitlement.AGENT_DERIVED
 
 
+def test_turn_carrying_an_unaudited_field_denies() -> None:
+    """The rule is an allowlist, so a field it has not classified denies the call.
+
+    Unreachable through the executor today — it builds every turn from a fixed dict literal —
+    and that is the point: a field added to ``recall_personal_history`` later cannot carry
+    unaudited content into ``USER_STATED`` just because nobody remembered this rule. A
+    denylist would classify the unknown field as harmless, which is exactly how FRE-1302's
+    "every other member is model-independent" premise went stale.
+    """
+    registry = SourceRegistry(turn_id=TURN)
+    registration = registry.register_tool_result(
+        tool_name="recall_personal_history",
+        arguments={"days_ago": 7},
+        content=json.dumps(
+            {
+                "turns": [
+                    {
+                        "turn_id": "turn-8801",
+                        "user_message": "what did that tin cost?",
+                        "assistant_response": "",
+                        "summary": "",
+                        "entities": [],
+                        "model_rationale": "Ortiz bonito costs 12 euros",
+                    }
+                ],
+                "total": 1,
+            }
+        ),
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.AGENT_DERIVED
+
+
+def test_known_turn_fields_still_classify_normally() -> None:
+    """The allowlist's positive control: every field the executor actually emits is audited,
+    so the real serialized shape still reaches ``USER_STATED``. A too-narrow allowlist would
+    deny production output outright, which is the failure mode this pins against.
+    """
+    entitlement, outcome = _run_chain(
+        turns=[
+            {
+                **_turn_row(user_message="Ortiz bonito costs 12 euros"),
+                "topic_matched": True,
+            }
+        ],
+        cited="Ortiz bonito costs 12 euros",
+    )
+
+    assert entitlement is Entitlement.USER_STATED
+    assert outcome is CheckOutcome.PASSED
+
+
 def test_turns_holding_a_non_mapping_denies() -> None:
     """A ``turns`` list whose members are not mappings is a shape this rule cannot read."""
     registry = SourceRegistry(turn_id=TURN)

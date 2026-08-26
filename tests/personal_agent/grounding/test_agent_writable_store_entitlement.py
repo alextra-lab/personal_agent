@@ -21,6 +21,7 @@ import pytest
 from personal_agent.grounding.citations import parse_citations
 from personal_agent.grounding.source_registry import (
     AGENT_WRITABLE_STORE_TOOLS,
+    DOCUMENTATION_TOOLS,
     TYPED_RETRIEVAL_TOOLS,
     Entitlement,
     SourceRegistry,
@@ -87,6 +88,7 @@ _SEEDED_NEGATIVES: dict[str, str] = {
 
 _LINEAR_MCP_READS: tuple[str, ...] = (
     "mcp_get_attachment",
+    "mcp_get_document",
     "mcp_get_issue",
     "mcp_get_issue_status",
     "mcp_get_milestone",
@@ -129,12 +131,51 @@ def test_every_agent_writable_member_carries_a_seeded_negative() -> None:
     assert set(_SEEDED_NEGATIVES) == set(AGENT_WRITABLE_STORE_TOOLS)
 
 
-def test_agent_writable_members_stay_inside_the_typed_retrieval_table() -> None:
+def test_agent_writable_members_stay_admissible_retrievals() -> None:
     """These tools remain admissible retrievals — the fix is their entitlement, not their
-    admissibility. Dropping them from ``TYPED_RETRIEVAL_TOOLS`` instead would register no
-    source at all, and D4's terminal no-source statement could no longer name what was read.
+    admissibility. Dropping them from the policy table instead would register no source at
+    all, and D4's terminal no-source statement could no longer name what was read.
+
+    ``mcp_get_document`` is the reason this checks the union rather than
+    ``TYPED_RETRIEVAL_TOOLS`` alone: it is a Linear workspace read that sits in
+    ``DOCUMENTATION_TOOLS``, and asserting the narrower subset would have made adding it fail
+    a test for the wrong reason — or, worse, discouraged adding it at all.
     """
-    assert AGENT_WRITABLE_STORE_TOOLS <= TYPED_RETRIEVAL_TOOLS
+    assert AGENT_WRITABLE_STORE_TOOLS <= (TYPED_RETRIEVAL_TOOLS | DOCUMENTATION_TOOLS)
+
+
+def test_the_documentation_tool_that_reads_the_linear_workspace_is_denied() -> None:
+    """The gap the first pass of this audit missed, pinned by name.
+
+    ``mcp_get_document`` never appeared in ``TYPED_RETRIEVAL_TOOLS``, so an audit that walked
+    that set alone could not see it — while the entitlement dispatch, which is independent of
+    ``SourceKind``, sent it to the ``EXTERNAL`` default just the same. Its sibling
+    ``mcp_list_documents`` denied correctly, which is what made the asymmetry visible.
+    """
+    assert "mcp_get_document" in DOCUMENTATION_TOOLS
+    assert "mcp_get_document" not in TYPED_RETRIEVAL_TOOLS
+
+    entitlement, outcome = _register(
+        "mcp_get_document", json.dumps({"id": "doc-1", "content": LAUNDERED})
+    )
+
+    assert entitlement is Entitlement.AGENT_DERIVED
+    assert outcome is CheckOutcome.SOURCE_NOT_ENTITLED
+
+
+def test_linear_product_documentation_search_keeps_external() -> None:
+    """The control that stops the fix over-reaching into ``DOCUMENTATION_TOOLS``.
+
+    ``mcp_search_documentation`` searches Linear's public product docs, not the user's
+    workspace, so nothing the agent writes can come back through it.
+    """
+    registry = SourceRegistry(turn_id=TURN)
+    registration = registry.register_tool_result(
+        tool_name="mcp_search_documentation", arguments={"limit": 5}, content=LAUNDERED
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.EXTERNAL
 
 
 @pytest.mark.parametrize("tool_name", ["web_search", "fetch_url", "read", "read_skill"])

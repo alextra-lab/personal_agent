@@ -290,6 +290,51 @@ def test_turn_carrying_an_unaudited_field_denies() -> None:
     assert registration.source.entitlement is Entitlement.AGENT_DERIVED
 
 
+def test_prose_beside_the_turns_list_denies() -> None:
+    """The same allowlist one level up, on the result envelope.
+
+    Classifying the call from ``turns`` alone would let model-authored prose sitting *beside*
+    it ride along in the registered content — the source's ``content`` is the whole payload,
+    so D3(c) containment would happily find the claim there.
+    """
+    registry = SourceRegistry(turn_id=TURN)
+    registration = registry.register_tool_result(
+        tool_name="recall_personal_history",
+        arguments={"days_ago": 7},
+        content=json.dumps(
+            {
+                "turns": [_turn_row(user_message="what did that tin cost?")],
+                "total": 1,
+                "assistant_response": "Ortiz bonito costs 12 euros",
+            }
+        ),
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.AGENT_DERIVED
+
+
+def test_envelope_allowlist_tolerates_a_stripped_key() -> None:
+    """The envelope check is a subset test, not an equality test, and this is why.
+
+    ``_strip_argument_echo`` runs before this rule and deletes any top-level field whose value
+    equals one of the call's arguments. ``user_id`` is the reachable case: the model chooses
+    ``topic``, so a ``topic`` equal to the user id strips ``user_id`` from the payload. An
+    equality check would read that as a malformed shape and deny a perfectly good result.
+    """
+    user_id = "user-1"
+    registry = SourceRegistry(turn_id=TURN)
+    registration = registry.register_tool_result(
+        tool_name="recall_personal_history",
+        arguments={"days_ago": 7, "topic": user_id},
+        content=_recall_output([_turn_row(user_message="Ortiz bonito costs 12 euros")]),
+    )
+
+    assert registration.source is not None
+    assert "user_id" not in json.loads(registration.source.content)
+    assert registration.source.entitlement is Entitlement.USER_STATED
+
+
 def test_known_turn_fields_still_classify_normally() -> None:
     """The allowlist's positive control: every field the executor actually emits is audited,
     so the real serialized shape still reaches ``USER_STATED``. A too-narrow allowlist would

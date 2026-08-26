@@ -78,6 +78,18 @@ single identifier. Making that a tuple is the per-item entitlement architecture 
 explicitly deferred, and it changes every consumer. The rule above is what is correct *until*
 that lands, and is not thrown away by it.
 
+**What the chosen rule costs, measured against how Turns are actually written.** In practice
+this denies nearly every real recall. ``second_brain/consolidator.py`` writes a non-empty
+``summary`` on both its paths — the extracted one, and a fallback that is
+``default_extraction_summary(user_message)`` — so the user-stated branch fires only on a Turn
+with no response, no summary and no entities. That is the cost the ticket named when it said
+this option "may be the right answer, but it is a decision with a real cost", and it is
+accepted with eyes open rather than discovered later. What keeps the owner's own history
+usable is not that branch but D1: a span attributedly restating the user's words is
+``CLAIM_EXEMPT``, and :func:`verify_turn` iterates only ``non_exempt`` spans, so it never
+reaches this gate at all. The narrow branch is kept because it is the honest classification of
+a user-only result, and because FRE-1304 widens what can reach it.
+
 *Rejected — drop* ``assistant_response`` *from the tool's output.* The tool exists to answer
 "what did we discuss"; the agent's half of the exchange is most of that answer. Narrowing a
 capability to protect a citation rule trades away more than it buys, and the chosen rule already
@@ -587,6 +599,16 @@ _AGENT_AUTHORED_TURN_FIELDS: frozenset[str] = frozenset(
 it is the owner's own words, and keeping it citable is this fix's AC-2.
 """
 
+_RECALL_ENVELOPE_FIELDS: frozenset[str] = frozenset({"turns", "total", "window_days", "user_id"})
+"""The top-level keys ``recall_personal_history_executor`` returns.
+
+Allowlisted for the same reason the per-turn keys are, one level up: model-authored prose
+appearing beside ``turns`` would otherwise ride along in the registered content while the
+rule classified the call from ``turns`` alone. Checked as a **subset**, never equality —
+:func:`_strip_argument_echo` runs first and can delete a top-level key whose value echoed an
+argument, and a deletion must not turn a well-formed result into a denial.
+"""
+
 _NEUTRAL_TURN_FIELDS: frozenset[str] = frozenset(
     {"turn_id", "timestamp", "session_id", "topic_matched", "user_message"}
 )
@@ -652,6 +674,9 @@ def _recall_personal_history_entitlement(content: str) -> Entitlement:
     except (json.JSONDecodeError, TypeError, ValueError):
         return Entitlement.AGENT_DERIVED
     if not isinstance(parsed, dict):
+        return Entitlement.AGENT_DERIVED
+
+    if not parsed.keys() <= _RECALL_ENVELOPE_FIELDS:
         return Entitlement.AGENT_DERIVED
 
     turns = parsed.get("turns")
@@ -725,6 +750,7 @@ AGENT_WRITABLE_STORE_TOOLS: frozenset[str] = frozenset(
         "find_linear_issues",
         "list_linear_projects",
         "mcp_get_attachment",
+        "mcp_get_document",
         "mcp_get_issue",
         "mcp_get_issue_status",
         "mcp_get_milestone",
@@ -765,6 +791,15 @@ retrieval?" but "can this return text the model itself authored?"
 * ``find_linear_issues`` / ``list_linear_projects`` — yes. ``create_linear_issue`` and
   ``create_linear_project`` set ``title``/``description`` verbatim from model-authored arguments,
   and these tools read them straight back with no author field in the result.
+* ``mcp_get_document`` — yes, and it is the one member this audit reached only on the second
+  pass, because it is not in :data:`TYPED_RETRIEVAL_TOOLS` at all. It sits in
+  :data:`DOCUMENTATION_TOOLS` ("context7 and equivalents") while being, per its
+  auto-discovered description in ``config/governance/tools.yaml``, *"Retrieve a Linear document
+  by ID or slug"* — the one Linear read returning a document **body**, in a workspace
+  ``mcp_create_document``/``mcp_update_document`` write. The entitlement dispatch is independent
+  of :class:`SourceKind`, so membership here fixes it without disturbing its kind. The lesson
+  generalises: this set is keyed on the store, so a tool's presence in *any* other policy set
+  is not evidence it was audited.
 * the ``mcp_*`` Linear reads — yes, **on the store, which is verifiable here, not on their
   schemas, which are not**. ``create_linear_issue`` writes to the same workspace they read, so
   the store is agent-writable whatever any connector returns. This repo holds only their registry

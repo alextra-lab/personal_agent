@@ -1551,7 +1551,20 @@ async def _verify_grounding(ctx: ExecutionContext, trace_ctx: TraceContext) -> T
         )
         return unavailable(f"span extraction failed: {type(exc).__name__}")
 
-    return verify_turn(extraction, parse_citations(ctx.final_reply), registry)
+    try:
+        return verify_turn(extraction, parse_citations(ctx.final_reply), registry)
+    except Exception as exc:
+        # The checks themselves parse attacker-influenced content — a fetched page's
+        # numeric tokens, its Unicode. A defect there must degrade to "unverified", never
+        # to a failed turn: this runs on the turn path for every reply, and the user's
+        # answer is not ours to lose over our own bug (security review).
+        log.exception(
+            "grounding_verification_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            error_type=type(exc).__name__,
+        )
+        return unavailable(f"verification failed: {type(exc).__name__}")
 
 
 def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mode: str) -> None:

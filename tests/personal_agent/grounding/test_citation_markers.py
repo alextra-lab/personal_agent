@@ -72,3 +72,34 @@ def test_stripped_text_carries_no_resolvable_citation() -> None:
     stripped = strip_citation_markers(f"Paris has 2.1 million residents [{ident}].")
 
     assert parse_citations(stripped).spans == ()
+
+
+def test_indentation_and_hard_breaks_survive_the_strip() -> None:
+    """Security-review finding: the repair must be local to each marker.
+
+    A first version tidied globally — collapse space runs, rstrip each line — which
+    flattened every indented code block, nested list and two-space hard break in every
+    reply, in every mode, since the strip runs unconditionally. Whitespace is content in
+    Markdown.
+    """
+    ident = _identifier()
+    reply = (
+        f"Here is the function [{ident}]:\n\n"
+        "```python\n"
+        "def f():\n"
+        "    if x:\n"
+        "        return 1\n"
+        "```\n\n"
+        "- outer\n"
+        "  - nested\n"
+        "line one  \n"
+        "line two"
+    )
+
+    stripped = strip_citation_markers(reply)
+
+    assert "    if x:" in stripped
+    assert "        return 1" in stripped
+    assert "  - nested" in stripped
+    assert "line one  \n" in stripped
+    assert stripped.startswith("Here is the function:")

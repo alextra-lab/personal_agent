@@ -66,7 +66,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
@@ -432,10 +432,13 @@ def _as_figure(token: str) -> Decimal | None:
         return None
     candidate = token.replace(",", "")
     try:
-        value = Decimal(candidate)
-    except InvalidOperation:
+        return Decimal(candidate)
+    except DecimalException:
+        # Not only malformed input: a fetched page containing `1E999999999` is a
+        # well-formed Decimal whose later arithmetic overflows. Catching the whole family
+        # here and in _figure_token keeps page content — which is attacker-influenced —
+        # from turning a numeric token into a failed turn (security review).
         return None
-    return value
 
 
 def _figure_token(value: Decimal) -> str:
@@ -452,11 +455,17 @@ def _figure_token(value: Decimal) -> str:
         A ``#``-prefixed plain-notation form with trailing zeros stripped, so it can never
         collide with an ordinary word.
     """
-    normalized = value.normalize()
-    _, _, exponent = normalized.as_tuple()
-    if isinstance(exponent, int) and exponent > 0:
-        normalized = normalized.quantize(Decimal(1))
-    return f"#{normalized:f}"
+    try:
+        normalized = value.normalize()
+        _, _, exponent = normalized.as_tuple()
+        if isinstance(exponent, int) and exponent > 0:
+            normalized = normalized.quantize(Decimal(1))
+        return f"#{normalized:f}"
+    except DecimalException:
+        # An exponent no plain-notation rendering can hold. Falling back to the exponent
+        # form keeps the token comparable with itself — two pages stating the same absurd
+        # quantity still match — without failing the turn.
+        return f"#{value}"
 
 
 def _canonical(token: str) -> str:

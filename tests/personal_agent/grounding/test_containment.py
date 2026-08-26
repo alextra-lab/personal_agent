@@ -261,3 +261,14 @@ def test_a_real_acronym_in_the_source_still_satisfies_the_spelled_out_claim() ->
     )
 
     assert result.outcome is ContainmentOutcome.CONTAINED
+
+
+def test_an_absurd_exponent_in_page_content_does_not_raise() -> None:
+    """Security-review finding: page content is attacker-influenced arithmetic input.
+
+    ``1E999999999`` is a well-formed Decimal whose normalization overflows. Catching only
+    ``InvalidOperation`` let that propagate out of the checks and fail the user's turn.
+    """
+    result = check_containment("Paris has 2 residents", "The page says 1E999999999 things")
+
+    assert result.outcome is ContainmentOutcome.NOT_CONTAINED

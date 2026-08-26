@@ -296,7 +296,7 @@ cases:
       pedagogical_outcomes: [cross_connection_made]
       tools_used_nonempty: true
       skills: [fetch-url, web-search]
-      tools_any_of: [web_search, perplexity_query]
+      tools_any_of: [web_search, fetch_url, perplexity_query]
     rubric:
       - "Claims carry citations / sources I can check."
       - "Explicitly connects resting to carryover cooking (the cross-connection)."

@@ -60,7 +60,7 @@ def test_all_four_kinds_registered_in_one_turn() -> None:
         ),
     )
     registry.register_tool_result(
-        tool_name="mcp_fetch_content",
+        tool_name="fetch_url",
         arguments={"url": "https://example.com/tuna"},
         content="Nardin bonito is packed in olive oil.",
     )
@@ -95,7 +95,7 @@ def test_all_four_kinds_registered_in_one_turn() -> None:
         "A Basque cannery in Ondarroa.",
         "A French cannery in Douarnenez.",
         "Ortiz is sold at...",  # web_search
-        "Nardin bonito is packed in olive oil.",  # mcp_fetch_content
+        "Nardin bonito is packed in olive oil.",  # fetch_url
         "AsyncClient accepts a timeout argument.",  # get_library_docs
     ):
         assert any(fragment in source.content for source in sources), fragment
@@ -276,11 +276,11 @@ ADMISSIBLE_TOOLS = [
         id="web_search",
     ),
     pytest.param(
-        "mcp_fetch_content",
+        "fetch_url",
         {"url": "https://example.com/tuna"},
         "Ortiz is a Spanish cannery.",
         SourceKind.TOOL,
-        id="mcp_fetch_content",
+        id="fetch_url",
     ),
     pytest.param(
         "read",
@@ -402,7 +402,7 @@ def test_fetch_registers_page_not_url() -> None:
     registry = SourceRegistry(turn_id=TURN_A)
 
     registration = registry.register_tool_result(
-        tool_name="mcp_fetch_content",
+        tool_name="fetch_url",
         arguments={"url": "https://example.com/paris-population"},
         content="Paris has 2.1 million residents.",
     )

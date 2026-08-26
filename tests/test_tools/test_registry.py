@@ -239,3 +239,24 @@ def test_search_memory_in_llm_tool_definitions() -> None:
     assert "query_text" in search_memory_def["function"]["parameters"]["properties"]
     assert "query_text" in search_memory_def["function"]["parameters"]["required"]
     # self_telemetry_query was deleted in FRE-265 (ADR-0063 PIVOT-6)
+
+
+def test_default_registry_offers_fetch_url_in_normal_mode() -> None:
+    """AC-1 (FRE-1297) — fetch_url is actually offered to the model, not merely declared.
+
+    A governance entry or a TYPED_RETRIEVAL_TOOLS membership alone does not satisfy AC-1:
+    this asserts the tool reaches the assembled list for a NORMAL-mode turn, the same
+    surface the model sees.
+    """
+    from personal_agent.tools import get_default_registry
+
+    registry = get_default_registry()
+    assert "fetch_url" in registry.list_tool_names()
+
+    normal_mode_names = {t.name for t in registry.list_tools(mode=Mode.NORMAL)}
+    assert "fetch_url" in normal_mode_names
+
+    llm_tools = registry.get_tool_definitions_for_llm(mode=Mode.NORMAL)
+    fetch_def = next(t for t in llm_tools if t["function"]["name"] == "fetch_url")
+    assert "url" in fetch_def["function"]["parameters"]["properties"]
+    assert "url" in fetch_def["function"]["parameters"]["required"]

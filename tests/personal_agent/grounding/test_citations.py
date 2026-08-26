@@ -20,12 +20,12 @@ def _registry_with_two_sources(turn_id: str) -> SourceRegistry:
     """A registry holding two tool sources, so markers have something to resolve to."""
     registry = SourceRegistry(turn_id=turn_id)
     registry.register_tool_result(
-        tool_name="mcp_fetch_content",
+        tool_name="fetch_url",
         arguments={"url": "https://example.com/ortiz"},
         content="Ortiz packs bonito del norte in olive oil.",
     )
     registry.register_tool_result(
-        tool_name="mcp_fetch_content",
+        tool_name="fetch_url",
         arguments={"url": "https://example.com/nardin"},
         content="Nardin packs bonito in a Basque cannery.",
     )

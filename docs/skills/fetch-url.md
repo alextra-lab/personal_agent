@@ -17,7 +17,13 @@ keywords:
 
 # fetch-url — Fetch a URL and return its content as plain text
 
-**Status:** Primary path (FRE-263, 2026-04-28). Legacy `fetch_url` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+**Status:** Fallback path (FRE-1297, 2026-08-25). A native `fetch_url` tool is registered
+again — prefer it: its fetched page content is an admissible citation source under the
+ADR-0138 grounding contract, while a `bash`/curl fetch of the same page is never citable
+(D2's independence rule — `bash` takes arbitrary model-authored input). Reach for `bash`
+curl here only when `fetch_url` cannot do the job — a non-GET request, a request needing
+custom headers/auth, or a response `fetch_url`'s extraction mangles — and note in your
+answer that the result is not citable.
 
 **Category:** `network_read` · **Risk:** low · **Approval:** `curl` auto-approved (NORMAL/ALERT/DEGRADED); not available in LOCKDOWN
 
@@ -99,6 +105,6 @@ curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 \
 - Always use `--max-time 20` to prevent hanging on slow hosts.
 - Hard-denied: `wget` is blocked by the bash governance layer — always use `curl`.
 
-**ALERT-mode note:** `bash curl` is auto-approved in ALERT mode — unlike the legacy `fetch_url` tool (which was disabled in ALERT mode), primitive `curl` has no ALERT-mode restriction. Be aware outbound network calls continue in degraded states.
+**ALERT-mode note:** `bash curl` is auto-approved in ALERT mode — unlike the native `fetch_url` tool (not allowed in ALERT mode, only NORMAL/DEGRADED), primitive `curl` has no ALERT-mode restriction. Be aware outbound network calls continue in degraded states.
 
 See also: [bash — Shell Command Executor](bash.md)

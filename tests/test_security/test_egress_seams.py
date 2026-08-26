@@ -509,6 +509,39 @@ class TestWebSearchToolSeam:
         assert result is not None
 
 
+class TestFetchUrlToolSeam:
+    @pytest.mark.asyncio
+    async def test_disallowed_domain_refused_before_connection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.tools.executor import ToolExecutionError
+        from personal_agent.tools.fetch import fetch_url_executor
+
+        _patch_guard(
+            monkeypatch, mode=GuardMode.ALLOWLIST, allowlist=frozenset({"allowed.example"})
+        )
+        with _unreachable_transport(), pytest.raises(ToolExecutionError):
+            await fetch_url_executor(url="https://not-allowed.example/page", ctx=_CTX)
+
+    @pytest.mark.asyncio
+    async def test_allowed_domain_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from personal_agent.tools.fetch import fetch_url_executor
+
+        _patch_guard(
+            monkeypatch, mode=GuardMode.ALLOWLIST, allowlist=frozenset({"allowed.example"})
+        )
+        resp = MagicMock()
+        resp.is_error = False
+        resp.text = "<p>Allowed page content.</p>"
+        resp.headers = {"content-type": "text/html"}
+        with patch(
+            "personal_agent.tools.fetch.create_guarded_http_client",
+            return_value=_mock_http_client(resp),
+        ):
+            result = await fetch_url_executor(url="https://allowed.example/page", ctx=_CTX)
+        assert "Allowed page content." in result["text"]
+
+
 class TestPerplexityToolSeam:
     @pytest.mark.asyncio
     async def test_disallowed_domain_refused_before_connection(

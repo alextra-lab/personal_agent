@@ -6,7 +6,9 @@ only registered when ``settings.primitive_tools_enabled`` is True.
 After FRE-265 (ADR-0063 PIVOT-6) the eight legacy curated tools (read_file,
 list_directory, system_metrics_snapshot, self_telemetry_query,
 query_elasticsearch, fetch_url, run_sysdiag, infra_health) are gone — their
-absence is now a structural guarantee, not a runtime flag.
+absence is now a structural guarantee, not a runtime flag. FRE-1297 (ADR-0028
+Phase 3, ADR-0138 D2) reintroduced fetch_url as a native, always-on Tier-1 tool
+distinct from the deleted curated one — it is no longer in ``_LEGACY_DELETED``.
 
 These are pure unit tests — no LLM, no infrastructure required.
 """
@@ -84,7 +86,6 @@ _LEGACY_DELETED = [
     "system_metrics_snapshot",
     "self_telemetry_query",
     "query_elasticsearch",
-    "fetch_url",
     "run_sysdiag",
     "infra_health",
 ]
@@ -96,7 +97,9 @@ class TestLegacyToolsDeleted:
     They can no longer be registered under any setting combination.
     """
 
-    @pytest.mark.parametrize("primitive,prefer", [(False, False), (True, False), (False, True), (True, True)])
+    @pytest.mark.parametrize(
+        "primitive,prefer", [(False, False), (True, False), (False, True), (True, True)]
+    )
     def test_legacy_tools_absent_under_all_flag_combinations(
         self, monkeypatch: pytest.MonkeyPatch, primitive: bool, prefer: bool
     ) -> None:
@@ -124,5 +127,11 @@ class TestLegacyToolsDeleted:
         register_mvp_tools(registry)
         tool_names = registry.list_tool_names()
 
-        for name in ("search_memory", "web_search", "perplexity_query", "create_linear_issue"):
+        for name in (
+            "search_memory",
+            "web_search",
+            "fetch_url",
+            "perplexity_query",
+            "create_linear_issue",
+        ):
             assert name in tool_names, f"{name} should always be present"

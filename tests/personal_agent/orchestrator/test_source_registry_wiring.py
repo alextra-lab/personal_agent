@@ -254,7 +254,7 @@ def test_snapshot_logs_identifiers_without_content(caplog: Any) -> None:
     ctx = _context()
     _register_tool_source(
         ctx,
-        tool_name="mcp_fetch_content",
+        tool_name="fetch_url",
         arguments={"url": "https://example.com/tuna"},
         content="Ortiz packs bonito del norte in olive oil.",
         success=True,
@@ -267,5 +267,5 @@ def test_snapshot_logs_identifiers_without_content(caplog: Any) -> None:
         record for record in caplog.records if "source_registry_snapshot" in record.getMessage()
     )
     rendered = snapshot.getMessage()
-    assert "mcp_fetch_content" in rendered
+    assert "fetch_url" in rendered
     assert "Ortiz packs bonito del norte" not in rendered

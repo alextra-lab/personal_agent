@@ -24,6 +24,10 @@ from personal_agent.tools.context7 import (
     get_library_docs_tool,
 )
 from personal_agent.tools.executor import ToolExecutionError, ToolExecutionLayer
+from personal_agent.tools.fetch import (
+    fetch_url_executor,
+    fetch_url_tool,
+)
 from personal_agent.tools.linear import (
     create_linear_issue_executor,
     create_linear_issue_tool,
@@ -84,6 +88,8 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     - web_search: Private web search via SearXNG (ADR-0034)
     - perplexity_query: Perplexity AI synthesized answers (ADR-0028 Phase 2)
     - get_library_docs: Context7 library documentation (ADR-0028 Phase 3)
+    - fetch_url: Full-page readable-text fetch, citable under ADR-0138 D2 (ADR-0028
+      Phase 3, FRE-1297)
     - Linear tools: create/find/list (FRE-224, Tier-1)
 
     When ``settings.primitive_tools_enabled`` is True (opt-in, default False),
@@ -104,6 +110,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     registry.register(web_search_tool, web_search_executor)  # ADR-0034
     registry.register(perplexity_query_tool, perplexity_query_executor)
     registry.register(get_library_docs_tool, get_library_docs_executor)
+    registry.register(fetch_url_tool, fetch_url_executor)  # ADR-0028 Ph3, FRE-1297
     # FRE-224: native Linear tool (Tier-1, no MCP gateway required)
     registry.register(create_linear_issue_tool, create_linear_issue_executor)
     registry.register(find_linear_issues_tool, find_linear_issues_executor)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -17,12 +18,14 @@ import pytest
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.fetch import (
+    _SKIP_TAGS,
     _resolves_to_private_or_internal,
     fetch_url_executor,
     fetch_url_tool,
 )
 
 _CTX = TraceContext.new_trace()
+_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "fetch"
 
 
 def _addrinfo(ip: str) -> list[tuple[object, ...]]:
@@ -170,6 +173,112 @@ async def test_adjacent_inline_tags_get_a_word_boundary() -> None:
     assert "AB" not in result["text"]
 
 
+# ── Void elements (FRE-1307) ─────────────────────────────────────────────
+#
+# `meta` and `link` are HTML void elements: html.parser never calls handle_endtag
+# for a bare `<meta charset=utf-8>` or `<link rel=x>`, so the old skip_depth
+# increment-on-starttag/decrement-on-endtag scheme never returned to 0 once either
+# tag appeared — blanking the rest of the document. Every real HTML page carries
+# at least one of them, so fetch_url never extracted a real page's text.
+
+
+@pytest.mark.asyncio
+async def test_real_archived_page_extracts_substantial_text() -> None:
+    """AC-1: a real, previously-fetched page — not a hand-authored fragment — must
+    extract a substantial amount of text. The hand-authored fixture in
+    ``test_basic_html_extraction`` omits the one feature every real document has
+    (meta/link tags), which is exactly the gap that let this ship.
+    """
+    html_body = (_FIXTURES_DIR / "lacuisinedemichel_jarret_de_veau.html").read_text(
+        encoding="utf-8"
+    )
+    resp = _mock_html_response(html_body)
+    with patch(
+        "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+    ):
+        result = await fetch_url_executor(url="https://example.com", max_chars=50_000, ctx=_CTX)
+
+    assert result["char_count"] > 2_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "html_body",
+    [
+        "<html><head><link rel=x></head><body><p>HELLO</p></body></html>",
+        "<html><head><meta charset=utf-8></head><body><p>HELLO</p></body></html>",
+        "<html><body><p>HELLO</p></body></html>",
+    ],
+    ids=["link", "meta", "neither"],
+)
+async def test_void_element_repro_is_pinned(html_body: str) -> None:
+    """AC-2: the ticket's three-line repro, pinned as a test."""
+    resp = _mock_html_response(html_body)
+    with patch(
+        "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+    ):
+        result = await fetch_url_executor(url="https://example.com", ctx=_CTX)
+
+    assert "HELLO" in result["text"]
+
+
+@pytest.mark.asyncio
+async def test_self_closed_void_tag_does_not_prematurely_end_an_enclosing_skip_region() -> None:
+    """A self-closed void tag (``<link />``) makes html.parser's default
+    ``handle_startendtag`` call ``handle_starttag`` then ``handle_endtag`` for it.
+    ``handle_endtag`` must ignore void tags too, or that synthesized end callback
+    prematurely decrements the *enclosing* ``<head>``'s skip depth and leaks its
+    remaining content (same shape as the original bug, codex-rescue plan review).
+    """
+    html_body = "<html><head><link /><title>SECRET</title></head><body>BODY</body></html>"
+    resp = _mock_html_response(html_body)
+    with patch(
+        "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+    ):
+        result = await fetch_url_executor(url="https://example.com", ctx=_CTX)
+
+    assert "SECRET" not in result["text"]
+    assert "BODY" in result["text"]
+
+
+@pytest.mark.asyncio
+async def test_self_closed_void_tag_inside_boilerplate_stays_excluded() -> None:
+    """AC-5 hardening: a self-closed void tag inside a boilerplate region (nav here)
+    must not prematurely end that region's exclusion either.
+    """
+    html_body = "<html><body><nav><link />SECRET</nav><main>BODY</main></body></html>"
+    resp = _mock_html_response(html_body)
+    with patch(
+        "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+    ):
+        result = await fetch_url_executor(url="https://example.com", ctx=_CTX)
+
+    assert "SECRET" not in result["text"]
+    assert "BODY" in result["text"]
+
+
+@pytest.mark.asyncio
+async def test_future_void_tag_added_to_skip_tags_does_not_blank_document() -> None:
+    """AC-3: adding a new void element to _SKIP_TAGS must not reintroduce the bug.
+
+    Simulates a future maintainer adding ``img`` (also a void element) to
+    ``_SKIP_TAGS``. If the fix were only "delete meta/link", this would still
+    blank the document; the fix must be structural (a void-tags concept).
+    """
+    html_body = '<html><body><img src="a.png"><p>AFTER</p></body></html>'
+    resp = _mock_html_response(html_body)
+    with (
+        patch(
+            "personal_agent.tools.fetch.create_guarded_http_client",
+            return_value=_mock_client(resp),
+        ),
+        patch("personal_agent.tools.fetch._SKIP_TAGS", _SKIP_TAGS | {"img"}),
+    ):
+        result = await fetch_url_executor(url="https://example.com", ctx=_CTX)
+
+    assert "AFTER" in result["text"]
+
+
 @pytest.mark.asyncio
 async def test_truncation() -> None:
     """Long content is truncated to max_chars."""
@@ -197,6 +306,24 @@ async def test_plain_text_response_returned_as_is() -> None:
 
 
 # ── Error paths ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_empty_extraction_raises_instead_of_silent_success() -> None:
+    """AC-4: a 200 response yielding zero extractable characters must surface as a
+    failure the model can act on, not `success: true` / `char_count: 0`.
+    """
+    html_body = (
+        "<html><head><meta charset=utf-8></head>"
+        "<body><script>var x = 1;</script><style>body { color: red; }</style></body>"
+        "</html>"
+    )
+    resp = _mock_html_response(html_body)
+    with patch(
+        "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+    ):
+        with pytest.raises(ToolExecutionError, match="no readable text"):
+            await fetch_url_executor(url="https://example.com", ctx=_CTX)
 
 
 @pytest.mark.asyncio

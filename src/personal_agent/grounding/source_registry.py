@@ -41,6 +41,60 @@ or address, they do not compose output. A tool taking arbitrary model-authored c
 command line is by construction a channel for the model's own words returning wearing a
 tool's identifier, and no static analysis of its argument bounds that.
 
+**D2 independence has two axes, and the paragraphs above are only the first (FRE-1303).**
+*Invocation* independence asks whether the model's **arguments** composed the result, and the
+parameter schema settles it. *Authorship* independence asks whether the agent **wrote the
+content** the tool hands back, and the parameter schema says nothing about it:
+``recall_personal_history(days_ago=7)`` is as typed as a call gets and returns the model's own
+prose from last week. FRE-1302 shipped the premise that ``search_memory`` was the only member
+needing more than a blanket ``EXTERNAL``, "every other member keeping the blanket ``EXTERNAL``
+a typed, **model-independent** retrieval earns by default". That premise was false, and this
+paragraph replaces it.
+
+The second axis has its own finite boundary: **the store being read.** A typed retrieval that
+reads back a store the agent itself writes into does not earn a blanket ``EXTERNAL``. That is
+enumerable because the agent's *write* tools are enumerable (``tools/__init__.py``) — ``write``,
+``bash``, ``run_python``, ``notes_write``, ``artifact_write``, ``artifact_draft``,
+``create_linear_issue``, ``create_linear_project``, plus the turn and KG writers (episodic
+capture, entity extraction). :data:`AGENT_WRITABLE_STORE_TOOLS` carries the resulting audit,
+one verdict per member.
+
+**The recall decision, recorded here because a merge commit is where reasoning goes to die.**
+A ``Turn`` carries both the user's message and the agent's response, and FRE-1280 registers one
+source per tool call, so there is no per-item entitlement to hand out. Three options were live:
+
+*Chosen — most-restrictive, applied content-aware.* A call is only as entitled as its
+least-entitled turn, decided from the fields that actually hold content rather than from the
+tool's name — the same shape :func:`_search_memory_entitlement` applies across Claim rows, so
+"aggregate to the least-entitled item" has one definition in this module rather than two. A
+result carrying only ``user_message`` is ``USER_STATED``, which keeps the owner's own history
+citable; anything carrying the agent's response, the generated summary, or extracted entity
+names is ``AGENT_DERIVED``.
+
+*Rejected — split the source.* Registering the user-message half and the assistant-response half
+under separate identifiers is the correct end state, but :meth:`SourceRegistry.register_tool_result`
+returns one :class:`ToolRegistration` holding a single ``source`` and the executor consumes a
+single identifier. Making that a tuple is the per-item entitlement architecture FRE-1302
+explicitly deferred, and it changes every consumer. The rule above is what is correct *until*
+that lands, and is not thrown away by it.
+
+**What the chosen rule costs, measured against how Turns are actually written.** In practice
+this denies nearly every real recall. ``second_brain/consolidator.py`` writes a non-empty
+``summary`` on both its paths — the extracted one, and a fallback that is
+``default_extraction_summary(user_message)`` — so the user-stated branch fires only on a Turn
+with no response, no summary and no entities. That is the cost the ticket named when it said
+this option "may be the right answer, but it is a decision with a real cost", and it is
+accepted with eyes open rather than discovered later. What keeps the owner's own history
+usable is not that branch but D1: a span attributedly restating the user's words is
+``CLAIM_EXEMPT``, and :func:`verify_turn` iterates only ``non_exempt`` spans, so it never
+reaches this gate at all. The narrow branch is kept because it is the honest classification of
+a user-only result, and because FRE-1304 widens what can reach it.
+
+*Rejected — drop* ``assistant_response`` *from the tool's output.* The tool exists to answer
+"what did we discuss"; the agent's half of the exchange is most of that answer. Narrowing a
+capability to protect a citation rule trades away more than it buys, and the chosen rule already
+leaves the model able to *read* its prior reply without *citing* it.
+
 **Consequence, stated plainly: a ``curl`` run through ``bash`` is not citable in v1.**
 Grounding is channelled through the typed retrieval tools instead
 (``fetch_url`` for ``curl``, ``read`` for ``cat``). This is stricter than ADR-0138
@@ -54,7 +108,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
@@ -535,6 +589,255 @@ def _search_memory_entitlement(content: str) -> Entitlement:
     return Entitlement.AGENT_DERIVED
 
 
+_AGENT_AUTHORED_TURN_FIELDS: frozenset[str] = frozenset(
+    {"assistant_response", "summary", "entities"}
+)
+"""``recall_personal_history`` turn fields the agent authored (FRE-1303).
+
+``assistant_response`` is the model's prior output verbatim; ``summary`` is generated; the
+``entities`` names come from extraction (ADR-0098). ``user_message`` is deliberately absent:
+it is the owner's own words, and keeping it citable is this fix's AC-2.
+"""
+
+_RECALL_ENVELOPE_FIELDS: frozenset[str] = frozenset({"turns", "total", "window_days", "user_id"})
+"""The top-level keys ``recall_personal_history_executor`` returns.
+
+Allowlisted for the same reason the per-turn keys are, one level up: model-authored prose
+appearing beside ``turns`` would otherwise ride along in the registered content while the
+rule classified the call from ``turns`` alone. Checked as a **subset**, never equality —
+:func:`_strip_argument_echo` runs first and can delete a top-level key whose value echoed an
+argument, and a deletion must not turn a well-formed result into a denial.
+"""
+
+_NEUTRAL_TURN_FIELDS: frozenset[str] = frozenset(
+    {"turn_id", "timestamp", "session_id", "topic_matched", "user_message"}
+)
+"""``recall_personal_history`` turn fields that carry no agent authorship.
+
+Addresses, a timestamp, a match flag, and the owner's own message — the rest of the dict
+literal ``tools/personal_history.py`` builds.
+
+Split out from :data:`_AGENT_AUTHORED_TURN_FIELDS` so the rule can work as an **allowlist**
+rather than a denylist. A denylist classifies an unrecognised field as harmless, which is the
+wrong default in a module whose whole posture is that an unaudited shape denies — and it is
+the precise way FRE-1302's premise went stale: a field added to the tool a quarter from now
+would silently carry unaudited content into ``USER_STATED``. Unreachable today, since the
+executor builds every turn from a fixed dict literal; the point is that it stays unreachable
+without anyone having to remember this rule exists.
+"""
+
+
+def _recall_personal_history_entitlement(content: str) -> Entitlement:
+    """Classify one ``recall_personal_history`` result by whose words it carries (FRE-1303).
+
+    The bug this closes: the tool returns ``assistant_response`` verbatim
+    (``tools/personal_history.py:192``), so before this rule the model could retrieve
+    something it said last week and cite it at :attr:`Entitlement.EXTERNAL` — the most-trusted
+    tier the contract has, and an *admitted* one, since :func:`verify_turn` rejects only
+    :attr:`Entitlement.AGENT_DERIVED`. That is the closed loop D2 exists to prevent, with the
+    aggravation that the content never even passed through extraction and adjudication.
+
+    **Value-sensitive, not presence-sensitive**, and the distinction is the whole rule. The
+    executor emits all three of :data:`_AGENT_AUTHORED_TURN_FIELDS` on every turn, falling back
+    to ``""`` / ``[]`` where the Turn has none, so a key-presence check would deny every
+    production result and make the user-stated branch unreachable. Each field is tested for
+    content instead.
+
+    Aggregates to most-restrictive across the returned turns, for the reason
+    :func:`_search_memory_entitlement` documents: FRE-1280 registers one source per tool call,
+    so a call is only as entitled as its least-entitled item.
+
+    An empty ``turns`` list denies rather than keeping ``EXTERNAL``. This is the one place the
+    rule diverges from its ``search_memory`` sibling, and deliberately: ``turns`` is this tool's
+    *only* payload, so an empty window carries no user-stated content to be entitled to, where
+    ``search_memory`` with no Claims still returns matched turns and entities.
+
+    Fails to :attr:`Entitlement.AGENT_DERIVED` on any shape it does not fully understand —
+    unparsable content, a non-object top level, a ``turns`` value that is not a list, a member
+    that is not a mapping, or **a turn carrying a field this rule has not audited**. The content
+    is attacker-influenced (it is whatever the tool returned), so falling back to ``EXTERNAL``
+    on a malformed shape would let a crafted result readmit itself at the most-trusted tier.
+    The unknown-field clause is an allowlist rather than a denylist for the reason
+    :data:`_NEUTRAL_TURN_FIELDS` gives: a denylist treats a field nobody has classified as
+    harmless, which is how FRE-1302's premise went stale in the first place.
+
+    Args:
+        content: The tool result exactly as registered — post argument-echo-strip, the same text
+            the registered source's own ``content`` field holds, so this function and D3(c)
+            containment reason about identical bytes.
+
+    Returns:
+        The entitlement this call's turns support.
+    """
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return Entitlement.AGENT_DERIVED
+    if not isinstance(parsed, dict):
+        return Entitlement.AGENT_DERIVED
+
+    if not parsed.keys() <= _RECALL_ENVELOPE_FIELDS:
+        return Entitlement.AGENT_DERIVED
+
+    turns = parsed.get("turns")
+    if not isinstance(turns, list) or not turns:
+        return Entitlement.AGENT_DERIVED
+
+    for turn in turns:
+        if not isinstance(turn, Mapping):
+            return Entitlement.AGENT_DERIVED
+        if not turn.keys() <= (_AGENT_AUTHORED_TURN_FIELDS | _NEUTRAL_TURN_FIELDS):
+            return Entitlement.AGENT_DERIVED
+        if any(turn.get(field) for field in _AGENT_AUTHORED_TURN_FIELDS):
+            return Entitlement.AGENT_DERIVED
+
+    return Entitlement.USER_STATED
+
+
+def _get_location_entitlement(content: str) -> Entitlement:
+    """Classify one ``get_location`` result by which resolver answered (FRE-1303).
+
+    ``get_location`` takes ``session_notes`` — free text the *model* writes — and
+    ``ExplicitLocationProvider`` extracts a city from it and returns it as ``location.city``
+    (``tools/location.py:179, 237``). That is D2's ``printf 'Paris'`` shape wearing a typed
+    parameter, and it is invisible to :func:`_strip_argument_echo`, which compares whole
+    top-level values: the returned city is a *substring* of the argument, nested one level down.
+
+    ``LocationResolution.source`` is a ``Literal["explicit", "client"]`` carried into the output
+    through ``asdict``, so the split is exact rather than heuristic. ``"client"`` is the stored
+    device-provided location — genuinely external, and the reason this is a content-aware rule
+    instead of a flat denial. Anything else, including a shape this cannot read, denies.
+
+    Args:
+        content: The tool result exactly as registered.
+
+    Returns:
+        The entitlement this resolution supports.
+    """
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return Entitlement.AGENT_DERIVED
+    if not isinstance(parsed, dict):
+        return Entitlement.AGENT_DERIVED
+
+    location = parsed.get("location")
+    if not isinstance(location, Mapping):
+        return Entitlement.AGENT_DERIVED
+    return Entitlement.EXTERNAL if location.get("source") == "client" else Entitlement.AGENT_DERIVED
+
+
+_CONTENT_AWARE_ENTITLEMENT: dict[str, Callable[[str], Entitlement]] = {
+    "search_memory": _search_memory_entitlement,
+    "recall_personal_history": _recall_personal_history_entitlement,
+    "get_location": _get_location_entitlement,
+}
+"""Members whose *result* carries a field settling authorship, and the rule that reads it.
+
+A tool belongs here rather than in :data:`AGENT_WRITABLE_STORE_TOOLS` only when its output
+exposes something to split on — ``asserted_by`` on a Claim, which turn fields hold content,
+which location resolver answered. Where the store is mixed but the tool exposes no author
+field, most-restrictive is the only sound rule and the flat denial is correct.
+"""
+
+
+AGENT_WRITABLE_STORE_TOOLS: frozenset[str] = frozenset(
+    {
+        "notes_search",
+        "expand_tool_result",
+        "artifact_read",
+        "artifact_list",
+        "find_linear_issues",
+        "list_linear_projects",
+        "mcp_get_attachment",
+        "mcp_get_document",
+        "mcp_get_issue",
+        "mcp_get_issue_status",
+        "mcp_get_milestone",
+        "mcp_get_project",
+        "mcp_get_team",
+        "mcp_get_user",
+        "mcp_list_comments",
+        "mcp_list_cycles",
+        "mcp_list_documents",
+        "mcp_list_issue_labels",
+        "mcp_list_issue_statuses",
+        "mcp_list_issues",
+        "mcp_list_milestones",
+        "mcp_list_project_labels",
+        "mcp_list_projects",
+        "mcp_list_teams",
+        "mcp_list_users",
+    }
+)
+"""Typed retrievals that read back a store the agent writes into (FRE-1303).
+
+Still admissible retrievals — they register a source, so D4's terminal no-source statement can
+still name what was read. What they lose is the unqualified ``EXTERNAL``.
+
+**The audit AC-3 asks for, one verdict per member.** The question is not "is this a typed
+retrieval?" but "can this return text the model itself authored?"
+
+* ``notes_search`` — yes. ``notes_write`` is the store's only writer: durable scratch space for
+  the agent (``tools/notes_tools.py``). No external-author half at all.
+* ``artifact_list`` — yes. Queries ``type = 'artifact'`` only, so it lists exactly what
+  ``artifact_write``/``artifact_draft`` produced. No external-author half.
+* ``expand_tool_result`` — yes, and this denial is load-bearing rather than precautionary. It
+  replays any digested result verbatim from R2, and the digest pipeline explicitly handles
+  ``tool_name == "bash"`` (``orchestrator/tool_result_digest.py``), so
+  :data:`ARBITRARY_CODE_TOOLS`' own excluded stdout is reachable through a typed tool one hop
+  later.
+* ``artifact_read`` — yes. Returns the inline content of agent-generated artifacts.
+* ``find_linear_issues`` / ``list_linear_projects`` — yes. ``create_linear_issue`` and
+  ``create_linear_project`` set ``title``/``description`` verbatim from model-authored arguments,
+  and these tools read them straight back with no author field in the result.
+* ``mcp_get_document`` — yes, and it is the one member this audit reached only on the second
+  pass, because it is not in :data:`TYPED_RETRIEVAL_TOOLS` at all. It sits in
+  :data:`DOCUMENTATION_TOOLS` ("context7 and equivalents") while being, per its
+  auto-discovered description in ``config/governance/tools.yaml``, *"Retrieve a Linear document
+  by ID or slug"* — the one Linear read returning a document **body**, in a workspace
+  ``mcp_create_document``/``mcp_update_document`` write. The entitlement dispatch is independent
+  of :class:`SourceKind`, so membership here fixes it without disturbing its kind. The lesson
+  generalises: this set is keyed on the store, so a tool's presence in *any* other policy set
+  is not evidence it was audited.
+* the ``mcp_*`` Linear reads — yes, **on the store, which is verifiable here, not on their
+  schemas, which are not**. ``create_linear_issue`` writes to the same workspace they read, so
+  the store is agent-writable whatever any connector returns. This repo holds only their registry
+  membership and auto-discovered governance descriptions, not their executors, so whether any of
+  them exposes an author field is unverified — recorded rather than assumed. Under
+  most-restrictive that changes the remedy, not the verdict.
+
+**Members audited and left on ``EXTERNAL``**, so the next reader does not have to re-derive it:
+``web_search``, ``mcp_search``, ``fetch_url`` (external web, no agent write path); ``read_skill``
+(repo files, not agent-writable at runtime); ``mcp_get_mappings``, ``mcp_get_shards``,
+``mcp_list_indices`` (cluster structure, not document content); the three ``mcp_browser_*``
+observation tools (a third-party page). ``search_memory``, ``recall_personal_history`` and
+``get_location`` are content-aware instead — see :data:`_CONTENT_AWARE_ENTITLEMENT`.
+
+**Two members are audited "yes, in principle" and deliberately left ``EXTERNAL``**, ticketed
+rather than folded in because neither is fixable here (FRE-1305, FRE-1306). ``read``: the agent has a ``write`` tool,
+but ``read`` is D2's designated channel for local state, the filesystem is overwhelmingly
+authored outside the agent, and :meth:`SourceRegistry._taint` already closes the intra-turn
+``write``→``read`` pair; the residual is *cross-session*, which a turn-scoped registry cannot
+see. ``mcp_esql``: ES|QL's ``ROW a = "…"`` emits a model-authored literal with no index involved
+— the same escape hatch ``find -printf`` represents for ``bash`` — but ADR-0138 D2 explicitly
+blesses the shape ("a database query — the returned **rows** are a source"), so reclassifying it
+contradicts the ADR's own illustration and needs an amendment rather than a bugfix.
+
+**The accepted regression, stated rather than discovered later.** ``artifact_read`` also serves
+``type = 'upload'`` rows, which carry ``created_by = 'user'`` — but ``created_by`` is in neither
+its ``SELECT`` nor its output, so a genuine user upload is denied too. The Linear reads deny
+owner-filed issues for the same reason. This is not a new tradeoff: :func:`_entitlement_of`
+already documents it for Claims lacking ``asserted_by`` — an owner-stated fact that is merely
+*unlabelled* loses its citation, because the alternative is the system certifying its own errors.
+The remedy is also the same and is FRE-1299's shape, threading the author field through each
+tool's output, which is separately sequenceable per store and is FRE-1304. Meanwhile D1's
+``ATTRIBUTED_RESTATEMENT`` exemption means restating the owner's words never needed one of these
+citations, and an expanded result's originating call registered its own source in the turn that
+made it.
+"""
+
+
 class SourceRegistry:
     """The sources one turn retrieved, and the identifiers citations resolve against.
 
@@ -714,16 +1017,21 @@ class SourceRegistry:
                 reason=f"{tool_name} returned no content to cite",
             )
 
-        # FRE-1302: search_memory is the one TYPED_RETRIEVAL_TOOLS member whose content can
-        # carry Claim rows with their own asserted_by authorship (ADR-0126 D4/D5) — every
-        # other member keeps the blanket EXTERNAL a typed, model-independent retrieval earns
-        # by default. A future tool that also surfaces Claims must route through the same
-        # _search_memory_entitlement rather than gaining an unqualified EXTERNAL by omission.
-        entitlement = (
-            _search_memory_entitlement(admissible)
-            if tool_name == "search_memory"
-            else Entitlement.EXTERNAL
-        )
+        # FRE-1303: EXTERNAL is what a retrieval earns when it is independent of the model on
+        # *both* of D2's axes — the arguments did not compose the result (the parameter schema,
+        # settled above by the policy table) *and* the agent did not author what the store hands
+        # back. FRE-1302 shipped this branch treating search_memory as the sole exception; that
+        # was wrong, and recall_personal_history is why — it returns assistant_response verbatim
+        # and so held the most-trusted tier on the model's own prior words. A new typed retrieval
+        # belongs in one of the two sets below unless neither axis touches it; the module
+        # docstring and AGENT_WRITABLE_STORE_TOOLS carry the audit and the reasoning.
+        rule = _CONTENT_AWARE_ENTITLEMENT.get(tool_name)
+        if rule is not None:
+            entitlement = rule(admissible)
+        elif tool_name in AGENT_WRITABLE_STORE_TOOLS:
+            entitlement = Entitlement.AGENT_DERIVED
+        else:
+            entitlement = Entitlement.EXTERNAL
         source = self._register(
             kind=kind,
             label=tool_name,

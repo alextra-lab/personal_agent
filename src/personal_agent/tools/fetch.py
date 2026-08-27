@@ -51,6 +51,32 @@ _SKIP_TAGS = frozenset(
     ]
 )
 _BLOCK_TAGS = frozenset(["br", "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr"])
+
+# HTML5 void elements — never have a closing tag and never contain children, so there
+# is nothing to skip inside them. `html.parser` calls handle_starttag but never
+# handle_endtag for a bare void tag (e.g. `<meta charset=utf-8>`), so a void tag that
+# also sits in _SKIP_TAGS (meta, link today) must never increment skip_depth — a
+# starttag-only increment with no matching endtag would never return to 0, blanking
+# the rest of the document (FRE-1307). Checked independently of _SKIP_TAGS membership
+# so adding a future void element to _SKIP_TAGS cannot reintroduce the bug.
+_VOID_TAGS = frozenset(
+    [
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    ]
+)
 _DEFAULT_MAX_CHARS = 10_000
 _MAX_CHARS_CAP = 50_000
 _TIMEOUT = 20.0
@@ -128,7 +154,7 @@ class _TextExtractor(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
-        if tag in _SKIP_TAGS:
+        if tag in _SKIP_TAGS and tag not in _VOID_TAGS:
             self._skip_depth += 1
         elif tag in _BLOCK_TAGS:
             self._parts.append("\n")
@@ -143,6 +169,15 @@ class _TextExtractor(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
+        if tag in _VOID_TAGS:
+            # A void element never opened a skip region (handle_starttag guards the
+            # same way), so it must never close one either. Without this guard, a
+            # self-closed void tag (e.g. `<link />`) reaches here too — html.parser's
+            # default handle_startendtag calls handle_starttag then handle_endtag for
+            # self-closed tags — and would prematurely decrement an *enclosing* skip
+            # region's depth (e.g. `<head><link/><title>SECRET</title></head>` would
+            # leak "SECRET"), same shape as FRE-1307's original bug.
+            return
         if tag in _SKIP_TAGS:
             self._skip_depth = max(0, self._skip_depth - 1)
         elif tag not in _BLOCK_TAGS:
@@ -235,7 +270,8 @@ async def fetch_url_executor(
 
     Raises:
         ToolExecutionError: On invalid URL, a blocked domain, connection failure,
-            timeout, or non-2xx HTTP response.
+            timeout, non-2xx HTTP response, or a successful response that yields
+            no readable text content.
     """
     url = (url or "").strip()
     if not url:
@@ -295,6 +331,14 @@ async def fetch_url_executor(
     except Exception as exc:
         log.error("fetch_url_failed", trace_id=trace_id, url=url, error=str(exc), exc_info=True)
         raise ToolExecutionError(str(exc)) from exc
+
+    if not text.strip():
+        log.warning(
+            "fetch_url_empty_extraction", trace_id=trace_id, url=url, status=resp.status_code
+        )
+        raise ToolExecutionError(
+            f"Fetched {url} (HTTP {resp.status_code}) but extracted no readable text content."
+        )
 
     truncated = len(text) > cap
     output_text = text[:cap]

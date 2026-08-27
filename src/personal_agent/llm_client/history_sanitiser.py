@@ -31,9 +31,21 @@ log = get_logger(__name__)
 # that fell back to pseudo-code instead of native tool_calls. Leaving these in
 # assistant history teaches the next turn to mimic the same pattern, which
 # silently breaks tool execution even when tools are properly passed.
+_TOOL_CODE_CLOSE_TAG = "</tool_code>"
+
 _TOOL_CODE_BLOCK_RE: re.Pattern[str] = re.compile(
-    r"<tool_code>.*?</tool_code>\s*", re.DOTALL | re.IGNORECASE
+    rf"<tool_code>.*?{re.escape(_TOOL_CODE_CLOSE_TAG)}\s*", re.DOTALL | re.IGNORECASE
 )
+
+
+def _may_contain_tool_code_block(content: str) -> bool:
+    """Cheap pre-check before running ``_TOOL_CODE_BLOCK_RE`` (FRE-1308).
+
+    A string with no closing tag cannot possibly match, so the lazy ``.*?``
+    under ``DOTALL`` never needs to run its O(k·n) backtracking search over
+    every ``<tool_code>`` open with no closer.
+    """
+    return _TOOL_CODE_CLOSE_TAG in content.lower()
 
 
 @dataclass(frozen=True)
@@ -302,6 +314,7 @@ def _strip_tool_code_blocks(
     has_block = any(
         m.get("role") == "assistant"
         and isinstance(m.get("content"), str)
+        and _may_contain_tool_code_block(m["content"])
         and _TOOL_CODE_BLOCK_RE.search(m["content"])
         for m in messages
     )
@@ -318,6 +331,9 @@ def _strip_tool_code_blocks(
             continue
 
         content: str = msg["content"]
+        if not _may_contain_tool_code_block(content):
+            result.append(msg)
+            continue
         new_content, n = _TOOL_CODE_BLOCK_RE.subn("", content)
         if n == 0:
             result.append(msg)

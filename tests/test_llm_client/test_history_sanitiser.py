@@ -1,5 +1,6 @@
 """Unit tests for history_sanitiser — all four cases per FRE-237."""
 
+import time
 from typing import Any
 
 import pytest
@@ -426,3 +427,40 @@ class TestToolCodeStripping:
         ]
         sanitised, _ = sanitise_messages(messages)
         assert sanitised[0]["content"] == messages[0]["content"]
+
+
+# ---------------------------------------------------------------------------
+# FRE-1308 — polynomial ReDoS guard on _TOOL_CODE_BLOCK_RE
+# ---------------------------------------------------------------------------
+
+
+class TestToolCodePolynomialRedosGuard:
+    def test_many_unclosed_opens_completes_fast(self) -> None:
+        """AC-1 — 20,000 unclosed <tool_code> opens must not trigger the O(k·n) regex blowup.
+
+        Pre-guard this took ~25s (measured on the ticket). The bound here is far
+        looser than the guarded ~0.0004s so the assertion holds on slow CI
+        runners without becoming decorative (AC-5: fails hard against the
+        unguarded regex, which blows well past a full second on this input).
+        """
+        poisoned = "<tool_code>" * 20_000
+        messages = [_assistant(content=poisoned)]
+
+        start = time.monotonic()
+        sanitise_messages(messages)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0, f"took {elapsed:.3f}s — polynomial regex blowup regressed (FRE-1308)"
+
+    def test_many_opens_with_one_trailing_close_still_stripped_and_fast(self) -> None:
+        """AC-2 — many opens with a single trailing close still strip correctly, and stay fast."""
+        content = "<tool_code>" * 8_000 + "</tool_code>"
+        messages = [_assistant(content=content)]
+
+        start = time.monotonic()
+        sanitised, report = sanitise_messages(messages)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0
+        assert all(m.get("role") != "assistant" for m in sanitised)
+        assert report.was_dirty

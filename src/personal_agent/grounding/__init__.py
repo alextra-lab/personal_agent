@@ -38,6 +38,14 @@ citation, the registry decides *what* a citation may resolve to, and these join 
 - :mod:`personal_agent.grounding.enforcement` — D4: block, retry with retrieval forced,
   then the explicit no-source statement.
 
+**How well a model actually holds to it** (FRE-1284) — the reading D5's enforcement
+selection is keyed on:
+
+- :mod:`personal_agent.grounding.compliance` — the per-model compliance metric: the
+  unconfounded-observation predicate, the rolling window, and the staleness rule that makes
+  compliance re-earned rather than banked. It computes a reading and decides nothing; what
+  follows from the reading is FRE-1285.
+
 **Whether this blocks a turn is one setting.** ``grounding_verification_mode`` runs the
 pass and records every outcome by default (``observe``) and blocks on ``enforce``, which is
 the ADR-compliant value. It is a deploy valve and emphatically **not** D5's enforcement

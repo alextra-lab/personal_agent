@@ -552,3 +552,40 @@ class KgStatModel(Base):
             postgresql_nulls_not_distinct=True,
         ),
     )
+
+
+class GroundingComplianceObservationModel(Base):
+    """SQLAlchemy model for the grounding_compliance_observations table.
+
+    One row per **unconfounded** turn (ADR-0138 D5 / FRE-1284): verification ran, the turn
+    contained at least one non-exempt span, and retrieval was not forced before generation.
+    Pre-forced turns are absent by construction rather than filtered on read — heavy
+    enforcement supplies sources before generation, so scoring those turns measures the
+    enforcement rather than the model, and a stored pre-forced row is a row that could
+    later be counted by mistake.
+
+    See migrations/0029_grounding_compliance_observations.sql for the full rationale.
+    """
+
+    __tablename__ = "grounding_compliance_observations"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    # server_default mirrors init.sql / migration 0029's ``DEFAULT NOW()`` -- see
+    # SessionModelSelectionModel's created_at comment for why this matters if the app
+    # boots and calls create_all before the migration has run. The writer always passes
+    # an explicit value: this is the *verification* instant, and the write is
+    # backgrounded, so letting the default stand would record insertion lag as turn age
+    # and weaken exactly the staleness guarantee the column feeds.
+    observed_at = Column(
+        DateTime(timezone=True), nullable=False, default=datetime.now, server_default=func.now()
+    )
+    # The catalog deployment key that actually answered, never the role name: an
+    # attachment-routed turn resolves to a different model than its role, and crediting
+    # one model's turns to another buys a promotion with someone else's compliance.
+    model_key = Column(String(255), nullable=False)
+    compliant = Column(Boolean, nullable=False)
+    # UNIQUE: one observation per turn. `_record_grounding` has a single call site and
+    # only attempt 1 is ever eligible, so a second row for a trace is a defect rather
+    # than a legitimate second observation -- and the writer's ON CONFLICT DO NOTHING
+    # makes a replay idempotent instead of inflating the numerator.
+    trace_id = Column(String(64), nullable=False, unique=True)

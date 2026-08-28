@@ -1,0 +1,306 @@
+# FRE-1284 — labelled turn-compliance corpus (ADR-0138 D5, AC-1)
+#
+# Each document is one turn, labelled BY HAND from the raw reply: which segments assert
+# something about the world, and whether the turn as a whole complied. The labels were
+# authored against ADR-0138 D1's exempt-region table and D3's three gates, never by
+# running the extractor and recording what it said — ADR-0138 AC-1 rules that circular
+# ("an extractor that recognises nothing would trivially find nothing uncited").
+#
+# WHAT THIS CORPUS IS FOR, AND WHAT IT IS NOT FOR.
+# It scores the METRIC's aggregation rule: a turn is compliant only if EVERY non-exempt
+# span passes, and a turn with no non-exempt span is not in the denominator at all. It is
+# NOT a second measurement of the span extractor — that is FRE-1281's corpus, and
+# re-scoring it here would measure the same thing twice and call the agreement evidence.
+#
+# DELIBERATELY ABSENT: the entity-free bare-predicate class ("that one is high in
+# mercury"). Containment cannot settle those and D3(d) escalates them to a live judge, so
+# their verdict is not deterministic and could not be hand-labelled honestly here.
+# FRE-1286's corpus owns that class.
+#
+# `{{S1}}` placeholders are rewritten by the harness into the real minted citation
+# markers. Identifiers are content- and turn-bound, so hand-writing one would be a
+# fabricated digest that resolves to nothing. `{{UNKNOWN}}` is the reserved placeholder
+# for a well-formed marker that deliberately resolves to no registered source.
+#
+# Documents are grounded but invented — no transcripts, no PII, no deployment identifiers.
+#
+# partition: dev documents may be inspected per-document while iterating; heldout
+# documents are reported in aggregate only.
+
+schema_version: 1
+corpus_version: "2026-08-28.1"
+
+documents:
+
+  # ── compliant turns ─────────────────────────────────────────────────────────
+
+  - doc_id: c01-compliant-single
+    partition: dev
+    user_message: "What oil is Ortiz tuna packed in?"
+    sources:
+      - ref: S1
+        kind: tool
+        tool: web_search
+        arguments:
+          query: "Ortiz yellowfin tuna olive oil"
+        content: |
+          Ortiz is a Basque cannery founded in 1891. Ortiz packs its yellowfin tuna in
+          olive oil and sells the tins across France and Spain.
+    text: |
+      Ortiz packs its yellowfin tuna in olive oil{{S1}}.
+    spans:
+      - text: "Ortiz packs its yellowfin tuna in olive oil"
+        label: claim_non_exempt
+    denominator: true
+    compliant: true
+    note: "The base case. One assertion, one citation, source contains it."
+
+  - doc_id: c02-mixed-compliant
+    partition: dev
+    user_message: "Should I buy the Ortiz tins?"
+    sources:
+      - ref: S1
+        kind: tool
+        tool: web_search
+        arguments:
+          query: "Ortiz yellowfin tuna olive oil"
+        content: |
+          Ortiz packs its yellowfin tuna in olive oil, and the tins are stocked by most
+          French supermarkets.
+    text: |
+      Ortiz packs its yellowfin tuna in olive oil{{S1}}. I would go with those.
+    spans:
+      - text: "Ortiz packs its yellowfin tuna in olive oil"
+        label: claim_non_exempt
+      - text: "I would go with those"
+        label: claim_exempt
+        region: connective_evaluative
+    denominator: true
+    compliant: true
+    note: "An exempt recommendation alongside a cited assertion must not cost the turn."
+
+  # ── the killer case AC-1 names explicitly ───────────────────────────────────
+
+  - doc_id: c03-one-cited-one-not
+    partition: dev
+    user_message: "Which tuna should I buy, and is bigeye worse?"
+    sources:
+      - ref: S1
+        kind: tool
+        tool: web_search
+        arguments:
+          query: "Ortiz yellowfin tuna olive oil"
+        content: |
+          Ortiz packs its yellowfin tuna in olive oil.
+    text: |
+      Ortiz packs its yellowfin tuna in olive oil{{S1}}. Bigeye tuna carries more mercury than yellowfin.
+    spans:
+      - text: "Ortiz packs its yellowfin tuna in olive oil"
+        label: claim_non_exempt
+      - text: "Bigeye tuna carries more mercury than yellowfin"
+        label: claim_non_exempt
+    denominator: true
+    compliant: false
+    note: >
+      THE case AC-1 is written around. One citation is present and passes; a second
+      assertion carries none. An implementation scoring a turn compliant because at least
+      one citation is present marks this true and fails AC-1 here.
+
+  # ── each gate, failing on its own ───────────────────────────────────────────
+
+  - doc_id: c04-uncited
+    partition: dev
+    user_message: "What oil is Ortiz tuna packed in?"
+    sources: []
+    text: |
+      Ortiz packs its yellowfin tuna in olive oil.
+    spans:
+      - text: "Ortiz packs its yellowfin tuna in olive oil"
+        label: claim_non_exempt
+    denominator: true
+    compliant: false
+    note: "No marker at all — D1's default-deny, the plain non-compliant turn."
+
+  - doc_id: c05-not-contained
+    partition: dev
+    user_message: "What oil is Ortiz tuna packed in?"
+    sources:
+      - ref: S1
+        kind: tool
+        tool: web_search
+        arguments:
+          query: "Ortiz cannery"
+        content: |
+          Ortiz is a Basque cannery based in Ondarroa, and its tins are sold across France.
+    text: |
+      Ortiz packs its yellowfin tuna in sunflower oil{{S1}}.
+    spans:
+      - text: "Ortiz packs its yellowfin tuna in sunflower oil"
+        label: claim_non_exempt
+    denominator: true
+    compliant: false
+    note: >
+      Cited, resolvable, reachable — and the source does not say it. Fails D3(c) as
+      `unverifiable_by_containment`: the source states the claim's entity but not
+      "sunflower", which the normalizer will not rule out as paraphrase. c11 covers the
+      clean `not_contained` half of the same gate. ADR-0138 AC-6 keeps the two apart
+      because one is a limit of our normalizer and one is the turn having nothing to
+      stand on — but both are non-compliant, which is all this metric asks.
+
+  - doc_id: c06-unresolved-identifier
+    partition: dev
+    user_message: "What oil is Ortiz tuna packed in?"
+    sources: []
+    text: |
+      Ortiz packs its yellowfin tuna in olive oil{{UNKNOWN}}.
+    spans:
+      - text: "Ortiz packs its yellowfin tuna in olive oil"
+        label: claim_non_exempt
+    denominator: true
+    compliant: false
+    note: "A well-formed marker naming a source this turn never registered (D3(a))."
+
+  - doc_id: c07-agent-derived-memory
+    partition: dev
+    user_message: "When did I start the tuna experiment?"
+    sources:
+      - ref: S1
+        kind: memory
+        asserted_by: agent
+        identity: "claim:tuna-experiment-start"
+        content: |
+          The tuna experiment started on 3 March 2026.
+    text: |
+      The tuna experiment started on 3 March 2026{{S1}}.
+    spans:
+      - text: "The tuna experiment started on 3 March 2026"
+        label: claim_non_exempt
+    denominator: true
+    compliant: false
+    note: >
+      The live 2026-08-26 failure, encoded. The source contains the claim exactly, because
+      the source IS the claim — an agent-asserted memory. Containment passes and the turn
+      must still fail, on entitlement (D2).
+
+  # ── outside the denominator ─────────────────────────────────────────────────
+
+  - doc_id: c08-no-non-exempt-span
+    partition: dev
+    user_message: "Shall I go with the first option?"
+    sources: []
+    text: |
+      That sounds like a reasonable plan to me. I would go with the first option.
+    spans:
+      - text: "That sounds like a reasonable plan to me"
+        label: claim_exempt
+        region: connective_evaluative
+      - text: "I would go with the first option"
+        label: claim_exempt
+        region: connective_evaluative
+    denominator: false
+    compliant: null
+    note: >
+      No non-exempt span, so the turn is not in the denominator — which is exactly the
+      hole window staleness exists to close: a model emitting only these would coast.
+
+  # ── heldout ─────────────────────────────────────────────────────────────────
+
+  - doc_id: c09-two-sources-compliant
+    partition: heldout
+    user_message: "Tell me about Ortiz and about the Ondarroa plant."
+    sources:
+      - ref: S1
+        kind: tool
+        tool: web_search
+        arguments:
+          query: "Ortiz yellowfin olive oil"
+        content: |
+          Ortiz packs its yellowfin tuna in olive oil.
+      - ref: S2
+        kind: tool
+        tool: web_search
+        arguments:
+          query: "Ortiz Ondarroa cannery"
+        content: |
+          The Ortiz cannery in Ondarroa has operated since 1891.
+    text: |
+      Ortiz packs its yellowfin tuna in olive oil{{S1}}. The Ortiz cannery in Ondarroa has operated since 1891{{S2}}.
+    spans:
+      - text: "Ortiz packs its yellowfin tuna in olive oil"
+        label: claim_non_exempt
+      - text: "The Ortiz cannery in Ondarroa has operated since 1891"
+        label: claim_non_exempt
+    denominator: true
+    compliant: true
+    note: "Every span cited, to different sources, each containing its own claim."
+
+  - doc_id: c10-user-stated-memory-compliant
+    partition: heldout
+    user_message: "What did I say my tinned-fish budget was?"
+    sources:
+      - ref: S1
+        kind: memory
+        asserted_by: user
+        identity: "claim:tinned-fish-budget"
+        content: |
+          The monthly tinned-fish budget is 40 euros.
+    text: |
+      The monthly tinned-fish budget is 40 euros{{S1}}.
+    spans:
+      - text: "The monthly tinned-fish budget is 40 euros"
+        label: claim_non_exempt
+    denominator: true
+    compliant: true
+    note: >
+      The negative control for c07. Same shape, same containment, opposite entitlement —
+      so c07's failure is provably entitlement rather than something incidental.
+
+  - doc_id: c11-second-span-wrong-source
+    partition: heldout
+    user_message: "Ortiz and mercury, please."
+    sources:
+      - ref: S1
+        kind: tool
+        tool: web_search
+        arguments:
+          query: "Ortiz yellowfin olive oil"
+        content: |
+          Ortiz packs its yellowfin tuna in olive oil.
+      - ref: S2
+        kind: tool
+        tool: web_search
+        arguments:
+          query: "Ortiz cannery history"
+        content: |
+          The Ortiz cannery in Ondarroa has operated since 1891.
+    text: |
+      Ortiz packs its yellowfin tuna in olive oil{{S1}}. Bigeye tuna carries more mercury than yellowfin{{S2}}.
+    spans:
+      - text: "Ortiz packs its yellowfin tuna in olive oil"
+        label: claim_non_exempt
+      - text: "Bigeye tuna carries more mercury than yellowfin"
+        label: claim_non_exempt
+    denominator: true
+    compliant: false
+    note: "Both spans carry a marker; the second's source is about something else."
+
+  - doc_id: c12-uncited-among-exempt
+    partition: heldout
+    user_message: "Anything else worth knowing?"
+    sources: []
+    text: |
+      That is a sensible choice. Bigeye tuna carries more mercury than yellowfin. I would stick with what you have.
+    spans:
+      - text: "That is a sensible choice"
+        label: claim_exempt
+        region: connective_evaluative
+      - text: "Bigeye tuna carries more mercury than yellowfin"
+        label: claim_non_exempt
+      - text: "I would stick with what you have"
+        label: claim_exempt
+        region: connective_evaluative
+    denominator: true
+    compliant: false
+    note: >
+      One uncited assertion buried between two exempt ones. A turn is not excused by the
+      exempt majority — the aggregation is over non-exempt spans only, and all of them.

@@ -306,6 +306,21 @@ CREATE TABLE IF NOT EXISTS kg_stats (
 );
 CREATE INDEX IF NOT EXISTS idx_kg_stats_metric_time ON kg_stats(metric_name, observed_at DESC);
 
+-- ADR-0138 D5's per-model citation-compliance metric (FRE-1284). One row per
+-- UNCONFOUNDED turn -- verification ran, at least one non-exempt span, retrieval
+-- not pre-forced. See migrations/0029_grounding_compliance_observations.sql for
+-- why pre-forced turns are absent rather than filtered, why this is a table
+-- rather than the structured log, and why trace_id is unique.
+CREATE TABLE IF NOT EXISTS grounding_compliance_observations (
+    id           BIGSERIAL PRIMARY KEY,
+    observed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    model_key    VARCHAR(255) NOT NULL,
+    compliant    BOOLEAN NOT NULL,
+    trace_id     VARCHAR(64) NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS idx_grounding_compliance_model_time
+    ON grounding_compliance_observations(model_key, observed_at DESC);
+
 -- Backfill — populate the unscoped (_total) counter rows for the current
 -- daily and weekly windows from existing api_costs aggregates so the gate
 -- sees existing spend on first start. Per-role backfill isn't possible
@@ -666,7 +681,8 @@ GRANT SELECT ON
     public.budget_reservations,
     public.kg_stats,
     public.consolidation_attempts,
-    public.artifacts
+    public.artifacts,
+    public.grounding_compliance_observations
 TO grafana_ro;
 
 GRANT USAGE ON SCHEMA sysgraph TO grafana_ro;

@@ -1056,6 +1056,14 @@ class TestDeicticDescriptionResolution:
         original = "A configuration setting in the username field."
         assert resolve_deictic_description(original) == original
 
+    def test_hyphenated_compound_is_not_a_match(self) -> None:
+        """Regression guard — ``\\b`` treats a hyphen as a boundary exactly like a
+        space, so "the User-Agent string" must not match "the user" and get mangled
+        into "the other party-Agent".
+        """
+        original = "The User-Agent string identifies the client software."
+        assert resolve_deictic_description(original) == original
+
     def test_non_deictic_description_is_returned_unchanged(self) -> None:
         original = "A graph database management system storing nodes and edges."
         assert resolve_deictic_description(original) == original

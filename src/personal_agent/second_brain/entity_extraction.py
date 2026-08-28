@@ -398,13 +398,16 @@ def prompt_material_for_hash() -> str:
     return _EXTRACTION_SYSTEM_PROMPT + _EXTRACTION_PROMPT_TEMPLATE + _fewshot_block()
 
 
-_DEICTIC_USER_RE = re.compile(r"\bthe user\b", re.IGNORECASE)
+_DEICTIC_USER_RE = re.compile(r"\bthe user\b(?!-)", re.IGNORECASE)
 """Matches a stored description referring to "the user" (FRE-1153).
 
 Mirrors the render-time pattern in ``orchestrator/executor.py`` (FRE-1150):
 word-bounded so "the username field" does not match; matches inside "the user's"
 because the apostrophe is a ``\\b`` boundary, and the match span excludes the "'s"
-suffix, which survives substitution unchanged.
+suffix, which survives substitution unchanged. The trailing ``(?!-)`` excludes a
+hyphenated compound like "the User-Agent string" — ``\\b`` treats a hyphen as a
+boundary exactly like a space, so without this guard "User-Agent" would otherwise
+match "the user" and get mangled into "the other party-Agent".
 """
 
 _DEICTIC_REPLACEMENT = "the other party"

@@ -554,10 +554,150 @@ def test_main_corrupt_ledger_exits_nonzero_and_warns(
     assert "corrupt" in captured.err.lower()
 
 
-def test_main_requires_unconsumed_flag(tmp_path: Path) -> None:
+def test_main_requires_a_mode_flag(tmp_path: Path) -> None:
     path = tmp_path / "trigger_ledger.json"
     with pytest.raises(SystemExit):
         main(["--ledger-file", str(path), "--json"])
+
+
+def test_main_rejects_both_unconsumed_and_all(tmp_path: Path) -> None:
+    path = tmp_path / "trigger_ledger.json"
+    with pytest.raises(SystemExit):
+        main(["--ledger-file", str(path), "--unconsumed", "--all", "--json"])
+
+
+# --- FRE-1271: --all shows consumed entries too, distinguishing sent/abandoned ---
+
+
+def test_main_all_json_includes_consumed_sent_entry(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, _ = _record({}, now=100.0)
+    ledger = mark_send_started(ledger, "master:412:abc123", 100.0)
+    ledger = mark_sent(ledger, "master:412:abc123", 100.0)
+    ledger = mark_consumed(ledger, "master:412:abc123", 100.0)
+    path = tmp_path / "trigger_ledger.json"
+    save_ledger(path, ledger)
+
+    exit_code = main(["--ledger-file", str(path), "--all", "--json"])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert len(payload) == 1
+    assert payload[0]["event_id"] == "master:412:abc123"
+    assert payload[0]["sent_at"] == 100.0
+    assert payload[0]["consumed_at"] == 100.0
+
+
+def test_main_all_text_labels_sent_entry(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    ledger, _ = _record({}, now=100.0)
+    ledger = mark_send_started(ledger, "master:412:abc123", 100.0)
+    ledger = mark_sent(ledger, "master:412:abc123", 100.0)
+    ledger = mark_consumed(ledger, "master:412:abc123", 100.0)
+    path = tmp_path / "trigger_ledger.json"
+    save_ledger(path, ledger)
+
+    assert main(["--ledger-file", str(path), "--all"]) == 0
+    assert "[sent]" in capsys.readouterr().out
+
+
+def test_main_all_text_labels_abandoned_entry(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    # consumed_at set, sent_at never set -- a busy/absent skip closed out without delivering.
+    ledger, _ = _record({}, now=100.0)
+    ledger = mark_send_started(ledger, "master:412:abc123", 100.0)
+    ledger = mark_consumed(ledger, "master:412:abc123", 100.0)
+    path = tmp_path / "trigger_ledger.json"
+    save_ledger(path, ledger)
+
+    assert main(["--ledger-file", str(path), "--all"]) == 0
+    assert "[abandoned]" in capsys.readouterr().out
+
+
+def test_main_all_includes_every_state_in_one_ledger(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, _ = record_pending(
+        {},
+        event_id="pending:1",
+        source="master-ready",
+        target_pane="cc-master",
+        ticket="1",
+        command="/master 1",
+        preconditions={},
+        now=100.0,
+        ttl_s=600.0,
+    )
+    ledger, _ = record_pending(
+        ledger,
+        event_id="queued:2",
+        source="master-ready",
+        target_pane="cc-master",
+        ticket="2",
+        command="/master 2",
+        preconditions={},
+        now=100.0,
+        ttl_s=600.0,
+    )
+    ledger = mark_send_started(ledger, "queued:2", 100.0)
+    ledger = mark_queued(ledger, "queued:2", 100.0)
+    ledger, _ = record_pending(
+        ledger,
+        event_id="surfaced:3",
+        source="master-ready",
+        target_pane="cc-master",
+        ticket="3",
+        command="/master 3",
+        preconditions={},
+        now=100.0,
+        ttl_s=600.0,
+    )
+    ledger = mark_send_started(ledger, "surfaced:3", 100.0)
+    ledger = mark_surfaced(ledger, "surfaced:3", 100.0)
+    ledger, _ = record_pending(
+        ledger,
+        event_id="sent:4",
+        source="master-ready",
+        target_pane="cc-master",
+        ticket="4",
+        command="/master 4",
+        preconditions={},
+        now=100.0,
+        ttl_s=600.0,
+    )
+    ledger = mark_send_started(ledger, "sent:4", 100.0)
+    ledger = mark_sent(ledger, "sent:4", 100.0)
+    ledger = mark_consumed(ledger, "sent:4", 100.0)
+    ledger, _ = record_pending(
+        ledger,
+        event_id="abandoned:5",
+        source="worker-ci-red",
+        target_pane="cc-build1",
+        ticket="5",
+        command="/prime-worker",
+        preconditions={},
+        now=100.0,
+        ttl_s=600.0,
+    )
+    ledger = mark_send_started(ledger, "abandoned:5", 100.0)
+    ledger = mark_consumed(ledger, "abandoned:5", 100.0)
+    path = tmp_path / "trigger_ledger.json"
+    save_ledger(path, ledger)
+
+    exit_all = main(["--ledger-file", str(path), "--all", "--json"])
+    assert exit_all == 0
+    all_entries = {e["event_id"]: e for e in json.loads(capsys.readouterr().out)}
+    assert set(all_entries) == {"pending:1", "queued:2", "surfaced:3", "sent:4", "abandoned:5"}
+    # consumed_at distinguishes sent from abandoned -- both close out consumed,
+    # but only sent:4 was ever actually delivered.
+    assert all_entries["sent:4"]["consumed_at"] == 100.0
+    assert all_entries["sent:4"]["sent_at"] == 100.0
+    assert all_entries["abandoned:5"]["consumed_at"] == 100.0
+    assert all_entries["abandoned:5"]["sent_at"] is None
+
+    exit_unconsumed = main(["--ledger-file", str(path), "--unconsumed", "--json"])
+    assert exit_unconsumed == 0
+    unconsumed_ids = {e["event_id"] for e in json.loads(capsys.readouterr().out)}
+    assert unconsumed_ids == {"pending:1", "queued:2", "surfaced:3"}
 
 
 # --- FRE-939: unconfirmed delivery is a fourth state, not a crash state -----

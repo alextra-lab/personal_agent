@@ -112,18 +112,17 @@ def test_ac3_send_keys_never_delivers_into_a_name_extension_seat() -> None:
     outcome = send_to_session(_DEAD_SEAT, "/master 42", runner, require_idle=False)
 
     # The recorder returns an empty pane, which reads busy (fail-safe), so a
-    # require_idle=False send is delivered-but-unconfirmed (FRE-939). Either
-    # outcome injects the keys — this test is about WHERE they land.
+    # require_idle=False send is deferred rather than injected (FRE-1271). No
+    # send-keys call happens at all on this path — the exact-match contract
+    # this test pins is on has-session/capture-pane, proven below.
     assert outcome == "queued"
+    assert not any("send-keys" in argv for argv in runner.calls)
     targets = _targets(runner.calls)
     # Every target is exact-matched...
     assert all(t.startswith("=") for t in targets), targets
     # ...and none can resolve to the live name-extension seat.
     for target in targets:
         assert not target.startswith(f"={_LIVE_NAME_EXTENSION}")
-    # send-keys targets are PANE targets — a bare "=name" errors at runtime.
-    send_targets = [argv[argv.index("-t") + 1] for argv in runner.calls if "send-keys" in argv]
-    assert send_targets == [exact_pane(_DEAD_SEAT), exact_pane(_DEAD_SEAT)]
 
 
 def test_ac3_idle_guard_reads_the_right_pane() -> None:

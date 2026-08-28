@@ -1,9 +1,9 @@
 """Tests for parsing text-based tool calls."""
 
 import json
+import time
 
 from personal_agent.llm_client.tool_call_parser import parse_text_tool_calls
-
 
 # ── Strategy 1: [TOOL_REQUEST] ──────────────────────────────────────────────
 
@@ -164,9 +164,7 @@ def test_parse_tool_code_no_args() -> None:
 def test_parse_tool_code_kwargs_only() -> None:
     """Parses `<tool_code>print(fn(key=value))</tool_code>` with kwargs."""
     content = (
-        "<tool_code>\n"
-        'print(self_telemetry_query(query_type="errors", limit=10))\n'
-        "</tool_code>"
+        '<tool_code>\nprint(self_telemetry_query(query_type="errors", limit=10))\n</tool_code>'
     )
     calls = parse_text_tool_calls(content)
     assert len(calls) == 1
@@ -194,3 +192,68 @@ def test_parse_tool_code_bare_call_no_print() -> None:
     assert len(calls) == 1
     assert calls[0]["name"] == "self_telemetry_query"
     assert json.loads(calls[0]["arguments"]) == {"query_type": "errors"}
+
+
+def test_parse_tool_code_mixed_case_tags() -> None:
+    """Tags are matched case-insensitively, same as the original regex's IGNORECASE."""
+    content = "<TOOL_CODE>\nprint(infra_health())\n</Tool_Code>"
+    calls = parse_text_tool_calls(content)
+    assert len(calls) == 1
+    assert calls[0]["name"] == "infra_health"
+
+
+# ---------------------------------------------------------------------------
+# FRE-1309 — polynomial ReDoS guard on Strategy 5's <tool_code> extraction
+# ---------------------------------------------------------------------------
+
+
+class TestToolCodePolynomialRedosGuard:
+    def test_many_unclosed_opens_completes_fast(self) -> None:
+        """AC-1 — 20,000 unclosed <tool_code> opens must not trigger the O(k·n) regex blowup.
+
+        Measured on the ticket: ~28.7s unguarded. The bound here is far looser
+        than the guarded runtime so the assertion holds on slow CI runners
+        without becoming decorative.
+        """
+        poisoned = "<tool_code>" * 20_000
+
+        start = time.monotonic()
+        calls = parse_text_tool_calls(poisoned)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0, f"took {elapsed:.3f}s — polynomial regex blowup regressed (FRE-1309)"
+        assert calls == []
+
+    def test_closer_before_many_unmatched_opens_completes_fast(self) -> None:
+        """AC-2 — a closer positioned BEFORE a long run of unmatched opens must also stay fast.
+
+        A containment-only pre-check (does the string contain a closer at
+        all?) passes on this input yet the original regex still scans the
+        entire unmatched suffix — measured at ~28.4s. This is the reason
+        FRE-1309 needed a linear scanner rather than the FRE-1308 pre-check
+        pattern reused as-is.
+        """
+        content = "</tool_code>" + "<tool_code>" * 20_000
+
+        start = time.monotonic()
+        calls = parse_text_tool_calls(content)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0, f"took {elapsed:.3f}s — polynomial regex blowup regressed (FRE-1309)"
+        assert calls == []
+
+    def test_one_valid_block_then_many_unmatched_opens_completes_fast(self) -> None:
+        """AC-3 — a real call before the unmatched run still parses, and stays fast.
+
+        Measured at ~28.3s unguarded (one valid block followed by 20,000
+        unmatched opens).
+        """
+        content = "<tool_code>\nprint(infra_health())\n</tool_code>" + "<tool_code>" * 20_000
+
+        start = time.monotonic()
+        calls = parse_text_tool_calls(content)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0, f"took {elapsed:.3f}s — polynomial regex blowup regressed (FRE-1309)"
+        assert len(calls) == 1
+        assert calls[0]["name"] == "infra_health"

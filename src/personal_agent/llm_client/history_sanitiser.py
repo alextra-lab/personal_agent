@@ -22,6 +22,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from personal_agent.llm_client.tool_code_blocks import iter_tool_code_blocks
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.events import HISTORY_SANITISED
 
@@ -31,21 +32,10 @@ log = get_logger(__name__)
 # that fell back to pseudo-code instead of native tool_calls. Leaving these in
 # assistant history teaches the next turn to mimic the same pattern, which
 # silently breaks tool execution even when tools are properly passed.
-_TOOL_CODE_CLOSE_TAG = "</tool_code>"
-
-_TOOL_CODE_BLOCK_RE: re.Pattern[str] = re.compile(
-    rf"<tool_code>.*?{re.escape(_TOOL_CODE_CLOSE_TAG)}\s*", re.DOTALL | re.IGNORECASE
-)
-
-
-def _may_contain_tool_code_block(content: str) -> bool:
-    """Cheap pre-check before running ``_TOOL_CODE_BLOCK_RE`` (FRE-1308).
-
-    A string with no closing tag cannot possibly match, so the lazy ``.*?``
-    under ``DOTALL`` never needs to run its O(k·n) backtracking search over
-    every ``<tool_code>`` open with no closer.
-    """
-    return _TOOL_CODE_CLOSE_TAG in content.lower()
+# Extraction is via iter_tool_code_blocks (FRE-1309) rather than a regex — see
+# that module's docstring for why a lazy-.*?-under-DOTALL regex, even guarded
+# by a containment pre-check (FRE-1308), stays polynomial.
+_TRAILING_WHITESPACE_RE: re.Pattern[str] = re.compile(r"\s*")
 
 
 @dataclass(frozen=True)
@@ -314,8 +304,7 @@ def _strip_tool_code_blocks(
     has_block = any(
         m.get("role") == "assistant"
         and isinstance(m.get("content"), str)
-        and _may_contain_tool_code_block(m["content"])
-        and _TOOL_CODE_BLOCK_RE.search(m["content"])
+        and next(iter_tool_code_blocks(m["content"]), None) is not None
         for m in messages
     )
     if not has_block:
@@ -331,16 +320,22 @@ def _strip_tool_code_blocks(
             continue
 
         content: str = msg["content"]
-        if not _may_contain_tool_code_block(content):
-            result.append(msg)
-            continue
-        new_content, n = _TOOL_CODE_BLOCK_RE.subn("", content)
-        if n == 0:
+        spans = list(iter_tool_code_blocks(content))
+        if not spans:
             result.append(msg)
             continue
 
-        blocks_stripped += n
-        new_content = new_content.strip()
+        parts: list[str] = []
+        cursor = 0
+        for start, end, _body in spans:
+            ws_match = _TRAILING_WHITESPACE_RE.match(content, end)
+            block_end = ws_match.end() if ws_match else end
+            parts.append(content[cursor:start])
+            cursor = block_end
+        parts.append(content[cursor:])
+        new_content = "".join(parts).strip()
+
+        blocks_stripped += len(spans)
 
         # Drop the assistant turn if it had nothing but tool_code and no tool_calls.
         if not new_content and not msg.get("tool_calls"):

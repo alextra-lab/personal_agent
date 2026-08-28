@@ -22,6 +22,7 @@ import re
 from ast import literal_eval as _literal  # safe: evaluates only Python literals
 from typing import Any
 
+from personal_agent.llm_client.tool_code_blocks import iter_tool_code_blocks
 from personal_agent.llm_client.types import ToolCall
 from personal_agent.telemetry import get_logger
 
@@ -149,11 +150,6 @@ def _parse_python_call_expr(expr: str) -> dict[str, Any] | None:
             return None
 
     return {"name": node.func.id, "arguments": arguments}
-
-
-_TOOL_CODE_BLOCK_RE: re.Pattern[str] = re.compile(
-    r"<tool_code>(.*?)</tool_code>", re.DOTALL | re.IGNORECASE
-)
 
 
 def _parse_tool_code_block(block: str) -> dict[str, Any] | None:
@@ -351,7 +347,7 @@ def parse_text_tool_calls(content: str, trace_id: str | None = None) -> list[Too
     # Strategy 5: <tool_code>print(fn(...))</tool_code>  (Gemini-style)
     # Also covers bare fn(...) inside tool_code when sessions are poisoned by
     # prior mimicked assistant output.
-    for match in _TOOL_CODE_BLOCK_RE.findall(content):
+    for _, _, match in iter_tool_code_blocks(content):
         parsed = _parse_tool_code_block(match)
         if parsed is None:
             log.warning(

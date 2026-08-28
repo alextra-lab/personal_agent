@@ -430,7 +430,7 @@ class TestToolCodeStripping:
 
 
 # ---------------------------------------------------------------------------
-# FRE-1308 — polynomial ReDoS guard on _TOOL_CODE_BLOCK_RE
+# FRE-1308 / FRE-1309 — polynomial ReDoS guard on tool_code block extraction
 # ---------------------------------------------------------------------------
 
 
@@ -463,4 +463,59 @@ class TestToolCodePolynomialRedosGuard:
 
         assert elapsed < 1.0
         assert all(m.get("role") != "assistant" for m in sanitised)
+        assert report.was_dirty
+
+    def test_closer_before_many_unmatched_opens_completes_fast(self) -> None:
+        """AC-3 (FRE-1309) — a closer BEFORE a long unmatched run must also stay fast.
+
+        FRE-1308's containment-only pre-check (does the string contain a
+        closer at all?) passes on this input, yet the original regex still
+        scans the whole unmatched suffix — measured at ~26.8s. This is why
+        FRE-1309 replaced the pre-check with a linear scanner.
+        """
+        content = "</tool_code>" + "<tool_code>" * 20_000
+        messages = [_assistant(content=content)]
+
+        start = time.monotonic()
+        sanitise_messages(messages)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0, f"took {elapsed:.3f}s — polynomial regex blowup regressed (FRE-1309)"
+
+    def test_valid_block_then_many_unmatched_opens_still_stripped_and_fast(self) -> None:
+        """AC-4 (FRE-1309) — a real block before the unmatched run is still stripped, and stays fast."""
+        content = "<tool_code>\nprint(infra_health())\n</tool_code>" + "<tool_code>" * 20_000
+        messages = [_assistant(content=content)]
+
+        start = time.monotonic()
+        sanitised, report = sanitise_messages(messages)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0, f"took {elapsed:.3f}s — polynomial regex blowup regressed (FRE-1309)"
+        assistant = next(m for m in sanitised if m.get("role") == "assistant")
+        assert "print(infra_health" not in assistant["content"]
+        assert report.was_dirty
+
+    def test_mixed_case_tags_still_stripped(self) -> None:
+        """Tags are matched case-insensitively, same as the original regex's IGNORECASE."""
+        messages = [_assistant(content="<TOOL_CODE>\nprint(infra_health())\n</Tool_Code>\ndone")]
+        sanitised, report = sanitise_messages(messages)
+        assistant = next(m for m in sanitised if m.get("role") == "assistant")
+        assert "tool_code" not in assistant["content"].lower()
+        assert "done" in assistant["content"]
+        assert report.was_dirty
+
+    def test_length_changing_lowercase_codepoint_does_not_bypass_the_guard(self) -> None:
+        """A length-changing lower() codepoint (İ → 'i̇', 1 char → 2) must not desync
+
+        scanner offsets and let a real tool_code block survive stripping — this is the
+        exact bypass a naive str.find(content.lower(), ...) scanner is vulnerable to.
+        """
+        content = "İ" * 5 + "<tool_code>\nprint(infra_health())\n</tool_code>\ndone"
+        messages = [_assistant(content=content)]
+        sanitised, report = sanitise_messages(messages)
+        assistant = next(m for m in sanitised if m.get("role") == "assistant")
+        assert "tool_code" not in assistant["content"].lower()
+        assert "print(infra_health" not in assistant["content"]
+        assert "done" in assistant["content"]
         assert report.was_dirty

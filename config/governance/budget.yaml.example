@@ -25,24 +25,21 @@ roles:
     default_output_tokens: 256
     safety_factor: 1.2
     on_denial: nack         # background consumer NACK → Redis Streams redeliver
-  # ADR-0138 D3 / FRE-1282 — PROPOSED, not yet live. span_extraction currently shares
-  # entity_extraction's lane (cost_gate/role_map.py). That was right while nothing called
-  # the extractor, and stops being right now that verification runs inline on every turn:
-  # an inline, blocking, per-turn consumer is sharing a ceiling with a background one it
-  # can starve, under `nack` denial semantics that assume a Redis redelivery that will
-  # never come. Splitting it needs this lane in the REAL budget.yaml (gitignored under
-  # FRE-1209) FIRST — role_map.py still points at entity_extraction, because pointing it
-  # here before the live lane exists would pass CI against this file and then fail
-  # validate_role_totality at startup on the deployed box.
+  # ADR-0138 D3 / FRE-1312 — span_extraction has its own lane, split out of
+  # entity_extraction's (cost_gate/role_map.py). FRE-1281 shared the lane while nothing
+  # called the extractor; that stopped being right once verification started running
+  # inline on every turn (FRE-1282) — an inline, blocking, per-turn consumer sharing a
+  # ceiling with a background one it can starve, under `nack` denial semantics that
+  # assume a Redis redelivery that will never come.
   #
   # Denial semantics are `deliver`, not `raise` or `nack`: a denied reservation means
   # verification could not run, which is a fact about our accounting rather than evidence
   # about the model's claim. The turn is delivered and recorded as unverified — never as
   # verified-and-passing — so a wave of denials reads as the malfunction it is.
-  # span_extraction:
-  #   default_output_tokens: 1024
-  #   safety_factor: 1.2
-  #   on_denial: deliver
+  span_extraction:
+    default_output_tokens: 1024
+    safety_factor: 1.2
+    on_denial: deliver
   captains_log:
     default_output_tokens: 512
     safety_factor: 1.2
@@ -91,13 +88,14 @@ uncapped_roles:
 # dollar amounts are invented.
 caps:
   - {time_window: daily,  role: entity_extraction, cap_usd: 1.00}
-  # - {time_window: daily,  role: span_extraction,   cap_usd: 1.00}   # FRE-1282, proposed
+  - {time_window: daily,  role: span_extraction,   cap_usd: 1.00}
   - {time_window: daily,  role: captains_log,      cap_usd: 1.00}
   - {time_window: daily,  role: main_inference,    cap_usd: 1.00}
   - {time_window: daily,  role: skill_routing,     cap_usd: 1.00}
   - {time_window: daily,  role: study,             cap_usd: 1.00}
   - {time_window: daily,  role: artifact_builder,  cap_usd: 1.00}
   - {time_window: weekly, role: entity_extraction, cap_usd: 5.00}
+  - {time_window: weekly, role: span_extraction,   cap_usd: 5.00}
   - {time_window: weekly, role: main_inference,    cap_usd: 5.00}
   - {time_window: weekly, role: skill_routing,     cap_usd: 5.00}
   - {time_window: weekly, role: study,             cap_usd: 5.00}

@@ -76,6 +76,37 @@ def test_study_has_its_own_lane() -> None:
     assert budget_role_for("study") == "study"
 
 
+def test_span_extraction_has_its_own_lane() -> None:
+    """FRE-1312: span_extraction is split out of entity_extraction's shared lane.
+
+    FRE-1281 pointed both at ``entity_extraction`` because nothing called the
+    extractor yet; verification now runs inline and blocking on every turn
+    (FRE-1282), so the two must resolve to separate lanes.
+    """
+    assert budget_role_for("span_extraction") == "span_extraction"
+
+
+def test_entity_extraction_lane_unaffected_by_the_split() -> None:
+    """FRE-1312 AC-4: entity_extraction still resolves to its own, unchanged lane."""
+    assert budget_role_for("entity_extraction") == "entity_extraction"
+    assert budget_role_for("entity_extraction_role") == "entity_extraction"
+
+
+def test_entity_extraction_role_config_unaffected_by_the_split() -> None:
+    """FRE-1312 AC-4: entity_extraction's own declared shape and cap did not move.
+
+    Pins the values the split must not touch: its ``nack`` denial semantics
+    (background consumer, Redis redelivery) stay distinct from the new
+    ``span_extraction`` lane's ``deliver`` semantics, and its cap counter still
+    resolves under its own name.
+    """
+    config = load_budget_config_for_tests()
+    role = config.roles["entity_extraction"]
+    assert role.default_output_tokens == 256
+    assert role.on_denial == "nack"
+    assert any(cap.role == "entity_extraction" for cap in config.caps)
+
+
 def test_unknown_role_name_raises() -> None:
     """AC-2: no silent fallback — an unmapped name is a loud failure."""
     with pytest.raises(UnknownBudgetRoleError):
@@ -125,6 +156,7 @@ def test_unknown_role_logs_the_remedy() -> None:
         ("study", "study"),
         ("entity_extraction", "entity_extraction"),
         ("entity_extraction_role", "entity_extraction"),
+        ("span_extraction", "span_extraction"),
         ("insights", "insights"),
         ("vision", "main_inference"),
     ],

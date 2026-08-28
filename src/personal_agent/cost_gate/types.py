@@ -60,6 +60,12 @@ class OnDenialBehaviour(str, Enum):
 
     RAISE = "raise"
     NACK = "nack"
+    # FRE-1312: the turn is delivered and recorded as unverified rather than raised
+    # or redelivered — a denied reservation is a fact about accounting, not evidence
+    # against the model's claim. span_extraction's call site (orchestrator/executor.py)
+    # already catches any exception from the extractor, including BudgetDenied, and
+    # folds it into an unavailable TurnVerification rather than failing the turn.
+    DELIVER = "deliver"
 
 
 # ---------------------------------------------------------------------------

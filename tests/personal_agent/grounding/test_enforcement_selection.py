@@ -45,6 +45,35 @@ BAND = EnforcementBand(
 
 LIGHT_STATE = EnforcementState(level=EnforcementLevel.LIGHT, demoted_at=None)
 
+MEASURED_TURNS_PER_DAY = 7.5
+"""Live turn rate: ``route_traces`` held 105 rows over 14 days, measured 2026-08-28.
+
+Not a guess and not a target. The reachability of promotion is a function of this number,
+and the first version of these parameters was chosen without it — which is how a control
+loop that cannot run at this deployment's volume reached review.
+"""
+
+SPAN_CARRYING_FRACTION = 0.20
+"""Conservative assumed share of turns carrying at least one non-exempt span.
+
+**An assumption, deliberately pessimistic, and the one number here still unmeasured** —
+``grounding_compliance_observations`` held 2 rows at the time of writing, far too few to
+estimate it. Only span-carrying turns can ever become observations, so this scales the
+measured turn rate down to the population that actually feeds the window. Replace it with
+a measurement once the table has data; if the true fraction is lower than this, the
+reachability guard below should start failing, which is the point of asserting on it.
+"""
+
+MEASURED_TURN_SPACING = timedelta(days=1) / MEASURED_TURNS_PER_DAY
+"""Wall-clock gap between simulated turns, so the freshness cut is actually exercised.
+
+The defect the review caught was hidden by ``timedelta(minutes=turn)`` — 1440 turns/day,
+roughly 200x reality — under which no observation in a 3000-turn run could age out.
+"""
+
+LIVE_WINDOW = ComplianceWindow(size=100, min_samples=20, max_age=timedelta(hours=1440), bar=0.95)
+"""The committed window parameters, mirrored here so simulations run what ships."""
+
 
 def _never_probation() -> random.Random:
     """A generator whose draws never fall under any sane probation rate."""
@@ -295,69 +324,141 @@ def test_a_light_model_is_never_on_probation() -> None:
 # ── AC-5 — the model that complies only when pre-forced ──────────────────────
 
 
-def test_pre_forced_only_model_settles_on_heavy() -> None:
-    """It must never promote, and must not flap (AC-5).
+def _simulate(
+    *,
+    compliant: bool,
+    turns: int,
+    spacing: timedelta,
+    window: ComplianceWindow,
+    band: EnforcementBand,
+    seed: int,
+    stop_on_light: bool = False,
+) -> tuple[EnforcementState, list[EnforcementLevel], int, int]:
+    """Run the real selection loop over simulated traffic.
 
-    Simulated as the real loop: heavy turns produce no observation at all (they are
-    confounded and never written), probation turns produce a *failing* one, because the
-    model complies only when sources were put in its hands. The rate can therefore only
-    fall, and the model settles on heavy rather than cycling.
+    Models the loop faithfully in the one respect the whole design turns on: a turn whose
+    retrieval was forced writes **no observation at all**, because it is confounded and
+    the store never receives it. Only probation turns feed the window.
+
+    Args:
+        compliant: Whether the model's unforced turns pass. ``False`` is D5's
+            complies-only-when-pre-forced model.
+        turns: How many turns to run.
+        spacing: Wall-clock gap between turns — the parameter that decides whether the
+            freshness cut is exercised or silently skipped.
+        window: The compliance window parameters.
+        band: The enforcement band.
+        seed: Probation RNG seed.
+        stop_on_light: Stop as soon as the standing level reaches light.
+
+    Returns:
+        Final standing, every standing level seen, count of light turns that were not
+        probation draws, and the number of observations accumulated.
     """
-    window = ComplianceWindow(size=100, min_samples=30, max_age=timedelta(hours=336), bar=0.95)
-    rng = random.Random(11)
+    rng = random.Random(seed)
     standing = initial_state()
     observations: list[ComplianceObservation] = []
-    standing_levels: list[EnforcementLevel] = []
+    levels: list[EnforcementLevel] = []
     unexplained_light = 0
 
-    for turn in range(3000):
-        moment = NOW + timedelta(minutes=turn)
+    for turn in range(turns):
+        moment = NOW + spacing * turn
         reading = classify("m", observations, window=window, now=moment)
         selection = select_enforcement(
-            rate=reading.rate, standing=standing, band=BAND, now=moment, rng=rng
+            rate=reading.rate, standing=standing, band=band, now=moment, rng=rng
         )
         standing = selection.standing
-        standing_levels.append(standing.level)
+        levels.append(standing.level)
         if selection.applied is EnforcementLevel.LIGHT and not selection.probation:
             unexplained_light += 1
-
+        if stop_on_light and standing.level is EnforcementLevel.LIGHT:
+            break
         if selection.retrieval_forced:
             continue  # confounded — never written, so it cannot inflate the rate
         observations.append(
-            ComplianceObservation(model_key="m", observed_at=moment, compliant=False)
+            ComplianceObservation(model_key="m", observed_at=moment, compliant=compliant)
         )
 
-    # Never promoted, and never flapped: the standing level held heavy for every one of
-    # 3000 turns, so there is no promote/demote cycle to find.
-    assert set(standing_levels) == {EnforcementLevel.HEAVY}
+    return standing, levels, unexplained_light, len(observations)
+
+
+def test_pre_forced_only_model_settles_on_heavy() -> None:
+    """It must never promote, and must not flap (AC-5).
+
+    Run at **measured traffic spacing**, so the freshness cut is live. The earlier
+    version of this test spaced turns one minute apart — 1440/day against a real 7.5 —
+    which packed 3000 turns into 50 hours and meant no observation could ever age out.
+    That hid the reachability defect rather than testing around it.
+    """
+    standing, levels, unexplained_light, observed = _simulate(
+        compliant=False,
+        turns=2000,
+        spacing=MEASURED_TURN_SPACING,
+        window=LIVE_WINDOW,
+        band=BAND,
+        seed=11,
+    )
+
+    # Never promoted, and never flapped: the standing level held heavy throughout, so
+    # there is no promote/demote cycle to find.
+    assert set(levels) == {EnforcementLevel.HEAVY}
     # Every light turn was a probation draw. A light turn with no probation flag would be
     # the model serving an unforced turn it had not earned.
     assert unexplained_light == 0
-    assert len(observations) > window.min_samples, "probation must supply enough to be measured"
+    # And it stayed heavy having been MEASURED and rejected, not merely never measured —
+    # otherwise this test would pass on a build where promotion is unreachable.
+    assert observed > LIVE_WINDOW.min_samples
 
 
-def test_a_genuinely_compliant_model_does_promote() -> None:
-    """The mirror of AC-5 — the mechanism must not simply pin everything heavy."""
-    window = ComplianceWindow(size=100, min_samples=30, max_age=timedelta(hours=336), bar=0.95)
-    rng = random.Random(12)
-    standing = initial_state()
-    observations: list[ComplianceObservation] = []
+def test_a_genuinely_compliant_model_promotes_at_measured_traffic() -> None:
+    """The blocking case from review: promotion must be reachable on real traffic.
 
-    for turn in range(3000):
-        moment = NOW + timedelta(minutes=turn)
-        reading = classify("m", observations, window=window, now=moment)
-        selection = select_enforcement(
-            rate=reading.rate, standing=standing, band=BAND, now=moment, rng=rng
-        )
-        standing = selection.standing
-        if standing.level is EnforcementLevel.LIGHT:
-            break
-        if not selection.retrieval_forced:
-            observations.append(
-                ComplianceObservation(model_key="m", observed_at=moment, compliant=True)
-            )
+    The committed parameters are only meaningful if a demoted-but-now-compliant model can
+    actually climb back. Run at the measured 7.5 turns/day with the 60-day freshness cut
+    live, this must reach light — on the previous 30 / 0.10 / 14d set it could not, at any
+    number of turns, because observations aged out faster than probation supplied them.
+    """
+    standing, _, _, observed = _simulate(
+        compliant=True,
+        turns=4000,
+        spacing=MEASURED_TURN_SPACING,
+        window=LIVE_WINDOW,
+        band=BAND,
+        seed=12,
+        stop_on_light=True,
+    )
 
     assert standing.level is EnforcementLevel.LIGHT
+    assert observed >= LIVE_WINDOW.min_samples
+
+
+def test_promotion_is_unreachable_on_the_superseded_parameters() -> None:
+    """The seeded negative: the old set really was unreachable, not merely slow.
+
+    Without this, the parameter change reads as a preference. Same simulation, same
+    traffic, only the window parameters reverted to the pre-2026-08-28 values — and the
+    model never promotes however long it runs, because at 0.10 probation a 14-day window
+    cannot hold 30 fresh observations at 7.5 turns/day.
+    """
+    superseded = ComplianceWindow(size=100, min_samples=30, max_age=timedelta(hours=336), bar=0.95)
+    superseded_band = EnforcementBand(
+        promote_at=0.95,
+        demote_below=0.90,
+        cooldown=timedelta(hours=24),
+        probation_rate=0.10,
+    )
+
+    standing, _, _, _ = _simulate(
+        compliant=True,
+        turns=4000,
+        spacing=MEASURED_TURN_SPACING,
+        window=superseded,
+        band=superseded_band,
+        seed=12,
+        stop_on_light=True,
+    )
+
+    assert standing.level is EnforcementLevel.HEAVY
 
 
 # ── Band configuration ───────────────────────────────────────────────────────
@@ -392,19 +493,71 @@ def test_configured_band_reads_the_pre_registered_settings() -> None:
     assert band.promote_at > band.demote_below
 
 
-def test_probation_rate_is_high_enough_to_ever_measure_a_model() -> None:
-    """The bootstrap must terminate.
+def test_committed_parameters_make_promotion_reachable_at_measured_traffic() -> None:
+    """The committed parameters must permit promotion at the traffic that exists.
 
-    At probation rate p, an unmeasured model needs about ``min_samples / p`` turns
-    carrying a non-exempt span before a rate exists at all. A rate low enough to make
-    that unreachable is the deadlock D5's probation sampling exists to break.
+    **This replaces a tautology.** The previous version computed ``min_samples /
+    probation_rate <= 500``, which ignored the freshness cut entirely, ignored
+    ``window_size``, compared against a bound with no external referent, and raised
+    ``ZeroDivisionError`` rather than failing at ``probation_rate=0.0``. It passed on
+    parameters under which no model could ever be promoted.
+
+    The real constraint is a **rate**, not a count. Under heavy the only measurable turns
+    are probation turns, and an observation older than ``max_age`` stops counting — so the
+    window fills only if probation supplies observations faster than they expire:
+
+        min_samples / (probation_rate x max_age_days)  <=  span-carrying turns per day
+
+    Both sides matter. The left is what the committed settings demand; the right is what
+    this deployment actually produces.
     """
     from personal_agent.config import settings
 
-    turns_to_first_reading = settings.grounding_compliance_min_samples / (
-        settings.grounding_enforcement_probation_rate
+    probation_rate = settings.grounding_enforcement_probation_rate
+    assert probation_rate > 0.0, (
+        "probation_rate=0.0 disables promotion entirely: a heavy model can never produce "
+        "an unconfounded observation, so the band and cooldown become dead code"
     )
-    assert turns_to_first_reading <= 500
+
+    max_age_days = settings.grounding_compliance_max_window_age_hours / 24
+    required_per_day = settings.grounding_compliance_min_samples / (probation_rate * max_age_days)
+    available_per_day = MEASURED_TURNS_PER_DAY * SPAN_CARRYING_FRACTION
+
+    assert required_per_day <= available_per_day, (
+        f"promotion is unreachable: the committed parameters need {required_per_day:.2f} "
+        f"span-carrying turns/day sustained, but measured traffic supplies about "
+        f"{available_per_day:.2f}. A demoted model would be permanently heavy and D5's "
+        "hysteresis band and cooldown would be dead code."
+    )
+
+
+def test_the_window_can_reach_its_own_minimum() -> None:
+    """``min_samples > window_size`` is permanent INSUFFICIENT_SAMPLES.
+
+    The window takes the most recent ``size`` observations and then filters for freshness,
+    so a minimum above the size can never be met however much traffic arrives. Asserted on
+    the committed settings here and rejected at boot by ``AppConfig``.
+    """
+    from personal_agent.config import settings
+
+    assert settings.grounding_compliance_min_samples <= settings.grounding_compliance_window_size
+
+
+def test_the_band_is_expressible_at_the_committed_sample_floor() -> None:
+    """A rate over n observations moves in steps of 1/n, so the band needs n >= 1/width.
+
+    This is why ``min_samples`` is 20 rather than something smaller: the [0.90, 0.95] band
+    is 0.05 wide, and at fewer than 20 samples no achievable rate falls strictly inside it
+    — the hysteresis collapses into a single threshold and the flapping it exists to
+    prevent comes back.
+    """
+    from personal_agent.config import settings
+
+    width = settings.grounding_compliance_bar - settings.grounding_enforcement_demote_below
+    # Stated as `n * width >= 1` rather than `n >= 1 / width`: the thresholds are binary
+    # floats (0.95 - 0.90 is 0.049999...), so the division form fails by one ulp on
+    # parameters that are exactly right.
+    assert settings.grounding_compliance_min_samples * width >= 1 - 1e-9
 
 
 def test_forced_retrieval_directive_does_not_hand_back_a_claim() -> None:

@@ -28,19 +28,27 @@ only the lower edge (`demote_below`, 0.90) is new.
 selection input". The strongest form of that is an input with no identity field in it at all, so
 renaming a model cannot change the answer because the name never reaches the decision.
 
-**Heavy is a hard gate — `tool_choice="required"` — not only a directive.** The first draft used a
+**Heavy is a gate — `tool_choice="required"` — not only a directive.** The first draft used a
 volatile-tail directive plus an iteration grant; codex plan-review finding 3 correctly rejected it.
 The executor receives a generation *before* it executes any tool, so a model that ignores the
-directive composes its assertion with an empty source registry — which is precisely the state
-ADR-0138 D5 says heavy makes unreachable ("cannot compose an assertion without a source set already
-in hand"). Pinning `tool_choice="required"` on heavy's first generation makes the first thing the
-model may emit a tool call, not prose. The plumbing exists: `tool_choice` is already threaded
-executor → `respond()` → adapters, and `_forced_synthesis_tool_overrides` is the standing precedent
-for the executor pinning it (FRE-484 pins `"none"`).
+directive composes its assertion with an empty source registry. Pinning `tool_choice="required"` on
+heavy's first generation makes the first thing the model may emit a tool call, not prose. The
+plumbing exists: `tool_choice` is already threaded executor → `respond()` → adapters, and
+`_forced_synthesis_tool_overrides` is the standing precedent for the executor pinning it (FRE-484
+pins `"none"`).
 
-The directive and the iteration grant stay — the gate makes retrieval *happen*, the directive tells
-the model what to retrieve *for*, and the grant means a turn that spent its tool budget legitimately
-still has an iteration to retrieve with (FRE-1282's reasoning, unchanged).
+**What this does not claim** (review round 2). ADR-0138 D5 describes heavy as leaving the model
+unable to "compose an assertion without a source set already in hand". The mechanism here does not
+deliver that: `"required"` forces *a* tool call, not a *retrieval* one, and nothing forces anything
+into the `SourceRegistry` — a model can satisfy the pin with `run_python`, which the registry treats
+as inadmissible by construction. What heavy buys is that the turn cannot go straight from prompt to
+prose. Correctness rests where it always did, on D3 and D4, identical at both levels.
+
+The directive and the iteration grant stay — the gate makes a tool step *happen*, the directive says
+what it is for, and the grant means a turn that spent its tool budget legitimately still has an
+iteration to retrieve with (FRE-1282's reasoning, unchanged). The directive is appended **per
+request**, never to `ctx.messages`: that list is persisted and reloaded, and heavy applies every
+turn, so attaching it there grows the history linearly and steals ADR-0081's volatile tail.
 
 **The gate degrades loudly, never silently.** It is applied only when tools are actually offered,
 the strategy is NATIVE, and the turn is not force-synthesizing — the same three conditions under
@@ -172,6 +180,48 @@ mid-chain, in a file the `adrs` seat owns.
 | **AC-6** | The same seeded bad citation is blocked under both levels; the verification call is level-invariant | `test_verification_identical_at_both_levels` |
 | **AC-6b** | **Heavy actually gates retrieval before generation** — `tool_choice == "required"` on the first heavy call, absent on light — and the gate's unavailability is logged rather than silent | `test_heavy_pins_tool_choice_required`, `test_light_leaves_tool_choice_unset`, `test_gate_unavailable_is_logged` |
 | **Durability** | A transition is persisted before the turn proceeds; a stale concurrent write cannot clobber a newer transition; a write failure fails safe to heavy | `test_transition_is_awaited`, `test_stale_write_does_not_clobber`, `test_state_write_failure_falls_back_to_heavy` |
+
+## Review round 2 — master's bounce, and what changed
+
+Four findings, all confirmed at the source. Q2 (the `retrieval_forced` widening and AC-5) came
+back clean and is unchanged.
+
+**1 — blocking: promotion was arithmetically unreachable.** Promotion off heavy needs
+`min_samples / (probation_rate x max_age_days)` span-carrying turns per day, *sustained*, because
+under heavy only probation turns are measurable and observations expire. At `30 / (0.10 x 14)` that
+is **21.4/day**; measured live traffic is **7.5 turns/day** (`route_traces`, 105 rows / 14 days).
+A demoted model could never return, so the band and cooldown this ticket exists to build were dead
+code. The suite hid it: simulations spaced turns `timedelta(minutes=turn)` — ~200x real — so the
+freshness cut never bit, and no test put probation and `max_window_age` in one scenario.
+
+Re-registered, deliberately, with the reasoning recorded beside the fields in `settings.py`:
+`min_samples` 30 → **20**, `max_window_age_hours` 336 → **1440** (60d), `probation_rate` 0.10 →
+**0.35**. Cost: `20 / (0.35 x 60) = 0.95` turns/day. `min_samples=20` is a floor, not a preference —
+a rate over n observations moves in steps of `1/n`, so the 0.05-wide band needs n ≥ 20 to be
+expressible at all. The simulations now run at measured spacing, and
+`test_promotion_is_unreachable_on_the_superseded_parameters` is the seeded negative proving the old
+set really was unreachable rather than merely slow.
+
+**2 — the cooldown stamp could be erased, invisibly.** `now` was captured *before* the read, but
+the repository's guard orders writers by it; a turn that waited on the connection pool could hold
+an older stamp than a turn that read later, win the guard, and wipe a demotion. `now` is now taken
+after the read. And `upsert`'s return value was discarded while the log line claimed `changed=True`
+— a rejected write now logs `grounding_enforcement_transition_not_persisted` at WARNING.
+
+**3 — the directive accumulated and hijacked the volatile block.** It was appended to
+`ctx.messages`, which is persisted and reloaded, unconditionally on every heavy turn — linear
+growth in stale pseudo-user messages. It also ran before `_inline_volatile_with_outcome`, so
+ADR-0081's volatile tail inlined into the directive instead of the user's query (FRE-1137 fixed a
+sibling of this on attachment turns). It now lives in `_append_heavy_directive`, per request,
+after both retargeting steps, and never touches `ctx.messages`.
+
+**4 — two config deadlocks had no cross-field validation.** `demote_below >= bar` and
+`min_samples > window_size` each produce silent permanent-heavy, built lazily in the turn path.
+Both are now rejected by an `AppConfig` validator at boot.
+
+**5 — the claim was overstated.** `tool_choice="required"` forces *a* tool call, not a *retrieval*
+one; nothing forces anything into the `SourceRegistry`, and `run_python` would satisfy the pin. The
+docstring and this plan now say what ships. Mechanism unchanged — correctness still rests on D3/D4.
 
 ## Risk
 

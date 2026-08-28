@@ -35,6 +35,7 @@ from personal_agent.grounding.verification import (
 from personal_agent.llm_client.models import ToolCallingStrategy
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.executor import (
+    _append_heavy_directive,
     _record_grounding,
     _resolve_heavy_gate,
     _select_enforcement,
@@ -341,12 +342,15 @@ async def test_selection_happens_once_per_turn() -> None:
 
 
 @pytest.mark.asyncio
-async def test_heavy_attaches_the_directive_and_the_iteration_grant() -> None:
-    """Heavy's other half: the gate makes retrieval happen, this says what for.
+async def test_heavy_reserves_the_iteration_grant_but_never_touches_history() -> None:
+    """Selection reserves the grant; it must NOT append the directive to ``ctx.messages``.
 
-    The grant matters independently — a turn that already spent its tool budget would
-    otherwise be told to retrieve with no iteration left to retrieve with, which is a
-    refusal caused by our accounting rather than by the absence of a source.
+    ``ctx.messages`` is persisted at end of turn and reloaded on the next one, and heavy
+    applies to every turn rather than to a limit being approached — so a directive
+    attached here accumulates one stale pseudo-user message per turn, forever. The
+    directive is a per-request concern and lives in ``_append_heavy_directive``.
+
+    The grant does belong here: it is per-turn state, and this runs once per turn.
     """
     ctx = _ctx()
     resolver = AsyncMock(return_value=_selection(EnforcementLevel.HEAVY))
@@ -359,8 +363,7 @@ async def test_heavy_attaches_the_directive_and_the_iteration_grant() -> None:
 
     assert ctx.grounding_enforcement is not None
     assert ctx.grounding_enforcement.applied is EnforcementLevel.HEAVY
-    assert len(ctx.messages) == 1
-    assert "retriev" in ctx.messages[0]["content"].lower()
+    assert ctx.messages == [], "the directive must never enter persisted history"
     assert ctx.grounding_retrieval_grant > 0
 
 
@@ -378,6 +381,87 @@ async def test_light_attaches_nothing() -> None:
 
     assert ctx.messages == []
     assert ctx.grounding_retrieval_grant == 0
+
+
+# ── The directive is per request, never persisted ────────────────────────────
+
+
+def test_heavy_directive_is_appended_to_the_request_only() -> None:
+    """It rides the request and leaves ``ctx.messages`` untouched.
+
+    The list identity check is the assertion that matters: a returned list that IS
+    ``ctx.messages`` would be persisted at end of turn, which is the accumulation defect.
+    """
+    ctx = _ctx(grounding_enforcement=_selection(EnforcementLevel.HEAVY))
+    ctx.messages = [{"role": "user", "content": "How many people live in Paris?"}]
+    original = list(ctx.messages)
+
+    sent = _append_heavy_directive(ctx.messages, ctx)
+
+    assert ctx.messages == original, "ctx.messages was mutated"
+    assert sent is not ctx.messages
+    assert len(sent) == 2
+    assert sent[0] == original[0]
+    assert "retriev" in sent[1]["content"].lower()
+
+
+def test_repeated_requests_do_not_accumulate_directives() -> None:
+    """The defect this function exists to prevent, asserted as growth that does not happen.
+
+    Ten passes over the same context must still send exactly one directive, and the
+    persisted history must still hold exactly the user's turn.
+    """
+    ctx = _ctx(grounding_enforcement=_selection(EnforcementLevel.HEAVY))
+    ctx.messages = [{"role": "user", "content": "How many people live in Paris?"}]
+
+    for _ in range(10):
+        sent = _append_heavy_directive(ctx.messages, ctx)
+        assert len(sent) == 2
+
+    assert len(ctx.messages) == 1
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [None, _selection(EnforcementLevel.LIGHT)],
+)
+def test_a_non_heavy_turn_sends_its_messages_unchanged(selection) -> None:
+    """Light and unselected turns get the list back untouched."""
+    ctx = _ctx(grounding_enforcement=selection)
+    ctx.messages = [{"role": "user", "content": "hello"}]
+
+    assert _append_heavy_directive(ctx.messages, ctx) is ctx.messages
+
+
+def test_a_probation_turn_sends_no_directive() -> None:
+    """Probation withholds the forcing, and the directive is part of the forcing."""
+    ctx = _ctx(
+        grounding_enforcement=_selection(
+            EnforcementLevel.LIGHT, standing=EnforcementLevel.HEAVY, probation=True
+        )
+    )
+    ctx.messages = [{"role": "user", "content": "hello"}]
+
+    assert _append_heavy_directive(ctx.messages, ctx) is ctx.messages
+
+
+def test_the_directive_follows_the_user_turn_it_must_not_displace() -> None:
+    """Ordering, stated as the ADR-0081 invariant it protects.
+
+    The volatile block and the ``/no_think`` suffix both target the LAST user message and
+    both run before this. The directive must therefore land after the user's query, so
+    that query is still the message they attach to — the inversion FRE-1137 fixed a
+    sibling of on attachment turns.
+    """
+    ctx = _ctx(grounding_enforcement=_selection(EnforcementLevel.HEAVY))
+    inlined_query = {"role": "user", "content": "Paris?\n\n<recalled memory block>"}
+    ctx.messages = [{"role": "assistant", "content": "earlier"}, inlined_query]
+
+    sent = _append_heavy_directive(ctx.messages, ctx)
+
+    assert sent[-2] == inlined_query
+    assert sent[-1]["role"] == "user"
+    assert "retriev" in sent[-1]["content"].lower()
 
 
 @pytest.mark.asyncio
@@ -437,35 +521,41 @@ async def test_a_failed_selection_is_never_persisted() -> None:
     assert not ctx.grounding_enforcement.changed
 
 
-@pytest.mark.asyncio
-async def test_a_transition_is_persisted_before_the_turn_proceeds() -> None:
-    """The write is awaited, not backgrounded.
+BAND = EnforcementBand(
+    promote_at=0.95, demote_below=0.90, cooldown=timedelta(hours=24), probation_rate=0.0
+)
 
-    A lost demotion is the one loss no later turn repairs: the next turn re-demotes with
-    a LATER stamp, handing the model a cooldown it has already partly served.
+
+async def _run_resolve(*, upsert: AsyncMock, read_at: list[datetime] | None = None):
+    """Drive ``_resolve_enforcement`` against stubbed repositories.
+
+    Args:
+        upsert: The stub the enforcement repository's write is recorded on.
+        read_at: When non-None, appended to with the wall-clock instant of the read, so a
+            test can assert the write's ``updated_at`` was taken afterwards.
+
+    Returns:
+        The selection.
     """
     from personal_agent.orchestrator.executor import _resolve_enforcement
-
-    band = EnforcementBand(
-        promote_at=0.95, demote_below=0.90, cooldown=timedelta(hours=24), probation_rate=0.0
-    )
-    recorded_upsert = AsyncMock(return_value=True)
 
     class _Compliance:
         def __init__(self, db):
             pass
 
         async def recent(self, model_key, *, limit):
+            if read_at is not None:
+                read_at.append(datetime.now(timezone.utc))
             return []
 
     class _Enforcement:
-        upsert = recorded_upsert
-
         def __init__(self, db):
             pass
 
         async def get(self, model_key):
             return EnforcementState(level=EnforcementLevel.LIGHT, demoted_at=None)
+
+    _Enforcement.upsert = upsert
 
     with (
         patch(
@@ -480,12 +570,77 @@ async def test_a_transition_is_persisted_before_the_turn_proceeds() -> None:
         ),
         patch("personal_agent.service.database.AsyncSessionLocal"),
     ):
-        selection = await _resolve_enforcement(MODEL, band=band, now=NOW)
+        return await _resolve_enforcement(_ctx(), MODEL, band=BAND)
+
+
+@pytest.mark.asyncio
+async def test_a_transition_is_persisted_before_the_turn_proceeds() -> None:
+    """The write is awaited, not backgrounded.
+
+    A lost demotion is the one loss no later turn repairs: the next turn re-demotes with
+    a LATER stamp, handing the model a cooldown it has already partly served.
+    """
+    upsert = AsyncMock(return_value=True)
+    selection = await _run_resolve(upsert=upsert)
 
     # No observations → unmeasured → heavy, and from LIGHT that is a demotion that stamps
     # the cooldown. The stamp is the thing that had to reach the database.
     assert selection.applied is EnforcementLevel.HEAVY
-    assert selection.standing.demoted_at == NOW
+    assert selection.standing.demoted_at is not None
     assert selection.changed
-    recorded_upsert.assert_awaited_once()
-    assert recorded_upsert.await_args.kwargs["updated_at"] == NOW
+    upsert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_the_write_timestamp_is_taken_after_the_read() -> None:
+    """The guard orders writers by this value, so it must date the state observed.
+
+    Taking it before the read means a turn that waited on the connection pool
+    (``pool_timeout=30``) carries a stamp older than a turn that read *later* — so it wins
+    the guard while holding the staler view, and erases a demotion's cooldown. The whole
+    fix is which side of the read this instant is captured on, so that is what is
+    asserted.
+    """
+    upsert = AsyncMock(return_value=True)
+    read_at: list[datetime] = []
+
+    selection = await _run_resolve(upsert=upsert, read_at=read_at)
+
+    assert read_at, "the read stub never ran"
+    written_at = upsert.await_args.kwargs["updated_at"]
+    assert written_at >= read_at[0]
+    # And the same instant dates the cooldown stamp, so the row is self-consistent.
+    assert selection.standing.demoted_at == written_at
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_write_is_logged_rather_than_swallowed() -> None:
+    """A discarded transition must not be reported as a landed one.
+
+    The repository returns whether the row now reflects this state. Dropping that value
+    while the selection log line says ``changed=True`` makes the telemetry assert a
+    transition that is not in the store — and on a demotion, a missing cooldown stamp that
+    nothing downstream could detect.
+    """
+    upsert = AsyncMock(return_value=False)
+
+    with patch("personal_agent.orchestrator.executor.log") as logger:
+        selection = await _run_resolve(upsert=upsert)
+
+    # The selection still governs THIS turn — the loser of the race is the write, not the
+    # enforcement decision, and this turn is still correctly heavy.
+    assert selection.applied is EnforcementLevel.HEAVY
+    logger.warning.assert_called_once()
+    assert logger.warning.call_args.args[0] == "grounding_enforcement_transition_not_persisted"
+
+
+@pytest.mark.asyncio
+async def test_a_landed_write_logs_no_warning() -> None:
+    """The seeded positive: the warning must distinguish, not fire on every transition."""
+    upsert = AsyncMock(return_value=True)
+
+    with patch("personal_agent.orchestrator.executor.log") as logger:
+        await _run_resolve(upsert=upsert)
+
+    warned = [c for c in logger.warning.call_args_list if c.args]
+    assert not any(c.args[0] == "grounding_enforcement_transition_not_persisted" for c in warned)

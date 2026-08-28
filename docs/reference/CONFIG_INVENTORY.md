@@ -166,12 +166,12 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 116 | `graph_quality_governance_enabled` | `AGENT_GRAPH_QUALITY_GOVERNANCE_ENABLED` | `bool` | `False` |  | — |
 | 117 | `graph_quality_stream_enabled` | `AGENT_GRAPH_QUALITY_STREAM_ENABLED` | `bool` | `True` |  | — |
 | 118 | `grounding_compliance_bar` | `AGENT_GROUNDING_COMPLIANCE_BAR` | `float` | `0.95` |  | — |
-| 119 | `grounding_compliance_max_window_age_hours` | `AGENT_GROUNDING_COMPLIANCE_MAX_WINDOW_AGE_HOURS` | `int` | `336` |  | — |
-| 120 | `grounding_compliance_min_samples` | `AGENT_GROUNDING_COMPLIANCE_MIN_SAMPLES` | `int` | `30` |  | — |
+| 119 | `grounding_compliance_max_window_age_hours` | `AGENT_GROUNDING_COMPLIANCE_MAX_WINDOW_AGE_HOURS` | `int` | `1440` |  | — |
+| 120 | `grounding_compliance_min_samples` | `AGENT_GROUNDING_COMPLIANCE_MIN_SAMPLES` | `int` | `20` |  | — |
 | 121 | `grounding_compliance_window_size` | `AGENT_GROUNDING_COMPLIANCE_WINDOW_SIZE` | `int` | `100` |  | — |
 | 122 | `grounding_enforcement_cooldown_hours` | `AGENT_GROUNDING_ENFORCEMENT_COOLDOWN_HOURS` | `int` | `24` |  | — |
 | 123 | `grounding_enforcement_demote_below` | `AGENT_GROUNDING_ENFORCEMENT_DEMOTE_BELOW` | `float` | `0.9` |  | — |
-| 124 | `grounding_enforcement_probation_rate` | `AGENT_GROUNDING_ENFORCEMENT_PROBATION_RATE` | `float` | `0.1` |  | — |
+| 124 | `grounding_enforcement_probation_rate` | `AGENT_GROUNDING_ENFORCEMENT_PROBATION_RATE` | `float` | `0.35` |  | — |
 | 125 | `grounding_entailment_latency_budget_ms` | `AGENT_GROUNDING_ENTAILMENT_LATENCY_BUDGET_MS` | `int` | `4000` |  | — |
 | 126 | `grounding_entailment_max_excerpt_chars` | `AGENT_GROUNDING_ENTAILMENT_MAX_EXCERPT_CHARS` | `int` | `6000` |  | — |
 | 127 | `grounding_entailment_max_inline_checks` | `AGENT_GROUNDING_ENTAILMENT_MAX_INLINE_CHECKS` | `int` | `8` |  | — |

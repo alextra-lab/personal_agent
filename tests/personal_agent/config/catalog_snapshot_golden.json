@@ -224,7 +224,7 @@
         "default_timeout": 600,
         "disable_thinking": false,
         "endpoint": "http://localhost:9099/v1",
-        "id": "unsloth/qwen3.6-35-A3B",
+        "id": "unsloth/qwen3.8-flash-next",
         "input_cost_per_token": null,
         "input_cost_per_token_eur": null,
         "max_concurrency": 1,
@@ -236,13 +236,13 @@
         "placement": "local",
         "presence_penalty": 0.0,
         "provider": "slm_local",
-        "quantization": "8bit",
+        "quantization": "UD-IQ4_XS",
         "reasoning_effort": null,
         "repetition_penalty": 1.0,
         "supports_function_calling": true,
         "supports_pdf_document": false,
         "supports_vision": true,
-        "temperature": 0.6,
+        "temperature": 1.0,
         "thinking_budget_tokens": 32768,
         "tool_calling_strategy": "native",
         "top_k": 20,
@@ -407,6 +407,10 @@
           "limit": 3
         },
         "qwen3.6-35b-thinking": {
+          "active": 0,
+          "limit": 1
+        },
+        "qwen3.8-flash-next": {
           "active": 0,
           "limit": 1
         },

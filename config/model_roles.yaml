@@ -49,7 +49,7 @@
 # "the one value" — kept because the loader and the dangling-ref check both
 # still read that key name, not because there is anything left to be "all" of.
 roles:
-  primary:            { all: qwen3.6-35b-thinking }
+  primary:            { all: qwen3.8-flash-next }
   entity_extraction:  { all: gpt-5.4-mini }
   captains_log:       { all: claude_sonnet }
   # ADR-0124 D2 (FRE-947): the session summariser's own role. It previously
@@ -111,7 +111,7 @@ required_secrets:
 # so a role added later is never selectable by omission (ADR-0121 §6). Nothing
 # consumes it yet; the guardrail is declared before the mechanism that reads it.
 bindings:
-  primary:            { deployment: qwen3.6-35b-thinking, open: true }
+  primary:            { deployment: qwen3.8-flash-next, open: true }
   # No default_timeout override: with a profile active — which is every
   # production request — this role already resolved to the sub_agent
   # deployment's 90s. The 120s only ever appeared on the no-profile path, which
@@ -141,6 +141,7 @@ bindings:
     deployment: qwen3.6-35b-instruct
     open: true
     defaults_by_primary:
+      qwen3.8-flash-next:   qwen3.6-35b-instruct   # FRE-1317: sub_agent deferred — qwen3.6-27b-ovh is absent from litellm's capability map, which fails check_config at policy class
       qwen3.6-35b-thinking: qwen3.6-35b-instruct  # local thinking primary -> local instruct companion
       qwen3.6-35b-instruct: qwen3.6-35b-instruct  # self-pair — no cheaper local companion
       qwen3.6-27b-ovh:      qwen3.6-27b-ovh       # self-pair — no cheaper OVH-hosted companion

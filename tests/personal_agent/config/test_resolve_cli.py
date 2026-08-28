@@ -24,7 +24,7 @@ from personal_agent.config.resolve import main, resolve
 
 class TestResolve:
     def test_resolve_primary_returns_qwen(self) -> None:
-        assert resolve("primary") == "qwen3.6-35b-thinking"
+        assert resolve("primary") == "qwen3.8-flash-next"
 
     def test_resolve_entity_extraction_returns_gpt_5_4_mini(self) -> None:
         assert resolve("entity_extraction") == "gpt-5.4-mini"

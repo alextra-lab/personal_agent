@@ -134,6 +134,50 @@ models:
     tool_calling_strategy: "native"  # Qwen3.5/3.6 chat template supports tools natively
     endpoint: "https://slm.example.com/v1"
 
+  qwen3.8-flash-next:
+    # Orchestrator brain, replacing qwen3.6-35b-thinking on the owner's swap of
+    # 2026-08-28. A NEW catalog key rather than an id-swap under the old one: the
+    # August 27B<->35B moves kept `qwen3.6-35b-thinking` stable because both sides
+    # were the same family, but a key naming 3.6 while serving a Qwen3.8 (qwen4exp
+    # preview) model would mislead every later reader of telemetry. The outgoing
+    # entries are retained below, so reverting stays one line in each direction.
+    #
+    # The MBP holds only one model at this size (87 GiB), so qwen3.6-35-A3B and
+    # its -subagent sibling are disabled on the host; `sub_agent` moves to
+    # qwen3.6-27b-ovh (owner decision 2026-08-28) rather than self-pairing here,
+    # which would serialise concurrent HYBRID sub-agents behind this single
+    # llama-server at 21 t/s decode.
+    #
+    # Measured on the box 2026-08-28 (llama-bench, M4 Max, build 90c26fc, 3 reps):
+    # pp16384 285 t/s, tg256 21.1 t/s -- against the outgoing qwen3.6-35-A3B Q6_K
+    # at 923 / 62.3. ~3x slower per token; whether that costs TURN latency is
+    # unmeasured and depends on tokens-per-turn. qwen4exp kernels were two days
+    # old at benchmark time.
+    provider: slm_local
+    id: "unsloth/qwen3.8-flash-next"
+    context_length: 131072
+    quantization: "UD-IQ4_XS"
+    min_concurrency: 1
+    max_concurrency: 1
+    default_timeout: 600
+    # Sampling per the Qwen3.8-Flash-Next card, "Thinking Mode" preset. NOT
+    # carried over from qwen3.6-35b-thinking's temperature 0.6: that value was
+    # chosen on EVAL-2026-05-11 evidence for a different model, and pairing it
+    # with this card's other parameters would rebuild exactly the two-preset
+    # hybrid this file records fixing on 2026-08-05.
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 20
+    min_p: 0.0
+    presence_penalty: 0.0
+    repetition_penalty: 1.0
+    thinking_budget_tokens: 32768
+    supports_function_calling: true
+    supports_vision: true         # SLM catalog reports model_type: multimodal
+    supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
+    tool_calling_strategy: "native"
+    endpoint: "https://slm.example.com/v1"
+
   # ── Tier 2: Sub-Agent ───────────────────────────────────────────
   qwen3.6-35b-instruct:
     # Focused single-task completion for HYBRID expansion sub-agents.

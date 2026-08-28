@@ -504,3 +504,18 @@ class TestToolCodePolynomialRedosGuard:
         assert "tool_code" not in assistant["content"].lower()
         assert "done" in assistant["content"]
         assert report.was_dirty
+
+    def test_length_changing_lowercase_codepoint_does_not_bypass_the_guard(self) -> None:
+        """A length-changing lower() codepoint (İ → 'i̇', 1 char → 2) must not desync
+
+        scanner offsets and let a real tool_code block survive stripping — this is the
+        exact bypass a naive str.find(content.lower(), ...) scanner is vulnerable to.
+        """
+        content = "İ" * 5 + "<tool_code>\nprint(infra_health())\n</tool_code>\ndone"
+        messages = [_assistant(content=content)]
+        sanitised, report = sanitise_messages(messages)
+        assistant = next(m for m in sanitised if m.get("role") == "assistant")
+        assert "tool_code" not in assistant["content"].lower()
+        assert "print(infra_health" not in assistant["content"]
+        assert "done" in assistant["content"]
+        assert report.was_dirty

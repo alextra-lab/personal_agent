@@ -10,15 +10,26 @@ A containment pre-check ("does the string contain a closer at all?", FRE-1308's 
 fix) does not close that gap: a closer positioned earlier in the string with many unmatched
 openers after it still passes the pre-check, and the regex still scans the whole unmatched
 suffix (FRE-1309 measured ~28s on this shape). This module walks the string once, left to
-right, using ``str.find``, so an unmatched trailing run of openers costs nothing.
+right, so an unmatched trailing run of openers costs nothing.
+
+Matching is done with case-insensitive regex search for the literal tags rather than
+comparing against a ``str.lower()`` copy: some code points (e.g. ``"İ".lower() == "i̇"``,
+two characters) change length under ``.lower()``, which would desync offsets found in a
+lowercased copy from positions in the original string and corrupt the slicing below. A
+literal (non-``DOTALL``, no ``.*?``) pattern under ``re.IGNORECASE`` has no backtracking
+blowup — it is the same shape as ``str.find``, just length-safe.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 
 TOOL_CODE_OPEN_TAG = "<tool_code>"
 TOOL_CODE_CLOSE_TAG = "</tool_code>"
+
+_OPEN_RE = re.compile(re.escape(TOOL_CODE_OPEN_TAG), re.IGNORECASE)
+_CLOSE_RE = re.compile(re.escape(TOOL_CODE_CLOSE_TAG), re.IGNORECASE)
 
 
 def iter_tool_code_blocks(content: str) -> Iterator[tuple[int, int, str]]:
@@ -28,7 +39,7 @@ def iter_tool_code_blocks(content: str) -> Iterator[tuple[int, int, str]]:
     ``re.compile(r"<tool_code>(.*?)</tool_code>", re.DOTALL | re.IGNORECASE)`` — each
     block closes at the nearest closing tag after its opener, and scanning for the next
     block resumes right after that closer — but never rescans an unmatched opener: every
-    position in ``content`` is visited at most once via ``str.find``.
+    position in ``content`` is visited at most once.
 
     Args:
         content: Text to scan. Not mutated.
@@ -37,18 +48,14 @@ def iter_tool_code_blocks(content: str) -> Iterator[tuple[int, int, str]]:
         ``(start, end, body)`` tuples where ``start``/``end`` bound the full match
         (both tags included) and ``body`` is the original-case text between them.
     """
-    lower = content.lower()
     pos = 0
-    open_len = len(TOOL_CODE_OPEN_TAG)
-    close_len = len(TOOL_CODE_CLOSE_TAG)
     while True:
-        start = lower.find(TOOL_CODE_OPEN_TAG, pos)
-        if start == -1:
+        m_open = _OPEN_RE.search(content, pos)
+        if m_open is None:
             return
-        body_start = start + open_len
-        close_start = lower.find(TOOL_CODE_CLOSE_TAG, body_start)
-        if close_start == -1:
+        body_start = m_open.end()
+        m_close = _CLOSE_RE.search(content, body_start)
+        if m_close is None:
             return
-        end = close_start + close_len
-        yield start, end, content[body_start:close_start]
-        pos = end
+        yield m_open.start(), m_close.end(), content[body_start : m_close.start()]
+        pos = m_close.end()

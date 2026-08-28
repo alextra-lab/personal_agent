@@ -57,3 +57,17 @@ def test_valid_block_then_many_unmatched_opens_finds_only_the_valid_one() -> Non
     content = "<tool_code>a()</tool_code>" + "<tool_code>" * 5_000
     blocks = list(iter_tool_code_blocks(content))
     assert [b for _, _, b in blocks] == ["a()"]
+
+
+def test_length_changing_lowercase_codepoint_does_not_desync_offsets() -> None:
+    """U+0130 (İ) expands to two characters under str.lower() ("i̇") — a naive
+    str.find(content.lower(), ...) scanner desyncs its offsets from the original
+    string on any input containing it, corrupting every block boundary that
+    follows. The scanner must not use a length-changing case fold.
+    """
+    content = "İ" * 5 + "<tool_code>REALCALL(1)</tool_code>SUFFIX"
+    blocks = list(iter_tool_code_blocks(content))
+    assert len(blocks) == 1
+    start, end, body = blocks[0]
+    assert body == "REALCALL(1)"
+    assert content[start:end] == "<tool_code>REALCALL(1)</tool_code>"

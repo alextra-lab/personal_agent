@@ -72,7 +72,6 @@ def _evidence(
     memory_context_present: bool = True,
     rendered: tuple[str, ...] = (),
     inline_outcome: InlineOutcome = InlineOutcome.INLINED,
-    session_facts_injected: bool = False,
     wire: list[dict] | None = None,
     user_message: str = "hello",
     skill_bodies: tuple[str, ...] = (),
@@ -83,7 +82,6 @@ def _evidence(
         memory_context_present=memory_context_present,
         rendered_identities=rendered,
         inline_outcome=inline_outcome,
-        session_facts_injected=session_facts_injected,
         wire_messages=wire if wire is not None else _wire(),
         system_prompt="sys",
         user_message=user_message,
@@ -411,53 +409,56 @@ class TestAssembledContextRecord:
         assert ev.assembled_context.conversation_slice[0].chars == 4
 
 
-# ── session facts ─────────────────────────────────────────────────────────────
+# ── admission is wire-form-grounded, for every source (FRE-1135) ───────────────
 
 
-class TestSessionFactCandidates:
-    """context.py:327-337 injects recall-controller facts bypassing memory_context."""
+class TestAdmissionRequiresWireForm:
+    """No source may be admitted without its content reaching the wire form.
 
-    def test_injected_session_facts_are_admitted(self) -> None:
+    FRE-1135 deleted a real bug: a former ``SESSION_FACT_SECTION`` source resolved
+    admission from a producer-supplied stamp (``session_facts_injected``) instead of
+    checking ``rendered_identities`` / ``block_reached_input`` — so a discarded
+    session-fact system message was recorded as delivered to the model. Parametrized
+    over every live ``CandidateSource`` (today, just ``MEMORY_CONTEXT``) so a future
+    source inherits this guarantee automatically instead of needing its own opt-in
+    test the way the deleted one never got one.
+    """
+
+    @pytest.mark.parametrize("source", list(CandidateSource))
+    def test_absent_from_rendered_identities_is_never_admitted(self, source) -> None:
         cands = (
             RecallCandidateRecord(
-                kind=MemoryItemKind.SESSION_FACT,
-                identity="turn:3",
-                score=0.7,
-                source=CandidateSource.SESSION_FACT_SECTION,
+                kind=MemoryItemKind.ENTITY, identity="ghost", score=1.0, source=source
             ),
         )
-        ev = _evidence(cands, session_facts_injected=True)
-
-        assert ev.recall.items[0].admitted is True
-        assert ev.recall.items[0].score == pytest.approx(0.7)
-
-    def test_uninjected_session_facts_are_dropped_not_omitted(self) -> None:
-        cands = (
-            RecallCandidateRecord(
-                kind=MemoryItemKind.SESSION_FACT,
-                identity="turn:3",
-                score=0.7,
-                source=CandidateSource.SESSION_FACT_SECTION,
-            ),
-        )
-        ev = _evidence(cands, session_facts_injected=False)
+        ev = _evidence(cands, rendered=())
 
         assert ev.recall.items[0].admitted is False
         assert ev.recall.items[0].drop_reason is DropReason.NOT_RENDERED
 
-    def test_session_facts_are_unaffected_by_memory_context_budget_drop(self) -> None:
-        """They ride a system message, which budget trimming preserves."""
+    @pytest.mark.parametrize("source", list(CandidateSource))
+    def test_block_not_reaching_wire_form_is_never_admitted(self, source) -> None:
         cands = (
             RecallCandidateRecord(
-                kind=MemoryItemKind.SESSION_FACT,
-                identity="turn:3",
-                score=None,
-                source=CandidateSource.SESSION_FACT_SECTION,
+                kind=MemoryItemKind.ENTITY, identity="x", score=1.0, source=source
             ),
         )
-        ev = _evidence(cands, memory_context_present=False, session_facts_injected=True)
+        ev = _evidence(cands, rendered=("x",), inline_outcome=InlineOutcome.EMPTY_BLOCK)
 
-        assert ev.recall.items[0].admitted is True
+        assert ev.recall.items[0].admitted is False
+        assert ev.recall.items[0].drop_reason is DropReason.ABSENT_FROM_FINAL_INPUT
+
+    @pytest.mark.parametrize("source", list(CandidateSource))
+    def test_dropped_memory_context_is_never_admitted(self, source) -> None:
+        cands = (
+            RecallCandidateRecord(
+                kind=MemoryItemKind.ENTITY, identity="x", score=1.0, source=source
+            ),
+        )
+        ev = _evidence(cands, memory_context_present=False, rendered=("x",))
+
+        assert ev.recall.items[0].admitted is False
+        assert ev.recall.items[0].drop_reason is DropReason.BUDGET_TRIMMED
 
 
 # ── 8. explicit absence ───────────────────────────────────────────────────────

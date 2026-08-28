@@ -228,7 +228,6 @@ async def _run_turn(
         memory_context_present=result.memory_context is not None,
         rendered_identities=rendered_ids,
         inline_outcome=inline_outcome,
-        session_facts_injected=result.session_facts_injected,
         wire_messages=wire,
         system_prompt="",
         user_message=user_message,

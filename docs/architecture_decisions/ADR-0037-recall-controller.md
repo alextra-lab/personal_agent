@@ -1,7 +1,7 @@
 # ADR-0037: Recall Controller — Implicit Memory Recall Path
 
 **Date:** 2026-03-28
-**Status:** Accepted
+**Status:** Superseded — by FRE-1135 (implementation deleted as dead code: the executor never read the assembled message list this ADR's recall controller injected into; its "reach facts beyond the window" purpose is now owned by the cold tier, FRE-465/FRE-1134)
 **Deciders:** Alex (project lead)
 **Linear Issue:** FRE-155
 **Depends on:** EVAL-08 (Slice 3 priority ranking — rank 4, should-have)
@@ -411,3 +411,7 @@ This component is independent of both the expansion controller (ADR-0036, Track 
 - ADR-0036 Expansion Controller: `docs/architecture_decisions/ADR-0036-expansion-controller.md`
 - "Lost in the Middle" (Liu et al., 2023): https://arxiv.org/abs/2307.03172
 - Anthropic — Building Effective Agents: https://www.anthropic.com/research/building-effective-agents
+
+---
+
+**Document Status:** Superseded (2026-08-28) — FRE-1131's alignment audit found the executor rebuilds its message list from `SessionManager` and never reads the gateway's assembled context, so the recall controller's Stage 4b reclassification and its "Session Fact Recall" system message never reached the model (reclassified 5 turns, all-time, output going nowhere on all 5). FRE-1135 deleted `request_gateway/recall_controller.py` and the injection surfaces it fed, and closed a false-admission path this left in the ADR-0125 evidence contract. The classification-gap problem this ADR addressed is unresolved; the "reach facts beyond the window" need is FRE-465/FRE-1134's cold tier to own.

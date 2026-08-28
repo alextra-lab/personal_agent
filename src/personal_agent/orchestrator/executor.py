@@ -1310,9 +1310,6 @@ def _record_turn_evidence(
             memory_context_present=bool(ctx.memory_context),
             rendered_identities=rendered_memory_ids,
             inline_outcome=inline_outcome,
-            session_facts_injected=(
-                gw_context.session_facts_injected if gw_context is not None else False
-            ),
             wire_messages=build_wire_messages(request_messages, system_prompt, ctx.trace_id),
             system_prompt=system_prompt,
             user_message=ctx.user_message,

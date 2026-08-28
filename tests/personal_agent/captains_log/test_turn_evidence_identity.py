@@ -33,7 +33,6 @@ def _build(**overrides: object) -> object:
         "memory_context_present": False,
         "rendered_identities": (),
         "inline_outcome": InlineOutcome.EMPTY_BLOCK,
-        "session_facts_injected": False,
         "wire_messages": [{"role": "system", "content": "x"}],
         "system_prompt": "x",
         "user_message": "Good evening",

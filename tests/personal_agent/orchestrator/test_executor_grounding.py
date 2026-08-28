@@ -8,11 +8,14 @@ marker leak that exists in every mode.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from personal_agent.captains_log.background import wait_for_background_tasks
+from personal_agent.cost_gate import BudgetDenied
 from personal_agent.governance.models import Mode
 from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.grounding.spans import (
@@ -300,6 +303,49 @@ async def test_a_turn_verification_could_not_run_on_is_delivered_and_recorded() 
     assert ctx.grounding_record is not None
     assert ctx.grounding_record.available is False
     assert ctx.grounding_record.first_generation_compliant is False
+
+
+@pytest.mark.asyncio
+async def test_a_denied_span_extraction_budget_reservation_is_delivered_and_recorded() -> None:
+    """FRE-1312: the ``deliver`` on_denial contract, exercised with the real exception.
+
+    The prior test proves the extractor's broad ``except Exception`` catches *something*;
+    this drives the actual ``BudgetDenied`` the split span_extraction lane's ``on_denial:
+    deliver`` semantics exist for — a denied reservation is a fact about our accounting,
+    not evidence against the model's claim, so the turn still delivers, unverified.
+    """
+    registry = SourceRegistry(turn_id="trace-budget-denied")
+    reply = f"{CLAIM}."
+    ctx = _ctx(reply, registry)
+    denial = BudgetDenied(
+        role="span_extraction",
+        time_window="daily",
+        current_spend=Decimal("5.00"),
+        cap=Decimal("5.00"),
+        window_resets_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    session_manager = AsyncMock()
+    session_manager.update_session = lambda *a, **k: None
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch(
+            "personal_agent.grounding.extractor.ModelSpanExtractor",
+            side_effect=denial,
+        ),
+        patch("personal_agent.llm_client.factory.get_llm_client", return_value=object()),
+    ):
+        cfg.grounding_verification_mode = "enforce"
+        cfg.grounding_max_generation_attempts = 2
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        state = await step_synthesis(ctx, session_manager, AsyncMock())
+
+    assert state is TaskState.COMPLETED
+    assert ctx.final_reply == f"{CLAIM}."
+    assert ctx.grounding_record is not None
+    assert ctx.grounding_record.available is False
+    assert ctx.grounding_record.unavailable_reason == "span extraction failed: BudgetDenied"
 
 
 # ── D3(d)'s sampled offline arm on the turn path (FRE-1286 AC-4) ────────────────────

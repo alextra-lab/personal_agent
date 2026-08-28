@@ -93,18 +93,35 @@ def test_entity_extraction_lane_unaffected_by_the_split() -> None:
 
 
 def test_entity_extraction_role_config_unaffected_by_the_split() -> None:
-    """FRE-1312 AC-4: entity_extraction's own declared shape and cap did not move.
+    """FRE-1312 AC-4: entity_extraction's own declared shape and caps did not move.
 
     Pins the values the split must not touch: its ``nack`` denial semantics
     (background consumer, Redis redelivery) stay distinct from the new
-    ``span_extraction`` lane's ``deliver`` semantics, and its cap counter still
-    resolves under its own name.
+    ``span_extraction`` lane's ``deliver`` semantics, and both its daily and
+    weekly cap windows still resolve under its own name. Cap *dollar* amounts
+    are deliberately not pinned — they legitimately differ between the real,
+    gitignored ``budget.yaml`` and the committed ``.example`` template.
     """
     config = load_budget_config_for_tests()
     role = config.roles["entity_extraction"]
     assert role.default_output_tokens == 256
     assert role.on_denial == "nack"
-    assert any(cap.role == "entity_extraction" for cap in config.caps)
+    windows = {cap.time_window for cap in config.caps if cap.role == "entity_extraction"}
+    assert windows == {"daily", "weekly"}
+
+
+def test_span_extraction_role_config_matches_its_declared_shape() -> None:
+    """FRE-1312: the new lane's own shape, not just that a lane exists.
+
+    ``deliver`` (not ``raise`` or ``nack``) and both cap windows, mirroring
+    ``entity_extraction``'s shape per the ticket's owner-confirmed decision.
+    """
+    config = load_budget_config_for_tests()
+    role = config.roles["span_extraction"]
+    assert role.default_output_tokens == 1024
+    assert role.on_denial == "deliver"
+    windows = {cap.time_window for cap in config.caps if cap.role == "span_extraction"}
+    assert windows == {"daily", "weekly"}
 
 
 def test_unknown_role_name_raises() -> None:

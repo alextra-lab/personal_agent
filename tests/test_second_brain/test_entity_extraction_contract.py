@@ -566,6 +566,71 @@ class TestFailOpenDefaultSignal:
 
         assert not self._fail_open_messages(caplog)
 
+    async def test_finding_entity_missing_class_emits_no_signal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """FRE-1013: a finding entity's missing class is compliant, not a coercion.
+
+        The prompt tells the model to omit "class" for finding/ephemeral entities.
+        Before this fix, that compliant omission still fired the same fail-open
+        signal as a genuine gap on a knowledge entity, inflating the FRE-997
+        measurement with expected noise.
+        """
+        model_json = _entity_model_json(
+            {
+                "name": "Postgres",
+                "type": "Technology",
+                "output_kind": "finding",
+                "description": "d",
+                "description_update_kind": "new",
+            }
+        )
+        with caplog.at_level("WARNING"):
+            result = await _run_extractor(model_json, user_message="msg")
+
+        assert not self._fail_open_messages(caplog)
+        assert result["entities"][0]["class"] == "World"
+
+    async def test_ephemeral_entity_missing_class_emits_no_signal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """FRE-1013: same as the finding case, for output_kind=ephemeral."""
+        model_json = _entity_model_json(
+            {
+                "name": "noise",
+                "type": "Event",
+                "output_kind": "ephemeral",
+                "description": "d",
+                "description_update_kind": "new",
+            }
+        )
+        with caplog.at_level("WARNING"):
+            result = await _run_extractor(model_json, user_message="msg")
+
+        assert not self._fail_open_messages(caplog)
+        assert result["entities"][0]["class"] == "World"
+
+    async def test_knowledge_entity_missing_class_still_emits_signal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """FRE-1013: the case the signal exists to catch is unaffected by the fix."""
+        model_json = _entity_model_json(
+            {
+                "name": "Neo4j",
+                "type": "Technology",
+                "output_kind": "knowledge",
+                "description": "d",
+                "description_update_kind": "new",
+            }
+        )
+        with caplog.at_level("WARNING"):
+            result = await _run_extractor(model_json, user_message="msg")
+
+        messages = self._fail_open_messages(caplog)
+        assert len(messages) == 1
+        assert "class" in messages[0]
+        assert result["entities"][0]["class"] == "World"
+
     async def test_off_vocabulary_output_kind_emits_signal(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

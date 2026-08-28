@@ -1,4 +1,4 @@
-"""The labelled entailment corpus (ADR-0138 D3(d), FRE-1286 AC-6).
+"""The labelled entailment corpus (ADR-0138 D3(d), FRE-1286 AC-6, FRE-1301).
 
 ADR-0138 rejected Option 5 partly because "the entailment judge is itself a model, with its
 own error rate, sitting on the critical path". Promoting it inline for one class — which
@@ -6,22 +6,26 @@ D3(d) does — does not make that objection go away; it makes measuring the judg
 precondition. **An unmeasured judge on the critical path is the weakest-link failure Option
 5 was rejected for**, so this corpus exists before the judge is trusted, not after.
 
-**Four classes, and two of them are the ADR's own named residue.** Containment accepts
-contradiction and quantifier reversal — a source saying *"not sold in France"* contains
-every token of *"sold in France"*, and *"some"* passes for *"all"*. Those are recorded in
-ADR-0138 as accepted residual risk assigned to this ticket, so they are scored as their own
-classes rather than being averaged into one accuracy number where a systematic blindness to
-either would disappear.
+**Five classes, and three of them are the ADR's own named residue or its consequence.**
+Containment accepts contradiction and quantifier reversal — a source saying *"not sold in
+France"* contains every token of *"sold in France"*, and *"some"* passes for *"all"*. Those
+are recorded in ADR-0138 as accepted residual risk, so they are scored as their own classes
+rather than being averaged into one accuracy number where a systematic blindness to either
+would disappear. ``not_supported`` was originally one such class too, until FRE-1301's
+held-out run found it conflating two different things (see :class:`CaseClass`) and split it
+into ``silent`` and ``implicitly_refuted``.
 
 **``supported`` is a class, not a control.** A judge that answers ``not_supported`` to
-everything scores perfectly on the three negative classes. The false-rejection rate over
-this class is what makes that judge fail, and it is also the number that matters in
-production: under D4 a false rejection costs a refusal the user did not deserve.
+everything scores perfectly on the negative classes. The false-rejection rate over this
+class is what makes that judge fail, and it is also the number that matters in production:
+under D4 a false rejection costs a refusal the user did not deserve.
 
 **Partitions.** ``dev`` is for iterating on the prompt; ``heldout`` is scored once, after
 the judge is frozen. Reporting a figure tuned against the same cases it was measured on is
 the way an eval quietly becomes a rehearsal — the split FRE-1281 used for the span
-extractor, for the same reason.
+extractor, for the same reason. FRE-1286's 2026-08-26 run scored every case then in
+``heldout``; none of those may serve as held-out again, so FRE-1301 moved them to ``dev``
+and authored a fresh ``heldout`` set.
 """
 
 from __future__ import annotations
@@ -38,14 +42,26 @@ CORPUS_PATH = Path(__file__).parent / "corpus.yaml"
 class CaseClass(StrEnum):
     """What a case is testing.
 
-    ``QUANTIFIER_REVERSAL`` is separated from the two verdict-shaped classes because it is
-    a *reason* a judge fails rather than a verdict: its expected answer is sometimes
-    ``not_supported`` (*some* offered for *all*) and sometimes ``contradicted`` (*no* against
-    *all*), and collapsing it into either would hide the blindness the class exists to find.
+    ``SILENT`` and ``IMPLICITLY_REFUTED`` replace what was originally one ``not_supported``
+    class (FRE-1301). Both are drawn from the judge's own stated definitions: ``SILENT`` is
+    a passage that "neither entails the claim nor its negation"; ``IMPLICITLY_REFUTED`` is a
+    passage that "states or directly entails the NEGATION of the claim" without an explicit
+    negating word or a directly conflicting stated value — the shape :attr:`CONTRADICTED`
+    cases already have. Kept apart from ``CONTRADICTED`` rather than merged into it because
+    the whole point is telemetry that can tell "the judge misses plainly-worded refutation"
+    from "the judge misses refutation it has to infer" — collapsing them back together would
+    erase the distinction the split exists to measure.
+
+    ``QUANTIFIER_REVERSAL`` is separated from the verdict-shaped classes because it is a
+    *reason* a judge fails rather than a verdict: its expected answer is sometimes
+    ``not_supported`` (*some* offered for *all*), sometimes ``contradicted`` (*no* against
+    *all*) and sometimes ``supported`` (*all* offered for *some*), and collapsing it into any
+    one of those would hide the blindness the class exists to find.
     """
 
     SUPPORTED = "supported"
-    NOT_SUPPORTED = "not_supported"
+    SILENT = "silent"
+    IMPLICITLY_REFUTED = "implicitly_refuted"
     CONTRADICTED = "contradicted"
     QUANTIFIER_REVERSAL = "quantifier_reversal"
 
@@ -88,6 +104,18 @@ class CorpusError(ValueError):
 
 _EXPECTED_VERDICTS = frozenset({"supported", "not_supported", "contradicted"})
 
+_CLASS_EXPECTED: dict[CaseClass, str] = {
+    CaseClass.SUPPORTED: "supported",
+    CaseClass.SILENT: "not_supported",
+    CaseClass.IMPLICITLY_REFUTED: "contradicted",
+    CaseClass.CONTRADICTED: "contradicted",
+}
+"""The boundary between ``silent`` and ``implicitly_refuted`` (FRE-1301 AC-1), stated as a
+mechanical map from class to the one verdict it may expect — the same device already used
+for ``supported`` and ``contradicted``. ``QUANTIFIER_REVERSAL`` is deliberately absent: its
+expected verdict varies by case, so no fixed mapping could apply to it.
+"""
+
 
 def load_corpus(path: Path | None = None) -> tuple[EntailmentCase, ...]:
     """Load and validate the labelled corpus.
@@ -129,10 +157,9 @@ def load_corpus(path: Path | None = None) -> tuple[EntailmentCase, ...]:
         expected = str(entry.get("expected", ""))
         if expected not in _EXPECTED_VERDICTS:
             raise CorpusError(f"{case_id}: expected must be one of {sorted(_EXPECTED_VERDICTS)}")
-        if case_class is CaseClass.SUPPORTED and expected != "supported":
-            raise CorpusError(f"{case_id}: a supported case cannot expect {expected}")
-        if case_class is CaseClass.CONTRADICTED and expected != "contradicted":
-            raise CorpusError(f"{case_id}: a contradicted case cannot expect {expected}")
+        required = _CLASS_EXPECTED.get(case_class)
+        if required is not None and expected != required:
+            raise CorpusError(f"{case_id}: a {case_class.value} case cannot expect {expected}")
 
         for field in ("claim", "passage", "note"):
             if not str(entry.get(field, "")).strip():

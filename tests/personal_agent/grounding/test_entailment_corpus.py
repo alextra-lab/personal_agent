@@ -39,7 +39,97 @@ def test_every_class_ac3_names_is_populated_in_both_partitions() -> None:
         assert CaseClass.CONTRADICTED in present
         assert CaseClass.QUANTIFIER_REVERSAL in present
         assert CaseClass.SUPPORTED in present
-        assert CaseClass.NOT_SUPPORTED in present
+        assert CaseClass.SILENT in present
+        assert CaseClass.IMPLICITLY_REFUTED in present
+
+
+def test_a_silent_case_cannot_expect_contradiction() -> None:
+    """FRE-1301 AC-1: the boundary between `silent` and `implicitly_refuted` is mechanical.
+
+    `silent` means the passage entails neither the claim nor its negation, so its expected
+    verdict is always `not_supported` — never `contradicted`.
+    """
+    bad = (
+        "cases:\n"
+        "  - id: x\n"
+        "    class: silent\n"
+        "    partition: dev\n"
+        "    expected: contradicted\n"
+        "    claim: c\n"
+        "    passage: p\n"
+        "    note: n\n"
+    )
+    with pytest.raises(CorpusError, match="cannot expect"):
+        load_corpus(_written(bad))
+
+
+def test_an_implicitly_refuted_case_cannot_expect_not_supported() -> None:
+    """FRE-1301 AC-1: `implicitly_refuted` means the passage entails the negation.
+
+    Its expected verdict is always `contradicted` — the same verdict `contradicted` cases
+    expect, which is the whole point of the split: both are refutation, one plainly worded
+    and one inferred, and the class distinguishes them for telemetry without disagreeing
+    with the judge about what the correct answer is.
+    """
+    bad = (
+        "cases:\n"
+        "  - id: x\n"
+        "    class: implicitly_refuted\n"
+        "    partition: dev\n"
+        "    expected: not_supported\n"
+        "    claim: c\n"
+        "    passage: p\n"
+        "    note: n\n"
+    )
+    with pytest.raises(CorpusError, match="cannot expect"):
+        load_corpus(_written(bad))
+
+
+_PREVIOUSLY_SCORED_HELDOUT_IDS = frozenset(
+    {
+        "sup-evaluative-grounded",
+        "sup-negation-matched",
+        "sup-unit-variant",
+        "sup-list-membership",
+        "sup-temporal",
+        "sup-degree-matched",
+        "ns-plan-not-fact",
+        "ns-scope-shift",
+        "ns-reversed-direction",
+        "ns-absent-attribute",
+        "ns-future-tense",
+        "con-attribution-flip",
+        "con-exclusion",
+        "con-identity",
+        "con-recall",
+        "con-order",
+        "quant-all-for-some",
+        "quant-only",
+        "quant-few",
+        "quant-generic",
+    }
+)
+"""The 20 case ids FRE-1286 scored as `heldout` on 2026-08-26. Frozen here as a regression
+guard for FRE-1301 AC-2: none of these may appear in the corpus's `heldout` partition again.
+"""
+
+
+def test_the_fresh_heldout_partition_reuses_no_case_scored_2026_08_26() -> None:
+    """FRE-1301 AC-2: a partition already scored cannot serve as held-out again.
+
+    Checking only that these ids are absent from ``heldout`` would also pass if the corpus
+    had simply deleted them — which is not what FRE-1301 did and would not be a fresh
+    partition either. Asserting each one is still present, in ``dev``, is what proves the
+    repartitioning actually happened rather than a silent loss of coverage.
+    """
+    cases = load_corpus()
+    by_id = {case.id: case for case in cases}
+    missing = _PREVIOUSLY_SCORED_HELDOUT_IDS - by_id.keys()
+    assert not missing, f"previously-scored cases dropped from the corpus: {sorted(missing)}"
+    for case_id in _PREVIOUSLY_SCORED_HELDOUT_IDS:
+        assert by_id[case_id].partition is Partition.DEV, (
+            f"{case_id} was scored heldout on 2026-08-26 and must not be heldout again"
+        )
 
 
 def test_a_mislabelled_case_is_refused_at_load() -> None:

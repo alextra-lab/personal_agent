@@ -2080,6 +2080,60 @@ class AppConfig(BaseSettings):
             "inline more generally."
         ),
     )
+    # ── D5 compliance metric (ADR-0138 D5, FRE-1284) ─────────────────────────
+    #
+    # These four are **pre-registered bars** (AC-6), not tuning knobs: they are committed
+    # here, in git, before any live reading exists, because a bar chosen after seeing the
+    # results is not a bar. `tests/personal_agent/grounding/test_compliance.py` asserts
+    # each default, so a later edit surfaces as a change to a pre-registered parameter
+    # rather than as a tweak nobody reviewed.
+    #
+    # FRE-1285 adds the promote/demote hysteresis band *around* `grounding_compliance_bar`
+    # — the single bar here answers "does this rate meet the contract?", which is what
+    # AC-6's broken-baseline check needs, and deliberately does not pre-empt the band.
+    grounding_compliance_window_size: int = Field(
+        default=100,
+        ge=1,
+        description=(
+            "Rolling window, in unconfounded observations, the compliance rate is computed "
+            "over. Only turns where retrieval was NOT pre-forced ever enter it (ADR-0138 "
+            "D5's round-2 finding): heavy enforcement supplies sources before generation, "
+            "so scoring those turns measures the enforcement rather than the model."
+        ),
+    )
+    grounding_compliance_min_samples: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            "Fewest fresh observations that may yield a rate. Below it the model is "
+            "unmeasured, and unmeasured means heavy — D5's fail-safe bootstrap. 30 is "
+            "ADR-0138 AC-1's own held-out sample floor, reused rather than reinvented."
+        ),
+    )
+    grounding_compliance_max_window_age_hours: int = Field(
+        default=336,
+        ge=1,
+        description=(
+            "How old an observation may be and still count. Past it, a window without "
+            "sufficient new observations reverts the model to unmeasured — the round-3 "
+            "finding, which closes the frozen-denominator hole: turns with no non-exempt "
+            "span never enter the denominator, so a model that stops producing recognized "
+            "spans would otherwise coast forever on a stale favourable window. Compliance "
+            "is re-earned, never banked. 336h = 14 days."
+        ),
+    )
+    grounding_compliance_bar: float = Field(
+        default=0.95,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "The rate a measured model must reach to be read as meeting the citation "
+            "contract. High because the numerator is already forgiving in the one way "
+            "that matters — a turn counts compliant only if EVERY non-exempt span passed, "
+            "so the rate is over turns, not over spans, and a model at 0.95 is still "
+            "shipping an uncited assertion in one turn out of twenty."
+        ),
+    )
     proactive_memory_max_candidates: int = Field(
         default=10,
         ge=1,

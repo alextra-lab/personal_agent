@@ -20,6 +20,7 @@ from opentelemetry.trace import Span
 
 from personal_agent.captains_log.turn_evidence import (
     CandidatePopulation,
+    GroundingRecord,
     InlineOutcome,
     MemoryItemKind,
     build_recall_candidates,
@@ -1694,6 +1695,7 @@ def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mod
         retrieval_forced=ctx.grounding_attempts > 1,
     )
     ctx.grounding_record = record
+    observation = _record_compliance_observation(ctx, record)
     log.info(
         "grounding_verification_completed",
         trace_id=ctx.trace_id,
@@ -1712,6 +1714,108 @@ def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mod
         attempts=record.attempts,
         first_generation_compliant=record.first_generation_compliant,
         outcomes=[span.outcome for span in record.spans],
+        # ADR-0138 D5 (FRE-1284). Carried on this line rather than a second one so the
+        # per-model exclusion rate is derivable from the record every turn already writes.
+        # It has to stay derivable: excluding turns verification could not run on is not
+        # obviously missing-at-random — a model whose output breaks the extractor may also
+        # be a model that cites poorly — and an exclusion nobody can see is one nobody can
+        # audit.
+        compliance_observation=observation,
+        answering_model_key=ctx.answering_model_key,
+    )
+
+
+def _record_compliance_observation(ctx: ExecutionContext, record: GroundingRecord) -> str:
+    """Append this turn to D5's compliance window, when it is an unconfounded observation.
+
+    **Why here and not at capture time.** ``ctx.grounding_record`` is replaced on every D4
+    attempt, so a turn that retried has already lost attempt 1's record by the time the
+    capture is written. Attempt 1 is the only eligible attempt, so the observation has to
+    be taken as it happens — which is what this call site is.
+
+    A failed write is logged at ERROR and never raised into the turn. Not fail-closed: a
+    database error is uncorrelated with whether the turn complied, so a dropped observation
+    is missing-at-random and cannot bias the rate, while failing a user's turn over our own
+    bookkeeping is the reasoning ADR-0138 D4 already rejects for verification itself. A
+    *wave* of these is a malfunction, and the ERROR line is what makes it visible.
+
+    Args:
+        ctx: Execution context.
+        record: This attempt's grounding record.
+
+    Returns:
+        What happened, for the caller's log line: ``recorded``, ``confounded`` (pre-forced
+        retrieval, no non-exempt span, or verification unavailable), or ``unattributable``.
+    """
+    from personal_agent.captains_log.background import run_in_background  # noqa: PLC0415
+    from personal_agent.grounding.compliance import is_unconfounded_observation  # noqa: PLC0415
+
+    if not is_unconfounded_observation(record):
+        return "confounded"
+
+    model_key = ctx.answering_model_key
+    if not model_key or not ctx.trace_id:
+        # No key means no observation, rather than an observation on a guessed one:
+        # crediting a compliant turn to a default model buys a promotion nothing earned.
+        log.warning(
+            "grounding_compliance_observation_unattributable",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            model_key=model_key,
+        )
+        return "unattributable"
+
+    run_in_background(
+        _write_compliance_observation(
+            model_key=model_key,
+            compliant=record.first_generation_compliant,
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+    )
+    return "recorded"
+
+
+async def _write_compliance_observation(
+    *, model_key: str, compliant: bool, trace_id: str, session_id: str
+) -> None:
+    """Write one compliance observation, off the turn's critical path.
+
+    Args:
+        model_key: The deployment key that answered.
+        compliant: Whether every non-exempt span passed on first generation.
+        trace_id: The turn's trace identifier, and the store's idempotency key.
+        session_id: For telemetry only.
+    """
+    from personal_agent.service.database import AsyncSessionLocal  # noqa: PLC0415
+    from personal_agent.service.repositories.grounding_compliance_repository import (  # noqa: PLC0415
+        GroundingComplianceRepository,
+    )
+
+    try:
+        async with AsyncSessionLocal() as db:
+            inserted = await GroundingComplianceRepository(db).record(
+                model_key=model_key,
+                compliant=compliant,
+                trace_id=trace_id,
+                observed_at=datetime.now(timezone.utc),
+            )
+    except Exception:
+        log.exception(
+            "grounding_compliance_observation_write_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+            model_key=model_key,
+        )
+        return
+
+    log.info(
+        "grounding_compliance_observation_recorded",
+        trace_id=trace_id,
+        session_id=session_id,
+        model_key=model_key,
+        compliant=compliant,
+        inserted=inserted,
     )
 
 
@@ -5010,6 +5114,13 @@ async def step_llm_call(
             # relabeling on that client risks a second, divergent resolution
             # if `vision` is ever rebound to a local deployment.
             respond_role = ModelRole.VISION if isinstance(llm_client, LiteLLMClient) else model_role
+
+        # ADR-0138 D5 (FRE-1284): stamp the deployment key that actually serves this
+        # generation, so the compliance metric attributes the turn to the model that made
+        # the claims rather than to the role that nominally owns them. Assigned on every
+        # pass, so a tool loop's last generation — the one whose reply is verified — is
+        # the one recorded.
+        ctx.answering_model_key = effective_model_key
 
         # Get tools for this model role and mode
         # ReAct loop: always offer tools so the model can chain calls until it

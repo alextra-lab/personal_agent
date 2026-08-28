@@ -383,6 +383,14 @@ class ExecutionContext:
     # ADR-0138's output side of the ADR-0125 evidence contract, attached for the capture.
     grounding_record: "GroundingRecord | None" = None
 
+    # ADR-0138 D5 (FRE-1284). The catalog deployment key that actually served this turn's
+    # generation, stamped by step_llm_call with the key it really used. Recorded rather
+    # than re-derived at finalize for two reasons: the role name is not the model (an
+    # attachment-routed turn resolves to a different deployment, and crediting one model's
+    # compliance to another is how a promotion gets bought with someone else's turns), and
+    # re-running the attachment routing can raise, which a metric write must never do.
+    answering_model_key: str | None = None
+
     # ADR-0129 D3 (FRE-1067): set by step_tool_execution just before it returns,
     # reset to 0 at its own entry — the driver loop's step-span closure reads
     # this back as the step span's "tool_count" attribute once the step

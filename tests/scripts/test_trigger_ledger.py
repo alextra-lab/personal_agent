@@ -685,8 +685,14 @@ def test_main_all_includes_every_state_in_one_ledger(
 
     exit_all = main(["--ledger-file", str(path), "--all", "--json"])
     assert exit_all == 0
-    all_ids = {e["event_id"] for e in json.loads(capsys.readouterr().out)}
-    assert all_ids == {"pending:1", "queued:2", "surfaced:3", "sent:4", "abandoned:5"}
+    all_entries = {e["event_id"]: e for e in json.loads(capsys.readouterr().out)}
+    assert set(all_entries) == {"pending:1", "queued:2", "surfaced:3", "sent:4", "abandoned:5"}
+    # consumed_at distinguishes sent from abandoned -- both close out consumed,
+    # but only sent:4 was ever actually delivered.
+    assert all_entries["sent:4"]["consumed_at"] == 100.0
+    assert all_entries["sent:4"]["sent_at"] == 100.0
+    assert all_entries["abandoned:5"]["consumed_at"] == 100.0
+    assert all_entries["abandoned:5"]["sent_at"] is None
 
     exit_unconsumed = main(["--ledger-file", str(path), "--unconsumed", "--json"])
     assert exit_unconsumed == 0

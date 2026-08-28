@@ -23,12 +23,14 @@ import pytest
 from personal_agent.config import get_settings
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.second_brain.entity_extraction import (
+    _DEICTIC_USER_RE,
     _EXTRACTION_PROMPT_TEMPLATE,
     _EXTRACTION_SYSTEM_PROMPT,
     ExtractionModelOverride,
     _build_extraction_prompt,
     extract_entities_and_relationships,
     prompt_material_for_hash,
+    resolve_deictic_description,
 )
 
 #: Substring unique to the FRE-759 exemplar block; absent when the flag is off.
@@ -1010,3 +1012,82 @@ class TestDescriptionFramingContract:
         assert "memory search context" in material, (
             "the machinery-leak phrasing must be named so the model can avoid it"
         )
+
+
+class TestDeicticDescriptionResolution:
+    """FRE-1153 — a stored description never carries an unresolved "the user" claim.
+
+    A description is stored globally (visibility="group") and rendered to every
+    authenticated reader, so "the user" in it is a claim about whoever reads it next,
+    not the person it was actually extracted from (the incident: an entity named Susan
+    carrying "The user's stated name in the conversation." — read by a different user,
+    that asserts their name is Susan). ``resolve_deictic_description`` is the pure
+    function `_finalize_extraction` applies to every entity's description; these tests
+    exercise it directly. Deliberately does NOT substitute the resolved user's real
+    name — group-visibility means every other authenticated reader would learn a
+    specific other person's identity, which is a disclosure this ticket has no mandate
+    to introduce (cross-user scoping is FRE-674's).
+    """
+
+    def test_incident_shape_is_resolved(self) -> None:
+        resolved = resolve_deictic_description("The user's stated name in the conversation.")
+        assert not _DEICTIC_USER_RE.search(resolved)
+        assert resolved == "The other party's stated name in the conversation."
+
+    def test_mid_sentence_reference_is_resolved(self) -> None:
+        resolved = resolve_deictic_description("Employer of the user, mentioned in passing.")
+        assert not _DEICTIC_USER_RE.search(resolved)
+        assert "the other party" in resolved
+
+    def test_case_insensitive_match_is_resolved(self) -> None:
+        resolved = resolve_deictic_description("THE USER prefers dark mode.")
+        assert not _DEICTIC_USER_RE.search(resolved)
+
+    def test_multiple_occurrences_are_all_resolved(self) -> None:
+        resolved = resolve_deictic_description(
+            "The user mentioned the user's employer twice in one turn."
+        )
+        assert not _DEICTIC_USER_RE.search(resolved)
+        assert resolved.count("the other party") == 1
+        assert resolved.count("The other party") == 1
+
+    def test_username_field_is_not_a_match(self) -> None:
+        """Word-boundary regression guard — "the username field" is not deictic."""
+        original = "A configuration setting in the username field."
+        assert resolve_deictic_description(original) == original
+
+    def test_hyphenated_compound_is_not_a_match(self) -> None:
+        """Regression guard — ``\\b`` treats a hyphen as a boundary exactly like a
+        space, so "the User-Agent string" must not match "the user" and get mangled
+        into "the other party-Agent".
+        """
+        original = "The User-Agent string identifies the client software."
+        assert resolve_deictic_description(original) == original
+
+    def test_non_deictic_description_is_returned_unchanged(self) -> None:
+        original = "A graph database management system storing nodes and edges."
+        assert resolve_deictic_description(original) == original
+
+    def test_empty_description_is_returned_unchanged(self) -> None:
+        assert resolve_deictic_description("") == ""
+
+
+@pytest.mark.asyncio
+class TestDeicticDescriptionResolutionWiredIntoExtraction:
+    """The resolution runs on the actual path the consolidator consumes, not just the
+    bare helper in isolation.
+    """
+
+    async def test_finalize_extraction_resolves_deictic_entity_descriptions(self) -> None:
+        model_json = _entity_model_json(
+            {
+                "name": "Susan",
+                "type": "Person",
+                "class": "Personal",
+                "description": "The user's stated name in the conversation.",
+            }
+        )
+        result = await _run_extractor(model_json, user_message="my name is Susan")
+        description = result["entities"][0]["description"]
+        assert not _DEICTIC_USER_RE.search(description)
+        assert "the other party" in description.lower()

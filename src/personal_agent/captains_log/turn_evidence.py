@@ -96,6 +96,11 @@ class MemoryItemKind(StrEnum):
     ENTITY = "entity"
     EPISODE = "episode"
     SESSION = "session"
+    # No producer emits this kind any more (FRE-1135 deleted the recall controller
+    # that did). Kept as a member — not removed — because RecalledMemoryRecord.kind
+    # is pydantic-validated on read: a historical TaskCapture persisted with
+    # "kind": "session_fact" would fail validation and be silently discarded by
+    # captains_log/capture.py's reconstruction path if this member were dropped.
     SESSION_FACT = "session_fact"
     STANCE = "stance"
     BEHAVIOURAL_STANCE = "behavioural_stance"
@@ -106,14 +111,15 @@ class CandidateSource(StrEnum):
     """Which producer offered a candidate, which determines how admission resolves.
 
     ``MEMORY_CONTEXT`` items ride the volatile block inlined into the user message and
-    are subject to budget trimming, renderer caps, and the inliner. ``SESSION_FACT_SECTION``
-    items ride a system message that budget trimming preserves by construction
-    (``request_gateway/budget.py`` phase 1 keeps every system message, and phases 2 and 3
-    drop ``memory_context`` and ``tool_definitions`` rather than messages).
+    are subject to budget trimming, renderer caps, and the inliner. The sole member
+    today, deliberately: a former second member, ``SESSION_FACT_SECTION``, resolved
+    admission from a producer-supplied stamp instead of the wire form (FRE-1135) and
+    was removed along with its producer. Any future source must resolve admission the
+    same way ``MEMORY_CONTEXT`` does — grounded in ``rendered_identities`` /
+    ``block_reached_input`` — never from a bare flag.
     """
 
     MEMORY_CONTEXT = "memory_context"
-    SESSION_FACT_SECTION = "session_fact_section"
 
 
 class DropReason(StrEnum):
@@ -670,7 +676,6 @@ def _resolve_admission(
     memory_context_present: bool,
     rendered_budget: Counter[str],
     block_reached_input: bool,
-    session_facts_injected: bool,
 ) -> RecalledMemoryRecord:
     """Resolve one candidate's disposition against the final serialized model input.
 
@@ -686,7 +691,6 @@ def _resolve_admission(
         memory_context_present: Whether memory context survived budget trimming.
         rendered_budget: Remaining rendered identities, decremented on each match.
         block_reached_input: Whether the volatile block reached the wire form.
-        session_facts_injected: Whether the session-fact section was written.
 
     Returns:
         The candidate with its admission and drop reason resolved.
@@ -708,10 +712,7 @@ def _resolve_admission(
             drop_reason=candidate.pre_drop_reason,
         )
 
-    if candidate.source is CandidateSource.SESSION_FACT_SECTION:
-        admitted = session_facts_injected
-        reason = None if admitted else DropReason.NOT_RENDERED
-    elif not memory_context_present:
+    if not memory_context_present:
         admitted, reason = False, DropReason.BUDGET_TRIMMED
     elif rendered_budget[candidate.identity] <= 0:
         admitted, reason = False, DropReason.NOT_RENDERED
@@ -737,7 +738,6 @@ def build_turn_evidence(
     memory_context_present: bool,
     rendered_identities: Sequence[str],
     inline_outcome: InlineOutcome,
-    session_facts_injected: bool,
     wire_messages: Sequence[object],
     system_prompt: str,
     user_message: str = "",
@@ -756,8 +756,6 @@ def build_turn_evidence(
         memory_context_present: Whether memory context survived budget trimming.
         rendered_identities: Identities the memory renderer actually emitted.
         inline_outcome: What the volatile-block inliner did.
-        session_facts_injected: Whether the session-fact section was written into the
-            message list.
         wire_messages: The final serialized message list (system message included).
         system_prompt: The system prompt sent on this call.
         user_message: This turn's user message, used to anchor the volatile block to
@@ -790,7 +788,6 @@ def build_turn_evidence(
             memory_context_present=memory_context_present,
             rendered_budget=rendered_budget,
             block_reached_input=block_reached_input,
-            session_facts_injected=session_facts_injected,
         )
         for candidate in candidates
     ]

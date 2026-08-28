@@ -30,8 +30,6 @@ from personal_agent.request_gateway.types import (
     AssembledContext,
     Complexity,
     IntentResult,
-    RecallCandidate,
-    RecallResult,
     TaskType,
 )
 
@@ -110,40 +108,6 @@ class TestStageSixEmitsCandidates:
             trace_id="t",
         )
         assert result.recall_candidates == ()
-
-    @pytest.mark.asyncio
-    async def test_session_fact_candidates_are_recorded(self, monkeypatch) -> None:
-        """context.py injects recall-controller facts bypassing memory_context."""
-        recall = RecallResult(
-            reclassified=True,
-            original_task_type=TaskType.CONVERSATIONAL,
-            trigger_cue="that thing",
-            candidates=[
-                RecallCandidate(
-                    fact="Primary database is PostgreSQL",
-                    source_turn=3,
-                    noun_phrase="database",
-                    confidence=0.77,
-                )
-            ],
-        )
-
-        result = await assemble_context(
-            user_message="what was it again?",
-            session_messages=[],
-            intent=_intent(),
-            memory_adapter=None,
-            trace_id="t",
-            recall_context=recall,
-        )
-
-        facts = [
-            c for c in result.recall_candidates if c.source is CandidateSource.SESSION_FACT_SECTION
-        ]
-        assert len(facts) == 1
-        assert facts[0].identity == "turn:3"
-        assert facts[0].kind is MemoryItemKind.SESSION_FACT
-        assert facts[0].score == pytest.approx(0.77)
 
 
 class TestBudgetPreservesCandidates:

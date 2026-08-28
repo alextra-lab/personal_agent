@@ -21,10 +21,7 @@ import structlog
 
 from personal_agent.captains_log.turn_evidence import (
     CandidatePopulation,
-    CandidateSource,
     DropReason,
-    MemoryItemKind,
-    RecallCandidateRecord,
     build_discarded_candidates,
     build_recall_candidates,
     mark_truncated,
@@ -33,11 +30,9 @@ from personal_agent.captains_log.turn_evidence import (
 from personal_agent.config import settings
 from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.memory.protocol import BroadRecallResult, MemoryProtocol, MemoryRecallQuery
-from personal_agent.request_gateway.state_document import build_state_document
 from personal_agent.request_gateway.types import (
     AssembledContext,
     IntentResult,
-    RecallResult,
     TaskType,
 )
 
@@ -362,35 +357,6 @@ async def _enrich_with_stances(
         return
 
 
-def _session_fact_candidates(
-    recall_context: RecallResult | None,
-) -> tuple[RecallCandidateRecord, ...]:
-    """Build candidate records for the recall controller's session facts (FRE-1004).
-
-    These bypass ``memory_context`` by design — they are injected as a system message
-    (see :func:`assemble_context`) — so they would be invisible to the evidence contract
-    unless captured separately. Facts the controller found but did not inject are still
-    recorded, and resolve to a drop at the admission point rather than being omitted.
-
-    Args:
-        recall_context: Recall controller result from Stage 4b, or None.
-
-    Returns:
-        One record per candidate fact, identified by its source turn.
-    """
-    if recall_context is None or not recall_context.candidates:
-        return ()
-    return tuple(
-        RecallCandidateRecord(
-            kind=MemoryItemKind.SESSION_FACT,
-            identity=f"turn:{c.source_turn}",
-            score=c.confidence,
-            source=CandidateSource.SESSION_FACT_SECTION,
-        )
-        for c in recall_context.candidates
-    )
-
-
 async def _query_memory_for_intent(
     intent: IntentResult,
     user_message: str,
@@ -597,7 +563,6 @@ async def assemble_context(
     memory_adapter: MemoryProtocol | None,
     trace_id: str,
     session_id: str = "",
-    recall_context: RecallResult | None = None,
     user_id: UUID | None = None,
     authenticated: bool = False,
 ) -> AssembledContext:
@@ -614,7 +579,6 @@ async def assemble_context(
         memory_adapter: Seshat protocol adapter (None if unavailable).
         trace_id: Request trace identifier.
         session_id: Client session id for proactive memory session scoping.
-        recall_context: Recall controller result from Stage 4b (None if not triggered).
         user_id: Authenticated user UUID for visibility scoping (FRE-229).
         authenticated: Whether the request carries a verified identity (FRE-229).
 
@@ -628,11 +592,6 @@ async def assemble_context(
 
     # Include session history
     messages.extend(session_messages)
-
-    # Prepend structured state document for multi-turn sessions (Phase 4.5).
-    state_doc = build_state_document(session_messages, trace_id=trace_id)
-    if state_doc:
-        messages.insert(0, {"role": "system", "content": state_doc})
 
     # Query memory if adapter is available
     if memory_adapter is not None:
@@ -652,21 +611,6 @@ async def assemble_context(
             memory_context, memory_adapter, trace_id, authenticated
         )
 
-    # Inject session fact candidates from recall controller (as system message
-    # in the main message list, not memory_context, to avoid schema mismatch
-    # and budget-trimming that silently drops memory_context items).
-    session_facts_injected = bool(
-        recall_context and recall_context.reclassified and recall_context.candidates
-    )
-    if recall_context and recall_context.reclassified and recall_context.candidates:
-        recall_section = "## Session Fact Recall\n"
-        recall_section += "The user appears to be referring to something discussed earlier.\n"
-        recall_section += "Relevant facts from the conversation:\n"
-        for c in recall_context.candidates:
-            recall_section += f'- Turn {c.source_turn}: "{c.fact}" (matched: "{c.noun_phrase}")\n'
-        recall_section += "\nUse these facts to answer accurately. Do not claim you don't know."
-        messages.append({"role": "system", "content": recall_section})
-
     # Add the current user message
     messages.append({"role": "user", "content": user_message})
 
@@ -684,19 +628,16 @@ async def assemble_context(
     )
 
     # ADR-0125 D3 item 5 (FRE-1004): record what recall offered *before* Stage 7 can
-    # drop it. Session-fact candidates are carried here too — they ride a system
-    # message rather than memory_context, so without them the record would omit a
-    # live, model-visible recalled-fact producer.
+    # drop it.
     # FRE-1060: the candidates recall's own gates discarded ride here too. Without them
     # the record named only the survivors and reported them as the population — on the
-    # melon turn, five of twelve. Three groups in construction order — offered, discarded,
-    # session facts — each internally rank-ordered; every item carries its score, so global
-    # rank stays recoverable by sorting. The completeness claim comes from the producing
-    # path, never asserted here: only that path knows whether it reported its own drops.
+    # melon turn, five of twelve. Two groups in construction order — offered, discarded —
+    # each internally rank-ordered; every item carries its score, so global rank stays
+    # recoverable by sorting. The completeness claim comes from the producing path, never
+    # asserted here: only that path knows whether it reported its own drops.
     recall_candidates = (
         *build_recall_candidates(memory_context, memory_scores),
         *build_discarded_candidates(discard_report.discards),
-        *_session_fact_candidates(recall_context),
     )
 
     return AssembledContext(
@@ -706,6 +647,5 @@ async def assemble_context(
         token_count=estimated_tokens,
         trimmed=False,  # Slice 1: no budget trimming
         recall_candidates=recall_candidates,
-        session_facts_injected=session_facts_injected,
         candidate_population=discard_report.population,
     )

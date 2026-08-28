@@ -280,15 +280,6 @@ def test_whole_file_scope_does_not_apply_to_other_files(tmp_path: Path) -> None:
     assert violations == []
 
 
-def test_real_state_document_module_is_clean_post_fix() -> None:
-    """Confirms Rule C's whole-file scope produces zero false positives against the
-    real (post-fix) file — every slice there now routes through mark_truncated.
-    """
-    real = REPO_ROOT / "src/personal_agent/request_gateway/state_document.py"
-    violations = lint_file(real, allowlist=[])
-    assert violations == []
-
-
 def test_real_executor_is_clean_with_no_allowlist_entry() -> None:
     """The task-assist render truncation FRE-1002 deferred is gone, not exempted.
 

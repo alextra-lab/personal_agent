@@ -65,7 +65,7 @@ This directory contains Architecture Decision Records for the Personal Agent (Se
 | [ADR-0034](ADR-0034-searxng-self-hosted-web-search.md) | SearXNG Self-Hosted Web Search Integration | Accepted |
 | [ADR-0035](ADR-0035-seshat-backend-decision.md) | Seshat Backend Decision — Neo4j vs Graphiti | Accepted |
 | [ADR-0036](ADR-0036-expansion-controller.md) | Expansion Controller — Deterministic Workflow Enforcement | Accepted |
-| [ADR-0037](ADR-0037-recall-controller.md) | Recall Controller — Implicit Memory Recall Path | Accepted |
+| [ADR-0037](ADR-0037-recall-controller.md) | Recall Controller — Implicit Memory Recall Path | Superseded by FRE-1135 (2026-08-28) |
 | [ADR-0038](ADR-0038-context-compressor-model.md) | Context Compressor Model Selection | Accepted |
 
 ### Self-Improvement & Infrastructure (ADR-0039 – ADR-0042)

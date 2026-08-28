@@ -121,9 +121,6 @@ class AssembledContext:
             budget trimming (ADR-0125 D3 item 5, FRE-1004). Sibling metadata only —
             never rendered, never counted against the token budget — so that an item
             ``apply_budget`` drops stays nameable instead of vanishing.
-        session_facts_injected: Whether the recall controller's session-fact section
-            was written into ``messages``. Decided here so the admission point does not
-            re-derive the condition and the two definitions cannot drift.
         candidate_population: Whether ``recall_candidates`` is the whole population the
             producing paths considered, or only the survivors of their internal selection
             (FRE-1060). Threaded to the admission point rather than assumed there,
@@ -141,42 +138,7 @@ class AssembledContext:
     trimmed: bool = False
     overflow_action: str | None = None
     recall_candidates: tuple[RecallCandidateRecord, ...] = ()
-    session_facts_injected: bool = False
     candidate_population: CandidatePopulation = CandidatePopulation.POST_SELECTION
-
-
-@dataclass(frozen=True)
-class RecallCandidate:
-    """A session fact candidate for recall injection.
-
-    Args:
-        fact: The extracted fact text (e.g., "Primary database is PostgreSQL").
-        source_turn: Turn index in session_messages where the fact was found.
-        noun_phrase: The matched noun phrase from the user's query.
-        confidence: Relevance score (0.0–1.0), weighted by recency × specificity.
-    """
-
-    fact: str
-    source_turn: int
-    noun_phrase: str
-    confidence: float
-
-
-@dataclass(frozen=True)
-class RecallResult:
-    """Output of the recall controller (Stage 4b).
-
-    Args:
-        reclassified: Whether the intent was changed from CONVERSATIONAL to MEMORY_RECALL.
-        original_task_type: The pre-reclassification task type.
-        trigger_cue: Which cue pattern matched (for telemetry).
-        candidates: Session fact candidates (max 3).
-    """
-
-    reclassified: bool
-    original_task_type: TaskType
-    trigger_cue: str
-    candidates: list[RecallCandidate] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -193,7 +155,6 @@ class GatewayOutput:
         session_id: Active session identifier.
         trace_id: Request trace identifier.
         degraded_stages: Stages that degraded gracefully (for telemetry).
-        recall_context: Recall controller result (Stage 4b), if triggered.
     """
 
     intent: IntentResult
@@ -203,4 +164,3 @@ class GatewayOutput:
     session_id: str
     trace_id: str
     degraded_stages: list[str] = field(default_factory=list)
-    recall_context: RecallResult | None = None

@@ -384,7 +384,6 @@ async def _process_chat_stream_background(
                 mode=get_current_mode(),
                 memory_adapter=memory_adapter,
                 expansion_budget=expansion_budget,
-                full_session_messages=db_messages,
                 user_id=user_id,
                 authenticated=True,
             )
@@ -2224,7 +2223,6 @@ async def _chat_impl(
             mode=get_current_mode(),
             memory_adapter=memory_adapter,
             expansion_budget=expansion_budget,
-            full_session_messages=db_messages,
             user_id=request_user.user_id,
             authenticated=True,
         )

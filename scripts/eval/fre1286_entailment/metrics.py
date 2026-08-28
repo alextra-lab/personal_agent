@@ -1,20 +1,23 @@
-"""Scoring the judge, against bars fixed before the run (FRE-1286 AC-3, AC-6).
+"""Scoring the judge, against bars fixed before the run (FRE-1286 AC-3, AC-6; FRE-1301).
 
 **The bars are declared here, as numbers, and they are declared *first*.** A bar chosen
 after seeing the score is not a bar; it is a description. ADR-0138 puts the same discipline
 on D3(c)'s false-rejection rate ("fixing this unit is a decision, not a tuning parameter,
 because AC-8's false-rejection measurement can only be taken once the matching rule is
-settled"), and the judge is owed no less.
+settled"), and the judge is owed no less. FRE-1301's ``detection_silent`` and
+``detection_implicitly_refuted`` bars are fixed the same way, before that ticket's fresh
+held-out run — see :data:`BARS`.
 
 **Per-class detection rates, never one accuracy number.** AC-3 requires contradiction and
 quantifier reversal to be detected, and a single accuracy figure lets a judge that is
-systematically blind to one class hide behind the other three. AC-3's "*fails if* either
-class passes at above its stated rate" is a per-class statement, so the metric is too.
+systematically blind to one class hide behind the others. AC-3's "*fails if* either class
+passes at above its stated rate" is a per-class statement, so the metric is too.
 
 **The false-rejection rate is the arm that stops the trivial judge.** Answering
-``not_supported`` to everything scores 1.0 on all three negative classes; only the
-``supported`` class fails it. In production it is also the expensive error: under D4 a
-false rejection costs a refusal the user did not deserve.
+``not_supported`` to everything scores 1.0 on ``silent`` and on nothing else negative; the
+``supported``, ``contradicted`` and ``implicitly_refuted`` classes all fail it. In
+production it is also the expensive error: under D4 a false rejection costs a refusal the
+user did not deserve.
 """
 
 from __future__ import annotations
@@ -28,18 +31,25 @@ BARS: dict[str, float] = {
     "accuracy": 0.85,
     "detection_contradicted": 0.90,
     "detection_quantifier_reversal": 0.80,
-    "detection_not_supported": 0.85,
+    "detection_silent": 0.85,
+    "detection_implicitly_refuted": 0.90,
     "false_rejection_rate": 0.10,
     "undecided_rate": 0.05,
 }
-"""Preregistered bars, fixed 2026-08-26 before the first scored run (FRE-1286).
+"""Preregistered bars. Fixed 2026-08-26 before FRE-1286's first scored run; re-fixed for
+``detection_silent`` and ``detection_implicitly_refuted`` before FRE-1301's fresh held-out
+run, replacing the single ``detection_not_supported`` those two classes were split from.
 
 Rates are floors except ``false_rejection_rate`` and ``undecided_rate``, which are
 ceilings. Contradiction carries the highest floor because it is the residue ADR-0138 names
 most concretely — a source stating the negation while containing every token of the claim —
-and because a judge that misses it leaves D3(c) exactly where it already was. Quantifier
-reversal sits lower on purpose: it is the harder linguistic call, and a bar set where it
-cannot be met is a bar that gets quietly re-tuned.
+and because a judge that misses it leaves D3(c) exactly where it already was.
+``detection_implicitly_refuted`` is held to the same floor: it is that same residue, just
+inferred from a described state rather than read off an explicit negation, so a judge is
+owed no more slack for it. ``detection_silent`` keeps the old ``detection_not_supported``
+floor — it is the class that floor was always measuring, the class just has a name that no
+longer also covers refutation. Quantifier reversal sits lower on purpose: it is the harder
+linguistic call, and a bar set where it cannot be met is a bar that gets quietly re-tuned.
 """
 
 _CEILINGS = frozenset({"false_rejection_rate", "undecided_rate"})
@@ -96,7 +106,8 @@ class Report:
             "accuracy": self.accuracy,
             "detection_contradicted": self._rate(CaseClass.CONTRADICTED),
             "detection_quantifier_reversal": self._rate(CaseClass.QUANTIFIER_REVERSAL),
-            "detection_not_supported": self._rate(CaseClass.NOT_SUPPORTED),
+            "detection_silent": self._rate(CaseClass.SILENT),
+            "detection_implicitly_refuted": self._rate(CaseClass.IMPLICITLY_REFUTED),
             "false_rejection_rate": self.false_rejection_rate,
             "undecided_rate": self.undecided_rate,
         }

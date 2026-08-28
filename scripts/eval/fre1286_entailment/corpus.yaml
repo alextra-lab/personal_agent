@@ -1,4 +1,4 @@
-# Labelled entailment pairs — ADR-0138 D3(d), FRE-1286 AC-3/AC-6.
+# Labelled entailment pairs — ADR-0138 D3(d), FRE-1286 AC-3/AC-6, FRE-1301.
 #
 # Hand-authored. Every passage is written to be the *cited source* of its claim, so each
 # case reaches the judge in the shape a real turn produces: containment has already passed
@@ -10,6 +10,13 @@
 # Entity-free, figure-free claims are over-represented on purpose: that is the class D3(d)
 # judges INLINE and blocking, so the judge's error rate there is the one that costs a user
 # a refusal. The rest exercise the offline arm's residue.
+#
+# FRE-1301: `not_supported` split into `silent` (the passage entails neither the claim nor
+# its negation) and `implicitly_refuted` (the passage entails the negation without an
+# explicit negating word or a directly conflicting stated value — the shape `contradicted`
+# cases already have). Every case that was in `heldout` when FRE-1286 scored it on
+# 2026-08-26 moved to `dev` here — a partition already scored cannot serve as held-out
+# again — and a fresh `heldout` set was authored in its place.
 
 cases:
   # ── supported ─────────────────────────────────────────────────────────────────────
@@ -73,63 +80,112 @@ cases:
 
   - id: sup-evaluative-grounded
     class: supported
-    partition: heldout
+    partition: dev
     expected: supported
     claim: the process is energy intensive
     passage: >-
       Producing one tonne by this route consumes roughly four times the energy of the
       conventional process, and energy dominates its operating cost.
-    note: An evaluative predicate the passage does establish — the class D1 refuses to exempt.
+    note: >-
+      An evaluative predicate the passage does establish — the class D1 refuses to exempt.
+      Scored heldout 2026-08-26 (FRE-1286); moved to dev per FRE-1301.
 
   - id: sup-negation-matched
     class: supported
-    partition: heldout
+    partition: dev
     expected: supported
     claim: the drug is not approved for children
     passage: >-
       Approval covers adults aged eighteen and over. Use in children has not been
       authorised.
-    note: A negative claim supported by a negative passage; polarity must be read, not counted.
+    note: >-
+      A negative claim supported by a negative passage; polarity must be read, not counted.
+      Scored heldout 2026-08-26 (FRE-1286); moved to dev per FRE-1301.
 
   - id: sup-unit-variant
     class: supported
-    partition: heldout
+    partition: dev
     expected: supported
     claim: the route is 12 km long
     passage: The waymarked route runs for 12 kilometres from the harbour to the lighthouse.
-    note: Unit synonyms, already normalised by containment, must not confuse the judge either.
+    note: >-
+      Unit synonyms, already normalised by containment, must not confuse the judge either.
+      Scored heldout 2026-08-26 (FRE-1286); moved to dev per FRE-1301.
 
   - id: sup-list-membership
     class: supported
-    partition: heldout
+    partition: dev
     expected: supported
     claim: the framework ships a built-in test runner
     passage: >-
       Included in the distribution: a development server, a migration tool, a test runner
       and a template engine.
-    note: Support carried by a list rather than a sentence.
+    note: >-
+      Support carried by a list rather than a sentence. Scored heldout 2026-08-26
+      (FRE-1286); moved to dev per FRE-1301.
 
   - id: sup-temporal
     class: supported
-    partition: heldout
+    partition: dev
     expected: supported
     claim: the standard was withdrawn
     passage: The standard was withdrawn in March and replaced by its successor document.
-    note: A plain restatement, present so the class is not all hard cases.
+    note: >-
+      A plain restatement, present so the class is not all hard cases. Scored heldout
+      2026-08-26 (FRE-1286); moved to dev per FRE-1301.
 
   - id: sup-degree-matched
     class: supported
-    partition: heldout
+    partition: dev
     expected: supported
     claim: the material is more conductive than copper
     passage: >-
       Measured conductivity exceeds that of copper by about eight percent at room
       temperature.
-    note: A comparative the passage actually makes.
+    note: >-
+      A comparative the passage actually makes. Scored heldout 2026-08-26 (FRE-1286);
+      moved to dev per FRE-1301.
 
-  # ── not_supported ─────────────────────────────────────────────────────────────────
+  - id: sup-comparative-restated
+    class: supported
+    partition: heldout
+    expected: supported
+    claim: the battery lasts longer than its predecessor
+    passage: >-
+      Independent testing measured runtime at 14 hours, up from 9 hours for the previous
+      model.
+    note: A comparative entailed by two anchored figures rather than stated outright.
+
+  - id: sup-cause-stated
+    class: supported
+    partition: heldout
+    expected: supported
+    claim: the outage was caused by a misconfigured firewall rule
+    passage: >-
+      A malformed firewall rule blocked internal traffic, which triggered the outage.
+    note: Causal claim entailed directly by a described mechanism.
+
+  - id: sup-negative-figure
+    class: supported
+    partition: heldout
+    expected: supported
+    claim: fewer than half of respondents agreed
+    passage: 42% of respondents agreed with the statement.
+    note: A negatively-phrased numeric claim entailed by a reported percentage.
+
+  - id: sup-scoped-claim
+    class: supported
+    partition: heldout
+    expected: supported
+    claim: the update is available for enterprise customers
+    passage: >-
+      The update has been rolled out to all enterprise and education tenants.
+    note: A claim naming one subset of a broader rollout the passage describes.
+
+  # ── silent ────────────────────────────────────────────────────────────────────────
+  # FRE-1301: the passage entails neither the claim nor its negation. Was `not_supported`.
   - id: ns-mercury-mention
-    class: not_supported
+    class: silent
     partition: dev
     expected: not_supported
     claim: this fish is high in mercury
@@ -141,7 +197,7 @@ cases:
       passes; the passage still says nothing about this fish's mercury.
 
   - id: ns-topical-only
-    class: not_supported
+    class: silent
     partition: dev
     expected: not_supported
     claim: the vaccine reduces transmission
@@ -151,7 +207,7 @@ cases:
     note: The passage explicitly declines to establish the claim without denying it.
 
   - id: ns-different-subject
-    class: not_supported
+    class: silent
     partition: dev
     expected: not_supported
     claim: the second edition fixes the indexing bug
@@ -159,7 +215,7 @@ cases:
     note: A near-miss on the subject; the shared vocabulary is the trap.
 
   - id: ns-hedged-source
-    class: not_supported
+    class: silent
     partition: dev
     expected: not_supported
     claim: the additive causes headaches
@@ -169,7 +225,7 @@ cases:
     note: A hedge does not support a flat assertion — the "may" to "does" upgrade.
 
   - id: ns-no-basis-for-degree
-    class: not_supported
+    class: silent
     partition: dev
     expected: not_supported
     claim: the survey was the largest of its kind
@@ -178,50 +234,167 @@ cases:
       The passage establishes scope but says nothing comparative; "largest" is a predicate
       content word the source never supports.
 
-  - id: ns-plan-not-fact
-    class: not_supported
-    partition: heldout
-    expected: not_supported
-    claim: the line runs to the airport
-    passage: >-
-      An extension to the airport has been proposed and is awaiting funding approval.
-    note: A plan is not the thing; conflating the two is a common generation error.
-
   - id: ns-scope-shift
-    class: not_supported
-    partition: heldout
+    class: silent
+    partition: dev
     expected: not_supported
     claim: the tool is safe to run on production data
     passage: >-
       The tool has been tested extensively against the sample dataset bundled with the
       repository.
-    note: Evidence about one scope offered for a claim about another.
-
-  - id: ns-reversed-direction
-    class: not_supported
-    partition: heldout
-    expected: not_supported
-    claim: rising costs caused the shortage
-    passage: The shortage has driven costs up sharply over the last two quarters.
-    note: Same two facts, opposite causal direction — the passage supports the converse.
+    note: >-
+      Evidence about one scope offered for a claim about another; untested is not unsafe.
+      Scored heldout 2026-08-26 (FRE-1286) as `not_supported`; moved to dev per FRE-1301.
 
   - id: ns-absent-attribute
-    class: not_supported
-    partition: heldout
+    class: silent
+    partition: dev
     expected: not_supported
     claim: the alloy is corrosion resistant
     passage: >-
       The alloy is valued for its high tensile strength and its low density, and is widely
       used in aerospace fastenings.
-    note: The passage praises the material for other properties entirely.
+    note: >-
+      The passage praises the material for other properties entirely; nothing here rules
+      corrosion resistance in or out. Scored heldout 2026-08-26 (FRE-1286) as
+      `not_supported`; moved to dev per FRE-1301.
 
   - id: ns-future-tense
-    class: not_supported
-    partition: heldout
+    class: silent
+    partition: dev
     expected: not_supported
     claim: the feature is available in the stable release
     passage: The feature is available behind a flag in the nightly builds.
-    note: Availability under a different condition is not availability.
+    note: >-
+      Describing availability in one channel does not by itself entail unavailability in
+      another — there is no "only" here. Scored heldout 2026-08-26 (FRE-1286), where the
+      judge answered `contradicted`; the FRE-1301 review found the label direction
+      defensible but not entailed, so it stays `silent` and moves to dev.
+
+  - id: sil-adjacent-metric
+    class: silent
+    partition: heldout
+    expected: not_supported
+    claim: the model is fast at inference
+    passage: >-
+      Inference speed for this model has been benchmarked extensively across cloud
+      providers, and the full results are published in the model card.
+    note: >-
+      Mentioning that inference speed was benchmarked is not stating what the benchmark
+      found — the same "mentioning is not supporting" trap as ns-mercury-mention.
+
+  - id: sil-different-version
+    class: silent
+    partition: heldout
+    expected: not_supported
+    claim: version 3 supports offline mode
+    passage: >-
+      Offline mode was one of the most requested features throughout the version 2
+      development cycle and remains under consideration for a future release.
+    note: >-
+      Heavy vocabulary overlap with the claim — "offline mode", the adjacent version — but
+      the passage never says whether version 3 shipped it.
+
+  - id: sil-pharmacokinetics
+    class: silent
+    partition: heldout
+    expected: not_supported
+    claim: the drug interacts with alcohol
+    passage: >-
+      The drug's label includes a section on interactions with other substances, covering
+      several common prescription combinations.
+    note: >-
+      Confirms an interactions section exists without saying what it covers — mentioning
+      interactions is not supporting this one.
+
+  - id: sil-organizational
+    class: silent
+    partition: heldout
+    expected: not_supported
+    claim: the committee will meet quarterly
+    passage: >-
+      The committee's charter includes a section on meeting cadence, to be finalized once
+      all seats are filled.
+    note: >-
+      Shares "meeting cadence" with the claim but leaves the actual cadence undecided.
+
+  # ── implicitly_refuted ───────────────────────────────────────────────────────────
+  # FRE-1301: the passage entails the negation, but by describing a state of the world
+  # rather than by an explicit negating word or a directly conflicting stated value — the
+  # shape `contradicted` cases below already have. Was `not_supported`. A converse causal
+  # or temporal claim is deliberately NOT used to build these — asserting one causal edge
+  # does not by itself rule out a feedback loop back the other way, so it does not meet the
+  # judge's own "directly entails" bar; each case here instead anchors on a single-valued
+  # fact (a role, a location, a structural precondition) that cannot hold two ways at once.
+  - id: ns-plan-not-fact
+    class: implicitly_refuted
+    partition: dev
+    expected: contradicted
+    claim: the line runs to the airport
+    passage: >-
+      An extension connecting the line to the airport has been proposed and is awaiting
+      funding approval; today the nearest station is 4 kilometres from the terminal,
+      reachable only by shuttle bus.
+    note: >-
+      The passage states the line's current endpoint directly, which entails the present-
+      tense claim is false — a plan is not the thing. Scored heldout 2026-08-26 (FRE-1286)
+      as `not_supported`, where the judge answered `contradicted`; the FRE-1301 review
+      agreed with the judge, strengthened the passage to state the current endpoint
+      explicitly rather than leave it inferred from the proposal alone, and moved the case
+      to dev with the corrected label.
+
+  - id: ns-reversed-direction
+    class: silent
+    partition: dev
+    expected: not_supported
+    claim: rising costs caused the shortage
+    passage: The shortage has driven costs up sharply over the last two quarters.
+    note: >-
+      The passage asserts one causal edge running the other way, which does not by itself
+      rule out a feedback loop back onto the claimed direction — asserting "A caused B"
+      does not directly entail "B did not also cause A". Scored heldout 2026-08-26
+      (FRE-1286); a first FRE-1301 pass reclassified this as `implicitly_refuted`, but a
+      codex review found the entailment insufficiently direct, so it stays `silent` and
+      moves to dev.
+
+  - id: imp-bridge-construction
+    class: implicitly_refuted
+    partition: heldout
+    expected: contradicted
+    claim: the bridge is open to traffic
+    passage: >-
+      The bridge deck was removed in March for full replacement; a pedestrian walkway is
+      the only crossing available until the new deck is installed next year.
+    note: >-
+      A removed deck entails no vehicle can cross, without the passage ever saying
+      "closed". An earlier draft said only "construction began", which a repair or a
+      phased widening could satisfy while traffic continued — this version anchors on a
+      structural fact traffic cannot survive.
+
+  - id: imp-traced-cause
+    class: implicitly_refuted
+    partition: heldout
+    expected: contradicted
+    claim: the recall was caused by contamination during manufacturing
+    passage: >-
+      Investigators traced the contamination to a mishandling incident during transport,
+      after the product had already left the factory with manufacturing complete.
+    note: >-
+      Naming the actual, single cause as a post-manufacturing event entails the claimed
+      cause is false — unlike a bare converse-direction claim, tracing a defect to one
+      cause does not leave room for a second cause elsewhere in the chain.
+
+  - id: imp-succession
+    class: implicitly_refuted
+    partition: heldout
+    expected: contradicted
+    claim: the committee is chaired by the finance director
+    passage: >-
+      The finance director stepped down last quarter, and the operations director has
+      chaired the committee since.
+    note: >-
+      A described succession entails the finance director no longer holds the role,
+      without the passage negating it directly.
 
   # ── contradicted ──────────────────────────────────────────────────────────────────
   - id: con-sold-in-france
@@ -270,45 +443,90 @@ cases:
 
   - id: con-attribution-flip
     class: contradicted
-    partition: heldout
+    partition: dev
     expected: contradicted
     claim: the agency approved the merger
     passage: The agency blocked the merger, citing concentration in the regional market.
-    note: One verb carries the whole refutation.
+    note: >-
+      One verb carries the whole refutation. Scored heldout 2026-08-26 (FRE-1286); moved
+      to dev per FRE-1301.
 
   - id: con-exclusion
     class: contradicted
-    partition: heldout
+    partition: dev
     expected: contradicted
     claim: the licence permits commercial use
     passage: >-
       The licence grants rights for research and teaching only. Commercial use requires a
       separate agreement.
-    note: An explicit carve-out refuting the claim without using its words negatively.
+    note: >-
+      An explicit carve-out refuting the claim without using its words negatively. Scored
+      heldout 2026-08-26 (FRE-1286); moved to dev per FRE-1301.
 
   - id: con-identity
     class: contradicted
-    partition: heldout
+    partition: dev
     expected: contradicted
     claim: the compound is water soluble
     passage: The compound is insoluble in water and is handled as a suspension.
-    note: Morphological negation — "insoluble" — rather than a negating particle.
+    note: >-
+      Morphological negation — "insoluble" — rather than a negating particle. Scored
+      heldout 2026-08-26 (FRE-1286); moved to dev per FRE-1301.
 
   - id: con-recall
     class: contradicted
-    partition: heldout
+    partition: dev
     expected: contradicted
     claim: the model is available to all users
     passage: Access was restricted to enterprise customers after the preview ended.
-    note: Availability refuted by a described restriction.
+    note: >-
+      Availability refuted by a described restriction. Scored heldout 2026-08-26
+      (FRE-1286); moved to dev per FRE-1301.
 
   - id: con-order
     class: contradicted
-    partition: heldout
+    partition: dev
     expected: contradicted
     claim: the treatment is given before surgery
     passage: The treatment is administered only after the surgical resection is complete.
-    note: Temporal order reversed; every content word is present in the passage.
+    note: >-
+      Temporal order reversed; every content word is present in the passage. Scored
+      heldout 2026-08-26 (FRE-1286); moved to dev per FRE-1301.
+
+  - id: con-status-flip
+    class: contradicted
+    partition: heldout
+    expected: contradicted
+    claim: the ticket is still open
+    passage: The ticket was closed after the fix was verified in staging.
+    note: A described state change refutes present-tense continuity.
+
+  - id: con-population
+    class: contradicted
+    partition: heldout
+    expected: contradicted
+    claim: the drug is approved for adults only
+    passage: >-
+      The drug received approval for both pediatric and adult populations last year.
+    note: An "only" claim refuted by a broader stated approval.
+
+  - id: con-comparative-flip
+    class: contradicted
+    partition: heldout
+    expected: contradicted
+    claim: the new algorithm is slower than the old one
+    passage: >-
+      Benchmarks show the new algorithm completes the same workload in half the time of
+      its predecessor.
+    note: Opposite comparative direction; the tokens overlap heavily.
+
+  - id: con-existence
+    class: contradicted
+    partition: heldout
+    expected: contradicted
+    claim: the vulnerability remains unpatched
+    passage: A patch shipped in the 4.2 release closes the vulnerability.
+    note: The existence of a remedy refutes a claim of its absence.
 
   # ── quantifier_reversal ───────────────────────────────────────────────────────────
   - id: quant-some-for-all
@@ -353,34 +571,72 @@ cases:
 
   - id: quant-all-for-some
     class: quantifier_reversal
-    partition: heldout
+    partition: dev
     expected: supported
     claim: some of the tested units failed
     passage: All of the tested units failed the drop test.
     note: >-
       The direction that DOES hold. Present so the class cannot be aced by a judge that
-      simply rejects every sentence containing a quantifier.
+      simply rejects every sentence containing a quantifier. Scored heldout 2026-08-26
+      (FRE-1286); moved to dev per FRE-1301.
 
   - id: quant-only
     class: quantifier_reversal
-    partition: heldout
+    partition: dev
     expected: contradicted
     claim: the grant is open to postgraduate students
     passage: The grant is open only to undergraduate students in their final year.
-    note: An "only" that narrows the set to one excluding the claim's.
+    note: >-
+      An "only" that narrows the set to one excluding the claim's. Scored heldout
+      2026-08-26 (FRE-1286); moved to dev per FRE-1301.
 
   - id: quant-few
     class: quantifier_reversal
-    partition: heldout
+    partition: dev
     expected: not_supported
     claim: the side effect is common
     passage: The side effect was reported by fewer than one in a thousand participants.
-    note: A frequency claim against a stated rarity; "common" is a predicate content word.
+    note: >-
+      A frequency claim against a stated rarity; "common" is a predicate content word.
+      Scored heldout 2026-08-26 (FRE-1286), where the judge answered `contradicted`; the
+      label is left as filed pending a dedicated review of the quantifier_reversal class,
+      which is out of FRE-1301's scope. Moved to dev per FRE-1301's AC-2 (a scored
+      partition cannot serve as held-out again).
 
   - id: quant-generic
     class: quantifier_reversal
-    partition: heldout
+    partition: dev
     expected: not_supported
     claim: these batteries last five years
     passage: Under laboratory conditions the best-performing cell retained capacity for five years.
-    note: A best case offered as the general case.
+    note: >-
+      A best case offered as the general case. Scored heldout 2026-08-26 (FRE-1286); moved
+      to dev per FRE-1301.
+
+  - id: quant-all-for-most
+    class: quantifier_reversal
+    partition: heldout
+    expected: supported
+    claim: most attendees stayed until the end
+    passage: All attendees stayed until the closing session ended.
+    note: >-
+      Another direction that DOES hold — a universal claim entails a majority claim — so
+      this fresh heldout set is not aceable by rejecting every quantifier sentence either.
+
+  - id: quant-none-for-some
+    class: quantifier_reversal
+    partition: heldout
+    expected: contradicted
+    claim: some of the reviewers raised concerns about the change
+    passage: None of the reviewers raised any concerns.
+    note: >-
+      A universal denial refutes an existential claim too, not only a universal one — the
+      same predicate on both sides, so the reversal is the only thing being tested.
+
+  - id: quant-majority-for-all
+    class: quantifier_reversal
+    partition: heldout
+    expected: not_supported
+    claim: all customers renewed their contracts
+    passage: The majority of customers renewed their contracts this quarter.
+    note: A majority does not reach "all"; the passage does not name a holdout.

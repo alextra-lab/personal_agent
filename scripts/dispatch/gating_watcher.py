@@ -42,25 +42,30 @@ suppressed iff ``now - last_sent < ttl(kind)``:
 - **worker** triggers require idle (``session_is_idle`` over ``capture-pane``) —
   a busy worker is mid-build and must not be interrupted; a busy target is
   skipped + logged, retried next tick.
-- **master** triggers are **unconditional** — idle detection over ``capture-pane``
-  is not reliable enough to *gate* on (it kept the watcher from ever informing a
-  busy master), so ``/master <id>`` is always sent and Claude Code queues it if
-  master is mid-turn. Master then decides whether to act on it now or after the
-  current task. The dedup store (long master TTL) still prevents re-sends.
+- **master** triggers defer, never drop, on a busy pane (FRE-1271; see below) —
+  ``/master <id>`` sends immediately when the pane reads idle; a busy read holds
+  the command rather than injecting it into Claude Code's queue, so a stale
+  command can never fire against a PR master has since gated some other way.
 
-**Unconfirmed delivery (FRE-939).** "Claude Code queues it" is a hope, not an
-observation: a master trigger sent mid-turn was returning ``sent`` and being
-booked as delivered-and-consumed, so when the keys *were* lost nothing surfaced,
-nothing retried, and PR 602 sat ungated for nine hours. The pane is therefore
-captured on the master path too — **as evidence, never as a gate** (the send is
-still unconditional; FRE-845's dropped-dispatch regression is not reintroduced).
-A busy pane yields ``queued``: keys injected, receipt unobserved. Such an entry
-is deliberately **not** consumed and does **not** arm the 6 h dedup TTL, so it
-stays visible to the existing unconsumed-trigger read, and ``resolve_queued_triggers``
-resolves it each tick — consume it once its PR is authoritatively closed,
-re-offer it into a now-idle pane, or surface it once past a bounded age. There
-is no blind retry: the re-offer is idle-gated, so a still-busy target costs zero
-keystrokes.
+**Deferred delivery (FRE-939, FRE-1271).** A master trigger used to send
+unconditionally regardless of pane state — "Claude Code queues it" was a hope,
+not an observation, and a send into a mid-turn pane was once booked as
+delivered-and-consumed with nothing surfaced and nothing retried when the keys
+were in fact lost (PR 602 sat ungated for nine hours, FRE-939). A busy pane now
+yields ``queued``: the command is **held, not injected**. Such an entry is
+deliberately **not** consumed and does **not** arm the 6 h dedup TTL, so it
+stays visible to the existing unconsumed-trigger read, and
+``resolve_queued_triggers`` resolves it each tick, in order — consume it once
+its PR is authoritatively closed (this is what stops a stale re-gate:
+master having already gated the PR through its own scan retires the entry here
+before any keystroke is ever sent), re-offer it idle-gated into a now-idle
+pane, or — only past a bounded age (default 30 min) — surface it *and*
+force-deliver it regardless of pane state, so a persistently busy (or
+persistently misread) pane still cannot drop the dispatch outright. The
+idle-gated re-offer costs zero keystrokes against a still-busy target; only the
+age-bounded fallback ever sends blind, and only after both the obsolescence
+check and the idle-gated re-offer have had a full escalation window's worth of
+ticks to resolve it safely first.
 
 The watcher only *actuates* the trigger; master's and worker's own gates re-read
 live state and remain authoritative.
@@ -150,6 +155,13 @@ _STREAM_FROM_LABEL: dict[str, str] = {
 # never appears).
 DEFAULT_MASTER_TTL_S: float = 21600.0  # 6 h
 DEFAULT_WORKER_TTL_S: float = 900.0  # 15 min
+
+# A worker trigger with no owning stream (FRE-1271) re-derives the identical
+# unroutable verdict every tick otherwise -- one log per (pr, head_sha), self-
+# healing on the same 6h horizon as the master TTL (this is pure log-noise
+# suppression, not actuation dedup, so reusing the master constant is a
+# convenience, not a coupling).
+DEFAULT_UNROUTABLE_LOG_TTL_S: float = DEFAULT_MASTER_TTL_S
 
 # Context-pressure nudge (FRE-848): a master context-pressure HEADS-UP (informational),
 # plus the dedup TTL. Reuses the master TTL -- one nudge per pressure episode, self-heals
@@ -858,53 +870,65 @@ def send_to_session(
         require_idle: When ``True`` (default), inject only into an idle pane — a
             busy pane returns ``busy`` without sending. Used for **worker**
             triggers so a build mid-turn is never interrupted. When ``False``,
-            inject regardless of pane state: Claude Code queues the keys if the
-            session is mid-turn. Used for the **master** trigger — idle detection
-            over ``capture-pane`` is not reliable enough to *gate* on (it kept the
-            watcher from ever informing a busy master), so master is always poked
-            with ``/master <id>`` and the owner/master decides whether to act on
-            it now or after the current task.
-        on_queued: Called once, **after** the pane reads busy and **before** the
-            keystrokes are injected, on the ``require_idle=False`` path only.
-            The caller uses it to durably record the unconfirmed delivery
-            (FRE-939). The ordering lives here rather than at the call site so
-            it cannot be forgotten: a durable "queued" record written *after*
-            injection leaves a crash window whose on-disk shape is
-            indistinguishable from an ambiguous mid-send crash, which
-            ``trigger_ledger.reconcile`` marks terminally ``surfaced`` —
-            permanently disabling delivery for that PR.
+            still capture the pane and defer (return ``queued``, no injection)
+            on a busy read — used for the **master** trigger. This does *not*
+            gate delivery outright the way ``require_idle=True`` does: a
+            deferred entry stays re-offerable every tick via
+            ``resolve_queued_triggers`` (idle-gated re-offer, obsolescence
+            check, then a bounded force-deliver fallback past the escalation
+            threshold, FRE-1271) — so a false-busy reading costs at most a
+            delayed poke, never a silently dropped one (the FRE-845 guarantee,
+            preserved by that bound rather than by injecting blind here).
+        on_queued: Called once, **instead of** injecting, when the pane reads
+            busy on the ``require_idle=False`` path. The caller uses it to
+            durably record the deferred delivery (FRE-939/FRE-1271) before
+            returning — there is no injection on this path to sequence against,
+            but keeping the write inside ``send_to_session`` (rather than at the
+            call site) keeps the "ledger write for every outcome" invariant in
+            one place.
 
     Returns:
         ``sent`` when the keys were injected into a pane observed **idle**;
-        ``queued`` when they were injected into a **busy** pane (issued, receipt
-        unobserved — ``require_idle=False`` only); ``absent`` when the session
-        does not exist; ``busy`` when ``require_idle`` and the pane is not idle.
-        The last two perform no injection.
+        ``queued`` when the pane read **busy** and delivery was deferred, no
+        injection performed (``require_idle=False`` only); ``absent`` when the
+        session does not exist; ``busy`` when ``require_idle`` and the pane is
+        not idle. Only the ``sent`` outcome performs any injection.
     """
     # Exact-match targets throughout (FRE-909): a dead seat must resolve to
     # nothing, never to a name-extension seat (cc-build -> cc-build2), which
     # would inject this command into a DIFFERENT worker mid-build.
     if runner(["tmux", "has-session", "-t", exact_session(session)]).returncode != 0:
         return "absent"
-    # The pane is now captured on BOTH paths (FRE-939). It still only *gates*
-    # the require_idle path; for master it is read-only evidence, used to stop
-    # booking an unobserved send as a confirmed delivery. Master delivery stays
-    # unconditional — FRE-845's regression (a false-busy reading dropping the
-    # dispatch outright) is not reintroduced: a false busy here costs at most a
-    # duplicate poke later, never a lost one.
     pane = runner(["tmux", "capture-pane", "-t", exact_pane(session), "-p"])
-    outcome: trigger_ledger.SendOutcome = "sent"
     if not session_is_idle(pane.stdout):
         if require_idle:
             return "busy"
-        outcome = "queued"
         if on_queued is not None:
             on_queued()
+        return "queued"
     # Send the literal text, then Enter as a separate key — never let tmux parse
     # the command text as key names.
     runner(["tmux", "send-keys", "-t", exact_pane(session), "-l", command])
     runner(["tmux", "send-keys", "-t", exact_pane(session), "Enter"])
-    return outcome
+    return "sent"
+
+
+def _force_deliver(session: str, command: str, runner: CommandRunner) -> Literal["sent", "absent"]:
+    """Inject unconditionally, ignoring pane busy/idle state entirely (FRE-1271).
+
+    Reserved for ``resolve_queued_triggers``'s age-escalation fallback: once a
+    trigger deferred while busy has waited past the escalation threshold
+    without a safe (idle) delivery window, deliver it anyway rather than
+    deferring forever — the pre-FRE-1271 unconditional-master guarantee, but
+    only as a last resort after the obsolescence check and idle-gated re-offer
+    have both had a full escalation window's worth of ticks to resolve it
+    safely first.
+    """
+    if runner(["tmux", "has-session", "-t", exact_session(session)]).returncode != 0:
+        return "absent"
+    runner(["tmux", "send-keys", "-t", exact_pane(session), "-l", command])
+    runner(["tmux", "send-keys", "-t", exact_pane(session), "Enter"])
+    return "sent"
 
 
 ChannelOutcome = Literal["delivered", "unreachable"]
@@ -1056,19 +1080,21 @@ def resolve_queued_triggers(
     open_pr_numbers: Collection[str],
     pr_closed: Callable[[str], bool | None],
     reoffer: Callable[[trigger_ledger.LedgerEntry], trigger_ledger.IdleGatedOutcome],
+    force_deliver: Callable[[trigger_ledger.LedgerEntry], Literal["sent", "absent"]],
     escalation_s: float,
     escalated: set[str],
     ledger_persist: Callable[[trigger_ledger.Ledger], None],
     logger: Logger,
     trace_id: str,
 ) -> tuple[trigger_ledger.Ledger, tuple[str, ...]]:
-    """Resolve every unconfirmed (``queued``) ledger entry (FRE-939).
+    """Resolve every deferred (``queued``) ledger entry (FRE-939, FRE-1271).
 
-    An entry reaches this pass when its command was injected into a **busy**
-    pane: issued, but receipt never observed. Each such entry is either closed
-    out as moot, re-delivered into a now-idle pane, or — past a bounded age —
-    surfaced to the owner. It is never dropped, and never blind-retried into a
-    busy pane.
+    An entry reaches this pass when its command was deferred into a **busy**
+    pane rather than injected. Each such entry is either closed out as moot,
+    re-delivered into a now-idle pane, or — past a bounded age — surfaced to
+    the owner *and* force-delivered regardless of pane state. It is never
+    silently dropped, and never blind-retried into a busy pane before the age
+    bound is reached.
 
     Per entry, in order:
 
@@ -1083,25 +1109,39 @@ def resolve_queued_triggers(
        closed/merged is moot (master acted, or the PR went away). Absence from
        ``open_pr_numbers`` alone is never sufficient — see ``pr_is_closed``. A
        non-numeric ticket (a context-pressure nudge keyed by session) has no PR
-       to close against and is never judged obsolete here.
+       to close against and is never judged obsolete here. This is what closes
+       FRE-1271's stale re-gate: it runs every tick, before any delivery
+       attempt, so a PR master already gated through its own scan is retired
+       here instead of ever being sent.
     2. **Re-offer, idle-gated.** ``reoffer`` injects only into an idle pane, so a
        still-busy target costs **zero keystrokes**. That is what keeps this from
        becoming the send loop the ticket forbids: there is no per-tick
        re-injection and no backoff timer to mistune. It is idle-*gated*, not
        race-free — the pane can turn busy between the capture and the send-keys,
        the same narrow pre-existing window every worker delivery carries.
-    3. **Escalate by age, once.** Age is measured from ``created_at``, which
-       ``record_pending`` writes exactly once; nothing on the re-offer path
-       rewrites it, so repeated attempts cannot reset the clock (the FRE-927
-       defect, avoided by construction rather than by discipline).
+    3. **Escalate by age, and force-deliver (FRE-1271).** Once an entry has been
+       unconfirmed for ``escalation_s`` (measured from ``created_at``, never
+       reset by a repeated attempt), it is surfaced *once* via a warning
+       (``escalated`` latch, below) **and** ``force_deliver`` is attempted —
+       injecting regardless of pane state, exactly like the pre-FRE-1271
+       unconditional master send. Unlike the warning, the force-attempt is
+       **not** latched: it retries every tick past the threshold until it
+       succeeds or the entry resolves via step 1. This is the liveness bound
+       that keeps this pass from ever permanently starving delivery (the
+       FRE-845 guarantee) — steps 1 and 2 get a full ``escalation_s`` window of
+       idle-gated, obsolescence-checked attempts first, and only after that
+       does delivery fall back to unconditional.
 
     ``escalated`` is an **in-memory** one-shot latch, deliberately not persisted
     — the FRE-922/FRE-924 lesson: a persisted crossing state can be
     first-observed already past its trigger after a restart and silently lose
     the single alert forever. In memory it gives exactly-once per daemon run and
     at-least-once across restarts, which is the correct direction to fail for an
-    alert. ``mark_surfaced`` is deliberately unused: it is terminal-pending and
-    never auto-retried, which would kill the re-offer above.
+    alert. It gates only the warning, never the force-deliver retry — a daemon
+    restart re-warning once more costs nothing, but a daemon restart silently
+    dropping the retry would recreate the exact gap this step exists to close.
+    ``mark_surfaced`` is deliberately unused: it is terminal-pending and never
+    auto-retried, which would kill the re-offer above.
 
     Args:
         ledger: The current ledger.
@@ -1113,9 +1153,14 @@ def resolve_queued_triggers(
         reoffer: Re-attempts one entry's delivery. Must be **idle-gated**,
             which the type enforces — a re-offer that could inject into a busy
             pane is the send loop this pass exists to avoid.
-        escalation_s: Age past which a still-unconfirmed entry is surfaced.
+        force_deliver: Delivers one entry unconditionally, ignoring pane state.
+            Only called once an entry has crossed ``escalation_s`` and the
+            idle-gated ``reoffer`` above has already failed this tick.
+        escalation_s: Age past which a still-unconfirmed entry is surfaced and
+            force-delivery is attempted.
         escalated: In-memory one-shot latch of already-surfaced event ids,
-            mutated in place.
+            mutated in place. Gates the warning only, not the force-deliver
+            retry.
         ledger_persist: Persists the ledger after each transition.
         logger: Structured logger.
         trace_id: The tick's trace id.
@@ -1195,18 +1240,33 @@ def resolve_queued_triggers(
             )
             continue
 
-        if now - entry.created_at >= escalation_s and event_id not in escalated:
-            escalated.add(event_id)
-            logger.warning(
-                "gating_trigger_unconfirmed_too_long",
-                trace_id=trace_id,
-                event_id=event_id,
-                pr=entry.ticket,
-                session=entry.target_pane,
-                command=entry.command,
-                age_s=round(now - entry.created_at, 1),
-                reoffer_outcome=outcome,
-            )
+        if now - entry.created_at >= escalation_s:
+            if event_id not in escalated:
+                escalated.add(event_id)
+                logger.warning(
+                    "gating_trigger_unconfirmed_too_long",
+                    trace_id=trace_id,
+                    event_id=event_id,
+                    pr=entry.ticket,
+                    session=entry.target_pane,
+                    command=entry.command,
+                    age_s=round(now - entry.created_at, 1),
+                    reoffer_outcome=outcome,
+                )
+            force_outcome = force_deliver(entry)
+            if force_outcome == "sent":
+                ledger = trigger_ledger.mark_sent(ledger, event_id, now)
+                ledger_persist(ledger)
+                ledger = trigger_ledger.mark_consumed(ledger, event_id, now)
+                ledger_persist(ledger)
+                delivered.append(event_id)
+                logger.info(
+                    "gating_queued_forced_after_escalation",
+                    trace_id=trace_id,
+                    event_id=event_id,
+                    pr=entry.ticket,
+                    session=entry.target_pane,
+                )
     return ledger, tuple(delivered)
 
 
@@ -1232,6 +1292,7 @@ def run_once(
     channel_secret: str | None = None,
     queued_escalated: set[str] | None = None,
     queued_escalation_s: float = DEFAULT_QUEUED_ESCALATION_S,
+    unroutable_ttl_s: float = DEFAULT_UNROUTABLE_LOG_TTL_S,
 ) -> dict[str, float]:
     """Run one watcher tick, mutating and returning the dedup store.
 
@@ -1273,6 +1334,10 @@ def run_once(
             run, which surfaces at most once by definition.
         queued_escalation_s: Age past which a still-unconfirmed trigger is
             surfaced to the owner.
+        unroutable_ttl_s: Suppression window for the ``gating_skip
+            reason=unroutable`` log line, keyed per ``(pr, head_sha)``
+            (FRE-1271) — a worker trigger with no owning stream would otherwise
+            re-log the identical verdict every tick for as long as it recurs.
 
     Returns:
         The updated dedup store.
@@ -1290,6 +1355,9 @@ def run_once(
 
     def _retry_pending(entry: trigger_ledger.LedgerEntry) -> trigger_ledger.IdleGatedOutcome:
         return send_to_session(entry.target_pane, entry.command, runner)
+
+    def _force_pending(entry: trigger_ledger.LedgerEntry) -> Literal["sent", "absent"]:
+        return _force_deliver(entry.target_pane, entry.command, runner)
 
     if execute:
         tick_ledger = trigger_ledger.reconcile(
@@ -1312,6 +1380,7 @@ def run_once(
             open_pr_numbers={str(pr.number) for pr in prs},
             pr_closed=lambda number: pr_is_closed(number, runner),
             reoffer=_retry_pending,
+            force_deliver=_force_pending,
             escalation_s=queued_escalation_s,
             escalated=queued_escalated,
             ledger_persist=ledger_persist,
@@ -1332,6 +1401,14 @@ def run_once(
         worker_ttl_s=worker_ttl_s,
     )
     for trigger in triggers:
+        if trigger.session is None:
+            unroutable_key = f"unroutable:{trigger.pr}:{trigger.head_sha}"
+            if execute and _suppressed(state, unroutable_key, now, unroutable_ttl_s):
+                # Fully silent this tick -- both the decision and the skip were
+                # already logged within this head SHA's window (FRE-1271): a
+                # PR with no owning worker stream re-derives the identical
+                # verdict every tick otherwise, burying real signal in the log.
+                continue
         logger.info(
             "gating_decision",
             trace_id=trace_id,
@@ -1343,6 +1420,9 @@ def run_once(
         )
         if trigger.session is None:
             logger.warning("gating_skip", trace_id=trace_id, reason="unroutable", pr=trigger.pr)
+            if execute:
+                state[unroutable_key] = now
+                persist(state)
             continue
         if not execute:
             continue
@@ -1419,14 +1499,16 @@ def run_once(
                 on_queued=_record_queued,
             )
         if outcome == "queued":
-            # Injected into a busy pane -- delivery issued, receipt NOT observed
-            # (FRE-939). Deliberately none of the "sent" bookkeeping below: no
-            # mark_sent, no dedup-store write (an unconfirmed send must not
-            # suppress the PR for the 6h master TTL), no mark_consumed. The
-            # entry stays unconsumed so the existing surfacing read sees it and
-            # resolve_queued_triggers re-offers it next tick.
+            # Held, NOT injected -- the pane read busy, so delivery is deferred
+            # rather than fired into the buffer (FRE-1271). Deliberately none
+            # of the "sent" bookkeeping below: no mark_sent, no dedup-store
+            # write (a deferred send must not suppress the PR for the 6h
+            # master TTL), no mark_consumed. The entry stays unconsumed so the
+            # existing surfacing read sees it and resolve_queued_triggers
+            # resolves it next tick -- obsolescence check first, then an
+            # idle-gated re-offer, before any keystroke ever reaches the pane.
             logger.warning(
-                "gating_send_unconfirmed",
+                "gating_send_deferred",
                 trace_id=trace_id,
                 pr=trigger.pr,
                 session=trigger.session,
@@ -1511,7 +1593,7 @@ def run_once(
     pruned = prune_state(
         state,
         now=now,
-        max_ttl_s=max(master_ttl_s, worker_ttl_s, context_pressure_ttl_s),
+        max_ttl_s=max(master_ttl_s, worker_ttl_s, context_pressure_ttl_s, unroutable_ttl_s),
         open_prs=[pr.number for pr in prs],
     )
     if pruned != state:

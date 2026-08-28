@@ -26,21 +26,23 @@ distinguishable places, each demanding a different response.
   ``"sent"``); the crash was purely in the post-send bookkeeping. Closed out
   directly (``mark_consumed``) — never replayed.
 
-**Unconfirmed delivery — the fourth state (FRE-939).** ``queued_at`` marks an
-entry whose command *was* injected but into a **busy** pane, so receipt was
-never observed. This is deliberately NOT one of the three crash states: the send
-demonstrably completed (no ambiguity about partial keystrokes), only the target's
-*receipt* is unknown, and the entry must stay re-offerable rather than becoming
-terminal. ``reconcile`` therefore skips it — the caller's own resolution pass
-owns it (``gating_watcher.resolve_queued_triggers``), re-offering into an idle
-pane and escalating by age.
+**Deferred delivery — the fourth state (FRE-939, FRE-1271).** ``queued_at`` marks
+an entry whose command was **held rather than injected** because its target pane
+read busy. This is deliberately NOT one of the three crash states: nothing was
+sent, there is no injection to be ambiguous about, and the entry must stay
+re-offerable rather than becoming terminal. ``reconcile`` therefore skips it —
+the caller's own resolution pass owns it (``gating_watcher.resolve_queued_triggers``),
+which checks the entry's precondition for obsolescence first (so a target that
+resolved the underlying decision some other way, e.g. master gating a PR through
+its own scan, never receives a stale command at all), then re-offers into an
+idle pane, and — only past a bounded age — force-delivers regardless of pane
+state so a persistently busy target still cannot drop the dispatch outright.
 
-``queued_at`` is written **before** the keystrokes are injected, never after the
-send returns. Writing it after would leave an ordinary crash window — keys in,
-``queued_at`` not yet durable — whose on-disk shape is exactly the
-``send_started_at``-set/``sent_at``-None ambiguous state above, so ``reconcile``
-would mark it terminally ``surfaced`` and delivery for that PR would be disabled
-forever: a fresh variant of the bug FRE-939 exists to close.
+``queued_at`` is written **at the same point the deferral decision is made**,
+before returning to the caller — there is no keystroke on this path to sequence
+against, but recording the deferral durably, in the same place every time,
+keeps "every outcome has a ledger write" an invariant rather than a convention
+callers must each get right.
 
 **Dedup folds in the trigger's own TTL window.** ``record_pending`` refuses a
 duplicate write while an entry is unconsumed (still in-flight, or surfaced and
@@ -61,6 +63,7 @@ post-hoc via ``mark_transport`` only once a channel delivery is confirmed, never
 Callable by hand::
 
     python -m scripts.dispatch.trigger_ledger --unconsumed --json
+    python -m scripts.dispatch.trigger_ledger --all --json  # includes consumed entries (FRE-1271)
 """
 
 from __future__ import annotations
@@ -110,10 +113,11 @@ class LedgerEntry:
         send_started_at: Set immediately before the send attempt; ``None``
             means the send was never attempted.
         sent_at: Set only after the send is confirmed to have succeeded.
-        queued_at: Set when the command was injected into a **busy** pane, so
-            delivery was issued but never observed (FRE-939). Written before
-            the keystrokes, never after. Mutually exclusive with ``sent_at``:
-            the same attempt cannot be both observed and unobserved.
+        queued_at: Set when the command was **deferred rather than injected**
+            because its target pane read busy (FRE-1271; previously meant
+            "injected into a busy pane, receipt unobserved" under FRE-939).
+            Mutually exclusive with ``sent_at``: an entry is either delivered
+            or deferred on a given attempt, never both.
         consumed_at: Set once bookkeeping is fully closed (sent or abandoned).
         surfaced_at: Set when reconciliation cannot safely resolve the entry —
             terminal-pending, requires owner intervention, never auto-retried.
@@ -212,12 +216,11 @@ def mark_sent(ledger: Ledger, event_id: str, now: float) -> Ledger:
 
 
 def mark_queued(ledger: Ledger, event_id: str, now: float) -> Ledger:
-    """Record that the command is about to be injected into a **busy** pane.
+    """Record that the command was deferred because its target pane read busy.
 
-    Call this *before* the keystrokes are sent (FRE-939) — see the module
-    docstring for why the ordering is load-bearing. The entry deliberately
-    stays unconsumed: delivery was issued but never observed, so it remains
-    re-offerable and surfaceable.
+    Call this instead of injecting (FRE-1271) — see the module docstring's
+    "Deferred delivery" section. The entry deliberately stays unconsumed: no
+    delivery has happened yet, so it remains re-offerable and surfaceable.
     """
     updated = dict(ledger)
     updated[event_id] = dataclasses.replace(updated[event_id], queued_at=now)
@@ -293,10 +296,10 @@ def reconcile(
             logger.info("trigger_ledger_reconcile_consumed_known_sent", event_id=event_id)
             continue
         if entry.queued_at is not None:
-            # Injected into a busy pane -- delivery issued but never observed
-            # (FRE-939). NOT a crash artifact, so the ambiguity branch below
-            # must not claim it: that would mark it terminally ``surfaced`` and
-            # kill the re-offer. The caller's resolution pass owns this entry.
+            # Deferred, not injected -- the target pane read busy (FRE-1271).
+            # NOT a crash artifact, so the ambiguity branch below must not
+            # claim it: that would mark it terminally ``surfaced`` and kill
+            # the re-offer. The caller's resolution pass owns this entry.
             continue
         if entry.send_started_at is not None:
             # Crash occurred *during* the send call -- genuinely ambiguous.
@@ -454,9 +457,28 @@ def _entry_to_json(entry: LedgerEntry) -> dict[str, object]:
         "send_started_at": entry.send_started_at,
         "sent_at": entry.sent_at,
         "queued_at": entry.queued_at,
+        "consumed_at": entry.consumed_at,
         "surfaced_at": entry.surfaced_at,
         "transport": entry.transport,
     }
+
+
+def _entry_state(entry: LedgerEntry) -> str:
+    """Classify one entry's disposition for the human-readable CLI read (FRE-1271).
+
+    Every ``--unconsumed`` entry is, by definition, ``surfaced``/``queued``/
+    ``pending`` — this only grows a fourth/fifth outcome (``sent``/
+    ``abandoned``) once ``--all`` also surfaces consumed entries, so a
+    receiving session can tell "the watcher sent this" from "the watcher
+    decided not to" after the fact, not just "this is still in flight".
+    """
+    if entry.surfaced_at is not None:
+        return "surfaced"
+    if entry.consumed_at is not None:
+        return "sent" if entry.sent_at is not None else "abandoned"
+    if entry.queued_at is not None:
+        return "queued"  # deferred, not injected -- target pane read busy
+    return "pending"
 
 
 class _CLILogger:
@@ -484,23 +506,30 @@ class _CLILogger:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Entry point. Prints unconsumed ledger entries (the `/clear`-safe read, FRE-832)."""
+    """Entry point. Prints ledger entries per ``--unconsumed``/``--all`` (FRE-832, FRE-1271)."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
         "--ledger-file", default=str(_default_ledger_path()), help="Path to the trigger ledger."
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--unconsumed",
         action="store_true",
-        help="Print entries not yet fully closed out (pending or surfaced).",
+        help="Print entries not yet fully closed out (pending, queued, or surfaced).",
+    )
+    mode.add_argument(
+        "--all",
+        action="store_true",
+        help="Print every entry, including consumed ones, so a receiving session can tell a "
+        "watcher-sent invocation from owner-typed input after the fact (FRE-1271).",
     )
     parser.add_argument("--json", action="store_true", help="Emit the result as JSON.")
     args = parser.parse_args(argv)
 
-    if not args.unconsumed:
-        parser.error("--unconsumed is required (the only supported read today)")
+    if not (args.unconsumed or args.all):
+        parser.error("one of --unconsumed or --all is required")
 
     logger = _CLILogger()
     ledger = load_ledger(Path(args.ledger_file), logger)
@@ -510,7 +539,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    entries = snapshot_unconsumed(ledger)
+    entries = snapshot_unconsumed(ledger) if args.unconsumed else tuple(ledger.values())
 
     if args.json:
         print(json.dumps([_entry_to_json(entry) for entry in entries], indent=2))
@@ -518,13 +547,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("none")
     else:
         for entry in entries:
-            if entry.surfaced_at is not None:
-                state = "surfaced"
-            elif entry.queued_at is not None:
-                state = "queued"  # injected into a busy pane, receipt unconfirmed
-            else:
-                state = "pending"
-            print(f"{entry.event_id} [{state}] ticket={entry.ticket} target={entry.target_pane}")
+            state = _entry_state(entry)
+            line = f"{entry.event_id} [{state}] ticket={entry.ticket} target={entry.target_pane}"
+            if args.all:
+                line += f" sent_at={entry.sent_at} consumed_at={entry.consumed_at}"
+            print(line)
     return 0
 
 

@@ -134,15 +134,21 @@ def test_synthesis_nudge_skips_block_list_last_message(_no_think_enabled_local: 
 
 
 # ---------------------------------------------------------------------------
-# 3d. Frozen volatile-context inlining — already safe, regression-pin it
+# 3d. Frozen volatile-context inlining — FRE-1137: block-list content now gets
+# the fence prepended instead of being silently skipped (was dropping memory/
+# skills/highlights on every attachment turn).
 # ---------------------------------------------------------------------------
 
 
-def test_volatile_inlining_skips_block_list_last_user_message() -> None:
+def test_volatile_inlining_prepends_fence_to_block_list_last_user_message() -> None:
     messages = [{"role": "user", "content": _BLOCK_LIST}]
     out = _inline_volatile_into_last_user_message(messages, "some recalled memory")
-    assert out == messages
-    assert out[-1]["content"] == _BLOCK_LIST
+    content = out[-1]["content"]
+    assert content[0] == {
+        "type": "text",
+        "text": "<turn_context>\nsome recalled memory\n</turn_context>",
+    }
+    assert content[1:] == _BLOCK_LIST
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +298,79 @@ async def test_ac3_assembled_request_messages_preserve_image_block(
         f"expected list content on the assembled user turn, got {type(last_user_content)}: "
         f"{last_user_content!r}"
     )
+    assert _IMAGE_BLOCK in last_user_content
+    assert _TEXT_BLOCK in last_user_content
+
+
+# ---------------------------------------------------------------------------
+# FRE-1137 regression probe — recalled memory must now reach the wire form on
+# an attachment (block-form) turn, not be silently dropped by the inliner.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fre1137_attachment_turn_carries_memory_section_in_wire_form(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from personal_agent.config import settings
+    from personal_agent.telemetry.trace import TraceContext
+
+    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
+    monkeypatch.setattr(settings, "skill_routing_model_key", "")
+
+    ctx = _make_minimal_ctx_with_block_content()
+    ctx.memory_context = [
+        {
+            "type": "entity",
+            "name": "Fre1137MarkerEntity",
+            "entity_type": "PERSON",
+            "description": "Fre1137MarkerEntity collects vintage telescopes",
+        }
+    ]
+    trace_ctx = TraceContext.new_trace()
+    mock_llm = _make_mock_llm_client(_make_minimal_response())
+    mock_session = MagicMock()
+    mock_session.add_message = AsyncMock()
+    mock_session.get_messages = AsyncMock(return_value=[])
+
+    with (
+        patch(
+            "personal_agent.orchestrator.skills.get_skill_bodies",
+            return_value=("", ()),
+        ),
+        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
+        patch(
+            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
+            return_value="",
+        ),
+        patch(
+            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
+            return_value="",
+        ),
+        patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+        patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm),
+        patch(
+            "personal_agent.orchestrator.executor.get_default_registry",
+            return_value=MagicMock(get_tool_definitions_for_llm=MagicMock(return_value=[])),
+        ),
+    ):
+        from personal_agent.orchestrator.executor import step_llm_call
+
+        await step_llm_call(ctx, mock_session, trace_ctx)  # type: ignore[arg-type]
+
+    assert mock_llm.respond.called, "LLM client was not called"
+    request_messages = mock_llm.respond.call_args.kwargs["messages"]
+    user_messages = [m for m in request_messages if m.get("role") == "user"]
+    assert user_messages, "no user message in assembled request_messages"
+    last_user_content = user_messages[-1]["content"]
+
+    assert isinstance(last_user_content, list)
+    fence_block = last_user_content[0]
+    assert fence_block["type"] == "text"
+    assert fence_block["text"].startswith("<turn_context>")
+    assert "Fre1137MarkerEntity" in fence_block["text"]
+    assert "vintage telescopes" in fence_block["text"]
+    # The attachment blocks still ride along, untouched, after the fence.
     assert _IMAGE_BLOCK in last_user_content
     assert _TEXT_BLOCK in last_user_content
 

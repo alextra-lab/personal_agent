@@ -618,6 +618,20 @@ def _wire_carries_volatile_fence(wire_messages: Sequence[object], user_message: 
     identifier-hunt through rendered content that ADR-0125 AC-3 rules out — the
     identities themselves still come from the renderer, never from this text.
 
+    Attachment turns widen ``content`` to block form (a list of typed blocks); this
+    joins the text of every ``type: text`` block (skipping image/document blocks,
+    which carry no fence or user text) and runs the same anchor check against that
+    joined text (FRE-1137 — the inliner's companion fix, otherwise this record would
+    keep reading a fixed attachment turn as a drop forever).
+
+    An image/document-only turn carries no user text to anchor on (``user_message``
+    empty). For block-form content in that case, additionally require at least one
+    non-text block in the candidate message before trusting it — without it, the scan
+    could mistake an unrelated earlier fenced turn for the current (e.g. sanitiser-
+    dropped) one and over-claim admission. This narrows, not eliminates, the
+    empty-anchor gap: an earlier turn that is itself both fenced and still carries an
+    attachment block remains indistinguishable, same as the dormant string-form case.
+
     Args:
         wire_messages: The final serialized message list.
         user_message: This turn's user message text.
@@ -630,11 +644,23 @@ def _wire_carries_volatile_fence(wire_messages: Sequence[object], user_message: 
         if not isinstance(message, Mapping) or message.get("role") != "user":
             continue
         content = message.get("content")
-        if not isinstance(content, str):
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            text = "\n".join(
+                str(b.get("text", ""))
+                for b in content
+                if isinstance(b, Mapping) and b.get("type") == "text"
+            )
+            if not user_message and not any(
+                isinstance(b, Mapping) and b.get("type") != "text" for b in content
+            ):
+                continue
+        else:
             continue
-        if user_message and user_message not in content:
+        if user_message and user_message not in text:
             continue
-        return TURN_CONTEXT_FENCE in content
+        return TURN_CONTEXT_FENCE in text
     return False
 
 

@@ -1876,6 +1876,12 @@ def _inline_volatile_with_outcome(
     can be rendered and still never reach the model input, and ADR-0125 D3 item 5
     requires that case to be recorded as a drop rather than assumed to be an admission.
 
+    Attachment turns widen ``content`` to block form (a list of typed blocks —
+    ADR-0101/0102); the block is prepended as a leading ``{"type": "text", ...}``
+    element there rather than skipped, otherwise every image/PDF turn silently drops
+    the whole volatile tail — memory, skill bodies, highlights (FRE-1137). The
+    string-form branch is byte-identical to before this fix (ADR-0081 §D2).
+
     Args:
         messages: Working message list. Not mutated.
         volatile_block: Pre-joined volatile content.
@@ -1887,18 +1893,29 @@ def _inline_volatile_with_outcome(
     block = volatile_block.strip() if volatile_block else ""
     if not block:
         return messages, InlineOutcome.EMPTY_BLOCK
+    fence = f"{_TURN_CONTEXT_OPEN}\n{block}\n{_TURN_CONTEXT_CLOSE}"
     out = deepcopy(messages)
     for i in range(len(out) - 1, -1, -1):
         if out[i].get("role") != "user":
             continue
         content = out[i].get("content")
-        if not isinstance(content, str):
-            return messages, InlineOutcome.NO_TARGET
-        if content.lstrip().startswith(_TURN_CONTEXT_OPEN):
-            # Already wrapped this turn — never double-wrap (byte stability).
-            return out, InlineOutcome.ALREADY_WRAPPED
-        out[i]["content"] = f"{_TURN_CONTEXT_OPEN}\n{block}\n{_TURN_CONTEXT_CLOSE}\n\n{content}"
-        return out, InlineOutcome.INLINED
+        if isinstance(content, str):
+            if content.lstrip().startswith(_TURN_CONTEXT_OPEN):
+                # Already wrapped this turn — never double-wrap (byte stability).
+                return out, InlineOutcome.ALREADY_WRAPPED
+            out[i]["content"] = f"{fence}\n\n{content}"
+            return out, InlineOutcome.INLINED
+        if isinstance(content, list):
+            first = content[0] if content else None
+            if (
+                isinstance(first, dict)
+                and first.get("type") == "text"
+                and str(first.get("text", "")).lstrip().startswith(_TURN_CONTEXT_OPEN)
+            ):
+                return out, InlineOutcome.ALREADY_WRAPPED
+            out[i]["content"] = [{"type": "text", "text": fence}, *content]
+            return out, InlineOutcome.INLINED
+        return messages, InlineOutcome.NO_TARGET
     return messages, InlineOutcome.NO_TARGET
 
 
@@ -1924,9 +1941,10 @@ def _inline_volatile_into_last_user_message(
             to inline this turn.
 
     Returns:
-        A new message list with the block inlined into the last user message, or
-        the input list unchanged when there is nothing to inline, the last user
-        content is non-string, or no user message exists.
+        A new message list with the block inlined into the last user message
+        (as a prepended text block when the content is an attachment turn's
+        block list — FRE-1137), or the input list unchanged when there is
+        nothing to inline or no user message exists.
     """
     return _inline_volatile_with_outcome(messages, volatile_block)[0]
 

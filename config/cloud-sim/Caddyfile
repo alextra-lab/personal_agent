@@ -221,7 +221,22 @@ http://{$OTLP_HOST:otlp.example.com}:80 {
 				dial_timeout 10s
 				# Time-to-first-header only. This CANNOT sever a stream that has
 				# begun — see the load-bearing omissions below.
-				response_header_timeout 60s
+				#
+				# 60s -> 300s, 2026-08-28 (FRE-1320). Headers do not arrive until the
+				# upstream starts producing, so this bounds PREFILL, not the stream.
+				# The primary moved to qwen3.8-flash-next, which prefills at ~285 t/s
+				# against the outgoing qwen3.6-35b-A3B's ~923 t/s (llama-bench, M4 Max,
+				# pp16384, 3 reps). Real tool turns carry 55-62k input tokens, so
+				# prefill alone runs ~218s on the new primary against ~67s on the old:
+				# the old model cleared 60s comfortably and the new one cannot.
+				# Observed live as `Server error 504 Gateway Timeout` on a turn whose
+				# context had grown across a tool loop, after ~121s (two attempts).
+				#
+				# 300s is chosen to clear that measured prefill with headroom, not as a
+				# round number. It is still a FIRST-HEADER bound: a generation that has
+				# begun streaming is untouched by it, which is why raising it does not
+				# reintroduce the body timeout the omissions below deliberately exclude.
+				response_header_timeout 300s
 				# Pinned explicitly so connection reuse survives later edits to this
 				# block rather than silently inheriting a changed default.
 				keepalive 90s

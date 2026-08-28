@@ -472,7 +472,7 @@ def test_get_session_stale_stored_key_provenance_is_default() -> None:
             resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
 
     body = resp.json()
-    assert body["primary_selection"] == "qwen3.6-35b-thinking"  # guardrail fell back to default
+    assert body["primary_selection"] == "qwen3.8-flash-next"  # guardrail fell back to default
     assert body["selection_provenance"] == "default"  # NOT 'server-hydrated'
 
 
@@ -530,7 +530,7 @@ def test_get_session_selection_defaults_when_no_row() -> None:
             resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
 
     body = resp.json()
-    assert body["primary_selection"] == "qwen3.6-35b-thinking"
+    assert body["primary_selection"] == "qwen3.8-flash-next"
     assert body["selection_provenance"] == "default"
 
 
@@ -588,7 +588,7 @@ def test_get_session_context_max_defaults_when_no_selection() -> None:
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["primary_selection"] == "qwen3.6-35b-thinking"
+    assert body["primary_selection"] == "qwen3.8-flash-next"
     assert body["context_max"] == 131072
 
 
@@ -795,6 +795,7 @@ def test_get_session_config_ac5_candidates_exclude_down_provider_both_directions
     assert candidates == {"claude_sonnet", "claude_haiku", "gpt-5.4-mini", "qwen3.6-27b-ovh"}
     assert "qwen3.6-35b-thinking" not in candidates
     assert "qwen3.6-35b-instruct" not in candidates
+    assert "qwen3.8-flash-next" not in candidates
     assert "embedding" not in candidates
     assert "reranker" not in candidates
 
@@ -845,7 +846,7 @@ def test_get_session_config_ac9_slice_reports_stored_selection_not_raw_default()
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
 
     primary = resp.json()["roles"]["primary"]
-    assert primary["resolved"] == "claude_sonnet"  # NOT the raw default qwen3.6-35b-thinking
+    assert primary["resolved"] == "claude_sonnet"  # NOT the raw default qwen3.8-flash-next
     assert primary["provenance"] == "server-hydrated"
 
 
@@ -871,9 +872,9 @@ def test_get_session_config_no_selection_row_falls_back_to_binding_default() -> 
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
 
     roles = resp.json()["roles"]
-    assert roles["primary"]["resolved"] == "qwen3.6-35b-thinking"
+    assert roles["primary"]["resolved"] == "qwen3.8-flash-next"
     assert roles["artifact_builder"]["resolved"] == "claude_sonnet"
-    assert roles["sub_agent"]["resolved"] == "qwen3.6-35b-instruct"
+    assert roles["sub_agent"]["resolved"] == "qwen3.8-flash-next"
 
 
 def test_get_session_config_selection_store_failure_logs_trace_id() -> None:

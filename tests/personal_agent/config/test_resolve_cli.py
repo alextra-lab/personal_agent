@@ -24,18 +24,19 @@ from personal_agent.config.resolve import main, resolve
 
 class TestResolve:
     def test_resolve_primary_returns_qwen(self) -> None:
-        assert resolve("primary") == "qwen3.6-35b-thinking"
+        assert resolve("primary") == "qwen3.8-flash-next"  # FRE-1317
 
     def test_resolve_entity_extraction_returns_gpt_5_4_mini(self) -> None:
         assert resolve("entity_extraction") == "gpt-5.4-mini"
 
-    def test_resolve_sub_agent_returns_qwen_instruct(self) -> None:
+    def test_resolve_sub_agent_returns_qwen38_flash_next(self) -> None:
         """FRE-926 AC-1 — sub_agent left the legacy matrix at FRE-920; it must still resolve via its Layer-3 binding.
 
-        FRE-963: the binding's deployment was restored from claude_sonnet to
-        qwen3.6-35b-instruct, the primary's local companion.
+        FRE-1317: repointed to qwen3.8-flash-next, self-paired with primary —
+        the owner's Mac can only serve one model at a time, so this is the
+        zero-cost companion. Previously qwen3.6-35b-instruct (FRE-963).
         """
-        assert resolve("sub_agent") == "qwen3.6-35b-instruct"
+        assert resolve("sub_agent") == "qwen3.8-flash-next"
 
     def test_resolve_artifact_builder_returns_claude_sonnet(self) -> None:
         """FRE-926 AC-1 — artifact_builder was never declared in the legacy matrix."""

@@ -167,7 +167,36 @@ models:
     tool_calling_strategy: "native"  # Qwen3.6 chat template supports tools natively
     endpoint: "https://slm.example.com/v1"
 
-
+  # ── Tier 1/2 (self-paired): Qwen3.8 Flash-Next ───────────────────
+  qwen3.8-flash-next:
+    # Owner-directed 2026-08-28 (FRE-1317): the owner's Mac cannot serve two
+    # models at once, and only Flash-Next is running now. New key, not an
+    # id-swap under qwen3.6-35b-thinking — that key still names a live Qwen3.6
+    # entry (kept for a one-line revert, AC-5), so reusing it here would mislead
+    # every later reader of telemetry into thinking a 3.6 model answered.
+    provider: slm_local
+    id: "unsloth/qwen3.8-flash-next"
+    context_length: 131072
+    quantization: "UD-IQ4_XS"
+    min_concurrency: 1
+    max_concurrency: 1
+    default_timeout: 600
+    # Card's Thinking Mode preset — NOT qwen3.6-35b-thinking's tuned 0.6 above.
+    # That value was chosen on EVAL-2026-05-11 evidence for Qwen3.6 specifically;
+    # carrying it over here would rebuild the exact two-preset hybrid that entry's
+    # own 2026-08-05 comment records fixing.
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 20
+    min_p: 0.0
+    presence_penalty: 0.0
+    repetition_penalty: 1.0
+    thinking_budget_tokens: 32768
+    supports_function_calling: true
+    supports_vision: true          # SLM catalog reports model_type: multimodal
+    supports_pdf_document: false
+    tool_calling_strategy: "native"
+    endpoint: "https://slm.example.com/v1"
 
   # ── Managed Qwen (OVH AI Endpoints) ─────────────────────────────
   qwen3.6-27b-ovh:

@@ -20,6 +20,7 @@ _CLAUDE_SONNET = "claude_sonnet"
 _CLAUDE_HAIKU = "claude_haiku"
 _GPT_MINI = "gpt-5.4-mini"
 _QWEN_27B_OVH = "qwen3.6-27b-ovh"
+_QWEN38_FLASH = "qwen3.8-flash-next"
 
 _EXPECTED_DEFAULTS_BY_PRIMARY = {
     _QWEN_THINKING: _QWEN_INSTRUCT,  # ADR-0121 Addendum A example; durable form of FRE-963
@@ -28,6 +29,7 @@ _EXPECTED_DEFAULTS_BY_PRIMARY = {
     _CLAUDE_HAIKU: _CLAUDE_HAIKU,  # self-pair, already the cheap Anthropic tier
     _GPT_MINI: _GPT_MINI,  # self-pair, no cheaper GPT tier in the catalog
     _QWEN_27B_OVH: _QWEN_27B_OVH,  # self-pair, no cheaper OVH-hosted companion
+    _QWEN38_FLASH: _QWEN38_FLASH,  # self-pair — only model that fits on the box now (FRE-1317)
 }
 
 
@@ -67,10 +69,16 @@ class TestDefaultsByPrimarySeededThroughTheRealLoader:
 
 
 class TestMigrationWindowLeavesFlatBindingOperative:
-    """The flat binding must keep resolving exactly as today (no intermediate gap)."""
+    """The flat binding must keep resolving through `deployment`/`open` (no intermediate gap).
+
+    FRE-1317: the VALUE moved (qwen3.6-35b-instruct -> qwen3.8-flash-next, the
+    owner's live repoint) — what this class actually guards, per its name, is
+    that the flat-binding MECHANISM stays operative rather than needing
+    `defaults_by_primary` to be cut over early.
+    """
 
     def test_deployment_and_open_are_unchanged(self) -> None:
         config = load_model_config()
         binding = config.roles["sub_agent"]
-        assert binding.deployment == _QWEN_INSTRUCT
+        assert binding.deployment == _QWEN38_FLASH
         assert binding.open is True

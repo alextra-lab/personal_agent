@@ -49,7 +49,7 @@
 # "the one value" — kept because the loader and the dangling-ref check both
 # still read that key name, not because there is anything left to be "all" of.
 roles:
-  primary:            { all: qwen3.6-35b-thinking }
+  primary:            { all: qwen3.8-flash-next }
   entity_extraction:  { all: gpt-5.4-mini }
   captains_log:       { all: claude_sonnet }
   # ADR-0124 D2 (FRE-947): the session summariser's own role. It previously
@@ -111,7 +111,7 @@ required_secrets:
 # so a role added later is never selectable by omission (ADR-0121 §6). Nothing
 # consumes it yet; the guardrail is declared before the mechanism that reads it.
 bindings:
-  primary:            { deployment: qwen3.6-35b-thinking, open: true }
+  primary:            { deployment: qwen3.8-flash-next, open: true }
   # No default_timeout override: with a profile active — which is every
   # production request — this role already resolved to the sub_agent
   # deployment's 90s. The 120s only ever appeared on the no-profile path, which
@@ -138,7 +138,13 @@ bindings:
   # (FRE-967) cuts the resolver over, and it is not yet enforced total/valid
   # until step 2's (FRE-966) fail-closed guard lands.
   sub_agent:
-    deployment: qwen3.6-35b-instruct
+    # Owner-directed 2026-08-28 (FRE-1317): repointed to the self-pair. Only
+    # Flash-Next fits on the box, so sub-agents serialise on the same
+    # single-concurrency deployment as primary — the zero-cost option, with a
+    # real serialization cost of its own (see the ticket). Pointing sub_agent at
+    # a cloud model instead is new vendor spend and the owner's call, not this
+    # ticket's.
+    deployment: qwen3.8-flash-next
     open: true
     defaults_by_primary:
       qwen3.6-35b-thinking: qwen3.6-35b-instruct  # local thinking primary -> local instruct companion
@@ -147,6 +153,7 @@ bindings:
       claude_sonnet:        claude_sonnet          # frontier primary -> itself (no cheaper same-family sub)
       claude_haiku:         claude_haiku           # self-pair — already the cheap Anthropic tier
       gpt-5.4-mini:         gpt-5.4-mini           # self-pair — no cheaper GPT tier in the catalog
+      qwen3.8-flash-next:   qwen3.8-flash-next     # self-pair — only model that fits on the box now (FRE-1317)
   entity_extraction:  { deployment: gpt-5.4-mini }
   captains_log:       { deployment: claude_sonnet }
   # ADR-0124 D2 (FRE-947): pinned — no `open: true`. The summariser reads the whole

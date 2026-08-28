@@ -825,6 +825,7 @@ def _coerce_mastery(value: Any) -> float | None:
 def _normalize_entity_class(
     entity: dict[str, Any],
     *,
+    output_kind: str,
     trace_id: UUID | str | None = None,
     session_id: str | None = None,
 ) -> str:
@@ -835,8 +836,18 @@ def _normalize_entity_class(
     the ``output_kind`` routing axis, see :func:`_normalize_output_kind`), so a model
     still emitting ``class="System"`` also falls open to ``World`` here.
 
+    Only logs the fail-open signal when ``output_kind == "knowledge"``. The prompt
+    tells the model to omit ``class`` entirely for finding/ephemeral entities, so a
+    missing class there is compliant behaviour, not a coercion (FRE-1013) — logging
+    it anyway inflated the FRE-997 signal with expected, harmless noise (measured:
+    over a month of production traffic, the signal could not distinguish this case
+    from a genuine gap on a knowledge entity). The ``World`` default is still applied
+    unconditionally regardless of ``output_kind`` — every entity carries a ``class``
+    property downstream, unchanged from before.
+
     Args:
         entity: An extracted entity dict.
+        output_kind: This entity's already-normalized ``output_kind``.
         trace_id: Originating capture's trace_id, for the fail-open signal (FRE-997).
         session_id: Originating capture's session_id, for the fail-open signal.
 
@@ -846,13 +857,14 @@ def _normalize_entity_class(
     candidate = str(entity.get("class", "")).strip().capitalize()
     if candidate in _VALID_ENTITY_CLASSES:
         return candidate
-    _log_fail_open_default(
-        field_name="class",
-        rejected_value=candidate,
-        default_value="World",
-        trace_id=trace_id,
-        session_id=session_id,
-    )
+    if output_kind == "knowledge":
+        _log_fail_open_default(
+            field_name="class",
+            rejected_value=candidate,
+            default_value="World",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
     return "World"
 
 
@@ -935,10 +947,14 @@ def _finalize_extraction(
     )
 
     for entity in result.get("entities", []):
-        entity["class"] = _normalize_entity_class(entity, trace_id=trace_id, session_id=session_id)
-        entity["output_kind"] = _normalize_output_kind(
-            entity, trace_id=trace_id, session_id=session_id
+        # FRE-1013: output_kind is normalized first because class's own fail-open
+        # signal (below) needs it to tell a compliant omission (finding/ephemeral)
+        # from a genuine gap (knowledge).
+        output_kind = _normalize_output_kind(entity, trace_id=trace_id, session_id=session_id)
+        entity["class"] = _normalize_entity_class(
+            entity, output_kind=output_kind, trace_id=trace_id, session_id=session_id
         )
+        entity["output_kind"] = output_kind
         # FRE-725: validated per-entity description enrichment/correction signal (Python owns
         # defaulting, like class) so the correction gate keys on a stable, in-vocabulary value.
         entity["description_update_kind"] = _normalize_description_update_kind(

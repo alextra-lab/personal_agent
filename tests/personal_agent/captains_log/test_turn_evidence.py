@@ -44,6 +44,28 @@ def _wire(fenced: bool = True, extra: list[dict] | None = None) -> list[dict]:
     ]
 
 
+def _wire_block(
+    fenced: bool = True, has_attachment: bool = True, user_text: str | None = "hello"
+) -> list[dict]:
+    """Build a minimal block-form (attachment-turn) wire message list."""
+    blocks: list[dict] = []
+    if fenced:
+        blocks.append({"type": "text", "text": f"{TURN_CONTEXT_OPEN}\nblock\n</turn_context>"})
+    if user_text:
+        blocks.append({"type": "text", "text": user_text})
+    if has_attachment:
+        blocks.append({"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}})
+    return [
+        {"role": "system", "content": "sys"},
+        {
+            "role": "user",
+            "content": blocks,
+            "trace_id": "t-cur",
+            "timestamp": "2026-07-27T10:00:00Z",
+        },
+    ]
+
+
 def _evidence(
     candidates,
     *,
@@ -52,6 +74,7 @@ def _evidence(
     inline_outcome: InlineOutcome = InlineOutcome.INLINED,
     session_facts_injected: bool = False,
     wire: list[dict] | None = None,
+    user_message: str = "hello",
     skill_bodies: tuple[str, ...] = (),
     candidate_population: CandidatePopulation = CandidatePopulation.POST_SELECTION,
 ):
@@ -63,7 +86,7 @@ def _evidence(
         session_facts_injected=session_facts_injected,
         wire_messages=wire if wire is not None else _wire(),
         system_prompt="sys",
-        user_message="hello",
+        user_message=user_message,
         skill_bodies=skill_bodies,
         call_index=0,
         primary_call_count=1,
@@ -250,6 +273,56 @@ class TestAdmissionAgainstFinalInput:
         )
 
         assert ev.recall.items[0].drop_reason is DropReason.ABSENT_FROM_FINAL_INPUT
+
+    def test_block_form_wire_with_fence_is_admitted(self) -> None:
+        """FRE-1137: an attachment turn's block-form wire content is now readable."""
+        candidates = build_recall_candidates([_entity("Paris")], {})
+        ev = _evidence(candidates, rendered=("Paris",), wire=_wire_block(fenced=True))
+
+        assert ev.recall.items[0].admitted is True
+
+    def test_block_form_wire_without_fence_is_not_admitted(self) -> None:
+        candidates = build_recall_candidates([_entity("Paris")], {})
+        ev = _evidence(candidates, rendered=("Paris",), wire=_wire_block(fenced=False))
+
+        assert ev.recall.items[0].admitted is False
+        assert ev.recall.items[0].drop_reason is DropReason.ABSENT_FROM_FINAL_INPUT
+
+    def test_block_form_image_only_turn_with_fence_is_admitted(self) -> None:
+        """Image-only turn (empty user_message, no caption text block) still reads."""
+        candidates = build_recall_candidates([_entity("Paris")], {})
+        ev = _evidence(
+            candidates,
+            rendered=("Paris",),
+            wire=_wire_block(fenced=True, has_attachment=True, user_text=None),
+            user_message="",
+        )
+
+        assert ev.recall.items[0].admitted is True
+
+    def test_empty_user_message_does_not_match_stale_fenced_block_turn(self) -> None:
+        """FRE-1137: an image-only current turn's empty anchor must not let the
+        reverse scan mistake an unrelated, already-fenced EARLIER block-form message
+        (that itself carries no attachment block) for the current (e.g. dropped by
+        the sanitiser) turn — over-claiming admission is the one failure this record
+        must never have (module docstring). This narrows, not eliminates, the
+        pre-existing empty-anchor gap: a stale earlier turn that both is fenced AND
+        still carries its own attachment block remains indistinguishable without a
+        stronger per-turn identifier, same as the dormant string-form case.
+        """
+        candidates = build_recall_candidates([_entity("Paris")], {})
+        wire = [
+            {"role": "system", "content": "sys"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"{TURN_CONTEXT_OPEN}\nold block\n</turn_context>"},
+                ],
+            },
+        ]
+        ev = _evidence(candidates, rendered=("Paris",), wire=wire, user_message="")
+
+        assert ev.recall.items[0].admitted is False
 
 
 # ── 6. scores ──────────────────────────────────────────────────────────────────

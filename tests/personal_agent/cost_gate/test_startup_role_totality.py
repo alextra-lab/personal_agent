@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from personal_agent.cost_gate import (
+    BUDGET_ROLE_BY_FACTORY_NAME,
     BudgetConfigError,
     validate_role_totality,
 )
@@ -53,6 +54,21 @@ def test_real_config_passes() -> None:
     invariant here; the caps themselves are not read.
     """
     validate_role_totality(load_budget_config_for_tests())  # must not raise
+
+
+def test_startup_validator_rejects_half_applied_span_extraction_split() -> None:
+    """FRE-1312 AC-3: a seeded negative proves the validator would catch a half-change.
+
+    The lane is declared in ``budget.yaml`` by this ticket's other half. This
+    reconstructs the map's pre-FRE-1312 shape — every entry unchanged except
+    ``span_extraction``, reverted to point at ``entity_extraction`` the way it
+    did before this ticket's flip — and demonstrates that a role_map.py-only
+    half-change fails startup, rather than asserting it happened.
+    """
+    config = load_budget_config_for_tests()
+    pre_fre_1312_map = {**BUDGET_ROLE_BY_FACTORY_NAME, "span_extraction": "entity_extraction"}
+    with pytest.raises(BudgetConfigError, match="span_extraction"):
+        validate_role_totality(config, role_map=pre_fre_1312_map)
 
 
 def test_declared_role_missing_from_map_raises() -> None:

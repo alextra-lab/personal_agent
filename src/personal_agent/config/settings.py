@@ -1999,11 +1999,11 @@ class AppConfig(BaseSettings):
     # FRE-1285's; D3's checks are inline and blocking at every one of those levels.
     # This is the deploy valve, and the ADR-compliant setting is "enforce". The default is
     # "off" for one concrete reason, not out of caution: anything above off adds a
-    # span-extraction call to **every turn**, and span_extraction is still attributed to
-    # entity_extraction's budget lane (cost_gate/role_map.py). Master's FRE-1281 gate note
-    # named that mismatch precisely — an inline per-turn consumer sharing a ceiling with
-    # the background consumer it would starve — and splitting the lane is an edit to the
-    # gitignored live budget.yaml, which is master's to make, not this PR's.
+    # span-extraction call to **every turn**. FRE-1312 split span_extraction into its own
+    # budget lane in the code and the tracked example, but the live, gitignored
+    # budget.yaml only gets that lane when master edits the box directly — until that
+    # edit lands and is deployed, span_extraction still resolves nowhere live, and
+    # validate_role_totality refuses to start rather than mis-bill it.
     #
     # The sequence is therefore: split the lane → "observe" (records everything, blocks
     # nothing, which is what FRE-1284's metric needs to bootstrap) → "enforce" once the

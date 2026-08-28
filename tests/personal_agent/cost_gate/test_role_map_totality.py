@@ -76,6 +76,54 @@ def test_study_has_its_own_lane() -> None:
     assert budget_role_for("study") == "study"
 
 
+def test_span_extraction_has_its_own_lane() -> None:
+    """FRE-1312: span_extraction is split out of entity_extraction's shared lane.
+
+    FRE-1281 pointed both at ``entity_extraction`` because nothing called the
+    extractor yet; verification now runs inline and blocking on every turn
+    (FRE-1282), so the two must resolve to separate lanes.
+    """
+    assert budget_role_for("span_extraction") == "span_extraction"
+
+
+def test_entity_extraction_lane_unaffected_by_the_split() -> None:
+    """FRE-1312 AC-4: entity_extraction still resolves to its own, unchanged lane."""
+    assert budget_role_for("entity_extraction") == "entity_extraction"
+    assert budget_role_for("entity_extraction_role") == "entity_extraction"
+
+
+def test_entity_extraction_role_config_unaffected_by_the_split() -> None:
+    """FRE-1312 AC-4: entity_extraction's own declared shape and caps did not move.
+
+    Pins the values the split must not touch: its ``nack`` denial semantics
+    (background consumer, Redis redelivery) stay distinct from the new
+    ``span_extraction`` lane's ``deliver`` semantics, and both its daily and
+    weekly cap windows still resolve under its own name. Cap *dollar* amounts
+    are deliberately not pinned — they legitimately differ between the real,
+    gitignored ``budget.yaml`` and the committed ``.example`` template.
+    """
+    config = load_budget_config_for_tests()
+    role = config.roles["entity_extraction"]
+    assert role.default_output_tokens == 256
+    assert role.on_denial == "nack"
+    windows = {cap.time_window for cap in config.caps if cap.role == "entity_extraction"}
+    assert windows == {"daily", "weekly"}
+
+
+def test_span_extraction_role_config_matches_its_declared_shape() -> None:
+    """FRE-1312: the new lane's own shape, not just that a lane exists.
+
+    ``deliver`` (not ``raise`` or ``nack``) and both cap windows, mirroring
+    ``entity_extraction``'s shape per the ticket's owner-confirmed decision.
+    """
+    config = load_budget_config_for_tests()
+    role = config.roles["span_extraction"]
+    assert role.default_output_tokens == 1024
+    assert role.on_denial == "deliver"
+    windows = {cap.time_window for cap in config.caps if cap.role == "span_extraction"}
+    assert windows == {"daily", "weekly"}
+
+
 def test_unknown_role_name_raises() -> None:
     """AC-2: no silent fallback — an unmapped name is a loud failure."""
     with pytest.raises(UnknownBudgetRoleError):
@@ -125,6 +173,7 @@ def test_unknown_role_logs_the_remedy() -> None:
         ("study", "study"),
         ("entity_extraction", "entity_extraction"),
         ("entity_extraction_role", "entity_extraction"),
+        ("span_extraction", "span_extraction"),
         ("insights", "insights"),
         ("vision", "main_inference"),
     ],

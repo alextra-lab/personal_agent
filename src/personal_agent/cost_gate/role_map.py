@@ -92,13 +92,13 @@ BUDGET_ROLE_BY_FACTORY_NAME: dict[str, str] = {
     # budget.yaml lane exists for them; main_inference is correct, now explicit.
     "vision": "main_inference",
     "skill_routing": "skill_routing",
-    # FRE-1281: the ADR-0138 span classifier shares entity_extraction's lane rather than
-    # opening its own. Both are background structured-extraction passes over a turn's
-    # text, and a new lane would need an entry in the REAL budget.yaml, which is
-    # gitignored (FRE-1209) — so adding one here would pass CI against the .example and
-    # then fail validate_role_totality at startup on the deployed box. Splitting the
-    # attribution later is a config edit, not a code change.
-    "span_extraction": "entity_extraction",
+    # FRE-1312: span_extraction has its own lane, split out of entity_extraction's.
+    # FRE-1281 shared the lane while nothing called the extractor; verification now
+    # runs inline and blocking on every turn (FRE-1282), so it can no longer share a
+    # ceiling with the background consumer it would starve. This entry and the
+    # declared budget.yaml lane must land together — see role_map.py's module
+    # docstring and budget.yaml.example for why a half-change fails startup.
+    "span_extraction": "span_extraction",
     # FRE-1286: the ADR-0138 D3(d) entailment judge, on the same terms and for the same
     # reason as span_extraction above — the REAL budget.yaml is gitignored (FRE-1209), so
     # a dedicated lane declared here would pass CI against the .example and then fail

@@ -1,0 +1,32 @@
+{
+  "build1": {
+    "stream": "build1",
+    "ticket": "FRE-1177",
+    "phase": "launched",
+    "launched_at": 1786199479.9570596,
+    "session_id": null,
+    "run_confirmed": false,
+    "stall_notified": false,
+    "attempts": 0
+  },
+  "build2": {
+    "stream": "build2",
+    "ticket": "FRE-1186",
+    "phase": "launched",
+    "launched_at": 1786204925.0676908,
+    "session_id": null,
+    "run_confirmed": false,
+    "stall_notified": false,
+    "attempts": 0
+  },
+  "adr": {
+    "stream": "adr",
+    "ticket": "FRE-1202",
+    "phase": "launched",
+    "launched_at": 1786206146.3361006,
+    "session_id": null,
+    "run_confirmed": false,
+    "stall_notified": false,
+    "attempts": 0
+  }
+}

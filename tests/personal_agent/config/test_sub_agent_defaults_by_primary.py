@@ -14,7 +14,8 @@ from __future__ import annotations
 from personal_agent.config.model_loader import load_model_config
 from personal_agent.llm_client.models import ModelKind
 
-_QWEN_THINKING = "qwen3.6-35b-thinking"
+_QWEN_FLASH = "qwen3.8-flash-next"  # FRE-1317: the bound primary since 2026-08-28
+_QWEN_THINKING = "qwen3.6-35b-thinking"  # retained in the catalog so reverting stays one line
 _QWEN_INSTRUCT = "qwen3.6-35b-instruct"
 _CLAUDE_SONNET = "claude_sonnet"
 _CLAUDE_HAIKU = "claude_haiku"
@@ -22,6 +23,7 @@ _GPT_MINI = "gpt-5.4-mini"
 _QWEN_27B_OVH = "qwen3.6-27b-ovh"
 
 _EXPECTED_DEFAULTS_BY_PRIMARY = {
+    _QWEN_FLASH: _QWEN_INSTRUCT,  # FRE-1317: bound primary; sub_agent deferred (see model_roles.yaml)
     _QWEN_THINKING: _QWEN_INSTRUCT,  # ADR-0121 Addendum A example; durable form of FRE-963
     _QWEN_INSTRUCT: _QWEN_INSTRUCT,  # self-pair, no cheaper local companion
     _CLAUDE_SONNET: _CLAUDE_SONNET,  # ADR-0121 Addendum A example

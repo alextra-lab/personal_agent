@@ -38,6 +38,12 @@ from personal_agent.grounding.enforcement import (
     build_retry_directive,
     decide,
 )
+from personal_agent.grounding.enforcement_selection import (
+    EnforcementBand,
+    EnforcementLevel,
+    EnforcementSelection,
+    SelectionReason,
+)
 from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.grounding.verification import (
     CheckOutcome,
@@ -53,7 +59,7 @@ from personal_agent.llm_client.message_content import (
     get_text_content,
     merge_content,
 )
-from personal_agent.llm_client.models import Placement
+from personal_agent.llm_client.models import Placement, ToolCallingStrategy
 from personal_agent.observability.topology import observe_topology
 from personal_agent.orchestrator.context_window import (
     apply_context_window,
@@ -1673,6 +1679,220 @@ async def _verify_grounding(ctx: ExecutionContext, trace_ctx: TraceContext) -> T
         return unavailable(f"verification failed: {type(exc).__name__}")
 
 
+def _resolve_heavy_gate(
+    ctx: ExecutionContext,
+    *,
+    tools: list[dict[str, Any]] | None,
+    tool_strategy: "ToolCallingStrategy",
+    is_synthesizing: bool,
+    model_key: str,
+) -> str | None:
+    """Return heavy enforcement's ``tool_choice`` pin, or None (ADR-0138 D5, FRE-1285).
+
+    **This is what makes heavy more than advice.** The directive attached at selection
+    says what to retrieve for; without a gate the executor still receives a generation
+    *before* it executes any tool, so a model that ignored the directive would compose its
+    assertion with an empty source registry — precisely the state D5 says heavy makes
+    unreachable ("cannot compose an assertion without a source set already in hand").
+    Pinning ``"required"`` makes the first thing the model may emit a tool call, not prose.
+
+    Applied only to the turn's **first** generation. Once the loop is running the model
+    has already been through the gate, and re-pinning every pass would forbid the turn
+    from ever answering.
+
+    The availability conditions are exactly those under which ``tool_choice`` reaches a
+    backend at all — ``client.py`` nulls it when the strategy is not NATIVE. When they
+    fail, heavy degrades to directive-only and **says so at WARNING**: a deployment where
+    the gate never reaches the model is a silent downgrade to the design this replaced,
+    and the log line is what makes it visible.
+
+    Args:
+        ctx: Execution context, for the selected level and the pass counters.
+        tools: The resolved tool list for this call.
+        tool_strategy: The model's tool-calling strategy.
+        is_synthesizing: Whether this call is the forced-synthesis pass, which pins its
+            own ``tool_choice`` and must not be overridden.
+        model_key: The deployment key serving this generation, for telemetry.
+
+    Returns:
+        ``"required"`` when the gate applies, otherwise ``None`` — leaving whatever
+        ``tool_choice`` the caller had already resolved untouched.
+    """
+    enforcement = ctx.grounding_enforcement
+    if enforcement is None or enforcement.applied is not EnforcementLevel.HEAVY:
+        return None
+    if ctx.tool_iteration_count != 0 or ctx.grounding_attempts:
+        return None
+
+    if tools and tool_strategy == ToolCallingStrategy.NATIVE and not is_synthesizing:
+        log.info(
+            "grounding_heavy_gate_applied",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            model_key=model_key,
+            probation=enforcement.probation,
+        )
+        return "required"
+
+    log.warning(
+        "grounding_heavy_gate_unavailable",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        model_key=model_key,
+        tool_strategy=tool_strategy.value,
+        has_tools=bool(tools),
+        is_synthesizing=is_synthesizing,
+        reason=(
+            "heavy enforcement degraded to directive-only: tool_choice cannot reach "
+            "this model, so retrieval is requested but not gated"
+        ),
+    )
+    return None
+
+
+async def _select_enforcement(ctx: ExecutionContext) -> None:
+    """Choose this turn's enforcement level, before generation (ADR-0138 D5, FRE-1285).
+
+    Runs once per turn and then holds: ``ctx.grounding_enforcement`` is both the result
+    and the guard. Placed immediately after the answering deployment key is stamped
+    because that is the first moment the model is known and the last moment before the
+    turn generates — D5's forcing is *pre*-generation or it is nothing.
+
+    **Heavy is applied here in two parts.** The ``tool_choice`` gate lives at the request
+    site (it needs the resolved tool list); this attaches the directive that says what to
+    retrieve for, and the iteration grant that means a turn which already spent its tool
+    budget still has an iteration to retrieve with — FRE-1282's reasoning, unchanged.
+
+    **Everything fails to heavy.** A missing key, an unreadable window, a misconfigured
+    band: all resolve to heavy and log. Unmeasured means heavy is D5's bootstrap, and a
+    broken instrument is at most as trustworthy as no instrument.
+
+    One known imprecision, recorded rather than papered over: selection reads the key
+    stamped by the *first* pass, while the compliance observation is credited to the key
+    stamped by the last (FRE-1284's existing behaviour — the last generation is the one
+    whose reply is verified). The two differ only when a turn re-routes mid-flight, which
+    today means vision escalation. The selected key is on the log line so the divergence
+    is visible rather than silent.
+
+    Args:
+        ctx: Execution context.
+    """
+    if ctx.grounding_enforcement is not None:
+        return
+    if settings.grounding_verification_mode != "enforce":
+        # In `observe` nothing blocks and nothing is forced, so every turn is
+        # unconfounded — which is the bootstrap the mode exists to provide. Forcing
+        # retrieval in a mode that promises not to change behaviour would be a lie
+        # about the mode.
+        return
+
+    from personal_agent.grounding.enforcement_selection import (  # noqa: PLC0415
+        build_forced_retrieval_directive,
+        configured_band,
+        initial_state,
+    )
+
+    model_key = ctx.answering_model_key
+    now = datetime.now(timezone.utc)
+    selection = None
+    try:
+        band = configured_band()
+        if not model_key:
+            raise ValueError("no answering model key to select enforcement for")
+        selection = await _resolve_enforcement(model_key, band=band, now=now)
+    except Exception:
+        log.exception(
+            "grounding_enforcement_selection_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            model_key=model_key,
+        )
+
+    if selection is None:
+        # The fail-safe, built here rather than by re-entering the selection that just
+        # failed: heavy, standing unchanged on disk, and never persisted — a reading we
+        # could not take must not overwrite the one we have.
+        selection = EnforcementSelection(
+            applied=EnforcementLevel.HEAVY,
+            standing=initial_state(),
+            reason=SelectionReason.UNMEASURED,
+        )
+
+    ctx.grounding_enforcement = selection
+    log.info(
+        "grounding_enforcement_selected",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        model_key=model_key,
+        applied=selection.applied.value,
+        standing=selection.standing.level.value,
+        reason=selection.reason.value,
+        probation=selection.probation,
+        changed=selection.changed,
+        demoted_at=selection.standing.demoted_at.isoformat()
+        if selection.standing.demoted_at
+        else None,
+    )
+
+    if selection.applied is not EnforcementLevel.HEAVY:
+        return
+
+    ctx.messages.append({"role": "user", "content": build_forced_retrieval_directive()})
+    # The same two iterations D4's retry reserves, for the same reason: one to search,
+    # one to fetch what the search found. A turn told to retrieve with nothing left to
+    # retrieve with is forced in name only.
+    ctx.grounding_retrieval_grant += GROUNDING_RETRY_TOOL_GRANT
+
+
+async def _resolve_enforcement(
+    model_key: str, *, band: EnforcementBand, now: datetime
+) -> EnforcementSelection:
+    """Read the window and the standing state, select, and persist any transition.
+
+    The write is **awaited**, unlike the compliance observation write. A transition
+    happens on the order of once per hundreds of turns, so the cost is negligible — and a
+    lost demotion is the one loss no later turn repairs, because the next turn re-demotes
+    with a *later* stamp and hands the model a cooldown it has already partly served.
+
+    Args:
+        model_key: The catalog deployment key that will answer.
+        band: The pre-registered thresholds.
+        now: The instant the reading is aged and the cooldown measured against.
+
+    Returns:
+        The selection.
+    """
+    from personal_agent.grounding.compliance import classify, configured_window  # noqa: PLC0415
+    from personal_agent.grounding.enforcement_selection import (  # noqa: PLC0415
+        initial_state,
+        select_enforcement,
+    )
+    from personal_agent.service.database import AsyncSessionLocal  # noqa: PLC0415
+    from personal_agent.service.repositories.grounding_compliance_repository import (  # noqa: PLC0415
+        GroundingComplianceRepository,
+    )
+    from personal_agent.service.repositories.grounding_enforcement_repository import (  # noqa: PLC0415
+        GroundingEnforcementRepository,
+    )
+
+    window = configured_window()
+    async with AsyncSessionLocal() as db:
+        observations = await GroundingComplianceRepository(db).recent(model_key, limit=window.size)
+        stored = await GroundingEnforcementRepository(db).get(model_key)
+
+    reading = classify(model_key, observations, window=window, now=now)
+    selection = select_enforcement(
+        rate=reading.rate, standing=stored or initial_state(), band=band, now=now
+    )
+
+    if selection.changed:
+        async with AsyncSessionLocal() as db:
+            await GroundingEnforcementRepository(db).upsert(
+                model_key, selection.standing, updated_at=now
+            )
+    return selection
+
+
 def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mode: str) -> None:
     """Attach and emit the output side of the evidence contract (AC-6).
 
@@ -1685,11 +1905,25 @@ def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mod
         verification: What the checks decided.
         mode: The verification mode this turn ran under.
     """
+    # ADR-0138 D5 (FRE-1285) widens this field, exactly as compliance.py's docstring
+    # anticipated. It meant "this generation followed a D4 retry"; it now also covers
+    # heavy enforcement's pre-generation forcing. Both are confounded for the same
+    # reason — sources were supplied rather than sought — and a heavy turn scored as
+    # unforced is how a model that only complies when spoon-fed earns promotion, fails
+    # under light, is demoted, recovers under heavy, and oscillates forever.
+    #
+    # A PROBATION turn reports FALSE and is measured: it ran the light path, which is
+    # the whole point of probation. `retrieval_forced` reads the APPLIED level, never
+    # the standing one.
+    _enforcement = ctx.grounding_enforcement
     record = build_grounding_record(
         verification,
         mode=mode,
         attempts=max(1, ctx.grounding_attempts),
-        retrieval_forced=ctx.grounding_attempts > 1,
+        retrieval_forced=(
+            ctx.grounding_attempts > 1
+            or (_enforcement is not None and _enforcement.retrieval_forced)
+        ),
     )
     ctx.grounding_record = record
     observation = _record_compliance_observation(ctx, record)
@@ -5119,6 +5353,12 @@ async def step_llm_call(
         # the one recorded.
         ctx.answering_model_key = effective_model_key
 
+        # ADR-0138 D5 (FRE-1285): choose light or heavy from the model's MEASURED
+        # compliance, before this turn generates anything. Once per turn — the call
+        # no-ops on every later pass — because the level describes how the turn was
+        # generated, not how its most recent pass would have been.
+        await _select_enforcement(ctx)
+
         # Get tools for this model role and mode
         # ReAct loop: always offer tools so the model can chain calls until it
         # decides to synthesize on its own.  Bounded by orchestrator_max_tool_iterations
@@ -5257,6 +5497,18 @@ async def step_llm_call(
                     provider=_provider,
                     tool_count=len(tools),
                 )
+
+        # ADR-0138 D5 (FRE-1285): heavy enforcement's actual gate. Never overrides the
+        # forced-synthesis pin above — _resolve_heavy_gate declines while synthesizing.
+        _heavy_pin = _resolve_heavy_gate(
+            ctx,
+            tools=tools,
+            tool_strategy=tool_strategy,
+            is_synthesizing=is_synthesizing,
+            model_key=effective_model_key,
+        )
+        if _heavy_pin is not None:
+            tool_choice = _heavy_pin
 
         # ADR-0081 D1: Volatility-gradient layout — build memory_section locally
         # without injecting it yet; it will be appended last as the VOLATILE tail.

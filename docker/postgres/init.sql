@@ -321,6 +321,21 @@ CREATE TABLE IF NOT EXISTS grounding_compliance_observations (
 CREATE INDEX IF NOT EXISTS idx_grounding_compliance_model_time
     ON grounding_compliance_observations(model_key, observed_at DESC);
 
+-- ADR-0138 D5's enforcement selection (FRE-1285). One row per model key. The
+-- level is recomputed from the rate every turn; what is stored is what the rate
+-- cannot say -- which level held when a reading lands inside the hysteresis
+-- band, and WHEN the model was demoted, the one fact no later turn can
+-- reconstruct. NULL demoted_at means never demoted (and so no cooldown owed),
+-- which is not the same as demoted long ago. See
+-- migrations/0030_grounding_enforcement_state.sql for the concurrency guard and
+-- why the write is awaited rather than backgrounded.
+CREATE TABLE IF NOT EXISTS grounding_enforcement_state (
+    model_key    VARCHAR(255) PRIMARY KEY,
+    level        VARCHAR(16) NOT NULL,
+    demoted_at   TIMESTAMPTZ,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Backfill — populate the unscoped (_total) counter rows for the current
 -- daily and weekly windows from existing api_costs aggregates so the gate
 -- sees existing spend on first start. Per-role backfill isn't possible
@@ -682,7 +697,8 @@ GRANT SELECT ON
     public.kg_stats,
     public.consolidation_attempts,
     public.artifacts,
-    public.grounding_compliance_observations
+    public.grounding_compliance_observations,
+    public.grounding_enforcement_state
 TO grafana_ro;
 
 GRANT USAGE ON SCHEMA sysgraph TO grafana_ro;

@@ -43,8 +43,15 @@ selection is keyed on:
 
 - :mod:`personal_agent.grounding.compliance` — the per-model compliance metric: the
   unconfounded-observation predicate, the rolling window, and the staleness rule that makes
-  compliance re-earned rather than banked. It computes a reading and decides nothing; what
-  follows from the reading is FRE-1285.
+  compliance re-earned rather than banked. It computes a reading and decides nothing.
+
+**What follows from the reading** (FRE-1285) — D5's other half:
+
+- :mod:`personal_agent.grounding.enforcement_selection` — light or heavy, keyed on the
+  computed rate and on nothing else: the hysteresis band, the cooldown a demoted model
+  serves, and the probation sampling that stops the bootstrap deadlocking. Its input is a
+  ``float | None``, so "never a model name, provider, or tier list" is a property of the
+  signature rather than a promise about the body.
 
 **Whether this blocks a turn is one setting.** ``grounding_verification_mode`` runs the
 pass and records every outcome by default (``observe``) and blocks on ``enforce``, which is

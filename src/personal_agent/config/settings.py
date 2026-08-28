@@ -2134,6 +2134,53 @@ class AppConfig(BaseSettings):
             "shipping an uncited assertion in one turn out of twenty."
         ),
     )
+    # ── D5 enforcement selection (ADR-0138 D5, FRE-1285) ─────────────────────
+    #
+    # The promote edge is `grounding_compliance_bar` above, deliberately NOT repeated
+    # here: D5 requires promote to differ from *demote*, not from the contract bar, and a
+    # second setting holding a copy of the bar is a value that can drift away from the
+    # contract it represents. Only the lower edge is new.
+    grounding_enforcement_demote_below: float = Field(
+        default=0.90,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Rate under which a model is demoted to heavy enforcement on the next turn. "
+            "Sits below `grounding_compliance_bar` (0.95) to form D5's hysteresis band — "
+            "separate promote/demote thresholds, never one value, so a model on the line "
+            "does not flap between having sources forced on it and not."
+        ),
+    )
+    grounding_enforcement_cooldown_hours: int = Field(
+        default=24,
+        ge=0,
+        description=(
+            "How long a DEMOTED model waits before promotion is eligible again. A model "
+            "that has never been light has never been demoted and serves no cooldown — "
+            "the bootstrap must not punish a new model for a demotion that never "
+            "happened. Every light-to-heavy transition stamps it, INCLUDING going "
+            "unmeasured: a model whose window went stale stopped producing recognized "
+            "spans, and letting it re-promote the instant it rebuilds a window would be "
+            "promotion without earning it."
+        ),
+    )
+    grounding_enforcement_probation_rate: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Fraction of a HEAVY model's turns routed to the light path to generate the "
+            "unconfounded observations the metric needs. Without it the bootstrap "
+            "deadlocks: only unforced turns count, and an unmeasured model — heavy by "
+            "default — would never get one. Probation turns are fully verified; only the "
+            "pre-generation forcing is withheld, so a bad output is blocked, never "
+            "served. THE COST IS STATED RATHER THAN DISCOVERED: at 0.10 with "
+            "min_samples=30, an unmeasured model needs ~300 turns carrying a non-exempt "
+            "span before a rate exists at all. That latency is inherent to measuring only "
+            "where measurement is unconfounded; lowering this rate raises it "
+            "proportionally, and 0.0 disables promotion entirely."
+        ),
+    )
     proactive_memory_max_candidates: int = Field(
         default=10,
         ge=1,

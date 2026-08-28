@@ -398,6 +398,60 @@ def prompt_material_for_hash() -> str:
     return _EXTRACTION_SYSTEM_PROMPT + _EXTRACTION_PROMPT_TEMPLATE + _fewshot_block()
 
 
+_DEICTIC_USER_RE = re.compile(r"\bthe user\b", re.IGNORECASE)
+"""Matches a stored description referring to "the user" (FRE-1153).
+
+Mirrors the render-time pattern in ``orchestrator/executor.py`` (FRE-1150):
+word-bounded so "the username field" does not match; matches inside "the user's"
+because the apostrophe is a ``\\b`` boundary, and the match span excludes the "'s"
+suffix, which survives substitution unchanged.
+"""
+
+_DEICTIC_REPLACEMENT = "the other party"
+"""Identity-free stand-in for "the user" in a stored description (FRE-1153).
+
+Unlike FRE-1150's render-time clarifier (an appended note), this REPLACES the phrase
+so the stored text itself never asserts a claim about "the user" — but, like that
+clarifier, it names no one: an entity description is stored globally
+(visibility="group") and rendered to every authenticated reader, so substituting a
+specific person's real name here would disclose their identity to every other
+reader, a new privacy exposure this ticket has no mandate to introduce (cross-user
+entity scoping is FRE-674's, not this ticket's).
+"""
+
+
+def resolve_deictic_description(description: str) -> str:
+    """Rewrite a description's "the user" reference to a non-identifying phrase (FRE-1153).
+
+    A description is stored globally and rendered to every authenticated reader, so a
+    "the user" reference in it is a claim about whoever reads it next, not about the
+    person it was actually extracted from (the incident: an entity named Susan
+    carrying "The user's stated name in the conversation." — read by a different user,
+    that asserts their name is Susan). Replacing it here means a newly extracted
+    description can never carry that claim, regardless of what the extractor prompt
+    does or does not manage to instruct the model to avoid — a deterministic
+    guarantee, not a prompt-compliance hope.
+
+    Args:
+        description: The entity's description as returned by the extractor.
+
+    Returns:
+        ``description`` unchanged if it contains no "the user" reference; otherwise
+        every occurrence replaced with :data:`_DEICTIC_REPLACEMENT`, capitalized when
+        the match starts the string (the common case: "The user's ..." at the start of
+        a one-sentence description).
+    """
+    if not description or not _DEICTIC_USER_RE.search(description):
+        return description
+
+    def _replace(match: re.Match[str]) -> str:
+        if match.start() == 0:
+            return _DEICTIC_REPLACEMENT[0].upper() + _DEICTIC_REPLACEMENT[1:]
+        return _DEICTIC_REPLACEMENT
+
+    return _DEICTIC_USER_RE.sub(_replace, description)
+
+
 # High-precision person attribution when the model omits structured Person entities (eval CP-26).
 _PROJECT_LEAD_PERSON_RE = re.compile(
     r"(?i)(?:the\s+)?project\s+lead\s+is\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b",
@@ -887,6 +941,15 @@ def _finalize_extraction(
         entity["description_update_kind"] = _normalize_description_update_kind(
             entity.get("description_update_kind"), trace_id=trace_id, session_id=session_id
         )
+        # FRE-1153: a description is stored globally and rendered to every authenticated
+        # reader, so an unresolved "the user" reference in it is a claim about whoever
+        # reads it next. Python owns this rewrite, like the other entity normalization
+        # above, so it holds regardless of what the extractor prompt produces. Only
+        # rewrites when a description is actually present — a missing/None description
+        # stays missing/None, unrelated to this fix.
+        description = entity.get("description")
+        if description:
+            entity["description"] = resolve_deictic_description(description)
 
     stances = list(result.get("stances", []))
     for stance in stances:

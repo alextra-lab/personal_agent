@@ -40,12 +40,19 @@ class TestSubAgentResolution:
         assert model_def.id == load_model_config().models["qwen3.8-flash-next"].id
 
     def test_builds_local_client_matching_its_deployment_placement(self) -> None:
-        """sub_agent dispatches to LocalLLMClient — qwen3.6-35b-instruct's placement.
+        """sub_agent dispatches to LocalLLMClient — qwen3.8-flash-next's placement.
 
-        Placement alone can't prove the FRE-958 regression is fixed (primary is
-        local too), but combined with test_role_resolves_to_qwen_instruct above —
-        which pins the resolved key specifically — the pair proves the client
-        factory used sub_agent's own binding, not primary's.
+        Placement alone never proved the FRE-958 regression fixed (primary is local
+        too), and since FRE-1317 the resolved key cannot close the gap either: the
+        self-pair means both roles name qwen3.8-flash-next, so no assertion in this
+        class can now distinguish "resolved sub_agent's own binding" from "fell back
+        to primary's". This test confirms the client TYPE only.
+
+        Stated plainly because the honest version is load-bearing: FRE-958's guard is
+        structurally weaker while the self-pair holds, and it recovers its full force
+        automatically once the two roles diverge again (either model back on the box,
+        or a cloud sub_agent). Do not read a passing run here as proof that the
+        FRE-958 path is exercised.
         """
         client = get_llm_client(role_name=ModelRole.SUB_AGENT.value)
 

@@ -9,8 +9,8 @@ client cannot overwrite it); a new session adopts a valid supplied key, else
 the primary binding default.
 
 Fixtures use two mutually distinct catalog keys so no branch can pass by
-coincidence (AC-6): A=claude_sonnet (non-default), D=qwen3.6-35b-thinking (the
-configured ``primary`` binding default).
+coincidence (AC-6): A=claude_sonnet (non-default), D=qwen3.8-flash-next (the
+configured ``primary`` binding default, FRE-1317).
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from personal_agent.service.app import _resolve_session_selection
 
 _USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 _A = "claude_sonnet"  # non-default
-_D = "qwen3.6-35b-thinking"  # configured default (primary binding)
+_D = "qwen3.8-flash-next"  # configured default (primary binding, FRE-1317)
 
 _SESSIONLOCAL = "personal_agent.service.app.AsyncSessionLocal"
 _SESSION_GET = "personal_agent.service.repositories.session_repository.SessionRepository.get"

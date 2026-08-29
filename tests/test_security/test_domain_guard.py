@@ -379,9 +379,6 @@ class TestGuardResult:
 
 
 class TestFre1330NamedBucketBlock:
-    def test_ticket_bucket_is_in_bundled_blocklist(self) -> None:
-        assert "routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com" in _BUNDLED_BLOCKLIST
-
     def test_ticket_url_is_blocked_by_a_fresh_guard(self) -> None:
         """A freshly-constructed guard (no ensure_loaded() call) already blocks this —
         _blocklist starts as _BUNDLED_BLOCKLIST in __init__.

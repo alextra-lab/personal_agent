@@ -39,6 +39,19 @@ def _load_searxng_config() -> dict:
     return yaml.safe_load(_searxng_config_path().read_text())
 
 
+def _load_searxng_example_config() -> dict:
+    """Load the committed template, never the real (possibly-activated) file.
+
+    For assertions about the *shipped default* — e.g. Exa's placeholder key
+    and ``disabled: true`` — rather than a durable invariant. Once an operator
+    activates Exa (real key, ``disabled: false``, per the file's own header
+    instructions), the real file legitimately stops matching those values;
+    only ``settings.yml.example`` is guaranteed to keep shipping the default.
+    """
+    searxng_dir = Path(__file__).resolve().parents[2] / "docker" / "searxng"
+    return yaml.safe_load((searxng_dir / "settings.yml.example").read_text())
+
+
 def test_chefkoch_not_in_general_category() -> None:
     """Chefkoch (recipe engine) must not be tagged under the default 'general' category.
 
@@ -116,12 +129,19 @@ def test_exa_content_mode_and_length() -> None:
 
 
 def test_exa_shipped_disabled_with_placeholder_key() -> None:
-    """Exa ships disabled with a placeholder key — no live Exa key exists yet.
+    """The template ships Exa disabled with a placeholder key — no live Exa key exists yet.
 
     FRE-1310: this PR delivers the capability, not a live secret. Enabling it
     is an ops step (pass show seshat/EXA_API_KEY on the real, untracked file).
+
+    Reads settings.yml.example specifically, not the real-file-preferring
+    fallback: once an operator activates Exa on the real file (real key,
+    disabled: false, per the template's own header instructions), it should
+    no longer match these placeholder values — that's the intended, correct
+    outcome, not a regression. Only the template is guaranteed to keep
+    shipping the pre-activation default.
     """
-    cfg = _load_searxng_config()
+    cfg = _load_searxng_example_config()
     exa = next(e for e in cfg["engines"] if e["name"] == "exa")
     assert exa["disabled"] is True
     assert exa["api_key"] == "REPLACE_WITH_EXA_API_KEY"

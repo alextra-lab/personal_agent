@@ -65,9 +65,13 @@ web_search_tool = ToolDefinition(
         "  - Unit conversion: query '20 °C in °F' or '10 EUR in USD' (use symbols, not words) → converted value\n"
         "  - Calculator: query '2^10 * 3' → computed result\n"
         "\nWeather: use engines='openmeteo' or categories='weather' for current conditions + hourly forecast.\n"
-        "\nCategories: general (default), it, science, news, weather, social_media, files, images, music, videos, recipes.\n"
+        "\nCategories: general (default), it, science, news, weather, social_media, files, images, music, videos, recipes, exa.\n"
         "Use 'it' for programming questions, 'science' for academic research, "
-        "'news' for current events, 'social_media' for Reddit/Lemmy discussions."
+        "'news' for current events, 'social_media' for Reddit/Lemmy discussions. "
+        "Use categories='exa' for semantic, long-tail, or non-English queries that keyword "
+        "engines miss — returns full page text in one call instead of a snippet. Opt-in only, "
+        "not included in 'general': Exa is a managed third-party vendor, unlike the other "
+        "self-hosted engines above."
     ),
     category="network",
     parameters=[
@@ -85,11 +89,13 @@ web_search_tool = ToolDefinition(
             description=(
                 "Comma-separated SearXNG categories to search. "
                 "Options: general, it, science, news, weather, social_media, files, images, "
-                "music, videos, recipes. "
+                "music, videos, recipes, exa. "
                 "Default: 'general'. Use 'it' for programming questions, "
                 "'science' for academic research, 'weather' for forecasts, "
                 "'social_media' for Reddit/Lemmy community discussions, "
-                "'recipes' for cooking/recipe results (chefkoch)."
+                "'recipes' for cooking/recipe results (chefkoch), "
+                "'exa' for semantic/long-tail/non-English queries needing full page text "
+                "(opt-in, not part of 'general' — a managed third-party vendor)."
             ),
             required=False,
             default=None,
@@ -107,7 +113,8 @@ web_search_tool = ToolDefinition(
                 "News: google news, bing news, reuters, wikinews, qwant news. "
                 "Social: reddit, lemmy posts. "
                 "Weather: openmeteo, wttr.in. "
-                "Recipes: chefkoch."
+                "Recipes: chefkoch. "
+                "Semantic (opt-in): exa."
             ),
             required=False,
             default=None,

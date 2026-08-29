@@ -151,6 +151,11 @@ telemetry/trigger_ledger.json
 docker/searxng/uwsgi.ini
 docker/searxng/settings.yml.new
 
+# Real SearXNG engine config — carries the Exa api_key (FRE-1310), same
+# public-repo rationale as budget.yaml above (FRE-1209). settings.yml.example
+# is the template; the real file is deployed only on the VPS / dev machines.
+docker/searxng/settings.yml
+
 # Local git worktrees (`git worktree add .worktrees/...`) — not source
 .worktrees/
 

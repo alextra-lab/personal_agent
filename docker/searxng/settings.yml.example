@@ -1,5 +1,23 @@
 # SearXNG configuration for personal agent (ADR-0034)
 # Docs: https://docs.searxng.org/admin/settings/
+#
+# TEMPLATE. Copy to `settings.yml` and set your own Exa api_key:
+#
+#     cp docker/searxng/settings.yml.example docker/searxng/settings.yml
+#
+# The real `settings.yml` is gitignored (FRE-1310, mirrors the `budget.yaml`/
+# FRE-1209 pattern): SearXNG's stock Docker image has no ${VAR}-style env
+# substitution for settings.yml (confirmed against SearXNG's own docs), so an
+# api_key literal is the only way to configure an engine — and this repo is
+# public. Get the real key from the Exa dashboard, then:
+#
+#     pass show seshat/EXA_API_KEY
+#
+# and paste it over the `exa` engine's api_key placeholder below, flipping
+# `disabled: false` to activate it.
+#
+# Everything else in this file (all other engines) carries no secrets and is
+# just the working config, kept here as a complete, deployable template.
 
 use_default_settings:
   engines:
@@ -232,6 +250,37 @@ engines:
     shortcut: ck
     disabled: false
     categories: recipes
+
+  # ── Semantic search (opt-in) ────────────────────────────
+  # FRE-1310. A dedicated `exa` category, NOT `general` — the owner has not
+  # opted every query into a managed third-party vendor seeing plaintext
+  # queries by default (SearXNG's other engines are self-hosted; Exa is not).
+  # Reachable via engines=exaapi or categories=exa (see tools/web.py's tool
+  # description for the model-facing framing).
+  #
+  # search_type pinned to `auto` — never `deep-reasoning`: that mode's output
+  # is model-generated, not retrieval, and under the authorship-independence
+  # rule (FRE-1303) that is not EXTERNAL, it's another model's assertion
+  # wearing a retrieval's identifier.
+  #
+  # content_mode: text (not SearXNG's doc-page 'highlights' default) returns
+  # full page text in one call, collapsing search-then-fetch and handing the
+  # ADR-0138 grounding contract text to check containment against.
+  # content_max_characters matches fetch_url's own _DEFAULT_MAX_CHARS
+  # (tools/fetch.py) for consistency between the two full-text tools.
+  #
+  # Shipped disabled with a placeholder key — no live Exa key exists yet.
+  # See the file header above for activation instructions.
+  - name: exa
+    engine: exaapi
+    shortcut: exa
+    api_key: "REPLACE_WITH_EXA_API_KEY"
+    results_per_page: 10
+    search_type: auto
+    content_mode: text
+    content_max_characters: 10000
+    categories: exa
+    disabled: true
 
   # ── Weather ─────────────────────────────────────────────
   # WeatherUnderground has no SearXNG engine. openmeteo is the

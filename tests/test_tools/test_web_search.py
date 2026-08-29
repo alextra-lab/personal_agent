@@ -4,6 +4,7 @@ Tests use mocked httpx responses — no SearXNG container required.
 The executor returns dict[str, Any] on success and raises ToolExecutionError on failure.
 """
 
+import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,6 +22,36 @@ _CTX = TraceContext.new_trace()
 # ── SearXNG config regression tests ────────────────────────────────────────
 
 
+def _searxng_config_path() -> Path:
+    """Return the SearXNG settings path to use in tests.
+
+    FRE-1310: the real ``docker/searxng/settings.yml`` is gitignored (mirrors
+    the ``budget.yaml``/FRE-1209 pattern — it now carries the Exa api_key,
+    and this repo is public). A developer machine and the VPS both have the
+    real file; a fresh clone and CI have only ``settings.yml.example``.
+    """
+    searxng_dir = Path(__file__).resolve().parents[2] / "docker" / "searxng"
+    real = searxng_dir / "settings.yml"
+    return real if real.exists() else searxng_dir / "settings.yml.example"
+
+
+def _load_searxng_config() -> dict:
+    return yaml.safe_load(_searxng_config_path().read_text())
+
+
+def _load_searxng_example_config() -> dict:
+    """Load the committed template, never the real (possibly-activated) file.
+
+    For assertions about the *shipped default* — e.g. Exa's placeholder key
+    and ``disabled: true`` — rather than a durable invariant. Once an operator
+    activates Exa (real key, ``disabled: false``, per the file's own header
+    instructions), the real file legitimately stops matching those values;
+    only ``settings.yml.example`` is guaranteed to keep shipping the default.
+    """
+    searxng_dir = Path(__file__).resolve().parents[2] / "docker" / "searxng"
+    return yaml.safe_load((searxng_dir / "settings.yml.example").read_text())
+
+
 def test_chefkoch_not_in_general_category() -> None:
     """Chefkoch (recipe engine) must not be tagged under the default 'general' category.
 
@@ -30,10 +61,90 @@ def test_chefkoch_not_in_general_category() -> None:
     that returned "Creamy tomato pasta" and "Cheeseburger" recipes. It stays
     reachable via engines=chefkoch or categories=recipes.
     """
-    cfg = yaml.safe_load(Path("docker/searxng/settings.yml").read_text())
+    cfg = _load_searxng_config()
     chefkoch = next(e for e in cfg["engines"] if e["name"] == "chefkoch")
     assert chefkoch["categories"] != "general"
     assert chefkoch["categories"] == "recipes"
+
+
+def test_searxng_settings_yml_not_tracked_in_git() -> None:
+    """The real settings.yml must never be committed once it can carry the Exa api_key.
+
+    FRE-1310. Mirrors ``config/governance/budget.yaml``'s FRE-1209 handling:
+    ``git rm --cached`` + ``.gitignore`` moved it out of version control so a
+    live credential can never land in this public repo.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        ["git", "ls-files", "docker/searxng/settings.yml"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == ""
+
+
+def test_exa_not_in_general_category() -> None:
+    """Exa must not be tagged under the default 'general' category.
+
+    FRE-1310: SearXNG is self-hosted (queries never leave our infra); Exa is a
+    managed third-party vendor that sees plaintext queries. Scoped to its own
+    category so adoption is opt-in per query, not a silent default-search
+    exposure for health/travel/personal queries. Reachable via engines=exaapi
+    or categories=exa.
+    """
+    cfg = _load_searxng_config()
+    exa = next(e for e in cfg["engines"] if e["name"] == "exa")
+    assert exa["engine"] == "exaapi"
+    assert exa["categories"] != "general"
+    assert exa["categories"] == "exa"
+
+
+def test_exa_search_type_pinned_to_auto() -> None:
+    """search_type must be pinned to 'auto', never 'deep-reasoning'.
+
+    FRE-1310 / FRE-1303: deep-reasoning's output is model-generated, not a
+    retrieval — under the authorship-independence rule that is not EXTERNAL,
+    it is another model's assertion wearing a retrieval's identifier.
+    """
+    cfg = _load_searxng_config()
+    exa = next(e for e in cfg["engines"] if e["name"] == "exa")
+    assert exa["search_type"] == "auto"
+
+
+def test_exa_content_mode_and_length() -> None:
+    """content_mode returns full page text, bounded like fetch_url's own default.
+
+    FRE-1310: content_mode: text (not SearXNG's doc-page 'highlights' default)
+    collapses search-then-fetch into one call and hands the ADR-0138 grounding
+    contract text to check containment against. content_max_characters matches
+    fetch_url's own _DEFAULT_MAX_CHARS (tools/fetch.py) for consistency between
+    the two full-text-returning tools.
+    """
+    cfg = _load_searxng_config()
+    exa = next(e for e in cfg["engines"] if e["name"] == "exa")
+    assert exa["content_mode"] == "text"
+    assert exa["content_max_characters"] == 10000
+
+
+def test_exa_shipped_disabled_with_placeholder_key() -> None:
+    """The template ships Exa disabled with a placeholder key — no live Exa key exists yet.
+
+    FRE-1310: this PR delivers the capability, not a live secret. Enabling it
+    is an ops step (pass show seshat/EXA_API_KEY on the real, untracked file).
+
+    Reads settings.yml.example specifically, not the real-file-preferring
+    fallback: once an operator activates Exa on the real file (real key,
+    disabled: false, per the template's own header instructions), it should
+    no longer match these placeholder values — that's the intended, correct
+    outcome, not a regression. Only the template is guaranteed to keep
+    shipping the pre-activation default.
+    """
+    cfg = _load_searxng_example_config()
+    exa = next(e for e in cfg["engines"] if e["name"] == "exa")
+    assert exa["disabled"] is True
+    assert exa["api_key"] == "REPLACE_WITH_EXA_API_KEY"
 
 
 def _mock_searxng_response(
@@ -94,6 +205,19 @@ def test_web_search_description_states_when_to_reach_for_it() -> None:
     # Plugin/category detail is preserved, only the framing changes.
     assert "Timezone" in web_search_tool.description
     assert "Categories:" in web_search_tool.description
+
+
+def test_web_search_description_mentions_exa() -> None:
+    """The model must be told exa exists and how to reach it — it's opt-in, not in general.
+
+    FRE-1310: categories is a free-form string with no code-level validation
+    (tools/web.py), so discoverability is entirely a documentation problem —
+    an engine the model is never told about is dead capability (the same
+    failure mode FRE-1290 found for web_search as a whole).
+    """
+    assert "exa" in web_search_tool.description
+    categories_param = next(p for p in web_search_tool.parameters if p.name == "categories")
+    assert "exa" in categories_param.description
 
 
 # ── Executor happy-path tests ──────────────────────────────────────────────

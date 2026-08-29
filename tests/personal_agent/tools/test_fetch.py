@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from personal_agent.security import DomainGuard, NovelDestinationTracker
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.fetch import (
@@ -455,3 +456,145 @@ async def test_docker_service_name_refused_before_connection() -> None:
     ):
         with pytest.raises(ToolExecutionError, match="resolves to a private or internal address"):
             await fetch_url_executor(url="http://elasticsearch:9200/_cat/indices", ctx=_CTX)
+
+
+# ── FRE-1330: named-bucket block (AC-3) + long-tail regression (AC-4) ──────
+#
+# The model emitted two fetch_url calls to a real Alibaba OSS bucket during a live
+# turn; not present anywhere in this codebase's config or code. Blocked via
+# DomainGuard's bundled list. These tests attempt the actual fetch (through
+# fetch_url_executor, transport patched unreachable/mocked) rather than reading
+# config, per the ticket's AC-3 failure condition.
+
+_TICKET_BUCKET_URL = (
+    "https://routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com/proxy_temp_file/"
+    "production/2026-08-30/trace_x/requestId_y/hash?Expires=1818630439"
+)
+
+# The 22-call fetch_url history from the ticket — every one of these must remain
+# fetchable; the new bundled blocklist entry must not widen to a parent domain.
+_LONG_TAIL_HOSTS = [
+    "aventureculinaire.fr",
+    "lacuisinedemichel.net",
+    "pmc.ncbi.nlm.nih.gov",
+    "en.wikipedia.org",
+    "fr.wikipedia.org",
+    "docs.searxng.org",
+    "climate-api.open-meteo.com",
+    "marine-api.open-meteo.com",
+    "exa.ai",
+    "docs.exa.ai",
+    "github.com",
+    "raw.githubusercontent.com",
+    "partir.com",
+    "snorkeling-report.com",
+]
+
+
+@pytest.mark.asyncio
+async def test_fre1330_named_bucket_refused_before_connection() -> None:
+    """AC-3: the exact bucket from the ticket is refused by the domain guard — proved
+    by attempting the fetch (transport patched to fail the test if reached), not by
+    reading config.
+    """
+    with patch.object(
+        httpx.AsyncHTTPTransport,
+        "handle_async_request",
+        AsyncMock(side_effect=AssertionError("transport reached — guard did not refuse")),
+    ):
+        with pytest.raises(ToolExecutionError, match="domain guard"):
+            await fetch_url_executor(url=_TICKET_BUCKET_URL, ctx=_CTX)
+
+
+@pytest.mark.parametrize("hostname", _LONG_TAIL_HOSTS)
+def test_fre1330_long_tail_host_still_allowed_by_guard(hostname: str) -> None:
+    """AC-4: every host from the 22-call history remains allowed by DomainGuard."""
+    g = DomainGuard()
+    result = g.check_url(f"https://{hostname}/some/path")
+    assert result.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_fre1330_long_tail_host_end_to_end_not_blocked() -> None:
+    """Representative long-tail host reaches the transport (neither the domain guard
+    nor the private-target check refuses it) — pairs with the AC-3 blocked case above.
+    """
+    loop = asyncio.get_running_loop()
+
+    async def _fake_handle_async_request(self: object, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=b"<html><body><p>Hello</p></body></html>",
+            request=request,
+        )
+
+    with (
+        patch.object(loop, "getaddrinfo", AsyncMock(return_value=_addrinfo("93.184.216.34"))),
+        patch.object(httpx.AsyncHTTPTransport, "handle_async_request", _fake_handle_async_request),
+    ):
+        result = await fetch_url_executor(url="https://docs.exa.ai/quickstart", ctx=_CTX)
+
+    assert "Hello" in result["text"]
+
+
+# ── FRE-1330: novel egress destination signal (AC-1 / AC-2 mechanism) ──────
+
+
+@pytest.mark.asyncio
+async def test_fre1330_fresh_domain_logs_novel_destination_event(tmp_path: Path) -> None:
+    """AC-1 mechanism: fetch_url logs a distinct event on a domain's first sighting."""
+    resp = _mock_html_response("<p>hi</p>")
+    tracker = NovelDestinationTracker(cache_path=tmp_path / "novelty.json")
+    with (
+        patch(
+            "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+        ),
+        patch("personal_agent.tools.fetch.get_novelty_tracker", return_value=tracker),
+        patch("personal_agent.tools.fetch.log") as mock_log,
+    ):
+        await fetch_url_executor(url="https://brand-new-domain.example/page", ctx=_CTX)
+
+    logged_events = [call.args[0] for call in mock_log.info.call_args_list]
+    assert "fetch_url_novel_destination" in logged_events
+
+
+@pytest.mark.asyncio
+async def test_fre1330_repeat_domain_does_not_log_novel_destination_event(tmp_path: Path) -> None:
+    """AC-2 (seeded negative): a domain already fetched inside the window must not
+    re-alert — a fetch_url_executor-level positive-only test would miss this failure
+    mode entirely.
+    """
+    resp = _mock_html_response("<p>hi</p>")
+    tracker = NovelDestinationTracker(cache_path=tmp_path / "novelty.json")
+    await tracker.check_and_record("https://seen-before.example/first")
+    with (
+        patch(
+            "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+        ),
+        patch("personal_agent.tools.fetch.get_novelty_tracker", return_value=tracker),
+        patch("personal_agent.tools.fetch.log") as mock_log,
+    ):
+        await fetch_url_executor(url="https://seen-before.example/second", ctx=_CTX)
+
+    logged_events = [call.args[0] for call in mock_log.info.call_args_list]
+    assert "fetch_url_novel_destination" not in logged_events
+
+
+@pytest.mark.asyncio
+async def test_fre1330_novelty_tracker_failure_is_fail_open() -> None:
+    """An observe-only signal must never break a fetch — a tracker raising (e.g. a
+    disk I/O error) must not prevent fetch_url_executor from completing successfully.
+    """
+    resp = _mock_html_response("<p>hi</p>")
+    broken_tracker = MagicMock()
+    broken_tracker.check_and_record = AsyncMock(side_effect=RuntimeError("disk full"))
+    with (
+        patch(
+            "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+        ),
+        patch("personal_agent.tools.fetch.get_novelty_tracker", return_value=broken_tracker),
+    ):
+        result = await fetch_url_executor(url="https://example.com/page", ctx=_CTX)
+
+    assert "hi" in result["text"]

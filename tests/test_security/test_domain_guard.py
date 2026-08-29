@@ -233,7 +233,9 @@ class TestFeedUnavailableFallback:
             await g._refresh()
 
         fetch_mock.assert_not_called()
-        assert g._blocklist == frozenset(cached_domains)
+        # Superset (not equality) — _refresh()'s disk-cache branch unions the cached
+        # domains with _BUNDLED_BLOCKLIST (FRE-1330), same as the network-fetch branch.
+        assert g._blocklist >= frozenset(cached_domains)
 
     @pytest.mark.asyncio
     async def test_stale_cache_triggers_refresh(self, tmp_path: Path) -> None:
@@ -368,3 +370,54 @@ class TestGuardResult:
         r = GuardResult(allowed=True, reason="not_blocked")
         with pytest.raises(Exception):
             r.allowed = False  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# 6. FRE-1330: the named Alibaba bucket is in the bundled blocklist, and the
+#    bundled list survives a disk-cache load (not just a fresh __init__ default)
+# ---------------------------------------------------------------------------
+
+
+class TestFre1330NamedBucketBlock:
+    def test_ticket_url_is_blocked_by_a_fresh_guard(self) -> None:
+        """A freshly-constructed guard (no ensure_loaded() call) already blocks this —
+        _blocklist starts as _BUNDLED_BLOCKLIST in __init__.
+        """
+        g = DomainGuard()
+        result = g.check_url(
+            "https://routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com/proxy_temp_file/"
+            "production/2026-08-30/trace_x/requestId_y/hash?Expires=1818630439"
+        )
+        assert result.allowed is False
+        assert result.reason == "blocklist_match"
+        assert result.matched_entry == "routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com"
+
+    @pytest.mark.asyncio
+    async def test_bundled_entry_survives_a_stale_predating_disk_cache(
+        self, tmp_path: Path
+    ) -> None:
+        """A disk cache written before this bundled entry existed (e.g. a prior deploy's
+        URLhaus fetch) must not silently drop the new block on the next warm-reload.
+
+        Regression for the pre-existing _refresh() bug this ticket's AC-3 exposed: the
+        disk-cache branch replaced _blocklist with the cached set alone, without
+        unioning _BUNDLED_BLOCKLIST the way the network-fetch branch already did.
+        """
+        cache_path = tmp_path / "blocklist.json"
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "cached_at": datetime.now(timezone.utc).isoformat(),
+                    "domain_count": 1,
+                    # Deliberately does NOT include the FRE-1330 bundled entry.
+                    "domains": ["some-old-urlhaus-domain.example"],
+                }
+            )
+        )
+
+        g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
+        await g._refresh()
+
+        result = g.check_url("https://routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com/x")
+        assert result.allowed is False
+        assert result.reason == "blocklist_match"

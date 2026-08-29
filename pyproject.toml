@@ -50,7 +50,7 @@ dependencies = [
   # Neo4j (Phase 2.2 - memory graph)
   "neo4j>=5.15.0",        # Neo4j driver for knowledge graph
   "cryptography>=50.0.0",  # FRE-1323 Dependabot — GHSA-g6cj-pr64-35w5, was 48.0.1 (FRE-578); direct dep for test RSA key gen
-  "litellm>=1.84.0",  # FRE-578 Dependabot — auth bypass via host-header injection
+  "litellm>=1.98.0",  # FRE-1324 — capability upgrade for ovhcloud/Qwen3.6 + GPT-5.6 binding
   # Event bus (ADR-0041 — Redis Streams)
   "redis[hiredis]>=5.0.0",
   "python-multipart>=0.0.30",  # FRE-578 Dependabot — quadratic-time DoS via semicolon querystring

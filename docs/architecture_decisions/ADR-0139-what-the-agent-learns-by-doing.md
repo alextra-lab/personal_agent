@@ -111,7 +111,7 @@ number without a denominator is not a measurement.**
 D1 comes first deliberately: it is the instrument by which every other decision here is judged, and
 it is implementable and shippable ahead of them.
 
-### D1 — The compliance metric gets a denominator, and three signals replace one number
+### D1 — The compliance metric gets a denominator, and four signals replace one number
 
 `grounding_verification_completed` carries, on every turn where verification ran:
 
@@ -120,6 +120,7 @@ it is implementable and shippable ahead of them.
 | `turn_evidence_class` | `no_assertions` · `uncitable` · `citable` |
 | `tool_results_offered` | Tool results the executor presented to the registry this turn |
 | `tool_results_admitted` | How many registered as sources |
+| `observed_spans` | Spans citing an `OBSERVED` source (D3), split by outcome: `passed`, `not_contained`, `invocation_covered` |
 | `near_miss_markers` | Citation-shaped strings that failed `CITATION_MARKER_PATTERN` |
 
 `uncitable` is defined mechanically: **non-exempt spans exist, at least one tool result was offered,
@@ -131,22 +132,32 @@ cannot hide behind this class.
 removes the join. Each document becomes self-diagnosing: a zero-compliance turn states, in its own
 record, whether a non-zero was reachable.
 
-**Compliance is then reported only over `citable` turns**, and two further numbers are published
-alongside it rather than folded into it:
+**Compliance is reported only over `citable` turns**, and the rest are published alongside rather
+than folded in:
 
-| Signal | Detects | ADR-0134 D1 disposition |
-|---|---|---|
-| `citation_compliance_rate` over `citable` turns | model carelessness | **correlated** — denominator is citable asserting turns |
-| `uncitable_turn_rate` over asserting turns | this ADR's defect, and any future tool landing unclassified | **correlated** — denominator is asserting turns |
-| `near_miss_markers` | confabulation under compliance pressure | **conditional** — silence is health; no stoppage rule |
+| Signal | Detects | Disposition (ADR-0134 D1) | Lifecycle |
+|---|---|---|---|
+| `citation_compliance_rate` over `citable` turns | model carelessness | **correlated** — denominator is citable asserting turns | steady-state |
+| `uncitable_turn_rate` over asserting turns | this ADR's defect; any future tool landing unclassified | **correlated** — denominator is asserting turns | **closure metric** — see below |
+| `observed_span_outcomes` — `passed` / `not_contained` / `invocation_covered` | confabulation against evidence that *was* present; laundering attempts | **correlated** — denominator is spans citing an `OBSERVED` source | steady-state |
+| `near_miss_markers` | confabulation under compliance pressure | **conditional** — silence is health; no stoppage rule | steady-state |
 
-The dispositions are not decoration. ADR-0134 D1 warns that a stoppage rule over a
-*conditional* family alerts on a working system, which is the muting path its D4 exists to prevent.
-`near_miss_markers` is rare by design and must never carry one.
+**`uncitable_turn_rate` is a closure metric, and saying so is load-bearing.** Once D2 lands,
+arbitrary-code results register, so `tool_results_admitted` is non-zero and this rate collapses **by
+construction** — whether or not a single span ever passes. It therefore **cannot be the criterion
+that proves D2 worked**, and any acceptance criterion resting on its fall alone is guaranteed to
+pass while measuring nothing. That is exactly the failure FRE-1328 names: trading a measurable,
+honest 0% for an unmeasurable 100%. The rate is retained because it remains a genuine sentinel for
+the *next* tool that lands unclassified — a failure that is silent today — but the evidence that D2
+delivered is `observed_span_outcomes`.
 
-**`uncitable_turn_rate` is this ADR's own regression test.** It is the number that should collapse
-when D2 lands, and the number that will rise on its own the next time a tool is added without a
-classification — a failure that is silent today.
+**`observed_span_outcomes` is the signal that must never go structurally to zero.** It is measured
+on spans, after both polarities of D2's check have run, so it distinguishes the three states
+registration alone cannot: evidence cited and supported (`passed`), evidence present but the claim
+invented against it (`not_contained` — this is FRE-1327), and a laundering attempt refused
+(`invocation_covered`). A vacuous implementation that registers everything and checks nothing shows
+`passed` at 100% and `invocation_covered` at zero across the seeded probe set, which AC-1 and AC-5
+both reject.
 
 **Alerting is platform configuration.** No notifier, no routing logic, and no threshold code enters
 `src/`; the emitted fields above are the whole application-side change. Rules live as
@@ -166,43 +177,74 @@ signals and their emission survive unchanged; only the disposition labels would 
 concerned the `bash` output. The classification fails toward counting against us, which is the safe
 direction, and the case collapses once D2 lands. It is not a defect to be fixed by widening
 `uncitable`, which would hand the model an escape.
-
 ### D2 — Admissibility is decided on the result, not on the invocation
 
-An arbitrary-code tool's result **is registered as a source**. Its arguments are retained as an
-**exclusion set**, and the anti-laundering rule becomes a second, opposite-polarity application of
-the containment machinery D3(c) already has:
+**The tool set that today short-circuits admissibility is split in two**, because it currently
+conflates two unrelated exclusions under one branch:
 
-> A span citing such a source passes only where the span is contained in the **result** and is
-> **not** contained in the **invocation** — where "contained in the invocation" uses D3(c)'s own
-> containment unit, unchanged.
+| Set | Members | Treatment |
+|---|---|---|
+| `MODEL_AUTHORED_CODE_TOOLS` | `bash`, `run_python`, `mcp_browser_evaluate`, `mcp_browser_run_code` | **Result-level admissibility**, below |
+| `GENERATIVE_TOOLS` | `perplexity_*`, `mcp_research`, `mcp_sequentialthinking` | **Categorically excluded, unchanged** (D5) |
 
-Symmetry is the point. One predicate, applied twice, opposite sign. `printf 'Paris has 9 million
-residents'` fails because the arguments cover every content word of the span. 27,000 tokens of Tempo
-output passes because "Paris" was never in the command line.
+Today both live in one `ARBITRARY_CODE_TOOLS` frozenset with one categorical branch. Relaxing that
+branch without splitting it would silently admit another model's generated prose as a source — the
+exact widening D5 forbids — so the split is part of this decision, not an implementation detail.
 
-**The negative check runs against the turn's accumulated argument text, not just this call's.**
-Otherwise the two-call shape defeats it — `bash("echo 'X' > /tmp/f")` emits no stdout, then
-`bash("cat /tmp/f")` returns `X`, whose content appears in an *earlier* call's arguments. The
-registry already accumulates exactly this text in `_tainted` for the existing write-then-read rule;
-the exclusion set reuses it.
+A `MODEL_AUTHORED_CODE_TOOLS` result **is registered as a source**, at `OBSERVED` entitlement. The
+anti-laundering rule becomes a second, opposite-polarity application of the containment machinery
+D3(c) already has:
+
+> A span citing such a source passes only where it is **contained in the result** and is **not
+> contained in the turn's model-authored invocation text**.
+
+**The negative check uses `ContainmentResult.contained`, never `.passed`.** This is the whole
+correctness of the rule and it is not a naming detail. `.passed` is `outcome is CONTAINED`, while
+`.contained` is `{CONTAINED, ENTAILMENT_REQUIRED}` — and an entity-free span such as *"this fish is
+high in mercury"* resolves to `ENTAILMENT_REQUIRED`, never to `CONTAINED`. A negative check written
+as `not result.passed` would therefore read `ENTAILMENT_REQUIRED` as "not present in the
+invocation" and admit `printf 'this fish is high in mercury'` — **reinstating precisely the vacuity
+ADR-0138's round-2 review found in D3(c)'s original containment unit, one polarity over.** Using
+`.contained` fails closed on that class, which is correct: we cannot cheaply run entailment against
+a command line, and the safe reading of "the invocation may cover this" is that it does.
+
+**The exclusion set is turn-final and evaluated at verification time, not at registration.** Tool
+calls dispatch concurrently — `executor.py`'s "Phase 2: Parallel async dispatch" runs them under
+`asyncio.gather` — so registration order within a batch is nondeterministic, and any rule consulting
+a *live* accumulating set would give different verdicts on different runs of the same turn.
+Verification runs after all dispatch has completed, so evaluating the negative check there against
+the turn's **final** set of model-authored argument text removes the ordering question entirely
+rather than patching around it. The cost is that an inadmissible call late in a turn retroactively
+excludes content an earlier legitimate call returned; that is a false rejection in the conservative
+direction, and it is recorded in Consequences rather than discovered.
 
 **Using D3(c)'s coverage predicate rather than "any word overlaps" is load-bearing.** A rule
 rejecting a span because *any* of its words appear in the arguments would reject
 `grep 'mercury' file.txt` followed by any assertion about mercury — search commands legitimately
 contain the search term, and that rule would manufacture refusals on the single most common
-evidence-gathering shape. Coverage asks whether the arguments **alone** would satisfy containment
+evidence-gathering shape. Coverage asks whether the invocation **alone** would satisfy containment
 for that span. `grep 'mercury' file.txt` does not cover *"this fish is high in mercury"*; `printf
 'Paris has 9 million residents'` covers its span exactly.
 
 The residual is `grep 'Paris has 9 million residents' bigfile.txt` against a file that genuinely
-contains the line: arguments cover the span, so it is rejected though the evidence is real. That is
-a false rejection, it is conservative, the model can `cat` the file instead, and it is accepted here
-rather than discovered later.
+contains the line: the invocation covers the span, so it is rejected though the evidence is real.
+That is a false rejection, it is conservative, the model can `cat` the file instead, and it is
+accepted here rather than discovered later.
+
+**This rule tightens the typed path as well as loosening the arbitrary-code one, and that resolves
+an open defect.** FRE-1306 records that `mcp_esql` earns a blanket `EXTERNAL` while its single
+parameter is a model-authored ES|QL program, so `ROW claim = "Paris has 9 million residents"`
+launders in one round-trip through a tool the parameter-schema boundary classifies as safe. That
+ticket offered three options — reclassify the tool and lose every telemetry-query citation; parse
+ES|QL in the turn path; or amend D2 to distinguish *selecting* from *composing*. The rule above is a
+fourth that none of them anticipated: **it needs no parse and draws no select/compose line**,
+because the composed literal appears in the invocation and coverage rejects it, while an
+index-reading query keeps its citation because the returned rows do not. The negative check
+therefore applies to **every** source whose parameters can carry a program — arbitrary-code tools
+and query-language tools alike — and FRE-1306 is resolved by this ADR rather than beside it.
 
 **`_strip_argument_echo` is retained** as field-level defence in depth. The span-level rule above is
 the binding one.
-
 ### D3 — A third entitlement tier: `OBSERVED`
 
 `Entitlement` gains a member between `EXTERNAL` and `AGENT_DERIVED`. It separates two questions D2
@@ -214,6 +256,12 @@ currently conflates: **is this admissible** (D2) from **how much do we trust it*
   (D4). Entitled to satisfy a citation; reported as its own tier so the metric can be sliced and so
   a future enforcement policy can treat the tiers differently **without another ADR**.
 - `AGENT_DERIVED` — the agent wrote it. Denied, unchanged.
+
+**The tiers are labels, not a comparable ordering.** `Entitlement` is a `StrEnum` with no
+`__lt__`, and this ADR does not add one. "Below `EXTERNAL`" above describes intent for a future
+policy, not a comparison any code performs; every gate that consumes entitlement does so by explicit
+membership test. Introducing an ordering would invite `entitlement >= OBSERVED` checks whose meaning
+drifts the next time a member is added.
 
 Master's position, argued rather than deferred to: *a `bash`-obtained fact is more verifiable than a
 memory-obtained one, because the command can be re-run and a memory node often cannot be
@@ -247,16 +295,27 @@ whether the image supports it. That is thin, and it is recorded as a limit rathe
 a check. It is nonetheless strictly better than the status quo, where every image span scores
 `UNCITED` for want of any source at all.
 
+**The containment bypass keys on the registry's own `SourceKind`, never on anything the model can
+write.** Skipping D3(c) is an exemption, and an exemption reachable from generated text is a hole: a
+span that could nominate its own source kind — through a marker variant, a metadata field, or any
+model-supplied string — would let a text claim buy its way out of containment by declaring itself an
+observation. Today's citation format carries an identifier and nothing else, so the hole is not
+reachable; this constraint exists to keep it that way as the format evolves. `SourceKind.OBSERVATION`
+is assigned at registration by the executor and is not derivable from model output.
+
 ### D5 — What does not change
 
 Scope discipline, stated so the amendment cannot widen by accident:
 
 - **D1's default-deny stands.** Nothing here exempts a span from needing a citation.
 - **D2's core stands.** The model's weights are never a source.
-- **`perplexity_*` and `mcp_research` remain inadmissible** — 4 of the 100 live refusals, correctly
-  refused. Their exclusion is **not** the laundering rule and does not follow it: another model's
-  output is parametric knowledge from a different set of weights. Result-level admissibility does
-  not reach them, because there is no world-determined result to admit.
+- **`perplexity_*`, `mcp_research` and `mcp_sequentialthinking` remain categorically inadmissible**
+  — 4 of the 100 live refusals, correctly refused. Their exclusion is **not** the laundering rule
+  and must not be made to follow it: another model's output is parametric knowledge from a
+  different set of weights, so there is no world-determined result for a result-level check to
+  admit. Because all of these share `ARBITRARY_CODE_TOOLS` with `bash` today, relaxing that one
+  branch would widen admissibility to them by accident — which is why D2 splits the set rather than
+  loosening its guard. AC-9 exists to catch this specific regression.
 - **Memory entitlement is untouched.** FRE-1302 and FRE-1303's rules stand as written.
 - **D4's block-retry-refuse loop keeps its shape.** What changes is that on a tool-driven turn the
   retry now has something to cite, so the loop terminates in an answer rather than in a refusal the
@@ -267,33 +326,47 @@ Scope discipline, stated so the amendment cannot widen by accident:
 **The model is careless, not adversarial.** This is a decision, not an assumption, and it is the
 load-bearing premise of D2.
 
-The cost, named rather than footnoted: **computed obfuscation defeats result-level containment.**
+The cost, named rather than footnoted: **result-level containment is defeated by any composition
+that emits the payload without the payload's tokens appearing in the invocation.** The Python
+concatenation case is the obvious member —
 
 ```
 bash(command="python -c \"print('Paris has ' + str(9) + ' million')\"")
 ```
 
-Its output appears nowhere in the argument string, so the negative containment check passes and the
-laundered claim is citable. Under an adversarial model this is a hole. Under a careless one it is
-not a shape that occurs: a careless model does not construct string concatenation to disguise a
-fact — it simply answers from its weights, which D1's default-deny already catches, or from what it
-read, which is the case this ADR makes citable.
+— but review established that it is not the interesting one. **Shell provides the same escape
+lexically, with no interpreter involved**, and it does so on the very command heads AC-1 probes:
+
+```
+printf '\x50aris has 9 million residents\n'
+git log --pretty=format:%x50aris…
+```
+
+Character escapes, `$'…'` quoting, variable expansion, unquoted heredocs and string concatenation
+all reproduce a target sentence while no token of it appears in the command line. **So the honest
+statement of D2's reach is narrower than "it closes the laundering families":** it closes their
+*literal* forms — the shapes a careless model actually produces — and it does not close their
+*encoded* forms.
+
+That is the price of the careless threat model, and it is why AC-1 tests literal-form probes and
+says so, rather than claiming a coverage it does not have. Under an adversarial model this is a
+hole, and Option 2 (typed wrappers only) is the correct design instead.
 
 **The evidence supports the careless reading.** The observed failure is FRE-1327 — the model had
 27,000 tokens of ground truth in context and generated figures matching none of it. That is
-confabulation, not laundering. No laundering attempt has been observed in 100 recorded refusals.
+confabulation, not laundering. No laundering attempt, literal or encoded, appears in the 100
+recorded refusals.
 
 **And the amendment turns that failure legible.** Today FRE-1327's invented figures score `UNCITED`
 — the same score as not trying. With the `bash` output registered, D3(c) checks those figures
 against the bytes that were actually in context, and they are not there: the outcome becomes
 `NOT_CONTAINED`, a **positive detection of invented figures against present ground truth.** The
 change does not merely unblock compliance. It converts the system's blindest failure into its most
-legible one.
+legible one, and `observed_span_outcomes` (D1) is where that detection surfaces.
 
 **Nothing here excuses the confabulation itself** (FRE-1327), which remains a separate, open
 failure. A citation-plumbing fix that made the fabrication *measurable* has not made it *rarer*, and
 this ADR must not be read as though it had.
-
 ---
 
 ## Alternatives Considered
@@ -415,14 +488,24 @@ invalidate a citation after the fact. This option contradicts that ruling and wo
   sources", which is the discrimination FRE-1285 keys enforcement on.
 - A tool added without a classification now moves `uncitable_turn_rate` instead of moving nothing —
   the class of failure this ADR exists to close becomes self-reporting.
+- **FRE-1306 is resolved rather than deferred.** The negative check reaches every source whose
+  parameters can carry a program, so a composing `ROW`-only ES|QL query stops being citable without
+  an ES|QL parser and without index-reading queries losing their citations — a fourth option beyond
+  the three that ticket could see.
 - Vision turns stop scoring zero by construction; FRE-1316 is absorbed rather than special-cased.
 - One containment predicate serves both polarities, so the normalization contract, its tolerated
   variance classes and its false-rejection bar are inherited rather than re-litigated.
 
 ### Negative Consequences
 
-- **Computed obfuscation remains open** (D6). Accepted, declared, and dependent on the careless
-  threat model holding.
+- **Encoded composition remains open** (D6) — and it is wider than a Python one-liner: shell
+  character escapes, `$'…'` quoting, variable expansion and unquoted heredocs all reproduce a
+  sentence with none of its tokens in the command line, on the same heads AC-1 probes. Accepted,
+  declared, and wholly dependent on the careless threat model holding.
+- **The exclusion set is turn-final, so exclusion is retroactive.** An inadmissible call late in a
+  turn can exclude content an earlier, causally unrelated legitimate call returned. This is the
+  price of removing the concurrency ordering bug (D2), it errs toward refusal, and it is a second
+  contributor to the false-rejection class below.
 - **A new false-rejection class**: a legitimate claim whose content words are covered by a command
   the model ran this turn — `grep 'Paris has 9 million residents' bigfile.txt` against a file that
   contains it. Conservative, and it counts against ADR-0138 AC-8's false-rejection bar.
@@ -440,7 +523,10 @@ invalidate a citation after the fact. This option contradicts that ruling and wo
 | The careless threat model is wrong, and laundering appears once `bash` is citable | High | `near_miss_markers` and the `NOT_CONTAINED` rate are both published per model; a laundering attempt raises neither, so AC-1's seeded probes are re-run at each enforcement promotion rather than once. Reverting is a one-line restoration of the categorical rule. |
 | Admitting `bash` inflates compliance without any real check — the ticket's own falsification clause | High | AC-2 requires **both** arms on the same probe family: a claim present in the output passes, a claim absent from it scores `NOT_CONTAINED`. A vacuous implementation fails the second arm. |
 | False rejections rise beyond the tolerated bar | Medium | Coverage semantics rather than word overlap (D2); measured against ADR-0138 AC-8's existing false-rejection bar, not a new one. |
-| `uncitable_turn_rate` falls because the class definition was widened rather than the defect fixed | Medium | The definition is fixed in D1 and its mechanical form is asserted in AC-4; AC-5 requires the fall to co-occur with AC-2's negative arm still holding. |
+| `uncitable_turn_rate` collapses by construction once results register, and is mistaken for proof the decision worked | **High** | Named in D1 as a **closure metric** and explicitly barred from AC-5, which keys on `observed_span_outcomes` instead — spans actually cited, checked and passed. The rate is retained only as the sentinel for the next unclassified tool. |
+| The negative check is implemented on `ContainmentResult.passed`, silently readmitting entity-free laundering | **High** | D2 fixes the predicate as `.contained` and states why; AC-1's probe set includes an entity-free payload (`this fish is high in mercury`) whose rejection cannot be achieved by the `.passed` reading. |
+| Relaxing the categorical branch widens admissibility to `perplexity_*`/`mcp_research`, which share the same frozenset | **High** | D2 splits the set as part of the decision rather than the implementation; AC-9 asserts both arms — generative tools register nothing, `run_python` is checked rather than blanket-refused. |
+| Concurrent dispatch makes the exclusion set order-dependent, so the same turn verifies differently on different runs | Medium | The set is turn-final and evaluated at verification time, after `asyncio.gather` completes, so no ordering exists to depend on (D2). |
 | The alert is authored but never fires, and nobody notices | Medium | AC-6 requires the rule to be **observed transitioning to Alerting** on a seeded turn. An untested alert rule is not an alert. |
 | Vision entailment is the model marking its own homework | Medium | Recorded as a stated limit (D4), with a negative arm in AC-8; promotion to a second model is left to the eval program (ADR-0087) rather than assumed here. |
 
@@ -450,16 +536,23 @@ invalidate a citation after the fact. This option contradicts that ruling and wo
 
 **Files affected:**
 
-- `src/personal_agent/grounding/source_registry.py` — `Entitlement` gains `OBSERVED`; `SourceKind`
-  gains `OBSERVATION`; `register_tool_result` stops short-circuiting on `ARBITRARY_CODE_TOOLS` and
-  registers with the turn-scoped exclusion set attached; `_tainted` is promoted from a
-  write-then-read guard to the exclusion set's backing store.
+- `src/personal_agent/grounding/source_registry.py` — `ARBITRARY_CODE_TOOLS` **splits** into
+  `MODEL_AUTHORED_CODE_TOOLS` and `GENERATIVE_TOOLS`; only the former loses its categorical branch,
+  and `GENERATIVE_TOOLS` keeps it verbatim. `Entitlement` gains `OBSERVED`, `SourceKind` gains
+  `OBSERVATION`, and a code-level ordering is **not** added (D3). The turn's model-authored
+  invocation text is accumulated as a new turn-scoped collection: `_tainted` is **not** it — that
+  set holds stripped top-level string argument values for the existing write-then-read guard,
+  ignores nested values, and keeps its current job unchanged.
 - `src/personal_agent/grounding/containment.py` — the coverage predicate is exposed for the negative
-  polarity; no change to the normalization contract.
+  polarity; no change to the normalization contract. Callers of the negative polarity must consume
+  `ContainmentResult.contained`, not `.passed` (D2).
 - `src/personal_agent/grounding/verification.py` — span checks gain the negative-containment clause
-  for `OBSERVED` sources; `OBSERVATION` sources route to the inline-entailment path.
+  for `OBSERVED` sources, evaluated against the turn-final invocation text **at verification time**
+  so concurrent dispatch order cannot affect the verdict; `OBSERVATION` sources route to the
+  inline-entailment path, keyed on the registry-assigned `SourceKind` only.
 - `src/personal_agent/orchestrator/executor.py` — attachment registration;
-  `grounding_verification_completed` gains D1's four fields; near-miss marker counting.
+  `grounding_verification_completed` gains D1's fields including per-outcome `observed_spans`;
+  near-miss marker counting.
 - `src/personal_agent/grounding/citations.py` — the near-miss pattern, deliberately narrow:
   citation-shaped, containing `@`, failing `CITATION_MARKER_PATTERN`.
 - `config/grafana/dashboards/` — a grounding panel set, built in the Grafana UI and exported per
@@ -483,43 +576,69 @@ any change is made: 2 of 222 non-exempt spans passed (0.9%); 13 of 15 asserting 
 > deployed. No seam ticket (ADR-0130 superseded 2026-08-18).
 
 Numeric bars are fixed in the implementation ticket that builds each check and **recorded before
-results are seen**; the invariants and their falsification conditions live here. Probe sets are
-held out and sampled at adjudication time, so an implementation cannot special-case probes it has
-not seen.
+results are seen**; the invariants and their falsification conditions live here. Probe sets are held
+out and sampled at adjudication time, so an implementation cannot special-case probes it has not
+seen.
 
-- **AC-1 — Laundering stays closed under result-level admissibility.** Every seeded laundering probe
-  — `printf`, `echo`, a heredoc, `find -printf`, `git log --pretty=format:`, `psql -c "SELECT '…'"`,
-  `curl --write-out`, each emitting a fabricated world-fact the model then cites — yields a span
-  that does **not** pass. · **Check:** seeded probe set run against the live verification path;
-  assert per-span outcome. · *Fails if* any laundering probe yields `PASSED`.
+**Every criterion below carries a positive arm.** Review round 1 established that this ADR's
+criteria were satisfiable by an implementation that rejects everything — a categorical refusal
+passes any purely negative test, and categorical refusal is the *status quo* this ADR exists to
+change. A criterion without an arm that a blanket "no" would fail is not a criterion here.
+
+- **AC-1 — Literal-form laundering is closed, for the stated reason, without closing everything.**
+  Seeded probes on `MODEL_AUTHORED_CODE_TOOLS` — `printf`, `echo`, a heredoc, `find -printf`,
+  `git log --pretty=format:`, `psql -c "SELECT '…'"`, `curl --write-out`, each emitting a fabricated
+  world-fact **as a literal** — yield spans recorded as `invocation_covered`. **Positive control on
+  the same tool:** a `cat`/`git log` probe whose asserted value is genuinely in the output and
+  absent from the command line yields `passed`. · **Check:** seeded probe set through
+  `register_tool_result` → `verify_turn`; assert the per-span outcome, not merely pass/fail. ·
+  *Fails if* any laundering probe passes; **or** if the positive control does not pass (blanket
+  rejection dressed as a fix); **or** if a laundering probe is rejected with any outcome other than
+  `invocation_covered` (right answer, wrong reason — indistinguishable from the tool being excluded
+  again). *Scope, per D6:* these are **literal-form** probes. Encoded forms (`printf '\x50aris…'`,
+  `--pretty=format:%x50`, concatenation) are **out of scope by decision**, not by oversight, and a
+  criterion claiming to close them would be false.
 
 - **AC-2 — Real tool evidence becomes citable, and containment still bites.** On one probe family
   built from the same `bash` output: **(a)** an assertion whose value appears in the output scores
   `PASSED`; **(b)** an assertion about the same output whose value does **not** appear in it scores
-  `NOT_CONTAINED`. · **Check:** paired probes, both arms required on every family. · *Fails if* arm
-  (b) passes — that is the ticket's own falsification clause, an unmeasurable 100% replacing an
-  honest 0%.
+  `NOT_CONTAINED`. · **Check:** paired probes, both arms required on every family. · *Fails if*
+  arm (b) passes — the ticket's own falsification clause, an unmeasurable 100% replacing an honest
+  0% — or if arm (a) fails.
 
-- **AC-3 — The recorded confabulation is detected.** Replaying trace
-  `dba5b2cba1e0bece6c8b9396465a265c`'s recorded tool output and generated response through the
-  amended verification path, the fabricated trace-metric figures score `NOT_CONTAINED`. · **Check:**
-  offline replay against the stored turn record; the tool content must come from the record, not be
-  re-executed. · *Fails if* those spans still score `UNCITED`, or if the replay cannot distinguish
-  the fabricated figures from figures actually present in the output.
+- **AC-3 — Confabulation against present evidence is detected, and not only on the case we named.**
+  Replaying trace `dba5b2cba1e0bece6c8b9396465a265c`'s recorded tool output and generated response
+  through the amended path, the fabricated trace-metric figures score `NOT_CONTAINED`; **and** the
+  same detection holds across a held-out set of recorded turns, not enumerated here, in which the
+  response asserts figures absent from the turn's own tool output. · **Check:** offline replay
+  against stored turn records; tool content comes from the record, never re-executed. · *Fails if*
+  those spans still score `UNCITED`; **or** if the named trace passes while the held-out set does
+  not — the signature of an implementation special-cased to the one trace this ADR cites.
 
-- **AC-4 — A zero-compliance turn is diagnosable from its own document.** For every turn in a
-  held-out post-deploy window where `passed_spans` is 0, `turn_evidence_class` and the two
-  `tool_results_*` counts on that same document determine whether a non-zero was reachable. ·
-  **Check:** ES query over `grounding_verification_completed` alone, no join. · *Fails if* any such
-  turn requires joining `source_registry_tool_inadmissible` to classify, or if `turn_evidence_class`
-  disagrees with the class recomputed from the joined refusal events.
+- **AC-4 — A zero-compliance turn is diagnosable from its own document.** Over a post-deploy window
+  containing **at least the preregistered minimum** of turns with `passed_spans == 0` (seeded if the
+  natural rate is below it), `turn_evidence_class` and the `tool_results_*` counts on that same
+  document determine whether a non-zero was reachable, and `tool_results_admitted` reconciles
+  against the source list in that trace's `source_registry_snapshot`. · **Check:** ES query over
+  `grounding_verification_completed`, reconciled against `source_registry_snapshot` on `trace_id`. ·
+  *Fails if* the window contains fewer than the minimum such turns (the criterion is vacuous over an
+  empty set and must not be reported as met); **or** if any such turn requires the DEBUG refusal
+  event to classify; **or** if `tool_results_admitted` disagrees with the snapshot's source count.
+  *Note:* reconciliation uses the snapshot, not the refusal events — no event fires on **successful**
+  registration, so a refusal-only join cannot validate the admitted count.
 
-- **AC-5 — The structural failure rate falls, without the metric being widened to hide it.**
-  `uncitable_turn_rate` over a post-deploy window of comparable asserting-turn count falls materially
-  against the preregistered baseline of 13/15. · **Check:** the same ES aggregation used to establish
-  the baseline. · *Fails if* the rate does not fall; **or** if it falls while AC-2's arm (b)
-  regresses; **or** if the fall is attributable to a change in the `uncitable` definition rather than
-  in admitted evidence — checked by recomputing the baseline window under the shipped definition.
+- **AC-5 — The evidence is not merely registered, it is used and checked.** On a post-deploy window:
+  spans citing an `OBSERVED` source are a material fraction of all non-exempt spans; their `passed`
+  rate is materially above zero; and `invocation_covered` is non-zero across the seeded probe set. ·
+  **Check:** the `observed_span_outcomes` aggregation from D1. · *Fails if* `OBSERVED` spans exist
+  but none pass (registration without usability); **or** if `invocation_covered` is zero across
+  AC-1's probes while `passed` is high (registration without checking — the vacuous implementation);
+  **or** if `passed` is high while AC-2 arm (b) regresses. **`uncitable_turn_rate`'s fall is
+  deliberately *not* a criterion here**: D1 records that it collapses by construction once
+  arbitrary-code results register, so keying on it would guarantee a pass while measuring nothing.
+  The 13/15 baseline anchors the *problem statement*, not this criterion — it measures "zero passed
+  spans", a different predicate from `uncitable`, and is reported alongside a recomputation of the
+  same window under the shipped definition rather than compared to it directly.
 
 - **AC-6 — The alert fires.** The `uncitable_turn_rate` rule is observed transitioning to `Alerting`
   when a seeded turn drives the metric past its threshold, and back to `Normal` afterwards. ·
@@ -529,23 +648,29 @@ not seen.
   the default is silence).
 
 - **AC-7 — Near-miss detection is discriminating in both directions.** The detector fires on the
-  recorded string `[S@bash-tempo-trace-dba5b2]` and does not fire across a held-out corpus of
-  legitimate turn outputs. · **Check:** unit assertion on the recorded string, plus a precision run
-  over the held-out corpus. · *Fails if* it misses the recorded string, or if it fires on any
-  legitimate output — a detector with false positives will be muted, which is the ADR-0134 D4 path.
+  recorded string `[S@bash-tempo-trace-dba5b2]`, and its false-positive rate over a held-out corpus
+  of legitimate turn outputs is at or below a **preregistered bar** fixed in the implementing ticket
+  and justified against a deliberately broken baseline. · **Check:** unit assertion on the recorded
+  string, plus a precision run over the held-out corpus. · *Fails if* it misses the recorded string,
+  or if it exceeds the bar. *An absolute zero-false-positive requirement is deliberately not used:*
+  over a finite corpus it is unfalsifiable in one direction and, once breached in production, invites
+  muting — the ADR-0134 D4 path.
 
-- **AC-8 — Image spans are no longer uncitable by construction, and are still checked.** On an
-  image-attached probe: spans about the image resolve to the `OBSERVATION` source and reach an
-  entailment outcome; and a span asserting content **absent** from the image does not score
-  `PASSED`. · **Check:** paired image probes, both arms. · *Fails if* any span about an attached
-  image scores `UNCITED` for want of a registered source, or if the absent-content arm passes.
+- **AC-8 — Image spans are checked, in both directions.** On image-attached probes: **(a)** a span
+  asserting content genuinely present in the image scores `PASSED`; **(b)** a span asserting content
+  **absent** from the image does not. · **Check:** paired image probes, both arms required. ·
+  *Fails if* arm (a) fails — an entailment checker that always rejects satisfies the negative arm
+  alone and delivers nothing — or if any span about an attached image scores `UNCITED` for want of a
+  registered source.
 
-- **AC-9 — Scope did not widen.** `perplexity_query`, `mcp_perplexity_*` and `mcp_research` register
-  no source, and `run_python` is admitted only under the same two-polarity rule as `bash`. ·
-  **Check:** probe each; assert `admissibility` on the recorded refusal. · *Fails if* any of them
-  registers a source, or if `run_python` results bypass the negative-containment clause.
+- **AC-9 — Scope did not widen, and did not collapse either.** `perplexity_query`,
+  `mcp_perplexity_*`, `mcp_research` and `mcp_sequentialthinking` register **no** source. `bash`
+  **and** `run_python` each admit a genuine non-laundering result under the same two-polarity rule. ·
+  **Check:** probe each tool; assert `admissibility` on refusals and per-span outcome on admissions.
+  · *Fails if* any generative tool registers a source; **or** if `run_python` is categorically
+  rejected rather than checked — the old wording was satisfied by blanket refusal, which is the
+  status quo, not the decision.
 
----
 
 ## References
 
@@ -580,6 +705,8 @@ not seen.
   that metric
 - [FRE-1302](https://linear.app/frenchforest/issue/FRE-1302) · [FRE-1303](https://linear.app/frenchforest/issue/FRE-1303)
   — the memory entitlement axis, untouched here and named in D3's provisional ordering
+- [FRE-1306](https://linear.app/frenchforest/issue/FRE-1306) — `mcp_esql` admits a model-authored
+  literal; resolved by D2's negative check, which needs neither a parse nor a select/compose line
 - [FRE-1325](https://linear.app/frenchforest/issue/FRE-1325) — nothing consumes the grounding signal
 
 ---
@@ -592,3 +719,34 @@ not seen.
 rather than adversarial (D6); this is a **new ADR** rather than an amendment to ADR-0138's status
 line; and an OCR/caption **surrogate for vision is rejected** as the laundering shape (D4, Option 5).
 The monitoring strategy was the owner's own addition to scope and is placed first, as D1.
+
+### 2026-08-29 - Review round 1 (Codex, adversarial)
+
+**Changed By:** `adr` session, on FRE-1328
+**Reason:** Seven blocking findings, all verified against source before acting on them.
+
+- **D2's rule was overclaimed.** Shell reproduces a payload lexically — `printf '\x50aris…'`,
+  `--pretty=format:%x50` — so the escape hatches do *not* all require the tokens in the invocation.
+  D6 now states the reach honestly (literal forms closed, encoded forms out of scope by decision)
+  and AC-1 scopes its probes to match rather than claiming coverage it lacks.
+- **The negative check was specified vacuously.** `ContainmentResult.passed` is
+  `outcome is CONTAINED`, but an entity-free span resolves to `ENTAILMENT_REQUIRED`, so
+  `not result.passed` would have readmitted `printf 'this fish is high in mercury'` — ADR-0138's
+  own round-2 vacuity, one polarity over. D2 now fixes the predicate as `.contained` and says why.
+- **The exclusion set had a concurrency bug.** `executor.py`'s "Phase 2: Parallel async dispatch"
+  gathers tool calls, so a live accumulating set is order-dependent. It is now turn-final and
+  evaluated at verification time, which removes the ordering rather than patching it.
+- **`uncitable_turn_rate` was a dead metric.** It collapses by construction once results register,
+  so the original AC-5 was guaranteed to pass while measuring nothing — the ticket's own
+  falsification clause. D1 now labels it a closure metric; `observed_span_outcomes` carries the
+  steady-state signal and AC-5 keys on it.
+- **The scope leak was real.** `bash`, `run_python` and `perplexity_*`/`mcp_research` share one
+  `ARBITRARY_CODE_TOOLS` frozenset, so "stop short-circuiting on it" would have admitted generated
+  prose as a source. D2 splits the set as part of the decision; AC-9 tests both arms.
+- **Five of nine criteria admitted a blanket-refusal implementation** (AC-1, AC-3, AC-4, AC-8,
+  AC-9). Every criterion now carries a positive arm, since categorical refusal *is* the status quo.
+- **Forward-looking:** the containment bypass for images must key on the registry-assigned
+  `SourceKind`, never on model-supplied text (D4).
+
+Also folded in: **FRE-1306** is resolved by D2's negative check — a fourth option beyond the three
+that ticket could see, needing neither an ES|QL parse nor a select/compose distinction.

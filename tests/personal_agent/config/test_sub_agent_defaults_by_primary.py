@@ -24,6 +24,7 @@ _QWEN_27B_OVH = "qwen3.6-27b-ovh"
 
 _EXPECTED_DEFAULTS_BY_PRIMARY = {
     _QWEN_FLASH: _QWEN_INSTRUCT,  # FRE-1317: bound primary; sub_agent deferred (see model_roles.yaml)
+    _QWEN_FLASH: _GPT_MINI,  # FRE-1319: local companion unloaded; gpt-5.4-mini expresses no-thinking on the cloud path
     _QWEN_THINKING: _QWEN_INSTRUCT,  # ADR-0121 Addendum A example; durable form of FRE-963
     _QWEN_INSTRUCT: _QWEN_INSTRUCT,  # self-pair, no cheaper local companion
     _CLAUDE_SONNET: _CLAUDE_SONNET,  # ADR-0121 Addendum A example
@@ -72,7 +73,16 @@ class TestMigrationWindowLeavesFlatBindingOperative:
     """The flat binding must keep resolving exactly as today (no intermediate gap)."""
 
     def test_deployment_and_open_are_unchanged(self) -> None:
+        """The flat binding still resolves; FRE-1319 moved it, FRE-967 has not yet cut over.
+
+        The value changed on 2026-08-28 (FRE-1319) — the local instruct companion is
+        unloaded, since the MBP holds one model at Flash-Next's 87 GiB. What this test
+        guards is unchanged and is not the value: `deployment` is still the field that
+        actually resolves, and `defaults_by_primary` is still substrate-only until
+        FRE-967 cuts the resolver over. A binding that silently stopped resolving
+        through `deployment` during that window is the gap this catches.
+        """
         config = load_model_config()
         binding = config.roles["sub_agent"]
-        assert binding.deployment == _QWEN_INSTRUCT
+        assert binding.deployment == _GPT_MINI
         assert binding.open is True

@@ -138,10 +138,10 @@ bindings:
   # (FRE-967) cuts the resolver over, and it is not yet enforced total/valid
   # until step 2's (FRE-966) fail-closed guard lands.
   sub_agent:
-    deployment: qwen3.6-35b-instruct
+    deployment: gpt-5.4-mini
     open: true
     defaults_by_primary:
-      qwen3.8-flash-next:   qwen3.6-35b-instruct   # FRE-1317: sub_agent deferred — qwen3.6-27b-ovh is absent from litellm's capability map, which fails check_config at policy class
+      qwen3.8-flash-next:   gpt-5.4-mini           # FRE-1319: the local instruct companion is unloaded (one model fits); gpt-5.4-mini is the cloud deployment that can express no-thinking
       qwen3.6-35b-thinking: qwen3.6-35b-instruct  # local thinking primary -> local instruct companion
       qwen3.6-35b-instruct: qwen3.6-35b-instruct  # self-pair — no cheaper local companion
       qwen3.6-27b-ovh:      qwen3.6-27b-ovh       # self-pair — no cheaper OVH-hosted companion

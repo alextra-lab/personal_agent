@@ -873,7 +873,7 @@ def test_get_session_config_no_selection_row_falls_back_to_binding_default() -> 
     roles = resp.json()["roles"]
     assert roles["primary"]["resolved"] == "qwen3.8-flash-next"
     assert roles["artifact_builder"]["resolved"] == "claude_sonnet"
-    assert roles["sub_agent"]["resolved"] == "qwen3.6-35b-instruct"
+    assert roles["sub_agent"]["resolved"] == "gpt-5.4-mini"  # FRE-1319
 
 
 def test_get_session_config_selection_store_failure_logs_trace_id() -> None:

@@ -185,7 +185,7 @@ conflates two unrelated exclusions under one branch:
 | Set | Members | Treatment |
 |---|---|---|
 | `MODEL_AUTHORED_CODE_TOOLS` | `bash`, `run_python`, `mcp_browser_evaluate`, `mcp_browser_run_code` | **Result-level admissibility**, below |
-| `GENERATIVE_TOOLS` | `perplexity_*`, `mcp_research`, `mcp_sequentialthinking` | **Categorically excluded, unchanged** (D5) |
+| `GENERATIVE_TOOLS` | `perplexity_query`, `mcp_perplexity_ask`, `mcp_perplexity_reason`, `mcp_perplexity_research`, `mcp_research`, `mcp_sequentialthinking` | **Categorically excluded, unchanged** (D5) |
 
 Today both live in one `ARBITRARY_CODE_TOOLS` frozenset with one categorical branch. Relaxing that
 branch without splitting it would silently admit another model's generated prose as a source — the
@@ -196,7 +196,7 @@ anti-laundering rule becomes a second, opposite-polarity application of the cont
 D3(c) already has:
 
 > A span citing such a source passes only where it is **contained in the result** and is **not
-> contained in the turn's model-authored invocation text**.
+> contained in the recorded invocation of the source it cites**.
 
 **The negative check uses `ContainmentResult.contained`, never `.passed`.** This is the whole
 correctness of the rule and it is not a naming detail. `.passed` is `outcome is CONTAINED`, while
@@ -229,15 +229,37 @@ Per-source scope removes that. It also restores the shape ADR-0138 already uses:
 travel with the content, recorded at registration, and verification reads the record rather than
 re-deriving anything.
 
-**What per-source scope does not cover, stated rather than implied.** Two calls where the first
-writes and the second reads — `bash("echo 'X' > /tmp/f")` then `bash("cat /tmp/f")` — are invisible
-to it, because `cat /tmp/f` does not cover the span. That shape stays with the existing `_taint`
-guard, which catches it only where a discrete argument value recurs (`write(path=…)` then
-`read(path=…)`), and **not** for two `bash` calls whose whole command line is the argument.
-`_reads_tainted`'s own docstring already records the remedy — "which needs the tool layer to report
-its writes rather than the registry to guess them" — and this ADR inherits that residual unchanged
-rather than pretending to close it. Under D6's careless threat model that is accepted; under an
-adversarial one it is not, and Option 2 is the design instead.
+**What per-source scope does not cover — the general form, not a list of two cases.** Any channel by
+which *one* call's invocation text reaches *another* call's output within the same turn is invisible
+to a per-source check, because the cited source's own invocation is clean. Concurrent dispatch makes
+this reachable without touching disk:
+
+```
+call A:  bash("python -c 'import time; time.sleep(5)' 'Paris has 9 million residents'")
+call B:  bash("sleep 1; ps -eo args")
+```
+
+B's output carries A's command line; B's invocation carries nothing. Review round 3 found this, and
+it is **not** the write-then-read case — no file, no store. The same family includes `bash` writing
+a path that a typed `read` then addresses under a different spelling, and browser-evaluate feeding
+browser-observation. `_taint` closes only the sub-case where a discrete argument value recurs
+verbatim (`source_registry.py:_reads_tainted` requires exact equality), so most of the family is
+open.
+
+**This is conceded, not closed, and the concession is deliberate.** Restoring a turn-scoped check
+would close it and would reintroduce the D4 poisoning above — a defect that fires on ordinary turns,
+traded against a channel that requires deliberately staging a process-listing side channel. Under
+D6's careless threat model that trade is wrong. The residual is recorded in D6 alongside encoded
+composition, both standing or falling with the same threat-model decision; under an adversarial
+model, Option 2 is the design instead.
+
+**Source identity must include the invocation, or the retry cannot repair anything.** `_register`
+deduplicates on `(kind, origin, content)`. Both `rg 'fish high mercury' report.txt` and
+`cat report.txt` have origin `bash`, and where the file holds only the matching line they return
+**byte-identical content** — so the retry's `cat` would reuse the first source, *carrying the first,
+covering invocation*, and be refused again. "Recoverable by construction" is therefore false unless
+the key changes: for sources subject to the negative check, the recorded invocation participates in
+source identity. AC-10 tests exactly this byte-identical case.
 
 **Using D3(c)'s coverage predicate rather than "any word overlaps" is load-bearing.** A rule
 rejecting a span because *any* of its words appear in the arguments would reject
@@ -252,17 +274,24 @@ contains the line: the invocation covers the span, so it is rejected though the 
 That is a false rejection, it is conservative, the model can `cat` the file instead, and it is
 accepted here rather than discovered later.
 
-**This rule tightens the typed path as well as loosening the arbitrary-code one, and that resolves
-an open defect.** FRE-1306 records that `mcp_esql` earns a blanket `EXTERNAL` while its single
-parameter is a model-authored ES|QL program, so `ROW claim = "Paris has 9 million residents"`
+**The negative check is keyed on a registry-assigned property, not on entitlement — and that is what
+makes the FRE-1306 claim reachable.** An earlier draft applied the clause to `OBSERVED` sources,
+which does not reach `mcp_esql` at all: it is a typed retrieval earning `EXTERNAL`, so an
+`OBSERVED`-only clause would have left the very case this ADR says it resolves untouched. Round 3
+caught that. The registry therefore marks each source `invocation_check_required`, set for
+**every tool whose parameters can carry a program** — `MODEL_AUTHORED_CODE_TOOLS`, and
+query-language tools such as `mcp_esql` — and verification keys on that flag. Entitlement answers
+*how far do we trust this*; `invocation_check_required` answers *can this call have composed its own
+result*. They are different questions and conflating them is what made the promise unreachable.
+
+With that flag, FRE-1306 resolves. It records that `mcp_esql` earns a blanket `EXTERNAL` while its
+single parameter is a model-authored ES|QL program, so `ROW claim = "Paris has 9 million residents"`
 launders in one round-trip through a tool the parameter-schema boundary classifies as safe. That
 ticket offered three options — reclassify the tool and lose every telemetry-query citation; parse
 ES|QL in the turn path; or amend D2 to distinguish *selecting* from *composing*. The rule above is a
 fourth that none of them anticipated: **it needs no parse and draws no select/compose line**,
 because the composed literal appears in the invocation and coverage rejects it, while an
-index-reading query keeps its citation because the returned rows do not. The negative check
-therefore applies to **every** source whose parameters can carry a program — arbitrary-code tools
-and query-language tools alike — and FRE-1306 is resolved by this ADR rather than beside it.
+index-reading query keeps its citation because the returned rows do not. AC-11 asserts both arms.
 
 **`_strip_argument_echo` is retained** as field-level defence in depth. The span-level rule above is
 the binding one.
@@ -372,9 +401,19 @@ statement of D2's reach is narrower than "it closes the laundering families":** 
 *literal* forms — the shapes a careless model actually produces — and it does not close their
 *encoded* forms.
 
-That is the price of the careless threat model, and it is why AC-1 tests literal-form probes and
-says so, rather than claiming a coverage it does not have. Under an adversarial model this is a
-hole, and Option 2 (typed wrappers only) is the correct design instead.
+**The second accepted residual is the cross-call shared-state channel.** Concurrent dispatch lets
+one call's invocation text surface in another call's output — `bash("… 'Paris has 9 million
+residents'")` running alongside `bash("sleep 1; ps -eo args")` — where the cited source's own
+invocation is clean and the per-source check sees nothing. Write-then-read across differing argument
+spellings, and browser-evaluate feeding browser-observation, are the same family. Closing it needs a
+turn-scoped check, which D2 shows would reintroduce the D4 retry poisoning: a defect that fires on
+ordinary turns, traded against a channel that requires deliberately staging a process-listing side
+channel. **That trade is wrong under a careless model and right under an adversarial one**, which is
+precisely the decision this section records.
+
+Both residuals stand or fall together with the threat model. Under an adversarial model this is a
+hole, Option 2 (typed wrappers only) is the correct design instead, and AC-1's fixture file is where
+the boundary is recorded so a future reader can see what was conceded rather than infer it.
 
 **The evidence supports the careless reading.** The observed failure is FRE-1327 — the model had
 27,000 tokens of ground truth in context and generated figures matching none of it. That is
@@ -526,22 +565,22 @@ invalidate a citation after the fact. This option contradicts that ruling and wo
   character escapes, `$'…'` quoting, variable expansion and unquoted heredocs all reproduce a
   sentence with none of its tokens in the command line, on the same heads AC-1 probes. Accepted,
   declared, and wholly dependent on the careless threat model holding.
-- **A new false-rejection class: the exact-phrase search.** `rg 'fish high mercury' report.txt`
-  returning *"This fish is high in mercury."* has every required content word in its own invocation,
-  so `.contained` is true and the span is refused though the evidence is genuine. This is the direct
-  cost of the `.contained` predicate and it is the common shape, not a corner. **It is recoverable
-  by construction**: because the exclusion is per-source, D4's retry with a non-covering invocation
-  — `cat report.txt` — succeeds. That recovery is the reason per-source scope is not merely tidier
-  than turn-scoped, and AC-10 asserts it rather than assuming it.
-- **Cross-call laundering through two `bash` calls is not closed** (D2). Inherited from `_taint`'s
-  existing residual, which needs the tool layer to report its writes; accepted under D6.
-- **A new false-rejection class**: a legitimate claim whose content words are covered by a command
-  the model ran this turn — `grep 'Paris has 9 million residents' bigfile.txt` against a file that
-  contains it. Conservative, and it counts against ADR-0138 AC-8's false-rejection bar.
+- **A new false-rejection class: the invocation-covered retrieval.** `rg 'fish high mercury'
+  report.txt` returning *"This fish is high in mercury."*, or `grep 'Paris has 9 million residents'
+  bigfile.txt` against a file that contains it, has every required content word in its own
+  invocation — so `.contained` is true and the span is refused though the evidence is genuine. This
+  is the direct cost of the `.contained` predicate and it is the common shape, not a corner. **It is
+  recoverable**: because exclusion is per-source *and* the invocation participates in source
+  identity, D4's retry with a non-covering invocation — `cat report.txt` — mints a distinct source
+  and passes. AC-10 asserts that recovery on byte-identical results rather than assuming it. The
+  residual rejections count against ADR-0138 AC-8's existing false-rejection bar.
+- **Cross-call shared-state laundering is not closed** (D2) — process listings, write-then-read
+  across differing argument spellings, browser-evaluate into browser-observation. Conceded under D6
+  rather than traded for the D4 poisoning a turn-scoped check would reintroduce.
 - **Inline entailment volume grows** with every image-bearing turn, since image spans take the
   entity-free path.
-- **Turn-scoped exclusion state grows** with the number of inadmissible calls in a turn, and every
-  span-level check now runs the containment predicate twice.
+- **Per-source invocation retention** adds storage on every source requiring the negative check, and
+  every such span-level check runs the containment predicate twice.
 - **`OBSERVED` below `EXTERNAL` is provisional** and rests on an inconsistency this ADR names but
   does not resolve (D3).
 
@@ -574,17 +613,25 @@ invalidate a citation after the fact. This option contradicts that ruling and wo
   polarity; no change to the normalization contract. Callers of the negative polarity must consume
   `ContainmentResult.contained`, not `.passed` (D2).
 - `src/personal_agent/grounding/verification.py` — `CheckOutcome` gains **`INVOCATION_COVERED`** as
-  a real member, not a telemetry string: it must carry defined blocking behaviour, a D4 retry
-  directive, and serialization alongside the existing outcomes, and it belongs with
-  `_TRUE_NO_SOURCE`'s siblings in the "the contract is working" family rather than with the
-  normalizer limits. Span checks gain the negative-containment clause for `OBSERVED` sources,
-  evaluated against **the cited source's own recorded invocation**; `OBSERVATION` sources route to
-  the inline-entailment path, keyed on the registry-assigned `SourceKind` only.
+  a real member, not a telemetry string. It is a **rejection** outcome — a source existed and was
+  caught — and **must not** join `_TRUE_NO_SOURCE` or `_MACHINE_UNDECIDED`: membership there feeds
+  `TurnVerification.true_no_source` and `GroundingRecord.no_source_count`, which mean *no admissible
+  source exists*, and would misreport a caught laundering attempt as an absence of evidence. No
+  special wiring is needed beyond the member: blocking, the D4 retry directive and serialization
+  already operate generically on any non-`PASSED` outcome. Span checks gain the negative-containment
+  clause for sources flagged `invocation_check_required`, evaluated against **the cited source's own
+  recorded invocation**; `OBSERVATION` sources route to the inline-entailment path, keyed on the
+  registry-assigned `SourceKind` only.
 - `src/personal_agent/grounding/source_registry.py` (cont.) — `RegisteredSource` retains the
-  invocation text that produced it. The executor already passes it (`_register_tool_source` takes
-  `arguments` alongside `content`, and its call site notes "the arguments travel with the content"),
-  so this is retention, not new plumbing. `_tainted` keeps its existing write-then-read job and is
-  **not** repurposed.
+  invocation text that produced it and carries an `invocation_check_required` flag, set from the
+  tool's classification (`MODEL_AUTHORED_CODE_TOOLS` plus query-language tools such as `mcp_esql`)
+  and **independent of `Entitlement`**. `_register`'s reuse key widens from `(kind, origin, content)`
+  to include the invocation for flagged sources, without which two `bash` calls returning identical
+  bytes collapse to one source carrying the first call's invocation — the defect that would make
+  AC-10 unsatisfiable. The executor already passes the arguments alongside the content
+  (`_register_tool_source`, whose call site notes "the arguments travel with the content"), so this
+  is retention, not new plumbing. `_tainted` keeps its existing write-then-read job and is **not**
+  repurposed.
 - `src/personal_agent/orchestrator/executor.py` — attachment registration;
   `grounding_verification_completed` gains D1's fields, including `observed_span_outcomes` split by
   outcome; near-miss marker counting.
@@ -621,8 +668,8 @@ everything — categorical refusal passes any purely negative test, and categori
 *status quo* this ADR exists to change. Round 2 then falsified the over-correction: **AC-4, AC-6 and
 AC-7 do not carry positive arms and cannot**, because they test diagnosability, alert wiring and
 marker parsing — properties independent of whether any source is ever admitted. The
-admission-dependent controls live in **AC-1, AC-2, AC-3, AC-5, AC-8, AC-9 and AC-10**, and
-adjudication requires all ten; no individual criterion is claimed to do work it cannot do.
+admission-dependent controls live in **AC-1, AC-2, AC-3, AC-5, AC-8, AC-9, AC-10 and AC-11**, and
+adjudication requires all eleven; no individual criterion is claimed to do work it cannot do.
 
 - **AC-1 — Literal-form laundering is closed, for the stated reason, without closing everything.**
   Seeded probes on `MODEL_AUTHORED_CODE_TOOLS` — `printf`, `echo`, a heredoc, `find -printf`,
@@ -634,13 +681,17 @@ adjudication requires all ten; no individual criterion is claimed to do work it 
   *Fails if* any laundering probe passes; **or** if the positive control does not pass (blanket
   rejection dressed as a fix); **or** if a laundering probe is rejected with any outcome other than
   `invocation_covered` (right answer, wrong reason — indistinguishable from the tool being excluded
-  again). *Scope, per D6:* "literal-form" is defined **operationally, not aesthetically** — a probe is
-  literal-form iff `check_containment(span, invocation).contained` is `True` for the serialized
-  invocation before execution. That makes AC-1 a wiring test of the boundary D2 actually draws,
-  rather than a claim about which human-readable constructions count as literal. Encoded forms
-  (`printf` with hex escapes, `--pretty=format:%x50`, concatenation, ANSI-C quoting, variable
-  expansion, unquoted heredocs) fail that predicate and are **out of scope by decision**, not
-  oversight; a criterion claiming to close them would be false.
+  again). *Scope, per D6:* the probe set is a **frozen fixture list with preregistered expected required
+  tokens and outcomes**, not a population selected at run time. An earlier draft defined
+  "literal-form" as `check_containment(span, invocation).contained == True`, which is circular — it
+  selects the test population using the predicate under test, so a containment regression could
+  reclassify a formerly covered probe as out of scope instead of failing. Adjudication is therefore
+  two-stage against an independent oracle: **(i)** `check_containment` reports each frozen fixture's
+  preregistered required tokens as covered by its invocation; **(ii)** verification converts that
+  result into `INVOCATION_COVERED`. A regression in either stage fails, and neither can shrink the
+  fixture list. Encoded forms (hex escapes, `--pretty=format:%x50`, concatenation, ANSI-C quoting,
+  variable expansion, unquoted heredocs) are **out of scope by decision**, not oversight, and are
+  listed as such in the fixture file so the boundary is recorded rather than inferred.
 
 - **AC-2 — Real tool evidence becomes citable, and containment still bites.** On one probe family
   built from the same `bash` output: **(a)** an assertion whose value appears in the output scores
@@ -719,14 +770,26 @@ adjudication requires all ten; no individual criterion is claimed to do work it 
   `MODEL_AUTHORED_CODE_TOOLS` — `bash` included — is categorically rejected rather than checked,
   which is the status quo passing as the decision.
 
-- **AC-10 — A refused covering invocation is repairable by retry.** A turn whose first attempt
-  asserts from a covering invocation (`rg 'fish high mercury' report.txt`) is refused
-  `INVOCATION_COVERED`; the D4 retry, issuing an independent non-covering retrieval
-  (`cat report.txt`) over the same underlying evidence, **passes**. · **Check:** a two-attempt probe
-  driven through the real D4 loop, not a unit call to the checker. · *Fails if* the second attempt
-  is refused for the first attempt's invocation — the turn-scoped-exclusion defect round 2 found —
-  **or** if the first attempt is not refused, which would mean the negative check never fired and
-  the probe proved nothing.
+- **AC-10 — A refused covering invocation is repairable by retry, on byte-identical evidence.** A
+  turn whose first attempt asserts from a covering invocation (`rg 'fish high mercury' report.txt`)
+  is refused `INVOCATION_COVERED`; the D4 retry issues `cat report.txt` over a file containing
+  **only** that line, so the two results are **byte-identical**, and the assertion **passes**. ·
+  **Check:** a two-attempt probe driven through the real D4 loop, not a unit call to the checker. ·
+  *Fails if* the second attempt is refused for the first attempt's invocation — which is what
+  happens if source identity still dedupes on `(kind, origin, content)`, since both calls have
+  origin `bash` and identical content, so the retry silently reuses the covering source — **or** if
+  the first attempt is not refused, which would mean the negative check never fired and the probe
+  proved nothing. *The byte-identical construction is deliberate: a probe whose two results differ
+  would pass without exercising the deduplication defect this criterion exists to catch.*
+
+- **AC-11 — The query-language path is checked, in both directions.** A composing ES|QL call
+  (`ROW claim = "Paris has 9 million residents"`) registers a source whose span is refused
+  `INVOCATION_COVERED`; a genuine index-reading ES|QL query over telemetry **retains its citation
+  and passes**. · **Check:** paired `mcp_esql` probes, both arms. · *Fails if* the composing arm
+  passes (FRE-1306 unresolved); **or** if the index-reading arm loses its citation (the outcome
+  FRE-1306's Option A was rejected for); **or** if the negative check never runs on `mcp_esql` at
+  all, which is what happens if the clause is keyed on `Entitlement`/`OBSERVED` rather than on
+  `invocation_check_required`.
 
 
 ## References
@@ -844,3 +907,43 @@ were re-verified in source before acting.
 - Also: `observed_span_outcomes` unified (the draft used two names for one field); the generative
   tools enumerated rather than written `perplexity_*`, since a `frozenset` has no wildcards; AC-9's
   failure clause widened from `run_python` to every `MODEL_AUTHORED_CODE_TOOLS` member.
+
+### 2026-08-29 - Review round 3 (Codex, adversarial — on the round-2 deltas)
+
+**Changed By:** `adr` session, on FRE-1328
+**Reason:** Six blocking findings against round 2's fixes. Code claims re-verified before acting.
+
+- **The FRE-1306 promise was unreachable as written.** The negative clause was keyed on `OBSERVED`
+  sources; `mcp_esql` is a typed retrieval earning `EXTERNAL`, so the clause would never have run on
+  the one case the ADR repeatedly claimed to resolve. The check is now keyed on a registry-assigned
+  `invocation_check_required` flag, independent of entitlement — *can this call have composed its own
+  result* is a different question from *how far do we trust it*, and conflating them is what broke
+  the promise. AC-11 asserts both arms.
+- **AC-10's "recoverable by construction" was false.** `_register` dedupes on
+  `(kind, origin, content)`; `rg` and `cat` share origin `bash`, so byte-identical output collapses
+  to one source **carrying the first, covering invocation** — the retry is refused again. The
+  invocation now participates in source identity for flagged sources, and AC-10 is rewritten to use
+  the byte-identical case so it actually exercises the defect.
+- **Per-source scope reopened a channel turn-scoped had closed.** Two concurrently dispatched `bash`
+  calls, one carrying a payload in its command line and one running `ps -eo args`, launder without
+  touching disk. This is **conceded in D6**, not closed: restoring the turn-scoped check would
+  reintroduce the D4 poisoning, trading a defect that fires on ordinary turns against one requiring
+  a deliberately staged side channel. The residual is now stated in its general form — any channel
+  carrying one call's invocation into another call's output — rather than as "two `bash` calls".
+- **`INVOCATION_COVERED` was assigned to the wrong accounting family.** Round 2 placed it with
+  `_TRUE_NO_SOURCE`, which feeds `no_source_count` and means *no admissible source exists* — it
+  would have reported a caught laundering attempt as an absence of evidence. It is now specified as
+  a rejection outcome barred from that set, and the note records that blocking, retry directives and
+  serialization already work generically for any non-`PASSED` outcome, so no further wiring is owed.
+- **AC-1 was circular.** Defining "literal-form" as `check_containment(...).contained == True`
+  selects the test population with the predicate under test, so a containment regression could
+  shrink the population instead of failing. Replaced with frozen fixtures carrying preregistered
+  required tokens, adjudicated in two independent stages.
+- Stale turn-scoped wording removed from the normative rule and the consequences; the duplicated
+  false-rejection consequence merged; the generative tools enumerated in the D2 table as well.
+
+**Review budget note.** The `/adr` contract caps Codex review at three rounds and this is round 3, so
+**these fixes have not themselves been adversarially reviewed.** Every prior round found real
+defects in the previous round's fixes, and round 3's changes are structural — a new registry flag, a
+widened deduplication key, and a conceded channel. That is the residual risk on this document, and
+it is recorded here rather than left for a reader to discover.

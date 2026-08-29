@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v52-composer-gap-widened';
+const CACHE_NAME = 'seshat-v53-dependabot-security-floors';
 
 const PRECACHE_URLS = [
   '/',

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import ipaddress
 import json
 import re
 from dataclasses import dataclass
@@ -36,6 +37,12 @@ _BUNDLED_BLOCKLIST: frozenset[str] = frozenset(
         "malware.wicar.org",
         "malware.testing.google.test",
         "testsafebrowsing.appspot.com",
+        # FRE-1330: a model-emitted fetch_url call reached this exact bucket during a live
+        # owner turn (trace 95df0b6bf51dc4c9f8a00712b8b865a5); not present anywhere in this
+        # codebase's config or code, so the URL arrived as generated tokens rather than
+        # something we constructed. Targeted, reversible block while the general novel-egress
+        # signal (NovelDestinationTracker, below) lands as the durable mitigation.
+        "routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com",
     }
 )
 
@@ -219,7 +226,12 @@ class DomainGuard:
         """Reload blocklist: disk cache → URLhaus feed → bundled fallback."""
         cached = self._load_from_disk_cache()
         if cached is not None:
-            self._blocklist = cached
+            # Union with _BUNDLED_BLOCKLIST (FRE-1330) — the disk cache holds only the last
+            # URLhaus fetch's domains, so a cache written before a bundled entry was added
+            # (e.g. this deploy's new targeted block) would otherwise silently drop that entry
+            # for up to ttl_seconds, until the next network refresh. The fetch-feed branch
+            # below already does this union; this branch must match it.
+            self._blocklist = cached | _BUNDLED_BLOCKLIST
             self._mark_loaded()
             log.debug("domain_guard_loaded_from_cache", count=len(self._blocklist))
             return
@@ -310,6 +322,162 @@ def get_domain_guard() -> DomainGuard:
             allowlist=frozenset(getattr(settings, "url_guard_allowlist", [])),
         )
     return _guard
+
+
+# ---------------------------------------------------------------------------
+# Novel egress destination signal (FRE-1330)
+# ---------------------------------------------------------------------------
+
+_NOVELTY_CACHE_PATH = Path("telemetry/security/egress_novelty_seen.json")
+
+
+def _registrable_domain(hostname: str) -> str:
+    """Approximate the eTLD+1 (registrable domain) of *hostname*.
+
+    Uses the last two dot-separated labels, e.g. ``docs.exa.ai`` -> ``exa.ai``, so a
+    subdomain of an already-seen site is not treated as a fresh novel destination.
+    Correct for every domain in this deployment's actual fetch_url history (22 calls,
+    all single-label public suffixes: .com, .org, .ai, ...). Known-wrong for a
+    multi-part public suffix (e.g. ``a.co.uk`` collapses to ``co.uk`` instead of
+    ``a.co.uk``) — stated as a residual gap rather than pulling in a public-suffix-list
+    dependency for a case that has not occurred here.
+
+    An IP literal (v4 or v6) is returned unchanged rather than collapsed by its
+    trailing labels/groups — there is no eTLD+1 for an IP address, and collapsing one
+    by its last two dot-separated parts would group unrelated hosts together (e.g.
+    ``203.0.113.5`` and ``198.51.113.5`` would both become ``113.5``).
+    """
+    hostname = hostname.lower().rstrip(".")
+    try:
+        ipaddress.ip_address(hostname)
+        return hostname
+    except ValueError:
+        pass
+    parts = hostname.split(".")
+    if len(parts) <= 2:
+        return hostname
+    return ".".join(parts[-2:])
+
+
+@dataclass(frozen=True)
+class NoveltyResult:
+    """Outcome of a NovelDestinationTracker.check_and_record() call.
+
+    Attributes:
+        novel: True when this registrable domain was not seen within the tracker's
+            window prior to this call.
+        registrable_domain: The eTLD+1 the URL was recorded under.
+    """
+
+    novel: bool
+    registrable_domain: str
+
+
+class NovelDestinationTracker:
+    """Tracks registrable domains fetch_url has targeted; flags first-ever ones.
+
+    Observe-only (FRE-1330): never blocks, only distinguishes "seen within the prior
+    window" from "novel" so a caller can log a distinct event for the latter. Persists
+    sightings to disk (survives restarts), keyed on eTLD+1 rather than full hostname.
+
+    The `asyncio.Lock` guarding the cache transaction is process-local — same scope as
+    `DomainGuard`'s own `_refresh_lock` — so a multi-process deployment would need
+    cross-process coordination this does not attempt, matching that existing gap
+    rather than introducing a new one.
+
+    Args:
+        cache_path: JSON file used to persist domain -> last-seen-ISO-timestamp.
+        window_seconds: How long a sighting counts as "not novel".
+    """
+
+    def __init__(
+        self,
+        cache_path: Path = _NOVELTY_CACHE_PATH,
+        window_seconds: float = 14 * 86400.0,
+    ) -> None:
+        """Initialise the tracker with its cache location and novelty window."""
+        self._cache_path = cache_path
+        self._window = window_seconds
+        self._lock: asyncio.Lock = asyncio.Lock()
+
+    async def check_and_record(self, url: str) -> NoveltyResult:
+        """Return whether url's registrable domain is novel, and record the sighting.
+
+        The load, novelty check, sighting update, prune, and save all happen inside
+        one lock acquisition, so concurrent calls for the same brand-new domain cannot
+        both observe "novel" — exactly one does, and the rest see the just-recorded
+        sighting.
+
+        Args:
+            url: The URL fetch_url was asked to target.
+
+        Returns:
+            NoveltyResult with the novelty verdict and the registrable domain used.
+        """
+        hostname = DomainGuard._extract_hostname(url)
+        if not hostname:
+            return NoveltyResult(novel=False, registrable_domain="")
+        domain = _registrable_domain(hostname)
+
+        async with self._lock:
+            seen = self._load()
+            now = datetime.now(timezone.utc)
+            novel = domain not in seen or self._is_expired(seen[domain], now)
+            seen[domain] = now.isoformat()
+            seen = {d: ts for d, ts in seen.items() if not self._is_expired(ts, now)}
+            self._save(seen)
+
+        return NoveltyResult(novel=novel, registrable_domain=domain)
+
+    def _is_expired(self, last_seen_iso: str, now: datetime) -> bool:
+        try:
+            last_seen = datetime.fromisoformat(last_seen_iso)
+        except (ValueError, TypeError):
+            return True
+        return (now - last_seen).total_seconds() > self._window
+
+    def _load(self) -> dict[str, str]:
+        if not self._cache_path.exists():
+            return {}
+        try:
+            data = json.loads(self._cache_path.read_text())
+            if not isinstance(data, dict):
+                return {}
+            return data
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _save(self, seen: dict[str, str]) -> None:
+        """Persist sightings via a temp-file-then-replace.
+
+        Avoids leaving truncated JSON if the process crashes mid-write. Failures are
+        logged and swallowed — this is an observe-only signal and must never
+        propagate into the fetch_url call path.
+        """
+        try:
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = self._cache_path.with_suffix(self._cache_path.suffix + ".tmp")
+            tmp_path.write_text(json.dumps(seen, indent=2))
+            tmp_path.replace(self._cache_path)
+        except OSError as exc:
+            log.warning("egress_novelty_save_failed", error=str(exc))
+
+
+_novelty_tracker: NovelDestinationTracker | None = None
+
+
+def get_novelty_tracker() -> NovelDestinationTracker:
+    """Return the process-lifetime NovelDestinationTracker singleton (created lazily).
+
+    Window is read from settings at creation time.
+    """
+    global _novelty_tracker
+    if _novelty_tracker is None:
+        _novelty_tracker = NovelDestinationTracker(
+            cache_path=_NOVELTY_CACHE_PATH,
+            window_seconds=float(getattr(settings, "url_guard_novelty_window_days", 14)) * 86400,
+        )
+    return _novelty_tracker
 
 
 # ---------------------------------------------------------------------------

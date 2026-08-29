@@ -2485,6 +2485,16 @@ class AppConfig(BaseSettings):
             "Env var: AGENT_URL_GUARD_ALLOWLIST"
         ),
     )
+    url_guard_novelty_window_days: int = Field(
+        default=14,
+        ge=1,
+        alias="AGENT_URL_GUARD_NOVELTY_WINDOW_DAYS",
+        description=(
+            "Days of prior fetch_url egress history a destination must appear in to not be "
+            "flagged as novel. Observe-only (FRE-1330): logs fetch_url_novel_destination, "
+            "never blocks. Env var: AGENT_URL_GUARD_NOVELTY_WINDOW_DAYS"
+        ),
+    )
 
     # FRE-335 / ADR-0066 D2: skill routing threshold monitor
     skill_index_p95_token_threshold: int = Field(

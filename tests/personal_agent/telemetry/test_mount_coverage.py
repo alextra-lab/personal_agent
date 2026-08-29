@@ -19,10 +19,12 @@ from tests._helpers.telemetry_mounts import (
 
 
 class TestTelemetryMountCoverage:
-    def test_nine_known_writers_found(self) -> None:
-        # Pins the ticket's measured inventory — a drop below 9 means the regex
-        # stopped matching a writer (rename/idiom change), not that one was removed.
-        assert len(find_telemetry_writers(repo_root())) == 9
+    def test_known_writers_found(self) -> None:
+        # Pins the measured inventory — a drop below this means the regex stopped
+        # matching a writer (rename/idiom change), not that one was removed. Bumped
+        # 9 -> 10 for FRE-1330's telemetry/security/egress_novelty_seen.json (already
+        # covered by the same /app/telemetry mount as its sibling domain_blocklist.json).
+        assert len(find_telemetry_writers(repo_root())) == 10
 
     def test_parent_mount_is_the_named_seshat_telemetry_volume(self) -> None:
         # Not just "something is mounted at /app/telemetry" — the specific named

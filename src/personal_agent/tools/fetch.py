@@ -20,7 +20,11 @@ from typing import Any
 
 import httpx
 
-from personal_agent.security import EgressBlockedError, create_guarded_http_client
+from personal_agent.security import (
+    EgressBlockedError,
+    create_guarded_http_client,
+    get_novelty_tracker,
+)
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.types import ToolDefinition, ToolParameter
@@ -283,6 +287,21 @@ async def fetch_url_executor(
     trace_id = ctx.trace_id
 
     log.info("fetch_url_started", trace_id=trace_id, url=url)
+
+    # FRE-1330: observe-only signal on what the model *targeted* — fires regardless of
+    # whether the fetch below succeeds, is blocked, or errors. Wrapped in its own
+    # try/except: a tracker I/O failure must never block or fail a fetch.
+    try:
+        novelty = await get_novelty_tracker().check_and_record(url)
+        if novelty.novel:
+            log.info(
+                "fetch_url_novel_destination",
+                trace_id=trace_id,
+                url=url,
+                domain=novelty.registrable_domain,
+            )
+    except Exception as exc:
+        log.warning("fetch_url_novelty_check_failed", trace_id=trace_id, url=url, error=str(exc))
 
     try:
         async with create_guarded_http_client(

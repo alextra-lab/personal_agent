@@ -24,6 +24,7 @@ from personal_agent.captains_log.turn_evidence import (
     TurnEvidence,
 )
 from personal_agent.governance.models import Mode
+from personal_agent.grounding.enforcement_selection import EnforcementSelection
 from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.loop_gate import ToolLoopGate
@@ -382,6 +383,13 @@ class ExecutionContext:
 
     # ADR-0138's output side of the ADR-0125 evidence contract, attached for the capture.
     grounding_record: "GroundingRecord | None" = None
+
+    # ADR-0138 D5 (FRE-1285). The enforcement level this turn runs under, chosen ONCE
+    # before the first generation and then held. Not re-decided per tool-loop pass: the
+    # level is a statement about how this turn was generated, and a turn that started
+    # heavy did have its retrieval forced whatever a later pass would have chosen. Its
+    # presence is also the once-per-turn guard.
+    grounding_enforcement: "EnforcementSelection | None" = None
 
     # ADR-0138 D5 (FRE-1284). The catalog deployment key that actually served this turn's
     # generation, stamped by step_llm_call with the key it really used. Recorded rather

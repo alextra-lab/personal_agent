@@ -2091,6 +2091,42 @@ class AppConfig(BaseSettings):
     # FRE-1285 adds the promote/demote hysteresis band *around* `grounding_compliance_bar`
     # — the single bar here answers "does this rate meet the contract?", which is what
     # AC-6's broken-baseline check needs, and deliberately does not pre-empt the band.
+    #
+    # ── RE-REGISTERED 2026-08-28 (FRE-1285 review), and why ──────────────────
+    #
+    # `min_samples` and `max_window_age_hours` moved from 30/336h to 20/1440h. This is a
+    # deliberate change to pre-registered values, recorded rather than slipped in, and it
+    # was forced by a measurement nobody had taken when the originals were chosen.
+    #
+    # Promotion off heavy requires `min_samples / (probation_rate x max_age_days)`
+    # span-carrying turns per day, SUSTAINED — because under heavy the only measurable
+    # turns are probation turns, and an observation older than the window age stops
+    # counting. At 30/(0.10 x 14) that is 21.4/day. Measured live traffic is 7.5 model
+    # calls/day (route_traces, 105 rows over 14 days, 2026-08-28), and span-carrying turns
+    # are a subset of that. The originals therefore made promotion arithmetically
+    # unreachable: a demoted model would be permanently heavy, and D5's hysteresis band
+    # and cooldown would be dead code that no test at the time could have caught, because
+    # none put probation and the freshness cut in the same scenario.
+    #
+    # The new set costs `20 / (0.35 x 60) = 0.95` span-carrying turns/day. What each lever
+    # gave up, stated so a reviewer can disagree with the trade rather than discover it:
+    #
+    # - min_samples 30 -> 20 loses statistical power, and 20 is a FLOOR, not a preference:
+    #   a window of n observations can only express rates in steps of 1/n, so the
+    #   [0.90, 0.95] band needs n >= 20 to be expressible at all. Below that the band
+    #   collapses and the hysteresis stops meaning anything.
+    # - max_age 14d -> 60d weakens the staleness guarantee — compliance stays banked
+    #   longer before reverting to unmeasured. At 7.5 turns/day, 60 days is ~450 turns,
+    #   which is a defensible "recent behaviour" horizon for a system this size; at high
+    #   traffic it would not be.
+    # - probation 0.10 -> 0.35 (below) is the largest concession and is described there.
+    #
+    # The honest summary: at 7.5 turns/day, "a small probation fraction" and "promotion is
+    # reachable" are in direct conflict, and reachability wins, because an unreachable
+    # promotion path does not make the system stricter — it makes half the design inert.
+    # A 20-sample window also means the rate is coarse: 0.95 is 19/20, so the band is
+    # really "at most one failure in twenty" against "at least two". Sized to the traffic
+    # that exists.
     grounding_compliance_window_size: int = Field(
         default=100,
         ge=1,
@@ -2098,20 +2134,25 @@ class AppConfig(BaseSettings):
             "Rolling window, in unconfounded observations, the compliance rate is computed "
             "over. Only turns where retrieval was NOT pre-forced ever enter it (ADR-0138 "
             "D5's round-2 finding): heavy enforcement supplies sources before generation, "
-            "so scoring those turns measures the enforcement rather than the model."
+            "so scoring those turns measures the enforcement rather than the model. Must "
+            "be >= min_samples, or no window can ever reach the minimum (cross-checked)."
         ),
     )
     grounding_compliance_min_samples: int = Field(
-        default=30,
+        default=20,
         ge=1,
         description=(
             "Fewest fresh observations that may yield a rate. Below it the model is "
-            "unmeasured, and unmeasured means heavy — D5's fail-safe bootstrap. 30 is "
-            "ADR-0138 AC-1's own held-out sample floor, reused rather than reinvented."
+            "unmeasured, and unmeasured means heavy — D5's fail-safe bootstrap. 20 is a "
+            "floor rather than a preference: a window of n observations expresses rates "
+            "only in steps of 1/n, so the [demote_below, bar] band of 0.05 needs n >= 20 "
+            "to be expressible at all. Was 30 (ADR-0138 AC-1's held-out sample floor); "
+            "re-registered 2026-08-28 because 30 made promotion unreachable at measured "
+            "traffic — see the block comment above."
         ),
     )
     grounding_compliance_max_window_age_hours: int = Field(
-        default=336,
+        default=1440,
         ge=1,
         description=(
             "How old an observation may be and still count. Past it, a window without "
@@ -2119,7 +2160,9 @@ class AppConfig(BaseSettings):
             "finding, which closes the frozen-denominator hole: turns with no non-exempt "
             "span never enter the denominator, so a model that stops producing recognized "
             "spans would otherwise coast forever on a stale favourable window. Compliance "
-            "is re-earned, never banked. 336h = 14 days."
+            "is re-earned, never banked. 1440h = 60 days; was 336h (14 days), widened "
+            "2026-08-28 because at 7.5 turns/day a 14-day window can never hold enough "
+            "probation observations to measure anything — see the block comment above."
         ),
     )
     grounding_compliance_bar: float = Field(
@@ -2132,6 +2175,57 @@ class AppConfig(BaseSettings):
             "that matters — a turn counts compliant only if EVERY non-exempt span passed, "
             "so the rate is over turns, not over spans, and a model at 0.95 is still "
             "shipping an uncited assertion in one turn out of twenty."
+        ),
+    )
+    # ── D5 enforcement selection (ADR-0138 D5, FRE-1285) ─────────────────────
+    #
+    # The promote edge is `grounding_compliance_bar` above, deliberately NOT repeated
+    # here: D5 requires promote to differ from *demote*, not from the contract bar, and a
+    # second setting holding a copy of the bar is a value that can drift away from the
+    # contract it represents. Only the lower edge is new.
+    grounding_enforcement_demote_below: float = Field(
+        default=0.90,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Rate under which a model is demoted to heavy enforcement on the next turn. "
+            "Sits below `grounding_compliance_bar` (0.95) to form D5's hysteresis band — "
+            "separate promote/demote thresholds, never one value, so a model on the line "
+            "does not flap between having sources forced on it and not."
+        ),
+    )
+    grounding_enforcement_cooldown_hours: int = Field(
+        default=24,
+        ge=0,
+        description=(
+            "How long a DEMOTED model waits before promotion is eligible again. A model "
+            "that has never been light has never been demoted and serves no cooldown — "
+            "the bootstrap must not punish a new model for a demotion that never "
+            "happened. Every light-to-heavy transition stamps it, INCLUDING going "
+            "unmeasured: a model whose window went stale stopped producing recognized "
+            "spans, and letting it re-promote the instant it rebuilds a window would be "
+            "promotion without earning it."
+        ),
+    )
+    grounding_enforcement_probation_rate: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Fraction of a HEAVY model's turns routed to the light path to generate the "
+            "unconfounded observations the metric needs. Without it the bootstrap "
+            "deadlocks: only unforced turns count, and an unmeasured model — heavy by "
+            "default — would never get one. Probation turns are fully verified; only the "
+            "pre-generation forcing is withheld, so a bad output is blocked, never "
+            "served. ADR-0138 D5 calls this 'a configured small fraction' and 0.35 is not "
+            "small; the departure is deliberate. At measured traffic (7.5 turns/day) a "
+            "small fraction and a reachable promotion path cannot both hold, and an "
+            "unreachable promotion path does not make the system stricter — it makes the "
+            "hysteresis band and the cooldown inert. What 0.35 actually costs is more D4 "
+            "retries on a genuinely bad model, NOT a weaker output guarantee: verification "
+            "is identical on a probation turn. Raise the traffic and this should come back "
+            "down. 0.0 disables promotion entirely and is rejected below unless the model "
+            "is already light."
         ),
     )
     proactive_memory_max_candidates: int = Field(
@@ -2906,6 +3000,49 @@ class AppConfig(BaseSettings):
             "AGENT_SYSGRAPH_DATABASE_URL=<test-db-url>, "
             "or set AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 to bypass (use with care)."
         )
+
+    @model_validator(mode="after")
+    def _validate_grounding_enforcement_band(self) -> "AppConfig":
+        """Reject grounding-enforcement settings that deadlock every model on heavy.
+
+        ADR-0138 D5 / FRE-1285. Both checks close a **silent permanent-heavy** failure:
+        the system keeps answering, every model stays maximally enforced forever, and the
+        only tell is a log line nobody is watching. They are validated here, at boot,
+        because the objects they feed are otherwise constructed lazily *inside the turn
+        path* — where the failure is a caught exception per turn rather than a refusal to
+        start.
+
+        - ``demote_below >= grounding_compliance_bar`` collapses or inverts the hysteresis
+          band, so ``EnforcementBand`` raises on construction. Selection catches it and
+          falls back to heavy with ``probation=False``, so no observation is ever written
+          and no model can ever be measured — the band failure erases the metric too.
+        - ``min_samples > window_size`` means the window can never reach its own minimum,
+          so every reading is ``INSUFFICIENT_SAMPLES`` forever.
+
+        Returns:
+            The validated config.
+
+        Raises:
+            ValueError: When either relation would deadlock enforcement on heavy.
+        """
+        if self.grounding_enforcement_demote_below >= self.grounding_compliance_bar:
+            raise ValueError(
+                "grounding_enforcement_demote_below "
+                f"({self.grounding_enforcement_demote_below}) must sit strictly below "
+                f"grounding_compliance_bar ({self.grounding_compliance_bar}): ADR-0138 D5 "
+                "requires separate promote/demote thresholds, and a collapsed or inverted "
+                "band makes EnforcementBand raise on every turn — which fails safe to "
+                "heavy with probation off, so no model can ever be measured again."
+            )
+        if self.grounding_compliance_min_samples > self.grounding_compliance_window_size:
+            raise ValueError(
+                f"grounding_compliance_min_samples ({self.grounding_compliance_min_samples}) "
+                "exceeds grounding_compliance_window_size "
+                f"({self.grounding_compliance_window_size}): the window can never reach its "
+                "own minimum, so every model reads INSUFFICIENT_SAMPLES forever and stays "
+                "permanently heavy."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_config_guard_policy(self) -> "AppConfig":

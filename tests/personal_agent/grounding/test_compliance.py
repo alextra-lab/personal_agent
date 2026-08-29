@@ -243,18 +243,27 @@ class TestAC6PreRegisteredBars:
 
         The commit history is the artifact AC-6 asks for; this assertion is what makes a
         silent later edit visible as a change to a pre-registered bar rather than a tweak.
+
+        **Re-registered 2026-08-28 (FRE-1285 review).** ``min_samples`` 30 -> 20 and
+        ``max_window_age_hours`` 336 -> 1440. This test did its job: the change had to be
+        made here, deliberately, rather than slipped in. The reason is recorded in
+        ``settings.py`` beside the fields and asserted by
+        ``test_enforcement_selection.py::test_committed_parameters_make_promotion_reachable_at_measured_traffic``
+        — at the original values, promotion off heavy required 21.4 span-carrying turns
+        per day against measured traffic of 7.5 turns/day, so D5's hysteresis band and
+        cooldown could never fire. The bar itself is untouched.
         """
         settings = AppConfig()
         assert settings.grounding_compliance_window_size == 100
-        assert settings.grounding_compliance_min_samples == 30
-        assert settings.grounding_compliance_max_window_age_hours == 336
+        assert settings.grounding_compliance_min_samples == 20
+        assert settings.grounding_compliance_max_window_age_hours == 1440
         assert settings.grounding_compliance_bar == 0.95
 
     def test_configured_window_reads_those_defaults(self) -> None:
         window = configured_window()
         assert window.size == 100
-        assert window.min_samples == 30
-        assert window.max_age == timedelta(hours=336)
+        assert window.min_samples == 20
+        assert window.max_age == timedelta(hours=1440)
         assert window.bar == 0.95
 
     def test_broken_baseline_is_rejected_under_the_committed_bar(self) -> None:

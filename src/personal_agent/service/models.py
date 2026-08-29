@@ -589,3 +589,36 @@ class GroundingComplianceObservationModel(Base):
     # than a legitimate second observation -- and the writer's ON CONFLICT DO NOTHING
     # makes a replay idempotent instead of inflating the numerator.
     trace_id = Column(String(64), nullable=False, unique=True)
+
+
+class GroundingEnforcementStateModel(Base):
+    """SQLAlchemy model for the grounding_enforcement_state table.
+
+    ADR-0138 D5's enforcement selection (FRE-1285). One row per model catalog key.
+
+    Selection remains keyed on the computed rate -- ``level`` is recomputed from the rate
+    every turn and this row never overrides it. What is stored is what the rate cannot
+    say: which level held when a reading lands inside the hysteresis band, and *when* the
+    model was demoted, which is the only fact no later turn can reconstruct from the
+    observations.
+
+    See migrations/0030_grounding_enforcement_state.sql for the concurrency guard and for
+    why the write is awaited rather than backgrounded.
+    """
+
+    __tablename__ = "grounding_enforcement_state"
+
+    # The catalog deployment key, matching grounding_compliance_observations.model_key.
+    # Primary key rather than a surrogate id: there is exactly one standing state per
+    # model, and a table that could hold two is a table where a reader has to guess.
+    model_key = Column(String(255), primary_key=True)
+    level = Column(String(16), nullable=False)
+    # NULL means NEVER demoted -- not "demoted long ago". D5 gives the cooldown to a
+    # demoted model, so a model that has never been light serves none.
+    demoted_at = Column(DateTime(timezone=True), nullable=True)
+    # The optimistic guard's comparison column: a write whose updated_at is not newer
+    # than the stored one is discarded, so a slow turn holding a stale reading cannot
+    # reset a cooldown a faster turn just stamped.
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, default=datetime.now, server_default=func.now()
+    )

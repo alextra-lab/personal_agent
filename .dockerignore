@@ -1,0 +1,42 @@
+# Prevent host's stale dependencies from shadowing Docker builds.
+# Build context is `.` (see docker-compose.cloud.yml), so this applies to all stages.
+
+# Node.js
+**/node_modules
+
+# Python
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Git
+.git
+.gitignore
+
+# Next.js & Test artifacts
+**/.next
+**/test-results
+**/playwright-report
+**/out
+**/.vercel
+**/*.tsbuildinfo
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+
+# Environment & secrets (keep .env.example for reference)
+.env
+.env.local
+.env.production
+.env.cloud
+.env.caddy

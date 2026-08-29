@@ -250,7 +250,7 @@ cases:
       orchestration_event: primary_handled
       pedagogical_outcomes: []
       tools_used_nonempty: true
-      skills: [self-telemetry, query-elasticsearch, turn-forensics]
+      skills: [self-telemetry, query-elasticsearch, query-tempo, turn-forensics]
       tools_any_of: [read_skill]
     rubric:
       - "Teaches the METHOD (which index, which fields, how to interpret) — not just the answer."

@@ -63,10 +63,27 @@ engines:
     shortcut: br
     disabled: false
 
+  # Added 2026-08-29 by master. `general` had exactly one working engine
+  # (brave), so any single flap took web_search to zero results — measured at
+  # 68% empty on 08-28 and 100% empty on 08-29. Bing answers fine from this IP
+  # (verified: 10 results on four consecutive fresh queries) but was only
+  # configured as `bing news` under categories: news, so it never served a
+  # normal web search. This gives `general` a second working engine.
+  - name: bing
+    engine: bing
+    shortcut: bi
+    disabled: false
+
+  # Disabled 2026-08-29 by master — these refuse this VPS's datacenter IP and
+  # will not recover by configuration. Measured via SearXNG's own
+  # unresponsive_engines: duckduckgo "CAPTCHA", startpage "Suspended: CAPTCHA",
+  # qwant "access denied". None has a public search API, so scraping is the only
+  # route and it is the route being blocked. Left in the file rather than
+  # deleted so the decision stays visible and is one-line reversible.
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
-    disabled: false
+    disabled: true
 
   - name: wikipedia
     engine: wikipedia
@@ -76,14 +93,14 @@ engines:
   - name: startpage
     engine: startpage
     shortcut: sp
-    disabled: false
+    disabled: true
 
   - name: qwant
     engine: qwant
     qwant_categ: web
     shortcut: qw
     categories: [general, web]
-    disabled: false
+    disabled: true
 
   # ── IT / Development ────────────────────────────────────
   - name: stackoverflow

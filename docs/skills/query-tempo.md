@@ -28,26 +28,19 @@ keywords:
   - critical path
 canonical_patterns:
   - "trace_id"
-  - "span"
 known_bad_patterns:
-  - pattern: "api/v2/traces"
+  - pattern: "api/v1/"
     applies_to:
       tool: bash
       fields: [command]
-    reason: "Tempo API v2 traces endpoint does not exist. Our deployment runs Tempo v2.10.7, which only has a v1 API."
-    suggestion: "Use 'api/v1/traces/{traceID}' for trace retrieval."
-  - pattern: "api/v2/search"
+    reason: "Tempo v1 API endpoints do not exist in our deployment. Documented Tempo API (upstream) uses v1, but our deployment (Tempo v2.10.7) has only the unprefixed and v2 APIs."
+    suggestion: "Use '/api/traces/{traceID}' or '/api/v2/traces/{traceID}' for trace retrieval, '/api/search' for search. Never '/api/v1/*'."
+  - pattern: "api/status"
     applies_to:
       tool: bash
       fields: [command]
-    reason: "Tempo API v2 search endpoint does not exist."
-    suggestion: "Use 'api/v1/search' with time-windowed queries."
-  - pattern: "tempo-localhost"
-    applies_to:
-      tool: bash
-      fields: [command]
-    reason: "Tempo on the compose network answers as 'tempo', not 'tempo-localhost'. The latter times out (000 connection error)."
-    suggestion: "Use 'http://tempo:3200' as the endpoint. Tempo is reachable ONLY from inside the compose network."
+    reason: "/api/status returns 404. The correct endpoint for Tempo status is /status (not /api/status)."
+    suggestion: "Use '/status' or '/api/echo' for status checks."
 ---
 
 # query-tempo — Query Tempo traces, read span hierarchies, and investigate latency
@@ -59,132 +52,156 @@ known_bad_patterns:
 ## Reachability
 
 - **Tempo answers on the compose network as `http://tempo:3200`**
-- Query API base: `http://tempo:3200/api/v1/`
-- **NOT reachable as `tempo-localhost`** — this hostname times out (connection error 000)
+- Query API base: `http://tempo:3200/api/`
 - Available only from inside containers (compose network) or SSH tunnels with port forwarding
+- Test connectivity: `curl -s 'http://tempo:3200/status'` returns 200
 
 ## Endpoints (verified live 2026-08-29)
 
 ### Trace retrieval by ID
 
+**Preferred: `/api/v2/traces/{traceID}` (standard OpenTelemetry proto format)**
+
 ```bash
-curl -s 'http://tempo:3200/api/v1/traces/{traceID}' \
-  | jq '.'
+curl -s 'http://tempo:3200/api/v2/traces/{traceID}' | jq '.trace.resourceSpans[0].scopeSpans[0].spans'
+```
+
+Returns standard OTel resourceSpans format:
+```json
+{
+  "trace": {
+    "resourceSpans": [
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "service.name",
+              "value": {"stringValue": "seshat-vps"}
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {"name": "personal_agent.telemetry.otel_middleware"},
+            "spans": [
+              {
+                "traceId": "G8hJv5Tr+AFir5yXue6Rww==",
+                "spanId": "KPV6tY/gbzU=",
+                "name": "GET /health",
+                "kind": "SPAN_KIND_INTERNAL",
+                "startTimeUnixNano": "1788030491849226974",
+                "endTimeUnixNano": "1788030491854866238",
+                "attributes": [
+                  {
+                    "key": "http.method",
+                    "value": {"stringValue": "GET"}
+                  }
+                ],
+                "status": {}
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "metrics": {
+    "inspectedBytes": "72504"
+  }
+}
+```
+
+**Alternative: `/api/traces/{traceID}` (Tempo-native batches format)**
+
+```bash
+curl -s 'http://tempo:3200/api/traces/{traceID}' | jq '.batches[0].scopeSpans[0].spans'
+```
+
+Returns Tempo's batches format (similar structure, different root key). Both endpoints work; v2 is the standard.
+
+**Key fields per span:**
+- `traceId`, `spanId` — base64-encoded trace and span identifiers
+- `parentSpanId` — parent span ID (if set); empty/absent for root spans
+- `name` — semantic span name (e.g., `GET /health`, `model_call`)
+- `startTimeUnixNano`, `endTimeUnixNano` — Unix nanosecond timestamps
+- `kind` — `SPAN_KIND_INTERNAL`, `SPAN_KIND_SERVER`, `SPAN_KIND_CLIENT`, etc.
+- `attributes` — key-value metadata (HTTP method, status, service name, etc.)
+- `status` — `{}` for success; `{"code": "STATUS_CODE_ERROR"}` for errors
+
+### Search for traces (by service or attributes)
+
+```bash
+# Search with limit (required parameter)
+curl -s 'http://tempo:3200/api/search?limit=10' | jq '.traces'
+
+# Search for a specific service
+curl -s 'http://tempo:3200/api/search?q=service.name%3Dseshat-vps&limit=5' | jq '.traces'
+
+# Search for recent traces with time window
+curl -s 'http://tempo:3200/api/search?start=<unix_seconds>&end=<unix_seconds>&q=<query>&limit=10' | jq '.traces'
 ```
 
 Returns:
 ```json
 {
-  "traceID": "f5d25f8b...",
-  "batches": [
+  "traces": [
     {
-      "instrumentationLibrarySpans": [
-        {
-          "spans": [
-            {
-              "traceID": "f5d25f8b...",
-              "spanID": "abc123def456",
-              "parentSpanID": "",
-              "name": "root_span",
-              "startTimeUnixNano": 1725014400000000000,
-              "endTimeUnixNano": 1725014402500000000,
-              "durationMs": 2500,
-              "status": { "code": "STATUS_CODE_OK" },
-              "attributes": {
-                "span.kind": "INTERNAL",
-                "service.name": "personal-agent"
-              }
-            },
-            {
-              "parentSpanID": "abc123def456",
-              "name": "model_call",
-              "startTimeUnixNano": 1725014400500000000,
-              "endTimeUnixNano": 1725014401500000000,
-              "durationMs": 1000
-            }
-          ]
-        }
-      ]
+      "traceID": "1bc849bf94ebf80162af9c97b9ee91c3",
+      "rootServiceName": "seshat-vps",
+      "rootTraceName": "GET /health",
+      "startTime": "1788030491849226974",
+      "duration": "5639264"
     }
-  ]
-}
-```
-
-**Key fields per span:**
-- `traceID` — fully qualified trace identifier
-- `spanID` — this span's unique identifier
-- `parentSpanID` — empty string if this is a root; references parent's `spanID` otherwise
-- `name` — semantic span name (e.g., `root_span`, `model_call`, `tool_execution`)
-- `startTimeUnixNano`, `endTimeUnixNano` — Unix nanosecond timestamps
-- `durationMs` — **computed duration** (endTime - startTime in milliseconds)
-- `attributes` — key-value metadata (span type, service, model, tool name, etc.)
-- `status.code` — `STATUS_CODE_OK`, `STATUS_CODE_ERROR`, or `STATUS_CODE_UNSET`
-
-**Span hierarchy:** Parent-child relationships via `parentSpanID`. Root span has empty `parentSpanID`. All siblings share the same `parentSpanID`.
-
-### Search for traces (by tags)
-
-```bash
-# Search with time window (required)
-curl -s -X POST 'http://tempo:3200/api/v1/search?start=1725000000&end=1725100000' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "tags": "service.name=personal-agent"
-  }' | jq '.traces'
-```
-
-Returns:
-```json
-[
-  {
-    "traceID": "f5d25f8b...",
-    "rootServiceName": "personal-agent",
-    "rootTraceName": "root_span",
-    "startTimeUnixNano": 1725014400000000000,
-    "durationMs": 2500
+  ],
+  "metrics": {
+    "inspectedBytes": "...",
+    "inspectedTraces": "..."
   }
-]
+}
 ```
 
 **Parameters:**
-- `start`, `end` — Unix **seconds** (not nanos). Required.
-- `tags` — filter by span attribute key=value pairs. Space-separated multiple filters.
-  - Common: `service.name=personal-agent`, `span.kind=INTERNAL`, `trace_id=<value>` (if available as a span attribute)
+- `limit` — required, max traces to return
+- `start`, `end` — Unix seconds (optional; if omitted, searches recent traces only)
+- `q` — query string with attribute filters (optional)
 
-**Time math:** Use explicit Unix seconds. `jq` can compute:
-```bash
-# Now minus 1 hour
-end=$(date +%s); start=$((end - 3600))
-curl -s -X POST "http://tempo:3200/api/v1/search?start=${start}&end=${end}" ...
-```
-
-### Service enumeration (tag keys)
+### Tag enumeration (search attributes)
 
 ```bash
-curl -s 'http://tempo:3200/api/v1/services' | jq '.'
+curl -s 'http://tempo:3200/api/search/tags' | jq '.tagNames'
 ```
 
-Returns:
+Returns available tag/attribute names that can be searched:
 ```json
 {
-  "services": ["personal-agent", "opentelemetry-collector"]
+  "tagNames": ["service.name", "http.method", "http.status_code", ...]
 }
 ```
-
-Use this to discover what services have traces, then refine search with `service.name=<service>`.
 
 ### Status / version
 
 ```bash
-curl -s 'http://tempo:3200/api/v1/status' | jq '.'
+curl -s 'http://tempo:3200/status' | jq .
 ```
 
 Returns:
 ```json
 {
-  "commit": "...",
-  "version": "2.10.7"
+  "version": "2.10.7",
+  "buildDate": "...",
+  "gitRevision": "..."
 }
+```
+
+### Echo endpoint (simple connectivity check)
+
+```bash
+curl -s 'http://tempo:3200/api/echo' | jq .
+```
+
+Returns:
+```json
+{}
 ```
 
 ---
@@ -194,107 +211,85 @@ Returns:
 ### Pattern 1: Read a complete trace end-to-end (with spans and timing)
 
 ```bash
-trace_id="f5d25f8b..."
-curl -s "http://tempo:3200/api/v1/traces/${trace_id}" | jq '.batches[0].instrumentationLibrarySpans[0].spans | sort_by(.startTimeUnixNano) | .[] | {name, spanID, parentSpanID, durationMs, status}'
+trace_id="1bc849bf94ebf80162af9c97b9ee91c3"
+curl -s "http://tempo:3200/api/v2/traces/${trace_id}" | jq '.trace.resourceSpans[0].scopeSpans[0].spans | 
+  map({
+    name,
+    spanId,
+    startTimeUnixNano: (.startTimeUnixNano | tonumber),
+    endTimeUnixNano: (.endTimeUnixNano | tonumber),
+    durationNano: ((.endTimeUnixNano | tonumber) - (.startTimeUnixNano | tonumber)),
+    attributes: (.attributes | map({(.key): .value.stringValue // .value.intValue}) | add)
+  }) | 
+  sort_by(.startTimeUnixNano)'
 ```
 
-Output:
-```
-{
-  "name": "root_span",
-  "spanID": "abc123...",
-  "parentSpanID": "",
-  "durationMs": 2500,
-  "status": {
-    "code": "STATUS_CODE_OK"
-  }
-}
-{
-  "name": "model_call",
-  "spanID": "def456...",
-  "parentSpanID": "abc123...",
-  "durationMs": 1000,
-  "status": {
-    "code": "STATUS_CODE_OK"
-  }
-}
-```
-
-**Interpretation:** Root span took 2500ms total; model_call (child of root) took 1000ms of it.
-
-### Pattern 2: Find longest-running trace in the last hour
-
-```bash
-end=$(date +%s)
-start=$((end - 3600))
-
-curl -s -X POST "http://tempo:3200/api/v1/search?start=${start}&end=${end}" \
-  -H 'Content-Type: application/json' \
-  -d '{"tags": "service.name=personal-agent"}' | \
-  jq '.traces | sort_by(.durationMs | -.) | .[0:3] | .[] | {traceID, durationMs, startTimeUnixNano}'
-```
-
-### Pattern 3: Find traces with errors (HTTP 500, span status ERROR)
-
-```bash
-end=$(date +%s)
-start=$((end - 3600))
-
-curl -s -X POST "http://tempo:3200/api/v1/search?start=${start}&end=${end}" \
-  -H 'Content-Type: application/json' \
-  -d '{"tags": "span.status.code=ERROR"}' | \
-  jq '.traces | .[] | {traceID, rootTraceName, durationMs}'
-```
-
-### Pattern 4: Breakdown latency by span type (how much time in model vs tool calls)
-
-```bash
-trace_id="f5d25f8b..."
-curl -s "http://tempo:3200/api/v1/traces/${trace_id}" | jq '
-  .batches[0].instrumentationLibrarySpans[0].spans 
-  | group_by(.name) 
-  | map({
-      span_type: .[0].name,
-      count: length,
-      total_ms: (map(.durationMs) | add),
-      avg_ms: (map(.durationMs) | add / length)
-    })
-  | sort_by(.total_ms | -.)
-'
-```
-
-Output:
+Output from real trace:
 ```json
 [
-  { "span_type": "root_span", "count": 1, "total_ms": 2500, "avg_ms": 2500 },
-  { "span_type": "model_call", "count": 1, "total_ms": 1000, "avg_ms": 1000 },
-  { "span_type": "tool_execution", "count": 3, "total_ms": 1200, "avg_ms": 400 }
+  {
+    "name": "GET /health",
+    "spanId": "KPV6tY/gbzU=",
+    "startTimeUnixNano": 1788030491849226974,
+    "endTimeUnixNano": 1788030491854866238,
+    "durationNano": 5639264,
+    "attributes": {
+      "http.method": "GET",
+      "http.target": "/health",
+      "http.status_code": 200
+    }
+  }
 ]
+```
+
+**Interpretation:** Single span representing an HTTP GET to /health that took ~5.6ms and returned 200.
+
+### Pattern 2: Find recently active services
+
+```bash
+curl -s 'http://tempo:3200/api/search?limit=100' | jq '.traces | unique_by(.rootServiceName) | .[] | {service: .rootServiceName, recentTrace: .traceID}'
+```
+
+### Pattern 3: Calculate span duration in milliseconds
+
+```bash
+trace_id="1bc849bf94ebf80162af9c97b9ee91c3"
+curl -s "http://tempo:3200/api/v2/traces/${trace_id}" | jq '.trace.resourceSpans[0].scopeSpans[0].spans[] | 
+  {
+    name,
+    durationMs: (((.endTimeUnixNano | tonumber) - (.startTimeUnixNano | tonumber)) / 1000000)
+  }'
+```
+
+### Pattern 4: Find traces by service name and time window
+
+```bash
+start=$(date -d '1 hour ago' +%s)  # 1 hour ago in Unix seconds
+end=$(date +%s)                     # now in Unix seconds
+curl -s "http://tempo:3200/api/search?start=${start}&end=${end}&q=service.name%3Dseshat-vps&limit=20" | jq '.traces[]'
 ```
 
 ---
 
 ## Known limitations
 
-**Metrics endpoint not exposed.** TraceQL (the metrics query language, `/api/v1/query_range`) requires the metrics aggregator (`metrics_generator`), which is enabled in config but exposes no instrumented endpoint. The search and trace-retrieval APIs are the primary path.
+**Search requires a limit parameter.** Unlike Elasticsearch, Tempo search always requires `?limit=N`. Without it, requests fail silently or return empty results.
 
-**Query Frontend max_duration.** Tempo's `query_frontend.metrics.max_duration` is configured to 360 hours (15 days) to permit fortnight-long range queries. Queries exceeding that ceiling are rejected — this is a hard limit per AC-1 of ADR-0129, not advisory.
+**Time format is Unix seconds only.** Unlike Elasticsearch's date-math (`now-1h`), Tempo requires explicit Unix-second timestamps for `start` and `end` parameters.
 
-**Span attribute schema is dynamic.** There is no schema registry — attributes are whatever the instrumentation library emits. Common ones:
-- `service.name` — originating service
-- `span.kind` — `INTERNAL`, `SERVER`, `CLIENT`
-- `span.status.code` — `OK`, `ERROR`, `UNSET`
-- `gen_ai.operation.name` — semantic operation (per OTel spec)
-- Any custom attributes the producer chose to include
+**Attribute filtering is basic.** The `q` parameter supports simple `key=value` matching. Complex boolean queries (AND, OR, NOT) are not supported in this endpoint.
+
+**Base64 encoding on IDs.** Trace and span IDs are base64-encoded in the response. To use them in subsequent queries, use them as-is (no decoding needed for another query).
 
 ---
 
 ## Data discipline
 
-- **Never rely on attribute names** from training data — run `curl 'http://tempo:3200/api/v1/services'` first and enumerate what's actually indexed
-- **Timestamps are nanoseconds.** Divide by 1e9 for seconds; use `jq '... / 1000000000'` for millisecond conversion
-- **Search always requires time bounds.** A missing `start`/`end` returns an empty result silently, not an error
-- **Traces are immutable.** Once written to Tempo, a trace cannot be updated; re-opening a span is a new span with a new ID
+- **Always use the gateway container.** Run commands with `docker exec cloud-sim-seshat-gateway curl ...` — Tempo is on the compose network, not reachable from the host
+- **Search requires a limit.** Always include `?limit=N` in search queries; omitting it causes silent failures
+- **Timestamps are nanoseconds.** Divide by 1e9 for seconds; divide by 1e6 for milliseconds
+- **v1 API does not exist here.** Documentation says v1, but our Tempo has only the unprefixed and v2 paths
+- **Traces are immutable.** Once written to Tempo, a trace cannot be updated
 
 ---
 
@@ -302,16 +297,18 @@ Output:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `connection refused` or HTTP 000 | Using `tempo-localhost` instead of `tempo` | Change hostname to `tempo`. Compose network routing is one-way: `tempo-localhost` is an alias for localhost inside the Tempo container itself, not reachable from other containers. |
-| Empty result `[]` on search | Query time bounds are wrong (past the retention window or swapped) | Check `start < end`, use `date +%s` to get current Unix time, verify Tempo is receiving spans (check `/api/v1/services`) |
-| HTTP 404 on `/api/v2/...` endpoint | Attempting to use Tempo v2 API | Tempo v2.10.7 has only v1 API. Use `/api/v1/` paths. |
-| Large trace (>10 MB) takes time to retrieve | Traces with many spans (1000+) are slower to deserialize | Use selective `jq` filtering to extract only needed span fields rather than rendering full docs |
+| `command not found: curl` | Running from the host instead of inside a container | Use `docker exec cloud-sim-seshat-gateway curl ...` to run inside the gateway container |
+| Empty `[]` on `/api/search` | Missing or empty `limit` parameter | Add `?limit=10` (or any positive integer) to the query |
+| `null` results on search | Trace time window is outside recent history | Use `/api/search?limit=10` with no time filter to get recent traces |
+| HTTP 404 on `/api/v1/traces` | Attempting to use the documented Tempo v1 API | Use `/api/v2/traces/{traceID}` or `/api/traces/{traceID}` instead |
+| HTTP 404 on `/api/status` | Using the wrong status endpoint | Use `/status` (not `/api/status`) |
+| Large trace (>10 MB) takes time to retrieve | Traces with many spans (1000+) are slower to deserialize | Use selective `jq` filtering to extract only needed span fields |
 
 ---
 
 ## References
 
-- [Tempo API docs](https://grafana.com/docs/tempo/latest/api_docs/) — official reference (this skill contains our deployment specifics)
+- [Tempo upstream API docs](https://grafana.com/docs/tempo/latest/api_docs/) — official reference (our deployment differs; use this skill for our specifics)
 - [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/) — standard span attribute names
 - [ADR-0129](../architecture_decisions/ADR-0129-opentelemetry-instrumentation-and-trace-visibility.md) — Tempo deployment and design rationale
 - `docs/skills/query-elasticsearch.md` — analogue for log queries (Elasticsearch backs logs, Tempo backs traces)

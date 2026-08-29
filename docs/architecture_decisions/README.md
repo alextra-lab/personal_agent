@@ -226,6 +226,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0136](ADR-0136-cloudflare-edge-carries-http-not-grpc.md) | The Cloudflare Edge Carries HTTP, Not gRPC — the Zone gRPC Toggle Stays Off, and Protocol Conversion Happens Before the Edge (Access does not enforce on gRPC and the toggle is zone-wide; records the constraint FRE-1220 Proposal 5 asked for) | Accepted |
 | [ADR-0137](ADR-0137-two-party-obligations-and-cutover-tickets.md) | A Two-Party Obligation Is Split at Authoring, and a Cutover Is Two Tickets — the Dispatch Question Is Only the Backstop (extends ADR-0130 D1's coverage clause and D6's dispatch check; preserves ADR-0033's clean-break case) | Superseded |
 | [ADR-0138](ADR-0138-the-model-may-generate-but-may-not-assert.md) | The Model May Generate, But It May Not Assert — Verified Citations as Seshat's Grounding Contract, Tier-Invariant and Enforced by Measured Compliance (parametric knowledge is never a source; deletes the "Do NOT say you have no memory" prohibition and the recency-keyed search trigger) | Accepted (amended 2026-08-25 — D2 `curl` illustration corrected) |
+| [ADR-0139](ADR-0139-what-the-agent-learns-by-doing.md) | What the Agent Learns by Doing — Result-Level Admissibility, a First-Person Observation Tier, and a Denominator for the Compliance Metric (amends ADR-0138 D2: admissibility decided on the result, not the invocation; absorbs FRE-1316 vision) | Proposed |
 
 ### Supplementary
 

@@ -252,6 +252,8 @@ fetch_url_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=30,
     rate_limit_per_hour=100,
+    # ADR-0098 Amendment A2: fetch_url addresses exactly one external referent.
+    referent_parameter="url",
 )
 
 

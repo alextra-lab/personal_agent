@@ -232,6 +232,13 @@ engines:
     disabled: false
     categories: science
 
+  # springer nature and astrophysics data system were declared here but NEVER loaded.
+  # Upstream ships both `inactive: true` AND requiring an `api_key` we do not hold, and
+  # `use_default_settings` merges by name, so our `disabled: false` was inherited over —
+  # the same trap that silently disabled braveapi (FRE-1331). They advertised science
+  # coverage we never had. Found 2026-08-30 by scripts/monitors/searxng_engine_parity.py
+  # on its first run. Re-add only with real keys, and re-run that check to prove it.
+
   # ── News ────────────────────────────────────────────────
   - name: google news
     engine: google_news
@@ -349,18 +356,6 @@ engines:
     categories: weather
 
   # ── Additional Science ───────────────────────────────────
-  - name: springer nature
-    engine: springer
-    shortcut: sn
-    disabled: false
-    categories: science
-
-  - name: astrophysics data system
-    engine: astrophysics_data_system
-    shortcut: ads
-    disabled: false
-    categories: science
-
 
 outgoing:
   request_timeout: 8

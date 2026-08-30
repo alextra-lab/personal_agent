@@ -41,7 +41,7 @@ silently serves old code with no error. Always:
 docker compose -p seshat -f docker-compose.cloud.yml -f docker-compose.eval.yml \
   build seshat-gateway-control
 docker compose -p seshat -f docker-compose.cloud.yml -f docker-compose.eval.yml \
-  up -d postgres-eval neo4j-eval elasticsearch-eval seshat-gateway-control
+  up -d postgres-eval neo4j-eval elasticsearch-eval redis-eval seshat-gateway-control
 export NEO4J_PASSWORD=<the eval stack's password>   # same one docker-compose.eval.yml needs
 uv run python -m scripts.eval.fre1337_intent_probe.harness --run-id 2026-08-30 --behavioral
 ```
@@ -65,7 +65,7 @@ is fine for repeated runs; if you want a clean slate at the container level:
 
 ```bash
 docker compose -p seshat -f docker-compose.cloud.yml -f docker-compose.eval.yml down -v \
-  seshat-gateway-control seshat-gateway-treatment postgres-eval neo4j-eval elasticsearch-eval
+  seshat-gateway-control seshat-gateway-treatment postgres-eval neo4j-eval elasticsearch-eval redis-eval
 ```
 
 ### Isolation
@@ -78,13 +78,15 @@ docker compose -p seshat -f docker-compose.cloud.yml -f docker-compose.eval.yml 
 - Between every fixture in the behavioral arm, the eval graph is fully wiped
   (`MATCH (n) DETACH DELETE n`) — the AC-3 control for FRE-1338's incident (one turn's
   freshly-extracted entities leaking into the next turn's `search_memory`).
-- **Known gaps, not fixed here** (both filed as follow-ups during this ticket's live
-  verification): both eval gateways in `docker-compose.eval.yml` point at the *same* Redis
-  DB (`redis://redis:6379/0`) as production — not isolated (FRE-1342). Doesn't affect this
-  harness's AC-3 claim (that's a Neo4j/entity-graph measurement; Redis carries no KG data).
-  Separately, `seshat-gateway:latest` is reused across `up -d` calls and can silently serve
-  a stale build with no error (FRE-1341, found 4 months stale) — always rebuild first, per
-  the section above.
+- Both eval gateways now point at their own `redis-eval` service (FRE-1342, fixed
+  2026-08-30) — the shared production Redis DB they used to share was a transport for
+  Streams events, not KG data, but it let an eval turn's `request.captured` reach
+  production's own consolidator and write to the production knowledge graph. See
+  `docker-compose.eval.yml`'s FRE-1342 comment block for the full trace.
+- **Known gap, not fixed here** (filed as a follow-up during this ticket's live
+  verification): `seshat-gateway:latest` is reused across `up -d` calls and can silently
+  serve a stale build with no error (FRE-1341, found 4 months stale) — always rebuild
+  first, per the section above.
 
 ## Output
 

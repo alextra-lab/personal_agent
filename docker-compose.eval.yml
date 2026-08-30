@@ -2,6 +2,14 @@
 # FRE-375 — Eval substrate isolation: eval gateway containers use their own
 #            postgres-eval / neo4j-eval / elasticsearch-eval services so eval
 #            runs never touch production data.
+# FRE-1342 — redis-eval: the eval gateways used to share production's Redis
+#            (`redis://redis:6379/0`), which carries no KG data itself but
+#            *transports* the Streams events that cause KG writes — an eval
+#            turn's `request.captured` was consumed by production's own
+#            consolidator, writing to the production knowledge graph. A
+#            dedicated instance, not just a separate DB index, because Redis
+#            Streams consumer groups are per-DB but the eval gateway would
+#            still share the instance and network with production.
 #
 # Layered on top of docker-compose.cloud.yml.  Adds two seshat-gateway
 # instances (control + treatment) plus isolated eval substrate services.
@@ -10,7 +18,7 @@
 # Usage:
 #
 #   docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml \
-#     up -d postgres-eval neo4j-eval elasticsearch-eval \
+#     up -d postgres-eval neo4j-eval elasticsearch-eval redis-eval \
 #            seshat-gateway-control seshat-gateway-treatment
 #
 #   curl -fsS http://localhost:9002/health   # control
@@ -18,7 +26,7 @@
 #
 #   docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml \
 #     down seshat-gateway-control seshat-gateway-treatment \
-#          postgres-eval neo4j-eval elasticsearch-eval
+#          postgres-eval neo4j-eval elasticsearch-eval redis-eval
 #
 # Reusable for FRE-263 (PIVOT-4) and FRE-264 (PIVOT-5) evals.
 
@@ -36,7 +44,7 @@ x-seshat-gateway-eval-base: &seshat-gateway-eval-base
       condition: service_healthy
     elasticsearch-eval:
       condition: service_healthy
-    redis:
+    redis-eval:
       condition: service_healthy
     searxng:
       condition: service_healthy
@@ -140,6 +148,31 @@ services:
       - cloud-sim
     restart: "no"
 
+  # Redis (eval) — port 6380 on host, separate instance and volume from
+  # production's `redis` service (FRE-1342). The eval gateways' Streams event
+  # bus must never overlap production's — a shared instance let eval turns'
+  # `request.captured` reach production's consolidator and write to the
+  # production knowledge graph.
+  redis-eval:
+    image: redis:7-alpine
+    container_name: cloud-sim-redis-eval
+    volumes:
+      - seshat_redis_eval:/data
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    mem_limit: 128m
+    cpus: 0.25
+    networks:
+      - cloud-sim
+    restart: "no"
+    command: redis-server --appendonly yes
+
   # ── Eval gateway instances ─────────────────────────────────────────────────
 
   # Control — curated tools only, primitives disabled
@@ -156,7 +189,7 @@ services:
       AGENT_NEO4J_USER: neo4j
       AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
       AGENT_ELASTICSEARCH_URL: http://elasticsearch-eval:9200
-      AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
+      AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
       # ADR-0132 D4: the eval profile declares its own SLM endpoint. There is no
@@ -195,7 +228,7 @@ services:
       AGENT_NEO4J_USER: neo4j
       AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
       AGENT_ELASTICSEARCH_URL: http://elasticsearch-eval:9200
-      AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
+      AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
       # ADR-0132 D4: the eval profile declares its own SLM endpoint. There is no
@@ -232,6 +265,8 @@ volumes:
   seshat_neo4j_eval:
     driver: local
   seshat_es_eval:
+    driver: local
+  seshat_redis_eval:
     driver: local
 
 networks:

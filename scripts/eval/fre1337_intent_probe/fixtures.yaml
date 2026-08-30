@@ -1,0 +1,33 @@
+# FRE-1337 fixture set. Each label is unique; expected_task_type is set only where the
+# deterministic classifier's answer is the well-established ground truth for that
+# fixture's *role* in the matrix (see harness README for how each is used).
+fixtures:
+  - label: gpsr_research
+    note: >
+      The 7-for-7 failure case from FRE-1288/FRE-1279: plainly deep research (comparing
+      options, weighing a purchase decision across sources), classified CONVERSATIONAL by
+      the deterministic cascade on every one of 7 measured attempts across 3 models
+      2026-08-23/30.
+    message: "Which tinned tuna should I buy in France"
+    expected_task_type: null
+
+  - label: plain_greeting
+    note: >
+      Genuinely conversational, no research/tool/recall/planning content — the seeded
+      agreement case (AC-5): both the deterministic cascade and a live model should call
+      this conversational.
+    message: "How is your day going?"
+    expected_task_type: conversational
+
+  - label: tool_use_request
+    note: >
+      Unambiguous tool-use request (log inspection) — matches _TOOL_INTENT_PATTERNS'
+      log/telemetry observation verbs.
+    message: "Check the logs for errors in the last hour."
+    expected_task_type: tool_use
+
+  - label: memory_recall_request
+    note: >
+      Unambiguous memory-recall phrasing ("what did we decide... last time we talked").
+    message: "What did we decide about the database schema last time we talked?"
+    expected_task_type: memory_recall

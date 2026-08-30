@@ -115,6 +115,14 @@ telemetry/evaluation/EVAL-primitive-tools/run-g3-full-sonnet-2026-04-28/
 # Environment variables (secrets, local configuration)
 # Per ADR-0007: Unified Configuration Management
 .env
+# Catch-all so a backup, a dated copy or a rotation artefact can never be staged.
+# 2026-08-30: a credential-rotation backup landed in the repo root as
+# `.env.env.bak-rotate-20260830` carrying the pre-rotation secrets in plaintext, and
+# matched none of the explicit patterns below — untracked, but `git add -A` would have
+# staged it. The enumerated list only ever covered filenames someone thought of.
+.env.*
+# ...except the tracked template, which carries placeholders and must stay in the repo.
+!.env.example
 .env.local
 .env.*.local
 .env.development

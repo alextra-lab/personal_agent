@@ -24,4 +24,5 @@ AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 make test
 **Pre-commit enforcement:** `scripts/check_no_direct_substrate_in_tests.py` blocks new hardcoded prod URIs or bare `MemoryService()` instantiations in `tests/` and `scripts/eval/`. Use `# fre-375-allow: <reason>` on the specific line to exemption when intentional.
 
 **Eval isolation:** `docker-compose.eval.yml` has its own `postgres-eval`, `neo4j-eval`,
-`elasticsearch-eval` services with isolated volumes. Use `make eval-infra-up` before running evals.
+`elasticsearch-eval`, `redis-eval` (FRE-1342) services with isolated volumes. Use
+`make eval-infra-up` before running evals.

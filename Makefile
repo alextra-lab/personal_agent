@@ -376,11 +376,11 @@ test-infra-ps:          ## Show test infra container status
 # The eval stack uses docker-compose.eval.yml on top of docker-compose.cloud.yml.
 # After FRE-375, eval services have their own isolated substrate.
 
-eval-infra-up:          ## Start eval infra (requires eval.yml rewire)
-	@docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml up -d
+eval-infra-up:          ## Start eval infra (names eval services explicitly — FRE-1342, never the file union)
+	@docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml up -d postgres-eval neo4j-eval elasticsearch-eval redis-eval seshat-gateway-control seshat-gateway-treatment
 
 eval-infra-down:        ## Stop eval infra
-	@docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml down seshat-gateway-control seshat-gateway-treatment
+	@docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml down seshat-gateway-control seshat-gateway-treatment postgres-eval neo4j-eval elasticsearch-eval redis-eval
 
 # ─── Study infrastructure (FRE-838, ADR-0114 D1) ─────────────────────────────
 # Isolated Neo4j+GDS sandbox for the decoupled associative-memory research

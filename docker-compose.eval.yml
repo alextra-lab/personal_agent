@@ -241,6 +241,23 @@ services:
       # the owner's local SLM, which runs at max_concurrency 1. Eval turns contend with the
       # owner's live turns. Pace multi-turn eval runs accordingly.
       AGENT_SLM_BASE_URL: http://caddy:8600
+      # FRE-1342: `event_bus_enabled` defaults to False and this file never set it, so the
+      # eval gateways have always run on NoOpBus. Two consequences worth stating, because
+      # master got the first one wrong when escalating this ticket:
+      #
+      #  1. The production-contamination path this ticket fixes was LATENT, not live. The
+      #     DSN did point at production's Redis and production's consumers were subscribed,
+      #     but eval never published, so no eval turn ever reached them. The redis-eval fix
+      #     is still correct — it removes the path before anything can arm it — but the
+      #     severity was overstated.
+      #  2. With no bus there is no consolidation, so no eval turn writes to ANY knowledge
+      #     graph. That makes "an eval turn produces no production KG write" vacuously true,
+      #     and it is why FRE-1337's behavioural arm 3, which measures entity extraction,
+      #     could never have worked here regardless of the endpoint or credential fixes.
+      #
+      # Enabled explicitly and pointed at redis-eval, so eval exercises the same machinery
+      # production does, against its own substrate.
+      AGENT_EVENT_BUS_ENABLED: "true"
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
       API_HOST: 0.0.0.0
@@ -310,6 +327,23 @@ services:
       # the owner's local SLM, which runs at max_concurrency 1. Eval turns contend with the
       # owner's live turns. Pace multi-turn eval runs accordingly.
       AGENT_SLM_BASE_URL: http://caddy:8600
+      # FRE-1342: `event_bus_enabled` defaults to False and this file never set it, so the
+      # eval gateways have always run on NoOpBus. Two consequences worth stating, because
+      # master got the first one wrong when escalating this ticket:
+      #
+      #  1. The production-contamination path this ticket fixes was LATENT, not live. The
+      #     DSN did point at production's Redis and production's consumers were subscribed,
+      #     but eval never published, so no eval turn ever reached them. The redis-eval fix
+      #     is still correct — it removes the path before anything can arm it — but the
+      #     severity was overstated.
+      #  2. With no bus there is no consolidation, so no eval turn writes to ANY knowledge
+      #     graph. That makes "an eval turn produces no production KG write" vacuously true,
+      #     and it is why FRE-1337's behavioural arm 3, which measures entity extraction,
+      #     could never have worked here regardless of the endpoint or credential fixes.
+      #
+      # Enabled explicitly and pointed at redis-eval, so eval exercises the same machinery
+      # production does, against its own substrate.
+      AGENT_EVENT_BUS_ENABLED: "true"
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
       API_HOST: 0.0.0.0

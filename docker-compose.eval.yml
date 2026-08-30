@@ -222,10 +222,25 @@ services:
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
-      # ADR-0132 D4: the eval profile declares its own SLM endpoint. There is no
-      # default to inherit, and evals must never traverse the Cloudflare egress
-      # path (no CF credential is available to this stack).
-      AGENT_SLM_BASE_URL: ${AGENT_SLM_BASE_URL:-http://localhost:8000}
+      # ADR-0132 D4: the eval profile uses "the endpoint its compose file declares;
+      # never the dead loopback default". Declared literally, NOT via ${AGENT_SLM_BASE_URL:-…}
+      # — .env defines that variable, so the interpolation let production's value win over
+      # this file's, resolving to the container's own loopback. That is exactly the "dead
+      # loopback default" D4 names, and it is the same shape as the SESHAT_APP_PASSWORD
+      # inheritance bug (FRE-1344): an eval service silently reading production's env.
+      #
+      # The comment previously here claimed "evals must never traverse the Cloudflare egress
+      # path (no CF credential is available to this stack)". That is wrong on its stated
+      # reason: no gateway holds a CF credential. It was deliberately moved into Caddy
+      # (see docker-compose.cloud.yml's gateway block, which warns that re-adding CF_ACCESS_*
+      # would undo the custody move), and D4's own table records "CF concept in app config:
+      # none" for every profile including cloud. Caddy performs the egress; the gateway just
+      # addresses it by service name on the shared network, which the eval gateways join.
+      #
+      # Operational note, which IS the real constraint the CF story obscured: this reaches
+      # the owner's local SLM, which runs at max_concurrency 1. Eval turns contend with the
+      # owner's live turns. Pace multi-turn eval runs accordingly.
+      AGENT_SLM_BASE_URL: http://caddy:8600
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
       API_HOST: 0.0.0.0
@@ -276,10 +291,25 @@ services:
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
-      # ADR-0132 D4: the eval profile declares its own SLM endpoint. There is no
-      # default to inherit, and evals must never traverse the Cloudflare egress
-      # path (no CF credential is available to this stack).
-      AGENT_SLM_BASE_URL: ${AGENT_SLM_BASE_URL:-http://localhost:8000}
+      # ADR-0132 D4: the eval profile uses "the endpoint its compose file declares;
+      # never the dead loopback default". Declared literally, NOT via ${AGENT_SLM_BASE_URL:-…}
+      # — .env defines that variable, so the interpolation let production's value win over
+      # this file's, resolving to the container's own loopback. That is exactly the "dead
+      # loopback default" D4 names, and it is the same shape as the SESHAT_APP_PASSWORD
+      # inheritance bug (FRE-1344): an eval service silently reading production's env.
+      #
+      # The comment previously here claimed "evals must never traverse the Cloudflare egress
+      # path (no CF credential is available to this stack)". That is wrong on its stated
+      # reason: no gateway holds a CF credential. It was deliberately moved into Caddy
+      # (see docker-compose.cloud.yml's gateway block, which warns that re-adding CF_ACCESS_*
+      # would undo the custody move), and D4's own table records "CF concept in app config:
+      # none" for every profile including cloud. Caddy performs the egress; the gateway just
+      # addresses it by service name on the shared network, which the eval gateways join.
+      #
+      # Operational note, which IS the real constraint the CF story obscured: this reaches
+      # the owner's local SLM, which runs at max_concurrency 1. Eval turns contend with the
+      # owner's live turns. Pace multi-turn eval runs accordingly.
+      AGENT_SLM_BASE_URL: http://caddy:8600
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
       API_HOST: 0.0.0.0

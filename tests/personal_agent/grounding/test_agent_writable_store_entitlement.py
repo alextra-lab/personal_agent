@@ -42,7 +42,7 @@ engages — the outcome under test is the entitlement gate, not the entailment j
 def _register(tool_name: str, content: str) -> tuple[Entitlement, CheckOutcome]:
     """Run one tool result through the real registry and the real verifier.
 
-    Arguments are numeric so ``_strip_argument_echo`` has no eligible value and the registered
+    Arguments are numeric so ``strip_argument_echo`` has no eligible value and the registered
     content is the payload byte for byte.
     """
     registry = SourceRegistry(turn_id=TURN)
@@ -218,7 +218,7 @@ def test_location_resolved_from_model_written_session_notes_is_refused() -> None
     """D2's ``printf 'Paris'`` shape wearing a typed parameter.
 
     ``session_notes`` is free text the *model* writes; ``ExplicitLocationProvider`` extracts a
-    city from it and hands it back as ``location.city``. ``_strip_argument_echo`` cannot see
+    city from it and hands it back as ``location.city``. ``strip_argument_echo`` cannot see
     this — it compares whole top-level values, and the returned city is a substring of the
     argument nested one level down — so the registered content really does carry the model's
     own word back at ``EXTERNAL`` unless this rule fires.

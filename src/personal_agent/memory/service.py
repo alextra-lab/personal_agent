@@ -53,6 +53,7 @@ from personal_agent.memory.models import (
     Stance,
     TurnNode,
 )
+from personal_agent.memory.provenance import SourceRecord
 from personal_agent.memory.session_digest import (
     TERMINAL_ELIGIBLE_REASONS,
     SessionDigest,
@@ -1309,7 +1310,14 @@ class MemoryService:
                             e.mention_count = COALESCE(e.mention_count, 0) + 1,
                             e.first_seen = COALESCE(e.first_seen, datetime($timestamp)),
                             e.entity_type = CASE WHEN $entity_type <> '' THEN $entity_type
-                                                 ELSE COALESCE(e.entity_type, '') END
+                                                 ELSE COALESCE(e.entity_type, '') END,
+                            // ADR-0098 A5 (FRE-1346): this bare MERGE can CREATE an :Entity,
+                            // and the consolidator deliberately falls through to it when
+                            // create_entity fails. Without the stamp those nodes carry no
+                            // provenance_state at all — the silent third state A5 forbids,
+                            // on a post-change write rather than a legacy row. COALESCE keeps
+                            // the transition one-way: never demotes an already-provenanced node.
+                            e.provenance_state = COALESCE(e.provenance_state, 'none')
                         WITH e
                         MATCH (t:Turn {turn_id: $turn_id})
                         MERGE (t)-[:DISCUSSES]->(e)
@@ -2031,6 +2039,48 @@ class MemoryService:
             )
             return 0
 
+    @staticmethod
+    def _source_merge_clause(alias: str | None) -> str:
+        """Return the Cypher that mints this write's ``:Source`` nodes (ADR-0098 A4b).
+
+        Two callers, two shapes, because a Neo4j relationship cannot be the endpoint of
+        another relationship:
+
+        * ``alias`` names a node — the clause also MERGEs ``(alias)-[:SOURCED_FROM]->(src)``,
+          append-only, so a canonical entity seen from three distinct sources carries three
+          references and corroboration becomes countable by distinct source rather than by
+          repetition.
+        * ``alias`` is ``None`` — the clause only mints the nodes, for the relationship path,
+          which then carries their ids in a ``source_ids`` list property. Minting them here
+          is what keeps every stored id resolvable to exactly one ``:Source``.
+
+        A unit ``CALL`` subquery with an empty ``$source_records`` preserves the outer row,
+        so every existing caller's statement is unchanged in behaviour.
+
+        Args:
+            alias: The node variable to attach ``SOURCED_FROM`` to, or ``None`` to mint the
+                ``:Source`` nodes without an edge.
+
+        Returns:
+            The Cypher fragment, ready to concatenate into the calling statement.
+        """
+        importing = f"    WITH {alias}\n" if alias else ""
+        edge = f"    MERGE ({alias})-[:SOURCED_FROM]->(src)\n" if alias else ""
+        return (
+            "CALL {\n"
+            f"{importing}"
+            "    UNWIND $source_records AS _src\n"
+            "    MERGE (src:Source {source_id: _src.source_id})\n"
+            "    ON CREATE SET src.referent = _src.referent,\n"
+            "                  src.authority = _src.authority,\n"
+            "                  src.retrieved_at = _src.retrieved_at,\n"
+            "                  src.content_hash = _src.content_hash,\n"
+            "                  src.content_hash_scope = _src.content_hash_scope,\n"
+            "                  src.retained_pointer = _src.retained_pointer\n"
+            f"{edge}"
+            "}\n"
+        )
+
     async def create_entity(
         self,
         entity: Entity,
@@ -2041,6 +2091,7 @@ class MemoryService:
         description_confidence: float = _DEFAULT_DESCRIPTION_CONFIDENCE,
         eval_mode: bool = False,
         description_update_kind: str = _DEFAULT_DESCRIPTION_UPDATE_KIND,
+        source_records: Sequence[SourceRecord] = (),
     ) -> str:
         """Create or update an entity node with dedup and optional embedding.
 
@@ -2075,6 +2126,15 @@ class MemoryService:
                 shrink the description. ``"new"`` (the default) keeps the strict ``>`` behaviour.
                 Off-vocabulary/``None`` values are coerced to ``"new"`` here (the signal is
                 write-authorizing, so validation is server-side, not caller-trusted).
+            source_records: External artifacts whose retrieved content contains this
+                entity's name (ADR-0098 Amendment A · A4). Written as append-only
+                ``SOURCED_FROM`` edges in this same statement, never a side channel with an
+                independent lifetime. The default — every caller outside the extraction
+                pipeline — writes no edge and stamps ``provenance_state='none'``, the honest
+                value for a fact the agent was handed rather than read. Association is
+                decided in Python by the caller and never read from the extractor's output
+                (D6 / FRE-1020): a model permitted to declare its own provenance can mint the
+                credential that makes its output authoritative.
 
         Returns:
             Entity ID (name-based, may be canonical name if deduplicated).
@@ -2148,6 +2208,14 @@ class MemoryService:
                     "e.last_accessed_at = datetime()",
                     "e.access_count = COALESCE(e.access_count, 0)",
                     "e.last_access_context = COALESCE(e.last_access_context, 'created')",
+                    # ADR-0098 A5 (FRE-1346): two states, never a silent third and never a
+                    # null. The `none -> provenanced` transition is expected and allowed, in
+                    # that direction only — an item written without a source legitimately
+                    # gains one from a later turn whose fetched page contains it. The
+                    # coalesce is what makes it one-way: a sourceless write can never demote
+                    # an already-provenanced node.
+                    "e.provenance_state = CASE WHEN size($source_records) > 0 THEN 'provenanced' "
+                    "ELSE coalesce(e.provenance_state, 'none') END",
                 ]
                 params: dict[str, Any] = {
                     "name": effective_name,
@@ -2173,6 +2241,9 @@ class MemoryService:
                     # FRE-1115 anti-framing guard inputs (see the pattern's declaration).
                     "new_is_self_referential": _is_self_referential_description(entity.description),
                     "self_referential_pattern": _SELF_REFERENTIAL_DESCRIPTION_PATTERN,
+                    # ADR-0098 A4: the provenance write is in the same statement as the node
+                    # it justifies, never a side channel with an independent lifetime.
+                    "source_records": [record.to_cypher_map() for record in source_records],
                 }
 
                 # FRE-659: never persist a zero-vector embedding. When the embedder is
@@ -2268,7 +2339,7 @@ class MemoryService:
                     "    })\n"
                     ")\n"
                     "SET " + ",\n    ".join(set_clauses) + "\n"
-                    "RETURN e.name as entity_id"
+                    "WITH e\n" + self._source_merge_clause("e") + "RETURN e.name as entity_id"
                 )
 
                 result = await session.run(query, **params)
@@ -2590,6 +2661,7 @@ class MemoryService:
         *,
         user_id: UUID,
         trace_id: str | None = None,
+        source_records: Sequence[SourceRecord] = (),
     ) -> str:
         """Assert a durable Claim under the acting User, killing first-write-wins.
 
@@ -2616,6 +2688,9 @@ class MemoryService:
             claim: The Claim to assert (content, class, confidence, provenance).
             user_id: The acting authenticated user's UUID (ADR-0107 §2).
             trace_id: Request/consolidation trace id for log correlation (ADR-0074 §I3).
+            source_records: External artifacts whose retrieved content contains this
+                claim's content (ADR-0098 Amendment A · A4), written as append-only
+                ``SOURCED_FROM`` edges in this same statement.
 
         Returns:
             The new Claim's id, or "" if skipped or on error.
@@ -2729,8 +2804,12 @@ class MemoryService:
                     "    superseded_by: null, supersession_reason: null,\n"
                     "    trace_id: $trace_id, session_id: $session_id, source_type: $source_type,\n"
                     "    asserted_by: $asserted_by,\n"
-                    "    observed_at: $observed_at, extracted_at: $extracted_at\n"
+                    "    observed_at: $observed_at, extracted_at: $extracted_at,\n"
+                    # ADR-0098 A5: stamped on the CREATE map, since a Claim node is always
+                    # new here (supersession retains the old one rather than mutating it).
+                    "    provenance_state: $provenance_state\n"
                     "})\n"
+                    "WITH cl, invalidated\n" + self._source_merge_clause("cl")
                 ]
                 params: dict[str, Any] = {
                     "user_id": user_id_str,
@@ -2752,6 +2831,8 @@ class MemoryService:
                     "asserted_by": claim.asserted_by,
                     "observed_at": claim.observed_at.isoformat(),
                     "extracted_at": claim.extracted_at.isoformat() if claim.extracted_at else None,
+                    "source_records": [record.to_cypher_map() for record in source_records],
+                    "provenance_state": "provenanced" if source_records else "none",
                 }
 
                 # FRE-768 (mirrors FRE-659): never persist a zero-vector embedding. When
@@ -3334,6 +3415,34 @@ class MemoryService:
             log.error("turn_user_id_index_creation_failed", error=str(e), exc_info=True)
             return False
 
+    async def ensure_source_id_constraint(self) -> bool:
+        """Create the Source.source_id uniqueness constraint (ADR-0098 A4b / FRE-1346).
+
+        A constraint rather than an index, because ``MERGE`` alone does not guarantee
+        uniqueness under concurrency — it guarantees existence. Two consolidation passes
+        merging the same ``(referent, content_hash)`` at once could otherwise mint two
+        identity nodes for one artifact, which would break A4b's provenance-version
+        identity and silently inflate corroboration counts: the same page twice, wearing
+        two ids, reading as two distinct sources. Idempotent (IF NOT EXISTS); mirrors
+        ``person_user_id_unique``.
+
+        Returns:
+            True if the constraint exists or was created successfully.
+        """
+        if not self.connected or not self.driver:
+            return False
+        try:
+            async with self.driver.session() as session:
+                await session.run(
+                    "CREATE CONSTRAINT source_id_unique IF NOT EXISTS "
+                    "FOR (s:Source) REQUIRE s.source_id IS UNIQUE"
+                )
+            log.info("source_id_constraint_ensured", constraint_name="source_id_unique")
+            return True
+        except Exception as e:
+            log.error("source_id_constraint_creation_failed", error=str(e), exc_info=True)
+            return False
+
     async def ensure_session_id_index(self) -> bool:
         """Create the Session.session_id index (ADR-0124 Phase 1 read path).
 
@@ -3805,6 +3914,7 @@ class MemoryService:
         relationship: Relationship,
         visibility: str = "public",
         trace_id: str | None = None,
+        source_records: Sequence[SourceRecord] = (),
     ) -> str | None:
         """Create a relationship between nodes.
 
@@ -3814,6 +3924,13 @@ class MemoryService:
                 property on the relationship edge.
             trace_id: Optional request trace identifier for log correlation
                 (ADR-0074 §I3).
+            source_records: External artifacts whose retrieved content contains this
+                edge's verbalization (ADR-0098 Amendment A · A4b). Carried as a
+                de-duplicated ``source_ids`` **list property**, not an edge: a Neo4j
+                relationship cannot be the endpoint of another relationship, which is why
+                A4b specifies a different physical model here than for nodes. The
+                ``:Source`` nodes are minted in this same statement so every stored id
+                resolves to exactly one of them rather than dangling.
 
         Returns:
             Neo4j ``elementId(rel)`` on success, or ``None`` on failure.
@@ -3837,7 +3954,13 @@ class MemoryService:
                 # apoc.merge.relationship handles this cleanly.
                 # Access tracking properties (FRE-161: KG Freshness) are initialized on creation.
                 result = await session.run(
-                    """
+                    # ADR-0098 A4b (FRE-1346): the `:Source` nodes are minted first, in this
+                    # same statement, so the ids the edge carries always resolve. The two
+                    # SET clauses are ordered deliberately — the second reads the value the
+                    # first wrote, and because the list is append-only (`toSet` of the union)
+                    # `provenance_state` can only ever move `none -> provenanced`.
+                    self._source_merge_clause(None)
+                    + """
                     MATCH (source)
                     WHERE source.entity_id = $source_id OR source.name = $source_id
                        OR (source:Turn AND source.turn_id = $source_id)
@@ -3857,6 +3980,8 @@ class MemoryService:
                         },
                         target
                     ) YIELD rel
+                    SET rel.source_ids = apoc.coll.toSet(coalesce(rel.source_ids, []) + $source_ids)
+                    SET rel.provenance_state = CASE WHEN size(rel.source_ids) > 0 THEN 'provenanced' ELSE 'none' END
                     RETURN elementId(rel) AS element_id
                     """,
                     source_id=relationship.source_id,
@@ -3864,6 +3989,8 @@ class MemoryService:
                     relationship_type=relationship_type,
                     weight=relationship.weight,
                     visibility=visibility,
+                    source_records=[record.to_cypher_map() for record in source_records],
+                    source_ids=[record.source_id for record in source_records],
                 )
                 rec = await result.single()
                 element_id = rec.get("element_id") if rec else None

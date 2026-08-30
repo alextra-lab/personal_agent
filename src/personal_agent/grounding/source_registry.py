@@ -449,7 +449,7 @@ def _argument_values(arguments: Mapping[str, object]) -> tuple[object, ...]:
     return tuple(eligible)
 
 
-def _strip_argument_echo(content: str, arguments: Mapping[str, object]) -> str:
+def strip_argument_echo(content: str, arguments: Mapping[str, object]) -> str:
     """Remove top-level result fields that are the call's own arguments returning.
 
     Driven by **value** comparison against the arguments mapping, never by a hardcoded
@@ -570,7 +570,7 @@ _RECALL_ENVELOPE_FIELDS: frozenset[str] = frozenset({"turns", "total", "window_d
 Allowlisted for the same reason the per-turn keys are, one level up: model-authored prose
 appearing beside ``turns`` would otherwise ride along in the registered content while the
 rule classified the call from ``turns`` alone. Checked as a **subset**, never equality —
-:func:`_strip_argument_echo` runs first and can delete a top-level key whose value echoed an
+:func:`strip_argument_echo` runs first and can delete a top-level key whose value echoed an
 argument, and a deletion must not turn a well-formed result into a denial.
 """
 
@@ -665,7 +665,7 @@ def _get_location_entitlement(content: str) -> Entitlement:
     ``get_location`` takes ``session_notes`` — free text the *model* writes — and
     ``ExplicitLocationProvider`` extracts a city from it and returns it as ``location.city``
     (``tools/location.py:179, 237``). That is D2's ``printf 'Paris'`` shape wearing a typed
-    parameter, and it is invisible to :func:`_strip_argument_echo`, which compares whole
+    parameter, and it is invisible to :func:`strip_argument_echo`, which compares whole
     top-level values: the returned city is a *substring* of the argument, nested one level down.
 
     ``LocationResolution.source`` is a ``Literal["explicit", "client"]`` carried into the output
@@ -981,7 +981,7 @@ class SourceRegistry:
                 ),
             )
 
-        admissible = _strip_argument_echo(content, arguments) if success else ""
+        admissible = strip_argument_echo(content, arguments) if success else ""
         if not admissible.strip():
             return ToolRegistration(
                 source=None,

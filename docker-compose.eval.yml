@@ -4,12 +4,20 @@
 #            runs never touch production data.
 # FRE-1342 — redis-eval: the eval gateways used to share production's Redis
 #            (`redis://redis:6379/0`), which carries no KG data itself but
-#            *transports* the Streams events that cause KG writes — an eval
-#            turn's `request.captured` was consumed by production's own
-#            consolidator, writing to the production knowledge graph. A
-#            dedicated instance, not just a separate DB index, because Redis
-#            Streams consumer groups are per-DB but the eval gateway would
-#            still share the instance and network with production.
+#            *transports* the Streams events that cause KG writes. Production's
+#            consolidator was subscribed to those streams, so an eval turn's
+#            `request.captured` would have reached it and written to the
+#            production knowledge graph. A dedicated instance, not just a
+#            separate DB index, because Streams consumer groups are per-DB but
+#            the eval gateway would still share the instance and network.
+#
+#            CORRECTED 2026-08-30: an earlier revision of this note said the eval
+#            turn "was consumed" by production's consolidator, and master escalated
+#            the ticket as a live contamination path on that basis. It was LATENT,
+#            not live — `event_bus_enabled` defaults to False and this file never
+#            set it, so the eval gateways ran on NoOpBus and never published at all.
+#            The isolation is still right, and now load-bearing: the bus is enabled
+#            below, which is what would have armed the path.
 #
 # Layered on top of docker-compose.cloud.yml.  Adds two seshat-gateway
 # instances (control + treatment) plus isolated eval substrate services.
@@ -164,10 +172,16 @@ services:
     restart: "no"
 
   # Redis (eval) — port 6380 on host, separate instance and volume from
-  # production's `redis` service (FRE-1342). The eval gateways' Streams event
-  # bus must never overlap production's — a shared instance let eval turns'
-  # `request.captured` reach production's consolidator and write to the
-  # production knowledge graph.
+  # production's `redis` service (FRE-1342). The eval gateways' Streams event bus
+  # must never overlap production's: production's consolidator is subscribed to
+  # those streams, so a shared instance would let an eval turn's
+  # `request.captured` reach it and write to the production knowledge graph.
+  #
+  # See the corrected note in this file's header: that path was latent rather than
+  # live while the eval bus was disabled. It is no longer disabled, so this service
+  # is what keeps the two apart. Verified with the producer enabled: production's
+  # `stream:request.captured` sat at 1923 both before and after an eval turn that
+  # demonstrably published, while eval's own stream went to 1.
   redis-eval:
     image: redis:7-alpine
     container_name: cloud-sim-redis-eval

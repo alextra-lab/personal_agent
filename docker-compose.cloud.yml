@@ -264,7 +264,11 @@ services:
   # Purpose: Private web search aggregating Google, Brave, DuckDuckGo, etc.
   # Resource limit: 256MB RAM, 0.5 CPU
   searxng:
-    image: searxng/searxng:latest
+    # Pinned 2026-08-30 (FRE-1331). Previously `latest`, which meant what we ran was
+    # decided by whenever someone last pulled — in practice a 2026.4.17 image four
+    # months stale, missing the `exaapi` and refusing to register `braveapi`. Bump this
+    # tag deliberately and re-run the per-category engine comparison when you do.
+    image: searxng/searxng:2026.8.29-d226b78bc
     container_name: cloud-sim-searxng
     environment:
       - SEARXNG_BASE_URL=http://searxng:8080

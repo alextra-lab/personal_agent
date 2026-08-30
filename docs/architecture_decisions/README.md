@@ -180,7 +180,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0095](ADR-0095-delegation-boundary-per-worker-routing-and-grammar.md) | Delegation Boundary: Per-Worker Routing + Grammar-Constrained Sub-Agent Output | Proposed |
 | [ADR-0096](ADR-0096-memory-access-model-coordinated-hybrid.md) | Memory Access Model: Coordinated Hybrid (Ambient Floor + On-Demand Retrieval) | Accepted |
 | [ADR-0097](ADR-0097-ingested-knowledge-taxonomy.md) | Ingested-Knowledge Taxonomy (hypothesis) | Proposed (supersedes ADR-0071) |
-| [ADR-0098](ADR-0098-memory-substrate-and-lifecycle-architecture.md) | Memory Substrate & Lifecycle Architecture (Core/Docs topology; living-knowledge model) | Accepted |
+| [ADR-0098](ADR-0098-memory-substrate-and-lifecycle-architecture.md) | Memory Substrate & Lifecycle Architecture (Core/Docs topology; living-knowledge model) | Accepted (amended 2026-08-30 — Amendment A: provenance chains terminate outside the agent; the retrieval tool declares its referent; provenance written atomically with the entity/relationship) |
 | [ADR-0099](ADR-0099-configuration-management-and-validation.md) | Configuration Management & Validation (single-source role matrix + validator) | Implemented; amended by ADR-0121 |
 | [ADR-0100](ADR-0100-relevance-bounded-recall.md) | Memory Recall — Relevance-Bounded Candidate Generation | Accepted |
 | [ADR-0101](ADR-0101-agent-vision-ingestion.md) | Agent Vision Ingestion of Uploaded Images | Accepted |

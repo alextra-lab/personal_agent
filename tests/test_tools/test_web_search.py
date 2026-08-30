@@ -151,14 +151,26 @@ def _mock_searxng_response(
     results: list[dict] | None = None,
     suggestions: list[str] | None = None,
     infoboxes: list[dict] | None = None,
+    unresponsive_engines: list[list[str]] | None = None,
 ) -> MagicMock:
-    """Build a mock httpx response with SearXNG JSON structure."""
+    """Build a mock httpx response with SearXNG JSON structure.
+
+    ``unresponsive_engines`` mirrors the real shape: a list of ``[engine_name,
+    reason]`` pairs (FRE-1339) — SearXNG uses both a bare reason
+    ("access denied") and a "Suspended: ..." prefix once it has taken the
+    engine out of rotation; callers may pass either.
+    """
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
     mock_resp.json.return_value = {
         "results": results or [],
         "suggestions": suggestions or [],
         "infoboxes": infoboxes or [],
+        "unresponsive_engines": unresponsive_engines or [],
+        # SearXNG's own total is independently untrustworthy (FRE-1339) and
+        # deliberately never matches len(results) here, so a test that
+        # accidentally started trusting it would fail loudly.
+        "number_of_results": 0,
     }
     return mock_resp
 
@@ -265,6 +277,182 @@ async def test_web_search_empty_results() -> None:
     assert isinstance(result, dict)
     assert result["result_count"] == 0
     assert result["results"] == []
+
+
+# ── Engine health signal (FRE-1339) ────────────────────────────────────────
+
+# Real observed unresponsive_engines payload from a collapsed pool: a mix of
+# the bare-reason and "Suspended: ..." forms SearXNG actually emits.
+_COLLAPSED_POOL = [
+    ["brave", "Suspended: too many requests"],
+    ["duckduckgo", "CAPTCHA"],
+    ["startpage", "Suspended: CAPTCHA"],
+    ["qwant", "Suspended: access denied"],
+    ["karmasearch", "access denied"],
+    ["karmasearch videos", "access denied"],
+    ["mojeek", "access denied"],
+    ["yep", "access denied"],
+    ["presearch", "access denied"],
+]
+
+
+@pytest.mark.asyncio
+async def test_web_search_skips_malformed_unresponsive_engine_entries() -> None:
+    """A malformed unresponsive_engines entry is skipped, not a crash.
+
+    ``entry[0]``/``entry[1]`` on a bare string indexes characters, a dict raises
+    ``KeyError``, and ``len()`` on a scalar raises ``TypeError`` — none of these
+    should ever reach the caller as an unhandled exception from a field SearXNG
+    itself controls the shape of.
+    """
+    resp = _mock_searxng_response(
+        results=[],
+        unresponsive_engines=[
+            "brave",  # bare string, not a [name, reason] pair
+            {"engine": "bing", "reason": "down"},  # dict, not indexable by position
+            42,  # scalar — len() would raise
+            ["short"],  # too short
+            ["qwant", "access denied"],  # the one well-formed entry
+        ],
+    )
+    client = _mock_client(resp)
+
+    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
+        result = await web_search_executor(query="anything", ctx=_CTX)
+
+    assert result["unresponsive_engines"] == [{"engine": "qwant", "reason": "access denied"}]
+    assert result["degraded_retrieval"] is True
+
+
+@pytest.mark.asyncio
+async def test_web_search_surfaces_unresponsive_engines() -> None:
+    """AC-1: a collapsed engine pool is visible on the tool result, not just result_count.
+
+    Modeled on the ticket's own incident: the surviving low-quality engines
+    still return a full page of "successful" junk results while most of the
+    configured pool is down — result_count alone reads as healthy.
+    """
+    resp = _mock_searxng_response(
+        results=[
+            {
+                "title": "Anmelden bei Hotmail",
+                "url": "https://outlook.live.com/",
+                "content": "",
+                "engine": "bing",
+                "score": 1.0,
+            }
+        ],
+        unresponsive_engines=_COLLAPSED_POOL,
+    )
+    client = _mock_client(resp)
+
+    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
+        result = await web_search_executor(query="EU product safety enforcement", ctx=_CTX)
+
+    assert result["degraded_retrieval"] is True
+    assert len(result["unresponsive_engines"]) == len(_COLLAPSED_POOL)
+    assert {"engine": "brave", "reason": "Suspended: too many requests"} in result[
+        "unresponsive_engines"
+    ]
+    assert {"engine": "karmasearch", "reason": "access denied"} in result["unresponsive_engines"]
+    assert result["engines_contributed"] == ["bing"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_degraded_result_warns_the_model() -> None:
+    """AC-2: degraded state is on the tool result itself, not only in logs."""
+    resp = _mock_searxng_response(
+        results=[
+            {"title": "junk", "url": "https://example.com/junk", "content": "", "engine": "bing"}
+        ],
+        unresponsive_engines=_COLLAPSED_POOL,
+    )
+    client = _mock_client(resp)
+
+    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
+        result = await web_search_executor(query="anything", ctx=_CTX)
+
+    assert "retrieval_warning" in result
+    assert "brave" in result["retrieval_warning"]
+    assert "bing" in result["retrieval_warning"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_seeded_negative_obscure_query_not_degraded() -> None:
+    """AC-4 (negative case): a legitimately empty search on healthy engines is NOT degraded.
+
+    The signal must be keyed on engine health, not on result_count — otherwise
+    a genuinely obscure query with zero hits would misfire the same alert a
+    collapsed engine pool trips.
+    """
+    resp = _mock_searxng_response(results=[], unresponsive_engines=[])
+    client = _mock_client(resp)
+
+    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
+        result = await web_search_executor(query="xyzzy_genuinely_obscure_query", ctx=_CTX)
+
+    assert result["result_count"] == 0
+    assert result["degraded_retrieval"] is False
+    assert result["unresponsive_engines"] == []
+    assert "retrieval_warning" not in result
+
+
+@pytest.mark.asyncio
+async def test_web_search_seeded_positive_collapsed_pool_is_degraded() -> None:
+    """AC-4 (positive case, paired with the negative above).
+
+    The collapsed-pool fixture above DOES trip the signal, even with a full
+    page of results.
+    """
+    resp = _mock_searxng_response(
+        results=[
+            {"title": f"r{i}", "url": f"https://example.com/{i}", "content": "", "engine": "bing"}
+            for i in range(10)
+        ],
+        unresponsive_engines=_COLLAPSED_POOL,
+    )
+    client = _mock_client(resp)
+
+    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
+        result = await web_search_executor(query="anything", ctx=_CTX)
+
+    assert result["result_count"] == 10
+    assert result["degraded_retrieval"] is True
+
+
+@pytest.mark.asyncio
+async def test_web_search_completed_log_carries_result_urls_and_engine_health() -> None:
+    """AC-1/AC-3: the telemetry event records engine health, not just the tool result.
+
+    Also carries the result URL list, so a collapsed pool is visible after the
+    fact and ``fetch_url.url in prior_search.result_urls`` becomes checkable.
+    """
+    resp = _mock_searxng_response(
+        results=[
+            {
+                "title": "Python 3.12 docs",
+                "url": "https://docs.python.org/3.12/",
+                "content": "",
+                "engine": "google",
+            }
+        ],
+        unresponsive_engines=_COLLAPSED_POOL,
+    )
+    client = _mock_client(resp)
+
+    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
+        with patch("personal_agent.tools.web.log") as mock_log:
+            await web_search_executor(query="python docs", ctx=_CTX)
+
+    completed_call = next(
+        c for c in mock_log.info.call_args_list if c.args[0] == "web_search_completed"
+    )
+    assert completed_call.kwargs["result_urls"] == ["https://docs.python.org/3.12/"]
+    assert completed_call.kwargs["degraded_retrieval"] is True
+    assert (
+        "brave: Suspended: too many requests"
+        in completed_call.kwargs["unresponsive_engine_reasons"]
+    )
 
 
 @pytest.mark.asyncio

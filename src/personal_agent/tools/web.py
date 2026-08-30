@@ -72,6 +72,10 @@ web_search_tool = ToolDefinition(
         "engines miss — returns full page text in one call instead of a snippet. Opt-in only, "
         "not included in 'general': Exa is a managed third-party vendor, unlike the other "
         "self-hosted engines above."
+        "\n\nIf underlying engines are failing, the result carries "
+        "'degraded_retrieval': true and a 'retrieval_warning' naming which engines "
+        "failed and which ones the results actually came from — treat such a result "
+        "set with more caution than a normal 'success' would warrant."
     ),
     category="network",
     parameters=[
@@ -188,7 +192,10 @@ async def web_search_executor(
     Returns:
         Dict with ``answers`` (plugin results: timezone, unit conversion,
         calculator, weather), ``results``, ``result_count``, ``suggestions``,
-        ``infoboxes``, and query metadata.
+        ``infoboxes``, ``unresponsive_engines`` (per-engine failure reasons),
+        ``engines_contributed`` (engines that actually returned a result),
+        ``degraded_retrieval`` (True when any engine failed — a ``retrieval_warning``
+        string is added in that case), and query metadata.
 
     Raises:
         ToolExecutionError: When SearXNG is unreachable, times out,
@@ -266,6 +273,10 @@ async def web_search_executor(
         )
         raise ToolExecutionError(str(exc)) from exc
 
+    # SearXNG's own `number_of_results` total has been observed to read 0 on a
+    # response whose `results` array held 20 real entries — it is independently
+    # untrustworthy and must never be used as the count. `result_count` below is
+    # always derived from `len(results)`.
     results = [
         {
             "title": item.get("title", ""),
@@ -276,6 +287,21 @@ async def web_search_executor(
         }
         for item in (data.get("results") or [])[:capped_max]
     ]
+
+    # FRE-1339: SearXNG reports engines it suspended or that errored in the same
+    # response (`[engine_name, reason]` pairs) and we were discarding it — a
+    # collapsed engine pool then looked identical to a healthy one everywhere we
+    # look (result_count, HTTP status), while the surviving low-quality engines'
+    # junk filled the model's context. Surfacing it here, keyed on engine health
+    # rather than result_count, keeps a legitimately empty search for an obscure
+    # query (healthy engines, zero hits) from tripping this signal.
+    unresponsive_engines = [
+        {"engine": str(entry[0]), "reason": str(entry[1])}
+        for entry in (data.get("unresponsive_engines") or [])
+        if isinstance(entry, list | tuple) and len(entry) >= 2
+    ]
+    engines_contributed = sorted({r["engine"] for r in results if r["engine"]})
+    degraded_retrieval = bool(unresponsive_engines)
 
     # Plugin answers (timezone, unit converter, calculator, openmeteo weather).
     # These are returned in the top-level "answers" array rather than "results".
@@ -321,12 +347,29 @@ async def web_search_executor(
         "query": query,
         "categories_used": categories,
         "engines_used": engines,
+        "unresponsive_engines": unresponsive_engines,
+        "engines_contributed": engines_contributed,
+        "degraded_retrieval": degraded_retrieval,
     }
+    if degraded_retrieval:
+        failed_names = ", ".join(e["engine"] for e in unresponsive_engines)
+        output["retrieval_warning"] = (
+            f"{len(unresponsive_engines)} engine(s) failed this search ({failed_names}); "
+            f"results came only from: {', '.join(engines_contributed) or 'no engine'}. "
+            "Treat this result set with caution — it may not be representative of what "
+            "a healthy search would return."
+        )
 
     log.info(
         "web_search_completed",
         trace_id=trace_id,
         result_count=len(results),
+        result_urls=[r["url"] for r in results if r["url"]],
+        # Flattened to "engine: reason" strings — deliberately not the same shape as
+        # the tool-output `unresponsive_engines` (list[dict]) to avoid a same-name,
+        # different-shape trap for a future governed-vocabulary entry.
+        unresponsive_engine_reasons=[f"{e['engine']}: {e['reason']}" for e in unresponsive_engines],
+        degraded_retrieval=degraded_retrieval,
     )
 
     return output

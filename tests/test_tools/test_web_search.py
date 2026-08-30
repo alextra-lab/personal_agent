@@ -114,18 +114,27 @@ def test_exa_search_type_pinned_to_auto() -> None:
 
 
 def test_exa_content_mode_and_length() -> None:
-    """content_mode returns full page text, bounded like fetch_url's own default.
+    """content_mode returns query-relevant highlights, not whole pages.
 
-    FRE-1310: content_mode: text (not SearXNG's doc-page 'highlights' default)
-    collapses search-then-fetch into one call and hands the ADR-0138 grounding
-    contract text to check containment against. content_max_characters matches
-    fetch_url's own _DEFAULT_MAX_CHARS (tools/fetch.py) for consistency between
-    the two full-text-returning tools.
+    FRE-1310 originally chose ``text`` at 10000 chars to collapse search-then-fetch
+    into one call. FRE-1331 reverses that on owner direction, because the cost side
+    was never measured: per-turn input already reaches 83k on an ordinary research
+    turn (FRE-1138), and ``text`` at 10 results is roughly 25k tokens of context per
+    single search call.
+
+    Measured live 2026-08-30 against the real Exa API: ``highlights`` returns about
+    1,850 content characters per result against ``text``'s 10,000 — a ~5x reduction,
+    ~4.6k tokens per call instead of ~25k — while still returning on-topic material
+    (the probe query surfaced EUR-Lex, Consilium and TÜV Rheinland).
+
+    This does not weaken ADR-0138 containment: highlights are verbatim excerpts of
+    the source page, so a claim can still be checked against returned bytes. It
+    narrows what is available to check against, not whether checking is possible.
     """
     cfg = _load_searxng_config()
     exa = next(e for e in cfg["engines"] if e["name"] == "exa")
-    assert exa["content_mode"] == "text"
-    assert exa["content_max_characters"] == 10000
+    assert exa["content_mode"] == "highlights"
+    assert exa["content_max_characters"] == 2000
 
 
 def test_exa_shipped_disabled_with_placeholder_key() -> None:

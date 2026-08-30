@@ -27,6 +27,14 @@ use_default_settings:
       - ahmia        # missing Tor/onion deps
       - torch        # missing sentence-transformers extras
       - wikidata     # SPARQL init fails due to upstream API change
+      # Permanently 403 from this datacenter IP (2026-08-30). Removed rather than
+      # disabled so they never appear in unresponsive_engines and desensitise
+      # FRE-1339's degraded_retrieval signal.
+      - karmasearch
+      - karmasearch videos
+      - karmasearch news
+      # Removed upstream between 2026.4.17 and 2026.8.29 — engines/reddit.py no longer exists.
+      - reddit
 
 general:
   instance_name: "PersonalAgent Search"
@@ -56,11 +64,29 @@ engines:
   - name: google
     engine: google
     shortcut: g
-    disabled: false
+    # Retired 2026-08-30: permanently blocked from this datacenter IP. `google cse`
+    # (keyed) covers this slot. Left enabled it would trip degraded_retrieval forever.
+    disabled: true
 
   - name: brave
     engine: brave
     shortcut: br
+    disabled: true   # superseded by braveapi below (master 2026-08-30)
+
+  # Added 2026-08-30 by master, owner-directed. The scraped `brave` engine above is
+  # disabled in the same change: scraping Brave from this datacenter IP is what earned
+  # the SearxEngineTooManyRequestsException suspensions, and a keyed call is not rate
+  # limited the same way. Brave runs its own 30B+ page index rather than proxying
+  # Google/Bing, so this is `general`'s independent backbone.
+  - name: braveapi
+    engine: braveapi
+    shortcut: bapi
+    api_key: "REPLACE_WITH_BRAVE_API_KEY"
+    results_per_page: 20
+    # `inactive: false` is REQUIRED, not redundant with `disabled`. Upstream's own
+    # defaults ship `braveapi` with `inactive: true`, and use_default_settings merges
+    # by name — so without this the engine is silently never loaded, with no error.
+    inactive: false
     disabled: false
 
   # Added 2026-08-29 by master. `general` had exactly one working engine
@@ -72,7 +98,9 @@ engines:
   - name: bing
     engine: bing
     shortcut: bi
-    disabled: false
+    # Retired 2026-08-30: superseded by braveapi. Scraped bing answers this IP but
+    # returns junk unrelated to the query — it was an emergency stopgap, not a search.
+    disabled: true
 
   # Disabled 2026-08-29 by master — these refuse this VPS's datacenter IP and
   # will not recover by configuration. Measured via SearXNG's own
@@ -243,12 +271,9 @@ engines:
   # BBC / UK press is surfaced via !gn and !bn using English queries.
 
   # ── Social Media ─────────────────────────────────────────
-  - name: reddit
-    engine: reddit
-    shortcut: re
-    disabled: false
-    categories: social_media
-
+  # reddit: engine removed upstream (engines/reddit.py absent as of 2026.8.29). Block
+  # deleted 2026-08-30 — declaring it forced a failing load attempt and an ERROR at every
+  # startup, which is exactly the noise that trains people to ignore startup errors.
   - name: lemmy posts
     shortcut: lm
     disabled: false
@@ -288,15 +313,24 @@ engines:
   #
   # Shipped disabled with a placeholder key — no live Exa key exists yet.
   # See the file header above for activation instructions.
+  # Activated 2026-08-30 by master, owner-directed. content_mode is `highlights`, not
+  # `text`: highlights are the query-relevant excerpts and roughly 10x more token
+  # efficient, which matters because per-turn input already reaches 83k on an ordinary
+  # research turn (FRE-1138). Never set this to `text` without measuring the footprint.
   - name: exa
     engine: exaapi
     shortcut: exa
     api_key: "REPLACE_WITH_EXA_API_KEY"
     results_per_page: 10
     search_type: auto
-    content_mode: text
-    content_max_characters: 10000
+    content_mode: highlights
+    content_max_characters: 2000
     categories: exa
+    # The TEMPLATE keeps shipping the pre-activation default, per its own contract and
+    # test_exa_shipped_disabled_with_placeholder_key: activation (a real key plus
+    # disabled: false) happens on the untracked settings.yml, never here. content_mode
+    # above is different in kind — it is policy, not activation, so it does belong in the
+    # template.
     disabled: true
 
   # ── Weather ─────────────────────────────────────────────

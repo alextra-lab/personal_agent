@@ -1,6 +1,6 @@
 # ADR-0098 — Memory Substrate & Lifecycle Architecture (Core/Docs topology; the living-knowledge model)
 
-**Status:** Accepted — 2026-06-27 (owner greenlight; build wave FRE-637–642 Approved, FRE-643 Tier-3 deferred-with-trigger) · **§D1 (class-as-stored-property) + its query-time System recall filter superseded by ADR-0115 (2026-07-11); §D2 / §D4 / §D7 remain Accepted.**
+**Status:** Accepted — 2026-06-27 (owner greenlight; build wave FRE-637–642 Approved, FRE-643 Tier-3 deferred-with-trigger) · **§D1 (class-as-stored-property) + its query-time System recall filter superseded by ADR-0115 (2026-07-11); §D2 / §D4 / §D7 remain Accepted.** · **Amended 2026-08-30 (Amendment A — a provenance chain must terminate outside the agent; the retrieval tool declares its referent; provenance is written atomically with the entity or relationship as an append-only edge, not only on the Claim; entitlement follows the terminus). Trigger: FRE-1338.**
 **Implements:** ADR-0097 (Ingested-Knowledge Taxonomy — *vocabulary*; this ADR is the *how*: storage, joins, aging, scale)
 **Supersedes:** ADR-0071 (the architecture half — "two-source one-gate"; the taxonomy half went to ADR-0097)
 **Related:** ADR-0052 (Owner Identity Primitive — the `is_owner` anchor + dedup-exclusion invariant this ADR extends to protect the soul subgraph), ADR-0087 (Memory Recall Quality — the pillar this lands under; a de-polluted, correctly-classified store is a recall-quality lever), ADR-0096 (Memory Access Model — *how* memory is retrieved; this ADR decides *what is stored and how it lives*, 0096 decides the access posture over it), ADR-0042 (KG freshness — the decay/access primitive the class-aware lifecycle consumes), ADR-0073 (cross-fact constraint layer — the thin contradiction-handling slice this ADR generalizes into correction), ADR-0069/0070 (R2 artifact substrate + output channels — the cold store transcripts and documents offload to), ADR-0035 (entity dedup at ingest — kept and hardened), the pedagogical north star (Socratic tutor: World know-how + the owner's Stance toward it + cross-thread insight).
@@ -62,7 +62,7 @@ Because facts are Claims with provenance and **temporal validity**, knowledge is
 
 **First-write-wins is explicitly retired** for durable knowledge. A Claim's value can change; the entity it hangs off persists.
 
-### D3 — Topology: Core unified; Docs an isolatable provenance layer; the seam is never hot-joined
+### D3 — Topology: Core unified; Docs an isolatable provenance layer; the seam is never hot-joined *(Amendment A distinguishes the query-shape sense of "terminal" — preserved unchanged — from the epistemic sense; see A1)*
 
 Two storage tiers along the *curation* axis (distinct from the *subject* axis of D1):
 
@@ -108,13 +108,13 @@ Per finding #3, no substrate is worth building until the extractor can feed it. 
 2. **Stance** as a structured owner↔World relation with affect/mastery — not a description clause;
 3. **Personal situational facts** as Claims (the dropped "lease expires October" case);
 4. a **System determination** for operational/infra/telemetry subjects;
-5. **provenance + a timestamp** on every Claim, so it can be superseded (D2).
+5. **provenance + a timestamp** on every Claim, so it can be superseded (D2). *(Amendment A extends this obligation to entities and relationships, not Claims alone — see A4.)*
 
 **One source yields many class items** (ADR-0097 invariant 1) — this *is* the document-triage decision. A single document is **not** a class: a medical textbook the owner is studying yields World content + a Stance edge ("learning it") + Personal facts (if annotated with their case) + possibly System (if it is an infra runbook). Triage runs **per extracted item, not per document** — "ingest must classify, not assume" (ADR-0097). Document sources are triaged by the **same contract** as conversation turns; the only Layer-0 difference is retention (D6 — documents keep verbatim bytes in R2; conversations offload the transcript). Document *chunking strategy* (how a long document is segmented into provenance anchors before extraction) is the one document-ingest detail deferred — **trigger:** the first non-conversation document source is actually wired (today there is none; all sources are conversations).
 
 This is the contract; the extractor model/prompt is implementation. Substrate tickets that depend on Stance/Personal/System storage are **blocked on this landing** — designing Stance storage on an extractor that never emits Stance is the exact failure that makes the crown jewel look unused and get cut in a year.
 
-### D6 — Retention: extract-and-point, not transcript hoarding
+### D6 — Retention: extract-and-point, not transcript hoarding *(terminus + carrier rules added by Amendment A)*
 
 Resolves ADR-0097's Layer-0 `retention` question:
 
@@ -122,7 +122,7 @@ Resolves ADR-0097's Layer-0 `retention` question:
 - **`document` source** = verbatim, re-readable — bytes in R2, a keyed pointer from Core (the D3 Docs seam).
 - **Co-authorship → trust** (ADR-0097 Layer-0 `co-authored?`): user-asserted Stance/Personal is trusted at face value (the owner is the authority on their own stance); **agent-derived** claims (the agent was a conversation participant) require corroboration before promotion to durable. Realized through `KnowledgeWeight.source_type` at the promotion gate. **[Amended by FRE-1020, 2026-07-27 — realization only; the decision above is unchanged.]** Co-authorship is **not** expressible through `source_type`, and attempting it is why the rule was inert for a year. `source_type` is a **channel** vocabulary (`conversation | tool_result | web_search | manual | inferred`) recording *how* a fact arrived; every extracted Claim arrives through `conversation`, so the slot was constant — and because confidence derived solely from it, D2's weaker-claim guard ("not naive last-write-wins") was **unreachable on the production path** — only the `observed_at` staleness check still discriminated (live: 94 Claims, one distinct confidence, zero rejections ever). Co-authorship is therefore a **distinct axis**, `Claim.asserted_by` (`user` | `agent`), and confidence derives from *(channel, authorship)* — the agent tier pinned to the pre-existing channel base so no existing supersession path regresses. Per **AC-9**, the value is **derived in Python from the role-partitioned captured turn and never read from the extractor's output**: were the model allowed to declare a claim user-asserted, it could mint the very credential that makes its own output authoritative. Measured on the live corpus, agent-grounded claims are the plurality (~43 %), so the discriminator has a real population. Scope: this restores the **D2 supersession guard**; D6's **corroboration/promotion gate (AC-9 (a)/(b))** — which needs a source registry with ingest-time trusted-source flags — remains unimplemented.
 
-This also creates the first **R2↔graph join** (a typed provenance pointer), which today does not exist.
+This also creates the first **R2↔graph join** (a typed provenance pointer), which today does not exist. *(Amendment A: this pointer terminates at the conversation transcript, which for an agent-participant turn is the agent's own prose — a hop, not a root. A1 requires the chain to be walkable to an external artifact.)*
 
 ### D7 — Insight now; heavy summarization deferred on a clean corpus
 
@@ -190,7 +190,7 @@ Outcome-level and discriminating — each states the observable result and how i
 3. **Stance and Personal survive extraction as structured items.** Run the redesigned extractor over the known car-buying turn (spike session `6b0e7d46`, seq 1) or an equivalent fixture. **Check:** ≥1 `HAS_STANCE` edge from the owner node to a World concept *with* affect/mastery, **and** ≥1 Personal situational Claim (the lease fact) — **neither** flattened into a World entity's `description`. *Fails if* the output is still only the 7 World-ish entity types (the current flattening/dropping reproduces). — D5
 4. **System material is gated from recall and never promoted — across the operational breadth, not just healthchecks.** Ingest a fixture set spanning all four System subjects D1 names: a healthcheck, a telemetry/log-review turn, a harness/tooling turn, and a connectivity ping. **Check:** every extracted item from all four carries `class=System`; a tutor/recall query for a *domain* prompt returns **zero** System items; a graph query for `class=System AND memory_type=semantic` (promoted) returns **zero**. *Fails if* a classifier that only keys on the word "healthcheck" lets telemetry/harness entities (e.g. `sensor_poll`, executor.py, Neo4j) through as World, or any System item is promoted to durable. — D1, D4
 5. **The Stance traversal is native (Core unified).** **Check (single Cypher query):** `owner -[:HAS_STANCE]-> WorldConcept -[:RELATED_TO]-> WorldConcept` returns results in **one** graph query with no cross-store hop. *Fails if* the Stance edge spans two physical stores and the walk requires an application-side join. — D3
-6. **Provenance joins; Docs is never hot-traversed.** **Check:** the joinability probe (ADR-0074) finds **every** promoted Core Claim has a non-dangling provenance pointer to its source; and the hot recall/tutor path issues **zero** traversals *through* Docs (inspect query plans / instrumentation). *Fails if* Core Claims are orphaned from their source, or a hot query walks Docs. — D3, D6
+6. **Provenance joins; Docs is never hot-traversed.** **Check:** the joinability probe (ADR-0074) finds **every** promoted Core Claim has a non-dangling provenance pointer to its source; and the hot recall/tutor path issues **zero** traversals *through* Docs (inspect query plans / instrumentation). *Fails if* Core Claims are orphaned from their source, or a hot query walks Docs. — D3, D6 *(Amendment A: "every promoted Core Claim" leaves entities and relationships uncovered, and the entity path is the one FRE-1338 travelled — see AC-A1.)*
 7. **World-internal correlation is queryable now.** **Check:** over the gated (System-excluded) corpus, a query returns a World↔World bridge between two concepts the owner never explicitly linked (graph path or vector-similarity), and returns **no** System-class bridge. *Fails if* World is unwalkable for correlation, or System pollution dominates the bridges. — D7
 8. **Transcripts are extracted-and-pointed, not hoarded.** After the retention job, a `conversation` source past the retention window carries a **pointer**, and the verbatim text is fetchable from R2 by that pointer — not stored hot in Neo4j. **Check:** the post-window `:Turn`/source node holds no full `user_message`/`assistant_response`, and the R2 fetch by pointer returns the text. *Fails if* full transcripts remain hot indefinitely (current behavior). — D6
 9. **Co-authorship differentiates trust — both directions, pinned to source identity not repetition.** Using `KnowledgeWeight.source_type` + source-id at the promotion gate. **Check:** (a) an agent-derived claim asserted **twice from the same agent source/session** is **not** promoted — *repetition is not corroboration*; (b) the **same** claim corroborated by a **second distinct non-agent source** **does** promote — where that second source-id resolves to a source-type **independently recorded as non-agent in the store's source registry** (or carries a trusted-source flag **set at ingest time**), *not* a source-id the agent self-assigned; an agent-emitted claim carrying a synthetic or self-attributed second source does **not** satisfy corroboration; (c) a user-asserted Stance/Personal **is** retained/promoted at face value on first assertion. *Fails if* repeated same-source agent self-assertions auto-promote ((a) collapses into (b)), **or** an agent can manufacture corroboration with a self-assigned source-id, **or** a never-promote gate blocks the genuinely-corroborated case ((b) fails), **or** all three collapse into identical handling. — D6
@@ -199,3 +199,338 @@ Outcome-level and discriminating — each states the observable result and how i
 **The assembled-ADR seam (closes only when all children land):** criteria **3 + 4 + 1 together, through one pipeline, over a two-fixture integration** — because no single real turn carries all four classes (the car-buying turn has Personal/World/Stance; System needs an operational turn). Run *both* the FRE-636 car-buying fixture (must yield a Stance edge + a Personal Claim + World, not flattened — criterion 3) **and** an operational fixture (must yield System, gated out — criterion 4) **through the same extraction→storage→promotion path**, then correct one of the emitted World/Personal Claims and confirm the update lands and supersedes (criterion 1). All three must pass together. No single ticket proves this; it is the integration criterion master holds the decomposed ADR against, and it does **not** close because the last child merged — only because both fixtures demonstrably produce the right graph end-to-end.
 
 *ADR-0098 is Proposed pending owner acceptance. It was co-designed with the owner (2026-06-27) and the design is settled; status elevation to Accepted is master's call at the integration gate.*
+
+---
+
+## Amendment A — 2026-08-30: provenance must reach the knowledge, and it must terminate outside the agent
+
+**Trigger:** FRE-1338, a verified cross-session incident. **Amends:** D3 (the meaning of "terminal"),
+D5(5) (the obligation's subjects) and D6 (what the pointer must resolve to). **Does not disturb** D2,
+D4, D7, or the FRE-1020 co-authorship realization. **Unblocks:** FRE-640 (filed 2026-06-27, parked in
+`Backlog` since 2026-07-10) and FRE-1022, which explicitly deferred its design question to "an
+ADR-0098 amendment or a small ADR of its own".
+
+### The incident, verified rather than inferred
+
+Model A researched GPSR obligations, read real pages, and named two real vendors — SafeCart and
+EaseCert. Entity extraction minted both as `Organization` nodes 11 seconds later. Thirty-one seconds
+after that, Model B in a **different session** recalled them through `search_memory`'s `entity_match`
+path and published a bibliography listing *"SafeCart, What Is GPSR?"* and *"EaseCert, 2026 GPSR
+Compliance"*. It had opened neither page.
+
+What crossed was checked against the graph, not assumed. `matched_turns` returns `turn_id`,
+`timestamp`, a `mark_truncated(user_message, 400)`, `summary` and `key_entities`
+(`tools/memory_search.py:198-206`) — **not** `assistant_response`. The source turn's 7,180-character
+response was never returned, and its stored summary names no document. Model B inherited two bare
+nouns and composed the titles around them. The facts were true; the addresses were absent.
+
+### Where the address actually is — corrected in review
+
+An earlier draft of this amendment claimed the addresses were never recorded. **That is false, and
+the correction matters because it makes the fix smaller.** `fetch_url`'s URL is persisted durably:
+every dispatched call appends `"arguments": plan["arguments"]` to `ctx.tool_results`
+(`orchestrator/executor.py:6538-6549` — put there by FRE-947 precisely because arguments "were
+dropped before the capture"), and the turn's `TaskCapture` is constructed with
+`tool_results=ctx.tool_results` (`executor.py:3835`), a field the capture model declares and
+persists (`captains_log/capture.py:84`).
+
+So the consolidator **already receives** every URL the turn fetched. It simply never looks: entity
+extraction is handed exactly two fields — `capture.user_message` and a `<think>`-stripped
+`capture.assistant_response` (`second_brain/consolidator.py:589-592`, called at
+`consolidator.py:607-615`) — and nothing else from the capture reaches it, so `tool_results` sits
+unread one attribute away. Entities are then written with a hardcoded
+`KnowledgeWeight.from_source("conversation")` (`consolidator.py:798`).
+
+**The defect is therefore association and propagation, not capture.** Two seams are missing:
+
+1. **Association** — nothing links an *extracted item* to the *tool result that supported it*. A turn
+   with four `fetch_url` calls and nine extracted entities has no rule assigning which address
+   justifies which entity.
+2. **Propagation** — the KG write does not copy any address onto the node or edge it creates. A live
+   `Organization` node carries 26 properties including `confidence`, `extractor_model` and
+   `originating_session_id`; **none** records where the knowledge came from.
+
+The turn-scoped `SourceRegistry` (`executor.py:3627`) and its end-of-turn telemetry snapshot, which
+omits `referent` (`executor.py:2194-2206`), are **not** part of this causal chain — the snapshot is a
+log call and consolidation never reads it. That observability gap is real but incidental; it is
+recorded here so a reader does not mistake it for the cause.
+
+### A1 — A provenance chain must terminate outside the agent *(owner policy, not a deduction)*
+
+A terminus is an **external artifact**: a fetched page, an ingested document, or a statement the owner
+made. A chain whose last hop is a `:Turn` the agent authored is a hop to be walked through, never a
+root to stop at.
+
+This is stated as an **owner decision, not as something the incident proves.** The incident
+demonstrates that the recall projection loses addresses; it does not by itself establish that an
+agent-authored transcript carrying resolvable citations could never serve as a root. The rule comes
+from the owner's stated purpose for provenance (2026-08-30): *"if the agent tells me something,
+provenance is the closest I can get to verifying its truthiness — that's what I want."* A pointer to
+the agent's own earlier output cannot serve that purpose; it cites the agent to justify the agent.
+Recorded this way so a future reader can revisit the policy without having to re-litigate the
+evidence.
+
+**This changes what D3 means by "terminal", and D3's row is amended accordingly.** D3's table calls
+`Core → fetch Docs by id` *terminal* in the **query-shape** sense — stop hot-traversing, the seam is a
+keyed one-way lookup. A1 uses "terminus" in the **epistemic** sense — where a justification bottoms
+out. These are different axes, and D3's keyed one-way lookup is preserved unchanged. What A1 adds is
+that reaching a conversation transcript is not *epistemically* terminal: the chain continues to the
+artifact that transcript's turn actually retrieved. D6's `conversation`-source pointer stands as a
+hop, not as the root it was implicitly treated as.
+
+### A2 — The retrieval tool declares its referent
+
+`REFERENT_ARGUMENTS` (`grounding/source_registry.py:408-410`) is a one-entry dict —
+`{"fetch_url": "url"}` — living in the grounding module and describing tools that do not know it
+exists. The declaration moves onto `ToolDefinition` as `referent_parameter: str | None` — the name of
+the parameter whose value is the thing retrieved, which is exactly what `REFERENT_ARGUMENTS` encoded,
+relocated to the tool that knows it. `fetch_url` declares `referent_parameter="url"`; a tool
+addressing a query rather than a referent leaves it `None`. The registry becomes a *consumer* of the
+tool contract rather than an oracle about it, and `REFERENT_ARGUMENTS` is deleted.
+
+**Scope boundary, stated deliberately.** Repairing FRE-1338 requires only that `fetch_url`-class
+tools — those addressing exactly one external referent — declare it. **Per-result referents out of
+`web_search` are deliberate additional scope, not a repair**: the incident's addresses came from
+fetches, and ADR-0138 already records per-result search provenance as knowingly deferred
+(`source_registry.py:416-424`). Sequenced after the repair, not inside it.
+
+### A3 — Provenance travels in the same record as the content it justifies
+
+Never a side channel with an independent lifetime.
+
+- **Not the event bus.** Not for reliability — the bus is enabled and healthy, and ADR-0041 already
+  has consumers fetch durable source data rather than trust the event payload — but because a message
+  in flight is not a value in the row. Provenance is a **write-time integrity constraint**, not a
+  notification. The bus may still *trigger* consolidation, exactly as ADR-0041 designs it.
+- **Not a session-scoped ledger.** The fetch→consolidation window is not bounded by a session:
+  `consolidate_recent_captures(days=7, limit=50)` (`brainstem/scheduler.py:930`) sweeps on-disk
+  captures under min-interval, in-flight-request and resource-pressure gates, plus retry. It spans
+  sessions and process restarts.
+- **The capture already satisfies this rule for tool arguments** (FRE-947), which is why the repair is
+  propagation rather than new storage. The obligation this amendment adds is that **extraction and
+  the KG write preserve the same property**: the address moves with the item it justifies.
+
+### A4 — Which source justifies which item is decided by containment, in Python
+
+The association seam has no answer today, and it is the hard half. Three candidates were live.
+
+*Rejected — turn-level association.* Every item extracted from a turn references every external
+referent that turn fetched. Cheap, and worthless: a turn fetching four pages would attribute all nine
+extracted entities to all four, so a provenance pointer would assert support it does not have. It
+also makes the verification criterion vacuous — any address passes.
+
+*Rejected — the extractor declares it.* Pass the tool results into the extraction prompt and have the
+model emit which source supported each item. This is the exact failure ADR-0098 D6 already ruled out
+under FRE-1020/AC-9: the value must be **"derived in Python from the role-partitioned captured turn
+and never read from the extractor's output"**, because a model permitted to declare its own
+provenance can mint the credential that makes its output authoritative. Model-declared provenance is
+not provenance.
+
+*Chosen — containment, computed in Python at write time.* An extracted item is provenanced to the
+source(s) whose **retrieved content contains it**, decided by the D3(c) containment check ADR-0138
+already ships (`grounding/containment.py`, normalized token presence — the same function
+`verify_turn` calls). It is deterministic, derivable without the model's cooperation, reuses existing
+machinery rather than inventing a second definition of "the source supports this", and it is
+computable retroactively (A5) because captures retain each tool result's `output`.
+
+Containment is evaluated **at write time, while the retrieved content is in hand** — not at read
+time. The graph therefore stores the *result* of the check, and no durable copy of page bytes is
+needed in Core to make provenance resolvable later.
+
+**Attribution is not verification, and this rule buys only the first.** D3(c) containment was written
+to ask "does this source support this assertion". Used here it answers a weaker question — "does this
+source mention this item" — and that is deliberate. A page mentioning SafeCart justifies *"this is
+where we learned of SafeCart"*; it does **not** license the entity's stored `description`, `type`, or
+any claim about it. Provenance is the owner's instrument for going and checking
+(A1); it is not a second grounding gate, and an implementer must not read it as one. Anything
+stronger is ADR-0138's job, on the assertion, at read time.
+
+**The string passed to the check, per item kind:** an Entity contributes its **name** only (matching
+the attribution semantics above); a Claim contributes its content; a relationship contributes its
+verbalization as `source-name predicate target-name`. A match is recorded on
+`ContainmentOutcome.CONTAINED` only — `ENTAILMENT_REQUIRED` and `UNVERIFIABLE` do **not** create a
+provenance reference, because an attribution that needed an entailment judgement is not the
+mechanical, model-independent link this rule exists to provide. The consequence is recorded rather
+than discovered: lowercase or stylized names (`npm`, `iPhone`) and stopword-like names fall to
+`none` under `grounding/containment.py`'s entity pattern and function-word list. That is a known
+false-negative class, not a silent one — it is countable via A5's reporting, and narrowing it is
+follow-on work, not a blocker.
+
+**An item containing no external source's content gets no source reference**, and falls to A5's
+`none`. That is the honest outcome for a fact the agent produced rather than read, and it is what
+makes the criteria below able to fail.
+
+### A4b — The physical model, decided here because a scalar reintroduces first-write-wins
+
+Entities are `MERGE`d and accumulate mentions across many turns and sources
+(`memory/service.py:2198-2229`, where origination is preserved on-create only). A single `provenance`
+property would overwrite on the second sighting or freeze on the first — the first-write-wins failure
+D2 exists to kill, reintroduced on a new axis.
+
+- **`:Source` is a Core node** carrying `referent`, `retrieved_at`, `content_hash`, and a *pointer* to
+  the retained bytes. This preserves D3: Core holds the small keyed pointer, the bytes live in the
+  isolatable Docs/R2 layer, and no hot query traverses into it. It also makes A4's same-transaction
+  requirement trivially satisfiable, since the Core write touches only Core.
+- **Two identities, deliberately separated.** *Provenance-version identity* is
+  `(referent, content_hash)`: the same URL re-fetched unchanged is the same Source, a changed page
+  mints a new one, and *"the page moved under the claim"* becomes detectable rather than silent.
+  *Corroborating-authority identity* is the **referent's origin** (its resolved host or document
+  identity), **not** the version. Two versions of one page are **one** authority. Stated separately
+  because collapsing them would let a single page changing over time satisfy D6's requirement for a
+  second distinct source — repetition wearing a new hash, which is precisely the failure AC-9 exists
+  to prevent.
+- **Nodes carry an edge**: `(:Entity|:Claim)-[:SOURCED_FROM]->(:Source)`, append-only. A canonical
+  entity seen from three distinct sources carries three references, so corroboration becomes
+  **countable by distinct source identity** rather than by repetition — the storage surface FRE-1022's
+  gate was blocked on.
+- **Relationships carry a property, not an edge.** Extracted relationships are native Neo4j
+  relationships created through `apoc.merge.relationship` (`memory/service.py:3833-3860`), and a
+  relationship cannot be the endpoint of another relationship. They therefore carry a `source_ids`
+  list property, appended and de-duplicated on the `YIELD rel` the existing statement already
+  returns; each element is the `:Source` node's own `source_id`. Stated explicitly because an earlier draft of this amendment
+  specified an edge for both and was unimplementable for relationships.
+- The provenance write is **in the same transaction** as the node or edge it justifies.
+
+### A5 — Two states, never a silent third; and backfill reconstructs before it surrenders
+
+A knowledge item carries `provenance_state` ∈ {`'provenanced'`, `'none'`} — a stored, queryable value
+on the node or relationship, never an absent property to be inferred. Both values are explicit; there
+is no third, and no null.
+
+**The transition `none → provenanced` is expected and allowed**, in that direction only. Provenance
+is append-only (A4b), so an item written without a source legitimately gains one later — a
+subsequent turn whose fetched page contains it, or the A5 reconstruction below. An item never
+returns to `none`.
+
+**Legacy items are reconstructed, not blanket-marked.** Captures retain `tool_results` including each
+call's `arguments` **and** `output` (`captains_log/capture.py:84-85`), so the A4 containment rule can
+be replayed offline against the capture that minted each entity. The migration:
+
+- applies the same containment check to each historical item against that turn's tool-result outputs;
+- **multiple matches are recorded, not treated as ambiguity** — provenance is append-only, so an item
+  contained in two fetched pages legitimately carries both;
+- marks `none` only where no tool result contains the item, or where the minting capture is missing;
+- reports reconstructed and `none` counts separately.
+
+**Legacy *relationships* are largely not reconstructable and this is accepted, not hidden.**
+Relationship writes persist neither a trace nor a session key (`memory/service.py:3849-3857`), so
+there is usually no join back to the capture that minted them. They take `none` and are reported as
+such. Entities, which carry `originating_session_id` and `source_turn_ids`, are the reconstructable
+population.
+
+A blanket `none` would discard recoverable provenance and is explicitly rejected.
+
+### A6 — Entitlement follows the terminus *(this amends ADR-0138 D2, and must be recorded there)*
+
+Recording `none` does not by itself stop the fabrication this amendment exists to prevent, so the
+consuming rule is decided here:
+
+| Terminus of the chain | Entitlement |
+|---|---|
+| External artifact (fetched page, ingested document) | `EXTERNAL` |
+| A statement the owner made | `USER_STATED` |
+| An agent-authored turn, **or** `provenance_state = 'none'` | `AGENT_DERIVED` — usable as context, **not** admissible as a citation |
+
+**Aggregation for a mixed recall** follows the rule already in the module rather than inventing a
+second one: a call is only as entitled as its **least-entitled item**, the same most-restrictive shape
+`_search_memory_entitlement` applies across Claim rows (`grounding/source_registry.py:531-540`). One
+`none`-terminus item in a recall drops the whole registration to `AGENT_DERIVED`, until the per-item
+entitlement architecture FRE-1302 deferred actually lands.
+
+**Provenance does not become an input to `verify_turn`, and the two must not be wired together.**
+`verify_turn` runs `check_containment(span.text, source.content)` against the content the turn
+actually registered (`grounding/verification.py:342-360`), and that is unchanged: a recall registers
+the recalled item's content, exactly as today. The provenance chain is **the owner's** path back to
+the originating artifact, per A1's stated purpose — not a second containment input. Making read-time
+verification load retained bytes would put the inline path into Docs and break D3's Core-only hot
+query shape, which is why it is ruled out here rather than left for an implementer to discover.
+What A6 changes for `verify_turn` is only the **entitlement** the recall registers with.
+
+**This is a narrowing of ADR-0138 D2, not a residue of it, and calling it residue was wrong.** ADR-0138
+treats a typed memory retrieval as admissible with reachability vacuous for referent-less items;
+A6 forbids an agent-authored or `none` terminus outright. The implementation therefore carries an
+obligation to record this as an amendment to ADR-0138 D2 in the same wave — an ADR narrowed by
+another ADR's amendment, without its own text changing, is exactly the drift this project keeps
+paying for.
+
+### Verification / Acceptance Criteria
+
+The ADR-0074 joinability probe is **not** the instrument: it walks session identity across substrates
+and its entity check is a `count(e)` keyed on `originating_session_id`
+(`observability/joinability/walk.py:1001-1018`), with no notion of a provenance chain. These criteria
+are checked by direct Cypher over the A4b structures plus the named live scenarios.
+
+- **AC-A1 — provenance reaches the knowledge, and the reference actually supports it.** Take every
+  `:Entity` and every extracted relationship created after the change **from a turn whose capture
+  holds at least one external-referent tool result**. **Check:** each either carries a `SOURCED_FROM`
+  reference (or `source_ids` entry) to a `:Source` whose retrieved content **contains that item's
+  attribution string** under the D3(c) check at `CONTAINED` (entity → name; claim → content;
+  relationship → `source-name predicate target-name`), or carries `provenance_state = 'none'`
+  **and** no tool result in that capture contains that string. *Fails if* (a) an item carries only `none` while some fetched result does contain it —
+  the universal-`none` implementation — **or** (b) an item references a `:Source` whose content does
+  not contain it, which is the false-association shortcut of linking every entity to any URL the turn
+  happened to fetch. Both vacuous implementations are rejected by construction.
+- **AC-A2 — the address survives the consolidation window.** Fetch a page in session A; end session A;
+  let consolidation run only *after* session end. **Check:** the entity minted from that turn
+  references a `:Source` whose referent is the fetched URL. *Fails if* the reference appears only when
+  consolidation runs in-session — the seeded negative for the session-ledger design A3 rejects.
+- **AC-A3 — provenance is bus-independent.** Repeat AC-A2 with the event bus disabled, triggering
+  consolidation directly. **Check:** the reference is still written. *Fails if* it is absent, which
+  would prove it travelled by bus contrary to A3.
+- **AC-A4 — the leak is closed, positively, without severing recall.** Run the same question in two
+  sequential sessions. **Check (a):** session B's recall of an entity minted in session A returns
+  session A's **external referent** — not a bare name, and not `none`, since the address is
+  recoverable and containment holds. **Check (b):** a recall of the owner's own prior statement still
+  returns and is usable at `USER_STATED`. *Fails if* (a) returns a bare noun (today's result) or
+  `none` where containment holds, **or** if (b) regresses — a fix that severs memory passes a weaker
+  (a) and breaks the product.
+- **AC-A5 — the sentinel is complete over nodes *and* relationships, and reconstruction was
+  attempted.** **Check:** `MATCH (n) WHERE (n:Entity OR n:Claim) AND n.provenance_state IS NULL
+  RETURN count(n)` returns 0 — and likewise for any value outside {`'provenanced'`, `'none'`} —
+  **and** the equivalent over extracted relationships
+  (`MATCH ()-[r]->() WHERE type(r) IN $extracted_types AND r.provenance_state IS NULL`) returns 0.
+  Separately, the migration reports reconstructed-vs-`none` counts, and a fixture of ≥10 legacy
+  entities whose minting captures demonstrably contain their names must reconstruct **non-zero**.
+  *Fails if* either query is non-zero, or if the reconstruction fixture yields zero — which is what a
+  migration that marked `none` without replaying containment would produce.
+- **AC-A6 — the tool contract is the single source of referents.** **Check:** `REFERENT_ARGUMENTS`
+  no longer exists (grep returns no definition), and a fixture tool declaring
+  `referent_parameter="<param>"` on its `ToolDefinition` and registered in the test registry produces
+  a resolvable `:Source` end-to-end
+  **with no edit inside `grounding/`**. *Fails if* the grounding module still carries a per-tool
+  table, or if the fixture tool requires a grounding-side change to be recognised — the drift A2
+  exists to end.
+- **AC-A7 — entitlement follows the terminus, including the mixed case.** Construct four recalls: one
+  terminating at a fetched page, one at an owner statement, one at an agent-authored turn, and one
+  **mixed** (a fetched-page item and a `none` item in the same call). **Check:** the first three
+  register `EXTERNAL`, `USER_STATED`, `AGENT_DERIVED`, the third is not admissible as a citation, and
+  the mixed call registers `AGENT_DERIVED` by the least-entitled-item rule. *Fails if* a bare entity
+  recall is still stamped `EXTERNAL` (today's behaviour via the no-Claims branch), or if the mixed
+  call inherits the entitlement of its best item.
+
+### Carried as open — decided by the implementation, not pretended settled here
+
+Three review rounds closed the principles and the storage topology. These remain genuinely open, and
+are listed so an implementer resolves them deliberately rather than by accident:
+
+1. **How the content hash is computed** — over the captured (possibly truncated) tool output, or over
+   the full retained bytes — and how pointer/hash integrity is checked on read. Affects whether
+   "the page moved" is detectable in the truncation case.
+2. **Narrowing the containment false-negative class.** Lowercase, stylized and stopword-like entity
+   names fall to `none` by A4's `CONTAINED`-only rule. A5's reporting makes the rate visible; whether
+   it warrants an alias or casing pass is a decision to take on measured numbers, not in advance.
+3. **Whether `web_search` gains per-result referents** (A2's deliberate additional scope), and if so
+   whether its snippets count as retrieved content for A4 attribution.
+
+Each is scoped so that getting it wrong degrades coverage — more items at `none` — rather than
+producing a false attribution. That asymmetry is intentional: an item honestly marked unprovenanced
+is recoverable later under A5's `none → provenanced` transition; a wrong address is not.
+
+### Scope explicitly **not** taken
+
+Cross-arm eval contamination — a sequential run in which arm N recalls arm N−1 — is a **run-scoping**
+problem, not a provenance one: a perfectly-provenanced fact still crosses. Correct provenance makes
+it *visible*, never absent. Tracked separately against the FRE-375 substrate-isolation shape.
+
+Per-item (rather than per-call) entitlement registration remains FRE-1302's deferred architecture;
+A6 aggregates most-restrictively until it lands.

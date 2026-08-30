@@ -1,0 +1,183 @@
+{
+  "meta": {
+    "run_id": "2026-08-30-build",
+    "models": [
+      "qwen3.6-35b-thinking",
+      "qwen3.6-27b-ovh",
+      "claude_sonnet"
+    ],
+    "timestamp": "2026-08-30T09:21:57.060483+00:00",
+    "behavioral_arm_run": false
+  },
+  "rows": [
+    {
+      "fixture_label": "gpsr_research",
+      "model_key": "qwen3.6-35b-thinking",
+      "deterministic_task_type": "conversational",
+      "deterministic_confidence": 0.7,
+      "deterministic_signals": [
+        "no_special_patterns"
+      ],
+      "model_task_type": "analysis",
+      "model_reason": "The request asks for a product recommendation requiring evaluation and comparison of regional options, fitting the analysis category's focus on recommendations and information synthesis.",
+      "prompt": "You are classifying a single user message into exactly one task type from this taxonomy:\n\n- conversational: General chat, greetings, or questions with no more specific match below \u2014 the default when nothing else applies.\n- memory_recall: Asking the agent to recall something from a prior conversation or session ('do you remember...', 'what did we decide about...', 'last time we talked...').\n- analysis: Deep analysis, research, investigation, evaluation, or comparison \u2014 weighing trade-offs, pros and cons, or recommendations that require gathering and synthesizing information rather than answering from what's already known.\n- planning: Creating a plan, roadmap, timeline, or breaking a project or task down into phases or steps.\n- delegation: Coding work \u2014 writing, debugging, refactoring, or testing code, or reviewing a pull request \u2014 the kind of task handed to an external coding agent.\n- self_improve: The agent reasoning about or proposing changes to its own architecture, memory, routing, or Captain's Log.\n- tool_use: A request that needs a specific tool invoked \u2014 searching, reading a file, running a command, checking logs or system health, or building an artifact (dashboard, chart, web page).\n\nRead only the message below \u2014 you have no other context about it: no conversation history, no tool results, no prior turns. Classify it as it would look at the very start of a brand new conversation.\n\nRespond with JSON only, no markdown fences, no other text:\n{\"task_type\": \"<one of: conversational, memory_recall, analysis, planning, delegation, self_improve, tool_use>\", \"reason\": \"<one sentence: why this type, not the others>\"}\n\nClassify this message:\n\nWhich tinned tuna should I buy in France",
+      "resolved_model_id": null,
+      "requested_model_id": "unsloth/qwen3.6-35-A3B"
+    },
+    {
+      "fixture_label": "gpsr_research",
+      "model_key": "qwen3.6-27b-ovh",
+      "deterministic_task_type": "conversational",
+      "deterministic_confidence": 0.7,
+      "deterministic_signals": [
+        "no_special_patterns"
+      ],
+      "model_task_type": "analysis",
+      "model_reason": "It asks for a product recommendation that requires evaluating options, comparing brands, and synthesizing information about quality and availability in a specific market.",
+      "prompt": "You are classifying a single user message into exactly one task type from this taxonomy:\n\n- conversational: General chat, greetings, or questions with no more specific match below \u2014 the default when nothing else applies.\n- memory_recall: Asking the agent to recall something from a prior conversation or session ('do you remember...', 'what did we decide about...', 'last time we talked...').\n- analysis: Deep analysis, research, investigation, evaluation, or comparison \u2014 weighing trade-offs, pros and cons, or recommendations that require gathering and synthesizing information rather than answering from what's already known.\n- planning: Creating a plan, roadmap, timeline, or breaking a project or task down into phases or steps.\n- delegation: Coding work \u2014 writing, debugging, refactoring, or testing code, or reviewing a pull request \u2014 the kind of task handed to an external coding agent.\n- self_improve: The agent reasoning about or proposing changes to its own architecture, memory, routing, or Captain's Log.\n- tool_use: A request that needs a specific tool invoked \u2014 searching, reading a file, running a command, checking logs or system health, or building an artifact (dashboard, chart, web page).\n\nRead only the message below \u2014 you have no other context about it: no conversation history, no tool results, no prior turns. Classify it as it would look at the very start of a brand new conversation.\n\nRespond with JSON only, no markdown fences, no other text:\n{\"task_type\": \"<one of: conversational, memory_recall, analysis, planning, delegation, self_improve, tool_use>\", \"reason\": \"<one sentence: why this type, not the others>\"}\n\nClassify this message:\n\nWhich tinned tuna should I buy in France",
+      "resolved_model_id": "Qwen3.6-27B",
+      "requested_model_id": "Qwen3.6-27B"
+    },
+    {
+      "fixture_label": "gpsr_research",
+      "model_key": "claude_sonnet",
+      "deterministic_task_type": "conversational",
+      "deterministic_confidence": 0.7,
+      "deterministic_signals": [
+        "no_special_patterns"
+      ],
+      "model_task_type": "analysis",
+      "model_reason": "The user wants a recommendation among options (tinned tuna brands/types) requiring evaluation of quality, sustainability, or price trade-offs rather than a simple lookup.",
+      "prompt": "You are classifying a single user message into exactly one task type from this taxonomy:\n\n- conversational: General chat, greetings, or questions with no more specific match below \u2014 the default when nothing else applies.\n- memory_recall: Asking the agent to recall something from a prior conversation or session ('do you remember...', 'what did we decide about...', 'last time we talked...').\n- analysis: Deep analysis, research, investigation, evaluation, or comparison \u2014 weighing trade-offs, pros and cons, or recommendations that require gathering and synthesizing information rather than answering from what's already known.\n- planning: Creating a plan, roadmap, timeline, or breaking a project or task down into phases or steps.\n- delegation: Coding work \u2014 writing, debugging, refactoring, or testing code, or reviewing a pull request \u2014 the kind of task handed to an external coding agent.\n- self_improve: The agent reasoning about or proposing changes to its own architecture, memory, routing, or Captain's Log.\n- tool_use: A request that needs a specific tool invoked \u2014 searching, reading a file, running a command, checking logs or system health, or building an artifact (dashboard, chart, web page).\n\nRead only the message below \u2014 you have no other context about it: no conversation history, no tool results, no prior turns. Classify it as it would look at the very start of a brand new conversation.\n\nRespond with JSON only, no markdown fences, no other text:\n{\"task_type\": \"<one of: conversational, memory_recall, analysis, planning, delegation, self_improve, tool_use>\", \"reason\": \"<one sentence: why this type, not the others>\"}\n\nClassify this message:\n\nWhich tinned tuna should I buy in France",
+      "resolved_model_id": "claude-sonnet-5",
+      "requested_model_id": "claude-sonnet-5"
+    },
+    {
+      "fixture_label": "plain_greeting",
+      "model_key": "qwen3.6-35b-thinking",
+      "deterministic_task_type": "conversational",
+      "deterministic_confidence": 0.7,
+      "deterministic_signals": [
+        "no_special_patterns"
+      ],
+      "model_task_type": "conversational",
+      "model_reason": "It is a simple greeting and casual chat question that does not require analysis, planning, coding, or tool invocation.",
+      "prompt": "You are classifying a single user message into exactly one task type from this taxonomy:\n\n- conversational: General chat, greetings, or questions with no more specific match below \u2014 the default when nothing else applies.\n- memory_recall: Asking the agent to recall something from a prior conversation or session ('do you remember...', 'what did we decide about...', 'last time we talked...').\n- analysis: Deep analysis, research, investigation, evaluation, or comparison \u2014 weighing trade-offs, pros and cons, or recommendations that require gathering and synthesizing information rather than answering from what's already known.\n- planning: Creating a plan, roadmap, timeline, or breaking a project or task down into phases or steps.\n- delegation: Coding work \u2014 writing, debugging, refactoring, or testing code, or reviewing a pull request \u2014 the kind of task handed to an external coding agent.\n- self_improve: The agent reasoning about or proposing changes to its own architecture, memory, routing, or Captain's Log.\n- tool_use: A request that needs a specific tool invoked \u2014 searching, reading a file, running a command, checking logs or system health, or building an artifact (dashboard, chart, web page).\n\nRead only the message below \u2014 you have no other context about it: no conversation history, no tool results, no prior turns. Classify it as it would look at the very start of a brand new conversation.\n\nRespond with JSON only, no markdown fences, no other text:\n{\"task_type\": \"<one of: conversational, memory_recall, analysis, planning, delegation, self_improve, tool_use>\", \"reason\": \"<one sentence: why this type, not the others>\"}\n\nClassify this message:\n\nHow is your day going?",
+      "resolved_model_id": null,
+      "requested_model_id": "unsloth/qwen3.6-35-A3B"
+    },
+    {
+      "fixture_label": "plain_greeting",
+      "model_key": "qwen3.6-27b-ovh",
+      "deterministic_task_type": "conversational",
+      "deterministic_confidence": 0.7,
+      "deterministic_signals": [
+        "no_special_patterns"
+      ],
+      "model_task_type": "conversational",
+      "model_reason": "It is a standard greeting and small talk that falls under general chat rather than requesting a specific task, analysis, or tool use.",
+      "prompt": "You are classifying a single user message into exactly one task type from this taxonomy:\n\n- conversational: General chat, greetings, or questions with no more specific match below \u2014 the default when nothing else applies.\n- memory_recall: Asking the agent to recall something from a prior conversation or session ('do you remember...', 'what did we decide about...', 'last time we talked...').\n- analysis: Deep analysis, research, investigation, evaluation, or comparison \u2014 weighing trade-offs, pros and cons, or recommendations that require gathering and synthesizing information rather than answering from what's already known.\n- planning: Creating a plan, roadmap, timeline, or breaking a project or task down into phases or steps.\n- delegation: Coding work \u2014 writing, debugging, refactoring, or testing code, or reviewing a pull request \u2014 the kind of task handed to an external coding agent.\n- self_improve: The agent reasoning about or proposing changes to its own architecture, memory, routing, or Captain's Log.\n- tool_use: A request that needs a specific tool invoked \u2014 searching, reading a file, running a command, checking logs or system health, or building an artifact (dashboard, chart, web page).\n\nRead only the message below \u2014 you have no other context about it: no conversation history, no tool results, no prior turns. Classify it as it would look at the very start of a brand new conversation.\n\nRespond with JSON only, no markdown fences, no other text:\n{\"task_type\": \"<one of: conversational, memory_recall, analysis, planning, delegation, self_improve, tool_use>\", \"reason\": \"<one sentence: why this type, not the others>\"}\n\nClassify this message:\n\nHow is your day going?",
+      "resolved_model_id": "Qwen3.6-27B",
+      "requested_model_id": "Qwen3.6-27B"
+    },
+    {
+      "fixture_label": "plain_greeting",
+      "model_key": "claude_sonnet",
+      "deterministic_task_type": "conversational",
+      "deterministic_confidence": 0.7,
+      "deterministic_signals": [
+        "no_special_patterns"
+      ],
+      "model_task_type": "conversational",
+      "model_reason": "This is a casual small-talk greeting question with no need for recall, analysis, planning, coding, tool use, or self-modification.",
+      "prompt": "You are classifying a single user message into exactly one task type from this taxonomy:\n\n- conversational: General chat, greetings, or questions with no more specific match below \u2014 the default when nothing else applies.\n- memory_recall: Asking the agent to recall something from a prior conversation or session ('do you remember...', 'what did we decide about...', 'last time we talked...').\n- analysis: Deep analysis, research, investigation, evaluation, or comparison \u2014 weighing trade-offs, pros and cons, or recommendations that require gathering and synthesizing information rather than answering from what's already known.\n- planning: Creating a plan, roadmap, timeline, or breaking a project or task down into phases or steps.\n- delegation: Coding work \u2014 writing, debugging, refactoring, or testing code, or reviewing a pull request \u2014 the kind of task handed to an external coding agent.\n- self_improve: The agent reasoning about or proposing changes to its own architecture, memory, routing, or Captain's Log.\n- tool_use: A request that needs a specific tool invoked \u2014 searching, reading a file, running a command, checking logs or system health, or building an artifact (dashboard, chart, web page).\n\nRead only the message below \u2014 you have no other context about it: no conversation history, no tool results, no prior turns. Classify it as it would look at the very start of a brand new conversation.\n\nRespond with JSON only, no markdown fences, no other text:\n{\"task_type\": \"<one of: conversational, memory_recall, analysis, planning, delegation, self_improve, tool_use>\", \"reason\": \"<one sentence: why this type, not the others>\"}\n\nClassify this message:\n\nHow is your day going?",
+      "resolved_model_id": "claude-sonnet-5",
+      "requested_model_id": "claude-sonnet-5"
+    },
+    {
+      "fixture_label": "tool_use_request",
+      "model_key": "qwen3.6-35b-thinking",
+      "deterministic_task_type": "tool_use",
+      "deterministic_confidence": 0.8,
+      "deterministic_signals": [
+        "tool_intent_pattern"
+      ],
+      "model_task_type": "tool_use",
+      "model_reason": "The request explicitly asks to check logs, which requires invoking a specific tool to search or read system logs.",
+      "prompt": "You are classifying a single user message into exactly one task type from this taxonomy:\n\n- conversational: General chat, greetings, or questions with no more specific match below \u2014 the default when nothing else applies.\n- memory_recall: Asking the agent to recall something from a prior conversation or session ('do you remember...', 'what did we decide about...', 'last time we talked...').\n- analysis: Deep analysis, research, investigation, evaluation, or comparison \u2014 weighing trade-offs, pros and cons, or recommendations that require gathering and synthesizing information rather than answering from what's already known.\n- planning: Creating a plan, roadmap, timeline, or breaking a project or task down into phases or steps.\n- delegation: Coding work \u2014 writing, debugging, refactoring, or testing code, or reviewing a pull request \u2014 the kind of task handed to an external coding agent.\n- self_improve: The agent reasoning about or proposing changes to its own architecture, memory, routing, or Captain's Log.\n- tool_use: A request that needs a specific tool invoked \u2014 searching, reading a file, running a command, checking logs or system health, or building an artifact (dashboard, chart, web page).\n\nRead only the message below \u2014 you have no other context about it: no conversation history, no tool results, no prior turns. Classify it as it would look at the very start of a brand new conversation.\n\nRespond with JSON only, no markdown fences, no other text:\n{\"task_type\": \"<one of: conversational, memory_recall, analysis, planning, delegation, self_improve, tool_use>\", \"reason\": \"<one sentence: why this type, not the others>\"}\n\nClassify this message:\n\nCheck the logs for errors in the last hour.",
+      "resolved_model_id": null,
+      "requested_model_id": "unsloth/qwen3.6-35-A3B"
+    },
+    {
+      "fixture_label": "tool_use_request",
+      "model_key": "qwen3.6-27b-ovh",
+      "deterministic_task_type": "tool_use",
+      "deterministic_confidence": 0.8,
+      "deterministic_signals": [
+        "tool_intent_pattern"
+      ],
+      "model_task_type": "tool_use",
+      "model_reason": "The user is requesting a specific system action (checking logs for errors) which requires invoking a tool to read system data.",
+      "prompt": "You are classifying a single user message into exactly one task type from this taxonomy:\n\n- conversational: General chat, greetings, or questions with no more specific match below \u2014 the default when nothing else applies.\n- memory_recall: Asking the agent to recall something from a prior conversation or session ('do you remember...', 'what did we decide about...', 'last time we talked...').\n- analysis: Deep analysis, research, investigation, evaluation, or comparison \u2014 weighing trade-offs, pros and cons, or recommendations that require gathering and synthesizing information rather than answering from what's already known.\n- planning: Creating a plan, roadmap, timeline, or breaking a project or task down into phases or steps.\n- delegation: Coding work \u2014 writing, debugging, refactoring, or testing code, or reviewing a pull request \u2014 the kind of task handed to an external coding agent.\n- self_improve: The agent reasoning about or proposing changes to its own architecture, memory, routing, or Captain's Log.\n- tool_use: A request that needs a specific tool invoked \u2014 searching, reading a file, running a command, checking logs or system health, or building an artifact (dashboard, chart, web page).\n\nRead only the message below \u2014 you have no other context about it: no conversation history, no tool results, no prior turns. Classify it as it would look at the very start of a brand new conversation.\n\nRespond with JSON only, no markdown fences, no other text:\n{\"task_type\": \"<one of: conversational, memory_recall, analysis, planning, delegation, self_improve, tool_use>\", \"reason\": \"<one sentence: why this type, not the others>\"}\n\nClassify this message:\n\nCheck the logs for errors in the last hour.",
+      "resolved_model_id": "Qwen3.6-27B",
+      "requested_model_id": "Qwen3.6-27B"
+    },
+    {
+      "fixture_label": "tool_use_request",
+      "model_key": "claude_sonnet",
+      "deterministic_task_type": "tool_use",
+      "deterministic_confidence": 0.8,
+      "deterministic_signals": [
+        "tool_intent_pattern"
+      ],
+      "model_task_type": "tool_use",
+      "model_reason": "The request explicitly asks to check logs, which requires invoking a log-checking tool rather than analysis or coding work.",
+      "prompt": "You are classifying a single user message into exactly one task type from this taxonomy:\n\n- conversational: General chat, greetings, or questions with no more specific match below \u2014 the default when nothing else applies.\n- memory_recall: Asking the agent to recall something from a prior conversation or session ('do you remember...', 'what did we decide about...', 'last time we talked...').\n- analysis: Deep analysis, research, investigation, evaluation, or comparison \u2014 weighing trade-offs, pros and cons, or recommendations that require gathering and synthesizing information rather than answering from what's already known.\n- planning: Creating a plan, roadmap, timeline, or breaking a project or task down into phases or steps.\n- delegation: Coding work \u2014 writing, debugging, refactoring, or testing code, or reviewing a pull request \u2014 the kind of task handed to an external coding agent.\n- self_improve: The agent reasoning about or proposing changes to its own architecture, memory, routing, or Captain's Log.\n- tool_use: A request that needs a specific tool invoked \u2014 searching, reading a file, running a command, checking logs or system health, or building an artifact (dashboard, chart, web page).\n\nRead only the message below \u2014 you have no other context about it: no conversation history, no tool results, no prior turns. Classify it as it would look at the very start of a brand new conversation.\n\nRespond with JSON only, no markdown fences, no other text:\n{\"task_type\": \"<one of: conversational, memory_recall, analysis, planning, delegation, self_improve, tool_use>\", \"reason\": \"<one sentence: why this type, not the others>\"}\n\nClassify this message:\n\nCheck the logs for errors in the last hour.",
+      "resolved_model_id": "claude-sonnet-5",
+      "requested_model_id": "claude-sonnet-5"
+    },
+    {
+      "fixture_label": "memory_recall_request",
+      "model_key": "qwen3.6-35b-thinking",
+      "deterministic_task_type": "memory_recall",
+      "deterministic_confidence": 0.9,
+      "deterministic_signals": [
+        "memory_recall_pattern"
+      ],
+      "model_task_type": "memory_recall",
+      "model_reason": "The message explicitly asks the agent to recall a decision made in a previous conversation, which directly matches the memory_recall definition.",
+      "prompt": "You are classifying a single user message into exactly one task type from this taxonomy:\n\n- conversational: General chat, greetings, or questions with no more specific match below \u2014 the default when nothing else applies.\n- memory_recall: Asking the agent to recall something from a prior conversation or session ('do you remember...', 'what did we decide about...', 'last time we talked...').\n- analysis: Deep analysis, research, investigation, evaluation, or comparison \u2014 weighing trade-offs, pros and cons, or recommendations that require gathering and synthesizing information rather than answering from what's already known.\n- planning: Creating a plan, roadmap, timeline, or breaking a project or task down into phases or steps.\n- delegation: Coding work \u2014 writing, debugging, refactoring, or testing code, or reviewing a pull request \u2014 the kind of task handed to an external coding agent.\n- self_improve: The agent reasoning about or proposing changes to its own architecture, memory, routing, or Captain's Log.\n- tool_use: A request that needs a specific tool invoked \u2014 searching, reading a file, running a command, checking logs or system health, or building an artifact (dashboard, chart, web page).\n\nRead only the message below \u2014 you have no other context about it: no conversation history, no tool results, no prior turns. Classify it as it would look at the very start of a brand new conversation.\n\nRespond with JSON only, no markdown fences, no other text:\n{\"task_type\": \"<one of: conversational, memory_recall, analysis, planning, delegation, self_improve, tool_use>\", \"reason\": \"<one sentence: why this type, not the others>\"}\n\nClassify this message:\n\nWhat did we decide about the database schema last time we talked?",
+      "resolved_model_id": null,
+      "requested_model_id": "unsloth/qwen3.6-35-A3B"
+    },
+    {
+      "fixture_label": "memory_recall_request",
+      "model_key": "qwen3.6-27b-ovh",
+      "deterministic_task_type": "memory_recall",
+      "deterministic_confidence": 0.9,
+      "deterministic_signals": [
+        "memory_recall_pattern"
+      ],
+      "model_task_type": "memory_recall",
+      "model_reason": "The user explicitly asks the agent to recall a decision made during a previous conversation.",
+      "prompt": "You are classifying a single user message into exactly one task type from this taxonomy:\n\n- conversational: General chat, greetings, or questions with no more specific match below \u2014 the default when nothing else applies.\n- memory_recall: Asking the agent to recall something from a prior conversation or session ('do you remember...', 'what did we decide about...', 'last time we talked...').\n- analysis: Deep analysis, research, investigation, evaluation, or comparison \u2014 weighing trade-offs, pros and cons, or recommendations that require gathering and synthesizing information rather than answering from what's already known.\n- planning: Creating a plan, roadmap, timeline, or breaking a project or task down into phases or steps.\n- delegation: Coding work \u2014 writing, debugging, refactoring, or testing code, or reviewing a pull request \u2014 the kind of task handed to an external coding agent.\n- self_improve: The agent reasoning about or proposing changes to its own architecture, memory, routing, or Captain's Log.\n- tool_use: A request that needs a specific tool invoked \u2014 searching, reading a file, running a command, checking logs or system health, or building an artifact (dashboard, chart, web page).\n\nRead only the message below \u2014 you have no other context about it: no conversation history, no tool results, no prior turns. Classify it as it would look at the very start of a brand new conversation.\n\nRespond with JSON only, no markdown fences, no other text:\n{\"task_type\": \"<one of: conversational, memory_recall, analysis, planning, delegation, self_improve, tool_use>\", \"reason\": \"<one sentence: why this type, not the others>\"}\n\nClassify this message:\n\nWhat did we decide about the database schema last time we talked?",
+      "resolved_model_id": "Qwen3.6-27B",
+      "requested_model_id": "Qwen3.6-27B"
+    },
+    {
+      "fixture_label": "memory_recall_request",
+      "model_key": "claude_sonnet",
+      "deterministic_task_type": "memory_recall",
+      "deterministic_confidence": 0.9,
+      "deterministic_signals": [
+        "memory_recall_pattern"
+      ],
+      "model_task_type": "memory_recall",
+      "model_reason": "The user explicitly asks the agent to recall a decision from a previous conversation.",
+      "prompt": "You are classifying a single user message into exactly one task type from this taxonomy:\n\n- conversational: General chat, greetings, or questions with no more specific match below \u2014 the default when nothing else applies.\n- memory_recall: Asking the agent to recall something from a prior conversation or session ('do you remember...', 'what did we decide about...', 'last time we talked...').\n- analysis: Deep analysis, research, investigation, evaluation, or comparison \u2014 weighing trade-offs, pros and cons, or recommendations that require gathering and synthesizing information rather than answering from what's already known.\n- planning: Creating a plan, roadmap, timeline, or breaking a project or task down into phases or steps.\n- delegation: Coding work \u2014 writing, debugging, refactoring, or testing code, or reviewing a pull request \u2014 the kind of task handed to an external coding agent.\n- self_improve: The agent reasoning about or proposing changes to its own architecture, memory, routing, or Captain's Log.\n- tool_use: A request that needs a specific tool invoked \u2014 searching, reading a file, running a command, checking logs or system health, or building an artifact (dashboard, chart, web page).\n\nRead only the message below \u2014 you have no other context about it: no conversation history, no tool results, no prior turns. Classify it as it would look at the very start of a brand new conversation.\n\nRespond with JSON only, no markdown fences, no other text:\n{\"task_type\": \"<one of: conversational, memory_recall, analysis, planning, delegation, self_improve, tool_use>\", \"reason\": \"<one sentence: why this type, not the others>\"}\n\nClassify this message:\n\nWhat did we decide about the database schema last time we talked?",
+      "resolved_model_id": "claude-sonnet-5",
+      "requested_model_id": "claude-sonnet-5"
+    }
+  ],
+  "behavioral": []
+}

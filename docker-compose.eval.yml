@@ -4,12 +4,20 @@
 #            runs never touch production data.
 # FRE-1342 — redis-eval: the eval gateways used to share production's Redis
 #            (`redis://redis:6379/0`), which carries no KG data itself but
-#            *transports* the Streams events that cause KG writes — an eval
-#            turn's `request.captured` was consumed by production's own
-#            consolidator, writing to the production knowledge graph. A
-#            dedicated instance, not just a separate DB index, because Redis
-#            Streams consumer groups are per-DB but the eval gateway would
-#            still share the instance and network with production.
+#            *transports* the Streams events that cause KG writes. Production's
+#            consolidator was subscribed to those streams, so an eval turn's
+#            `request.captured` would have reached it and written to the
+#            production knowledge graph. A dedicated instance, not just a
+#            separate DB index, because Streams consumer groups are per-DB but
+#            the eval gateway would still share the instance and network.
+#
+#            CORRECTED 2026-08-30: an earlier revision of this note said the eval
+#            turn "was consumed" by production's consolidator, and master escalated
+#            the ticket as a live contamination path on that basis. It was LATENT,
+#            not live — `event_bus_enabled` defaults to False and this file never
+#            set it, so the eval gateways ran on NoOpBus and never published at all.
+#            The isolation is still right, and now load-bearing: the bus is enabled
+#            below, which is what would have armed the path.
 #
 # Layered on top of docker-compose.cloud.yml.  Adds two seshat-gateway
 # instances (control + treatment) plus isolated eval substrate services.
@@ -164,10 +172,16 @@ services:
     restart: "no"
 
   # Redis (eval) — port 6380 on host, separate instance and volume from
-  # production's `redis` service (FRE-1342). The eval gateways' Streams event
-  # bus must never overlap production's — a shared instance let eval turns'
-  # `request.captured` reach production's consolidator and write to the
-  # production knowledge graph.
+  # production's `redis` service (FRE-1342). The eval gateways' Streams event bus
+  # must never overlap production's: production's consolidator is subscribed to
+  # those streams, so a shared instance would let an eval turn's
+  # `request.captured` reach it and write to the production knowledge graph.
+  #
+  # See the corrected note in this file's header: that path was latent rather than
+  # live while the eval bus was disabled. It is no longer disabled, so this service
+  # is what keeps the two apart. Verified with the producer enabled: production's
+  # `stream:request.captured` sat at 1923 both before and after an eval turn that
+  # demonstrably published, while eval's own stream went to 1.
   redis-eval:
     image: redis:7-alpine
     container_name: cloud-sim-redis-eval
@@ -222,10 +236,42 @@ services:
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
-      # ADR-0132 D4: the eval profile declares its own SLM endpoint. There is no
-      # default to inherit, and evals must never traverse the Cloudflare egress
-      # path (no CF credential is available to this stack).
-      AGENT_SLM_BASE_URL: ${AGENT_SLM_BASE_URL:-http://localhost:8000}
+      # ADR-0132 D4: the eval profile uses "the endpoint its compose file declares;
+      # never the dead loopback default". Declared literally, NOT via ${AGENT_SLM_BASE_URL:-…}
+      # — .env defines that variable, so the interpolation let production's value win over
+      # this file's, resolving to the container's own loopback. That is exactly the "dead
+      # loopback default" D4 names, and it is the same shape as the SESHAT_APP_PASSWORD
+      # inheritance bug (FRE-1344): an eval service silently reading production's env.
+      #
+      # The comment previously here claimed "evals must never traverse the Cloudflare egress
+      # path (no CF credential is available to this stack)". That is wrong on its stated
+      # reason: no gateway holds a CF credential. It was deliberately moved into Caddy
+      # (see docker-compose.cloud.yml's gateway block, which warns that re-adding CF_ACCESS_*
+      # would undo the custody move), and D4's own table records "CF concept in app config:
+      # none" for every profile including cloud. Caddy performs the egress; the gateway just
+      # addresses it by service name on the shared network, which the eval gateways join.
+      #
+      # Operational note, which IS the real constraint the CF story obscured: this reaches
+      # the owner's local SLM, which runs at max_concurrency 1. Eval turns contend with the
+      # owner's live turns. Pace multi-turn eval runs accordingly.
+      AGENT_SLM_BASE_URL: http://caddy:8600
+      # FRE-1342: `event_bus_enabled` defaults to False and this file never set it, so the
+      # eval gateways have always run on NoOpBus. Two consequences worth stating, because
+      # master got the first one wrong when escalating this ticket:
+      #
+      #  1. The production-contamination path this ticket fixes was LATENT, not live. The
+      #     DSN did point at production's Redis and production's consumers were subscribed,
+      #     but eval never published, so no eval turn ever reached them. The redis-eval fix
+      #     is still correct — it removes the path before anything can arm it — but the
+      #     severity was overstated.
+      #  2. With no bus there is no consolidation, so no eval turn writes to ANY knowledge
+      #     graph. That makes "an eval turn produces no production KG write" vacuously true,
+      #     and it is why FRE-1337's behavioural arm 3, which measures entity extraction,
+      #     could never have worked here regardless of the endpoint or credential fixes.
+      #
+      # Enabled explicitly and pointed at redis-eval, so eval exercises the same machinery
+      # production does, against its own substrate.
+      AGENT_EVENT_BUS_ENABLED: "true"
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
       API_HOST: 0.0.0.0
@@ -276,10 +322,42 @@ services:
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
-      # ADR-0132 D4: the eval profile declares its own SLM endpoint. There is no
-      # default to inherit, and evals must never traverse the Cloudflare egress
-      # path (no CF credential is available to this stack).
-      AGENT_SLM_BASE_URL: ${AGENT_SLM_BASE_URL:-http://localhost:8000}
+      # ADR-0132 D4: the eval profile uses "the endpoint its compose file declares;
+      # never the dead loopback default". Declared literally, NOT via ${AGENT_SLM_BASE_URL:-…}
+      # — .env defines that variable, so the interpolation let production's value win over
+      # this file's, resolving to the container's own loopback. That is exactly the "dead
+      # loopback default" D4 names, and it is the same shape as the SESHAT_APP_PASSWORD
+      # inheritance bug (FRE-1344): an eval service silently reading production's env.
+      #
+      # The comment previously here claimed "evals must never traverse the Cloudflare egress
+      # path (no CF credential is available to this stack)". That is wrong on its stated
+      # reason: no gateway holds a CF credential. It was deliberately moved into Caddy
+      # (see docker-compose.cloud.yml's gateway block, which warns that re-adding CF_ACCESS_*
+      # would undo the custody move), and D4's own table records "CF concept in app config:
+      # none" for every profile including cloud. Caddy performs the egress; the gateway just
+      # addresses it by service name on the shared network, which the eval gateways join.
+      #
+      # Operational note, which IS the real constraint the CF story obscured: this reaches
+      # the owner's local SLM, which runs at max_concurrency 1. Eval turns contend with the
+      # owner's live turns. Pace multi-turn eval runs accordingly.
+      AGENT_SLM_BASE_URL: http://caddy:8600
+      # FRE-1342: `event_bus_enabled` defaults to False and this file never set it, so the
+      # eval gateways have always run on NoOpBus. Two consequences worth stating, because
+      # master got the first one wrong when escalating this ticket:
+      #
+      #  1. The production-contamination path this ticket fixes was LATENT, not live. The
+      #     DSN did point at production's Redis and production's consumers were subscribed,
+      #     but eval never published, so no eval turn ever reached them. The redis-eval fix
+      #     is still correct — it removes the path before anything can arm it — but the
+      #     severity was overstated.
+      #  2. With no bus there is no consolidation, so no eval turn writes to ANY knowledge
+      #     graph. That makes "an eval turn produces no production KG write" vacuously true,
+      #     and it is why FRE-1337's behavioural arm 3, which measures entity extraction,
+      #     could never have worked here regardless of the endpoint or credential fixes.
+      #
+      # Enabled explicitly and pointed at redis-eval, so eval exercises the same machinery
+      # production does, against its own substrate.
+      AGENT_EVENT_BUS_ENABLED: "true"
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
       API_HOST: 0.0.0.0

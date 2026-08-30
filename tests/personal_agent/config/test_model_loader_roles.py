@@ -44,7 +44,7 @@ class TestRolesResolveToTheAllValue:
             # gate 2026-07-20) removed its matrix entry as a stale duplicate of
             # the Layer-3 binding — it was never actually resolved through this
             # matrix (see TestUndeclaredRole below for the now-undeclared case).
-            ("primary", "qwen3.8-flash-next"),
+            ("primary", "qwen3.6-35b-thinking"),
             ("entity_extraction", "gpt-5.4-mini"),
             ("captains_log", "claude_sonnet"),
             ("insights", "claude_sonnet"),

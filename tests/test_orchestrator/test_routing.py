@@ -260,12 +260,12 @@ class TestVisionRouting:
     def test_no_image_attachment_is_noop(self) -> None:
         """No raster image attachment — returns the calling role's own resolved key."""
         ctx = self._make_ctx(())
-        assert _resolve_vision_routing_key(ctx, "primary") == "qwen3.8-flash-next"
+        assert _resolve_vision_routing_key(ctx, "primary") == "qwen3.6-35b-thinking"
 
     def test_non_raster_attachment_is_noop(self) -> None:
         """A PDF attachment (ADR-0102 territory) never triggers vision routing."""
         ctx = self._make_ctx((self._make_attachment(content_type="application/pdf"),))
-        assert _resolve_vision_routing_key(ctx, "primary") == "qwen3.8-flash-next"
+        assert _resolve_vision_routing_key(ctx, "primary") == "qwen3.6-35b-thinking"
 
     def test_image_attachment_resolves_to_pinned_vision_role(self) -> None:
         """A raster image always resolves via the pinned ``vision`` binding —

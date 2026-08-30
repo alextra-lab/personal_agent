@@ -49,7 +49,7 @@
 # "the one value" — kept because the loader and the dangling-ref check both
 # still read that key name, not because there is anything left to be "all" of.
 roles:
-  primary:            { all: qwen3.8-flash-next }
+  primary:            { all: qwen3.6-35b-thinking }
   entity_extraction:  { all: gpt-5.4-mini }
   captains_log:       { all: claude_sonnet }
   # ADR-0124 D2 (FRE-947): the session summariser's own role. It previously
@@ -111,7 +111,15 @@ required_secrets:
 # so a role added later is never selectable by omission (ADR-0121 §6). Nothing
 # consumes it yet; the guardrail is declared before the mechanism that reads it.
 bindings:
-  primary:            { deployment: qwen3.8-flash-next, open: true }
+  # Owner-directed 2026-08-30: reverted to qwen3.6-35b-thinking. Flash-Next was
+  # adjudicated on measured turn wall-clock, not benchmark tok/s: on an ordinary
+  # multi-search research turn its context grew 12k -> 83k over six iterations
+  # and, at its measured 285 t/s prefill against this model's 923, an 83k call
+  # needs ~291s to prefill before emitting a token. The turn hit the 900s
+  # orchestrator_task_timeout_seconds deadline (FRE-973) and delivered the
+  # degraded stub instead of an answer. The FRE-1317 note that "wall clock is
+  # not the only factor" stands — this is that measurement, on real work.
+  primary:            { deployment: qwen3.6-35b-thinking, open: true }
   # No default_timeout override: with a profile active — which is every
   # production request — this role already resolved to the sub_agent
   # deployment's 90s. The 120s only ever appeared on the no-profile path, which
@@ -137,8 +145,16 @@ bindings:
   # operative and unchanged; nothing resolves through this map until step 3
   # (FRE-967) cuts the resolver over, and it is not yet enforced total/valid
   # until step 2's (FRE-966) fail-closed guard lands.
+  # Owner-directed 2026-08-30: back to the local instruct companion alongside the
+  # qwen3.6-35b-thinking primary, restoring the FRE-963 pairing. FRE-1319 moved
+  # this to gpt-5.4-mini only because the MBP could hold a single model at
+  # Flash-Next's footprint; with both 35B deployments loaded again that
+  # constraint is gone, and the companion is local, free and concurrent
+  # (max_concurrency 3 against the primary's 1), which is what HYBRID fan-out
+  # needs. Non-thinking is expressed by the deployment itself, so FRE-1007's
+  # reasoning-declaration guard is satisfied without a cloud reasoning lever.
   sub_agent:
-    deployment: gpt-5.4-mini
+    deployment: qwen3.6-35b-instruct
     open: true
     defaults_by_primary:
       qwen3.8-flash-next:   gpt-5.4-mini           # FRE-1319: the local instruct companion is unloaded (one model fits); gpt-5.4-mini is the cloud deployment that can express no-thinking

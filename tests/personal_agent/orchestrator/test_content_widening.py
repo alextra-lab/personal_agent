@@ -90,7 +90,7 @@ def _no_think_enabled_local(monkeypatch: pytest.MonkeyPatch):
     from personal_agent.config.selection import reset_current_selection, set_current_selection
 
     monkeypatch.setattr(settings, "llm_append_no_think_to_tool_prompts", True)
-    token = set_current_selection({"primary": "qwen3.8-flash-next"})
+    token = set_current_selection({"primary": "qwen3.6-35b-thinking"})
     yield
     reset_current_selection(token)
 
@@ -384,7 +384,7 @@ async def test_vision_routing_decision_log_fires_for_raster_attachment(
     ADR-0121 T5 (FRE-920): vision is a pinned Layer-3 role — any raster image
     always routes to the pinned ``vision`` deployment (``claude_sonnet`` in the
     real catalog), regardless of whether the calling role (``primary``, here
-    ``qwen3.8-flash-next``) could itself have served the image. This always
+    ``qwen3.6-35b-thinking``) could itself have served the image. This always
     reads as "escalated", by design — there is no conditional path anymore.
     """
     import structlog
@@ -447,7 +447,7 @@ async def test_vision_routing_decision_log_fires_for_raster_attachment(
     # by role. `role_key` is the calling role's own resolution; the image
     # always routes `effective_model_key` to the pinned `vision` deployment
     # instead (ADR-0121 T5), so the two always differ.
-    assert entry["role_key"] == "qwen3.8-flash-next"
+    assert entry["role_key"] == "qwen3.6-35b-thinking"
     assert entry["effective_model_key"] == "claude_sonnet"
     assert entry["escalated"] is True
 

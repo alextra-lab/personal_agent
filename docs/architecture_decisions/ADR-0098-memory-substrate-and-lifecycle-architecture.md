@@ -198,7 +198,7 @@ Outcome-level and discriminating — each states the observable result and how i
 
 **The assembled-ADR seam (closes only when all children land):** criteria **3 + 4 + 1 together, through one pipeline, over a two-fixture integration** — because no single real turn carries all four classes (the car-buying turn has Personal/World/Stance; System needs an operational turn). Run *both* the FRE-636 car-buying fixture (must yield a Stance edge + a Personal Claim + World, not flattened — criterion 3) **and** an operational fixture (must yield System, gated out — criterion 4) **through the same extraction→storage→promotion path**, then correct one of the emitted World/Personal Claims and confirm the update lands and supersedes (criterion 1). All three must pass together. No single ticket proves this; it is the integration criterion master holds the decomposed ADR against, and it does **not** close because the last child merged — only because both fixtures demonstrably produce the right graph end-to-end.
 
-*ADR-0098 is Proposed pending owner acceptance. It was co-designed with the owner (2026-06-27) and the design is settled; status elevation to Accepted is master's call at the integration gate.*
+*ADR-0098 is **Accepted** — co-designed with the owner and greenlit 2026-06-27, as the status header and the ADR index both record. This line previously read "Proposed pending owner acceptance", which contradicted both; the elevation it describes as pending had already happened on the day the ADR was written. The integration criterion above is unaffected: it is what closes the assembled seam, not what elevates the status.*
 
 ---
 

@@ -81,6 +81,34 @@ def assert_eval_chat_url(base_url: str) -> None:
         )
 
 
+async def fetch_originating_session_ids(driver: Any, *, uri: str) -> list[dict[str, Any]]:
+    """Read every node's ``originating_session_id`` currently in the eval graph.
+
+    The AC-3 proof's raw material: after a wipe + a later turn, this is what
+    :func:`find_cross_session_sources` checks for anything that traces back to a session
+    that should have been cleared.
+
+    Args:
+        driver: A connected ``neo4j.AsyncDriver`` for ``uri``.
+        uri: The URI the driver is connected to — checked against
+            :data:`EVAL_NEO4J_URI` before every read, same guard as the wipe.
+
+    Returns:
+        One record per node carrying an ``originating_session_id`` property.
+
+    Raises:
+        SubstrateGuardError: If ``uri`` is anything but the eval Neo4j.
+    """
+    _assert_eval_uri(uri)
+    async with driver.session() as session:
+        result = await session.run(
+            "MATCH (n) WHERE n.originating_session_id IS NOT NULL "
+            "RETURN n.originating_session_id AS originating_session_id, "
+            "labels(n) AS labels, coalesce(n.name, n.id, '') AS name"
+        )
+        return [dict(record) async for record in result]
+
+
 def find_cross_session_sources(
     session_sources: list[dict[str, Any]], excluded_session_id: str
 ) -> list[dict[str, Any]]:

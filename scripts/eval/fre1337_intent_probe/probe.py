@@ -111,7 +111,10 @@ async def classify_with_model(
     Raises:
         ValueError: If ``model_key`` is not registered in ``models.yaml``.
     """
-    model_def = load_model_config().models[model_key]
+    models = load_model_config().models
+    if model_key not in models:
+        raise ValueError(f"Unknown model key {model_key!r}. Available: {sorted(models)}")
+    model_def = models[model_key]
     prompt = build_probe_prompt(message)
 
     token = set_current_selection({ModelRole.STUDY.value: model_key})

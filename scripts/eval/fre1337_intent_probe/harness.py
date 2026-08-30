@@ -52,11 +52,16 @@ from collections import Counter  # noqa: E402
 from dataclasses import asdict, dataclass  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Any  # noqa: E402
+from typing import TYPE_CHECKING, Any  # noqa: E402
 
 import structlog  # noqa: E402
 from scripts.eval.fre1337_intent_probe.fixtures import Fixture, load_fixtures  # noqa: E402
 from scripts.eval.fre1337_intent_probe.probe import MODEL_KEYS, ModelClassification  # noqa: E402
+
+if TYPE_CHECKING:
+    import argparse
+
+    from personal_agent.request_gateway.types import IntentResult
 
 log = structlog.get_logger(__name__)
 
@@ -127,7 +132,7 @@ def has_seeded_agreement(matrix: dict[str, Counter[tuple[str, str]]]) -> bool:
     return any(det == model for counts in matrix.values() for (det, model) in counts)
 
 
-def _classify_deterministic(message: str) -> Any:
+def _classify_deterministic(message: str) -> "IntentResult":
     from personal_agent.request_gateway.intent import classify_intent
 
     return classify_intent(message)
@@ -168,7 +173,7 @@ async def _run_probe_arm(fixtures: list[Fixture], model_keys: tuple[str, ...]) -
     return rows
 
 
-async def amain(args: Any) -> int:
+async def amain(args: "argparse.Namespace") -> int:
     """Drive the fixture set through arms 1+2 (+ optional arm 3) and write the report."""
     fixtures = load_fixtures()
     model_keys = tuple(args.models.split(",")) if args.models else MODEL_KEYS

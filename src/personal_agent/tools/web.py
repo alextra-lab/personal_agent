@@ -111,11 +111,18 @@ web_search_tool = ToolDefinition(
             description=(
                 "Comma-separated engine names to query directly. "
                 "Overrides categories if provided. "
-                "General: google, brave, duckduckgo, startpage, qwant. "
-                "IT: stackoverflow, github, hackernews, lobste.rs, huggingface, docker hub. "
-                "Science: arxiv, google scholar, pubmed, crossref, openalex, springer nature, astrophysics data system, semantic scholar. "
+                # FRE-1331: this list is what the model addresses engines by name with, so a
+                # stale entry is a name that silently returns nothing. Verified 2026-08-30
+                # against the running instance's /config rather than transcribed from
+                # settings.yml — the two disagreed on six entries. Re-derive it with
+                # scripts/monitors/searxng_engine_parity.py whenever engines change.
+                "General: braveapi, google cse, wikipedia. "
+                "IT: stackoverflow, github, hackernews, lobste.rs, mdn, pypi, huggingface, "
+                "huggingface datasets, huggingface spaces, docker hub. "
+                "Science: arxiv, google scholar, pubmed, crossref, openalex, openairepublications, "
+                "semantic scholar. "
                 "News: google news, bing news, reuters, wikinews, qwant news. "
-                "Social: reddit, lemmy posts. "
+                "Social: lemmy posts. "
                 "Weather: openmeteo, wttr.in. "
                 "Recipes: chefkoch. "
                 "Semantic (opt-in): exa."

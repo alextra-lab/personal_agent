@@ -326,7 +326,12 @@ engines:
     content_mode: highlights
     content_max_characters: 2000
     categories: exa
-    disabled: false
+    # The TEMPLATE keeps shipping the pre-activation default, per its own contract and
+    # test_exa_shipped_disabled_with_placeholder_key: activation (a real key plus
+    # disabled: false) happens on the untracked settings.yml, never here. content_mode
+    # above is different in kind — it is policy, not activation, so it does belong in the
+    # template.
+    disabled: true
 
   # ── Weather ─────────────────────────────────────────────
   # WeatherUnderground has no SearXNG engine. openmeteo is the

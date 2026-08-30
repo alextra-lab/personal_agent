@@ -3954,18 +3954,23 @@ class MemoryService:
                 # apoc.merge.relationship handles this cleanly.
                 # Access tracking properties (FRE-161: KG Freshness) are initialized on creation.
                 result = await session.run(
-                    # ADR-0098 A4b (FRE-1346): the `:Source` nodes are minted first, in this
-                    # same statement, so the ids the edge carries always resolve. The two
-                    # SET clauses are ordered deliberately — the second reads the value the
-                    # first wrote, and because the list is append-only (`toSet` of the union)
-                    # `provenance_state` can only ever move `none -> provenanced`.
-                    self._source_merge_clause(None)
-                    + """
+                    # ADR-0098 A4b (FRE-1346): the `:Source` nodes are minted in this same
+                    # statement, so the ids the edge carries always resolve. Minted AFTER
+                    # the endpoint MATCHes deliberately — placed before them, an
+                    # unresolvable endpoint still ran the subquery and left an orphan
+                    # `:Source` behind that nothing referenced. No rows, no mint. The two
+                    # SET clauses are likewise ordered: the second reads the value the
+                    # first wrote, and because the list is append-only (`toSet` of the
+                    # union) `provenance_state` can only ever move `none -> provenanced`.
+                    """
                     MATCH (source)
                     WHERE source.entity_id = $source_id OR source.name = $source_id
                        OR (source:Turn AND source.turn_id = $source_id)
                     MATCH (target)
                     WHERE target.entity_id = $target_id OR target.name = $target_id
+                    """
+                    + self._source_merge_clause(None)
+                    + """
                     CALL apoc.merge.relationship(
                         source, $relationship_type,
                         {},

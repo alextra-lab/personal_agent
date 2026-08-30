@@ -140,6 +140,12 @@ class SourceRecord:
 def _authority_of(referent: str) -> str:
     """Return the referent's corroborating-authority identity (A4b).
 
+    ``urlsplit`` raises on a malformed IPv6 literal (``http://[abc``), and the referent is
+    a *model-chosen* URL reaching this from a captured turn. Letting that propagate would
+    abort the whole consolidation pass over an unparseable address, losing every other
+    item's provenance with it — so it degrades to the referent instead, which is the
+    honest authority for a string we cannot resolve.
+
     Args:
         referent: The address of the thing retrieved.
 
@@ -147,7 +153,10 @@ def _authority_of(referent: str) -> str:
         The lowercased host for an ``http(s)`` URL, else the referent unchanged — an
         ingested document identifies its own authority.
     """
-    split = urlsplit(referent)
+    try:
+        split = urlsplit(referent)
+    except ValueError:
+        return referent
     if split.scheme in ("http", "https") and split.hostname:
         return split.hostname.lower()
     return referent

@@ -192,6 +192,22 @@ def test_authority_falls_back_to_the_referent_when_it_is_not_a_url() -> None:
     assert record.authority == "ingested-document-42"
 
 
+@pytest.mark.parametrize("referent", ["http://[abc", "http://[::1", "https://["])
+def test_a_malformed_referent_does_not_abort_the_consolidation_pass(referent: str) -> None:
+    """``urlsplit`` raises on a malformed IPv6 literal, and the URL is model-chosen.
+
+    Propagating that would lose every other item's provenance in the same sweep over one
+    unparseable address.
+    """
+    record = SourceRecord.build(
+        referent=referent,
+        content="SafeCart is a checkout platform.",
+        retrieved_at=_TS,
+        retained_pointer="capture://trace-1#tool_results/0",
+    )
+    assert record.authority == referent
+
+
 def test_content_never_reaches_the_cypher_map() -> None:
     """D3: Core holds the small keyed pointer; the bytes stay in the Docs layer."""
     payload = _sources()[0].to_cypher_map()

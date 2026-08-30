@@ -231,6 +231,34 @@ async def test_ac5_every_stored_source_id_resolves_to_exactly_one_source(
 
 
 @pytest.mark.asyncio
+async def test_an_unresolvable_endpoint_leaves_no_orphan_source(
+    service: MemoryService,
+) -> None:
+    """No rows, no mint: the :Source subquery runs after the endpoint MATCHes.
+
+    Minted before them, a relationship whose endpoint does not exist still created the
+    :Source node, leaving one behind that nothing referenced.
+    """
+    assert (
+        await service.create_relationship(
+            Relationship(
+                source_id="FRE1346Missing", target_id="FRE1346Absent", relationship_type="BASED_IN"
+            ),
+            source_records=[_source("src-orphan", "https://orphan.example.com")],
+        )
+        is None
+    )
+
+    async with service.driver.session() as session:
+        result = await session.run(
+            "MATCH (s:Source {source_id: 'src-orphan'}) RETURN count(s) AS n"
+        )
+        record = await result.single()
+
+    assert record["n"] == 0
+
+
+@pytest.mark.asyncio
 async def test_ac5_relationship_with_no_sources_is_stamped_none(
     service: MemoryService,
 ) -> None:

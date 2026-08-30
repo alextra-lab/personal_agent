@@ -46,8 +46,15 @@ x-seshat-gateway-eval-base: &seshat-gateway-eval-base
       condition: service_healthy
     redis-eval:
       condition: service_healthy
+    # FRE-1344: searxng is PRODUCTION's service, and a depends_on pulls it into the scope
+    # of any `up` naming these gateways — observed recreating the live searxng container
+    # (1ee1fb09d19a -> a49fce879e3d) during an eval bring-up, which is how FRE-1342's AC-3
+    # failed despite the target naming eval services explicitly. `required: false` lets the
+    # eval gateways address it by name without compose managing its lifecycle on their
+    # behalf. Search is not needed for the gateway to become healthy.
     searxng:
-      condition: service_healthy
+      condition: service_started
+      required: false
   volumes:
     # Eval-specific volumes — isolated from production captures and workspace.
     - seshat_captures_eval:/app/telemetry/captains_log/captures
@@ -117,7 +124,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      # FRE-1344: 15s was short of a cold Neo4j start on this host — measured 38s from
+      # container start to "Started.", so eval-infra-up aborted on first invocation and
+      # only worked on the retry. Production's neo4j allows 15s but starts from a warm
+      # volume; a fresh eval volume pays full initialisation.
+      start_period: 90s
     mem_limit: 768m
     cpus: 0.5
     networks:
@@ -141,7 +152,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      # FRE-1344: 20s did not cover a cold Elasticsearch start from a fresh volume on this
+      # host — this was the service that actually aborted `eval-infra-up` first, and the
+      # "dependency neo4j-eval failed to start" line alongside it was collateral. All four
+      # eval substrate services reach healthy unattended; they just need to be allowed to.
+      start_period: 120s
     mem_limit: 768m
     cpus: 0.5
     networks:
@@ -183,12 +198,27 @@ services:
       # Infrastructure wiring — eval substrate (isolated from prod)
       # App connects as the restricted `seshat_app` role (FRE-808); internal eval
       # stack falls back to the init.sql dev password when the secret is unset.
-      AGENT_DATABASE_URL: postgresql+asyncpg://seshat_app:${SESHAT_APP_PASSWORD:-seshat_app_dev_password}@postgres-eval:5432/personal_agent
+      # FRE-1344: keyed on SESHAT_APP_EVAL_PASSWORD, NOT production's SESHAT_APP_PASSWORD.
+      # init.sql:648 creates the role with the literal 'seshat_app_dev_password' and
+      # production installs its real secret separately via ALTER ROLE at deploy. Reading
+      # production's variable here made the eval gateway present production's password to
+      # a freshly-initialised eval database that only knows the dev one — a guaranteed
+      # auth failure on any host with a populated .env. Eval credentials stay independent
+      # of production's by construction (FRE-733's direction), so leave this unset.
+      AGENT_DATABASE_URL: postgresql+asyncpg://seshat_app:${SESHAT_APP_EVAL_PASSWORD:-seshat_app_dev_password}@postgres-eval:5432/personal_agent
       AGENT_DATABASE_ADMIN_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres-eval:5432/personal_agent
       AGENT_NEO4J_URI: bolt://neo4j-eval:7687
       AGENT_NEO4J_USER: neo4j
       AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
       AGENT_ELASTICSEARCH_URL: http://elasticsearch-eval:9200
+      # FRE-1344 / ADR-0112 AC-1: owner_storage_allowlist defaults to production's compose
+      # service names (postgres, neo4j, elasticsearch), so the private profile rejected
+      # every eval store and the gateway refused to boot. The eval services are the same
+      # owner-controlled containers on the same host, so declaring them is what ADR-0112
+      # intends — NOT a reason to set AGENT_SUBSTRATE_PROFILE=managed, which would disable
+      # the check wholesale. The stale cached image predated this guard, which is why this
+      # only surfaced once the image was rebuilt (FRE-1341).
+      AGENT_OWNER_STORAGE_ALLOWLIST: '["postgres","neo4j","elasticsearch","postgres-eval","neo4j-eval","elasticsearch-eval"]'
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
@@ -222,12 +252,27 @@ services:
       # Infrastructure wiring — eval substrate (isolated from prod)
       # App connects as the restricted `seshat_app` role (FRE-808); internal eval
       # stack falls back to the init.sql dev password when the secret is unset.
-      AGENT_DATABASE_URL: postgresql+asyncpg://seshat_app:${SESHAT_APP_PASSWORD:-seshat_app_dev_password}@postgres-eval:5432/personal_agent
+      # FRE-1344: keyed on SESHAT_APP_EVAL_PASSWORD, NOT production's SESHAT_APP_PASSWORD.
+      # init.sql:648 creates the role with the literal 'seshat_app_dev_password' and
+      # production installs its real secret separately via ALTER ROLE at deploy. Reading
+      # production's variable here made the eval gateway present production's password to
+      # a freshly-initialised eval database that only knows the dev one — a guaranteed
+      # auth failure on any host with a populated .env. Eval credentials stay independent
+      # of production's by construction (FRE-733's direction), so leave this unset.
+      AGENT_DATABASE_URL: postgresql+asyncpg://seshat_app:${SESHAT_APP_EVAL_PASSWORD:-seshat_app_dev_password}@postgres-eval:5432/personal_agent
       AGENT_DATABASE_ADMIN_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres-eval:5432/personal_agent
       AGENT_NEO4J_URI: bolt://neo4j-eval:7687
       AGENT_NEO4J_USER: neo4j
       AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
       AGENT_ELASTICSEARCH_URL: http://elasticsearch-eval:9200
+      # FRE-1344 / ADR-0112 AC-1: owner_storage_allowlist defaults to production's compose
+      # service names (postgres, neo4j, elasticsearch), so the private profile rejected
+      # every eval store and the gateway refused to boot. The eval services are the same
+      # owner-controlled containers on the same host, so declaring them is what ADR-0112
+      # intends — NOT a reason to set AGENT_SUBSTRATE_PROFILE=managed, which would disable
+      # the check wholesale. The stale cached image predated this guard, which is why this
+      # only surfaced once the image was rebuilt (FRE-1341).
+      AGENT_OWNER_STORAGE_ALLOWLIST: '["postgres","neo4j","elasticsearch","postgres-eval","neo4j-eval","elasticsearch-eval"]'
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval

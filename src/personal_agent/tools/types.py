@@ -47,6 +47,16 @@ class ToolDefinition(BaseModel):
     timeout_seconds: int = Field(30, ge=1, description="Execution timeout in seconds")
     rate_limit_per_hour: int | None = Field(None, ge=0, description="Rate limit per hour")
 
+    # Grounding metadata (ADR-0098 Amendment A2)
+    referent_parameter: str | None = Field(
+        None,
+        description=(
+            "Name of the parameter whose value is the single external referent this tool "
+            "retrieves (e.g. 'url' for fetch_url). None if the tool addresses a query "
+            "rather than one referent (e.g. web_search)."
+        ),
+    )
+
 
 class ToolResult(BaseModel):
     """Result from tool execution."""

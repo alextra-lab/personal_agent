@@ -110,10 +110,14 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
 from personal_agent.captains_log.turn_evidence import mark_truncated, memory_item_identity
+
+if TYPE_CHECKING:
+    from personal_agent.tools.registry import ToolRegistry
 
 IDENTIFIER_DIGEST_CHARS = 16
 """Hex characters of the content digest carried by every identifier.
@@ -403,45 +407,6 @@ browser evaluate tools), and a model-authored prompt handed to another generator
 though the default already denies them, because "this is structurally a laundering
 channel" and "nobody has classified this yet" call for different remedies.
 """
-
-
-REFERENT_ARGUMENTS: dict[str, str] = {
-    "fetch_url": "url",
-}
-"""Tools that address exactly one external referent, and the parameter naming it.
-
-The same parameter-schema boundary the rest of this module rests on, applied to a
-different question. A tool listed here retrieves *one* identified external thing, so its
-result stands for that thing and D3(b) has something to check. A tool whose parameters
-address a query rather than a referent — ``web_search`` — returns a result *set* that was
-itself retrieved this turn; under D2 that recorded set is the durable artifact, so it has
-no external referent of its own and reachability is not-applicable.
-
-**What that leaves open, recorded rather than discovered.** A search snippet naming a URL
-the model never fetched is citable and its reachability is vacuous. Closing it needs
-per-result referents out of the search tool, not a rule here; channelling grounding through
-``fetch_url`` — which registers a real referent — is v1's answer, and it is the same answer
-D2 already gives for ``curl``.
-"""
-
-
-def _referent_of(tool_name: str, arguments: Mapping[str, object]) -> str | None:
-    """Return the single external thing this call retrieved, if it had one.
-
-    Args:
-        tool_name: The tool that ran.
-        arguments: The model's arguments to it.
-
-    Returns:
-        The referent, or None when the tool addresses a query rather than a referent.
-        The model *chose* the URL and under D2 it is not evidence — but it remains the
-        correct address of what was fetched, which is what D3(b) checks.
-    """
-    parameter = REFERENT_ARGUMENTS.get(tool_name)
-    if parameter is None:
-        return None
-    value = arguments.get(parameter)
-    return value.strip() or None if isinstance(value, str) else None
 
 
 def _digest(turn_id: str, ordinal: int, kind: SourceKind, content: str) -> str:
@@ -850,14 +815,22 @@ class SourceRegistry:
     registers tool results.
     """
 
-    def __init__(self, turn_id: str) -> None:
+    def __init__(self, turn_id: str, tool_registry: "ToolRegistry | None" = None) -> None:
         """Create an empty registry for one turn.
 
         Args:
             turn_id: This turn's trace identifier. Feeds the identifier digest, so two
                 turns cannot mint the same identifier for different content.
+            tool_registry: Where a tool's ``referent_parameter`` (ADR-0098 Amendment A2)
+                is looked up. Defaults to the process's default tool registry so callers
+                that don't care about referents don't need to supply one.
         """
         self._turn_id = turn_id
+        if tool_registry is None:
+            from personal_agent.tools import get_default_registry  # noqa: PLC0415
+
+            tool_registry = get_default_registry()
+        self._tool_registry = tool_registry
         self._sources: list[RegisteredSource] = []
         self._by_identifier: dict[str, RegisteredSource] = {}
         self._by_dedupe_key: dict[tuple[SourceKind, str, str], RegisteredSource] = {}
@@ -1038,7 +1011,7 @@ class SourceRegistry:
             content=admissible,
             origin=tool_name,
             entitlement=entitlement,
-            referent=_referent_of(tool_name, arguments),
+            referent=self._referent_of(tool_name, arguments),
         )
         return ToolRegistration(
             source=source,
@@ -1046,6 +1019,37 @@ class SourceRegistry:
             excluded_arguments=excluded,
             reason="",
         )
+
+    def _referent_of(self, tool_name: str, arguments: Mapping[str, object]) -> str | None:
+        """Return the single external thing this call retrieved, if it had one.
+
+        The tool contract is the single source of referents (ADR-0098 Amendment A2): a
+        tool declares ``referent_parameter`` on its own :class:`ToolDefinition` — the
+        name of the parameter whose value is the thing retrieved — and this method reads
+        that declaration rather than consulting a table grounding maintains about tools
+        it doesn't know. A tool whose parameters address a query rather than a referent
+        (``web_search``) leaves it ``None``: its result is a set retrieved *this* turn,
+        which under D2 is itself the durable artifact, so it has no external referent and
+        D3(b) reachability is not-applicable.
+
+        Args:
+            tool_name: The tool that ran.
+            arguments: The model's arguments to it.
+
+        Returns:
+            The referent, or None when the tool declares none or is not registered. The
+            model *chose* the value and under D2 it is not evidence — but it remains the
+            correct address of what was fetched, which is what D3(b) checks.
+        """
+        registered = self._tool_registry.get_tool(tool_name)
+        if registered is None:
+            return None
+        tool_definition, _ = registered
+        referent_parameter = tool_definition.referent_parameter
+        if referent_parameter is None:
+            return None
+        value = arguments.get(referent_parameter)
+        return value.strip() or None if isinstance(value, str) else None
 
     def _taint(self, arguments: Mapping[str, object]) -> None:
         """Record an inadmissible call's argument values as turn-tainted.

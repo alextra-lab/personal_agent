@@ -11,6 +11,7 @@ import json
 
 import pytest
 
+import personal_agent.grounding.source_registry as source_registry_module
 from personal_agent.grounding.source_registry import (
     IDENTIFIER_DIGEST_CHARS,
     Admissibility,
@@ -18,6 +19,9 @@ from personal_agent.grounding.source_registry import (
     SourceKind,
     SourceRegistry,
 )
+from personal_agent.tools.fetch import fetch_url_tool
+from personal_agent.tools.registry import ToolRegistry
+from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 TURN_A = "trace-aaaa-1111"
 TURN_B = "trace-bbbb-2222"
@@ -722,3 +726,84 @@ def test_non_search_memory_tool_with_claims_shaped_content_is_unaffected() -> No
 
     assert registration.source is not None
     assert registration.source.entitlement is Entitlement.EXTERNAL
+
+
+# ── FRE-1345 (ADR-0098 Amendment A2) — the tool declares its own referent ────────
+
+
+def _fixture_tool_registry(tool_def: ToolDefinition) -> ToolRegistry:
+    """A tool registry carrying one fixture tool, isolated from the process default."""
+    registry = ToolRegistry()
+    registry.register(tool_def, lambda **_kwargs: {})
+    return registry
+
+
+def test_referent_from_tool_definition_needs_no_grounding_edit() -> None:
+    """AC-1: a tool's own ``referent_parameter`` declaration is enough.
+
+    No per-tool table inside grounding/ names it. ``read`` is reused as the carrier (it is already a typed retrieval tool for D2's
+    unrelated admissibility question) purely to declare a referent it doesn't carry in
+    production; what's under test is the referent mechanism this ticket adds, not D2
+    admissibility (``TYPED_RETRIEVAL_TOOLS``), which is a separate, pre-existing table
+    this ticket doesn't touch (see ``test_unknown_tool_registers_no_source`` above).
+    """
+    fixture_read = ToolDefinition(
+        name="read",
+        description="fixture",
+        category="filesystem",
+        parameters=[
+            ToolParameter(name="path", type="string", description="fixture", required=True)
+        ],
+        risk_level="low",
+        allowed_modes=["NORMAL"],
+        referent_parameter="path",
+    )
+    registry = SourceRegistry(turn_id=TURN_A, tool_registry=_fixture_tool_registry(fixture_read))
+
+    registration = registry.register_tool_result(
+        tool_name="read",
+        arguments={"path": "/opt/seshat/docs/README.md"},
+        content="Ortiz is a Spanish cannery.",
+    )
+
+    assert registration.source is not None
+    assert registration.source.referent == "/opt/seshat/docs/README.md"
+    assert registry.resolve(registration.source.identifier) is registration.source
+
+
+def test_fetch_url_referent_matches_the_fetched_url() -> None:
+    """AC-3: fetch_url's referent is unchanged by the relocation off REFERENT_ARGUMENTS."""
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    registration = registry.register_tool_result(
+        tool_name="fetch_url",
+        arguments={"url": "https://example.com/tuna"},
+        content="Ortiz is a Spanish cannery.",
+    )
+
+    assert registration.source is not None
+    assert registration.source.referent == "https://example.com/tuna"
+
+
+def test_fetch_url_tool_declares_its_referent_parameter() -> None:
+    """AC-3, pinned at the ToolDefinition level, not only through the registry."""
+    assert fetch_url_tool.referent_parameter == "url"
+
+
+def test_blank_referent_argument_resolves_to_no_referent() -> None:
+    """Whitespace-only referent values normalize to None, same as before the relocation."""
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    registration = registry.register_tool_result(
+        tool_name="fetch_url",
+        arguments={"url": "   "},
+        content="Ortiz is a Spanish cannery.",
+    )
+
+    assert registration.source is not None
+    assert registration.source.referent is None
+
+
+def test_referent_arguments_table_is_gone() -> None:
+    """AC-2: REFERENT_ARGUMENTS is deleted, not shadowed or re-exported."""
+    assert not hasattr(source_registry_module, "REFERENT_ARGUMENTS")

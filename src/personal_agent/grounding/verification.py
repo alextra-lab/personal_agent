@@ -30,11 +30,12 @@ never against a re-execution"; extending that to the fetched page is the consist
 What a check *can* still add is the residual the fetch could not see — a soft-404 or an auth
 wall served with HTTP 200 — and that is what :func:`check_reachability` looks for.
 
-Which sources have an external referent at all is
-:data:`~personal_agent.grounding.source_registry.REFERENT_ARGUMENTS`' decision, carried on
-the source itself. Everything else passes **vacuously**, which is D2 stated literally: for
-the user's words, memory nodes and turn-local tool evidence "the recorded result *is* the
-durable artifact", and reachability is not-applicable rather than failed.
+Which sources have an external referent at all is the retrieval tool's own decision
+(``referent_parameter`` on its :class:`~personal_agent.tools.types.ToolDefinition`,
+ADR-0098 Amendment A2), carried on the source itself. Everything else passes
+**vacuously**, which is D2 stated literally: for the user's words, memory nodes and
+turn-local tool evidence "the recorded result *is* the durable artifact", and
+reachability is not-applicable rather than failed.
 """
 
 from __future__ import annotations

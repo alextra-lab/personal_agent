@@ -3624,7 +3624,10 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
     # ADR-0138 D2/D3(a) (FRE-1280): one registry per turn, created before any retrieval
     # so every source this turn gathers has somewhere to land. The user's own words are
     # D2's fourth admissible kind and are available right here, at turn start.
-    ctx.source_registry = SourceRegistry(turn_id=ctx.trace_id)
+    global _tool_registry
+    if _tool_registry is None:
+        _tool_registry = get_default_registry()
+    ctx.source_registry = SourceRegistry(turn_id=ctx.trace_id, tool_registry=_tool_registry)
     ctx.source_registry.register_user_message(ctx.user_message)
 
     # Start request-scoped metrics monitoring (ADR-0012)

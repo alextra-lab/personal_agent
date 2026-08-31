@@ -905,6 +905,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     log.info("neo4j_turn_user_id_index_ensured")
                 except Exception as turn_uid_idx_e:
                     log.warning("neo4j_turn_user_id_index_setup_failed", error=str(turn_uid_idx_e))
+                # Ensure Source.source_id uniqueness (ADR-0098 Amendment A4b / FRE-1346).
+                # Idempotent; a plain MERGE guarantees existence but not uniqueness under
+                # concurrency, and a duplicated :Source would read as two distinct sources
+                # corroborating one fact.
+                try:
+                    await memory_service.ensure_source_id_constraint()
+                    log.info("neo4j_source_id_constraint_ensured")
+                except Exception as src_c_e:
+                    log.warning("neo4j_source_id_constraint_setup_failed", error=str(src_c_e))
                 # Bootstrap owner identity (FRE-213 / ADR-0052) — idempotent, no-op when empty
                 if settings.owner_name and settings.agent_owner_email:
                     try:

@@ -7,7 +7,7 @@ using Claude 4.5 or local SLMs, and updates the Neo4j memory graph.
 import asyncio
 import re
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -27,6 +27,12 @@ from personal_agent.events import (
 )
 from personal_agent.memory.models import Claim, Entity, Relationship, SessionNode, Stance, TurnNode
 from personal_agent.memory.promote import run_promotion_pipeline
+from personal_agent.memory.provenance import (
+    SourceRecord,
+    associate,
+    attribution_for_relationship,
+    sources_from_tool_results,
+)
 from personal_agent.memory.service import MemoryService
 from personal_agent.memory.weight import KnowledgeWeight
 from personal_agent.second_brain.attempts import (
@@ -41,11 +47,30 @@ from personal_agent.sysgraph import get_default_sysgraph_repo
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.spans import close_root_span, open_root_span
 from personal_agent.telemetry.trace import SystemTraceContext
+from personal_agent.tools import get_default_registry
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Tracer
 
+    from personal_agent.tools.registry import ToolRegistry
+
 log = get_logger(__name__)
+
+
+def _matching_sources(attribution: str, sources: Sequence[SourceRecord]) -> list[SourceRecord]:
+    """Return the sources whose retrieved content contains this item (ADR-0098 A4).
+
+    Args:
+        attribution: The item's attribution string — an entity's name, a claim's content,
+            or a relationship's verbalization.
+        sources: The external artifacts this turn retrieved.
+
+    Returns:
+        The matching records. Several matches are all kept: provenance is append-only, so
+        an item contained in two fetched pages legitimately carries both.
+    """
+    matched = set(associate(attribution, sources))
+    return [source for source in sources if source.source_id in matched]
 
 
 def _new_consolidation_trace_id() -> str:
@@ -159,6 +184,7 @@ class SecondBrainConsolidator:
         self,
         memory_service: MemoryService | None = None,
         tracer: "Tracer | None" = None,
+        tool_registry: "ToolRegistry | None" = None,
     ) -> None:  # noqa: D107
         """Initialize consolidator with optional dependencies.
 
@@ -167,9 +193,15 @@ class SecondBrainConsolidator:
             tracer: Tracer to open each consolidation run's root span with
                 (ADR-0129 D3, FRE-1069). Defaults to the process-wide tracer;
                 tests inject their own tracer bound to an in-memory exporter.
+            tool_registry: Registry to read each tool's ``referent_parameter``
+                declaration from (ADR-0098 Amendment A2). Defaults to the process
+                registry; tests inject one holding a fixture tool, which is what makes
+                a new referent-declaring tool resolvable end-to-end with no edit inside
+                ``grounding/``.
         """
         self.memory_service = memory_service or MemoryService()
         self._tracer = tracer
+        self._tool_registry = tool_registry or get_default_registry()
 
         # Ensure memory service is connected
         if not self.memory_service.connected:
@@ -767,6 +799,28 @@ class SecondBrainConsolidator:
         # node was orphaned with no description forever — the single generator of all
         # 1,404 empty-description entities on the live graph, still minting at ~9%.
         #
+        # ADR-0098 Amendment A (FRE-1346): the external artifacts this turn retrieved.
+        # Derived once per capture from `tool_results`, which has held every fetched URL
+        # since FRE-947 — the address was already captured and extraction simply never
+        # looked. The tool contract is the single source of referents (A2): a result
+        # becomes a :Source only because its own ToolDefinition declares which parameter
+        # names the thing retrieved.
+        sources = sources_from_tool_results(
+            capture.tool_results,
+            retrieved_at=capture.timestamp,
+            capture_trace_id=capture.trace_id,
+            tool_registry=self._tool_registry,
+        )
+        # The false-negative class A4 records rather than hides: an item that fell to
+        # `none` *while a source existed* is a countable miss (lowercase/stylized names
+        # like `npm`), whereas an item from a turn that fetched nothing never had a source
+        # to be contained in. Counting them together would inflate the rate and make the
+        # decision to widen the check — or not — rest on a wrong number.
+        entities_provenanced = 0
+        entities_none_with_sources = 0
+        relationships_provenanced = 0
+        relationships_none_with_sources = 0
+
         # Create entity nodes — knowledge items only (ADR-0115 D3 dispatch).
         entities_created = 0
         entity_ids: list[str] = []
@@ -778,6 +832,14 @@ class SecondBrainConsolidator:
         unresolved_entity_mentions: list[str] = []
         for entity_data in knowledge_entities:
             raw_name = entity_data.get("name", "")
+            # A4: an entity contributes its NAME only. That matches the attribution
+            # semantics — a page mentioning SafeCart justifies where we learned of
+            # SafeCart, never the entity's stored description or type.
+            entity_sources = _matching_sources(raw_name, sources)
+            if entity_sources:
+                entities_provenanced += 1
+            elif sources:
+                entities_none_with_sources += 1
             entity = Entity(
                 name=raw_name,
                 entity_type=entity_data.get("type", "Unknown"),
@@ -800,6 +862,10 @@ class SecondBrainConsolidator:
                 # FRE-725: the extractor's per-entity enrichment/correction signal so a later
                 # same-confidence description can supersede a thin one (validated in the service).
                 description_update_kind=entity_data.get("description_update_kind", "new"),
+                # ADR-0098 A4: derived in Python from the captured turn, never read from
+                # the extractor's output (D6/FRE-1020) — a model permitted to declare its
+                # own provenance can mint the credential that makes it authoritative.
+                source_records=entity_sources,
             )
             if entity_id:
                 entities_created += 1
@@ -962,15 +1028,31 @@ class SecondBrainConsolidator:
             # it here instead would silently delete every cross-turn edge.
             canonical_source = canonical_by_raw.get(source_name, source_name)
             canonical_target = canonical_by_raw.get(target_name, target_name)
+            relationship_type = rel_data.get("type", "RELATED_TO")
             relationship = Relationship(
                 source_id=canonical_source,
                 target_id=canonical_target,
-                relationship_type=rel_data.get("type", "RELATED_TO"),
+                relationship_type=relationship_type,
                 weight=rel_data.get("weight", 1.0),
                 properties=rel_data.get("properties", {}),
             )
+            # A4: a relationship contributes its verbalization, `source predicate target`.
+            # Built from the CANONICAL endpoint names — the raw extractor spellings may
+            # have been renamed by dedup, and attributing the edge under a name the graph
+            # does not use would check containment against the wrong string.
+            rel_sources = _matching_sources(
+                attribution_for_relationship(canonical_source, relationship_type, canonical_target),
+                sources,
+            )
+            if rel_sources:
+                relationships_provenanced += 1
+            elif sources:
+                relationships_none_with_sources += 1
             rel_eid = await self.memory_service.create_relationship(
-                relationship, visibility=visibility, trace_id=capture.trace_id
+                relationship,
+                visibility=visibility,
+                trace_id=capture.trace_id,
+                source_records=rel_sources,
             )
             if rel_eid:
                 relationships_created += 1
@@ -1003,8 +1085,12 @@ class SecondBrainConsolidator:
             claim = _build_claim(claim_data)
             if claim is None:
                 continue
+            # A4: a claim contributes its content.
             if await self.memory_service.assert_claim(
-                claim, user_id=capture.user_id, trace_id=capture.trace_id
+                claim,
+                user_id=capture.user_id,
+                trace_id=capture.trace_id,
+                source_records=_matching_sources(claim.content, sources),
             ):
                 claims_created += 1
 
@@ -1016,10 +1102,29 @@ class SecondBrainConsolidator:
             outcome="success",
         )
 
+        # A5: the rate is reported, never used to widen the containment check. `*_none_
+        # with_sources` counts only items that had a source available and still did not
+        # match — the population where a false negative is even possible.
+        log.info(
+            "consolidation_provenance_summary",
+            capture_trace_id=capture.trace_id,
+            trace_id=capture.trace_id,
+            session_id=capture.session_id,
+            sources_available=len(sources),
+            entities_provenanced=entities_provenanced,
+            entities_none_with_sources=entities_none_with_sources,
+            relationships_provenanced=relationships_provenanced,
+            relationships_none_with_sources=relationships_none_with_sources,
+        )
+
         return {
             "turns_created": turns_created,
             "entities_created": entities_created,
             "relationships_created": relationships_created,
+            "entities_provenanced": entities_provenanced,
+            "entities_none_with_sources": entities_none_with_sources,
+            "relationships_provenanced": relationships_provenanced,
+            "relationships_none_with_sources": relationships_none_with_sources,
             "stances_created": stances_created,
             "claims_created": claims_created,
             "entity_ids": entity_ids,

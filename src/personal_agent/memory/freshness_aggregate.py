@@ -194,8 +194,14 @@ async def aggregate_graph_staleness(
     # --- Relationships (paged) ---
     skip = 0
     while True:
+        # FRE-1346: SOURCED_FROM is structural provenance, not accessed knowledge, and
+        # these counters are summed GLOBALLY across relationship types. Provenance writes
+        # roughly one edge per (item, source) pair and nothing ever "accesses" one, so
+        # leaving them in would have grown the dormant-relationship count in step with
+        # provenance coverage — reading as a decaying graph when the opposite was true.
         rel_q = """
             MATCH ()-[r]->()
+            WHERE type(r) <> 'SOURCED_FROM'
             RETURN type(r) AS rel_type,
                    r.created_at AS created_at,
                    r.last_accessed_at AS last_accessed_at,

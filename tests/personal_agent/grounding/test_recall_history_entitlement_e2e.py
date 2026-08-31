@@ -84,7 +84,7 @@ def _non_exempt(output: str, text: str) -> SpanExtraction:
 def _run_chain(*, turns: list[dict[str, object]], cited: str) -> tuple[Entitlement, CheckOutcome]:
     """Turn rows -> recall_personal_history JSON -> register_tool_result -> verify_turn.
 
-    ``days_ago`` is numeric, so ``_strip_argument_echo`` has no eligible value and the
+    ``days_ago`` is numeric, so ``strip_argument_echo`` has no eligible value and the
     registered content is the emitted JSON byte for byte.
     """
     registry = SourceRegistry(turn_id=TURN)
@@ -317,7 +317,7 @@ def test_prose_beside_the_turns_list_denies() -> None:
 def test_envelope_allowlist_tolerates_a_stripped_key() -> None:
     """The envelope check is a subset test, not an equality test, and this is why.
 
-    ``_strip_argument_echo`` runs before this rule and deletes any top-level field whose value
+    ``strip_argument_echo`` runs before this rule and deletes any top-level field whose value
     equals one of the call's arguments. ``user_id`` is the reachable case: the model chooses
     ``topic``, so a ``topic`` equal to the user id strips ``user_id`` from the payload. An
     equality check would read that as a malformed shape and deny a perfectly good result.

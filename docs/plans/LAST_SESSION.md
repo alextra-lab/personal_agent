@@ -1,79 +1,75 @@
-# Last session — 2026-08-29 → 30
+# Last session — 2026-08-30 → 31
 
 ## Doing / discussing  (≤5 sentences)
-The Flash-Next swap was adjudicated and **reverted** on measured turn wall-clock, not benchmark
-tok/s. Chasing why the model emitted an Alibaba URL led, by accident, to discovering `web_search`
-had been returning nothing for two days — and then that it also returns *ten junk results* while
-reporting success, which is worse. The owner ran one identical research question across three
-primaries; the comparison produced a three-way model verdict **and** exposed that sequential runs
-contaminate each other through the knowledge graph. Five tickets filed and approved out of that;
-the owner's intent-classification test is now buildable as FRE-1337.
+The day began with the owner reporting `web_search` dead and ended with a live user losing work.
+Search was restored end to end — the cause was not the engines but that **production SearXNG had been
+reading its config from a build seat's git worktree**, so PR #995's repair never reached it. The
+eval stack was made to boot for the first time (four separate blockers, each found by the previous
+one failing), which finally let FRE-1337's arm 3 run and settle FRE-1288 with data. Then a deploy of
+mine killed a user's turn and destroyed the NFL tool she'd had built; it was recovered from
+telemetry. The open thread the owner raised last: **do we need a home for executable artifacts?**
 
 ## What was decided and why
 
-**The Alibaba URL was not memorised, and the probe that "proved" it was mine failing.** A held-out
-suffix probe gave 2/6 hits on the real bucket prefix vs 0/6 on a fabricated one, and I called that
-"the discriminator firing." At n=25 it reversed: **2/25 real vs 4/25 control** — the fabricated
-bucket scored *higher*. The model knows the Alibaba OSS *convention* (`<x>-sg.oss-` → `ap-southeast-1.aliyuncs.com`),
-not this host. A separate arm asked it to invent a temp-file URL on a clean prompt: it **refused 4/4**
-and correctly named the false premise. Also: an n=15 run returned "0/14" that was **29 backend
-errors** my parser scored as non-hits — I nearly reported an outage I had caused as a failed
-replication. The local primary is `max_concurrency: 1`; unpaced probes take it down.
+**Three claims of mine were wrong and are retracted in writing on their tickets.** All the same
+shape: reasoning from an absence, or from configuration, without checking the instrument pointed
+where the writer writes. (1) *"The eval stack has never worked on this box"* — inferred history from
+a deterministic failure; the owner corrected it. (2) *"A live production-contamination path"* —
+the wiring trace was right but `event_bus_enabled` defaults to `False` and the eval compose never
+set it, so eval had **never published**. Latent, not live; I escalated FRE-1342 to Urgent on that
+overstatement. (3) *"The Captain's Log persists nothing"* — I queried Postgres tables **no code has
+ever INSERTed into**; it writes to disk and ES, 2,121 reflection docs sitting there. A build seat
+caught that one. Memory updated (`feedback_a_negative_result_is_probably_your_instrument`) with the
+sub-pattern the old note missed: **config proves a path EXISTS, never that it RUNS.**
 
-**The real cause was search starvation.** `web_search` returned `result_count: 0` on 13/13 calls in
-that turn — with **no search results, the model constructed URLs from priors**, and the Alibaba one
-was simply the exotic-looking member of three invented URLs (the others were plausible-but-absent
-Wikipedia articles). Root cause external: DuckDuckGo/Startpage/Qwant/karmasearch all refuse this
-VPS's datacenter IP. `general` was running on **brave alone**; PR #995 added `bing` (which worked all
-along but was only configured under `categories: news`) and disabled the three that will never
-answer. **Free scraped search is a depreciating asset from a datacenter IP** — the durable fix is
-keyed APIs, which puts **FRE-1331 on the critical path**, not the medium-hygiene ticket I filed it as.
+**Search: the engines were a symptom.** Scraped `bing` returns exactly 10 results, always
+`success`, always unrelated — Romanian wallpaper tutorials, Arabic Google Translate, Airbnb — and
+**different junk each time for an identical query**, so it is a blocked scraper parsing whatever it
+lands on. The owner's locale hypothesis was tested at en/fr/en-US/fr-FR and disproved. `braveapi`
+then refused to register silently because upstream's defaults ship it `inactive: true` and
+`use_default_settings` merges by name — `disabled: false` does not override it. FRE-1310's exa block
+had the identical latent defect. **ADR-0034's privacy rationale is stale and unadjudicated**: one
+keyed vendor is *fewer* third parties than fanning out to a dozen.
 
-**Flash-Next reverted.** On an ordinary research turn context grew **12k → 83k over six calls**; at its
-285 t/s prefill (vs 923) an 83k call needs ~291s *before* the first token. It hit the 900s
-`orchestrator_task_timeout_seconds` and returned the degraded stub. `sub_agent` returned to the local
-instruct companion — verified live, it spends **2 completion tokens** on "Say OK" where the thinking
-primary spends 122, so non-thinking is expressed by the deployment and FRE-1007's guard needs no cloud
-reasoning lever.
+**FRE-1288 is answered.** 3 research fixtures × 3 models × 3 trials = **27/27** say `analysis` where
+the cascade says `conversational`; 36/36 agree elsewhere. Behaviour corroborates (4–8 tool calls,
++7.7k–19.8k tokens vs 0/0 for conversational). The classifier is not noisy — it is systematically
+wrong on exactly one class. **Do not cite the earlier single run**: every cell was n=1, and its
+`tool_use_request` zero was an artifact (control arm has no `bash`), which I initially reported as a
+finding.
 
-**Assumptions now known false.** (1) The "8 pre-existing test failures" figure repeated across three
-PR handoffs — I contradicted it claiming 41, then found **I measured bare `pytest` while CI and
-`make test` run `-m "not integration"`**. CI reports **0**; local `make test` 23; bare pytest 41. The
-seats' 8 may be right in their condition. Retracted on PR #996 before merge. (2) I read six seat
-permission-stalls as a machinery defect; the config deliberately allows `docker exec` **only** for
-`*-test-1` containers and asks for everything else — the guard was correct, the seat was wrongly
-reaching into production. (3) ADR-0034's privacy rationale for SearXNG is stale — it forwards to 35
-engines, query text already leaves.
-
-**Fable's round-4 on ADR-0139 found three blocking defects**, all verified independently: `NOT_CONTAINED`
-is unreachable for FRE-1327's trace because `_verify_span` short-circuits to `UNCITED` before
-containment; `observed_span_outcomes` keys on the `OBSERVED` entitlement but `mcp_esql` is `EXTERNAL`,
-so the FRE-1306 detection it headlines is invisible to its own monitoring; and the negative check fails
-open on partial composition (`echo "found: $(ls|wc -l)"`). Do not accept ADR-0139 without a round 5.
+**The user-data loss, and what it exposed.** `config/governance/tools.yaml` grants `write`
+`allowed_paths: /app/**`, but only `/app/agent_workspace` and `/app/telemetry` are mounted.
+Everything else under `/app` is image layer. Susan's nine files (38,857 chars) passed governance
+**cleanly, because the config says they should** — then died on my rebuild. FRE-1352 filed Urgent.
+Recovery worked only because `write` arguments survive in ES telemetry; that is luck, not design.
 
 ## Worktrees — anything special
-`docker/searxng/` reverts to uid **977** ownership on every container restart — `sudo chown debian:977`
-before editing or git operations fail confusingly. `settings.yml` is gitignored as of PR #990; it and
-the tracked `.example` must change together.
+`docker/searxng/` reverts to uid **977** on every container restart — `sudo chown -R debian:977`
+before any git operation there or checkouts fail confusingly. It bit repeatedly. The build worktree
+also has `git update-index --assume-unchanged` set on `docker/searxng/settings.yml.example` as a
+workaround for that ownership — **it will silently ignore real changes to that file** until cleared.
 
 ## Sequence position + drift
-Heavy drift, owner-directed and justified: none of yesterday's queue advanced. The session went
-Dependabot → SearXNG outage → model adjudication → three-way comparison. The Observability Foundation
-directive is untouched.
+Heavy drift, owner-directed throughout. The Observability Foundation directive is still untouched.
+The owner added a standing directive (console, 2026-08-31): **"Waive unless seriously necessary"** —
+master merges escalated diffs without asking. Applied three times since.
 
 ## Answers for the fresh start
-- **Is the Alibaba URL a security incident?** No. Not memorised, not exfiltration; two GETs, both 403.
-  It was search starvation. The bucket is blocked and FRE-1330 is Done.
-- **Why is `web_search` suspect even though it "works"?** It reported `result_count: 10` while returning
-  Hotmail login pages and Slovak bus timetables. **A bad ten is worse than a zero.** FRE-1339.
-- **Can I compare models by running them in sequence?** **No.** Entity extraction writes one arm's
-  sources into Neo4j and the next arm's `search_memory` cites them without fetching — verified.
-  FRE-1338. Any eval must disable `search_memory` or snapshot the KG per arm.
-- **Is the intent classifier mis-classifying?** It is worse: `conversational` is the *fallback* when
-  the regex cascade matches nothing, there is no `RESEARCH` type, and `complexity=moderate` was already
-  correct. 3 units of expansion budget granted, 0 used, 7/7. FRE-1337 measures before FRE-1288 decides.
-- **Captain's Log?** Both tables have **zero rows ever** while billing $0.058–0.073/turn. FRE-1340.
-- **Unfiled, owner's call:** FRE-1330's novelty signal both checks *and* records, so the first blocked
-  attempt marks `aliyuncs.com` seen and every sibling bucket is then unblocked *and* unremarkable.
-  Fix: record only when not blocked. Also unfiled: local inference invisible in `api_costs`;
-  `span_extraction` is a 16–28s serial post-answer tax.
+- **Is the eval stack trustworthy now?** Boots from a fresh substrate and is genuinely isolated
+  (prod stream unchanged at 1923 across a turn that demonstrably published). But **neither arm has
+  production's tool surface** — control 10 tools, treatment 15, production 22, MCP off in both. Tool
+  counts compare between fixtures, never to production.
+- **Why is FRE-1348 not Done?** The script is merged and proven on test fixtures; production still
+  carries `NULL provenance_state`. The ops run is parked under the owner's hold — dry-run first.
+- **Why is FRE-1337 not Done?** AC-3 needs `run_contamination_proof`, which **has no callers
+  anywhere**. Arm 3 ran; that specific proof did not.
+- **Is `build_fingerprint: unknown` on production a failure?** No — only `make eval-infra-up` passes
+  the build-arg. But it is a dead field, and `unknown` is in the checker's own marker set, so
+  pointing the freshness check at production would call it permanently stale. Unfiled.
+- **Open, owner-led:** where do executable artifacts live? Three mechanisms exist and none fits —
+  `agent_workspace` is durable but unscoped and invisible to users; artifacts/R2 are scoped and
+  retrievable but single-blob and not runnable; the sandbox is correctly ephemeral. Tensions:
+  runnable-by-agent vs exportable-to-user pull opposite ways; durable+executable is a real security
+  step; scoping is already broken with >1 user. **FRE-1352's AC-3 names a destination this may
+  change** — I recommended narrowing it to enforcement only. Owner had not answered.

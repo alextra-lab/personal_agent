@@ -1690,6 +1690,7 @@ async def health_check() -> HealthResponse:
     """Service health check endpoint."""
     return {
         "status": "healthy",
+        "build_fingerprint": settings.build_fingerprint,
         "components": {
             "database": "connected",
             "elasticsearch": "connected"

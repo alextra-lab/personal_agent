@@ -109,6 +109,20 @@ class TestAppConfig:
         assert config.log_level == "DEBUG"
         assert config.slm_base_url == "http://test:8080/v1"
 
+    def test_build_fingerprint_defaults_to_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FRE-1341: outside a container build, no fingerprint was baked in."""
+        monkeypatch.delenv("AGENT_BUILD_FINGERPRINT", raising=False)
+        monkeypatch.setenv("AGENT_SLM_BASE_URL", "http://localhost:9099")
+        config = AppConfig()
+        assert config.build_fingerprint is None
+
+    def test_build_fingerprint_reads_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FRE-1341: Dockerfile.gateway bakes this in via AGENT_BUILD_FINGERPRINT."""
+        monkeypatch.setenv("AGENT_SLM_BASE_URL", "http://localhost:9099")
+        monkeypatch.setenv("AGENT_BUILD_FINGERPRINT", "deadbeef123")
+        config = AppConfig()
+        assert config.build_fingerprint == "deadbeef123"
+
     def test_app_config_log_level_validation(self) -> None:
         """Test log level validation."""
         # Reset singleton

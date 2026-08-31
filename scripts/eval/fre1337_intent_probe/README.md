@@ -32,19 +32,22 @@ Fails loudly (non-zero exit) rather than under-reporting:
 
 ## Running arm 3 (behavioral)
 
-**Rebuild the eval image first** — `seshat-gateway:latest` is reused across `up -d` calls,
-so a stale cached build (found 4 months stale during FRE-1337's own verification: it
-predated the current `claude_sonnet` model id and couldn't reach the local SLM tunnel)
-silently serves old code with no error. Always:
-
 ```bash
-docker compose -p seshat -f docker-compose.cloud.yml -f docker-compose.eval.yml \
-  build seshat-gateway-control
 docker compose -p seshat -f docker-compose.cloud.yml -f docker-compose.eval.yml \
   up -d postgres-eval neo4j-eval elasticsearch-eval redis-eval seshat-gateway-control
 export NEO4J_PASSWORD=<the eval stack's password>   # same one docker-compose.eval.yml needs
 uv run python -m scripts.eval.fre1337_intent_probe.harness --run-id 2026-08-30 --behavioral
 ```
+
+No need to rebuild by hand first — `run_behavioral_arm` asserts the running gateway's baked
+build fingerprint matches your working tree (including uncommitted changes) before driving a
+single fixture through it, and refuses loudly, naming the exact rebuild command, if it's stale
+(FRE-1341, `scripts/eval/gateway_freshness.py`). `seshat-gateway:latest` is still reused across
+`up -d` calls — a stale cached build (found 4 months stale during FRE-1337's own verification:
+it predated the current `claude_sonnet` model id and couldn't reach the local SLM tunnel) used
+to silently serve old code with no error, `/health` reporting `"status": "healthy"` throughout
+— but the harness itself catches that now instead of relying on this README being followed by
+hand.
 
 Two more things verified live during FRE-1337 (2026-08-30), worth knowing before you run
 this: (1) the eval gateway's default `AGENT_SLM_BASE_URL` (`http://localhost:8000` inside
@@ -83,10 +86,11 @@ docker compose -p seshat -f docker-compose.cloud.yml -f docker-compose.eval.yml 
   Streams events, not KG data, but it let an eval turn's `request.captured` reach
   production's own consolidator and write to the production knowledge graph. See
   `docker-compose.eval.yml`'s FRE-1342 comment block for the full trace.
-- **Known gap, not fixed here** (filed as a follow-up during this ticket's live
-  verification): `seshat-gateway:latest` is reused across `up -d` calls and can silently
-  serve a stale build with no error (FRE-1341, found 4 months stale) — always rebuild
-  first, per the section above.
+- **Fixed** (was a known gap filed as a follow-up during this ticket's live verification,
+  now FRE-1341): `seshat-gateway:latest` is still reused across `up -d` calls and can still
+  go stale relative to the working tree, but `run_behavioral_arm` now asserts freshness
+  against the running gateway before driving any fixture through it and refuses loudly if
+  it's stale — see `scripts/eval/gateway_freshness.py` and the section above.
 
 ## Output
 

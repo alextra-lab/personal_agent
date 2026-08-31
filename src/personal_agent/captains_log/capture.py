@@ -7,6 +7,7 @@ the second brain for deep reflection.
 
 import asyncio
 import pathlib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
@@ -414,6 +415,124 @@ def _safe_error_summary(exc: Exception) -> str:
         )
     return f"{type(exc).__name__}: {exc}"
     return None
+
+
+def build_capture_index() -> dict[str, pathlib.Path]:
+    """Build a ``trace_id -> file path`` index of every on-disk capture (ADR-0098 A5).
+
+    Cheap: lists filenames only, parses nothing. A caller resolving many trace_ids (e.g.
+    the provenance backfill, FRE-1348) builds this once rather than re-walking every date
+    directory per lookup.
+
+    Returns:
+        Every on-disk capture's trace_id mapped to its file path.
+    """
+    captures_dir = _get_captures_dir()
+    index: dict[str, pathlib.Path] = {}
+    if not captures_dir.exists():
+        return index
+    for date_dir in captures_dir.iterdir():
+        if not date_dir.is_dir():
+            continue
+        for json_file in date_dir.glob("*.json"):
+            index[json_file.stem] = json_file
+    return index
+
+
+def _parse_capture_file(path: pathlib.Path) -> TaskCapture | None:
+    """Parse one on-disk capture file. Logs and returns None on failure; never raises."""
+    try:
+        data = orjson.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        # FRE-343: pre-FRE-343 capture files on disk have user_id=null.
+        if data.get("user_id") is None:
+            data["user_id"] = "00000000-0000-0000-0000-000000000000"
+        return TaskCapture(**data)
+    except Exception as e:
+        log.warning(
+            "capture_read_by_trace_id_failed",
+            file_path=str(path),
+            error=_safe_error_summary(e),
+        )
+        return None
+
+
+async def read_captures_by_trace_ids(
+    trace_ids: Sequence[str],
+    *,
+    disk_index: Mapping[str, pathlib.Path],
+    es_client: Any | None = None,
+) -> dict[str, TaskCapture]:
+    """Resolve a batch of trace_ids to their captures, disk first then Elasticsearch.
+
+    Written for ADR-0098 A5 (FRE-1348): reconstructing a legacy item's provenance means
+    resolving the capture that minted it. Neither store is a replica of the other
+    (``load_session_captures``'s own docstring, above): ``write_capture`` writes disk
+    synchronously but schedules the ES index as a best-effort fire-and-forget task, so
+    either store can hold a capture the other lacks. A disk-only lookup would report "the
+    minting capture is missing" for an item that is actually recoverable from
+    Elasticsearch — a false surrender A5 explicitly rejects ("reconstructs before it
+    surrenders"). One batched ``ids`` query resolves every disk-miss at once rather than
+    one round trip per trace_id.
+
+    Args:
+        trace_ids: The trace_ids to resolve. Duplicates are resolved once.
+        disk_index: A :func:`build_capture_index` result.
+        es_client: An open Elasticsearch client, or None to skip the ES fallback entirely
+            (disk-only — the deterministic path unit tests use).
+
+    Returns:
+        Every trace_id that resolved, mapped to its capture. A trace_id genuinely absent
+        from both stores is simply missing from the result, never an exception.
+    """
+    resolved: dict[str, TaskCapture] = {}
+    missing: list[str] = []
+    for trace_id in dict.fromkeys(trace_ids):  # de-dup, preserve order
+        path = disk_index.get(trace_id)
+        capture = _parse_capture_file(path) if path is not None else None
+        if capture is not None:
+            resolved[trace_id] = capture
+        else:
+            missing.append(trace_id)
+
+    if not missing or es_client is None:
+        return resolved
+
+    index = f"{CAPTURES_INDEX_PREFIX}-*,-{SUBAGENT_CAPTURES_INDEX_PREFIX}-*"
+    try:
+        response = await es_client.search(
+            index=index,
+            query={"ids": {"values": missing}},
+            size=len(missing),
+            ignore_unavailable=True,
+            allow_no_indices=True,
+        )
+    except Exception as e:
+        log.warning(  # trace-allow: batch failure over `missing`'s many trace_ids, no single one is the right value to thread
+            "capture_es_batch_read_failed",
+            count=len(missing),
+            error=str(e),
+            error_type=type(e).__name__,
+        )
+        return resolved
+
+    for hit in response.get("hits", {}).get("hits", []) or []:
+        source = hit.get("_source")
+        if not isinstance(source, dict):
+            continue
+        try:
+            capture = TaskCapture(**source)
+        except Exception as e:
+            log.warning(
+                "capture_es_doc_unreadable",
+                trace_id=source.get("trace_id"),
+                error=str(e),
+            )
+            continue
+        resolved[capture.trace_id] = capture
+
+    return resolved
 
 
 def read_session_captures(

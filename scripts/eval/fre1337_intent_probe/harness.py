@@ -112,6 +112,24 @@ def build_confusion_matrix(rows: list[ProbeRow]) -> dict[str, Counter[tuple[str,
     return matrix
 
 
+def _environment_caveat(args: "argparse.Namespace") -> str:
+    """FRE-1350 AC-5: state the environment gap in the artifact, not only in a ticket.
+
+    A reader should not have to find a Linear issue to learn that the behavioural numbers
+    were not taken in a production-equivalent environment.
+    """
+    if not args.behavioral:
+        return f"_Arms 1+2 only; {args.trials} trial(s) per cell._\n\n"
+    return (
+        f"> **Environment caveat.** Behavioural rows come from the eval gateways, which do "
+        f"**not** carry production's tool surface: control exposes 10 tools with primitives "
+        f"disabled, treatment 15, production 22, and MCP is off in both. A tool-call count "
+        f"here is not directly comparable to production behaviour, and a fixture needing an "
+        f"absent tool scores zero for want of the tool. Arms run: {args.arms}; "
+        f"{args.trials} trial(s) per cell. See FRE-1350.\n\n"
+    )
+
+
 def render_confusion_markdown(matrix: dict[str, Counter[tuple[str, str]]]) -> str:
     """Render the confusion matrix as one markdown table per model."""
     lines: list[str] = []
@@ -178,7 +196,12 @@ async def amain(args: "argparse.Namespace") -> int:
     fixtures = load_fixtures()
     model_keys = tuple(args.models.split(",")) if args.models else MODEL_KEYS
 
-    rows = await _run_probe_arm(fixtures, model_keys)
+    # FRE-1350 AC-3: repeat every cell. Before this, each (model, fixture) was one draw,
+    # and the gpsr_research cell was observed returning different answers in two runs on
+    # the same day — precision on a single sample is not a result.
+    rows = []
+    for _trial in range(args.trials):
+        rows.extend(await _run_probe_arm(fixtures, model_keys))
 
     missing_models = set(model_keys) - {r.model_key for r in rows}
     if missing_models:
@@ -194,7 +217,8 @@ async def amain(args: "argparse.Namespace") -> int:
     if args.behavioral:
         from scripts.eval.fre1337_intent_probe.behavioral import run_behavioral_arm
 
-        behavioral_reports = await run_behavioral_arm(fixtures)
+        arms = tuple(a.strip() for a in args.arms.split(",") if a.strip())
+        behavioral_reports = await run_behavioral_arm(fixtures, arms=arms, trials=args.trials)
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -203,6 +227,8 @@ async def amain(args: "argparse.Namespace") -> int:
         "models": list(model_keys),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "behavioral_arm_run": args.behavioral,
+        "trials": args.trials,
+        "arms": [a.strip() for a in args.arms.split(",") if a.strip()] if args.behavioral else [],
     }
     stem = f"{args.run_id}"
     (out_dir / f"{stem}.json").write_text(
@@ -217,6 +243,7 @@ async def amain(args: "argparse.Namespace") -> int:
     )
     (out_dir / f"{stem}.md").write_text(
         f"# FRE-1337 intent-classification probe — {args.run_id}\n\n"
+        + _environment_caveat(args)
         + render_confusion_markdown(matrix)
     )
     log.info("fre1337_pass_written", out=str(out_dir / f"{stem}.md"), rows=len(rows))
@@ -235,6 +262,17 @@ def main() -> int:
 
     p = argparse.ArgumentParser(description="FRE-1337 intent-classification probe harness")
     p.add_argument("--run-id", required=True, help="Run identifier (tag in output).")
+    p.add_argument(
+        "--arms",
+        default="control,treatment",
+        help="Comma-separated eval arms for arm 3 (default: control,treatment).",
+    )
+    p.add_argument(
+        "--trials",
+        type=int,
+        default=1,
+        help="Repeats per cell (default 1). Agreement is only meaningful above 1.",
+    )
     p.add_argument(
         "--models",
         default=None,

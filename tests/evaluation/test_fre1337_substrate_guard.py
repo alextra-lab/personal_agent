@@ -82,11 +82,40 @@ def test_assert_eval_chat_url_accepts_the_eval_gateway() -> None:
 
 @pytest.mark.parametrize(
     "bad_url",
-    ["http://localhost:9001", "http://localhost:9000", "http://localhost:9003", ""],
+    ["http://localhost:9001", "http://localhost:9000", "http://localhost:9004", ""],
 )
 def test_assert_eval_chat_url_refuses_any_other_url(bad_url: str) -> None:
+    """Anything outside `EVAL_ARMS` is refused — production above all.
+
+    FRE-1350 removed `http://localhost:9003` from this list because the treatment
+    gateway became a legitimate arm, NOT because the guard was loosened. 9001 is
+    production's gateway and stays here: that is the case this test exists for, and it
+    must keep failing loudly. 9004 replaces 9003 to keep an unknown-port case.
+    """
     with pytest.raises(SubstrateGuardError):
         assert_eval_chat_url(bad_url)
+
+
+@pytest.mark.parametrize("arm_url", ["http://localhost:9002", "http://localhost:9003"])
+def test_assert_eval_chat_url_admits_both_eval_arms(arm_url: str) -> None:
+    """FRE-1350: control AND treatment are both drivable.
+
+    Arm 3 originally drove only control, whose primitives are disabled — the
+    `tool_use_request` fixture scored 0 tool calls for want of `bash` rather than for
+    anything about intent routing. Measured: control 10 tools, treatment 15,
+    production 22.
+    """
+    assert_eval_chat_url(arm_url)
+
+
+def test_eval_arms_maps_names_to_the_guarded_urls() -> None:
+    """The arm map and the guard cannot drift apart — the guard reads the same mapping."""
+    from scripts.eval.fre1337_intent_probe.substrate import EVAL_ARMS
+
+    assert EVAL_ARMS == {
+        "control": "http://localhost:9002",
+        "treatment": "http://localhost:9003",
+    }
 
 
 def test_find_cross_session_sources_empty_when_control_held() -> None:

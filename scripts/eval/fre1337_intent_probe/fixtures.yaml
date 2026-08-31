@@ -31,3 +31,33 @@ fixtures:
       Unambiguous memory-recall phrasing ("what did we decide... last time we talked").
     message: "What did we decide about the database schema last time we talked?"
     expected_task_type: memory_recall
+
+  # ── FRE-1350 AC-4: more than one fixture per claim ────────────────────────
+  # The off-diagonal finding previously rested on `gpsr_research` alone — a single
+  # message cannot carry a taxonomy critique. Two more research-shaped messages and a
+  # second genuinely-conversational one, so every cell of the matrix has corroboration.
+
+  - label: research_regulatory
+    note: >
+      Research-shaped and unambiguous: multi-source regulatory comparison, the exact
+      turn shape that grew context 12k->83k in the FRE-1317 measurement. Deliberately
+      phrased WITHOUT interrogative research verbs, to test whether the cascade keys on
+      surface form rather than task.
+    message: "I need to understand how the EU AI Act's transparency duties differ from the GDPR's for a product we're shipping in France."
+    expected_task_type: null
+
+  - label: research_comparative_purchase
+    note: >
+      The same shape as gpsr_research (comparing options for a purchase decision across
+      sources) on a different subject, so the finding does not rest on one message or one
+      domain.
+    message: "Which heat pump should I install in a 1930s stone house in Brittany"
+    expected_task_type: null
+
+  - label: plain_chitchat
+    note: >
+      Second seeded-agreement case (AC-5 corroboration). Genuinely conversational with no
+      research, tool, recall or planning content, phrased differently from plain_greeting
+      so agreement is not an artifact of one phrasing.
+    message: "That was a long week. Anything interesting on your side?"
+    expected_task_type: conversational

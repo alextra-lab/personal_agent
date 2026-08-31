@@ -277,6 +277,16 @@ class CaptainLogEntry(BaseModel):
     eval_mode: bool = Field(
         default=False, description="True when the entry originated from an eval run (FRE-523)"
     )
+    # FRE-1340: durable landing spot for the FRE-328/FRE-1321 gap-recognition signal.
+    # Reflection previously only fired a fire-and-forget log.warning for a detected
+    # missing-skill request, which never reached the persisted, reachable entry.
+    missing_skill_names: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Skills requested by name during this turn that don't exist in the skill "
+            "library (FRE-328/FRE-1321 gap-recognition signal)."
+        ),
+    )
 
     @field_validator("timestamp", mode="before")
     @classmethod

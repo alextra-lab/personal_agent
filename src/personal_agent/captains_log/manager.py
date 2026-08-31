@@ -410,6 +410,17 @@ class CaptainLogManager:
         pc["related_entry_ids"] = related
 
         data["proposed_change"] = pc
+
+        # FRE-1340: a duplicate reflection's missing-skill signal must not vanish
+        # into this merge — union it onto the stored entry rather than dropping it
+        # (the merge otherwise only touches proposed_change fields).
+        if new_entry.missing_skill_names:
+            existing_names = data.get("missing_skill_names") or []
+            for name in new_entry.missing_skill_names:
+                if name not in existing_names:
+                    existing_names.append(name)
+            data["missing_skill_names"] = existing_names
+
         existing_path.write_text(_json.dumps(data, indent=2, default=str), encoding="utf-8")
 
         log.info(

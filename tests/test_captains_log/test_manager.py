@@ -306,3 +306,37 @@ class TestCaptainLogManager:
             assert isinstance(call_args[1], dict)
             assert call_args[1]["type"] == "config_proposal"
             assert mock_schedule.call_args[1].get("doc_id") == "CL-2026-02-22-001"
+
+
+class TestMissingSkillNamesOnDisk:
+    """FRE-1340: missing_skill_names must round-trip through the actual disk write."""
+
+    def test_missing_skill_names_written_to_disk(self, tmp_path: pathlib.Path) -> None:
+        """A non-empty field is present in the JSON file save_entry() produces."""
+        log_dir = tmp_path / "captains_log"
+        manager = CaptainLogManager(log_dir=log_dir)
+        entry = CaptainLogEntry(
+            entry_id="CL-2026-08-31-001",
+            type=CaptainLogEntryType.REFLECTION,
+            title="Test Reflection",
+            rationale="Test",
+            missing_skill_names=["citation-validator", "compliance-checker"],
+        )
+
+        file_path = manager.write_entry(entry)
+        content = json.loads(file_path.read_text(encoding="utf-8"))
+        assert content["missing_skill_names"] == ["citation-validator", "compliance-checker"]
+
+    def test_legacy_record_without_field_parses_with_empty_default(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A pre-FRE-1340 on-disk record (no missing_skill_names key) still loads."""
+        legacy_json = {
+            "entry_id": "CL-2026-01-01-001",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "type": "reflection",
+            "title": "Legacy entry",
+            "rationale": "Written before FRE-1340",
+        }
+        entry = CaptainLogEntry.model_validate(legacy_json)
+        assert entry.missing_skill_names == []

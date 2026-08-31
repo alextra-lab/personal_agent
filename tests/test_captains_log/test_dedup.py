@@ -126,6 +126,7 @@ class TestDedupOnWrite:
         what: str = "Add retry logic",
         entry_id: str = "",
         fingerprint: str | None = None,
+        missing_skill_names: list[str] | None = None,
     ) -> CaptainLogEntry:
         cat = ChangeCategory.RELIABILITY
         scope = ChangeScope.LLM_CLIENT
@@ -147,6 +148,7 @@ class TestDedupOnWrite:
                 source=ProposalSource.STATISTICAL_DETECTOR,
             ),
             status=CaptainLogStatus.AWAITING_APPROVAL,
+            missing_skill_names=missing_skill_names or [],
         )
 
     def test_first_write_creates_file(self, tmp_path: pathlib.Path) -> None:
@@ -176,6 +178,29 @@ class TestDedupOnWrite:
         data = json.loads(path1.read_text())
         assert data["proposed_change"]["seen_count"] == 2
         assert "CL-dup-001" in data["proposed_change"]["related_entry_ids"]
+
+    def test_merge_unions_missing_skill_names_instead_of_dropping_them(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """FRE-1340: a duplicate's missing-skill signal must survive the merge.
+
+        ``_merge_into_existing`` only ever touched ``proposed_change`` fields, so a
+        second reflection sharing a fingerprint with an existing entry would have
+        its ``missing_skill_names`` silently discarded — exactly the "capture works
+        but the signal still vanishes" failure this ticket exists to close.
+        """
+        log_dir = tmp_path / "captains_log"
+        manager = CaptainLogManager(log_dir=log_dir)
+
+        with patch("personal_agent.captains_log.manager.schedule_es_index"):
+            path1 = manager.save_entry(self._make_entry(missing_skill_names=["citation-validator"]))
+            path2 = manager.save_entry(
+                self._make_entry(entry_id="CL-dup-001", missing_skill_names=["compliance-checker"])
+            )
+
+        assert path1 == path2
+        data = json.loads(path1.read_text())
+        assert data["missing_skill_names"] == ["citation-validator", "compliance-checker"]
 
     def test_five_duplicates_produce_seen_count_5(self, tmp_path: pathlib.Path) -> None:
         """Integration-style: 5 similar proposals -> 1 entry with seen_count 5."""

@@ -496,6 +496,10 @@ async def generate_reflection_entry(
                     session_id=session_id,
                 )
             entry.eval_mode = eval_mode  # FRE-523 provenance
+            # FRE-1340: persist the signal on the entry itself, not just the log
+            # warning above — the warning is ephemeral and depends on
+            # InsightsEngine's clustering job running before logs age out.
+            entry.missing_skill_names = missing_skill_names
             await _apply_read_before_emit(entry, sysgraph_repo, trace_id=trace_id)
             return entry
         except Exception as e:

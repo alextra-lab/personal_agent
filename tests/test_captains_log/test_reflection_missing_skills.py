@@ -9,11 +9,15 @@ warnings reach Elasticsearch via the standard handler chain and feed
 `InsightsEngine.detect_missing_skill_patterns`.
 """
 
+import asyncio
+from contextlib import contextmanager
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from personal_agent.captains_log import reflection_dspy
+from personal_agent.captains_log.models import CaptainLogEntry, CaptainLogEntryType
 
 
 class TestParseMissingSkillNames:
@@ -135,3 +139,92 @@ class TestDspySignatureField:
         assert "missing_skill_names" in fields, (
             f"missing_skill_names not declared on GenerateReflection. Available: {list(fields)}"
         )
+
+
+class TestMissingSkillNamesPersistedOnEntry:
+    """FRE-1340: the signal must survive on the persisted, reachable entry.
+
+    Before this fix, ``missing_skill_names`` was consumed only by
+    ``emit_missing_skill_warnings`` (a fire-and-forget log line) and then
+    discarded — the ``CaptainLogEntry`` that ``CaptainLogManager.write_entry``
+    actually persists to disk/ES never carried it.
+    """
+
+    @staticmethod
+    def _entry() -> CaptainLogEntry:
+        return CaptainLogEntry(
+            entry_id="",
+            type=CaptainLogEntryType.REFLECTION,
+            title="t",
+            rationale="r",
+        )
+
+    @contextmanager
+    def _env(self, names: list[str]):
+        def _fake_dspy(*args: Any, **kwargs: Any) -> tuple[CaptainLogEntry, list[str]]:
+            return self._entry(), names
+
+        async def _fake_to_thread(fn: Any, **kwargs: Any) -> Any:
+            return fn(**kwargs)
+
+        from personal_agent.config import load_model_config
+
+        model_def = load_model_config().models["claude_sonnet"]
+
+        with (
+            patch(
+                "personal_agent.captains_log.reflection._fetch_trace_events",
+                AsyncMock(return_value=[]),
+            ),
+            patch("personal_agent.captains_log.reflection.DSPY_AVAILABLE", True),
+            patch(
+                "personal_agent.captains_log.reflection.generate_reflection_dspy", new=_fake_dspy
+            ),
+            patch.object(asyncio, "to_thread", new=_fake_to_thread),
+            patch(
+                "personal_agent.captains_log.reflection.load_mean_rating_lookup",
+                new=AsyncMock(return_value={}),
+            ),
+            # Local (non-cloud) target — the missing-skill plumbing under test
+            # is orthogonal to the FRE-989 cost-gate path already covered by
+            # test_reflection_dspy_gated.py.
+            patch(
+                "personal_agent.captains_log.reflection.resolve_dspy_target",
+                return_value=("claude_sonnet", model_def, False),
+            ),
+        ):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_missing_skill_names_attached_to_returned_entry(self) -> None:
+        """The specific signal that motivated FRE-1340 must not vanish."""
+        from personal_agent.captains_log.reflection import generate_reflection_entry
+
+        with self._env(["citation-validator", "compliance-checker"]):
+            entry = await generate_reflection_entry(
+                user_message="hi",
+                trace_id="trace-test",
+                steps_count=1,
+                final_state="COMPLETED",
+                reply_length=5,
+                session_id="sess-1",
+            )
+
+        assert entry.missing_skill_names == ["citation-validator", "compliance-checker"]
+
+    @pytest.mark.asyncio
+    async def test_no_missing_skills_defaults_to_empty_list(self) -> None:
+        """No signal detected → the field stays an empty list, not absent/None."""
+        from personal_agent.captains_log.reflection import generate_reflection_entry
+
+        with self._env([]):
+            entry = await generate_reflection_entry(
+                user_message="hi",
+                trace_id="trace-test",
+                steps_count=1,
+                final_state="COMPLETED",
+                reply_length=5,
+                session_id="sess-1",
+            )
+
+        assert entry.missing_skill_names == []

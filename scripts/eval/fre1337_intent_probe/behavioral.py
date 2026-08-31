@@ -29,6 +29,7 @@ import httpx
 import structlog
 from scripts.eval.fre1337_intent_probe.fixtures import Fixture
 from scripts.eval.fre1337_intent_probe.substrate import (
+    EVAL_ARMS,
     EVAL_CHAT_BASE_URL,
     EVAL_NEO4J_URI,
     assert_eval_chat_url,
@@ -175,10 +176,18 @@ async def wait_for_event_settle(
     return seen > 0 or not require_nonzero
 
 
-async def _call_chat(client: httpx.AsyncClient, message: str) -> tuple[str, str]:
-    assert_eval_chat_url(EVAL_CHAT_BASE_URL)
+async def _call_chat(
+    client: httpx.AsyncClient, message: str, base_url: str = EVAL_CHAT_BASE_URL
+) -> tuple[str, str]:
+    """POST one message to a named eval arm.
+
+    FRE-1350: the arm is a parameter, not a module constant read at the call site, so a
+    behavioral row can be attributed to the gateway that produced it. The guard still
+    refuses anything outside `EVAL_ARMS`.
+    """
+    assert_eval_chat_url(base_url)
     resp = await client.post(
-        f"{EVAL_CHAT_BASE_URL}/chat",
+        f"{base_url}/chat",
         params={"message": message, "channel": "EVAL"},
         timeout=1200.0,
     )
@@ -295,7 +304,10 @@ async def _fetch_behavioral_signals(
 
 
 async def run_one_fixture(
-    http: httpx.AsyncClient, es: httpx.AsyncClient, fixture: Fixture
+    http: httpx.AsyncClient,
+    es: httpx.AsyncClient,
+    fixture: Fixture,
+    arm: str = "control",
 ) -> BehavioralReport:
     """Drive one fixture through the eval gateway and collect its behavioral report.
 
@@ -304,7 +316,7 @@ async def run_one_fixture(
     `entity_extraction_completed` (so the caller's next wipe, if any, happens *after*
     this turn's entities have actually landed — see module docstring).
     """
-    session_id, trace_id = await _call_chat(http, fixture.message)
+    session_id, trace_id = await _call_chat(http, fixture.message, EVAL_ARMS[arm])
     await wait_for_event_settle(
         es, trace_id, "model_call_completed", timeout_s=SIGNAL_SETTLE_TIMEOUT_S
     )
@@ -354,7 +366,9 @@ def _make_eval_driver() -> Any:
     )
 
 
-async def run_behavioral_arm(fixtures: list[Fixture]) -> list[dict[str, Any]]:
+async def run_behavioral_arm(
+    fixtures: list[Fixture], arms: tuple[str, ...] = ("control",), trials: int = 1
+) -> list[dict[str, Any]]:
     """Run every fixture through arm 3, wiping `neo4j-eval` between each.
 
     Covers AC-4 plus AC-3's per-fixture control — see :func:`run_contamination_proof`
@@ -362,31 +376,53 @@ async def run_behavioral_arm(fixtures: list[Fixture]) -> list[dict[str, Any]]:
 
     Args:
         fixtures: The fixture set.
+        arms: Which eval gateways to drive, by name in ``EVAL_ARMS``. FRE-1350: the
+            original run drove only ``control``, whose primitives are disabled, so a
+            fixture needing ``bash`` scored zero tool calls for want of the tool. Pass
+            both arms to make that difference measurable rather than invisible.
+        trials: Repeats per (arm, fixture). Every cell was n=1 before FRE-1350, and the
+            ``gpsr_research`` cell was observed flipping between two runs on the same
+            day — a single draw cannot separate that variance from signal.
 
     Returns:
-        One JSON-serializable behavioral report per fixture.
+        One JSON-serializable behavioral report per (arm, trial, fixture), each carrying
+        its own ``arm`` and ``trial`` so no row's environment is implicit.
 
     Raises:
-        GatewayStaleError: The eval gateway's cached image predates the working tree
+        GatewayStaleError: An eval gateway's cached image predates the working tree
             (FRE-1341) — a stale `seshat-gateway:latest` used to serve this silently,
-            with `/health` reporting "healthy" throughout.
+            with `/health` reporting "healthy" throughout. Checked per arm: FRE-1350
+            drives two gateways, and asserting only control would leave treatment
+            unguarded, which is the same shape as the gap FRE-1341 left on
+            `run_contamination_proof`.
     """
     driver = _make_eval_driver()
-    reports: list[BehavioralReport] = []
+    rows: list[dict[str, Any]] = []
     try:
         async with httpx.AsyncClient() as http, httpx.AsyncClient() as es:
-            await assert_gateway_fresh(http, EVAL_CHAT_BASE_URL, _repo_root())
-            for fixture in fixtures:
-                await wipe_eval_graph(driver, uri=EVAL_NEO4J_URI)
-                report = await run_one_fixture(http, es, fixture)
-                reports.append(report)
-                log.info(
-                    "fre1337_behavioral_row",
-                    fixture=fixture.label,
-                    tool_calls=report.tool_call_count,
-                    web_searches=report.web_search_count,
-                    extraction_settled=report.extraction_settled,
-                )
+            for arm in arms:
+                # FRE-1341 + FRE-1350: assert freshness PER ARM, not once for control.
+                # A stale image serves old code with /health reporting "healthy", and
+                # each arm is a separate container that can be stale independently.
+                await assert_gateway_fresh(http, EVAL_ARMS[arm], _repo_root())
+                for trial in range(trials):
+                    for fixture in fixtures:
+                        await wipe_eval_graph(driver, uri=EVAL_NEO4J_URI)
+                        report = await run_one_fixture(http, es, fixture, arm=arm)
+                        # FRE-1350 AC-1: the arm and its trial index travel WITH the row.
+                        # A tool-call count whose environment is not recorded is what made
+                        # the first arm-3 run unattributable.
+                        row = asdict(report) | {"arm": arm, "trial": trial}
+                        rows.append(row)
+                        log.info(
+                            "fre1337_behavioral_row",
+                            arm=arm,
+                            trial=trial,
+                            fixture=fixture.label,
+                            tool_calls=report.tool_call_count,
+                            web_searches=report.web_search_count,
+                            extraction_settled=report.extraction_settled,
+                        )
                 # AC-3: wait for THIS fixture's extraction to land before the NEXT
                 # fixture's wipe runs — wiping first would very likely let this
                 # fixture's own extraction land after the wipe, during or after the
@@ -396,7 +432,7 @@ async def run_behavioral_arm(fixtures: list[Fixture]) -> list[dict[str, Any]]:
                 # loop iteration, after this wait already completed) is the control.
     finally:
         await driver.close()
-    return [asdict(r) for r in reports]
+    return rows
 
 
 @dataclass(frozen=True)

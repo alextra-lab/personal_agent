@@ -31,6 +31,23 @@ EVAL_NEO4J_URI = "bolt://localhost:7689"
 #: for `seshat-gateway-control` (127.0.0.1:9002:9001) — never prod's :9001.
 EVAL_CHAT_BASE_URL = "http://localhost:9002"
 
+#: The treatment arm (`seshat-gateway-treatment`, host 127.0.0.1:9003). FRE-1350: arm 3
+#: originally drove only :data:`EVAL_CHAT_BASE_URL`, which is the **control** gateway —
+#: "curated tools only, primitives disabled" per docker-compose.eval.yml. Measured live
+#: 2026-08-30: control carries 10 tools, treatment 15, production 22. The control arm has
+#: no `bash`, so the `tool_use_request` fixture ("check the logs") scored 0 tool calls for
+#: want of the tool rather than for anything about intent routing. Running one side of a
+#: deliberate A/B and reporting it as the system's behaviour is the defect FRE-1350 records.
+EVAL_CHAT_BASE_URL_TREATMENT = "http://localhost:9003"
+
+#: The only `/chat` endpoints this harness may drive, by arm name. The guard below checks
+#: membership of this mapping rather than equality with one constant, so adding an arm is a
+#: deliberate edit here and never an accident at a call site.
+EVAL_ARMS: dict[str, str] = {
+    "control": EVAL_CHAT_BASE_URL,
+    "treatment": EVAL_CHAT_BASE_URL_TREATMENT,
+}
+
 #: Full-graph wipe, same statement `fre435_memory_recall/harness.py`'s `WIPE_CYPHER` uses.
 #: Leaves schema (constraints, vector index) intact.
 WIPE_CYPHER = "MATCH (n) DETACH DELETE n"
@@ -74,10 +91,11 @@ def assert_eval_chat_url(base_url: str) -> None:
     Raises:
         SubstrateGuardError: If ``base_url`` is anything but the eval gateway.
     """
-    if base_url != EVAL_CHAT_BASE_URL:
+    if base_url not in EVAL_ARMS.values():
+        allowed = ", ".join(f"{name}={url!r}" for name, url in sorted(EVAL_ARMS.items()))
         raise SubstrateGuardError(
-            f"refused: {base_url!r} is not the eval gateway ({EVAL_CHAT_BASE_URL!r}) — "
-            "this harness's behavioral arm drives nothing but the isolated eval gateway."
+            f"refused: {base_url!r} is not an eval gateway ({allowed}) — this harness's "
+            "behavioral arm drives nothing but the isolated eval gateways."
         )
 
 

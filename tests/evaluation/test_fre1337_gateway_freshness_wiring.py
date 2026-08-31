@@ -30,6 +30,26 @@ def test_run_behavioral_arm_asserts_gateway_freshness_before_the_fixture_loop() 
     )
 
 
-def test_freshness_assertion_targets_the_control_gateway() -> None:
+def test_freshness_assertion_targets_every_arm_driven() -> None:
+    """FRE-1350 supersedes FRE-1341's control-only assertion — but does not weaken it.
+
+    The original asserted `assert_gateway_fresh(http, EVAL_CHAT_BASE_URL` — a literal
+    pinning the check to the control gateway. Arm 3 now drives control AND treatment,
+    which are separate containers that can be stale independently, so pinning to control
+    would leave treatment silently unguarded: exactly the shape of the gap FRE-1341
+    itself recorded on `run_contamination_proof`.
+
+    The check is therefore keyed on the arm under test, and must sit inside the arm loop
+    so every arm is asserted rather than only the first.
+    """
     source = inspect.getsource(behavioral.run_behavioral_arm)
-    assert "assert_gateway_fresh(http, EVAL_CHAT_BASE_URL" in source
+    assert "assert_gateway_fresh(http, EVAL_ARMS[arm]" in source, (
+        "freshness must be asserted for the arm actually being driven, not a fixed "
+        "control constant — two arms, two containers, two chances to be stale"
+    )
+    arm_loop = source.index("for arm in arms:")
+    freshness_call = source.index("assert_gateway_fresh(")
+    assert arm_loop < freshness_call, (
+        "the assertion must be INSIDE the arm loop; before it, only one arm would ever "
+        "be checked no matter how many are driven"
+    )

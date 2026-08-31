@@ -194,12 +194,23 @@ class GraphProtocol(Protocol):
 
     async def mark_relationships_none(self) -> int: ...
 
+    async def count_relationship_candidates(self) -> int: ...
+
 
 #: Candidate selection: anything NOT YET 'provenanced' — NULL, 'none' (a legacy item may
 #: already read 'none' from an incidental post-FRE-1346 touch, see module docstring), or
 #: any out-of-enum value. Deliberately NOT "NOT IN ['provenanced','none']", which would
 #: exclude 'none' from re-examination and defeat the whole point of the widened filter.
 _CANDIDATE_PREDICATE = "n.provenance_state IS NULL OR n.provenance_state <> 'provenanced'"
+
+#: Shared between mark_relationships_none (SET) and count_relationship_candidates
+#: (read-only, --dry-run preview) — one predicate, so the preview can never drift from
+#: what the real write would actually touch.
+_RELATIONSHIP_CANDIDATE_MATCH = (
+    "MATCH ()-[r]->() "
+    "WHERE r.weight IS NOT NULL AND NOT type(r) IN $structural_types "
+    f"AND ({_CANDIDATE_PREDICATE.replace('n.', 'r.')})"
+)
 
 
 class _Neo4jGraph:
@@ -301,12 +312,20 @@ class _Neo4jGraph:
     async def mark_relationships_none(self) -> int:
         async with self._driver.session() as session:  # type: ignore[attr-defined]
             result = await session.run(
-                "MATCH ()-[r]->() "
-                "WHERE r.weight IS NOT NULL AND NOT type(r) IN $structural_types "
-                f"AND ({_CANDIDATE_PREDICATE.replace('n.', 'r.')}) "
+                f"{_RELATIONSHIP_CANDIDATE_MATCH} "
                 "SET r.provenance_state = "
                 "CASE WHEN r.provenance_state = 'provenanced' THEN r.provenance_state ELSE 'none' END "
                 "RETURN count(r) AS n",
+                structural_types=list(_STRUCTURAL_RELATIONSHIP_TYPES),
+            )
+            rec = await result.single()
+        return int(rec["n"]) if rec else 0
+
+    async def count_relationship_candidates(self) -> int:
+        """Read-only preview count for ``--dry-run`` — same predicate, no write."""
+        async with self._driver.session() as session:  # type: ignore[attr-defined]
+            result = await session.run(
+                f"{_RELATIONSHIP_CANDIDATE_MATCH} RETURN count(r) AS n",
                 structural_types=list(_STRUCTURAL_RELATIONSHIP_TYPES),
             )
             rec = await result.single()
@@ -468,8 +487,14 @@ async def run_backfill(
                     await graph.write_claim_none(claim_cand.claim_id)
 
     # Relationships — never reconstructed (A4b: no trace/session key persisted), one
-    # bulk pass covers the whole population.
-    report.relationships_marked_none = 0 if dry_run else await graph.mark_relationships_none()
+    # bulk pass covers the whole population. Under --dry-run this is a read-only count
+    # over the identical predicate, not a hard-coded 0 — the flag previews every kind's
+    # outcome, per its own docstring below.
+    report.relationships_marked_none = (
+        await graph.count_relationship_candidates()
+        if dry_run
+        else await graph.mark_relationships_none()
+    )
 
     report.success = report.entities_errors == 0 and report.claims_errors == 0
     report.finished_at = now

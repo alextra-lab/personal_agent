@@ -58,6 +58,32 @@ def captures_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
     return d
 
 
+@pytest_asyncio.fixture
+async def prefix(driver):
+    """A unique fixture-name prefix, cleaned up on teardown even if the test fails.
+
+    A trailing cleanup statement at the end of the test body only runs when every
+    assertion above it passes — an assertion failure mid-test (as happened once during
+    this ticket's own development) skips straight past it and leaves fixture nodes
+    orphaned on the shared test substrate for every later test run to trip over.
+    """
+    value = f"FRE1348IT{uuid4().hex[:8]}"
+    try:
+        yield value
+    finally:
+        async with driver.session() as session:
+            await session.run(
+                "MATCH (x) WHERE x.name STARTS WITH $prefix OR x.claim_id STARTS WITH $prefix "
+                "DETACH DELETE x",
+                prefix=value,
+            )
+            await session.run(
+                "MATCH (s:Source) WHERE s.referent STARTS WITH 'https://example.com/' "
+                "AND s.retained_pointer CONTAINS $prefix DETACH DELETE s",
+                prefix=value,
+            )
+
+
 def _write_fixture_capture(trace_id: str, *, fetches: list[tuple[str, str]]) -> None:
     """Write a fixture capture with one fetch_url tool_result per (url, content) pair."""
     write_capture(
@@ -148,9 +174,7 @@ async def _claim_state(driver, claim_id: str) -> tuple[str | None, list[str]]:
 
 
 @pytest.mark.asyncio
-async def test_backfill_end_to_end(driver, captures_dir) -> None:
-    prefix = f"FRE1348IT{uuid4().hex[:8]}"
-
+async def test_backfill_end_to_end(driver, captures_dir, prefix) -> None:
     def n(suffix: str) -> str:
         return f"{prefix}{suffix}"
 
@@ -191,9 +215,16 @@ async def test_backfill_end_to_end(driver, captures_dir) -> None:
 
     capture_index = build_capture_index()
     graph = _Neo4jGraph(driver)
+
+    # --dry-run's relationship preview must agree with what the real run then marks —
+    # same predicate, read-only vs write (code-reviewer finding: a hard-coded 0 under
+    # dry-run would silently break that contract).
+    preview_count = await graph.count_relationship_candidates()
+
     report = await run_backfill(
         graph, capture_index, _REGISTRY, None, run_id=_RUN_ID, now=_NOW, dry_run=False
     )
+    assert report.relationships_marked_none == preview_count
 
     # ---- AC-2: all 10 (including the 2 pre-stamped 'none') are provenanced with a
     # :Source carrying the fixture's referent.
@@ -278,15 +309,5 @@ async def test_backfill_end_to_end(driver, captures_dir) -> None:
     assert node_rec["n"] == 0
     assert rel_rec["n"] == 0
 
-    # ---- Cleanup, scoped to this fixture's prefix.
-    async with driver.session() as session:
-        await session.run(
-            "MATCH (x) WHERE x.name STARTS WITH $prefix OR x.claim_id STARTS WITH $prefix "
-            "DETACH DELETE x",
-            prefix=prefix,
-        )
-        await session.run(
-            "MATCH (s:Source) WHERE s.referent STARTS WITH 'https://example.com/' "
-            "AND s.retained_pointer CONTAINS $prefix DETACH DELETE s",
-            prefix=prefix,
-        )
+    # Cleanup happens in the `prefix` fixture's teardown, even if an assertion above
+    # this point fails.

@@ -132,6 +132,7 @@ class FakeGraph:
         self.entity_writes: list[tuple[str, str, list[SourceRecord]]] = []
         self.claim_writes: list[tuple[str, str, list[SourceRecord]]] = []
         self.mark_relationships_none_calls = 0
+        self.count_relationship_candidates_calls = 0
 
     @staticmethod
     def _is_candidate(node: dict[str, object]) -> bool:
@@ -197,6 +198,10 @@ class FakeGraph:
         self.mark_relationships_none_calls += 1
         return self._relationships_none_count
 
+    async def count_relationship_candidates(self) -> int:
+        self.count_relationship_candidates_calls += 1
+        return self._relationships_none_count
+
 
 async def _run(graph: FakeGraph, *, dry_run: bool = False):
     return await run_backfill(
@@ -251,7 +256,10 @@ async def test_reconstructed_and_missing_capture_buckets(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_dry_run_calls_no_write_method(monkeypatch: pytest.MonkeyPatch) -> None:
-    graph = FakeGraph(entities=[{"eid": "e1", "name": "SafeCart", "trace_id": "trace-a"}])
+    graph = FakeGraph(
+        entities=[{"eid": "e1", "name": "SafeCart", "trace_id": "trace-a"}],
+        relationships_none_count=7,
+    )
 
     async def fake_reader(trace_ids, *, disk_index, es_client):
         return {
@@ -270,7 +278,11 @@ async def test_dry_run_calls_no_write_method(monkeypatch: pytest.MonkeyPatch) ->
     assert report.entities_reconstructed == 1
     assert graph.entity_writes == []
     assert graph.mark_relationships_none_calls == 0
-    assert report.relationships_marked_none == 0
+    # Dry-run previews relationships too, via a read-only count over the identical
+    # predicate — not a hard-coded 0 (the flag's own contract: "still counts and
+    # previews outcomes").
+    assert graph.count_relationship_candidates_calls == 1
+    assert report.relationships_marked_none == 7
 
 
 @pytest.mark.asyncio

@@ -36,6 +36,8 @@ from scripts.eval.fre1337_intent_probe.substrate import (
     find_cross_session_sources,
     wipe_eval_graph,
 )
+from scripts.eval.gateway_freshness import assert_gateway_fresh
+from scripts.eval.gateway_freshness import repo_root as _repo_root
 
 log = structlog.get_logger(__name__)
 
@@ -363,11 +365,17 @@ async def run_behavioral_arm(fixtures: list[Fixture]) -> list[dict[str, Any]]:
 
     Returns:
         One JSON-serializable behavioral report per fixture.
+
+    Raises:
+        GatewayStaleError: The eval gateway's cached image predates the working tree
+            (FRE-1341) — a stale `seshat-gateway:latest` used to serve this silently,
+            with `/health` reporting "healthy" throughout.
     """
     driver = _make_eval_driver()
     reports: list[BehavioralReport] = []
     try:
         async with httpx.AsyncClient() as http, httpx.AsyncClient() as es:
+            await assert_gateway_fresh(http, EVAL_CHAT_BASE_URL, _repo_root())
             for fixture in fixtures:
                 await wipe_eval_graph(driver, uri=EVAL_NEO4J_URI)
                 report = await run_one_fixture(http, es, fixture)

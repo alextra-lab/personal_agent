@@ -75,6 +75,14 @@ RUN chmod +x docker/mcp/run-gateway.sh
 # Install dependencies (production-only, no dev dependencies)
 RUN uv sync --frozen --no-dev
 
+# FRE-1341: bakes a fingerprint of the build inputs above into the image so a running
+# gateway can report what it's actually running — a cached image can otherwise silently
+# serve stale code for months (`/health` reports "healthy" regardless). Placed after
+# `uv sync` so it never invalidates that layer on its own; computed by
+# scripts/eval/gateway_freshness.py, passed in via docker-compose.eval.yml's build args.
+ARG BUILD_FINGERPRINT=unknown
+ENV AGENT_BUILD_FINGERPRINT=$BUILD_FINGERPRINT
+
 HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=30s \
   CMD curl -fsS http://localhost:9001/health || exit 1
 

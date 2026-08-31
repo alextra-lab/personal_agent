@@ -67,6 +67,16 @@ class AppConfig(BaseSettings):
     # Application
     project_name: str = Field(default="Personal Local AI Collaborator", description="Project name")
     version: str = Field(default="0.1.0", description="Application version")
+    build_fingerprint: str | None = Field(
+        default=None,
+        description=(
+            "sha256 over every file Dockerfile.gateway copies into the image "
+            "(scripts/eval/gateway_freshness.py computes it; Dockerfile ARG/ENV bakes it in "
+            "at build time). None outside a container build. Lets a harness assert a running "
+            "eval gateway reflects the code it's about to test, including uncommitted "
+            "changes (FRE-1341)."
+        ),
+    )
     cors_allowed_origins: list[str] = Field(
         default=[
             "http://localhost:3000",

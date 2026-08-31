@@ -44,6 +44,12 @@ x-seshat-gateway-eval-base: &seshat-gateway-eval-base
   build:
     context: .
     dockerfile: Dockerfile.gateway
+    # FRE-1341: bakes a fingerprint of the build inputs into the image so a running
+    # gateway can report what it's actually running (/health's build_fingerprint field) —
+    # computed by scripts/eval/gateway_freshness.py, which `make eval-infra-up` shells out
+    # to. Defaults to "unknown" for an ad hoc `docker build` that doesn't pass it.
+    args:
+      BUILD_FINGERPRINT: ${BUILD_FINGERPRINT:-unknown}
   image: seshat-gateway:latest
   depends_on:
     postgres-eval:

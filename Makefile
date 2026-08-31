@@ -376,8 +376,8 @@ test-infra-ps:          ## Show test infra container status
 # The eval stack uses docker-compose.eval.yml on top of docker-compose.cloud.yml.
 # After FRE-375, eval services have their own isolated substrate.
 
-eval-infra-up:          ## Start eval infra (names eval services explicitly — FRE-1342, never the file union)
-	@docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml up -d postgres-eval neo4j-eval elasticsearch-eval redis-eval seshat-gateway-control seshat-gateway-treatment
+eval-infra-up:          ## Start eval infra (names eval services explicitly — FRE-1342, never the file union; always rebuilds — FRE-1341: a cached image can silently serve stale code)
+	@BUILD_FINGERPRINT=$$(uv run python -m scripts.eval.gateway_freshness --print-fingerprint) docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml up -d --build postgres-eval neo4j-eval elasticsearch-eval redis-eval seshat-gateway-control seshat-gateway-treatment
 
 eval-infra-down:        ## Stop eval infra
 	@docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml down seshat-gateway-control seshat-gateway-treatment postgres-eval neo4j-eval elasticsearch-eval redis-eval

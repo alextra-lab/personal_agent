@@ -104,9 +104,28 @@ class TestEvalComposeRedisIsolation:
             if "compose" in line and "up" in line
         )
         assert up_line.rstrip().endswith(
-            "up -d postgres-eval neo4j-eval elasticsearch-eval redis-eval "
+            "up -d --build postgres-eval neo4j-eval elasticsearch-eval redis-eval "
             "seshat-gateway-control seshat-gateway-treatment"
         ), (
             "eval-infra-up must name eval services explicitly, not bring up the "
             f"union of both compose files with no service args: {up_line!r}"
         )
+
+    def test_makefile_eval_infra_up_always_rebuilds_with_a_fresh_fingerprint(self) -> None:
+        """FRE-1341: a cached seshat-gateway:latest can silently serve months-stale code.
+
+        `--build` forces a rebuild on every bring-up; BUILD_FINGERPRINT is recomputed from
+        the current working tree (including uncommitted changes) so the image that gets
+        built actually reflects what a rebuild produces, and /health can report it.
+        """
+        makefile = (repo_root() / "Makefile").read_text()
+        lines = makefile.splitlines()
+        target_line = next(i for i, line in enumerate(lines) if line.startswith("eval-infra-up:"))
+        up_line = next(
+            line
+            for line in lines[target_line : target_line + 5]
+            if "compose" in line and "up" in line
+        )
+        assert "BUILD_FINGERPRINT=" in up_line
+        assert "scripts.eval.gateway_freshness --print-fingerprint" in up_line
+        assert " --build " in up_line

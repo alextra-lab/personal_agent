@@ -260,7 +260,7 @@ For a source flagged `invocation_check_required`, all three arms run. **Any** ar
 | Arm | Predicate | Class closed |
 |---|---|---|
 | **1 — span coverage** | the recorded invocation **contains** the cited span (`ContainmentResult.contained`) | fully-literal payloads: `printf 'Paris has 9 million residents'` |
-| **2 — fragment contiguity** | some maximal literal run of **≥ 2 content tokens** of the invocation appears as a contiguous run in the result | partial composition generally — entity holes (`… 9 million $(whoami)`), entity-free predicates (`echo "the fish is high in $(basename /x/mercury)"`), multi-token frames |
+| **2 — fragment contiguity** | the **longest common contiguous run** of `normalize_tokens(invocation)` and `normalize_tokens(result)` is **≥ 2 tokens** | partial composition generally — entity holes (`… 9 million $(whoami)`), entity-free predicates (`echo "the fish is high in $(basename /x/mercury)"`), multi-token frames |
 | **3 — non-figure coverage** | the result's non-figure content-token set is **non-empty** *and* the invocation supplies every token in it | one-content-token frames with a computed figure: `echo "found: $(ls | wc -l)"` |
 
 **The non-empty guard on arm 3 is load-bearing, not defensive boilerplate.** "The invocation supplies
@@ -271,6 +271,29 @@ every numeric `ls`, and every scalar `psql -tAc`. That is a false rejection of t
 observation, produced by the arm that exists to catch composition. It was found by review rather than
 by construction, which is the reason the guard is stated in the rule instead of left to an
 implementer.
+
+**Arm 2 is defined on token sequences, not on shell syntax, and that is deliberate.** An earlier
+round-5 draft said "some maximal *literal run* of the invocation", which reads well and defines
+nothing: isolating a quoted argument from its command head requires parsing arbitrary shell, which
+this ADR refuses to do everywhere else. The operational rule needs no parse — run the **existing**
+`normalize_tokens` over the invocation and over the result, and take the longest contiguous token
+subsequence they share. Measured on the fixtures:
+
+| Invocation → result | Longest shared run | Arm 2 |
+|---|---|---|
+| `printf '2026'` → `2026` | `('#2026',)` | misses — 1 |
+| `echo "found: $(ls \| wc -l)"` → `found: 3` | `('found',)` | misses — 1 |
+| `grep 'mercury' file.txt` → *this fish is high in mercury* | `('mercury',)` | misses — 1 |
+| `cat report.txt` → `2026` | `()` | misses — 0 |
+| `echo "Paris has 9 million $(whoami)"` → `Paris has 9 million debian` | `('paris','has','#9000000')` | **fires** — 3 |
+| `printf 'Paris has 9 million residents'` → same | `('paris','has','#9000000','residents')` | **fires** — 4 |
+| `echo "the fish is high in $(basename /x/mercury)"` → *the fish is high in mercury* | `('the','fish','is','high','in')` | **fires** — 5 |
+
+Note that the command head cannot inflate the run: `printf` and `cat` do not appear in their own
+output, so they contribute nothing. **This table is measured against the shipped normalizer, not
+reasoned** — round 5's own review found the previous draft's arm-1 fixture wrong precisely because
+`normalize_tokens("printf '2026'")` is `('printf', '#2026')`, two tokens, which an undefined
+"literal run" could have been read as tripping arm 2.
 
 Arms 2 and 3 are **source-level** — they decide whether this result was composed at all — while
 arm 1 is span-level. That difference is deliberate: arm 1 must stay span-scoped because a legitimate
@@ -616,9 +639,11 @@ Registry identifiers are `S{ordinal}@{16-hex-digest}`, so `bash-tempo-trace-dba5
 identifier; resolving instead by source attribute finds **four** candidate `bash` sources in this
 trace and therefore resolves nothing. **The claim that this ADR converts FRE-1327's fabrication into
 `NOT_CONTAINED` is withdrawn.** What it converts is the *reason recorded*: the span moves from
-`UNCITED` — indistinguishable from a model that never tried — to `MALFORMED_CITATION`, an attempted
-citation against evidence that was present. That is the confabulation-versus-apathy gap the Context
-actually names, and it is smaller than the sentence it replaces.
+`UNCITED` — indistinguishable from a model that never tried — to **`UNRESOLVED`**, the model naming
+a source that does not exist. That is the confabulation-versus-apathy gap the Context actually names,
+and it is smaller than the sentence it replaces. It is also why the Context's observation that
+`UNRESOLVED` sits at **0 documents** is a symptom of this defect rather than an incidental
+statistic.
 
 `NOT_CONTAINED` remains reachable on well-formed citations (AC-2 arm (b)) and on near-misses that do
 resolve unambiguously, and the two span-outcome fields (D1) are where those detections surface —
@@ -693,11 +718,28 @@ recalled item's own identity — an entity `name`, a stance `target` (`captains_
 model steer which source its malformed marker resolves against, by first writing the label it later
 names. `origin` and the digest are minted by the registry from data the model does not author.
 
+**Matching is defined on segments, not substrings.** The near-miss's inner text is lowercased and
+split on runs of non-alphanumeric characters; a candidate matches when **some segment equals its
+`origin` exactly**, or when some segment is a **≥ 8-character prefix of its digest**. Exact segment
+equality rather than substring containment is the operational half of the rule: without it
+`[S@bashful]` matches a `bash` source, and the line between *the model named the tool* and *the model
+wrote a word containing the tool's name* is left to an implementer. On the recorded near-miss
+`bash-tempo-trace-dba5b2` the segments are `bash`, `tempo`, `trace`, `dba5b2`; `bash` matches four
+sources by origin, and `dba5b2` — valid hex, but 6 characters — contributes nothing.
+
 **The 8-character floor exists because a shorter one manufactures detections.** A single hex
 character matches roughly one source in sixteen by coincidence, so `[S@a]` would resolve
 "unambiguously" whenever exactly one registered source happened to have a digest starting `a` — and
-produce a `NOT_CONTAINED` against a source the model never meant. A match must be **unique across
-the whole registry**; two candidates is ambiguity, and ambiguity is row one.
+produce a rejection against a source the model never meant. A match must be **unique across the whole
+registry**; two candidates is ambiguity, and ambiguity is row one.
+
+**D7 engages only where the span's selected binding is itself a near-miss.** Verification records one
+outcome per span and binds one identifier per span (`verification.py:173`, `:289`), so multiplicity is
+already decided before D7 is reached and D7 does not reopen it. **A well-formed marker always wins:**
+where a span carries both a valid marker and a near-miss, the valid marker binds, the span is an
+ordinary citation, and `PASSED` stays reachable. Without that precedence a stray near-miss could
+*degrade* a genuine citation, handing the model a way to poison its own compliant spans — the
+opposite of the admission channel Option 9 was rejected for, and just as unwanted.
 
 #### This does not rescue FRE-1327, and the ADR no longer claims it does
 
@@ -1165,7 +1207,7 @@ implementation can produce.
   `dba5b2cba1e0bece6c8b9396465a265c`, by construction and permanently.** The criterion is therefore
   adjudicated on an **equivalent** — held-out recorded turns asserting figures absent from their own
   tool output — and the named trace carries a **separate, weaker** obligation: **its spans move from
-  `UNCITED` to `MALFORMED_CITATION`**, which is all D7 claims for the ambiguous case. · *Additionally
+  `UNCITED` to `UNRESOLVED`**, which is all D7 claims for the ambiguous case. · *Additionally
   fails if* the equivalent set is drawn entirely from one route: it must contain turns whose citation
   is well-formed (the D2 route) **and** turns whose near-miss resolves unambiguously (the D7 route),
   since a single-route set cannot distinguish an implementation that shipped half the decision;
@@ -1264,10 +1306,13 @@ implementation can produce.
   detection would again be invisible to the ADR's own instrumentation.
 
 - **AC-12 — All three arms of the invocation-composition check fire, and each is the *only* arm that
-  catches its fixture.** The frozen fixture file carries, per arm, at least one composition that
-  **arm 1 and the other arm both miss**: for arm 2, an entity hole (`echo "Paris has 9 million
-  $(whoami)"`) and an entity-free predicate (`echo "the fish is high in $(basename /x/mercury)"`);
-  for arm 3, a one-token frame with a computed figure (`echo "found: $(ls | wc -l)"`). Each such span
+  catches its fixture.** The frozen fixture file carries, **per arm**, at least one
+  composition that the **other two arms both miss**: for arm 1, a fully-literal figure payload
+  (`printf '2026'` asserting *"There are 2026."*); for arm 2, an entity hole
+  (`echo "Paris has 9 million $(whoami)"`); for arm 3, a one-content-token frame with a computed
+  figure (`echo "found: $(ls | wc -l)"`). It additionally carries compositions that trip more than
+  one arm — `printf 'Paris has 9 million residents'` trips all three — so the file records overlap
+  rather than implying exclusivity. Each such span
   is refused `INVOCATION_COVERED`. · **Check:** run the fixture set with each arm individually
   disabled and record which fixtures survive. · *Fails if* any fixture survives with **all** arms
   enabled — an arm is not implemented; **or** if disabling any single arm fails to free that arm's
@@ -1284,28 +1329,35 @@ implementation can produce.
   *"this fish is high in mercury"* must **all** register and pass. · **No exclusivity is asserted
   and none is tested.** The arms overlap: `printf 'Paris has 9 million residents'` trips all three,
   and `echo "the fish is high in $(basename /x/mercury)"` trips arms 2 and 3 because `mercury`
-  reaches the invocation through the path. Only arms 2 and 3 are demonstrably load-bearing alone;
-  **arm 1 is retained for precision, not closure**, and this criterion does not pretend otherwise.
-  *The criterion exists because an implementation shipping arm 1 alone satisfies AC-1 in full —
-  AC-1's probes are all fully-literal.*
+  reaches the invocation through the path. **All three arms are load-bearing**, each on the
+  fixture named above, and this criterion tests all three independently. *It exists because an
+  implementation shipping arm 1 alone satisfies AC-1 in full — AC-1's probes are all
+  fully-literal — and, symmetrically, because round 5's own first draft dismissed arm 1 as
+  redundant when `printf '2026'` shows it is not.*
 
 - **AC-13 — A malformed marker becomes a rejection with a reason, and never an admission.** All
   three D7 rows hold. **(a) No or ambiguous match → `UNRESOLVED`**, gates not run: replaying
-  FRE-1327's recorded `[S@bash-tempo-trace-dba5b2]` against that trace's registry yields `UNRESOLVED`,
-  its four `bash` sources making the match ambiguous. **(b) Unique match, gates reject → that gate's
+  FRE-1327's recorded `[S@bash-tempo-trace-dba5b2]` against that trace's registry yields `UNRESOLVED`:
+  segment `bash` matches four sources by origin, and segment `dba5b2` sits below the 8-character
+  digest floor, so the match is ambiguous. **(b) Unique match, gates reject → that gate's
   own outcome**: a near-miss resolving to an `AGENT_DERIVED` source yields `SOURCE_NOT_ENTITLED`, not
   a containment outcome, because D7 defers to the standard sequence rather than restating it.
   **(c) Unique match, gates would pass → `MALFORMED_CITATION`**, never `PASSED`.
   `MALFORMED_CITATION` is absent from `_TRUE_NO_SOURCE` and `_MACHINE_UNDECIDED`; a turn whose spans
   are all row (c) reports `no_source_count == 0`, and one whose spans are all row (a) reports
   `no_source_count` equal to its span count. · **Check:** unit assertions per row; the FRE-1327
-  replay; frozenset membership assertions; a resolver test that `[S@a]` (one hex character) does
-  **not** resolve; and a scan of the verification path asserting no code path yields `PASSED` for a
-  near-miss span, including after the asynchronous entailment pass. · *Fails if* the FRE-1327 span
-  still scores `UNCITED` (D7 not implemented); **or** if it scores `NOT_CONTAINED` or
-  `MALFORMED_CITATION` — either means the resolver picked one of four candidates arbitrarily, a false
-  detection worse than the silence it replaces; **or** if any near-miss span scores `PASSED`
-  (Option 9's admission channel); **or** if `MALFORMED_CITATION` joins either frozenset — round 3
+  replay; frozenset membership assertions; resolver tests that `[S@a]` (one hex character) does **not**
+  resolve and that `[S@bashful]` does **not** match a `bash` source (segment equality, not substring);
+  a **multiplicity** probe — a span carrying both a valid marker and a near-miss binds the valid one
+  and may score `PASSED`; and a scan of the verification path asserting no code path yields `PASSED`
+  for a span whose *selected binding* is a near-miss, including after the asynchronous entailment
+  pass. · *Fails if* the FRE-1327 span
+  still scores `UNCITED` (D7 not implemented); **or** if it scores anything other than `UNRESOLVED`
+  — `NOT_CONTAINED` and `MALFORMED_CITATION` both mean the resolver picked one of four candidates
+  arbitrarily, a false detection worse than the silence it replaces; **or** if any span whose selected
+  binding is a near-miss scores `PASSED` (Option 9's admission channel); **or** if a near-miss
+  adjacent to a valid marker prevents that span from passing — a stray near-miss must not degrade a
+  compliant span; **or** if `MALFORMED_CITATION` joins either frozenset — round 3
   caught this accounting defect for `INVOCATION_COVERED`, round 5 reproduced it on `UNRESOLVED`, and
   this criterion exists so a third instance fails a test rather than a review; **or** if row (a)
   spans are booked outside `_TRUE_NO_SOURCE`, which would under-count genuine no-source turns; **or**
@@ -1357,8 +1409,9 @@ implementation can produce.
 - [FRE-1316](https://linear.app/frenchforest/issue/FRE-1316) — vision-derived assertions; absorbed
   here as a member of this class
 - [FRE-1327](https://linear.app/frenchforest/issue/FRE-1327) — the confabulation case study. Its
-  span becomes **`MALFORMED_CITATION`** rather than `UNCITED` (D7); `NOT_CONTAINED` is unreachable on
-  this trace and the ADR no longer claims it. The confabulation itself is **not** resolved here
+  span becomes **`UNRESOLVED`** rather than `UNCITED` (D7), its marker resolving ambiguously against
+  four `bash` sources; `NOT_CONTAINED` and `MALFORMED_CITATION` are both unreachable on this trace
+  and the ADR claims neither. The confabulation itself is **not** resolved here
 - [FRE-1284](https://linear.app/frenchforest/issue/FRE-1284) — the compliance metric this
   de-confounds
 - [FRE-1285](https://linear.app/frenchforest/issue/FRE-1285) — enforcement selection, which keys on
@@ -1514,9 +1567,9 @@ still a text defect.
   first is unreachable. **Registering the `bash` output does not make an unparseable marker parse** —
   so D6's headline claim (*"converts the system's blindest failure into its most legible one"*) and
   AC-3 were both false for the one trace this document is built on. **D7** is new: a citation-shaped
-  near-miss produces `CheckOutcome.MALFORMED_CITATION` rather than `UNCITED`, and where it
-  unambiguously identifies one registered source, containment runs and a failure records
-  `NOT_CONTAINED`. `PASSED` is barred from the lattice by construction, so the model's own text can
+  near-miss stops short-circuiting to `UNCITED`: it resolves on registry-minted attributes and, on a
+  unique match, runs the standard gate sequence, with `CheckOutcome.MALFORMED_CITATION` reserved for
+  the one row where the gates would otherwise have returned `PASSED`. `PASSED` is barred from the lattice by construction, so the model's own text can
   select among registered sources but never create admissibility; Option 9 records the permissive
   version and why it was rejected.
 
@@ -1533,9 +1586,10 @@ still a text defect.
   `bash` refusals, so `bash-tempo-trace-dba5b2` resolves ambiguously and containment never runs on
   it. **`NOT_CONTAINED` is unreachable on trace `dba5b2cba1e0bece6c8b9396465a265c`, permanently.**
   What the ADR delivers there is the narrower and honest thing — the span stops reading as *the model
-  did not try* and reads as *the model attempted a citation against evidence that was present*. AC-3
-  is adjudicated on an equivalent, and AC-13 fails an implementation that reports `NOT_CONTAINED` on
-  the named trace, since that could only come from picking one of four candidates arbitrarily.
+  did not try* and reads as **`UNRESOLVED`** — the model named a source that does not exist. AC-3 is
+  adjudicated on an equivalent, and AC-13 fails an implementation that reports `NOT_CONTAINED` **or**
+  `MALFORMED_CITATION` on the named trace, since either could only come from picking one of four
+  candidates arbitrarily.
 - **The monitoring was blind to the case the ADR headlines — round 3's fix, one layer too shallow.**
   Round 3 correctly re-keyed the D2 **check** from `OBSERVED` to `invocation_check_required` and
   wrote down why the two answer different questions. It left the **metric** keyed on `OBSERVED`.
@@ -1560,7 +1614,9 @@ still a text defect.
   rejected, along with `date +%Y`, numeric `ls` and scalar `psql`; arm 3 now carries a non-empty
   guard. And the arms were presented as each closing a distinct class, which measurement refutes:
   `printf 'Paris has 9 million residents'` trips all three and the entity-free fixture trips two, so
-  the exclusivity claim is withdrawn and arm 1 is stated as retained for **precision, not closure**.
+  the exclusivity claim is withdrawn. *(That draft then went too far the other way and called arm 1
+  "retained for precision, not closure"; a later review round refuted it with `printf '2026'` and
+  restored all three arms as load-bearing — see below.)*
   The D2 worked example's token arithmetic was also wrong and is now measured — `claim_unit("Paris
   has 3 million residents")` returns `('paris', '#3000000', 'residents')`, folding the magnitude word
   into the figure, not the `{paris, #3, million, residents}` the draft asserted. **The refinement that
@@ -1618,9 +1674,23 @@ offered for the precision framing was itself wrong, since arm 2 refuses that who
 Three stale assertions that FRE-1327 becomes `NOT_CONTAINED` survived in normative text — D1, the
 Positive Consequences, and AC-3's own opening clause — and are now consistent with the withdrawal.
 
+**A third review round found five more, and one invalidated a table this document had just presented
+as measured.** Arm 2 was written as *"some maximal literal run of the invocation"* — which reads well
+and defines nothing, since isolating a quoted argument from its command head needs a shell parse this
+ADR refuses everywhere else. Under the shipped normalizer `normalize_tokens("printf '2026'")` is
+`('printf', '#2026')` — **two** tokens — so the arm-1 fixture introduced one round earlier was wrong
+as stated. Arm 2 is now defined without any parse: the **longest common contiguous run** of
+`normalize_tokens(invocation)` and `normalize_tokens(result)`, threshold 2, with the per-fixture table
+re-measured against the real normalizer rather than argued. The round also found three surviving
+`MALFORMED_CITATION`-for-FRE-1327 assertions in normative text, where the correct outcome after the
+three-outcome split is `UNRESOLVED`; AC-12 simultaneously requiring and denying arm 1's load-bearing
+status; **no precedence rule for a span carrying several markers**, now settled as *a well-formed
+marker always wins*, so a stray near-miss cannot degrade a compliant span; and origin matching left
+ambiguous between substring and segment, now fixed as **exact segment equality**.
+
 **The standing risk, restated rather than retired.** Round 5 found defects in round 4's fixes; round
-5's first review found defects in round 5's fixes; its second review found defects in those. That is
-this document's whole history and it has not stopped. The changes remain structural — a new
+5's first review found defects in round 5's fixes; its second found defects in those; its third found
+defects in those. That is this document's whole history and it has not stopped. The changes remain structural — a new
 `CheckOutcome` member, a check that went from one arm to three, an entitlement rule consulting an
 address list, and a headline claim withdrawn. **A further round would be a reasonable thing to want**,
 and the honest summary is that this document converges slowly because each fix is load-bearing enough

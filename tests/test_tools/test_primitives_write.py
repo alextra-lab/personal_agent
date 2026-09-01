@@ -10,8 +10,10 @@ from unittest.mock import patch
 import pytest
 
 from personal_agent.governance.models import ToolPolicy
-from personal_agent.tools.primitives.write import write_executor
 from personal_agent.telemetry.trace import TraceContext
+from personal_agent.tools.primitives.write import write_executor
+
+_DURABLE_MOUNTS = frozenset({"/app/agent_workspace", "/app/telemetry", "/"})
 
 
 _CTX = TraceContext.new_trace()
@@ -172,3 +174,67 @@ async def test_write_path_not_in_allowed_paths() -> None:
     assert result["success"] is False
     assert result["error"] == "path_not_allowed"
     assert "path" in result
+
+
+# ---------------------------------------------------------------------------
+# Durability guard (FRE-1352) — /app paths outside a bind mount are refused,
+# the mounted subdirectory still works. Both tests run in the same suite,
+# satisfying AC-5 (seeded negative alongside the passing case).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_rejects_nonmounted_app_path() -> None:
+    """AC-1: a write to a non-mounted /app path is refused, not silently written."""
+    from personal_agent.governance.models import GovernanceConfig
+
+    policy = _make_policy(allowed_paths=["/app/**"], forbidden_paths=[], unattended_paths=[])
+    mock_config = GovernanceConfig.__new__(GovernanceConfig)
+    object.__setattr__(mock_config, "tools", {"write": policy})
+
+    with (
+        patch(
+            "personal_agent.tools.primitives._governance.load_governance_config",
+            return_value=mock_config,
+        ),
+        patch(
+            "personal_agent.tools.primitives._governance._mount_points",
+            return_value=_DURABLE_MOUNTS,
+        ),
+    ):
+        result = await write_executor(
+            "/app/nfl-predictor/x.py", content="junk", mode="overwrite", ctx=_CTX
+        )
+
+    assert result["success"] is False
+    assert result["error"] == "not_durable"
+    assert "agent_workspace" in result["detail"]
+
+
+@pytest.mark.asyncio
+async def test_write_allows_mounted_app_path() -> None:
+    """AC-2: the same run's durable /app subdirectory still writes successfully."""
+    from personal_agent.governance.models import GovernanceConfig
+
+    policy = _make_policy(allowed_paths=["/app/**"], forbidden_paths=[], unattended_paths=[])
+    mock_config = GovernanceConfig.__new__(GovernanceConfig)
+    object.__setattr__(mock_config, "tools", {"write": policy})
+
+    target = "/app/agent_workspace/nfl-predictor/x.py"
+
+    with (
+        patch(
+            "personal_agent.tools.primitives._governance.load_governance_config",
+            return_value=mock_config,
+        ),
+        patch(
+            "personal_agent.tools.primitives._governance._mount_points",
+            return_value=_DURABLE_MOUNTS,
+        ),
+        patch.object(Path, "mkdir", return_value=None),
+        patch.object(Path, "write_text", return_value=None),
+    ):
+        result = await write_executor(target, content="model code", mode="overwrite", ctx=_CTX)
+
+    assert result["success"] is True
+    assert result["path"] == target

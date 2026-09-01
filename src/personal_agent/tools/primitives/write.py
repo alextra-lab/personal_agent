@@ -15,6 +15,7 @@ import structlog
 from personal_agent.config import load_governance_config
 from personal_agent.telemetry import TraceContext
 from personal_agent.tools.primitives._governance import (
+    _check_durability,
     _check_path_governance,
     _expand_path,
     _matches_any,
@@ -30,7 +31,10 @@ log = structlog.get_logger(__name__)
 write_tool = ToolDefinition(
     name="write",
     description=(
-        "Write content to a file. Mode 'overwrite' replaces the file; 'append' adds to the end."
+        "Write content to a file. Mode 'overwrite' replaces the file; 'append' adds to the end. "
+        "Durable storage (survives a restart): /app/agent_workspace/** and /app/telemetry/**. "
+        "Any other path under /app/ is the container's image layer and is destroyed on the "
+        "next rebuild — write work that must persist to /app/agent_workspace/ instead."
     ),
     category="system_write",
     parameters=[
@@ -153,6 +157,8 @@ async def write_executor(
         * ``"invalid_mode"`` — *mode* is not ``'overwrite'`` or ``'append'``
         * ``"forbidden_path"`` — path matched a ``forbidden_paths`` entry
         * ``"path_not_allowed"`` — path not in ``allowed_paths``
+        * ``"not_durable"`` — path is under ``/app`` but not backed by a mounted
+          volume, so it would not survive a container restart (FRE-1352)
         * ``"permission_denied"`` — OS permission error
         * ``"io_error"`` — other I/O error
     """
@@ -183,6 +189,12 @@ async def write_executor(
             trace_id=trace_id,
         )
         return governance_error
+
+    # 3b. Durability (FRE-1352) — refuse a write into the ephemeral container layer
+    # under /app; only bind-mounted subdirectories survive a restart.
+    durability_error = _check_durability(resolved, tool_name="write", trace_id=trace_id)
+    if durability_error is not None:
+        return durability_error
 
     # 4. Scratch-dir / unattended detection
     unattended = _is_unattended_path(resolved, tool_name="write", trace_id=trace_id)

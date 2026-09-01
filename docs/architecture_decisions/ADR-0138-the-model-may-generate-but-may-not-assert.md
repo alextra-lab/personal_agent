@@ -5,7 +5,11 @@ corrected: `bash`+`curl` yields no admissible source at all under the shipped in
 rule, not the partial page-yes/URL-no case the original illustration described (FRE-1283
 review). A typed fetch tool would get that partial admission, but none was live in this
 deployment at the time; FRE-1297 provisioned the native `fetch_url` tool the illustration
-now names.
+now names. · **D2 amended again 2026-09-01 — once, in both
+directions**: ADR-0098 Amendment A §A6 **narrows** it (entitlement follows the provenance terminus)
+and ADR-0139 D2/D3/D7 **widens** it (admissibility decided on the result, at a new `OBSERVED` tier).
+Both are recorded in the D2 amendment note below rather than left to be reconciled by a reader
+(FRE-1349, FRE-1347).
 **Date:** 2026-08-23
 **Deciders:** Project owner (design), `adr` session (drafting)
 **Tags:** grounding, hallucination, citations, retrieval, model-routing, memory, prompts
@@ -207,6 +211,53 @@ This is the same principle as D2 itself, applied one layer down: a tool that ret
 told it to say is the model, wearing a tool's identifier. Turns citing only such sources enter the D5 compliance metric on the same
 footing as any other. This keeps D3's "all three" invariant literally true rather than
 carrying a silent exception.
+
+#### Amendment note — 2026-09-01: D2 is narrowed and widened at once, and the two compose here
+
+D2 acquired **two independent amendments, drafted without reference to each other**. ADR-0098
+Amendment A §A6 obliges this record explicitly ("this amends ADR-0138 D2, and must be recorded
+there"); FRE-1349 required them applied **once, coherently**, rather than twice with a reconciliation
+pass in between. Neither amendment's own text is restated here — this note says what D2 now means and
+where each rule lives.
+
+**The narrowing — ADR-0098 Amendment A §A6.** Entitlement follows the **terminus of the provenance
+chain**. A typed memory retrieval — item 1 of the admissible set above — whose chain terminates at an
+agent-authored turn or at `provenance_state = 'none'` earns `AGENT_DERIVED` and is **not** admissible
+as a citation. Aggregation is most-restrictive: one `none`-terminus item drops the whole recall.
+D2 previously treated a typed memory retrieval as admissible with reachability vacuous for
+referent-less items; that is no longer sufficient on its own. Provenance is **not** an input to
+`verify_turn`'s containment — it decides only the entitlement the recall registers with.
+
+**The widening — ADR-0139 D2, D3 and D7.** Admissibility is decided on the **result**, not on the
+pipe it arrived through, so the categorical exclusion of arbitrary-code tools in the third bullet
+above is replaced for `MODEL_AUTHORED_CODE_TOOLS` (`bash`, `run_python`, `mcp_browser_evaluate`,
+`mcp_browser_run_code`) by a result-level rule at a new `OBSERVED` entitlement tier. The generative
+tools (`perplexity_*`, `mcp_research`, `mcp_sequentialthinking`) keep the categorical exclusion
+verbatim. Model-composed payloads stay inadmissible — no longer by tool identity, but by an
+invocation-composition check whose three arms are specified in ADR-0139 D2. **That check is not
+total, and the amendment does not claim it is:** it closes fully-literal payloads (`printf 'Paris
+has 9 million residents'`) and partially-composed ones, and leaves three residuals declared in
+ADR-0139 D6 — encoded forms, the cross-call shared-state channel, and a one-content-token authored
+frame filled by a non-figure substitution (`echo "Capital: $(whoami)"`). D2's *rule* is unchanged and
+still says the model's own words returning are not evidence; what this amendment records is that the
+rule is now enforced by a check with a stated reach rather than by a categorical tool exclusion with
+none.
+
+**Where they meet, and the rule that resolves it.** The seam is a result that is *both* a
+first-person act and a read of stored state. **The terminus rule follows the bytes, not the tool.**
+A live observation has no provenance chain, so §A6 has nothing to test and `OBSERVED` stands. A
+**read-back of persistent state is a retrieval wearing an observation's clothes** and inherits §A6's
+terminus test whatever tool carried it — so `bash("cat …")` addressed into an agent-writable store
+earns `AGENT_DERIVED`, exactly as a memory recall with an agent-authored terminus does. Without this
+rule the two amendments would cancel: A6 closes FRE-1338's leak in the knowledge graph while
+ADR-0139 reopens the same shape on the filesystem. The rule binds at the **address** rather than the
+author, which is a stated residual with a filed remedy, not an omission — see ADR-0139 D3.
+
+**Net effect on the admissible set above.** Item 1 (memory graph) is *conditional* on its terminus.
+Item 2 (tool and web results) is *widened* to arbitrary-code results that survive the
+invocation-composition check, *except* where the result is a read-back of an agent-writable store, in
+which case item 1's terminus rule governs instead. Items 3 and 4 are unchanged. The model's weights
+are still not on the list, and nothing in either amendment exempts a span from needing a citation.
 
 ### D3 — Three deterministic checks inline; entailment sampled offline
 

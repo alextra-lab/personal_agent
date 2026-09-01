@@ -233,8 +233,15 @@ pipe it arrived through, so the categorical exclusion of arbitrary-code tools in
 above is replaced for `MODEL_AUTHORED_CODE_TOOLS` (`bash`, `run_python`, `mcp_browser_evaluate`,
 `mcp_browser_run_code`) by a result-level rule at a new `OBSERVED` entitlement tier. The generative
 tools (`perplexity_*`, `mcp_research`, `mcp_sequentialthinking`) keep the categorical exclusion
-verbatim. `printf`/`echo` and every other model-composed payload stay inadmissible — not by tool
-identity now, but by an invocation-composition check whose three arms are specified in ADR-0139 D2.
+verbatim. Model-composed payloads stay inadmissible — no longer by tool identity, but by an
+invocation-composition check whose three arms are specified in ADR-0139 D2. **That check is not
+total, and the amendment does not claim it is:** it closes fully-literal payloads (`printf 'Paris
+has 9 million residents'`) and partially-composed ones, and leaves three residuals declared in
+ADR-0139 D6 — encoded forms, the cross-call shared-state channel, and a one-content-token authored
+frame filled by a non-figure substitution (`echo "Capital: $(whoami)"`). D2's *rule* is unchanged and
+still says the model's own words returning are not evidence; what this amendment records is that the
+rule is now enforced by a check with a stated reach rather than by a categorical tool exclusion with
+none.
 
 **Where they meet, and the rule that resolves it.** The seam is a result that is *both* a
 first-person act and a read of stored state. **The terminus rule follows the bytes, not the tool.**

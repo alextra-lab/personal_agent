@@ -31,6 +31,13 @@ Run `mcp__claude_ai_Linear__list_projects` with `team: FrenchForest` and pick th
 covers the work. If genuinely none fits, say so explicitly to the user and get their agreement
 before filing without one — never leave it unset silently.
 
+**A wrong project name is as silent as a missing one.** `save_issue` returns success with no
+`project` on the issue rather than erroring, so a typo, a stale name, or an HTML-escaped
+character produces exactly the unfiled ticket this rule exists to prevent. During the 2026-09-01
+backfill, passing `ADR-0081 Extended — Context &amp; Memory Injection Quality` (ampersand escaped)
+did this; the project id resolved it. Copy the name verbatim from `list_projects`, or pass the
+project **id**, and confirm `project` is populated on the returned issue before reporting success.
+
 ## Tier Selection
 
 Use the routing policy from `.claude/MODEL_ROUTING_POLICY.md`:

@@ -33,9 +33,9 @@ def test_mount_points_parses_mountinfo_fixture(tmp_path: Path) -> None:
     )
 
 
-def test_mount_points_missing_file_returns_empty_set() -> None:
-    """A missing or unreadable mountinfo file fails open to an empty set."""
-    assert _mount_points("/nonexistent/mountinfo") == frozenset()
+def test_mount_points_missing_file_returns_none() -> None:
+    """A missing or unreadable mountinfo file returns None, distinct from an empty table."""
+    assert _mount_points("/nonexistent/mountinfo") is None
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ _MOUNT_SET = frozenset(
 )
 
 
-def _patched(mount_set: frozenset[str] = _MOUNT_SET):
+def _patched(mount_set: frozenset[str] | None = _MOUNT_SET):
     return patch(
         "personal_agent.tools.primitives._governance._mount_points",
         return_value=mount_set,
@@ -86,3 +86,15 @@ def test_is_durable_mount_not_applicable_outside_app() -> None:
     """Durability is only enforced under /app — other allowed roots are out of scope."""
     with _patched():
         assert _is_durable_mount(Path("/tmp/scratch.txt")) is True
+
+
+def test_is_durable_mount_fails_open_when_mountinfo_unreadable() -> None:
+    """Unreadable mount data (None) must not be treated as 'nothing is durable'.
+
+    Otherwise every /app write — including genuinely durable ones like
+    /app/agent_workspace/** — would be wrongly rejected in any environment where
+    /proc/self/mountinfo can't be read (non-Linux, permission-restricted sandbox).
+    """
+    with _patched(mount_set=None):
+        assert _is_durable_mount(Path("/app/agent_workspace/nfl-predictor/x.py")) is True
+        assert _is_durable_mount(Path("/app/nfl-predictor/x.py")) is True

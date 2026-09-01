@@ -43,7 +43,7 @@ def _matches_any(path: str, patterns: list[str]) -> bool:
     return any(fnmatch(path, _expand_path(p)) for p in patterns)
 
 
-def _mount_points(mountinfo_path: str = "/proc/self/mountinfo") -> frozenset[str]:
+def _mount_points(mountinfo_path: str = "/proc/self/mountinfo") -> frozenset[str] | None:
     """Return the set of absolute mount-point paths from the kernel mount table.
 
     Reads ``/proc/self/mountinfo`` rather than ``os.path.ismount``, which only compares
@@ -55,15 +55,16 @@ def _mount_points(mountinfo_path: str = "/proc/self/mountinfo") -> frozenset[str
             hermetic unit test independent of the real filesystem.
 
     Returns:
-        Frozenset of mount-point path strings. Empty when the file cannot be read
-        (non-Linux, permission) — callers must treat that as "no mount data", not
+        Frozenset of mount-point path strings, or ``None`` when the file cannot be
+        read (non-Linux, permission) — distinct from a successfully parsed empty
+        table, so callers can fail open on "no mount data" rather than treat it as
         "nothing is durable".
     """
     try:
         with open(mountinfo_path, encoding="utf-8") as fh:
             lines = fh.readlines()
     except OSError:
-        return frozenset()
+        return None
 
     points = set()
     for line in lines:
@@ -100,6 +101,10 @@ def _is_durable_mount(resolved: Path) -> bool:
         return True
 
     mount_points = _mount_points()
+    if mount_points is None:
+        log.warning("mountinfo_unreadable_durability_check_fails_open", path=str(resolved))
+        return True
+
     for ancestor in (resolved, *resolved.parents):
         if str(ancestor) in mount_points:
             return True

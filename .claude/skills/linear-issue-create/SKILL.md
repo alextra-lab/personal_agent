@@ -18,6 +18,18 @@ Create a Linear issue that conforms to the **Linear Implement Gate** policy in `
 | State | `Needs Approval` (state — **not** a label) |
 | Labels | `PersonalAgent` + exactly one tier label |
 | Tier label (pick one) | `Tier-1:Opus` · `Tier-2:Sonnet` · `Tier-3:Haiku` |
+| Project | The Linear project this work belongs to — **required** |
+
+### Project is required
+
+`save_issue` accepts `project` and silently omits it when you don't pass one, so a ticket filed
+without it lands in no project at all and disappears from every project-level view. On
+2026-09-01 that had produced **29 unfiled Approved tickets carrying three of the portfolio's four
+Urgents**, across three months — the default outcome leaking through, not a one-off.
+
+Run `mcp__claude_ai_Linear__list_projects` with `team: FrenchForest` and pick the one whose scope
+covers the work. If genuinely none fits, say so explicitly to the user and get their agreement
+before filing without one — never leave it unset silently.
 
 ## Tier Selection
 
@@ -33,17 +45,21 @@ Ask the user which tier if it isn't obvious from the description.
 
 1. **Gather** title and body from the user. Body should reference any specs/ADRs.
 2. **Determine** tier (ask if ambiguous).
-3. **Find** team/label IDs:
+3. **Find** team/label/project IDs:
    - `mcp__claude_ai_Linear__list_teams` → find `FrenchForest`
    - `mcp__claude_ai_Linear__list_issue_labels` → find IDs for `PersonalAgent` + chosen tier label
    - `mcp__claude_ai_Linear__list_issue_statuses` → find state ID for `Needs Approval`
-4. **Create** via `mcp__claude_ai_Linear__save_issue` with team, state, label IDs, title, description.
+   - `mcp__claude_ai_Linear__list_projects` → find the project whose scope covers this work
+4. **Create** via `mcp__claude_ai_Linear__save_issue` with team, state, label IDs, **project**,
+   title, description.
 5. **Report** the created issue URL and remind the user it's `Needs Approval` — implementation is blocked until they move it to `Approved`.
 
 ## Never Do
 
 - Add a `Needs Approval` **label** (the policy uses *state*, not label).
 - Skip the tier label — every issue must have exactly one.
+- File without a project because none obviously fits — ask the user instead. An unfiled ticket is
+  invisible to project-level planning, which is how the most urgent work goes unseen.
 - Move the issue to `Approved` yourself. Only the user does that.
 - Create the issue under any team other than `FrenchForest`.
 

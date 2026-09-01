@@ -181,8 +181,9 @@ delivered is the two span-outcome fields.
 **Those two fields are the signals that must never go structurally to zero.** They are measured on
 spans, after both polarities of D2's check have run, so together they distinguish the three states
 registration alone cannot: evidence cited and supported (`passed`), evidence present but the claim
-invented against it (`not_contained` — this is FRE-1327, reachable only via D7), and a laundering
-attempt refused (`invocation_covered`). A vacuous implementation that registers everything and checks
+invented against it (`not_contained`), and a laundering attempt refused (`invocation_covered`).
+*`not_contained` is **not** FRE-1327's outcome: that span resolves ambiguously and lands at
+`UNRESOLVED` — see D7.* A vacuous implementation that registers everything and checks
 nothing shows `passed` at 100% and `invocation_covered` at zero across the seeded probe set, which
 AC-1 and AC-5 both reject.
 
@@ -284,17 +285,28 @@ entity hole, because `echo "Paris has 9 million $(whoami)"` leaves `debian` in t
 by the invocation. Neither is a tuning failure; they close complementary halves and the union is the
 rule.
 
-**The arms overlap heavily, and no claim of exclusivity is made.** Measured on the fixtures:
-`printf 'Paris has 9 million residents'` trips all three; `echo "the fish is high in
-$(basename /x/mercury)"` trips arm 2 **and** arm 3, because `mercury` reaches the invocation through
-the path argument; `echo "Paris has $(ls | wc -l) million residents"` trips arm 2 and arm 3 though it
-was introduced as arm 2's case. Only **arm 2** is demonstrably load-bearing alone —
-`echo "Paris has 9 million $(whoami)"` escapes arms 1 and 3 and is caught by the contiguous run
-`Paris has 9 million`. **Arm 1 is retained for precision, not for closure**: it is span-scoped, so it
-refuses the offending span, while arms 2 and 3 are source-scoped and refuse the whole result. On
-`bash("cat report.txt; echo 'Paris has 9 million residents'")` arm 1 refuses one span and leaves the
-report citable, where arm 2 would cost the turn its genuine evidence. That is a real
-false-rejection cost of the source-scoped arms and it is accepted here rather than discovered later.
+**The arms overlap heavily, and no claim of exclusivity is made — but all three are load-bearing.**
+Measured on the fixtures: `printf 'Paris has 9 million residents'` trips all three;
+`echo "the fish is high in $(basename /x/mercury)"` trips arm 2 **and** arm 3, because `mercury`
+reaches the invocation through the path argument; `echo "Paris has $(ls | wc -l) million residents"`
+trips arms 2 and 3 though it was introduced as arm 2's case. Each arm nonetheless has a fixture the
+other two miss:
+
+| Arm | Fixture the other two miss | Why the others miss it |
+|---|---|---|
+| 1 | `printf '2026'` → assertion *"There are 2026."* | required is `('#2026',)`; the invocation's literal run is one token, so arm 2 misses at `N ≥ 2`, and the result's non-figure set is empty, so arm 3's guard disables it |
+| 2 | `echo "Paris has 9 million $(whoami)"` | `debian` is absent from the invocation, so arm 1's coverage and arm 3's non-figure coverage both fail |
+| 3 | `echo "found: $(ls \| wc -l)"` | the frame is one content token, below arm 2's threshold; `#3` is absent from the invocation, so arm 1 misses |
+
+**Round 5's first draft got arm 1 wrong twice** and both errors are recorded because they are
+instructive. It called arm 1 *"retained for precision, not closure"* — false: `printf '2026'` is a
+fully-literal payload that **only** arm 1 closes, so dropping arm 1 would reopen the very class AC-1
+exists for. And it justified arm 1 with
+`bash("cat report.txt; echo 'Paris has 9 million residents'")`, claiming arm 1 refuses one span while
+leaving the report citable — also false, because arm 2 detects the echoed literal run and refuses the
+**whole source** regardless. That last point stands as a real cost of the source-scoped arms:
+**a single laundering fragment in an otherwise genuine result costs the whole source its citations.**
+It is conservative, it is the direction that fails safe, and it is not mitigated by arm 1.
 
 **Why the threshold is a token count and not something more principled.** The obvious refinement is
 to key arm 2 on *what* the echoed fragment carries — reject when it holds an entity or a figure,
@@ -618,10 +630,11 @@ failure. A citation-plumbing fix that made the fabrication *measurable* has not 
 this ADR must not be read as though it had.
 ### D7 — A malformed citation marker is a rejection with a reason, not a silence
 
-**A citation-shaped string that fails `CITATION_MARKER_PATTERN` produces a new rejection outcome,
-`CheckOutcome.MALFORMED_CITATION`, instead of `UNCITED`.** Where — and only where — that string
-unambiguously identifies exactly one registered source, containment additionally runs against it and
-a failure is recorded as `NOT_CONTAINED`. A near-miss span can **never** score `PASSED`.
+**A citation-shaped string that fails `CITATION_MARKER_PATTERN` stops short-circuiting to `UNCITED`.**
+It is resolved against the registry on **registry-minted attributes only**, and the span it binds
+then runs **the standard gate sequence** — entitlement, reachability, containment — exactly as a
+well-formed citation does. The one difference is at the end: **a near-miss span can never score
+`PASSED`.**
 
 The defect this closes is stated in the Context and then not acted on: `UNRESOLVED` appears in **0**
 documents while `uncited` appears in 11, so *"the model minted a marker naming the source it had
@@ -629,62 +642,90 @@ actually used"* is byte-identical, in every record we keep, to *"the model did n
 `near_miss_markers` counts those strings; counting says a near-miss happened and says nothing about
 the turn's verdict, which is where every consumer looks.
 
-#### `MALFORMED_CITATION` is its own outcome, and reusing `UNRESOLVED` would have been a bug
+#### Three outcomes, because there are three situations — and only one of them is new
 
-Round 5's first draft clamped these spans to `UNRESOLVED`. That is wrong for a reason this document
-has already met once: `UNRESOLVED` is a member of `_TRUE_NO_SOURCE` (`verification.py:120`), which
-feeds `TurnVerification.true_no_source` and `GroundingRecord.no_source_count` — fields meaning **no
-admissible source existed**. A near-miss fires precisely when a source *did* exist and the model
-reached for it, so the clamp would have recorded a botched citation against present evidence as an
-absence of evidence. **This is the identical accounting defect round 3 caught for
-`INVOCATION_COVERED`, on a different outcome value**, and it is the reason `MALFORMED_CITATION` is a
-new member barred from `_TRUE_NO_SOURCE` and from `_MACHINE_UNDECIDED` rather than a reuse of an
-existing one. Blocking, the D4 retry directive and serialization already operate generically on any
-non-`PASSED` outcome, so no further wiring is owed.
+Round 5's first draft used a single new outcome for every near-miss, and its own review broke that in
+one line: a near-miss matching **no** source and a near-miss matching **one source that holds the
+claim** are not the same situation. In the first, no admissible source was brought to bear on the
+span; in the second, one was, and only the marker was malformed. A single member cannot be both
+inside and outside `_TRUE_NO_SOURCE`, and `no_source_count` is computed from that membership alone
+(`verification.py:615`).
 
-#### Resolution is by source attribute, it is usually ambiguous, and it does not rescue FRE-1327
+| Near-miss resolves to | Then | Outcome |
+|---|---|---|
+| no source, or more than one | gates not run | **`UNRESOLVED`** — existing member, correctly inside `_TRUE_NO_SOURCE` |
+| exactly one source | the standard gate sequence rejects it | **that gate's own outcome**, unchanged — `SOURCE_NOT_ENTITLED`, `UNREACHABLE`, `NOT_CONTAINED`, `INVOCATION_COVERED` … |
+| exactly one source | the standard gate sequence would return `PASSED` | **`MALFORMED_CITATION`** — the one new member |
+
+**Only the third row needs a new outcome, and it is the only row where a source demonstrably existed
+and supported the claim.** `MALFORMED_CITATION` is therefore a rejection barred from
+`_TRUE_NO_SOURCE` and `_MACHINE_UNDECIDED`, for the reason round 3 gave for `INVOCATION_COVERED`:
+booking it as an absence would report a botched citation against present, supporting evidence as
+having had no evidence at all.
+
+**The first row is the one that does most of the work, and it needs no new member.** `UNRESOLVED`
+already means *this identifier resolves to no source in this turn's registry*, which is precisely
+what a near-miss matching nothing is. Routing near-misses there rather than to `UNCITED` is the whole
+of the confabulation-versus-apathy fix — and it is why the Context's observation that `UNRESOLVED`
+sits at **0 documents** is a symptom of this defect rather than an incidental statistic.
+
+**The second row is deliberately not enumerated.** Round 5's first draft wrote a closed three-row
+lattice that jumped straight to containment, which contradicts gate ordering: a near-miss resolving
+to an `AGENT_DERIVED` memory source is rejected `SOURCE_NOT_ENTITLED` at `verification.py:330`, long
+before containment, and such sources are routinely registered. Deferring to the standard sequence
+removes the contradiction and removes the temptation to keep a second, drifting copy of the gate
+order in this document.
+
+#### Resolution matches registry-minted attributes only, and never the label
 
 Registry identifiers are minted as `S{ordinal}@{16-hex-digest}` (`IDENTIFIER_DIGEST_CHARS` is 16).
 The recorded near-miss `[S@bash-tempo-trace-dba5b2]` has no ordinal and no digest, so it **cannot
-match an identifier**, and a resolution rule written against identifiers would have delivered
-nothing. Resolution therefore matches the near-miss text against registered sources' **identifying
-attributes** — origin, label, digest prefix — and returns a source only on an **unambiguous single**
-match.
+match an identifier**, and a rule written against identifiers would deliver nothing. Resolution
+therefore matches on:
 
-**On FRE-1327's own trace that match is ambiguous and no containment runs.** The trace carries
-**four** `bash` refusals, so `bash-tempo-trace-dba5b2` names four candidate sources and none of them
-uniquely; `dba5b2` is a prefix of the *trace* id, not of any source digest. The span's outcome is
-`MALFORMED_CITATION`. **The claim that this ADR turns FRE-1327's fabrication into `NOT_CONTAINED` is
-therefore withdrawn**, twice over: first because the marker never parses (D6), and now because it
-never resolves either. What the ADR delivers on that trace is narrower and still worth having — the
-span stops reading as *the model did not try* and starts reading as *the model attempted a citation
-against evidence that was present and got the claim wrong* — which is exactly the
-confabulation-versus-apathy gap the Context raises and the one the record could not express.
+- **`origin`** — the registry-assigned tool name (`bash`, `mcp_esql`, …); and
+- **a digest prefix of at least 8 hex characters** of the source's minted identifier.
+
+**`label` is excluded, and excluding it is a security property rather than a simplification.**
+`RegisteredSource.label` is not uniformly registry-controlled: for memory sources it derives from the
+recalled item's own identity — an entity `name`, a stance `target` (`captains_log/turn_evidence.py:240`)
+— which is knowledge-graph content and therefore agent-influenceable. Matching on it would let the
+model steer which source its malformed marker resolves against, by first writing the label it later
+names. `origin` and the digest are minted by the registry from data the model does not author.
+
+**The 8-character floor exists because a shorter one manufactures detections.** A single hex
+character matches roughly one source in sixteen by coincidence, so `[S@a]` would resolve
+"unambiguously" whenever exactly one registered source happened to have a digest starting `a` — and
+produce a `NOT_CONTAINED` against a source the model never meant. A match must be **unique across
+the whole registry**; two candidates is ambiguity, and ambiguity is row one.
+
+#### This does not rescue FRE-1327, and the ADR no longer claims it does
+
+FRE-1327's trace carries **four** `bash` refusals. `bash-tempo-trace-dba5b2` matches `origin = bash`
+four times over, and `dba5b2` is a prefix of the **trace** id, not of any source digest. The match is
+ambiguous, so the span lands in row one: **`UNRESOLVED`**.
+
+**The claim that this ADR converts FRE-1327's fabrication into `NOT_CONTAINED` is withdrawn** —
+first because the marker never parses, and now because it never resolves either. What the ADR
+delivers on that trace is narrower and still the thing the Context asked for: the span stops reading
+as *the model did not try* and starts reading as *the model named a source that does not exist*,
+which is what confabulation-under-compliance-pressure looks like in a record.
 
 A best-effort nearest match is rejected rather than tuned. It would manufacture a `NOT_CONTAINED`
-against a source the model never named, a false detection in the one signal this ADR asks the reader
-to trust, and on this very trace it would have to pick one of four `bash` calls arbitrarily.
+against a source the model never named — a false detection in the one signal this ADR asks the reader
+to trust — and on this very trace it would have to pick one of four `bash` calls arbitrarily.
 
-#### The lattice
+#### `PASSED` is unreachable from a near-miss, by construction
 
-| Near-miss text identifies | Containment against that source | Outcome |
-|---|---|---|
-| exactly one registered source | span not contained | **`NOT_CONTAINED`** |
-| exactly one registered source | span contained | **`MALFORMED_CITATION`** — the marker was still not a citation |
-| no source, or more than one | not attempted | **`MALFORMED_CITATION`** |
-
-`PASSED` is unreachable from a near-miss by construction. That is the design, not a conservatism:
-letting a fuzzy match earn a pass would create an admission channel steered by text the model writes,
-which is what D4 forbids for the containment bypass ("keys on the registry's own `SourceKind`, never
-on anything the model can write"). Here the model's string may **select** among sources the registry
-already holds and can never **create** admissibility. The span is blocked under D1's default-deny in
-every row above. **All D7 changes is what the record says about why** — and that is the whole
-difference between a system that can see confabulation and one that cannot.
+That is the design, not a conservatism. Letting a fuzzy match earn a pass would create an admission
+channel steered by text the model writes, which is what D4 forbids for the containment bypass ("keys
+on the registry's own `SourceKind`, never on anything the model can write"). Here the model's string
+may **select** among sources the registry already holds, on attributes it does not author, and can
+never **create** admissibility. The span is blocked under D1's default-deny in every row above.
+**All D7 changes is what the record says about why.**
 
 **`NOT_CONTAINED` is reachable without D7**, on a well-formed citation whose claim its source does
-not support; that is AC-2 arm (b) and it does not depend on this decision. What D7 adds is
-reachability on the confabulation-under-pressure shape — and, on the ambiguous majority of that
-shape, a rejection that finally names its own reason.
+not support; that is AC-2 arm (b) and it does not depend on this decision.
 
 ---
 
@@ -890,7 +931,10 @@ it keeps the motivating case citable and names the ledger that upgrades it.
 
 - Tool-driven turns become answerable under `enforce`, removing the hard blocker on ADR-0138 D5's
   enforcement selection.
-- FRE-1327's confabulation becomes a **positive detection** (`NOT_CONTAINED`) rather than a silence
+- FRE-1327's confabulation stops being a **silence**: its span moves from `UNCITED` — the same score
+  as a model that never tried — to `UNRESOLVED`, the model naming a source that does not exist (D7).
+  `NOT_CONTAINED` is **not** reachable on that trace and is no longer claimed; it is the outcome for
+  confabulation carrying a *well-formed* citation, or a near-miss that resolves uniquely, rather than a silence
   indistinguishable from apathy.
 - The compliance metric measures compliance rather than "did this turn happen to reason from citable
   sources", which is the discrimination FRE-1285 keys enforcement on.
@@ -938,11 +982,11 @@ it keeps the motivating case citable and names the ledger that upgrades it.
   citations — conservative, and the direction that fails safe.
 - **`near_miss_markers` acquires a false-detection surface.** D7 converts near-misses from a count
   into a verification outcome, so an over-eager matcher would produce `NOT_CONTAINED` against sources
-  the model never meant. D7 requires an unambiguous single match for exactly this reason, and AC-7's
-  precision bar governs it. The cost of that strictness is that the **majority** of near-misses
-  resolve to nothing and stop at `MALFORMED_CITATION` — including the one recorded instance we have,
-  FRE-1327, whose trace holds four `bash` sources. D7 buys a named rejection, not a containment check,
-  on that shape.
+  the model never meant. D7 requires an unambiguous single match on registry-minted attributes for
+  exactly this reason, and AC-7's precision bar governs it. The cost of that strictness is that the
+  **majority** of near-misses resolve to nothing and stop at `UNRESOLVED` — including the one recorded
+  instance we have, FRE-1327, whose trace holds four `bash` sources. D7 buys a named rejection, not a
+  containment check, on that shape.
 
 ### Risks and Mitigations
 
@@ -955,7 +999,8 @@ it keeps the motivating case citable and names the ledger that upgrades it.
 | A laundering attempt on a tool that is invocation-checked but not `OBSERVED` — `mcp_esql` — is refused correctly and never appears in the evidence surface | **High** | D1 splits the metric: `observed_span_outcomes` keys on entitlement, `invocation_checked_span_outcomes` keys on the flag. AC-11 requires the `mcp_esql` refusal to land in the second field by name, so a re-keyed aggregation that is never demonstrated on the case fails. |
 | Only arm 1 is implemented, and partial composition ships open under a document claiming it closed | **High** | AC-12 seeds all three arms with preregistered fixtures, including a one-token-frame figure hole that arm 1 and arm 2 both miss. An arm-1-only implementation fails on that fixture specifically. |
 | D7's near-miss resolution is implemented as a permissive nearest match, becoming an admission channel or a false-detection source | **High** | D7 bars `PASSED` from the lattice by construction and requires an unambiguous single match on source attributes. AC-13 asserts both directions, and **fails an implementation that reports `NOT_CONTAINED` on FRE-1327's trace** — with four `bash` sources there, that outcome can only come from picking a candidate arbitrarily. |
-| `MALFORMED_CITATION` is placed in `_TRUE_NO_SOURCE`, booking a botched citation against present evidence as an absence of evidence | **High** | D7 bars it from that set and from `_MACHINE_UNDECIDED`, and states that round 3 caught this same accounting defect for `INVOCATION_COVERED` and round 5 reproduced it on `UNRESOLVED`. AC-13 asserts frozenset membership and `no_source_count == 0` on a malformed-only turn. |
+| One near-miss outcome is used for both "no source resolved" and "a source resolved and supported the claim", so `no_source_count` is wrong in one direction whichever frozenset it joins | **High** | D7 splits them: no/ambiguous match takes the **existing** `UNRESOLVED` (correctly inside `_TRUE_NO_SOURCE`), and only the resolved-and-supported row takes the new `MALFORMED_CITATION` (barred from it). AC-13 asserts `no_source_count` in **both** directions — zero on a row-(c)-only turn, equal to the span count on a row-(a)-only turn. Round 3 caught this accounting shape for `INVOCATION_COVERED`; round 5 reproduced it on `UNRESOLVED` and its review caught it again. |
+| The near-miss resolver matches on `label`, letting the model steer resolution by first writing the label it later names | **High** | D7 restricts matching to registry-minted attributes — `origin` and a ≥8-character digest prefix — and states why `label` is excluded: for memory sources it derives from entity names and stance targets (`captains_log/turn_evidence.py:240`), which is agent-influenceable graph content. AC-13 asserts a one-character prefix does not resolve. |
 | Arm 3's universal quantifier is implemented without the non-empty guard, rejecting every numeric-only observation | **High** | D2 states the guard in the rule; AC-12's positive controls name `cat` over numeric content, `date +%Y`, numeric `ls` and scalar `psql` explicitly, because round 5's own first draft failed all four. |
 | `OBSERVED` is granted to a read-back of state the agent wrote in an earlier turn, reopening FRE-1338 on the filesystem | **High** | D3 binds the terminus at the address; AC-14 seeds a read into an agent-writable store and requires `AGENT_DERIVED`, with a read outside those stores earning `OBSERVED` on the same probe family. |
 | The negative check is implemented on `ContainmentResult.passed`, silently readmitting entity-free laundering | **High** | D2 fixes the predicate as `.contained` and states why; AC-1's probe set includes an entity-free payload (`this fish is high in mercury`) whose rejection cannot be achieved by the `.passed` reading. |
@@ -983,11 +1028,13 @@ it keeps the motivating case citable and names the ledger that upgrades it.
   a non-figure-content-token set. Neither introduces a second normalization.
 - `src/personal_agent/grounding/citations.py` (cont.) — near-miss resolution for D7. The near-miss
   detector (built by D1's ticket) yields the candidate string; resolution matches it against
-  registered sources' **identifying attributes** — origin, label, digest prefix — and **never against
-  the minted identifier**, which a near-miss by definition fails to reproduce. A source is returned
-  only on an **unambiguous single** match. The function reports "ambiguous" distinctly from "no
-  match": both yield `MALFORMED_CITATION`, but only the first is a signal worth counting, and the
-  ambiguous case is the majority — FRE-1327's own trace holds four `bash` sources.
+  registered sources on **registry-minted attributes only** — `origin`, and a digest prefix of at
+  least **8** hex characters — and never against the whole minted identifier, which a near-miss by
+  definition fails to reproduce, nor against `label`, which for memory sources derives from
+  agent-influenceable knowledge-graph content (`captains_log/turn_evidence.py:240`). A source is
+  returned only on a match **unique across the registry**. Ambiguous and no-match are reported
+  distinctly — both yield `UNRESOLVED`, but only the first is worth counting, and the ambiguous case
+  is the majority: FRE-1327's own trace holds four `bash` sources.
 - `src/personal_agent/grounding/verification.py` — `CheckOutcome` gains **`INVOCATION_COVERED`** as
   a real member, not a telemetry string. It is a **rejection** outcome — a source existed and was
   caught — and **must not** join `_TRUE_NO_SOURCE` or `_MACHINE_UNDECIDED`: membership there feeds
@@ -997,16 +1044,18 @@ it keeps the motivating case citable and names the ledger that upgrades it.
   already operate generically on any non-`PASSED` outcome. Span checks gain the negative-containment
   clause for sources flagged `invocation_check_required`, evaluated against **the cited source's own
   recorded invocation** and running **all three arms** (D2); `OBSERVATION` sources route to the
-  inline-entailment path, keyed on the registry-assigned `SourceKind` only. `CheckOutcome` also gains
-  **`MALFORMED_CITATION`** (D7) — like `INVOCATION_COVERED` a **rejection** outcome, and barred from
-  `_TRUE_NO_SOURCE` and `_MACHINE_UNDECIDED` for the same reason: a near-miss fires when a source
-  *did* exist, so counting it as an absence corrupts `no_source_count`. A near-miss span that
-  resolves unambiguously runs the containment gate and records `NOT_CONTAINED` on failure;
-  `PASSED` is rewritten to `MALFORMED_CITATION` before the verdict is recorded, and this must be an
-  explicit final step rather than "skip containment for near-misses", which would lose the
-  `NOT_CONTAINED` detection D7 exists to produce. The rewrite is applied **after** any asynchronous
-  entailment pass, so a later `ENTAILMENT_REQUIRED` → `PASSED` transition cannot reopen the admission
-  path behind it.
+  inline-entailment path, keyed on the registry-assigned `SourceKind` only. `CheckOutcome` also gains exactly one
+  member for D7 — **`MALFORMED_CITATION`** — barred from `_TRUE_NO_SOURCE` and `_MACHINE_UNDECIDED`
+  for `INVOCATION_COVERED`'s reason: it is reached only where a source existed *and supported the
+  claim*, so counting it as an absence corrupts `no_source_count`. A near-miss that resolves to no
+  source or to more than one takes the **existing** `UNRESOLVED`, which is already correctly inside
+  `_TRUE_NO_SOURCE` and needs no change. A near-miss that resolves uniquely runs **the standard gate
+  sequence unmodified** — entitlement, reachability, containment — and keeps whatever rejection it
+  yields; only a `PASSED` is rewritten to `MALFORMED_CITATION`. That rewrite is the final step and is
+  applied **after** any asynchronous entailment pass, so a later `ENTAILMENT_REQUIRED` → `PASSED`
+  transition cannot reopen the admission path behind it. Implementing D7 as "skip the gates for
+  near-misses" would lose the detections it exists to produce; implementing it as a second copy of
+  the gate order would drift from the first.
 - `src/personal_agent/grounding/source_registry.py` (cont.) — `RegisteredSource` retains the
   invocation text that produced it and carries an `invocation_check_required` flag, set from the
   tool's classification (`MODEL_AUTHORED_CODE_TOOLS` plus query-language tools such as `mcp_esql`)
@@ -1100,10 +1149,11 @@ implementation can produce.
   0% — or if arm (a) fails.
 
 - **AC-3 — Confabulation against present evidence is detected, and not only on the case we named.**
-  Replaying trace `dba5b2cba1e0bece6c8b9396465a265c`'s recorded tool output and generated response
-  through the amended path, the fabricated trace-metric figures score `NOT_CONTAINED`; **and** the
-  same detection holds across a held-out set of recorded turns, not enumerated here, in which the
-  response asserts figures absent from the turn's own tool output. · **Check:** offline replay
+  On a held-out set of recorded turns, not enumerated here, whose responses assert figures absent
+  from their own tool output **and carry a resolvable citation**, those figures score
+  `NOT_CONTAINED`. Trace `dba5b2cba1e0bece6c8b9396465a265c` carries a **separate and weaker**
+  obligation, because its citation resolves to nothing: its fabricated figures move from `UNCITED` to
+  `UNRESOLVED`. · **Check:** offline replay
   against stored turn records; tool content comes from the record, never re-executed. · *Fails if*
   those spans still score `UNCITED`; **or** if the named trace passes while the held-out set does
   not — the signature of an implementation special-cased to the one trace this ADR cites.
@@ -1220,11 +1270,14 @@ implementation can produce.
   for arm 3, a one-token frame with a computed figure (`echo "found: $(ls | wc -l)"`). Each such span
   is refused `INVOCATION_COVERED`. · **Check:** run the fixture set with each arm individually
   disabled and record which fixtures survive. · *Fails if* any fixture survives with **all** arms
-  enabled — an arm is not implemented; **or** if disabling **arm 2** does not free
-  `echo "Paris has 9 million $(whoami)"`, and disabling **arm 3** does not free
-  `echo "found: $(ls | wc -l)"` — the two cases measured to be caught by that arm alone, so an
-  implementation that stubbed either arm would otherwise pass; **or** if the false-rejection
-  controls regress. **The controls are named because round 5's own review broke them:** `cat
+  enabled — an arm is not implemented; **or** if disabling any single arm fails to free that arm's
+  designated fixture, each of which is measured to be caught by that arm alone: **arm 1** →
+  `printf '2026'` asserting *"There are 2026."*; **arm 2** → `echo "Paris has 9 million $(whoami)"`;
+  **arm 3** → `echo "found: $(ls | wc -l)"`. An implementation that stubbed any one arm would
+  otherwise pass. **All three arms carry such a fixture** — round 5's first draft claimed arm 1 was
+  retained "for precision, not closure" and its review refuted that with `printf '2026'`, which arm 2
+  misses (one-token literal run) and arm 3's non-empty guard disables. · *Also fails if* the
+  false-rejection controls regress. **The controls are named because round 5's own review broke them:** `cat
   report.txt` over a file holding `2026` yields required `('#2026',)` and an **empty** non-figure
   set, which made arm 3 vacuously true and rejected it. So `cat` over numeric-only content, `date
   +%Y`, `ls` with numeric filenames, a scalar `psql -tAc`, and `grep 'mercury' file.txt` →
@@ -1237,24 +1290,27 @@ implementation can produce.
   AC-1's probes are all fully-literal.*
 
 - **AC-13 — A malformed marker becomes a rejection with a reason, and never an admission.** All
-  three D7 lattice rows hold: a near-miss resolving to exactly one source whose content lacks the
-  claim → `NOT_CONTAINED`; one resolving to exactly one source whose content **holds** the claim →
-  `MALFORMED_CITATION`, never `PASSED`; one matching **no** source or **more than one** →
-  `MALFORMED_CITATION` with containment not attempted. Replaying FRE-1327's recorded string
-  `[S@bash-tempo-trace-dba5b2]` against that trace's registry yields `MALFORMED_CITATION` — its four
-  `bash` sources make the match ambiguous. `MALFORMED_CITATION` is absent from `_TRUE_NO_SOURCE` and
-  `_MACHINE_UNDECIDED`, and a turn containing only such spans reports `no_source_count == 0`. ·
-  **Check:** unit assertions per lattice row; the FRE-1327 replay; a membership assertion on the two
-  frozensets; and a scan of the verification path asserting no code path yields `PASSED` for a span
-  whose source came from a near-miss, including after the asynchronous entailment pass. · *Fails if*
-  the FRE-1327 span still scores `UNCITED` (D7 not implemented); **or** if it scores `NOT_CONTAINED`
-  — the resolver picked one of four candidates arbitrarily, which is a false detection and worse than
-  the silence it replaces; **or** if any near-miss span scores `PASSED` (Option 9's admission
-  channel); **or** if `MALFORMED_CITATION` joins either frozenset, which would book a botched citation
-  against present evidence as an absence of evidence — round 3 caught this for `INVOCATION_COVERED`
-  and round 5 caught it again here, on `UNRESOLVED`; **or** if `MALFORMED_CITATION` stays at 0
-  documents over a post-deploy window in which `near_miss_markers` is non-zero, meaning near-misses
-  are still counted and never adjudicated.
+  three D7 rows hold. **(a) No or ambiguous match → `UNRESOLVED`**, gates not run: replaying
+  FRE-1327's recorded `[S@bash-tempo-trace-dba5b2]` against that trace's registry yields `UNRESOLVED`,
+  its four `bash` sources making the match ambiguous. **(b) Unique match, gates reject → that gate's
+  own outcome**: a near-miss resolving to an `AGENT_DERIVED` source yields `SOURCE_NOT_ENTITLED`, not
+  a containment outcome, because D7 defers to the standard sequence rather than restating it.
+  **(c) Unique match, gates would pass → `MALFORMED_CITATION`**, never `PASSED`.
+  `MALFORMED_CITATION` is absent from `_TRUE_NO_SOURCE` and `_MACHINE_UNDECIDED`; a turn whose spans
+  are all row (c) reports `no_source_count == 0`, and one whose spans are all row (a) reports
+  `no_source_count` equal to its span count. · **Check:** unit assertions per row; the FRE-1327
+  replay; frozenset membership assertions; a resolver test that `[S@a]` (one hex character) does
+  **not** resolve; and a scan of the verification path asserting no code path yields `PASSED` for a
+  near-miss span, including after the asynchronous entailment pass. · *Fails if* the FRE-1327 span
+  still scores `UNCITED` (D7 not implemented); **or** if it scores `NOT_CONTAINED` or
+  `MALFORMED_CITATION` — either means the resolver picked one of four candidates arbitrarily, a false
+  detection worse than the silence it replaces; **or** if any near-miss span scores `PASSED`
+  (Option 9's admission channel); **or** if `MALFORMED_CITATION` joins either frozenset — round 3
+  caught this accounting defect for `INVOCATION_COVERED`, round 5 reproduced it on `UNRESOLVED`, and
+  this criterion exists so a third instance fails a test rather than a review; **or** if row (a)
+  spans are booked outside `_TRUE_NO_SOURCE`, which would under-count genuine no-source turns; **or**
+  if `UNRESOLVED` stays at 0 documents over a post-deploy window in which `near_miss_markers` is
+  non-zero, meaning near-misses are still counted and never adjudicated.
 
 - **AC-14 — The terminus rule binds, and it binds on the address.** On a probe family differing
   **only** in the address read: for **each** of D3's normative address classes — the sandbox scratch
@@ -1544,9 +1600,28 @@ ADR-0138 amendment note, which is now stated with its reach rather than as a tot
 claim in this ADR that a reader could check was re-derived by running the normalizer rather than
 reasoning about it, which is how the token-arithmetic error was found.
 
-**The standing risk, restated rather than retired.** Round 5 found defects in round 4's fixes, and
-round 5's review found defects in round 5's fixes — the same pattern every round of this document has
-exhibited. The changes here remain structural: a new `CheckOutcome` member, a check that went from
-one arm to three, an entitlement rule that consults an address list, and a headline claim withdrawn.
-**A sixth round would be a reasonable thing to want**, and the honest summary is that this document
-converges slowly because each fix is load-bearing enough to have its own failure modes.
+**A second review round, on the first round's fixes, found five more.** Every one was against text
+round 5 had just written, and three of them changed the design again. **D7's single new outcome
+collapsed two accounting families** — a near-miss matching nothing means no source was brought to
+bear, while a near-miss matching one supporting source means a source existed and only the marker was
+wrong; one enum member cannot sit both inside and outside `_TRUE_NO_SOURCE`, so the first row now
+takes the **existing** `UNRESOLVED` and only the third takes the new member. **D7's closed lattice
+contradicted gate ordering**: a near-miss resolving to an `AGENT_DERIVED` source is rejected
+`SOURCE_NOT_ENTITLED` at `verification.py:330` long before containment, so D7 now defers to the
+standard gate sequence instead of keeping a second, drifting copy of it. **Resolution by "identifying
+attributes" was underspecified into a false-detection channel** — a one-hex-character digest prefix
+would resolve "unambiguously" by coincidence, and `label` is agent-influenceable for memory sources
+(`captains_log/turn_evidence.py:240`), so matching is now restricted to `origin` plus a ≥8-character
+digest prefix. It also refuted round 5's claim that **arm 1 is retained "for precision, not
+closure"**: `printf '2026'` is a fully-literal payload that only arm 1 catches, and the example
+offered for the precision framing was itself wrong, since arm 2 refuses that whole source anyway.
+Three stale assertions that FRE-1327 becomes `NOT_CONTAINED` survived in normative text — D1, the
+Positive Consequences, and AC-3's own opening clause — and are now consistent with the withdrawal.
+
+**The standing risk, restated rather than retired.** Round 5 found defects in round 4's fixes; round
+5's first review found defects in round 5's fixes; its second review found defects in those. That is
+this document's whole history and it has not stopped. The changes remain structural — a new
+`CheckOutcome` member, a check that went from one arm to three, an entitlement rule consulting an
+address list, and a headline claim withdrawn. **A further round would be a reasonable thing to want**,
+and the honest summary is that this document converges slowly because each fix is load-bearing enough
+to have failure modes of its own.

@@ -43,6 +43,110 @@ def _matches_any(path: str, patterns: list[str]) -> bool:
     return any(fnmatch(path, _expand_path(p)) for p in patterns)
 
 
+def _mount_points(mountinfo_path: str = "/proc/self/mountinfo") -> frozenset[str] | None:
+    """Return the set of absolute mount-point paths from the kernel mount table.
+
+    Reads ``/proc/self/mountinfo`` rather than ``os.path.ismount``, which only compares
+    parent/child device and inode numbers and can misdetect a same-filesystem bind mount.
+    Field index 4 of each mountinfo line is the mount point (man 5 proc).
+
+    Args:
+        mountinfo_path: Path to the mountinfo file. Parameterized so parsing has a
+            hermetic unit test independent of the real filesystem.
+
+    Returns:
+        Frozenset of mount-point path strings, or ``None`` when the file cannot be
+        read (non-Linux, permission) — distinct from a successfully parsed empty
+        table, so callers can fail open on "no mount data" rather than treat it as
+        "nothing is durable".
+    """
+    try:
+        with open(mountinfo_path, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return None
+
+    points = set()
+    for line in lines:
+        fields = line.split(" ")
+        if len(fields) > 4:
+            points.add(fields[4])
+    return frozenset(points)
+
+
+def _is_durable_mount(resolved: Path) -> bool:
+    """Check whether *resolved* survives a container restart.
+
+    Only ``/app`` is the ephemeral image layer (FRE-1352) — other allowed roots
+    (``$HOME/**``, ``/opt/seshat/**``, ``/tmp/**``) are out of this check's scope and
+    always considered durable here. For a path under ``/app``, walk its ancestors and
+    check each against the live mount table: a bind-mounted subdirectory (or a
+    subdirectory of one) survives; a plain image-layer path does not.
+
+    The walk stops at ``/app`` itself and never tests ``/`` — the root filesystem is
+    always a mount entry in real mountinfo, so testing it would make every path read
+    as durable.
+
+    Args:
+        resolved: Fully resolved absolute path.
+
+    Returns:
+        True when the path is durable (or the check does not apply), False when it
+        is under ``/app`` but not backed by any mount.
+    """
+    app_root = Path("/app")
+    try:
+        resolved.relative_to(app_root)
+    except ValueError:
+        return True
+
+    mount_points = _mount_points()
+    if mount_points is None:
+        log.warning("mountinfo_unreadable_durability_check_fails_open", path=str(resolved))
+        return True
+
+    for ancestor in (resolved, *resolved.parents):
+        if str(ancestor) in mount_points:
+            return True
+        if ancestor == app_root:
+            break
+    return False
+
+
+def _check_durability(
+    resolved: Path,
+    tool_name: str,
+    *,
+    trace_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Reject a write into the ephemeral container layer under ``/app``.
+
+    Args:
+        resolved: Fully resolved absolute path.
+        tool_name: Tool name, included in the log line for §I3 identity threading.
+        trace_id: Originating request trace_id.
+
+    Returns:
+        An error dict when *resolved* is under ``/app`` but not backed by a mount,
+        else ``None``.
+    """
+    if _is_durable_mount(resolved):
+        return None
+
+    path_str = str(resolved)
+    log.warning("write_not_durable_rejected", tool=tool_name, path=path_str, trace_id=trace_id)
+    return {
+        "success": False,
+        "error": "not_durable",
+        "path": path_str,
+        "detail": (
+            f"{path_str!r} is under /app but outside a mounted volume, so it lives only in "
+            "the container's writable layer and is destroyed on the next rebuild or restart. "
+            "Write durable work to /app/agent_workspace/ or /app/telemetry/ instead."
+        ),
+    }
+
+
 def _check_path_governance(
     resolved: Path,
     tool_name: str,

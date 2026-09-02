@@ -46,10 +46,20 @@ Wire the existing Captain's Log promotion pipeline to Linear (replacing dry-run 
 > hard non-archived-issue cap** (the free tier's 250-issue limit no longer binds). The promotion
 > budget gate is therefore **not** a billing constraint; it is a **self-imposed review-bandwidth
 > backpressure** so the agent never auto-files more *open* work than a human can triage. It now
-> counts **open (non-terminal) issues** — `count_open_issues`, excluding Done/Canceled/Duplicate —
-> because Linear keeps terminal issues non-archived while their project is open, so a raw
-> non-archived count would wedge the gate shut on completed work. The threshold (200) is a tunable
-> review-bandwidth knob, not a plan limit.
+> counts **open (non-terminal) issues** — excluding Done/Canceled/Duplicate — because Linear keeps
+> terminal issues non-archived while their project is open, so a raw non-archived count would wedge
+> the gate shut on completed work. The threshold (200) is a tunable review-bandwidth knob, not a
+> plan limit.
+
+> **Update 2026-09-02 (FRE-1354):** the gate counted the wrong **population**, not the wrong
+> number. Counting *all* non-terminal team issues put it at 259 against a bar of 200 — shut — on
+> volume Seshat never produced: 81 `Backlog` notes and the entire human queue. Owner ruling: *"the
+> count should be based on the Self-Recommended count. Don't let Seshat create more than 10 self
+> help tickets."* `issue_budget_threshold` is retired; `seshat_open_ticket_cap` (default 10) counts
+> only issues carrying the `agent-filed` marker, which **both** creation paths now apply
+> (`tools/linear.py` and `captains_log/promotion.py`) — a cap against one label alone would leak
+> through the other. The gate refuses at or above the cap and **fails closed** when the count
+> cannot be read; `count_open_agent_issues` replaces `count_open_issues`.
 
 **Historical context (free tier)**: the original design targeted the free tier — 250 non-archived
 issues, 2 teams, 5,000 API requests/hour — where archived issues didn't count toward the 250 limit.
@@ -620,11 +630,16 @@ feedback_defer_revisit_days: int = Field(
     ge=7,
     description="Days before a Deferred issue is captured and archived",
 )
-issue_budget_threshold: int = Field(
-    default=200,
-    ge=50,
-    le=250,
-    description="Pause promotion when non-archived issues exceed this count",
+seshat_open_ticket_cap: int = Field(
+    default=10,
+    ge=1,
+    le=100,
+    description="Max open tickets Seshat itself may have outstanding (FRE-1354)",
+)
+promotion_min_seen_count: int = Field(
+    default=3,
+    ge=1,
+    description="Corroboration bar shared by promotion and read-before-emit retention",
 )
 promotion_initial_cap: int = Field(
     default=5,

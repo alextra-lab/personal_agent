@@ -76,7 +76,7 @@ def _no_sysgraph_suppression() -> object:
     "not suppressed" so entry construction is tested in isolation.
     """
     with patch(
-        "personal_agent.events.pipeline_handlers._read_before_emit_suppresses",
+        "personal_agent.events.pipeline_handlers._read_before_emit_suppresses_entry",
         new=AsyncMock(return_value=False),
     ):
         yield

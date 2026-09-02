@@ -120,6 +120,30 @@ def _generate_entry_id(date: datetime | None = None, trace_id: str | None = None
     return f"CL-{timestamp_str}-{trace_prefix}{next_num:03d}"
 
 
+def _parse_first_seen(raw: object) -> datetime | None:
+    """Parse a stored ``first_seen`` value into an aware datetime (FRE-1354).
+
+    Stored entries hold an ISO string; comparing that to a live ``datetime`` via
+    ``str()`` would compare ``"2026-07-07 00:00:00+00:00"`` against
+    ``"2026-07-07T00:00:00+00:00"`` and order them by the separator character.
+
+    Args:
+        raw: The stored value, normally an ISO 8601 string.
+
+    Returns:
+        An aware datetime, or ``None`` when absent or unparseable.
+    """
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _trace_id_from_entry(entry: CaptainLogEntry) -> str | None:
     """Extract the originating trace_id from a Captain's Log entry, if any.
 
@@ -398,7 +422,23 @@ class CaptainLogManager:
         data = _json.loads(existing_path.read_text(encoding="utf-8"))
         pc = data.get("proposed_change", {})
 
-        pc["seen_count"] = pc.get("seen_count", 1) + 1
+        # FRE-1354: a plain local increment silently discards sysgraph's authoritative
+        # corroboration. A proposal seen 167 times whose local file sat at 1 became 2,
+        # not 168, and still failed promotion's min_seen_count bar — so stamping the
+        # canonical count upstream was worthless until this merge honoured it. Take
+        # whichever is larger: the incoming count when it is authoritative, otherwise
+        # the usual local +1.
+        incoming_pc = new_entry.proposed_change
+        incoming_seen = incoming_pc.seen_count if incoming_pc else 1
+        pc["seen_count"] = max(pc.get("seen_count", 1) + 1, incoming_seen)
+
+        # The group's original first_seen, not this sighting's — otherwise the age
+        # criterion resets on every observation and a long-standing idea never ages.
+        incoming_first_seen = incoming_pc.first_seen if incoming_pc else None
+        if incoming_first_seen is not None:
+            stored = _parse_first_seen(pc.get("first_seen"))
+            if stored is None or incoming_first_seen < stored:
+                pc["first_seen"] = incoming_first_seen.isoformat()
 
         if not pc.get("source") and new_entry.proposed_change and new_entry.proposed_change.source:
             pc["source"] = new_entry.proposed_change.source.value

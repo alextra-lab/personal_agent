@@ -195,7 +195,18 @@ class ProposedChange(BaseModel):
         ),
     )
     fingerprint: str | None = Field(
-        None, description="Semantic dedup key: sha256(category:scope:normalized_what)[:16]"
+        None,
+        description=(
+            "Canonical proposal identity. Computed as "
+            "sha256(category:scope:normalized_what)[:16] at first sighting, then "
+            "carried forward onto every later sighting absorbed into the same "
+            "(source, category, scope) group (FRE-1354) — so it is the group's "
+            "stable identity, not necessarily a hash of THIS entry's `what`. "
+            "Consumers treat it as opaque and must not recompute-and-compare it. "
+            "Carrying it forward is what maps repeated sightings of one idea to a "
+            "single Linear ticket; on 2026-06-26 six sightings hashed six different "
+            "ways and produced six tickets."
+        ),
     )
     seen_count: int = Field(
         default=1, ge=1, description="How many times this proposal has been observed"

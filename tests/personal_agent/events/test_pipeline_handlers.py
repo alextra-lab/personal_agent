@@ -614,7 +614,7 @@ class TestCompactionQualityCaptainLogHandler:
         proposal row that gets reinforced — nondeterministically skipping ``save_entry``.
         """
         with patch(
-            "personal_agent.events.pipeline_handlers._read_before_emit_suppresses",
+            "personal_agent.events.pipeline_handlers._read_before_emit_suppresses_entry",
             new=AsyncMock(return_value=False),
         ):
             yield

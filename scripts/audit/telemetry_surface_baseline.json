@@ -41,7 +41,7 @@
     "family": "docker/elasticsearch/captains-funnel-events-index-template.json",
     "field": "threshold",
     "source": "docker/elasticsearch/captains-funnel-events-index-template.json",
-    "note": "ACCEPTED \u2014 reviewed-correct (FRE-719). This is the configured issue_budget_threshold CAP (an integer open-issue count, e.g. 200), not a ratio/percentage value; integer is intentional. FLOAT_HINT false-fires on the word 'threshold'; no static linter can tell a threshold count from a threshold ratio.",
+    "note": "ACCEPTED \u2014 reviewed-correct (FRE-719). This is the configured seshat_open_ticket_cap (an integer ticket count, e.g. 10; was issue_budget_threshold before FRE-1354), not a ratio/percentage value; integer is intentional. FLOAT_HINT false-fires on the word 'threshold'; no static linter can tell a threshold count from a threshold ratio.",
     "detail": "'threshold' is numeric/duration-named but mapped 'integer'; a non-integer value is rejected or truncated (the 0.0\u2192long trap)"
   },
   {

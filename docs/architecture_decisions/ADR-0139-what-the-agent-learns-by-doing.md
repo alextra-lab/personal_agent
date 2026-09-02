@@ -1,7 +1,8 @@
 # ADR-0139: What the Agent Learns by Doing — Result-Level Admissibility, a First-Person Observation Tier, and a Denominator for the Compliance Metric
 
 **Status:** Proposed — **partially withdrawn 2026-09-02** (review round 6, FRE-1357). **Live: D1
-(as amended), D4, D5 and the new D8.** **D2, D3 and D7 are withdrawn**, and **D6 is retired**, under
+(as amended), D4, D5 and the new D8.** **D2, D3 and D7 — the last except its first row, restated as AC-15 — are withdrawn**, and **D6 is
+retired**, under
 [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md). **The revision table below is the
 single authority on what is live**; this line is a summary and loses to it on any disagreement. The
 premise: the model is not a security boundary,
@@ -27,10 +28,10 @@ lapses with D2.
 | **D2** — result-level admissibility, three-arm invocation check | **Withdrawn** | A model-layer control standing as the boundary for the invariant (ADR-0140 T3). Round 6 measured its cost: arm 2 rejects the whole source on `grep 'passed_count' logs.json`, `rg 'source_registry tool' src/`, `git log --grep='cost gate'`, a `psql` column header and an ES\|QL `KEEP` projection — contradicting this ADR's own AC-11 |
 | **D3** — the `OBSERVED` tier and the address-bound terminus | **Withdrawn as written.** The `OBSERVED` tier itself **survives, scoped to D4** | The tier is a capability fact where the harness received the bytes (attachments). The address rule was undecidable by the means this ADR permits — extracting a read's target from a command line needs the shell parse it refuses everywhere else |
 | **D4** — attachments are first-person observation | **Stands.** Untouched by all six round-6 findings | An attachment is caller-supplied; the model did not author the bytes. Admissible at the capability layer |
-| **D5** — generative tools stay excluded | **Stands**, and is now the general rule rather than an exception |
+| **D5** — generative tools stay excluded | **Stands** | It is now the general rule rather than an exception: no arbitrary-code or generative tool mints a source |
 | **D6** — the declared threat model | **Retired.** Superseded by [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md) | A program-level premise cannot live inside one consumer; and its axis (careless vs adversarial) was the wrong axis |
 | **D8** — the replacement path: typed retrieval, provisioned on demand | **Live**, added by this revision | It is what D2 and D3 are replaced *by*. Its premise is ADR-0140 T4; the application — which tools, in what order — is stated here because it is a question about this problem |
-| **D7** — near-miss markers | **Withdrawn except its first row.** A near-miss scores `UNRESOLVED` rather than `UNCITED`; the resolver, rows 2–3 and `MALFORMED_CITATION` are dropped | Row 1 needs no resolution and grants no admissibility, so it is a pure observability gain. The rest was unreachable (`_identifier_for` short-circuits at `verification.py:309` before any of it) and non-discriminating |
+| **D7** — near-miss markers | **Withdrawn except its first row.** A near-miss scores `UNRESOLVED` rather than `UNCITED`; the resolver, rows 2–3 and `MALFORMED_CITATION` are dropped | Row 1 needs no resolution and grants no admissibility, so it is a pure observability gain. The rest was unreachable (`_identifier_for` short-circuits at `verification.py:359` before any of it) and non-discriminating |
 
 **The replacement path is D8, below.** The measured defect D2 was written to close — 2 of 222 spans
 passing — is **not** closed by this revision; it is made visible and ordered instead. That trade is
@@ -768,7 +769,7 @@ this ADR must not be read as though it had.
 > Withdrawn: the attribute resolver, rows two and three, and `MALFORMED_CITATION`. Round 6 established
 > that the rest was unreachable and non-discriminating. **(a)** `parse_citations` yields no `CitedSpan`
 > for a near-miss, so `_identifier_for` returns `None` and `_verify_span` short-circuits to `UNCITED`
-> at `verification.py:309` before any of D7 runs; giving it an entry point means making a near-miss
+> at `verification.py:359` before any of D7 runs; giving it an entry point means making a near-miss
 > bind a region, which changes ADR-0138 D1's segmentation contract. **(b)** `strip_citation_markers`
 > is built from the same pattern, so a near-miss's own characters stay in the span text — measured,
 > `claim_unit` over the FRE-1327-shaped span yields `('trace','four','bash','calls','succeeded',
@@ -820,7 +821,7 @@ sits at **0 documents** is a symptom of this defect rather than an incidental st
 
 **The second row is deliberately not enumerated.** Round 5's first draft wrote a closed three-row
 lattice that jumped straight to containment, which contradicts gate ordering: a near-miss resolving
-to an `AGENT_DERIVED` memory source is rejected `SOURCE_NOT_ENTITLED` at `verification.py:330`, long
+to an `AGENT_DERIVED` memory source is rejected `SOURCE_NOT_ENTITLED` at `verification.py:374`, long
 before containment, and such sources are routinely registered. Deferring to the standard sequence
 removes the contradiction and removes the temptation to keep a second, drifting copy of the gate
 order in this document.
@@ -903,7 +904,7 @@ threat-model document — the error D6 made in the other direction.
 
 **Arbitrary-code tools stay inadmissible, and that is now a decision rather than a status quo.**
 `bash`, `run_python` and the browser-evaluate pair keep the categorical branch at
-`source_registry.py:945`. No split, no `invocation_check_required`, no invocation-bearing source
+`source_registry.py:973`. No split, no `invocation_check_required`, no invocation-bearing source
 identity, no negative containment check. ADR-0138 D2's parameter-schema boundary stands on its
 **invocation** axis (its authorship axis is separately narrowed by ADR-0098 Amendment A §A6, which
 this revision does not touch):
@@ -1363,7 +1364,7 @@ any change is made: 2 of 222 non-exempt spans passed (0.9%); 13 of 15 asserting 
 >   near-miss prevents an otherwise compliant span from passing; **or** if `UNRESOLVED` stays at 0
 >   while near-misses are counted. **Reaching this at all requires the span to bind the near-miss**,
 >   which `parse_citations` does not do today — `_verify_span` short-circuits to `UNCITED` at
->   `verification.py:309`. **The binding rule is not left to the implementer**, because an
+>   `verification.py:359`. **The binding rule is not left to the implementer**, because an
 >   under-specified binder is either special-cased to FRE-1327's fixture or over-broad: a near-miss
 >   binds by **exactly the rule a valid marker binds by** — the contiguous text from the end of the
 >   previous marker (valid or near-miss) up to its own opening bracket, whitespace trimmed
@@ -1457,7 +1458,7 @@ implementation can produce.
   document determine whether a non-zero was reachable, and `tool_results_admitted` reconciles
   against the source list in that trace's `source_registry_snapshot`, **filtered to tool-kind sources
   by `origin`** — the snapshot's `source_count` is every registered source and always includes the
-  user message registered at turn start (`orchestrator/executor.py:3624`), plus any memory sources, so
+  user message registered at turn start (`orchestrator/executor.py:3681`), plus any memory sources, so
   an unfiltered `tool_results_admitted == source_count` is false even for a correct implementation
   (corrected 2026-09-02, FRE-1357). · **Check:** ES query over
   `grounding_verification_completed`, reconciled against `source_registry_snapshot` on `trace_id`. ·
@@ -1903,7 +1904,7 @@ bear, while a near-miss matching one supporting source means a source existed an
 wrong; one enum member cannot sit both inside and outside `_TRUE_NO_SOURCE`, so the first row now
 takes the **existing** `UNRESOLVED` and only the third takes the new member. **D7's closed lattice
 contradicted gate ordering**: a near-miss resolving to an `AGENT_DERIVED` source is rejected
-`SOURCE_NOT_ENTITLED` at `verification.py:330` long before containment, so D7 now defers to the
+`SOURCE_NOT_ENTITLED` at `verification.py:374` long before containment, so D7 now defers to the
 standard gate sequence instead of keeping a second, drifting copy of it. **Resolution by "identifying
 attributes" was underspecified into a false-detection channel** — a one-hex-character digest prefix
 would resolve "unambiguously" by coincidence, and `label` is agent-influenceable for memory sources
@@ -1965,7 +1966,7 @@ round's answer reappearing one level down:
   `_reads_tainted`'s own docstring records.
 
 The fourth finding is that D7 has no entry point at all: `_verify_span` short-circuits to `UNCITED`
-at `verification.py:309` before any of it runs, and `strip_citation_markers` — built from the same
+at `verification.py:359` before any of it runs, and `strip_citation_markers` — built from the same
 pattern that fails to match a near-miss — leaves the marker's characters in the span text.
 Measured, `claim_unit` over the FRE-1327-shaped span yields
 `('trace','four','bash','calls','succeeded','second','tempo','dba5b2')`; three of those eight tokens
@@ -1981,7 +1982,7 @@ derives from `memory_item_identity` (`source_registry.py:915`).
 
 **What held.** All seven rows of D2's arm-2 fixture table reproduce exactly against the shipped
 normalizer; `ARBITRARY_CODE_TOOLS`' ten members match D2's split table; the `(kind, origin, content)`
-dedupe key; the `.contained`-versus-`.passed` argument; the entitlement gate at `verification.py:330`.
+dedupe key; the `.contained`-versus-`.passed` argument; the entitlement gate at `verification.py:374`.
 
 **Why the diagnosis is altitude and not a fourth repair.** D2 arms 2–3, D7's resolver and D3's
 address rule are three attempts to make one discriminator — *model-composed versus world-observed* —

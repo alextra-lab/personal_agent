@@ -76,11 +76,19 @@ value **where it is produced** and propagate the label through execution; none i
 traces of its own arguments. A 2026 survey of evidence tracing in LLM agents finds **no** system that
 semantically validates tool-output content before citing it, and treats the question as open.
 
-And Anthropic has already shipped the answer to Seshat's specific problem. The Citations API does not
-check whether the model fabricated a citation — it removes the ability to. Documents are chunked
-before generation, the model emits an index, and the API extracts `cited_text` from the source, so
-"citations are guaranteed to contain valid pointers to the provided documents." Capability, not
-inspection.
+Anthropic's Citations API shows the shape in product form: it does not check whether the model
+fabricated a citation, it removes the ability to. Documents are chunked before generation, the model
+emits an index, and the API extracts `cited_text` from the source, so "citations are guaranteed to
+contain valid pointers to the provided documents." Capability, not inspection.
+
+**It is a precedent for the mechanism and not an answer to our question, and overstating that was an
+earlier draft's error.** What the Citations API guarantees is *pointer validity* over documents the
+**caller supplied** — the caller vouches for the corpus by fiat, and the capability guarantees the
+model's index refers into it. Seshat already has that half: ADR-0138's registry mints identifiers and
+resolution binds them. Our actual question — *which of the agent's own self-obtained results deserve
+to be documents at all* — is the one the caller-supplies-documents contract assumes away. The
+precedent supports T3's layer rule; it does not decide T4's admissibility, and this ADR must argue
+that for itself.
 
 ---
 
@@ -171,6 +179,20 @@ fail-open would be forbidden and no docstring could rescue it.
 **What T3 forbids, then, is not fail-open. It is fail-open that is undeclared, unjustified, or
 indistinguishable in the record from a verdict.**
 
+**And this is what reconciles T3 with T4, which otherwise look results-driven.** T3 treats grounding
+as a quality property when legitimising a fail-open; T4 treats minting a source as a boundary whose
+holes are fatal. The asymmetry is not convenience, it is **legibility of failure**: a fail-open
+produces a record marked *unverified* — a failure that announces itself and that an operator can
+count — whereas a laundered source produces a record marked *verified-and-passing*, a failure that is
+invisible **and that corrupts the very metric you would use to detect it**. A control whose failure is
+legible can be a judgement; a control whose failure forges its own evidence of success must be a
+boundary. That is the test, and it is why the same document can accept one and refuse the other.
+
+**One obligation follows immediately, and it is not yet met.** "A wave of them reads as the
+malfunction it is" presumes somebody is looking. Nothing today alerts on the `unavailable`-verification
+rate, and by ADR-0134 D1's own reasoning an unwatched signal is an invisible failure class.
+Distinguishable-in-telemetry is not observed. That alert is owed, and is filed rather than asserted.
+
 **This distinction is the whole diagnosis of ADR-0139's five review rounds.** Its D2 arms were a
 *boundary* control — they decided whether a source could be minted at all — implemented as a
 judgement predicate over the result's own text. Containment is the same *kind* of predicate and is
@@ -218,6 +240,14 @@ expression the tool will evaluate. They *select or address* when they name a thi
 tool's own logic decides the bytes. A schema of typed scalars is not sufficient evidence of the
 second: **one string parameter holding a language is a composing parameter.**
 
+**The grey zone is named because every D8 wrapper will meet it.** A typed telemetry wrapper wants
+filter expressions; a regex pattern is arguably a language, and "is it a language" will be
+re-litigated in tickets without ADR-grade review. The sharper form of the same test, and the one to
+reach for when the surface reading is ambiguous: **can the tool emit bytes not drawn from the corpus
+it addresses?** `grep` cannot — it returns only what the file holds, whatever the pattern says. ES|QL
+`ROW`/`EVAL` and `SELECT 'literal'` can. That form admits pattern parameters cleanly and still
+condemns `mcp_esql` and model-authored SQL, and it is the test a wrapper design should be held to.
+
 Applying that test finds a misclassification. **`mcp_esql` is in `TYPED_RETRIEVAL_TOOLS`
 (`source_registry.py:346`) and must not be.** ES|QL is a query language, and the module's own audit
 records the channel — *"ES|QL's `ROW a = \"…\"` emits a model-authored literal with no index
@@ -237,12 +267,13 @@ permission check reads `tool_def.allowed_modes` and `tool_policy.forbidden_in_mo
 (`tools/executor.py:181-188`), and MCP tool definitions are built with `allowed_modes` hardcoded to
 `["NORMAL", "DEGRADED"]` (`mcp/types.py:81-88`) before the gateway registers them
 (`mcp/gateway.py:182`, `:197`). A tool believed disabled in every mode is therefore permitted in two.
-**That is a live governance gap affecting far more than this ADR** — it is filed separately and at
+**That is a live governance gap affecting far more than this ADR** — filed as **FRE-1358** at
 higher priority than the reclassification it was invoked to excuse. *(What is not established here is
 exposure:* whether any of those 44 tools is currently discovered and registered depends on which MCP
 servers run, which this review did not test. The enforcement gap is verified; the reachability is
 not.) *(ii)* **This ADR specifies the change and does not make it.** The `adr`
-session may not edit `src/`, so the reclassification is filed as its own ticket; until that ticket
+session may not edit `src/`, so the reclassification is carried by **FRE-1306**, which already exists
+and is re-scoped to it; until that ticket
 lands the table is wrong even though nothing can reach it. Saying "this ADR does not withdraw D2
 without closing what D2 was covering" — as an earlier draft did — was false: what it does is *name*
 what D2 was covering and carry it as a filed obligation. Its parameter schema is not verifiable in
@@ -369,6 +400,48 @@ D7's resolver given attribute precedence, D3's address rule replaced.
 altitude rather than defects: the discriminator "was this result composed by the model?" is not
 decidable from content, and five rounds of evidence say so.
 
+### Option 6: Narrow the obligation instead of the admissibility
+
+**Description:** Leave admissibility where Route 1 puts it, and change **span policy** instead: a
+report of *this turn's own tool activity* — including a quoted output value — is not a world-fact
+assertion requiring an external source. It is checked for accuracy **against the recorded tool
+transcript** the harness already holds. Nothing is minted into the evidence registry, so no other
+span can cite it and no laundering channel opens; a world-fact phrased as a world-fact still meets
+D1's default-deny.
+
+**Pros:**
+- **It targets the population Route 1 structurally cannot reach** — reports of the agent's own
+  execution, which no typed wrapper will ever make citable because running the command *is* the work.
+  That is the permanent half of the cost recorded in Consequences.
+- **The machinery half-exists.** `ExemptRegion.SYSTEM_RECORD` is already defined and already means
+  almost this — *"claims about THIS turn's own execution — what was searched, what was retrieved,
+  that nothing was found. Not about the world"* (`grounding/extractor.py:114-116`,
+  `grounding/spans.py:57`). The containment machinery for checking a report against a recorded result
+  exists too. This is a widening of an existing exempt class plus a check, not new architecture.
+- **It would have caught FRE-1327, which nothing else here does.** That incident was a *false
+  first-person report* — the model said a trace showed four `bash` calls succeeding, against evidence
+  it had not read. Today that span scores `UNCITED`, indistinguishable from the mass of honest but
+  uncitable reports; under Route 1 it still does; under the withdrawn D2 it was shown unreachable.
+  Checked against the turn transcript it **fails**. That is strictly better detection of the one
+  failure this whole chain was commissioned by, at zero wrapper cost.
+
+**Cons:**
+- It is a change to ADR-0138 D1's obligation, not to this ADR's subject, so it needs its own
+  adjudication rather than a clause here.
+- The exempt class widens, and a widened exemption is a surface: "what my tool returned" shades into
+  "what is true", and the boundary between them has to be drawn by the extractor — a model-layer
+  control, which T3 then requires to declare its absence behaviour.
+
+**Why Rejected — it is not rejected on the merits, and recording that honestly is the point.** It is
+**out of scope here and filed as the next ADR**. This document answers *what may be admitted*, and
+Option 6 answers *what must be justified* — a different question with a different contract behind it
+(ADR-0138 D1, not D2). Route 1's layer rule and capability admissibility are needed regardless and
+are not in competition with it. But **Route 1 alone does not close the measured defect** for the
+permanent half of the population, and this is the only option anywhere in ADR-0139 or ADR-0140 that
+addresses it. Both documents' option spaces varied *admissibility* and never *obligation*; that was a
+hole, it was found by the fourth review of this ADR rather than by its author, and the correct
+disposition is a filed successor rather than silence.
+
 ---
 
 ## Consequences
@@ -389,15 +462,29 @@ decidable from content, and five rounds of evidence say so.
 
 ### Negative Consequences
 
-- **Everything the agent learns by running a command stays uncitable until a typed tool exists for
-  it.** This is a real, ongoing cost, and it is the cost ADR-0139 was written to remove. It is
-  accepted here in exchange for a boundary that holds, and it is made *visible and ordered* by
-  ADR-0139 D1's instrument rather than left implicit.
+- **Everything the agent learns by running a command stays uncitable — and for a large part of it,
+  permanently.** This is the cost ADR-0139 was written to remove, accepted here in exchange for a
+  boundary that holds and made *visible and ordered* by ADR-0139 D1's instrument. **An earlier draft
+  called it transitional — "until a typed tool exists for it" — and that is false for the population
+  that matters most.** A typed wrapper replaces a *retrieval pattern* that was reaching for a schema.
+  It cannot replace *execution*: no wrapper makes `make test`, a migration, or a build citable,
+  because running the command is the work rather than a query awaiting a parameter list. So the
+  uncitable population splits in two, and only one half is on a treadmill:
+
+  | Population | Under Route 1 |
+  |---|---|
+  | Retrievals arriving through `bash` — index reads, telemetry queries, file reads | **Transitional.** A typed wrapper closes each, ordered by D1 |
+  | Reports of the agent's own execution — *"the suite passed"*, *"four calls succeeded"* | **Permanent.** No wrapper reaches these; nothing in this ADR does |
+
+  **ADR-0140 AC-3 cannot detect that split**, and this is stated so nobody mistakes a green criterion
+  for a shrinking residual: AC-3 measures whether wrappers track demand, not whether the residual is
+  reducible at all. A treadmill running honestly over the wrappable half, forever, satisfies it. The
+  second half needs a different decision, and Option 6 below is the candidate.
 - **A provisioning obligation.** Each new evidence source needs a typed tool before it can ground
   anything. Demand-driven (see ADR-0139's revision) but non-zero.
 - **A classification obligation on every future ADR** — each control must name its layer. Small, but
   it is new process, and process that no one enforces decays.
-- **Work is withdrawn.** ADR-0139 D2/D3/D7 and the tickets implementing them are cancelled or
+- **Work is withdrawn.** ADR-0139 D2, D3 and D7-except-row-one, and the tickets implementing them, are cancelled or
   re-scoped; roughly five rounds of design effort is retained as record rather than as decision.
 
 ### Risks and Mitigations
@@ -419,8 +506,8 @@ revises what other documents may rest on; its implementation is the amendment of
 the re-scoping of the tickets that flowed from the retired premise. The exception is the `mcp_esql`
 reclassification, which cannot wait: withdrawing D2 removes the only thing that was covering it.
 
-- `docs/architecture_decisions/ADR-0139-*.md` — revised in the same PR: **D1 and D4 stand; D2, D3
-  and D7 are withdrawn** with their reasoning retained as record and a pointer to this ADR. The
+- `docs/architecture_decisions/ADR-0139-*.md` — revised in the same PR: **D1, D4 and D5 stand, D8 is added; D2, D3 and
+  D7 — the last except its first row — are withdrawn** with their reasoning retained as record and a pointer to this ADR. The
   replacement path — typed retrieval, ordered by D1's instrument — is stated there because it is the
   application, not the premise.
 - `docs/architecture_decisions/ADR-0138-*.md` — gains a one-line citation of this ADR where its
@@ -439,7 +526,7 @@ reclassification, which cannot wait: withdrawing D2 removes the only thing that 
   (`orchestrator/executor.py:5752-5763`), so graph content — agent-writable, and the FRE-1338
   channel — reaches the model outside any tool-result channel. T2 declares that content untrusted;
   closing it is a message-assembly change with its own blast radius and belongs in its own ticket
-  rather than inside this ADR's diff.
+  rather than inside this ADR's diff — **FRE-1360**.
 - Ticket dispositions are carried on FRE-1357 and are not restated here.
 
 **What this ADR deliberately does not decide:** which typed tools get provisioned, in what order, or
@@ -465,7 +552,7 @@ an upstream document.
   **no** source. Named members at authoring time: `bash`, `run_python`, `mcp_browser_evaluate`,
   `mcp_browser_run_code`, **and `mcp_esql`**. **Second arm, because a named list cannot cover tools
   that do not exist yet:** a tool absent from every classification table registers **no** source —
-  the `UNCLASSIFIED_TOOL` default-deny (`source_registry.py:989-998`) — and that arm is what covers
+  the `UNCLASSIFIED_TOOL` default-deny (`source_registry.py:989-999`) — and that arm is what covers
   an MCP server introducing a compose-capable tool at runtime (`mcp/gateway.py`), which the named
   list structurally cannot. · **Check:** probe each named tool through `register_tool_result` with a
   composing payload (`printf 'Paris has 9 million residents'`;
@@ -523,8 +610,7 @@ an upstream document.
   into `_volatile_block` and inlined into the current user message
   (`orchestrator/executor.py:5752-5763`), so graph content — agent-writable, and FRE-1338's own
   channel — reaches the model as user text today. T2 is a declaration until this closes; the closing
-  change is filed as its own ticket, and this criterion is how we know it landed rather than being
-  described.
+  change is **FRE-1360**, and this criterion is how we know it landed rather than being described.
 
 - **AC-5 — The cost stayed visible.** Compliance continues to be reported over `citable` turns with
   the **`uncitable` class published beside it**, per ADR-0139 D1 — classified and counted, never
@@ -541,7 +627,7 @@ an upstream document.
 ## References
 
 - [ADR-0138](ADR-0138-the-model-may-generate-but-may-not-assert.md) — the grounding contract; its D2 parameter-schema boundary is restored by T4
-- [ADR-0139](ADR-0139-what-the-agent-learns-by-doing.md) — D6 is retired by this ADR; D2/D3/D7 withdrawn, D1/D4 stand
+- [ADR-0139](ADR-0139-what-the-agent-learns-by-doing.md) — D6 is retired by this ADR; D2, D3 and D7 (except its first row) withdrawn; D1 as amended, D4, D5 and the new D8 stand
 - [ADR-0098](ADR-0098-memory-substrate-and-lifecycle-architecture.md) Amendment A §A6 — the provenance-terminus rule for retrieval
 - [ADR-0089](ADR-0089-artifact-execution-security-model.md) — the existing scoped threat model for artifact execution; unchanged, and now a consumer of T3
 - [ADR-0028](ADR-0028-external-tool-cli-migration.md) — tool-integration tiers; the provisioning path T4 names

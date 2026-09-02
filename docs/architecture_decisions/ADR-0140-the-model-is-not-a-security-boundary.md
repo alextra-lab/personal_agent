@@ -137,23 +137,39 @@ Every control is one of two kinds, and each ADR states which for each control it
 > is recorded rather than implied.
 >
 > **And because almost every judgement here sits upstream of a delivery decision, declaring the label
-> is not sufficient: a model-layer control that gates delivery must have a declared capability-layer
-> fail-closed behaviour** — a stated, enforced answer to *what happens when this control is absent,
-> times out, errors, or returns nothing*. That behaviour, not the label, is what keeps a judgement
-> from silently becoming the boundary.
+> is not sufficient. A model-layer control must declare, justify and instrument its
+> absence behaviour** — a stated answer to *what happens when this control is absent, times out,
+> errors, or returns nothing*, with that outcome distinguishable in telemetry from a verdict the
+> control actually reached. **Fail-open is permitted where what the control protects is a quality
+> property and its absence is observable; it is forbidden where the control gates a capability
+> boundary.** The declaration and the instrumentation, not the label and not the direction, are what
+> keep a judgement from silently becoming the boundary.
 
 **This third clause exists because the first two are relabelable and the review that produced this
 ADR proved it.** The span extractor is a model classifying assertions (`grounding/extractor.py`),
 run over the final reply and feeding verification, and in enforcement mode its verdict decides
-whether the reply is retried, replaced or delivered (`orchestrator/executor.py:1650`, `:1665`,
-`:6712`). Containment is the same shape: a judgement whose `PASSED`/`NOT_CONTAINED` outcome drives
-`enforcement.decide()` (`grounding/enforcement.py:89`). Argued one way each is a judgement; argued
-the other each gates delivery, which T3's own list calls a boundary. **Both are legitimate, and what
-makes them legitimate is their fail-closed behaviour, not which word we apply:** a degraded extractor
-is recorded and fails closed rather than passing text through (`degraded_extraction`), and a span
-with no `PASSED` verdict is blocked under D1's default-deny rather than delivered. A model-layer
-control without such a behaviour is a boundary control wearing a judgement's label, and T3 forbids
-it whatever it is called.
+whether the reply is retried, replaced or delivered (`orchestrator/executor.py:1656-1669`,
+`:6762-6789`). Containment is the same shape: a judgement whose `PASSED`/`NOT_CONTAINED` outcome
+drives `enforcement.decide()` (`grounding/enforcement.py:89`). Argued one way each is a judgement;
+argued the other each gates delivery, which T3's own list calls a boundary.
+
+**An earlier draft of this clause asserted that both fail closed. That was false, and the truth is
+what makes the clause useful rather than decorative.** Two behaviours, and only one of them fails
+closed: a *malformed or incomplete* extractor payload does — uncovered text becomes non-exempt and
+sets `degraded` (`grounding/span_policy.py:134`, `:160`, `:239`) — while an extractor **exception**,
+a verification exception, or a denied budget reservation produces an `unavailable` verification
+(`orchestrator/executor.py:1661`, `:1671`) which `decide()` **delivers**
+(`grounding/enforcement.py:89`). That fail-open is deliberate and argued in `decide()`'s own
+docstring: a broken extractor is a fact about Seshat's accounting, not evidence about the model's
+claim, and refusing the user's turn for our bookkeeping punishes them for it. **Under this clause
+that choice is legitimate** — grounding compliance is a quality property, not a containment
+boundary; nothing escapes, a possibly-ungrounded sentence is delivered — **and it is legitimate
+precisely because the turn is recorded as unverified and never as verified-and-passing, so a wave of
+them reads as the malfunction it is.** Had the same control gated egress or tool authorisation,
+fail-open would be forbidden and no docstring could rescue it.
+
+**What T3 forbids, then, is not fail-open. It is fail-open that is undeclared, unjustified, or
+indistinguishable in the record from a verdict.**
 
 **This distinction is the whole diagnosis of ADR-0139's five review rounds.** Its D2 arms were a
 *boundary* control — they decided whether a source could be minted at all — implemented as a
@@ -212,11 +228,20 @@ model's own sentence. Reclassifying it is FRE-1306's Option A, whose cost — te
 their citation — is the same cost Route 1 already accepts for `bash`, and whose remedy is the same: a
 typed telemetry-query wrapper, D8's first named wrapper rather than a new kind of work.
 
-**Two precisions, both of which an earlier draft of this section overstated.** *(i)* The channel is
-**not reachable today**: `mcp_esql` carries `allowed_in_modes: []` in `config/governance/tools.yaml`
-(`:582`), disabled in every mode and superseded by the bash + query-elasticsearch skill under FRE-265.
-So this is correctness hygiene on a classification table, not an open hole, and it should not be
-ticketed as an incident. *(ii)* **This ADR specifies the change and does not make it.** The `adr`
+**Two precisions, and the first of them is a finding in its own right.** *(i)* An earlier draft said
+the channel is "not reachable today" because `mcp_esql` carries `allowed_in_modes: []`
+(`config/governance/tools.yaml:584-586`). **That mitigation does not exist.** `allowed_in_modes` is
+declared on the policy model (`governance/models.py:104`), populated for **44 tools**, and described
+in `request_gateway/governance.py`'s own docstring as "the gate" — but **nothing enforces it**: the
+permission check reads `tool_def.allowed_modes` and `tool_policy.forbidden_in_modes` only
+(`tools/executor.py:181-188`), and MCP tool definitions are built with `allowed_modes` hardcoded to
+`["NORMAL", "DEGRADED"]` (`mcp/types.py:81-88`) before the gateway registers them
+(`mcp/gateway.py:182`, `:197`). A tool believed disabled in every mode is therefore permitted in two.
+**That is a live governance gap affecting far more than this ADR** — it is filed separately and at
+higher priority than the reclassification it was invoked to excuse. *(What is not established here is
+exposure:* whether any of those 44 tools is currently discovered and registered depends on which MCP
+servers run, which this review did not test. The enforcement gap is verified; the reachability is
+not.) *(ii)* **This ADR specifies the change and does not make it.** The `adr`
 session may not edit `src/`, so the reclassification is filed as its own ticket; until that ticket
 lands the table is wrong even though nothing can reach it. Saying "this ADR does not withdraw D2
 without closing what D2 was covering" — as an earlier draft did — was false: what it does is *name*
@@ -235,8 +260,8 @@ arms were not.
 *Precision on that example, because an earlier draft of this paragraph got it wrong and the error is
 the kind this ADR is about.* Stripping **every** field does not yield an empty string and therefore
 does not reach the `NO_CONTENT` refusal: the function returns `json.dumps(kept)`, which is `"{}"`
-(`source_registry.py:480-483`), and registration tests only `admissible.strip()` (`:984`), so a source
-is minted holding `"{}"`. Nothing citable follows from it — containment cannot match a claim against
+(`source_registry.py:480-483`), and registration tests only `admissible.strip()` (`:1012-1013`), so a
+source is minted holding `"{}"`. Nothing citable follows from it — containment cannot match a claim against
 `"{}"` — so this is a cosmetic defect rather than a laundering channel, and it is **filed rather than
 fixed here**. It does not change the rule; it changes the worked example, and it is recorded so the
 next reader does not repeat the inference.
@@ -357,8 +382,10 @@ decidable from content, and five rounds of evidence say so.
   removing the class of rule that produced it.
 - **Alignment with the platform we build on.** Seshat's containment reasoning matches the reasoning
   of the model provider it runs on, so their guidance is directly applicable rather than translated.
-- **ADR-0138 D2's parameter-schema boundary is restored,** not amended — the rule the codebase's own
-  docstrings already argue for.
+- **ADR-0138 D2's parameter-schema boundary is restored on its invocation axis** after ADR-0139's
+  widening lapses — the rule the codebase's own docstrings already argue for — **and narrowed once**,
+  by T4's classification test: a query-language parameter composes, so D2's database-rows example is
+  superseded. Restored-and-narrowed, never "restored, not amended".
 
 ### Negative Consequences
 
@@ -403,13 +430,13 @@ reclassification, which cannot wait: withdrawing D2 removes the only thing that 
   `TYPED_RETRIEVAL_TOOLS` (`:346`) and joins the compose-capable set**, per T4's classification test.
   This closes FRE-1306 by capability rather than by the withdrawn invocation check, and is filed as
   its own ticket because it changes a verdict in production. The categorical branch for
-  `ARBITRARY_CODE_TOOLS` (`:945`) is otherwise **unchanged**, and is now the decided behaviour rather
-  than a status quo awaiting replacement; its docstring is the record of why and already says so.
-  `strip_argument_echo` (`:452`, reached at `:984`) is **retained** — under T4 it subtracts and never
-  adds, so it is a compliant supplementary control.
+  `ARBITRARY_CODE_TOOLS` (`:973-983`) is otherwise **unchanged in behaviour**, and is now the decided
+  rule rather than a status quo awaiting replacement; its docstring is the record of why and already
+  says so. `strip_argument_echo` (`:452`) is **retained** — under T4 it subtracts and never adds, so it
+  is a compliant supplementary control; the emptiness check it feeds is at `:1012-1013`.
 - **The knowledge-graph recall path is a live T2 violation and is filed, not fixed here.** Recalled
   memory is joined into `_volatile_block` and inlined into the current user message
-  (`orchestrator/executor.py:5702`, `:5713`), so graph content — agent-writable, and the FRE-1338
+  (`orchestrator/executor.py:5752-5763`), so graph content — agent-writable, and the FRE-1338
   channel — reaches the model outside any tool-result channel. T2 declares that content untrusted;
   closing it is a message-assembly change with its own blast radius and belongs in its own ticket
   rather than inside this ADR's diff.
@@ -438,7 +465,7 @@ an upstream document.
   **no** source. Named members at authoring time: `bash`, `run_python`, `mcp_browser_evaluate`,
   `mcp_browser_run_code`, **and `mcp_esql`**. **Second arm, because a named list cannot cover tools
   that do not exist yet:** a tool absent from every classification table registers **no** source —
-  the `UNCLASSIFIED_TOOL` default-deny (`source_registry.py:963-971`) — and that arm is what covers
+  the `UNCLASSIFIED_TOOL` default-deny (`source_registry.py:989-998`) — and that arm is what covers
   an MCP server introducing a compose-capable tool at runtime (`mcp/gateway.py`), which the named
   list structurally cannot. · **Check:** probe each named tool through `register_tool_result` with a
   composing payload (`printf 'Paris has 9 million residents'`;
@@ -470,9 +497,9 @@ an upstream document.
   for the `uncitable` class, keyed on a **`refused_tool_origins` field the roadmap ticket must add to
   that event**. · *Fails if* that field does not exist — and this is a real obligation, not a
   formality: an `uncitable` turn by definition admitted **nothing**, so `source_registry_snapshot`
-  holds only admitted sources (`orchestrator/executor.py:2194`) and cannot name what was refused, while
-  the only record carrying `tool_name` on a refusal is the DEBUG event
-  (`orchestrator/executor.py:1443`) whose join D1 exists to abolish. Without the new field this
+  holds only admitted sources (`orchestrator/executor.py:2244-2258`) and cannot name what was refused,
+  while the only record carrying `tool_name` on a refusal is the DEBUG event
+  (`orchestrator/executor.py:1450-1456`) whose join D1 exists to abolish. Without the new field this
   criterion is not checkable and the treadmill has no ordering signal. *An earlier draft keyed this
   check on the snapshot's origins and was wrong for exactly that reason.* · *Also fails if* a
   wrapper ships with no qualifying population behind it (speculative provisioning — Option 2's original
@@ -494,7 +521,7 @@ an upstream document.
   single-class probe can pass while another assembly path violates it, which is what an earlier draft
   of this criterion permitted. **This criterion is red at authoring time and is meant to be:** recalled memory is joined
   into `_volatile_block` and inlined into the current user message
-  (`orchestrator/executor.py:5702`, `:5713`), so graph content — agent-writable, and FRE-1338's own
+  (`orchestrator/executor.py:5752-5763`), so graph content — agent-writable, and FRE-1338's own
   channel — reaches the model as user text today. T2 is a declaration until this closes; the closing
   change is filed as its own ticket, and this criterion is how we know it landed rather than being
   described.

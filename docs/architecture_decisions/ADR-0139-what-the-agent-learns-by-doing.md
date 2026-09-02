@@ -7,7 +7,9 @@ single authority on what is live**; this line is a summary and loses to it on an
 premise: the model is not a security boundary,
 so admissibility is a capability property and may not rest on a content predicate over a tool's own
 result. The withdrawn sections are retained below as record, each under a withdrawal banner.
-ADR-0138 D2's parameter-schema boundary — its **invocation** axis — is **restored, not amended**;
+ADR-0138 D2's parameter-schema boundary — its **invocation** axis — is **restored and then narrowed
+once** by ADR-0140 T4's classification test (a query-language parameter composes, so D2's
+database-rows example is superseded);
 D2's separate **authorship** axis stays narrowed by ADR-0098 Amendment A §A6 (FRE-1347, Approved and
 untouched here). This ADR's amendment of the invocation axis
 lapses with D2.
@@ -171,9 +173,9 @@ whole of `CheckOutcome`.
 > *reasoning* — that entitlement and compose-capability are different questions, and that a metric
 > keyed on one is blind to the other — is why ADR-0140 T4 keys the boundary on the schema rather than
 > on the tier. **FRE-1332 merged these fields on 2026-09-02 (`c4660d8c`), before this revision**, so
-> the emitter exists: `invocation_checked_span_outcomes` is populated at
-> `orchestrator/executor.py:2036` and will now always be empty, since nothing sets
-> `invocation_check_required`. Pruning it is a **follow-up on that ticket's chain, not a bounce** — an
+> the emitter exists: `invocation_checked_span_outcomes` is declared at
+> `orchestrator/executor.py:2036`, assigned empty at `:2049` and emitted at `:2083`, and will now
+> always be empty since nothing sets `invocation_check_required`. Pruning it is a **follow-up on that ticket's chain, not a bounce** — an
 > emitted field with no population misleads a reader, it does not break a consumer. `near_miss_markers`
 > already ships as a single `unresolved` count (`:2043`) rather than a D7-resolution split, so no
 > change is owed there.
@@ -918,9 +920,15 @@ rejected in round 5 under D6 and correct under ADR-0140 T1. Round 5 rejected it 
   ES|QL query to keep its citation. The alternative was not cheap; it was unmeasured.
 - *"An unbounded provisioning treadmill, and the metric stays confounded meanwhile."* **D1 removes
   the second half and bounds the first.** `turn_evidence_class`, `tool_results_offered` and
-  `tool_results_admitted` de-confound the metric, and they identify *which* turns went uncitable for
-  want of which source. Provisioning becomes demand-driven and ordered rather than speculative and
-  unbounded — you build the wrapper the measurement asks for.
+  `tool_results_admitted` de-confound the metric and identify *which turns* went uncitable.
+  **They do not yet identify *which source*** — the shipped fields carry a class and aggregate counts
+  only (`orchestrator/executor.py:2031-2049`, emitted at `:2079-2084`), and an `uncitable` turn admitted
+  nothing, so its `source_registry_snapshot` cannot name what was refused. Ordering therefore requires
+  one addition — a `refused_tool_origins` field — which
+  [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md) AC-3 makes an explicit obligation of the
+  roadmap ticket and fails without. With it, provisioning is demand-driven and ordered rather than
+  speculative and unbounded; without it, D1 tells you *that* the treadmill is owed work and not *what*
+  work, which is a weaker claim than an earlier draft of this bullet made.
 
 **The sequencing is therefore: D1 first and alone** (unchanged — FRE-1332, in implementation), then
 D4, then wrappers in the order D1's uncitable population ranks them. ADR-0140 AC-3 is what keeps

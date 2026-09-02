@@ -7,7 +7,8 @@ review). A typed fetch tool would get that partial admission, but none was live 
 deployment at the time; FRE-1297 provisioned the native `fetch_url` tool the illustration
 now names. · **D2 amended again 2026-09-01 — once, in both
 directions**: ADR-0098 Amendment A §A6 **narrows** it (entitlement follows the provenance terminus)
-and ADR-0139 D2/D3/D7 **widens** it (admissibility decided on the result, at a new `OBSERVED` tier).
+and ADR-0139 D2/D3/D7 **widened** it — that widening is **withdrawn** as of 2026-09-02 under
+ADR-0140; see the amendment note below for which half of this section still stands.
 Both are recorded in the D2 amendment note below rather than left to be reconciled by a reader
 (FRE-1349, FRE-1347).
 **Date:** 2026-08-23

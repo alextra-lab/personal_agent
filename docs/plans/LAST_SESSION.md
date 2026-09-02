@@ -52,11 +52,13 @@ The recurring shape is #4/#5 and it is new: **field and label names taken from p
 docstring, another agent's summary — instead of from the index or the source.** Cheap to catch,
 because a wrong field name produces a *clean, plausible zero*.
 
+A sixth, after the delta was first written: master read a `/v1/models` **listing** as proof the
+models were serving. It is a config declaration that includes disabled entries. Same family as
+"config proves a path EXISTS, never that it RUNS" — which was already in memory, and still got
+made. A listing is not a liveness probe.
+
 ## Worktrees — anything special
-All three seats sit on their merged branches with nothing in flight: `build` on
-`fre-1333-grounding-alerting`, `build2` on `fre-1354-self-improvement-promotion`, `adrs` on
-`fre-1357-adr-0139-round-6`. Untracked `telemetry/dispatch_state.json.bak-163808` is stale machinery
-residue from 2026-08-30, not this session's.
+Nothing — all three seats idle on their merged branches (`git worktree list` has it).
 
 ## Sequence position + drift
 **Heavy drift, owner-directed.** The Observability Foundation directive remains untouched; the
@@ -69,12 +71,15 @@ while the directed area has nothing pointed at a seat.
   `0b4123f8` had five streaming turns in the preceding ten minutes — the FRE-1352 shape. Owner-gated
   since. Expect ~5 auto-filed tickets on the first post-deploy consolidation; the `.env` promotion-
   project gotcha was checked and does **not** bite (line 409 is commented out).
-- **Was the SLM 502 an incident?** No — the owner was reworking inference on the mpb. Back up and
-  verified 19:12 UTC: all three model_ids the VPS sends are served (`unsloth/qwen3.6-35-A3B`,
-  `…-A3B-subagent`, `unsloth/qwen3.8-flash-next`). Nothing to file. **New:** the dense
-  `unsloth/qwen3.6-27B` is now served locally too, while the catalog's only 27B entry is the
-  cloud `qwen3.6-27b-ovh` — so the owner's proposed 27B quality A/B now has a local path that is
-  not wired up.
+- **Was the SLM 502 an incident?** No — the owner was reworking inference on the mpb; back up
+  19:12 UTC. Nothing to file. **`/v1/models` lists what is CONFIGURED, including disabled
+  entries — it carries `port` and `quantization` but no enabled flag, so it cannot prove a model
+  is loaded.** Master twice read it as liveness and was corrected. The port map it does give:
+  8502 `qwen3.6-35-A3B` Q6 (primary) · 8503 `…-A3B-subagent` Q4 (sub_agent) — matching the
+  owner's intended split exactly · 8504 `qwen3.6-27B` (disabled) · 8506 reranker. Note
+  **`qwen3.8-flash-next` is registered on 8502, the primary's port**, so the two cannot both be
+  loaded; it is bound to no role today. Proving a local model actually serves needs a completion
+  request, which is owner-gated.
 - **Why are all streams idle?** The six ADR-0140 dispositions (cancel FRE-1335; cancel FRE-1334
   as-scoped folding its OBSERVED part into FRE-1336; approve FRE-1336; amend FRE-1355 to row one;
   re-point FRE-1356; re-scope FRE-1306) are unexecuted and owner-gated. They produce the next heads.

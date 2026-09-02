@@ -7,7 +7,8 @@ review). A typed fetch tool would get that partial admission, but none was live 
 deployment at the time; FRE-1297 provisioned the native `fetch_url` tool the illustration
 now names. · **D2 amended again 2026-09-01 — once, in both
 directions**: ADR-0098 Amendment A §A6 **narrows** it (entitlement follows the provenance terminus)
-and ADR-0139 D2/D3/D7 **widens** it (admissibility decided on the result, at a new `OBSERVED` tier).
+and ADR-0139 D2/D3/D7 **widened** it — that widening is **withdrawn** as of 2026-09-02 under
+ADR-0140; see the amendment note below for which half of this section still stands.
 Both are recorded in the D2 amendment note below rather than left to be reconciled by a reader
 (FRE-1349, FRE-1347).
 **Date:** 2026-08-23
@@ -192,6 +193,12 @@ the turn record, and reachability is not-applicable rather than failed. Verifica
 resolves against the recorded result, never against a re-execution, so a non-deterministic tool
 cannot invalidate a citation after the fact.
 
+> **Threat model (added 2026-09-02):** this contract's adversary is declared in
+> [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md), not here and not in any consumer.
+> Under it the parameter-schema boundary stated below **is** the boundary on D2's invocation axis,
+> and ADR-0139's widening of that axis is withdrawn — see the amendment note further down, which
+> records which half of it still stands.
+
 **Independence requirement — a tool result is a source only where it is not the model's own words
 returning.** A tool result is admissible **only to the extent its content is not derived from the
 model's own arguments to that call.** Without this, D2 is bypassed in a single round-trip: the model
@@ -213,6 +220,25 @@ footing as any other. This keeps D3's "all three" invariant literally true rathe
 carrying a silent exception.
 
 #### Amendment note — 2026-09-01: D2 is narrowed and widened at once, and the two compose here
+
+> **HALF WITHDRAWN 2026-09-02 (FRE-1357).** D2 has two axes and this note amended both. **The
+> narrowing stands** — ADR-0098 Amendment A §A6's provenance-terminus rule on the **authorship** axis
+> is live, is being implemented under FRE-1347, and nothing here disturbs it. **The widening is
+> withdrawn** — ADR-0139 D2/D3/D7 on the **invocation** axis, under
+> [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md): arbitrary-code tools keep the
+> categorical exclusion stated in the third bullet above, there is no `MODEL_AUTHORED_CODE_TOOLS`
+> split, no `OBSERVED` tier for tool results (it survives only for D4 attachments), and no
+> invocation-composition check. **`OBSERVED` and `OBSERVATION` are not introduced by this note.**
+> The widening paragraphs below are retained as record and are not normative. One change does follow
+> for this contract: `mcp_esql`'s single parameter is a model-authored query language, so under
+> ADR-0140 T4's classification test it is **compose-capable and inadmissible** — the case ADR-0139's
+> withdrawn check was covering. **And one narrowing reaches D2's own text above:** its worked example
+> *"for a database query, the returned rows are a source and the SQL is not"* no longer holds as
+> written, because SQL is a query language and `SELECT 'Paris has 9 million residents'` composes. A
+> tool taking model-authored SQL is compose-capable whatever it returns; the citable form is a typed
+> query tool whose parameters name an index, filters and fields, with the query built by the harness.
+> That example is **superseded**, and it is called out here rather than left for a reader to
+> reconcile against ADR-0140.
 
 D2 acquired **two independent amendments, drafted without reference to each other**. ADR-0098
 Amendment A §A6 obliges this record explicitly ("this amends ADR-0138 D2, and must be recorded

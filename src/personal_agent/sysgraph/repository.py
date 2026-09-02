@@ -103,11 +103,18 @@ class ProposalRecord:
     scope: str | None = None
 
 
+# GREATEST, not a plain overwrite (FRE-1354). Promotion's caller was once the
+# authoritative source of seen_count, so clobbering was correct. It no longer is:
+# a promoted entry now carries a count it READ from this table, and promotion is
+# gated behind min_age_days — so the value arriving here can be an arbitrarily old
+# snapshot while generation-time reinforcement has moved the row on. Overwriting
+# would knock the canonical corroboration backwards.
 _RECORD_PROMOTION_UPSERT_PROPOSAL = """
 INSERT INTO sysgraph.proposal (source, category, fingerprint, what, why, how, seen_count)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (fingerprint) DO UPDATE
-    SET seen_count = EXCLUDED.seen_count, updated_at = NOW()
+    SET seen_count = GREATEST(sysgraph.proposal.seen_count, EXCLUDED.seen_count),
+        updated_at = NOW()
 RETURNING id;
 """
 
@@ -201,11 +208,11 @@ ON CONFLICT (source, category) DO UPDATE
 """
 
 # ADR-0105 D9/D10 / FRE-721 — generation-time read-before-emit queries.
-# Deliberately NOT the same upsert as promotion's ON CONFLICT clause: that one
-# overwrites seen_count with the caller's authoritative count (correct once,
-# at promotion time); this one increments, since a repeated generation-time
-# detection of the identical fingerprint must accumulate, never clobber a
-# previously-recorded higher count.
+# Deliberately NOT the same upsert as promotion's ON CONFLICT clause: this one
+# increments, since a repeated generation-time detection of the identical
+# fingerprint must accumulate. Promotion's clause takes GREATEST instead —
+# both are now monotonic, and neither can clobber a higher recorded count
+# (FRE-1354; promotion's used to overwrite outright).
 
 _ADVISORY_LOCK_QUERY = "SELECT pg_advisory_xact_lock(hashtext($1));"
 

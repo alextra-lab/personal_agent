@@ -814,3 +814,29 @@ class TestRepeatRunContainment:
         )
         with patch.object(pipeline, "_mark_promoted", return_value=False):
             assert await pipeline.run() == []
+
+
+class TestCorroborationIsMonotonic:
+    """The canonical seen_count must never be knocked backwards."""
+
+    def test_promotion_upsert_takes_greatest_not_a_plain_overwrite(self) -> None:
+        """A stale promotion-time snapshot must not clobber a higher live count.
+
+        Promotion is gated behind `min_age_days`, so the count travelling with an
+        entry can be an arbitrarily old read of the row while generation-time
+        reinforcement has moved it on. Before FRE-1354 reinforced entries never
+        reached this path at all; now that they do, a plain
+        `SET seen_count = EXCLUDED.seen_count` would lose corroboration.
+        """
+        from personal_agent.sysgraph.repository import _RECORD_PROMOTION_UPSERT_PROPOSAL
+
+        sql = " ".join(_RECORD_PROMOTION_UPSERT_PROPOSAL.split())
+        assert "GREATEST(sysgraph.proposal.seen_count, EXCLUDED.seen_count)" in sql
+        assert "SET seen_count = EXCLUDED.seen_count" not in sql
+
+    def test_generation_time_upsert_still_increments(self) -> None:
+        """The read-before-emit upsert stays an increment — both clauses monotonic."""
+        from personal_agent.sysgraph.repository import _GENERATION_TIME_UPSERT_PROPOSAL
+
+        sql = " ".join(_GENERATION_TIME_UPSERT_PROPOSAL.split())
+        assert "sysgraph.proposal.seen_count + 1" in sql

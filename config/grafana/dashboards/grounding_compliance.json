@@ -107,8 +107,7 @@
           "preserveQuery": false,
           "query": "event_type:grounding_verification_completed AND turn_evidence_class:citable",
           "queryType": "lucene",
-          "refId": "A",
-          "timeField": "@timestamp"
+          "refId": "A"
         }
       ],
       "title": "Citation Compliance Rate",
@@ -232,8 +231,7 @@
           "preserveQuery": false,
           "query": "event_type:grounding_verification_completed",
           "queryType": "lucene",
-          "refId": "A",
-          "timeField": "@timestamp"
+          "refId": "A"
         }
       ],
       "title": "Uncitable Turn Rate",
@@ -350,8 +348,7 @@
           "preserveQuery": false,
           "query": "event_type:grounding_verification_completed",
           "queryType": "lucene",
-          "refId": "A",
-          "timeField": "@timestamp"
+          "refId": "A"
         }
       ],
       "title": "Unresolved Near-Miss Markers",

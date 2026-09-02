@@ -90,13 +90,13 @@ class TestAC2Unconfounded:
         oscillation D5 exists to prevent.
         """
         assert not is_unconfounded_observation(
-            _record(retrieval_forced=True, first_generation_compliant=True)
+            _record(retrieval_forced=True, first_generation_compliant=True), citable=True
         )
 
     def test_a_pre_forced_turn_never_reaches_the_denominator(self) -> None:
         """The exclusion holds end-to-end, not merely in the predicate."""
         records = [_record(retrieval_forced=True) for _ in range(50)]
-        eligible = [r for r in records if is_unconfounded_observation(r)]
+        eligible = [r for r in records if is_unconfounded_observation(r, citable=True)]
         assert eligible == []
 
         result = classify(MODEL, [], window=WINDOW, now=NOW)
@@ -105,16 +105,16 @@ class TestAC2Unconfounded:
 
     def test_unforced_turn_is_an_observation(self) -> None:
         """The predicate must not reject everything — a vacuous AC-2 proves nothing."""
-        assert is_unconfounded_observation(_record())
+        assert is_unconfounded_observation(_record(), citable=True)
 
     def test_turn_without_a_non_exempt_span_is_excluded(self) -> None:
         """D5's denominator is 'turns containing at least one non-exempt span'."""
-        assert not is_unconfounded_observation(_record(non_exempt_count=0))
+        assert not is_unconfounded_observation(_record(non_exempt_count=0), citable=True)
 
     def test_unavailable_verification_is_excluded(self) -> None:
         """A denied budget or a broken extractor is not evidence about the model."""
         assert not is_unconfounded_observation(
-            _record(available=False, first_generation_compliant=False)
+            _record(available=False, first_generation_compliant=False), citable=True
         )
 
     def test_degraded_extraction_is_still_counted(self) -> None:
@@ -123,7 +123,24 @@ class TestAC2Unconfounded:
         Excluding these turns is therefore the choice that inflates, and inflation is the
         failure that matters: an inflated rate promotes a model that has not earned it.
         """
-        assert is_unconfounded_observation(_record(degraded_extraction=True))
+        assert is_unconfounded_observation(_record(degraded_extraction=True), citable=True)
+
+
+class TestAC5Citable:
+    """ADR-0139 D1 AC-5 — the de-confounded number is the one FRE-1284/1285 read.
+
+    An ``uncitable`` turn (every tool result this turn offered was refused) is not a
+    model failure; it is the system offering nothing to cite from. Counting it as
+    non-compliant confounds the metric exactly as a pre-forced turn would, so it is
+    excluded here, at the single place both consumers' window is built.
+    """
+
+    def test_an_uncitable_but_otherwise_eligible_record_is_excluded(self) -> None:
+        assert not is_unconfounded_observation(_record(), citable=False)
+
+    def test_a_citable_record_is_still_included(self) -> None:
+        """The predicate must not reject everything — a vacuous AC-5 proves nothing."""
+        assert is_unconfounded_observation(_record(), citable=True)
 
 
 class TestAC3Responsive:

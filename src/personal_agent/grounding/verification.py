@@ -251,6 +251,50 @@ class TurnVerification(BaseModel):
         return tuple(span for span in self.spans if span.outcome in _MACHINE_UNDECIDED)
 
 
+class TurnEvidenceClass(StrEnum):
+    """The denominator ``passed_count: 0`` was missing (ADR-0139 D1).
+
+    A zero-compliance turn is equally consistent with a careless model and with a system
+    that offered nothing citable, and today distinguishing them requires joining
+    ``source_registry_tool_inadmissible`` to ``grounding_verification_completed`` by
+    ``trace_id`` — a join nobody runs. This class states the answer on the verification
+    event itself.
+    """
+
+    NO_ASSERTIONS = "no_assertions"
+    UNCITABLE = "uncitable"
+    CITABLE = "citable"
+
+
+def classify_turn_evidence(
+    verification: TurnVerification, *, tool_results_offered: int, tool_results_admitted: int
+) -> TurnEvidenceClass:
+    """Classify one turn's evidence shape (ADR-0139 D1, AC-1 and AC-2).
+
+    ``uncitable`` is defined mechanically: non-exempt spans exist, at least one tool
+    result was offered, and none was admitted. A turn that called no tools and asserted
+    anyway is **not** ``uncitable`` — it is a genuine no-source turn and must stay in the
+    compliance denominator, so a model reasoning from its weights cannot hide behind this
+    class (AC-2).
+
+    Callers should only invoke this when ``verification.available`` — a turn verification
+    could not run on has no span list this classification can trust.
+
+    Args:
+        verification: What the inline checks decided.
+        tool_results_offered: This turn's :attr:`SourceRegistry.tool_results_offered`.
+        tool_results_admitted: This turn's :attr:`SourceRegistry.tool_results_admitted`.
+
+    Returns:
+        The class this turn's evidence falls into.
+    """
+    if not verification.spans:
+        return TurnEvidenceClass.NO_ASSERTIONS
+    if tool_results_offered > 0 and tool_results_admitted == 0:
+        return TurnEvidenceClass.UNCITABLE
+    return TurnEvidenceClass.CITABLE
+
+
 def check_reachability(source: RegisteredSource) -> Reachability:
     """Run D3(b) against one source's recorded retrieval.
 
@@ -583,10 +627,12 @@ __all__ = [
     "CheckOutcome",
     "Reachability",
     "SpanVerification",
+    "TurnEvidenceClass",
     "TurnVerification",
     "apply_entailment",
     "build_grounding_record",
     "check_reachability",
+    "classify_turn_evidence",
     "unavailable",
     "verify_turn",
 ]

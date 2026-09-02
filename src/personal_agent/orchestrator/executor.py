@@ -31,7 +31,11 @@ from personal_agent.captains_log.turn_evidence import (
 )
 from personal_agent.config import settings
 from personal_agent.config.env_loader import Environment
-from personal_agent.grounding.citations import parse_citations, strip_citation_markers
+from personal_agent.grounding.citations import (
+    count_near_miss_markers,
+    parse_citations,
+    strip_citation_markers,
+)
 from personal_agent.grounding.enforcement import (
     TurnDecision,
     build_no_source_statement,
@@ -47,9 +51,11 @@ from personal_agent.grounding.enforcement_selection import (
 from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.grounding.verification import (
     CheckOutcome,
+    TurnEvidenceClass,
     TurnVerification,
     apply_entailment,
     build_grounding_record,
+    classify_turn_evidence,
     unavailable,
     verify_turn,
 )
@@ -2014,7 +2020,35 @@ def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mod
         ),
     )
     ctx.grounding_record = record
-    observation = _record_compliance_observation(ctx, record)
+
+    # ADR-0139 D1 (FRE-1332): the compliance metric's denominator. Putting these on this
+    # event rather than a second one removes the join `passed_count: 0` used to require —
+    # `source_registry_tool_inadmissible` (DEBUG) against this line (INFO) by `trace_id` —
+    # a join nobody ran. Gated on `verification.available`: a turn verification did not
+    # run on has no span list these fields could trust, and the ADR scopes the whole
+    # table to "on every turn where verification ran".
+    registry = ctx.source_registry
+    tool_results_offered = registry.tool_results_offered if registry is not None else 0
+    tool_results_admitted = registry.tool_results_admitted if registry is not None else 0
+    turn_evidence_class: TurnEvidenceClass | None = None
+    near_miss_markers: dict[str, int] | None = None
+    observed_span_outcomes: dict[str, int] | None = None
+    invocation_checked_span_outcomes: dict[str, int] | None = None
+    if verification.available:
+        turn_evidence_class = classify_turn_evidence(
+            verification,
+            tool_results_offered=tool_results_offered,
+            tool_results_admitted=tool_results_admitted,
+        )
+        near_miss_markers = {"unresolved": count_near_miss_markers(ctx.final_reply or "")}
+        # Neither `Entitlement.OBSERVED` nor `RegisteredSource.invocation_check_required`
+        # exists yet (ADR-0139 D2/D3, FRE-1334), so no span can qualify for either map.
+        # Emitted empty rather than omitted so a consumer built against this ticket does
+        # not have to special-case a missing key once D2/D3 populate them by construction.
+        observed_span_outcomes = {}
+        invocation_checked_span_outcomes = {}
+
+    observation = _record_compliance_observation(ctx, record, turn_evidence_class)
     log.info(
         "grounding_verification_completed",
         trace_id=ctx.trace_id,
@@ -2041,10 +2075,19 @@ def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mod
         # audit.
         compliance_observation=observation,
         answering_model_key=ctx.answering_model_key,
+        # ADR-0139 D1 (FRE-1332).
+        turn_evidence_class=turn_evidence_class.value if turn_evidence_class else None,
+        tool_results_offered=tool_results_offered,
+        tool_results_admitted=tool_results_admitted,
+        observed_span_outcomes=observed_span_outcomes,
+        invocation_checked_span_outcomes=invocation_checked_span_outcomes,
+        near_miss_markers=near_miss_markers,
     )
 
 
-def _record_compliance_observation(ctx: ExecutionContext, record: GroundingRecord) -> str:
+def _record_compliance_observation(
+    ctx: ExecutionContext, record: GroundingRecord, turn_evidence_class: TurnEvidenceClass | None
+) -> str:
     """Append this turn to D5's compliance window, when it is an unconfounded observation.
 
     **Why here and not at capture time.** ``ctx.grounding_record`` is replaced on every D4
@@ -2061,15 +2104,22 @@ def _record_compliance_observation(ctx: ExecutionContext, record: GroundingRecor
     Args:
         ctx: Execution context.
         record: This attempt's grounding record.
+        turn_evidence_class: ADR-0139 D1's classification of this turn, or ``None`` when
+            verification did not run. An ``uncitable`` turn is excluded on the same
+            footing as a pre-forced one (AC-5): the system offered nothing to cite from,
+            which is not evidence about the model.
 
     Returns:
         What happened, for the caller's log line: ``recorded``, ``confounded`` (pre-forced
-        retrieval, no non-exempt span, or verification unavailable), or ``unattributable``.
+        retrieval, no non-exempt span, uncitable, or verification unavailable), or
+        ``unattributable``.
     """
     from personal_agent.captains_log.background import run_in_background  # noqa: PLC0415
     from personal_agent.grounding.compliance import is_unconfounded_observation  # noqa: PLC0415
 
-    if not is_unconfounded_observation(record):
+    if not is_unconfounded_observation(
+        record, citable=(turn_evidence_class is TurnEvidenceClass.CITABLE)
+    ):
         return "confounded"
 
     model_key = ctx.answering_model_key

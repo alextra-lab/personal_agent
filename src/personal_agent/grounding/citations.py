@@ -279,6 +279,44 @@ def strip_citation_markers(text: str) -> str:
     return _MARKER_WITH_LEADING_SPACE.sub("", text)
 
 
+_NEAR_MISS_CANDIDATE_PATTERN = re.compile(r"\[[^\]]*@[^\]]*\]")
+"""A bracketed, ``@``-bearing span — the shape a citation marker takes when malformed.
+
+Only ``]`` is excluded from the character classes, not ``[``. Excluding both would let a
+malformed marker carrying a nested ``[`` before its digest (``[S1@[0123]]``) match
+nothing at all, since the class could not cross the inner bracket either — the exact gap
+an ADR-0139 D1 plan review caught. Excluding only ``]`` still bounds each candidate to
+"the next ``]`` after this ``[``", so two adjacent well-formed markers are scanned as two
+independent candidates rather than conflated into one run.
+"""
+
+
+def count_near_miss_markers(text: str) -> int:
+    """Count citation-shaped strings that fail the well-formed marker pattern.
+
+    ADR-0139 D1's near-miss signal: a candidate that is citation-shaped — bracketed,
+    containing ``@`` — but does not match :data:`CITATION_MARKER_PATTERN`. FRE-1327's
+    ``[S@bash-tempo-trace-dba5b2]`` is the worked case: it fails on ordinal, hex and
+    length, so it scores as an ordinary no-source outcome today, indistinguishable from
+    not trying to cite at all.
+
+    Deliberately narrow, and deliberately does not resolve a candidate against the
+    registry: resolution on registry-minted attributes only is D7's job (FRE-1355), kept
+    separate so a near-miss can never be rescued into a citation by construction.
+
+    Args:
+        text: The model's output for one turn, markers intact.
+
+    Returns:
+        How many candidates failed the well-formed pattern.
+    """
+    return sum(
+        1
+        for candidate in _NEAR_MISS_CANDIDATE_PATTERN.findall(text)
+        if not CITATION_MARKER_PATTERN.fullmatch(candidate)
+    )
+
+
 def resolve_citations(parse: CitationParse, registry: SourceRegistry) -> tuple[SpanResolution, ...]:
     """Resolve each parsed span's citation against this turn's registry (D3(a)).
 

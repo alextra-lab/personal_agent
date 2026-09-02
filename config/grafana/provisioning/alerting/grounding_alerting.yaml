@@ -1,0 +1,126 @@
+apiVersion: 1
+groups:
+    - orgId: 1
+      name: grounding-alerts
+      folder: Grounding
+      interval: 1m
+      rules:
+        - uid: ffx0ngrgd5mv4b
+          title: 'Grounding: Uncitable Turn Rate'
+          condition: C
+          data:
+            - refId: A
+              queryType: lucene
+              relativeTimeRange:
+                from: 300
+                to: 0
+              datasourceUid: es-agent-logs
+              model:
+                alias: ""
+                bucketAggs:
+                    - id: "2"
+                      settings:
+                        filters:
+                            - label: ""
+                              query: '*'
+                      type: filters
+                editorType: builder
+                intervalMs: 1000
+                maxDataPoints: 43200
+                metrics:
+                    - id: "1"
+                      type: count
+                preserveQuery: false
+                query: event_type:grounding_verification_completed AND turn_evidence_class:uncitable
+                queryType: lucene
+                refId: A
+                timeField: '@timestamp'
+            - refId: D
+              queryType: lucene
+              relativeTimeRange:
+                from: 300
+                to: 0
+              datasourceUid: es-agent-logs
+              model:
+                alias: ""
+                bucketAggs:
+                    - id: "2"
+                      settings:
+                        filters:
+                            - label: ""
+                              query: '*'
+                      type: filters
+                editorType: builder
+                hide: false
+                intervalMs: 1000
+                maxDataPoints: 43200
+                metrics:
+                    - id: "1"
+                      type: count
+                preserveQuery: false
+                query: event_type:grounding_verification_completed AND (turn_evidence_class:uncitable OR turn_evidence_class:citable)
+                queryType: lucene
+                refId: D
+                timeField: '@timestamp'
+            - refId: B
+              datasourceUid: __expr__
+              model:
+                conditions:
+                    - evaluator:
+                        params:
+                            - 0
+                            - 0
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params: []
+                      reducer:
+                        params: []
+                        type: avg
+                      type: query
+                datasource:
+                    name: Expression
+                    type: __expr__
+                    uid: __expr__
+                expression: $A / $D
+                hide: false
+                intervalMs: 1000
+                maxDataPoints: 43200
+                refId: B
+                type: math
+            - refId: C
+              datasourceUid: __expr__
+              model:
+                conditions:
+                    - evaluator:
+                        params:
+                            - 0
+                            - 0
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params: []
+                      reducer:
+                        params: []
+                        type: avg
+                      type: query
+                datasource:
+                    name: Expression
+                    type: __expr__
+                    uid: __expr__
+                expression: B
+                hide: false
+                intervalMs: 1000
+                maxDataPoints: 43200
+                refId: C
+                type: threshold
+          noDataState: Alerting
+          execErrState: Error
+          annotations:
+            description: 'ADR-0139 D1 closure-metric sentinel: fires the instant uncitable_turn_rate (uncitable / (uncitable+citable) asserting turns) reads above 0 -- any occurrence means a tool landed unclassified. No-data state is explicitly Alerting: this is a correlated family per ADR-0134 D1, and an unauthored default here would be the exact "decided by not deciding" failure the ADR names -- silence on a family that should emit whenever asserting turns happen is itself worth flagging.'
+            summary: 'A new tool landed unclassified: uncitable turns are non-zero.'
+          isPaused: false
+          notification_settings:
+            receiver: empty

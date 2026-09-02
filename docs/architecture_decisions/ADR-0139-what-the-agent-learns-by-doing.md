@@ -1,11 +1,33 @@
 # ADR-0139: What the Agent Learns by Doing — Result-Level Admissibility, a First-Person Observation Tier, and a Denominator for the Compliance Metric
 
-**Status:** Proposed — revised 2026-09-01 (review round 5, FRE-1349): three verified blocking
-defects closed, `D7` added, and ADR-0138 D2 amended **once** with ADR-0098 Amendment A §A6's
-narrowing and this ADR's widening composed rather than stated adjacently
+**Status:** Proposed — **partially withdrawn 2026-09-02** (review round 6, FRE-1357). **D1 and D4
+stand and are the live decisions.** **D2, D3 and D7 are withdrawn**, and **D6 is retired**, under
+[ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md): the model is not a security boundary,
+so admissibility is a capability property and may not rest on a content predicate over a tool's own
+result. The withdrawn sections are retained below as record, each under a withdrawal banner.
+ADR-0138 D2's parameter-schema boundary is **restored, not amended** — this ADR's amendment of it
+lapses with D2.
 **Date:** 2026-08-29
 **Deciders:** Project owner (design), `adr` session (drafting)
 **Tags:** grounding, hallucination, citations, observability, alerting, vision
+
+---
+
+## Revision note — what stands, what is withdrawn (2026-09-02, FRE-1357)
+
+| Decision | Status | Why |
+|---|---|---|
+| **D1** — denominator and the signal family | **Stands.** In implementation (FRE-1332, FRE-1333) | An instrument, not a boundary. It is what makes the replacement path orderable |
+| **D2** — result-level admissibility, three-arm invocation check | **Withdrawn** | A model-layer control standing as the boundary for the invariant (ADR-0140 T3). Round 6 measured its cost: arm 2 rejects the whole source on `grep 'passed_count' logs.json`, `rg 'source_registry tool' src/`, `git log --grep='cost gate'`, a `psql` column header and an ES\|QL `KEEP` projection — contradicting this ADR's own AC-11 |
+| **D3** — the `OBSERVED` tier and the address-bound terminus | **Withdrawn as written.** The `OBSERVED` tier itself **survives, scoped to D4** | The tier is a capability fact where the harness received the bytes (attachments). The address rule was undecidable by the means this ADR permits — extracting a read's target from a command line needs the shell parse it refuses everywhere else |
+| **D4** — attachments are first-person observation | **Stands.** Untouched by all six round-6 findings | An attachment is caller-supplied; the model did not author the bytes. Admissible at the capability layer |
+| **D5** — generative tools stay excluded | **Stands**, and is now the general rule rather than an exception |
+| **D6** — the declared threat model | **Retired.** Superseded by [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md) | A program-level premise cannot live inside one consumer; and its axis (careless vs adversarial) was the wrong axis |
+| **D7** — near-miss markers | **Withdrawn except its first row.** A near-miss scores `UNRESOLVED` rather than `UNCITED`; the resolver, rows 2–3 and `MALFORMED_CITATION` are dropped | Row 1 needs no resolution and grants no admissibility, so it is a pure observability gain. The rest was unreachable (`_identifier_for` short-circuits at `verification.py:315` before any of it) and non-discriminating |
+
+**The replacement path is D8, below.** The measured defect D2 was written to close — 2 of 222 spans
+passing — is **not** closed by this revision; it is made visible and ordered instead. That trade is
+stated plainly rather than softened: see ADR-0140's Negative Consequences.
 
 ---
 
@@ -206,6 +228,14 @@ concerned the `bash` output. The classification fails toward counting against us
 direction, and the case collapses once D2 lands. It is not a defect to be fixed by widening
 `uncitable`, which would hand the model an escape.
 ### D2 — Admissibility is decided on the result, not on the invocation
+
+> **WITHDRAWN 2026-09-02 (FRE-1357), under [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md) T3/T4.**
+> This decision made a content predicate over a tool's own result the boundary for admissibility.
+> ADR-0140 rules that a model-layer control may never be the sole control for an invariant, and that
+> admissibility is decided from what the harness knows about *how* a result was obtained. Arbitrary-code
+> tools therefore stay inadmissible and ADR-0138 D2's parameter-schema boundary is restored unamended.
+> **The text below is retained as record** — it is the reasoning five review rounds produced, and the
+> reason the alternative was reachable. It is not a live decision and must not be implemented.
 
 **The tool set that today short-circuits admissibility is split in two**, because it currently
 conflates two unrelated exclusions under one branch:
@@ -446,6 +476,16 @@ index-reading query keeps its citation because the returned rows do not. AC-11 a
 the binding one.
 ### D3 — A third entitlement tier: `OBSERVED`
 
+> **WITHDRAWN AS WRITTEN 2026-09-02 (FRE-1357).** The `OBSERVED` **tier survives**, scoped to D4:
+> it records that *the harness received these bytes*, which is a capability fact. What is withdrawn is
+> its extension to arbitrary-code results (which D2's withdrawal removes) and the **address-bound
+> terminus rule**, which is not decidable by the means this ADR permits: extracting a read's target
+> from a command line requires the shell parse the ADR refuses everywhere else, and string-matching the
+> invocation instead reproduces the failure `_reads_tainted`'s own docstring records — "a write and a
+> read that name the same target differently — an absolute path against a relative one". The terminus
+> for typed reads is the cross-turn write ledger (FRE-1356), which is the mechanism rather than an
+> upgrade to one. **Retained below as record.**
+
 `Entitlement` gains a member between `EXTERNAL` and `AGENT_DERIVED`. It separates two questions D2
 currently conflates: **is this admissible** (D2) from **how much do we trust it** (entitlement).
 
@@ -563,6 +603,16 @@ Scope discipline, stated so the amendment cannot widen by accident:
 
 ### D6 — The declared threat model, and what it costs
 
+> **RETIRED 2026-09-02 (FRE-1357).** Superseded by
+> [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md), which declares the threat model at
+> program level. Two things were wrong here, and the location was the first of them: a premise that
+> decides whether an entire approach is correct cannot be a subsection of that approach — stated here,
+> it was invisible to ADR-0138, whose admissibility rule it governed. The second is the axis:
+> "careless or adversarial" reasons about model *intent*, and ADR-0140 T1 rules that intent is not a
+> design input at all. The behavioural observation this section records — no laundering attempt in the
+> 100 recorded refusals — remains true and remains admissible for prioritisation. **Retained below as
+> record.**
+
 **The model is careless, not adversarial.** This is a decision, not an assumption, and it is the
 load-bearing premise of D2.
 
@@ -654,6 +704,23 @@ adjudicate on an equivalent trace, since its named one cannot carry it.
 failure. A citation-plumbing fix that made the fabrication *measurable* has not made it *rarer*, and
 this ADR must not be read as though it had.
 ### D7 — A malformed citation marker is a rejection with a reason, not a silence
+
+> **WITHDRAWN EXCEPT ROW ONE, 2026-09-02 (FRE-1357).** What survives: **a span whose only
+> citation-shaped marker fails `CITATION_MARKER_PATTERN` scores `UNRESOLVED`, not `UNCITED`** — the
+> whole of the confabulation-versus-apathy fix, needing no resolution and granting no admissibility.
+> Withdrawn: the attribute resolver, rows two and three, and `MALFORMED_CITATION`. Round 6 established
+> that the rest was unreachable and non-discriminating. **(a)** `parse_citations` yields no `CitedSpan`
+> for a near-miss, so `_identifier_for` returns `None` and `_verify_span` short-circuits to `UNCITED`
+> at `verification.py:315` before any of D7 runs; giving it an entry point means making a near-miss
+> bind a region, which changes ADR-0138 D1's segmentation contract. **(b)** `strip_citation_markers`
+> is built from the same pattern, so a near-miss's own characters stay in the span text — measured,
+> `claim_unit` over the FRE-1327-shaped span yields `('trace','four','bash','calls','succeeded',
+> 'second','tempo','dba5b2')`, three tokens minted by the marker itself (`S` folds to the unit
+> synonym `second`). Row three is therefore unreachable by construction and row two always returns
+> `NOT_CONTAINED` for a protocol-character reason. **(c)** Attribute precedence is undefined: a
+> candidate matches on `origin` **or** an ≥8-hex digest prefix and the match must be unique, so
+> `[S@bash-<the correct digest>]` on a four-`bash` turn resolves *ambiguously* — the rule is strictly
+> worse the more the model gets right. **Retained below as record.**
 
 **A citation-shaped string that fails `CITATION_MARKER_PATTERN` stops short-circuiting to `UNCITED`.**
 It is resolved against the registry on **registry-minted attributes only**, and the span it binds
@@ -768,6 +835,47 @@ never **create** admissibility. The span is blocked under D1's default-deny in e
 
 **`NOT_CONTAINED` is reachable without D7**, on a well-formed citation whose claim its source does
 not support; that is AC-2 arm (b) and it does not depend on this decision.
+
+### D8 — The replacement path: typed retrieval, provisioned on demand and ordered by D1
+
+Added 2026-09-02 (FRE-1357) as what D2 and D3 are replaced *by*, not merely withdrawn *for*. The
+premise is [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md) T4: a source is admissible
+because of how the harness obtained it. The application is this ADR's, because which tools get
+provisioned in what order is a question about *this* problem and must not be settled inside the
+threat-model document — the error D6 made in the other direction.
+
+**Arbitrary-code tools stay inadmissible, and that is now a decision rather than a status quo.**
+`bash`, `run_python` and the browser-evaluate pair keep the categorical branch at
+`source_registry.py:945`. No split, no `invocation_check_required`, no invocation-bearing source
+identity, no negative containment check. ADR-0138 D2's parameter-schema boundary stands unamended:
+a tool whose parameters *select or address* is admissible; a tool whose parameters *compose* is not.
+
+**Evidence the agent needs to cite is provisioned as a typed tool.** This is Option 2 of this ADR,
+rejected in round 5 under D6 and correct under ADR-0140 T1. Round 5 rejected it on two grounds, and
+**both are now stale**:
+
+- *"Cheap to close the alternative instead."* Round 6 measured the cost of the three-arm check:
+  it rejects the **whole source** for `grep 'passed_count' logs.json` (snake_case splits into two
+  tokens), `rg 'source_registry tool' src/`, `git log --grep='cost gate'`, a `psql` column header and
+  an ES|QL `KEEP` projection — refuting this ADR's own **AC-11**, which requires an index-reading
+  ES|QL query to keep its citation. The alternative was not cheap; it was unmeasured.
+- *"An unbounded provisioning treadmill, and the metric stays confounded meanwhile."* **D1 removes
+  the second half and bounds the first.** `turn_evidence_class`, `tool_results_offered` and
+  `tool_results_admitted` de-confound the metric, and they identify *which* turns went uncitable for
+  want of which source. Provisioning becomes demand-driven and ordered rather than speculative and
+  unbounded — you build the wrapper the measurement asks for.
+
+**The sequencing is therefore: D1 first and alone** (unchanged — FRE-1332, in implementation), then
+D4, then wrappers in the order D1's uncitable population ranks them. ADR-0140 AC-3 is what keeps
+that honest in both directions: a wrapper shipped with no uncitable evidence behind it fails, and an
+uncitable population that persists two windows with nothing filed fails too.
+
+**The cost is not closed and is not disguised.** Until a source has a typed tool, assertions that
+depend on it stay uncitable and those turns keep scoring zero — the measured defect this ADR opens
+with. What changes is that they are **classified, counted and ranked** instead of being an
+undiagnosable constant, and that the boundary they sit behind is one that holds. Exempting them from
+the denominator to make the number look better is Option 3, rejected here and re-forbidden by
+ADR-0140 AC-5.
 
 ---
 
@@ -1136,6 +1244,16 @@ any change is made: 2 of 222 non-exempt spans passed (0.9%); 13 of 15 asserting 
 ## Verification / Acceptance Criteria
 
 **How will we know this decision actually delivered — not just merged?**
+
+> **PARTIALLY LAPSED 2026-09-02 (FRE-1357).** With D2, D3 and most of D7 withdrawn, the criteria
+> written for them lapse with them. **Standing:** **AC-4** (a zero-compliance turn is diagnosable
+> from its own document), **AC-6** (the alert fires), **AC-7** (near-miss detection is
+> discriminating), **AC-8** (image spans are checked in both directions), and **AC-13 arm (a)** only
+> — a near-miss scoring `UNRESOLVED` rather than `UNCITED` — which is D7's surviving row.
+> **Lapsed:** AC-1, AC-2, AC-3, AC-5, AC-9, AC-10, AC-11, AC-12, AC-13 arms (b) and (c), AC-14. They
+> are retained below unedited as the record of what the withdrawn decisions would have had to prove;
+> none of them is a live obligation, and adjudication on FRE-1328 covers the standing five only.
+> ADR-0140 carries the criteria for the replacement path.
 
 > **Adjudication:** on the umbrella, **FRE-1328**, once the implementation chain has landed and
 > deployed. No seam ticket (ADR-0130 superseded 2026-08-18).
@@ -1695,3 +1813,68 @@ defects in those. That is this document's whole history and it has not stopped. 
 address list, and a headline claim withdrawn. **A further round would be a reasonable thing to want**,
 and the honest summary is that this document converges slowly because each fix is load-bearing enough
 to have failure modes of its own.
+
+### 2026-09-02 - Review round 6 (`adr` session, on FRE-1357) — partially withdrawn
+
+**Changed By:** `adr` session (FRE-1357), on the owner's Route 1 decision
+**Reason:** D2, D3 and D7 reviewed adversarially, with every code claim verified in source and every
+token-arithmetic claim produced by running the shipped normalizer. The round was commissioned to
+answer one question beyond finding defects: **is the churn defects, or is it altitude?**
+
+**The convergence answer: 4 blocking findings, against 7 / 5 / 5 in rounds 1–3. The count fell; the
+trend did not flatten — and the diagnosis is altitude.** Three of the four findings are the previous
+round's answer reappearing one level down:
+
+- Round 3 replaced arm 2's undefined "maximal literal run" with a token rule. Round 6 measured that
+  the token rule false-rejects the shape D2 exists to protect: `grep 'passed_count' logs.json` (run
+  of 2 — snake_case splits on `_`), `rg 'source_registry tool' src/` (3), `git log --grep='cost
+  gate'` (2), `psql "SELECT name, city"` against its own header (2), ES|QL `KEEP trace_id,
+  passed_count` (4). Arm 2 is source-scoped, so each rejects the **whole source** — directly
+  contradicting **AC-11**, which requires an index-reading ES|QL query to keep its citation. AC-12's
+  false-rejection controls contain none of these shapes, so AC-12 would have gone green.
+- Round 3 set precedence between marker *kinds* (a valid marker wins over a near-miss). Round 6
+  found precedence between resolution *attributes* undefined, and the default perverse: a candidate
+  matches on `origin` **or** an ≥8-hex digest prefix, and the match must be unique, so
+  `[S@bash-<the correct digest>]` on a four-`bash` turn resolves ambiguously. The rule is worse the
+  more the model gets right.
+- Round 5 replaced "who wrote it" with "where you read" because the former was undecidable. Round 6
+  found the latter equally undecidable from a command line without the shell parse the ADR refuses
+  everywhere else — and string-matching the invocation instead reproduces the failure
+  `_reads_tainted`'s own docstring records.
+
+The fourth finding is that D7 has no entry point at all: `_verify_span` short-circuits to `UNCITED`
+at `verification.py:315` before any of it runs, and `strip_citation_markers` — built from the same
+pattern that fails to match a near-miss — leaves the marker's characters in the span text.
+Measured, `claim_unit` over the FRE-1327-shaped span yields
+`('trace','four','bash','calls','succeeded','second','tempo','dba5b2')`; three of those eight tokens
+are minted by the marker itself, `S` folding to the unit synonym `second`. D7's row three is
+therefore unreachable by construction, and AC-3's D7 arm and AC-13(c) would have passed vacuously.
+
+Two non-blocking: the Implementation Notes still specified the **withdrawn** "maximal-literal-run
+extractor" that D2's body replaced in round 3 — the implementer-facing half disagreeing with the
+normative half, on the ticket that builds arm 2; and two line anchors had drifted
+(`verification.py:615` for a field at `:622`; `turn_evidence.py:240` for returns at `:241`/`:256`).
+Both substantive claims behind those anchors verified true, including that `RegisteredSource.label`
+derives from `memory_item_identity` (`source_registry.py:915`).
+
+**What held.** All seven rows of D2's arm-2 fixture table reproduce exactly against the shipped
+normalizer; `ARBITRARY_CODE_TOOLS`' ten members match D2's split table; the `(kind, origin, content)`
+dedupe key; the `.contained`-versus-`.passed` argument; the entitlement gate at `verification.py:330`.
+
+**Why the diagnosis is altitude and not a fourth repair.** D2 arms 2–3, D7's resolver and D3's
+address rule are three attempts to make one discriminator — *model-composed versus world-observed* —
+decidable by string arithmetic. This document's own Context already says that question is
+undecidable for arbitrary shell, and each round has been rediscovering it under a new name. The
+external record agrees from an independent direction: a 2026 survey of evidence tracing in LLM
+agents finds no system that semantically validates tool-output content before citing it; CaMeL,
+FIDES and NeuroTaint all label values where they are produced; and GuardFall (June 2026) named the
+precise failure of inspecting raw shell command text — *"the filter and the shell end up looking at
+two different things"*.
+
+**Outcome.** The owner ruled **Route 1** on 2026-09-02 — follow the capability route, and follow
+Anthropic's lead. The premise is corrected at program level in
+[ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md); D6 is retired there; D2, D3 and most
+of D7 are withdrawn here; D1 and D4 stand; the replacement path is **D8** above. On the ADR-0098
+Amendment A precedent, this round stopped and narrowed rather than patching a fourth time — one
+level higher than FRE-1357 anticipated, because the premise rather than the predicate was where the
+grain was wrong.

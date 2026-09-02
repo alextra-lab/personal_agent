@@ -1,0 +1,405 @@
+# ADR-0140: The Model Is Not a Security Boundary — Seshat's Declared Threat Model, and the Layer Rule Every Other ADR Cites
+
+**Status:** Proposed
+**Date:** 2026-09-02
+**Deciders:** Project owner (decision, 2026-09-02 — "Route 1, and we follow Anthropic's lead"), `adr` session (drafting)
+**Tags:** security, threat-model, grounding, agent-architecture, prompt-injection
+
+---
+
+## Context
+
+**Seshat has no declared threat model.** ADR-0138 — the grounding contract, the document that
+decides what counts as evidence for an assertion — names no adversary anywhere in it. The only
+declaration of a *model-intent* threat model in the entire corpus is **ADR-0139 D6**, and it sits
+inside the ADR whose design depends on it. ADR-0089 declares one scoped to artifact execution
+(users, sharing) — a different asset. ADR-0063, ADR-0003 and ADR-0070 use the phrase in passing
+without declaring anything.
+
+### The location is the defect, before the value is
+
+D6 is decision six of seven in the document it justifies. A premise that determines whether an
+entire approach is correct cannot be a subsection of that approach: it is discovered after the
+design, it is argued against that design's alternatives, and it is invisible to every other
+document that should honour it — ADR-0138's admissibility rule, ADR-0028's tool-integration tiers,
+the sandbox and egress posture.
+
+### What D6 declared, and what it cost
+
+> "**The model is careless, not adversarial.** This is a decision, not an assumption, and it is the
+> load-bearing premise of D2."
+
+From that premise ADR-0139 derived result-level admissibility for arbitrary-code tools, and rejected
+**Option 2** (typed wrappers only, `bash` stays inadmissible) with the words: *"It is the correct
+answer under an **adversarial** threat model, and the owner settled that question the other way."*
+
+The derivation has been reviewed five times. Rounds 1–3 produced 7, then 5, then 5 blocking
+findings; round 5 produced three more and introduced D7; round 6 (FRE-1357) produced four more.
+**Every one of them is in a model-layer predicate** — a rule that inspects the model's own output
+after the fact and tries to decide whether the model composed it. Round 6's measurements are the
+clearest statement of the pattern: D2's arm 2 rejects `grep 'passed_count' logs.json`,
+`rg 'source_registry tool' src/`, `git log --grep='cost gate'`, a `psql` column header and an
+ES|QL `KEEP` projection — and it rejects the **whole source**, not the offending span. Each round
+fixed the predicate at one grain and exposed the next grain down.
+
+### The axis is wrong, not only the value
+
+"Careless or adversarial" conflates two independent questions:
+
+| Axis | Question | What the evidence says |
+|---|---|---|
+| **Model intent** | Does *our* model try to launder its own words into evidence? | No laundering attempt, literal or encoded, appears in the 100 recorded refusals. FRE-1327 was **confabulation**, not laundering. |
+| **Input integrity** | Is what reaches the model trustworthy? | Seshat reads the web, a shared knowledge graph, and MCP tool results. FRE-1338 is an in-house instance of one session's authorship crossing into the next through the shared graph. |
+
+D6 derives a design that holds only if nothing can *supply* intent, from evidence showing only that
+our model has none of its own. Flipping the value to "adversarial" does not repair that; it
+over-corrects on the same wrong axis.
+
+### What the ecosystem we build on actually does
+
+Anthropic's containment philosophy treats the model's intent as **irrelevant** — the architecture is
+designed to work whether misbehaviour is careless or adversarial:
+
+> "Rather than supervising what the agent does, we supervise what it's *able* to do by enforcing
+> access boundaries."
+>
+> "even with best-in-class defenses, protection in the model layer will never be 100% effective,
+> which is why it can't stand alone."
+>
+> "tool output is an attack surface even when the tool is trusted."
+
+OpenAI's public position is the same conclusion from the other end: prompt injection may never be
+fully solved, because a model cannot reliably enforce privilege boundaries inside one token
+sequence. OWASP's 2026 agentic guidance states it flatly — model protections are not your security
+boundary. The research direction is uniform: CaMeL, FIDES, NeuroTaint and Agent-Sentry all label a
+value **where it is produced** and propagate the label through execution; none inspects a result for
+traces of its own arguments. A 2026 survey of evidence tracing in LLM agents finds **no** system that
+semantically validates tool-output content before citing it, and treats the question as open.
+
+And Anthropic has already shipped the answer to Seshat's specific problem. The Citations API does not
+check whether the model fabricated a citation — it removes the ability to. Documents are chunked
+before generation, the model emits an index, and the API extracts `cited_text` from the source, so
+"citations are guaranteed to contain valid pointers to the provided documents." Capability, not
+inspection.
+
+---
+
+## Decision
+
+**Intent is not a design input. The model is not a security boundary. Controls are classified by the
+layer they act at, and no invariant rests on a model-layer control alone.**
+
+This ADR declares the premise once. Other ADRs **cite** it and must not restate it.
+
+### T1 — Intent is not a design input
+
+No design in this repository may rest on a claim about what the model *intends*. Whether a bad
+outcome arises from carelessness, confabulation, a jailbreak, or content that supplied the intent is
+irrelevant to whether the design must hold. This retires "careless, not adversarial" as a load-bearing
+premise anywhere in the corpus.
+
+The empirical observation that our model has shown no laundering behaviour remains true and remains
+worth recording; it is **evidence about behaviour**, admissible for prioritisation and inadmissible
+as a security premise.
+
+### T2 — Two axes, declared separately
+
+| Axis | Declared position |
+|---|---|
+| **Model intent** | Not a design input (T1). Behavioural observations inform priority, never boundaries. |
+| **Input integrity** | **Untrusted.** Tool results, retrieved pages, MCP responses and knowledge-graph content are attack surface even when the tool itself is trusted. |
+
+Untrusted inputs are a standing condition, not a threat that must be demonstrated before it is
+designed for.
+
+### T3 — The layer rule
+
+Every control is one of two kinds, and each ADR states which for each control it introduces:
+
+- **Capability-layer** — the harness decides what the agent is *able* to do or *able* to produce:
+  tool provisioning, parameter schemas, sandboxes, egress control, what the registry will mint, what
+  a format permits the model to emit. Deterministic; enforced outside the model.
+- **Model-layer** — an inspection of what the model produced, after it produced it: content
+  predicates, classifiers, prompt instructions, output checks.
+
+> **A model-layer control may never be the sole control for an invariant.** It is admitted as a
+> supplementary layer and is judged on its measured cost and benefit as a layer — never defended as
+> a boundary.
+
+The practical consequence is a different argument shape. "This check has a hole" stops being a
+blocking objection to a model-layer control (all of them do) and "this check false-rejects the
+legitimate majority" starts being decisive, because a supplementary layer that costs more than it
+returns has no case for existing.
+
+### T4 — Applied to evidence: admissibility is a capability property
+
+**A source is admissible because of how the harness obtained it, never because a checker inspected
+its content.** Admissibility is decided at registration from facts the harness holds — which tool ran,
+what the parameter schema permitted it to carry, what the executor recorded — and is not re-derived
+from the result text at verification time.
+
+Three consequences follow immediately, and ADR-0139 is revised to carry them:
+
+1. **Arbitrary-code tools stay inadmissible.** `bash` and its family take a model-authored command
+   line; no capability-layer fact distinguishes observation from composition, so no source is minted.
+   This is ADR-0139 Option 2, which becomes correct under T1 rather than under an adversarial model.
+2. **Typed retrieval carries evidence.** A tool whose parameters *select or address* rather than
+   *compose* is admissible by construction, which is exactly ADR-0138 D2's original parameter-schema
+   boundary — restored rather than amended.
+3. **Attachments are admissible** because the harness received them; the model did not author the
+   bytes. The tier that records this is a capability fact, not a content judgement.
+
+Content predicates over tool results are not forbidden — they are model-layer controls under T3, and
+must earn their place on measured cost.
+
+### T5 — How this ADR binds
+
+An ADR introducing a control states its layer. An ADR relying on a threat-model premise **cites this
+document and does not restate it**, on the pattern `.claude/skills/lifecycle-rules.md` already uses
+for process invariants. Where an existing ADR declares a premise that contradicts T1 or T2, this ADR
+governs and that ADR is amended.
+
+---
+
+## Alternatives Considered
+
+### Option 1: Flip D6's value — declare the model adversarial
+
+**Description:** Keep the careless/adversarial axis and change the answer, making ADR-0139 Option 2
+correct by that document's own text.
+
+**Pros:**
+- Smallest possible edit; reaches the same conclusion for grounding.
+- Consistent with the conservative reading.
+
+**Cons:**
+- Preserves the wrong axis. Anthropic's stated position is that intent is *irrelevant*, not that it
+  is hostile, and the difference decides future arguments: an intent axis invites "but the model
+  would never do that" as a design move, whichever value is set.
+- Licenses unbounded pre-emptive hardening against a threat nothing has attempted, which is the
+  failure mode `feedback_dont_prematurely_clamp_new_capabilities` records.
+- Says nothing about input integrity, which is the axis the evidence (FRE-1338) actually implicates.
+
+**Why Rejected:** It repairs the value of a premise whose *shape* is the defect, and it would have to
+be re-litigated the first time someone argues our model is well-behaved.
+
+### Option 2: Amend D6 in place and leave it in ADR-0139
+
+**Description:** Correct the value or the axis, but keep the declaration where it is.
+
+**Pros:**
+- No new document; nothing else to keep in sync.
+
+**Cons:**
+- The premise stays invisible to ADR-0138, whose admissibility rule it governs, and to ADR-0028's
+  tool tiers.
+- It remains argued against one ADR's alternatives, which is how it came to be settled by the design
+  it was meant to constrain.
+
+**Why Rejected:** The location is the defect. A program-level premise living inside one consumer
+produced exactly the outcome observed — two ADRs on the same subject, one declaring a threat model
+the other never saw.
+
+### Option 3: Declare no threat model; decide per ADR
+
+**Description:** The status quo made explicit — each ADR reasons about adversaries in its own scope.
+
+**Pros:**
+- Zero cost; matches how a research project has operated to date.
+- Avoids a document that could become stale boilerplate.
+
+**Cons:**
+- It is the condition that produced this ADR. ADR-0138 declared nothing and ADR-0139 declared
+  something ADR-0138 could not see.
+- Every future ADR re-derives the premise, and they will not agree.
+
+**Why Rejected:** The corpus has already demonstrated the failure. A premise re-derived per document
+is a premise that drifts per document.
+
+### Option 4: Adopt CaMeL-style information-flow control wholesale
+
+**Description:** Implement the research answer directly — a custom interpreter over the agent's plan
+that tracks per-value provenance and capabilities, blocking flows by policy.
+
+**Pros:**
+- The strongest available guarantee, and the direction the field is converging on.
+- Would close the cross-call and read-back channels structurally rather than by concession.
+
+**Cons:**
+- Requires extracting control and data flow from every turn into an interpretable plan — a
+  re-architecture of the orchestrator, not a decision.
+- Research-grade and unproven at this scale; disproportionate to a single-owner research harness
+  (`feedback_use_platform_functionality_dont_build_it`).
+
+**Why Rejected:** T3 captures the operative principle — provenance is a property the harness assigns,
+never one inferred from content — without committing to the machinery. The machinery stays available
+as a later upgrade, and the cross-turn write ledger (FRE-1356) is its first affordable increment.
+
+### Option 5: Keep result-level admissibility and repair the predicates once more
+
+**Description:** ADR-0139's current path, with round 6's four findings fixed — arm 2 rethresholded,
+D7's resolver given attribute precedence, D3's address rule replaced.
+
+**Pros:**
+- Preserves the citability of everything the agent learns by doing, which is the measured defect
+  (2 of 222 spans passing).
+- Every individual finding is fixable.
+
+**Cons:**
+- It is the fourth repair at a grain that has produced defects in each of five rounds, and round 6's
+  findings are each the previous round's answer reappearing one level down.
+- It makes a model-layer control the boundary for the invariant, which T3 forbids and which both
+  Anthropic and OpenAI state cannot hold.
+
+**Why Rejected:** The owner ruled Route 1 on 2026-09-02. The technical ground is that the churn is
+altitude rather than defects: the discriminator "was this result composed by the model?" is not
+decidable from content, and five rounds of evidence say so.
+
+---
+
+## Consequences
+
+### Positive Consequences
+
+- **One premise, cited rather than re-derived.** ADR-0138 gains a threat model it never had.
+- **Arguments about model-layer controls get a decision procedure.** Holes stop being fatal and
+  false-rejection cost becomes decisive, which is the argument round 6 could not make cleanly.
+- **The grounding design stops churning.** The five-round review cycle in ADR-0139 D2/D3/D7 ends by
+  removing the class of rule that produced it.
+- **Alignment with the platform we build on.** Seshat's containment reasoning matches the reasoning
+  of the model provider it runs on, so their guidance is directly applicable rather than translated.
+- **ADR-0138 D2's parameter-schema boundary is restored,** not amended — the rule the codebase's own
+  docstrings already argue for.
+
+### Negative Consequences
+
+- **Everything the agent learns by running a command stays uncitable until a typed tool exists for
+  it.** This is a real, ongoing cost, and it is the cost ADR-0139 was written to remove. It is
+  accepted here in exchange for a boundary that holds, and it is made *visible and ordered* by
+  ADR-0139 D1's instrument rather than left implicit.
+- **A provisioning obligation.** Each new evidence source needs a typed tool before it can ground
+  anything. Demand-driven (see ADR-0139's revision) but non-zero.
+- **A classification obligation on every future ADR** — each control must name its layer. Small, but
+  it is new process, and process that no one enforces decays.
+- **Work is withdrawn.** ADR-0139 D2/D3/D7 and the tickets implementing them are cancelled or
+  re-scoped; roughly five rounds of design effort is retained as record rather than as decision.
+
+### Risks and Mitigations
+
+| Risk | Severity | Mitigation |
+|------|----------|------------|
+| The typed-tool treadmill never runs, and uncitable turns become permanent | **High** | AC-3 fails in both directions: a wrapper shipped with no uncitable-turn evidence, *and* a persistent uncitable population with no wrapper filed. ADR-0139 D1 is the instrument and ships first |
+| The cost is hidden by exempting uncitable turns from the metric | **High** | AC-5 asserts the uncitable class stays in the denominator. This is ADR-0139 Option 3, rejected there and re-forbidden here |
+| "Capability-layer" becomes a label attached to model-layer checks to exempt them | Medium | AC-2 tests the behaviour, not the label: admission must be decidable without reading the result content |
+| The layer rule becomes boilerplate nobody applies | Medium | AC-1 requires a disposition per existing sole-model-layer control, produced once as a list; a vacuous audit fails the criterion |
+| Declaring inputs untrusted is read as licence for broad pre-emptive hardening | Medium | T1's second paragraph keeps behavioural evidence admissible for prioritisation; work still competes on measured need |
+
+---
+
+## Implementation Notes
+
+**This ADR changes no code by itself.** It declares a premise and revises what other documents may
+rest on. Its implementation is the amendment of the documents it governs and the re-scoping of the
+tickets that flowed from the retired premise.
+
+- `docs/architecture_decisions/ADR-0139-*.md` — revised in the same PR: **D1 and D4 stand; D2, D3
+  and D7 are withdrawn** with their reasoning retained as record and a pointer to this ADR. The
+  replacement path — typed retrieval, ordered by D1's instrument — is stated there because it is the
+  application, not the premise.
+- `docs/architecture_decisions/ADR-0138-*.md` — gains a one-line citation of this ADR where its
+  independence rule is stated. Its D2 parameter-schema boundary is **unchanged**; ADR-0139's
+  amendment of it lapses with D2's withdrawal.
+- `src/personal_agent/grounding/source_registry.py` — **no change under this ADR.** The categorical
+  branch for `ARBITRARY_CODE_TOOLS` is now the decided behaviour rather than the status quo awaiting
+  replacement; its docstring is the record of why and already says so.
+- Ticket dispositions are carried on FRE-1357 and are not restated here.
+
+**What this ADR deliberately does not decide:** which typed tools get provisioned, in what order, or
+against what threshold. That is demand-driven work ordered by ADR-0139 D1's measurements and is
+filed separately — deciding it here would repeat D6's error of settling a downstream question inside
+an upstream document.
+
+---
+
+## Verification / Acceptance Criteria
+
+**How will we know this decision actually delivered — not just merged?**
+
+> **Adjudication:** on this ADR's umbrella ticket, once ADR-0139 D1 has landed and deployed and one
+> full measurement window has passed. Not at merge of this ADR.
+
+- **AC-1 — Every existing sole-model-layer control has a recorded disposition.** A one-time audit
+  enumerates the controls in `grounding/`, `governance/` and the tool layer that today enforce an
+  invariant with no capability-layer counterpart, and each entry carries one of: *accepted as
+  supplementary*, *promoted to capability layer*, or *removed*. · **Check:** the audit list, reviewed
+  against `ast-grep` sweeps for content-predicate gates in the admission and governance paths. ·
+  *Fails if* the list is empty or names only controls this ADR already discusses — a vacuous audit
+  reported as a met criterion; **or** if any entry is closed without one of the three dispositions.
+
+- **AC-2 — Admission is decidable without reading the result.** For every tool the registry admits, the
+  admission decision is reproducible from `(tool_name, arguments-schema classification,
+  harness-recorded provenance)` alone. · **Check:** a probe that registers each admissible tool's
+  result twice — once with genuine content, once with content deliberately crafted to look
+  model-composed — and asserts the **same** admissibility verdict both times; plus the inverse, that a
+  `bash` result is refused whatever its content. · *Fails if* any tool's verdict differs between the
+  two contents (a content predicate is gating admission); **or** if any arbitrary-code result
+  registers a source.
+
+- **AC-3 — The treadmill is demand-driven, and it actually runs.** Over each post-deploy measurement
+  window, every typed wrapper provisioned traces to a `turn_evidence_class: uncitable` population
+  above a preregistered threshold, **and** no uncitable population above that threshold persists for
+  two consecutive windows without a wrapper ticket filed against it. · **Check:** ES query over
+  `grounding_verification_completed` for the uncitable class, joined to wrapper tickets by the source
+  they name. · *Fails if* a wrapper ships with no uncitable evidence behind it (speculative
+  provisioning — Option 2's original objection, live); **or** if the threshold is breached for two
+  windows with nothing filed (the treadmill has stalled and the cost has become permanent).
+
+- **AC-4 — Untrusted input is handled as declared, at the capability layer.** Content retrieved from
+  tools, the web, MCP servers and the knowledge graph reaches the model only through tool-result
+  channels, never through system-prompt or user-text assembly. · **Check:** an assertion over the
+  message-assembly path in `orchestrator/`, driven by a probe whose retrieved content contains a
+  marker string, asserting the marker appears in no system or user block of the emitted request. ·
+  *Fails if* any assembly path places retrieved content outside a tool-result channel — T2 declared
+  without being enforced anywhere is a declaration, not a control.
+
+- **AC-5 — The cost stayed visible.** Turns whose evidence is inadmissible remain **in** the compliance
+  denominator, classified rather than exempted, for at least two windows after this ADR's chain
+  lands. · **Check:** the same ES query; assert the `uncitable` class is populated and that no
+  consumer filters it out of its denominator. · *Fails if* the class is empty while arbitrary-code
+  refusals are non-zero (the classification silently stopped), **or** if any consumer excludes it —
+  which is ADR-0139 Option 3 arriving through the back door, and would make every other criterion
+  here unfalsifiable.
+
+---
+
+## References
+
+- [ADR-0138](ADR-0138-the-model-may-generate-but-may-not-assert.md) — the grounding contract; its D2 parameter-schema boundary is restored by T4
+- [ADR-0139](ADR-0139-what-the-agent-learns-by-doing.md) — D6 is retired by this ADR; D2/D3/D7 withdrawn, D1/D4 stand
+- [ADR-0098](ADR-0098-memory-substrate-and-lifecycle-architecture.md) Amendment A §A6 — the provenance-terminus rule for retrieval
+- [ADR-0089](ADR-0089-artifact-execution-security-model.md) — the existing scoped threat model for artifact execution; unchanged, and now a consumer of T3
+- [ADR-0028](ADR-0028-external-tool-cli-migration.md) — tool-integration tiers; the provisioning path T4 names
+- [ADR-0134](ADR-0134-activity-alerting-absence-as-a-first-class-signal.md) D1 — denominators, and why an unmeasured class is an invisible failure class
+- FRE-1357 — round 6, whose four findings and convergence verdict produced this ADR; carries the per-ticket dispositions
+- FRE-1349 — round 5 of ADR-0139, and its residual-risk statement
+- FRE-1338 — one session's authorship crossing into the next through the shared knowledge graph (the input-integrity instance)
+- FRE-1327 — the confabulation case study; evidence for the model-intent axis, not for the boundary
+- [How we contain Claude — Anthropic Engineering](https://www.anthropic.com/engineering/how-we-contain-claude) — "supervise what it's *able* to do"; the model layer "can't stand alone"; "tool output is an attack surface even when the tool is trusted"
+- [Citations — Claude Platform Docs](https://platform.claude.com/docs/en/build-with-claude/citations) — capability-based citation: the provider extracts `cited_text`, the model emits an index
+- [Mitigate jailbreaks and prompt injections — Claude Platform Docs](https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/mitigate-jailbreaks) — untrusted content belongs in tool-result blocks
+- [OpenAI on prompt injection in browser agents](https://cyberscoop.com/openai-chatgpt-atlas-prompt-injection-browser-agent-security-update-head-of-preparedness/) — may never be fully solved
+- [OWASP Top 10 for Agentic Applications 2026](https://goteleport.com/blog/owasp-top-10-agentic-applications/) — model protections are not your security boundary
+- [Defeating Prompt Injections by Design (CaMeL)](https://arxiv.org/pdf/2503.18813) — capability and provenance tracking in an interpreter (Option 4)
+- [From Agent Traces to Trust: Evidence Tracing and Execution Provenance in LLM Agents](https://arxiv.org/html/2606.04990v1) — no surveyed system semantically validates tool-output content before citing it
+- [GuardFall: shell-injection gap in AI coding agents](https://thehackernews.com/2026/06/guardfall-exposes-open-source-ai-coding.html) — why inspecting raw command text fails: "the filter and the shell end up looking at two different things"
+
+---
+
+## Status Updates
+
+### 2026-09-02 - Proposed
+**Changed By:** `adr` session (FRE-1357)
+**Reason:** Authored on the owner's Route 1 decision, after round 6 of ADR-0139's review found four
+blocking defects — all in model-layer predicates, three of them the previous round's answer
+reappearing one level down. The convergence verdict was **altitude, not defects**; this ADR is the
+narrowing, taken one level above where FRE-1357 anticipated it.

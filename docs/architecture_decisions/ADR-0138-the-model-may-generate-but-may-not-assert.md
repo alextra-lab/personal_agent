@@ -192,6 +192,13 @@ the turn record, and reachability is not-applicable rather than failed. Verifica
 resolves against the recorded result, never against a re-execution, so a non-deterministic tool
 cannot invalidate a citation after the fact.
 
+> **Threat model (added 2026-09-02):** this contract's adversary is declared in
+> [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md), not here and not in any consumer.
+> Intent is not a design input, inputs are untrusted, and admissibility is a **capability** property —
+> so the parameter-schema boundary below is the boundary, and it is not amendable by a content
+> predicate over a tool's own result. ADR-0139's D2 amendment of this rule was withdrawn on that
+> ground; this section stands as originally written.
+
 **Independence requirement — a tool result is a source only where it is not the model's own words
 returning.** A tool result is admissible **only to the extent its content is not derived from the
 model's own arguments to that call.** Without this, D2 is bypassed in a single round-trip: the model

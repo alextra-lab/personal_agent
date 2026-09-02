@@ -574,3 +574,34 @@ an upstream document.
 blocking defects — all in model-layer predicates, three of them the previous round's answer
 reappearing one level down. The convergence verdict was **altitude, not defects**; this ADR is the
 narrowing, taken one level above where FRE-1357 anticipated it.
+
+### 2026-09-02 - Codex adversarial review, three rounds
+**Changed By:** `adr` session (FRE-1357)
+**Reason:** Round 1 found 7 blockers, all verified in source before acting. The two that changed the
+design: `mcp_esql` sits in `TYPED_RETRIEVAL_TOOLS` while the module's own audit records its `ROW`
+laundering channel, so withdrawing ADR-0139 D2 without the classification test would have reopened
+FRE-1306; and T3 as first written made ADR-0138's own containment check illegal, which produced the
+boundary-versus-judgement distinction that is now the sharpest statement of this ADR's diagnosis.
+
+Round 2 found defects **in round 1's fixes** — the failure mode this whole chain was commissioned
+for. Three were claims about the codebase that were wrong in my favour: the `mcp_esql` code change
+was described as made when the `adr` session may not edit `src/`; `strip_argument_echo` returns
+`"{}"` rather than `""`, so it mints an empty source instead of reaching `NO_CONTENT`; and T4
+*narrows* ADR-0138 D2 rather than restoring it, because SQL is a query language and D2's
+database-rows example is superseded.
+
+Round 3 found no new design defect, and two more claims that were wrong in the same direction —
+which is the pattern worth recording. **(a)** T3's fail-closed clause asserted a behaviour the
+implementation does not have: an extractor or verification *exception* yields an `unavailable`
+verification which `decide()` **delivers** (`grounding/enforcement.py:89`). The clause is now written
+as *declare, justify and instrument the absence behaviour*, and that deliberate fail-open is
+legitimate under it because grounding compliance is a quality property and the turn is recorded as
+unverified. **(b)** The claim that `mcp_esql` is unreachable because it carries `allowed_in_modes: []`
+was false: **nothing enforces `allowed_in_modes`** — 44 tools declare it, its own gateway docstring
+calls it "the gate", and the permission path reads only `allowed_modes` (hardcoded to
+`["NORMAL","DEGRADED"]` for MCP tools) and `forbidden_in_modes`. That is filed separately and at
+higher priority than the reclassification it was invoked to excuse.
+
+**Round 3's fixes were not themselves codex-reviewed** — the `/adr` three-round cap is spent. They
+are documentary corrections to claims this ADR made about the codebase, each verified in source, and
+they are flagged for master rather than presented as reviewed.

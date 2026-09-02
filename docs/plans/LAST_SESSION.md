@@ -4,10 +4,10 @@
 Four PRs cleared (grounding denominator, self-improvement loop, ADR-0140, Grafana panels). The
 session ended mid-discussion on **local model serving**: the owner ran model tests on the mpb and
 relayed a recommendation via the slm_server CC session, which **corrected a config change master
-had proposed and was about to file**. Left open and unowned: **the SLM upstream returns 502** —
-last local model call 06:16 UTC, everything since on cloud models. Three decisions sit with the
-owner (FRE-1354's deploy, six board dispositions, ADR-0140's acceptance), and **all three streams
-are idle** because those dispositions are what produce the next eligible heads.
+had proposed and was about to file**. The SLM upstream was down (502) for most of the day and is
+**back up and verified at 19:12 UTC** — not an incident, the owner was reworking inference. Three
+decisions sit with the owner (FRE-1354's deploy, six board dispositions, ADR-0140's acceptance),
+and **all three streams are idle** because those dispositions produce the next eligible heads.
 
 ## What was decided and why
 
@@ -69,9 +69,12 @@ while the directed area has nothing pointed at a seat.
   `0b4123f8` had five streaming turns in the preceding ten minutes — the FRE-1352 shape. Owner-gated
   since. Expect ~5 auto-filed tickets on the first post-deploy consolidation; the `.env` promotion-
   project gotcha was checked and does **not** bite (line 409 is commented out).
-- **Is the SLM 502 an incident?** Unknown and unfiled. It coincides with the owner reworking
-  inference on the mpb, so it is probably expected — but while it is down `primary` has no backend.
-  This is the only item from the session held in conversation alone.
+- **Was the SLM 502 an incident?** No — the owner was reworking inference on the mpb. Back up and
+  verified 19:12 UTC: all three model_ids the VPS sends are served (`unsloth/qwen3.6-35-A3B`,
+  `…-A3B-subagent`, `unsloth/qwen3.8-flash-next`). Nothing to file. **New:** the dense
+  `unsloth/qwen3.6-27B` is now served locally too, while the catalog's only 27B entry is the
+  cloud `qwen3.6-27b-ovh` — so the owner's proposed 27B quality A/B now has a local path that is
+  not wired up.
 - **Why are all streams idle?** The six ADR-0140 dispositions (cancel FRE-1335; cancel FRE-1334
   as-scoped folding its OBSERVED part into FRE-1336; approve FRE-1336; amend FRE-1355 to row one;
   re-point FRE-1356; re-scope FRE-1306) are unexecuted and owner-gated. They produce the next heads.

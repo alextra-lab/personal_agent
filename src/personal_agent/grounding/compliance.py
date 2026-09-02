@@ -129,10 +129,11 @@ class ModelCompliance(BaseModel):
         return self.rate is not None and self.rate >= self.bar
 
 
-def is_unconfounded_observation(record: GroundingRecord) -> bool:
+def is_unconfounded_observation(record: GroundingRecord, *, citable: bool) -> bool:
     """Whether one turn's grounding record may enter the metric.
 
-    Three conditions, each of which is a clause of D5 rather than a defensive check:
+    Four conditions, each of which is a clause of D5 (or, for the fourth, of ADR-0139
+    D1 AC-5) rather than a defensive check:
 
     - **Verification ran.** A denied budget reservation or a broken extractor is a fact
       about Seshat's accounting, not evidence about the model's claim. There is no verdict
@@ -142,6 +143,12 @@ def is_unconfounded_observation(record: GroundingRecord) -> bool:
     - **Retrieval was not forced.** The round-2 finding. Today the field means "this
       generation followed a D4 retry"; FRE-1285 widens the same field to heavy
       enforcement's pre-generation forcing. Both are confounded and both are excluded.
+    - **The turn was citable.** An ``uncitable`` turn — every tool result this turn
+      offered was refused — is the system offering nothing to cite from, not the model
+      declining to cite. Counting it as a compliance failure is the same confound as
+      counting a pre-forced turn as a success, and this is the single place both
+      FRE-1284's per-model metric and FRE-1285's enforcement selection would otherwise
+      absorb it, since both read the window this predicate gates.
 
     A **degraded** extraction is deliberately *not* excluded. Degradation fails safe, so it
     can only depress the rate; dropping those turns would be the choice that inflates, and
@@ -149,11 +156,18 @@ def is_unconfounded_observation(record: GroundingRecord) -> bool:
 
     Args:
         record: The turn's grounding record.
+        citable: Whether ADR-0139 D1 classified this turn's evidence as ``citable``
+            (:func:`~personal_agent.grounding.verification.classify_turn_evidence`).
 
     Returns:
         Whether this turn is an unconfounded observation of the model.
     """
-    return record.available and record.non_exempt_count >= 1 and not record.retrieval_forced
+    return (
+        record.available
+        and record.non_exempt_count >= 1
+        and not record.retrieval_forced
+        and citable
+    )
 
 
 def configured_window() -> ComplianceWindow:

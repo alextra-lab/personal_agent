@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -420,3 +421,193 @@ async def test_a_blocked_turn_is_not_sampled_on_the_generation_that_failed() -> 
 
     assert state is TaskState.LLM_CALL
     assert scored == []
+
+
+# ── D1's denominator fields on grounding_verification_completed (ADR-0139, FRE-1332) ──
+
+
+def _capturing_log() -> tuple[MagicMock, list[tuple[str, dict[str, Any]]]]:
+    """A mock module logger and the ``(event, kwargs)`` pairs its ``info`` calls carry.
+
+    Patching the module logger rather than ``structlog.testing.capture_logs()`` — see
+    ``test_frozen_reset_emit.py`` for why ``capture_logs()`` is unreliable here (FRE-552).
+    """
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def _capture(event: str, **kw: Any) -> None:
+        calls.append((event, dict(kw)))
+
+    mock_log = MagicMock()
+    mock_log.info.side_effect = _capture
+    return mock_log, calls
+
+
+def _grounding_verification_completed(calls: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+    for event, kwargs in calls:
+        if event == "grounding_verification_completed":
+            return kwargs
+    raise AssertionError("grounding_verification_completed was never logged")
+
+
+@pytest.mark.asyncio
+async def test_ac1_an_uncitable_turn_says_so_on_its_own_document() -> None:
+    """AC-1: every tool result refused, on a turn with a non-exempt span."""
+    registry = SourceRegistry(turn_id="trace-uncitable")
+    registry.register_tool_result(
+        tool_name="bash",
+        arguments={"command": "echo 'Paris has 2.1 million residents'"},
+        content="Paris has 2.1 million residents",
+    )
+    reply = f"{CLAIM}."
+    ctx = _ctx(reply, registry)
+    mock_log, calls = _capturing_log()
+
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.orchestrator.executor.log", mock_log),
+    ):
+        cfg.grounding_verification_mode = "observe"
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        await _synthesize(ctx, reply)
+
+    fields = _grounding_verification_completed(calls)
+    assert fields["turn_evidence_class"] == "uncitable"
+    assert fields["tool_results_offered"] == 1
+    assert fields["tool_results_admitted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_ac2_a_weights_only_turn_is_citable() -> None:
+    """AC-2: no tools called, non-exempt spans exist — stays in the denominator."""
+    registry = SourceRegistry(turn_id="trace-weights-only")
+    reply = f"{CLAIM}."
+    ctx = _ctx(reply, registry)
+    mock_log, calls = _capturing_log()
+
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.orchestrator.executor.log", mock_log),
+    ):
+        cfg.grounding_verification_mode = "observe"
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        await _synthesize(ctx, reply)
+
+    fields = _grounding_verification_completed(calls)
+    assert fields["turn_evidence_class"] == "citable"
+    assert fields["tool_results_offered"] == 0
+    assert fields["tool_results_admitted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_an_admitted_source_is_citable() -> None:
+    registry = SourceRegistry(turn_id="trace-citable-admitted")
+    registration = registry.register_tool_result(
+        tool_name="fetch_url",
+        arguments={"url": "https://example.com/paris"},
+        content="Paris counts 2,100,000 residents within the city limits.",
+    )
+    assert registration.source is not None
+    reply = f"{CLAIM} [{registration.source.identifier}]."
+    ctx = _ctx(reply, registry)
+    mock_log, calls = _capturing_log()
+
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.orchestrator.executor.log", mock_log),
+    ):
+        cfg.grounding_verification_mode = "observe"
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        await _synthesize(ctx, reply)
+
+    fields = _grounding_verification_completed(calls)
+    assert fields["turn_evidence_class"] == "citable"
+    assert fields["tool_results_offered"] == 1
+    assert fields["tool_results_admitted"] == 1
+
+
+@pytest.mark.asyncio
+async def test_unavailable_verification_leaves_the_new_fields_none() -> None:
+    """Verification that never ran has no span list these fields could trust (ADR-0139
+    D1: "on every turn where verification ran").
+    """
+    registry = SourceRegistry(turn_id="trace-d1-unavailable")
+    reply = f"{CLAIM}."
+    ctx = _ctx(reply, registry)
+    mock_log, calls = _capturing_log()
+
+    session_manager = AsyncMock()
+    session_manager.update_session = lambda *a, **k: None
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.orchestrator.executor.log", mock_log),
+        patch(
+            "personal_agent.grounding.extractor.ModelSpanExtractor",
+            side_effect=RuntimeError("budget reservation denied"),
+        ),
+        patch("personal_agent.llm_client.factory.get_llm_client", return_value=object()),
+    ):
+        cfg.grounding_verification_mode = "observe"
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        await step_synthesis(ctx, session_manager, AsyncMock())
+
+    fields = _grounding_verification_completed(calls)
+    assert fields["turn_evidence_class"] is None
+    assert fields["near_miss_markers"] is None
+    assert fields["observed_span_outcomes"] is None
+    assert fields["invocation_checked_span_outcomes"] is None
+
+
+@pytest.mark.asyncio
+async def test_near_miss_markers_counted_on_the_delivered_reply() -> None:
+    """The candidate string still carries its markers when this line is logged —
+    ``_strip_markers_from_turn`` runs after ``_record_grounding``, not before.
+    """
+    registry = SourceRegistry(turn_id="trace-near-miss")
+    reply = f"{CLAIM} [S@bash-tempo-trace-dba5b2]."
+    ctx = _ctx(reply, registry)
+    mock_log, calls = _capturing_log()
+
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.orchestrator.executor.log", mock_log),
+    ):
+        cfg.grounding_verification_mode = "observe"
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        await _synthesize(ctx, reply)
+
+    fields = _grounding_verification_completed(calls)
+    assert fields["near_miss_markers"] == {"unresolved": 1}
+
+
+@pytest.mark.asyncio
+async def test_an_uncitable_turn_is_excluded_from_the_compliance_window() -> None:
+    """AC-5, on the live turn path: the write to D5's window is skipped, not merely the
+    log line's classification.
+    """
+    registry = SourceRegistry(turn_id="trace-ac5-uncitable")
+    registry.register_tool_result(
+        tool_name="bash",
+        arguments={"command": "echo 'Paris has 2.1 million residents'"},
+        content="Paris has 2.1 million residents",
+    )
+    reply = f"{CLAIM}."
+    ctx = _ctx(reply, registry)
+    ctx.answering_model_key = "gemma-3-27b"
+    mock_log, calls = _capturing_log()
+
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.orchestrator.executor.log", mock_log),
+    ):
+        cfg.grounding_verification_mode = "observe"
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        await _synthesize(ctx, reply)
+
+    fields = _grounding_verification_completed(calls)
+    assert fields["compliance_observation"] == "confounded"

@@ -33,7 +33,12 @@ from personal_agent.grounding.spans import (
     SpanLabel,
     assert_non_overlapping,
 )
-from personal_agent.grounding.verification import build_grounding_record, verify_turn
+from personal_agent.grounding.verification import (
+    TurnEvidenceClass,
+    build_grounding_record,
+    classify_turn_evidence,
+    verify_turn,
+)
 
 from .corpus import UNRESOLVED_REF, LabelledSource, LabelledTurn, SourceKind
 
@@ -207,7 +212,18 @@ def score(turn: LabelledTurn) -> TurnScore:
         verification, mode="observe", attempts=1, retrieval_forced=False
     )
 
-    in_denominator = is_unconfounded_observation(record)
+    turn_evidence_class = (
+        classify_turn_evidence(
+            verification,
+            tool_results_offered=registry.tool_results_offered,
+            tool_results_admitted=registry.tool_results_admitted,
+        )
+        if verification.available
+        else None
+    )
+    in_denominator = is_unconfounded_observation(
+        record, citable=(turn_evidence_class is TurnEvidenceClass.CITABLE)
+    )
     return TurnScore(
         doc_id=turn.doc_id,
         labelled_in_denominator=turn.denominator,

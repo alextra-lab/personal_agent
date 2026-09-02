@@ -835,11 +835,38 @@ class SourceRegistry:
         self._by_identifier: dict[str, RegisteredSource] = {}
         self._by_dedupe_key: dict[tuple[SourceKind, str, str], RegisteredSource] = {}
         self._tainted: set[str] = set()
+        self._tool_results_offered = 0
 
     @property
     def turn_id(self) -> str:
         """The trace identifier of the turn this registry belongs to."""
         return self._turn_id
+
+    @property
+    def tool_results_offered(self) -> int:
+        """How many tool results this turn offered to :meth:`register_tool_result`.
+
+        Every call counts, including a D4 retry that resubmits the same tool call: each
+        call is a genuine offer even when :meth:`_register` later dedupes its content
+        against an earlier source (ADR-0139 D1).
+        """
+        return self._tool_results_offered
+
+    @property
+    def tool_results_admitted(self) -> int:
+        """Sources this turn's tool and documentation calls actually registered.
+
+        Computed from :meth:`sources` rather than a counter incremented on every
+        ``ADMISSIBLE`` return: :meth:`_register` reuses an existing source's identifier
+        when a D4 retry resubmits identical content (its dedupe key is ``(kind, origin,
+        content)``), so a per-call counter would overcount a retried admission that
+        produced no new source. Deriving the count from the registered-source collection
+        is correct by construction — which is exactly AC-3's reconciliation claim
+        (ADR-0139 D1), not a coincidence.
+        """
+        return sum(
+            1 for s in self._sources if s.kind in (SourceKind.TOOL, SourceKind.DOCUMENTATION)
+        )
 
     def sources(self) -> tuple[RegisteredSource, ...]:
         """Return every registered source, in registration order."""
@@ -938,6 +965,7 @@ class SourceRegistry:
             The outcome, naming the source when one was registered and the rule that
             fired when none was.
         """
+        self._tool_results_offered += 1
         excluded = tuple(
             ExcludedArgument(name=name, value=str(value)) for name, value in arguments.items()
         )

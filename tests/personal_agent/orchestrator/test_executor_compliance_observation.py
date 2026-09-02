@@ -16,6 +16,7 @@ import pytest
 from personal_agent.captains_log.background import wait_for_background_tasks
 from personal_agent.captains_log.turn_evidence import GroundingRecord
 from personal_agent.governance.models import Mode
+from personal_agent.grounding.verification import TurnEvidenceClass
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.executor import _record_compliance_observation
 from personal_agent.orchestrator.types import ExecutionContext
@@ -60,7 +61,9 @@ async def test_an_unconfounded_turn_is_recorded_against_the_answering_model() ->
     """The base case — and the attribution AC the role name would have got wrong."""
     writer = AsyncMock()
     with patch("personal_agent.orchestrator.executor._write_compliance_observation", writer):
-        status = _record_compliance_observation(_ctx(), _record(compliant=True))
+        status = _record_compliance_observation(
+            _ctx(), _record(compliant=True), TurnEvidenceClass.CITABLE
+        )
         await wait_for_background_tasks()
 
     assert status == "recorded"
@@ -75,7 +78,7 @@ async def test_a_non_compliant_turn_is_recorded_too() -> None:
     """The denominator is turns, not passes — recording only successes would read 1.0."""
     writer = AsyncMock()
     with patch("personal_agent.orchestrator.executor._write_compliance_observation", writer):
-        _record_compliance_observation(_ctx(), _record(compliant=False))
+        _record_compliance_observation(_ctx(), _record(compliant=False), TurnEvidenceClass.CITABLE)
         await wait_for_background_tasks()
 
     assert writer.call_args.kwargs["compliant"] is False
@@ -90,7 +93,24 @@ async def test_a_pre_forced_turn_is_never_written() -> None:
     """
     writer = AsyncMock()
     with patch("personal_agent.orchestrator.executor._write_compliance_observation", writer):
-        status = _record_compliance_observation(_ctx(), _record(retrieval_forced=True))
+        status = _record_compliance_observation(
+            _ctx(), _record(retrieval_forced=True), TurnEvidenceClass.CITABLE
+        )
+        await wait_for_background_tasks()
+
+    assert status == "confounded"
+    writer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_an_uncitable_turn_is_never_written() -> None:
+    """ADR-0139 D1 AC-5, at this seam: uncitable is confounded on the same footing as
+    pre-forced — the system offered nothing to cite from, which is not evidence about
+    the model.
+    """
+    writer = AsyncMock()
+    with patch("personal_agent.orchestrator.executor._write_compliance_observation", writer):
+        status = _record_compliance_observation(_ctx(), _record(), TurnEvidenceClass.UNCITABLE)
         await wait_for_background_tasks()
 
     assert status == "confounded"
@@ -102,7 +122,9 @@ async def test_a_turn_verification_could_not_run_on_is_never_written() -> None:
     """A denied budget or a broken extractor is not evidence about the model."""
     writer = AsyncMock()
     with patch("personal_agent.orchestrator.executor._write_compliance_observation", writer):
-        _record_compliance_observation(_ctx(), _record(available=False, compliant=False))
+        # None, matching what _record_grounding passes when verification did not run —
+        # the exclusion still has to hold via record.available, not via this argument.
+        _record_compliance_observation(_ctx(), _record(available=False, compliant=False), None)
         await wait_for_background_tasks()
 
     writer.assert_not_called()
@@ -113,7 +135,9 @@ async def test_a_turn_with_no_non_exempt_span_is_never_written() -> None:
     """D5's denominator is turns containing at least one non-exempt span."""
     writer = AsyncMock()
     with patch("personal_agent.orchestrator.executor._write_compliance_observation", writer):
-        _record_compliance_observation(_ctx(), _record(non_exempt_count=0))
+        _record_compliance_observation(
+            _ctx(), _record(non_exempt_count=0), TurnEvidenceClass.CITABLE
+        )
         await wait_for_background_tasks()
 
     writer.assert_not_called()
@@ -128,7 +152,9 @@ async def test_an_unattributable_turn_is_not_credited_to_anyone() -> None:
     """
     writer = AsyncMock()
     with patch("personal_agent.orchestrator.executor._write_compliance_observation", writer):
-        status = _record_compliance_observation(_ctx(model_key=None), _record())
+        status = _record_compliance_observation(
+            _ctx(model_key=None), _record(), TurnEvidenceClass.CITABLE
+        )
         await wait_for_background_tasks()
 
     assert status == "unattributable"

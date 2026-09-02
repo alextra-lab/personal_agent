@@ -122,14 +122,29 @@ Every control is one of two kinds, and each ADR states which for each control it
 - **Model-layer** — an inspection of what the model produced, after it produced it: content
   predicates, classifiers, prompt instructions, output checks.
 
-> **A model-layer control may never be the sole control for an invariant.** It is admitted as a
-> supplementary layer and is judged on its measured cost and benefit as a layer — never defended as
-> a boundary.
+**Invariants come in two kinds, and the rule applies to one of them.**
 
-The practical consequence is a different argument shape. "This check has a hole" stops being a
-blocking objection to a model-layer control (all of them do) and "this check false-rejects the
-legitimate majority" starts being decisive, because a supplementary layer that costs more than it
-returns has no case for existing.
+- A **boundary invariant** decides what the agent is *able* to do or produce, and what may enter a
+  trusted set — *may this tool mint a source*, *may this text be delivered*, *may this call reach the
+  network*. Its failure is a breach.
+- A **judgement check** decides whether something already inside the boundary supports a claim —
+  *does this source contain this assertion*, *does this image support this sentence*. Its failure is a
+  wrong verdict.
+
+> **A boundary invariant may never rest solely on a model-layer control.** A judgement check *is*
+> model-layer by nature — ADR-0138's containment check and D3(d)'s entailment escalation both are —
+> and is legitimate provided it is declared as a judgement, never as a boundary, and its failure mode
+> is recorded rather than implied.
+
+**This distinction is the whole diagnosis of ADR-0139's five review rounds.** Its D2 arms were a
+*boundary* control — they decided whether a source could be minted at all — implemented as a
+judgement predicate over the result's own text. Containment is the same *kind* of predicate and is
+fine, because what it judges has already crossed a boundary decided elsewhere. Getting the two
+confused is what produced a rule that had to be repaired at a finer grain every round.
+
+The practical consequence is a different argument shape. For a judgement check, "this has a hole"
+stops being a blocking objection (all of them do) and "this false-rejects the legitimate majority"
+becomes decisive. For a boundary control, a hole is still fatal.
 
 ### T4 — Applied to evidence: admissibility is a capability property
 
@@ -149,8 +164,30 @@ Three consequences follow immediately, and ADR-0139 is revised to carry them:
 3. **Attachments are admissible** because the harness received them; the model did not author the
    bytes. The tier that records this is a capability fact, not a content judgement.
 
-Content predicates over tool results are not forbidden — they are model-layer controls under T3, and
-must earn their place on measured cost.
+**The classification test, stated because the boundary is only as good as it.** A tool's parameters
+*compose* when any of them can carry a **program, a command line, or a query language** — an
+expression the tool will evaluate. They *select or address* when they name a thing to fetch and the
+tool's own logic decides the bytes. A schema of typed scalars is not sufficient evidence of the
+second: **one string parameter holding a language is a composing parameter.**
+
+Applying that test finds a live misclassification. **`mcp_esql` is in `TYPED_RETRIEVAL_TOOLS`
+(`source_registry.py:346`) and must not be.** Its single parameter is a model-authored ES|QL program,
+and the module's own audit records the channel — *"ES|QL's `ROW a = \"…\"` emits a model-authored
+literal with no index involved"* (`source_registry.py:787`). ADR-0139 D2 reached it through the
+`invocation_check_required` flag; with D2 withdrawn that flag does not exist, so **`ROW claim =
+"Paris has 9 million residents"` would mint a source holding exactly the model's own sentence.**
+Reclassifying it is FRE-1306's Option A, whose cost — telemetry queries lose their citation — is the
+same cost Route 1 already accepts for `bash`, and whose remedy is the same: a typed telemetry-query
+wrapper, which is D8's first named wrapper rather than a new kind of work. **This ADR does not
+withdraw D2 without closing what D2 was covering.**
+
+**Content predicates may subtract, never add.** A capability-layer decision admits a source; a
+content predicate may then *withhold* part or all of what it carries — `strip_argument_echo` reducing
+a result to nothing and yielding `NO_CONTENT` (`source_registry.py:984`) is exactly this, and is
+retained. What no content predicate may do is *confer* admissibility on a source the capability layer
+would not have admitted, or restore one it refused. Admission is monotone downward from the
+capability decision, which is why the existing field-level defence is compatible with T4 and why
+D2's arms were not.
 
 ### T5 — How this ADR binds
 
@@ -298,9 +335,10 @@ decidable from content, and five rounds of evidence say so.
 
 ## Implementation Notes
 
-**This ADR changes no code by itself.** It declares a premise and revises what other documents may
-rest on. Its implementation is the amendment of the documents it governs and the re-scoping of the
-tickets that flowed from the retired premise.
+**This ADR is mostly documentary, with one code change it may not defer.** It declares a premise and
+revises what other documents may rest on; its implementation is the amendment of those documents and
+the re-scoping of the tickets that flowed from the retired premise. The exception is the `mcp_esql`
+reclassification, which cannot wait: withdrawing D2 removes the only thing that was covering it.
 
 - `docs/architecture_decisions/ADR-0139-*.md` — revised in the same PR: **D1 and D4 stand; D2, D3
   and D7 are withdrawn** with their reasoning retained as record and a pointer to this ADR. The
@@ -309,9 +347,20 @@ tickets that flowed from the retired premise.
 - `docs/architecture_decisions/ADR-0138-*.md` — gains a one-line citation of this ADR where its
   independence rule is stated. Its D2 parameter-schema boundary is **unchanged**; ADR-0139's
   amendment of it lapses with D2's withdrawal.
-- `src/personal_agent/grounding/source_registry.py` — **no change under this ADR.** The categorical
-  branch for `ARBITRARY_CODE_TOOLS` is now the decided behaviour rather than the status quo awaiting
-  replacement; its docstring is the record of why and already says so.
+- `src/personal_agent/grounding/source_registry.py` — **one change: `mcp_esql` leaves
+  `TYPED_RETRIEVAL_TOOLS` (`:346`) and joins the compose-capable set**, per T4's classification test.
+  This closes FRE-1306 by capability rather than by the withdrawn invocation check, and is filed as
+  its own ticket because it changes a verdict in production. The categorical branch for
+  `ARBITRARY_CODE_TOOLS` (`:945`) is otherwise **unchanged**, and is now the decided behaviour rather
+  than a status quo awaiting replacement; its docstring is the record of why and already says so.
+  `strip_argument_echo` (`:452`, reached at `:984`) is **retained** — under T4 it subtracts and never
+  adds, so it is a compliant supplementary control.
+- **The knowledge-graph recall path is a live T2 violation and is filed, not fixed here.** Recalled
+  memory is joined into `_volatile_block` and inlined into the current user message
+  (`orchestrator/executor.py:5702`, `:5713`), so graph content — agent-writable, and the FRE-1338
+  channel — reaches the model outside any tool-result channel. T2 declares that content untrusted;
+  closing it is a message-assembly change with its own blast radius and belongs in its own ticket
+  rather than inside this ADR's diff.
 - Ticket dispositions are carried on FRE-1357 and are not restated here.
 
 **What this ADR deliberately does not decide:** which typed tools get provisioned, in what order, or
@@ -325,50 +374,68 @@ an upstream document.
 
 **How will we know this decision actually delivered — not just merged?**
 
-> **Adjudication:** on this ADR's umbrella ticket, once ADR-0139 D1 has landed and deployed and one
-> full measurement window has passed. Not at merge of this ADR.
+> **Adjudication:** on this ADR's umbrella ticket, after **two** consecutive measurement windows
+> have completed with ADR-0139 D1 deployed — two because AC-3 and AC-5 are both statements about
+> persistence, and one window cannot carry them. A criterion whose qualifying population never
+> materialised is recorded **not yet adjudicable**, never *met*: a criterion that passes because
+> nothing happened is the vacuity this ADR exists to stop tolerating.
 
-- **AC-1 — Every existing sole-model-layer control has a recorded disposition.** A one-time audit
-  enumerates the controls in `grounding/`, `governance/` and the tool layer that today enforce an
-  invariant with no capability-layer counterpart, and each entry carries one of: *accepted as
-  supplementary*, *promoted to capability layer*, or *removed*. · **Check:** the audit list, reviewed
-  against `ast-grep` sweeps for content-predicate gates in the admission and governance paths. ·
-  *Fails if* the list is empty or names only controls this ADR already discusses — a vacuous audit
-  reported as a met criterion; **or** if any entry is closed without one of the three dispositions.
+- **AC-1 — No tool whose parameters can carry a program mints a source.** For every tool the registry
+  can classify, admissibility is decided against **T4's classification test applied to the tool's own
+  schema** — and each tool whose schema admits a program, command line or query language registers
+  **no** source. Named members at authoring time: `bash`, `run_python`, `mcp_browser_evaluate`,
+  `mcp_browser_run_code`, **and `mcp_esql`**. · **Check:** probe each named tool through
+  `register_tool_result` with a composing payload (`printf 'Paris has 9 million residents'`;
+  `ROW claim = "Paris has 9 million residents"`) and assert `source is None`. · *Fails if* any named
+  tool mints a source — `mcp_esql` is the one that does today, and this criterion exists because it
+  survived the previous design; **or** if the probe set is derived **from the classification tables
+  themselves** rather than from tool schemas, which is circular and passes whenever the table is
+  wrong. That circularity is exactly how `mcp_esql` reached this point, so a probe set that inherits
+  it does not satisfy this criterion.
 
-- **AC-2 — Admission is decidable without reading the result.** For every tool the registry admits, the
-  admission decision is reproducible from `(tool_name, arguments-schema classification,
-  harness-recorded provenance)` alone. · **Check:** a probe that registers each admissible tool's
-  result twice — once with genuine content, once with content deliberately crafted to look
-  model-composed — and asserts the **same** admissibility verdict both times; plus the inverse, that a
-  `bash` result is refused whatever its content. · *Fails if* any tool's verdict differs between the
-  two contents (a content predicate is gating admission); **or** if any arbitrary-code result
-  registers a source.
+- **AC-2 — The boundary did not collapse into blanket refusal, and admission is content-independent
+  upward.** **(a)** A typed retrieval — `read`, `fetch_url` — registers a source, and a span asserting
+  a value genuinely present in that result scores `PASSED`. **(b)** The *same* tool registers with the
+  *same* verdict when its content is crafted to look model-composed. · **Check:** paired probes; both
+  arms required; read the per-span outcome, not pass/fail. · *Fails if* arm (a) fails — a boundary that
+  admits nothing is not a boundary, it is Option 3 with better vocabulary, and it would satisfy AC-1
+  trivially; **or** if arm (b) differs from a genuine-content run, which would mean a content predicate
+  is gating admission upward, contrary to T4.
 
-- **AC-3 — The treadmill is demand-driven, and it actually runs.** Over each post-deploy measurement
-  window, every typed wrapper provisioned traces to a `turn_evidence_class: uncitable` population
-  above a preregistered threshold, **and** no uncitable population above that threshold persists for
-  two consecutive windows without a wrapper ticket filed against it. · **Check:** ES query over
-  `grounding_verification_completed` for the uncitable class, joined to wrapper tickets by the source
-  they name. · *Fails if* a wrapper ships with no uncitable evidence behind it (speculative
-  provisioning — Option 2's original objection, live); **or** if the threshold is breached for two
-  windows with nothing filed (the treadmill has stalled and the cost has become permanent).
+- **AC-3 — The treadmill is demand-driven, and it actually runs.** The qualifying threshold is
+  **preregistered in the roadmap ticket before the first window opens** and is not re-set after a
+  window is read. Then, over two consecutive windows: every typed wrapper provisioned traces to an
+  `uncitable` population above that threshold, **and** no such population persists across both windows
+  without a wrapper ticket filed against it. · **Check:** ES query over `grounding_verification_completed`
+  for the `uncitable` class, joined on `trace_id` to that trace's `source_registry_snapshot` — whose
+  per-source `origin` values are what name the missing source. D1's event carries no source identity of
+  its own, so a join attempted against the event alone does not satisfy this check. · *Fails if* a
+  wrapper ships with no qualifying population behind it (speculative provisioning — Option 2's original
+  objection, live); **or** if a qualifying population persists across both windows with nothing filed
+  (the treadmill has stalled and the cost has quietly become permanent); **or** if the threshold is set
+  or revised after any window is read. *If no population reaches the threshold in either window, this
+  criterion is **not yet adjudicable** — it is not met.*
 
-- **AC-4 — Untrusted input is handled as declared, at the capability layer.** Content retrieved from
-  tools, the web, MCP servers and the knowledge graph reaches the model only through tool-result
-  channels, never through system-prompt or user-text assembly. · **Check:** an assertion over the
-  message-assembly path in `orchestrator/`, driven by a probe whose retrieved content contains a
-  marker string, asserting the marker appears in no system or user block of the emitted request. ·
-  *Fails if* any assembly path places retrieved content outside a tool-result channel — T2 declared
-  without being enforced anywhere is a declaration, not a control.
+- **AC-4 — Untrusted input reaches the model only through tool-result channels.** A probe whose
+  recalled memory carries a unique marker string asserts that the marker appears in **no** system block
+  and **no** user text block of the emitted request. · **Check:** capture the assembled request for a
+  seeded recall turn; assert marker placement. · *Fails if* the marker appears outside a tool-result
+  channel. **This criterion is red at authoring time and is meant to be:** recalled memory is joined
+  into `_volatile_block` and inlined into the current user message
+  (`orchestrator/executor.py:5702`, `:5713`), so graph content — agent-writable, and FRE-1338's own
+  channel — reaches the model as user text today. T2 is a declaration until this closes; the closing
+  change is filed as its own ticket, and this criterion is how we know it landed rather than being
+  described.
 
-- **AC-5 — The cost stayed visible.** Turns whose evidence is inadmissible remain **in** the compliance
-  denominator, classified rather than exempted, for at least two windows after this ADR's chain
-  lands. · **Check:** the same ES query; assert the `uncitable` class is populated and that no
-  consumer filters it out of its denominator. · *Fails if* the class is empty while arbitrary-code
-  refusals are non-zero (the classification silently stopped), **or** if any consumer excludes it —
-  which is ADR-0139 Option 3 arriving through the back door, and would make every other criterion
-  here unfalsifiable.
+- **AC-5 — The cost stayed visible.** Compliance continues to be reported over `citable` turns with
+  the **`uncitable` class published beside it**, per ADR-0139 D1 — classified and counted, never
+  silently dropped. · **Check:** the same ES query, plus the published `uncitable_turn_rate`. ·
+  *Fails if* the `uncitable` class is empty over a window in which arbitrary-code refusals are non-zero
+  — the classification stopped and the cost became invisible; **or** if `uncitable_turn_rate` ceases to
+  be published. *Note the change from an earlier draft, which asserted these turns stay in the
+  **compliance** denominator: that contradicts D1, which deliberately reports compliance over `citable`
+  turns only. The invariant is that the class stays measured and visible, not that it is averaged into
+  a number it would only confound.*
 
 ---
 
@@ -382,6 +449,11 @@ an upstream document.
 - [ADR-0134](ADR-0134-activity-alerting-absence-as-a-first-class-signal.md) D1 — denominators, and why an unmeasured class is an invisible failure class
 - FRE-1357 — round 6, whose four findings and convergence verdict produced this ADR; carries the per-ticket dispositions
 - FRE-1349 — round 5 of ADR-0139, and its residual-risk statement
+- FRE-1347 — implements ADR-0098 Amendment A §A6 and writes D2's **authorship**-axis narrowing into
+  ADR-0138's own text. `Approved` and **out of scope here**: this ADR restores only D2's *invocation*
+  axis, and nothing in it changes FRE-1347's deliverable
+- FRE-1306 — `mcp_esql` emits a model-authored literal in one round trip; closed by T4's
+  classification test rather than by the withdrawn invocation check
 - FRE-1338 — one session's authorship crossing into the next through the shared knowledge graph (the input-integrity instance)
 - FRE-1327 — the confabulation case study; evidence for the model-intent axis, not for the boundary
 - [How we contain Claude — Anthropic Engineering](https://www.anthropic.com/engineering/how-we-contain-claude) — "supervise what it's *able* to do"; the model layer "can't stand alone"; "tool output is an attack surface even when the tool is trusted"

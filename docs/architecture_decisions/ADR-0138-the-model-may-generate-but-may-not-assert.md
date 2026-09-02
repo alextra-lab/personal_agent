@@ -194,10 +194,9 @@ cannot invalidate a citation after the fact.
 
 > **Threat model (added 2026-09-02):** this contract's adversary is declared in
 > [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md), not here and not in any consumer.
-> Intent is not a design input, inputs are untrusted, and admissibility is a **capability** property —
-> so the parameter-schema boundary below is the boundary, and it is not amendable by a content
-> predicate over a tool's own result. ADR-0139's D2 amendment of this rule was withdrawn on that
-> ground; this section stands as originally written.
+> Under it the parameter-schema boundary stated below **is** the boundary on D2's invocation axis,
+> and ADR-0139's widening of that axis is withdrawn — see the amendment note further down, which
+> records which half of it still stands.
 
 **Independence requirement — a tool result is a source only where it is not the model's own words
 returning.** A tool result is admissible **only to the extent its content is not derived from the
@@ -220,6 +219,19 @@ footing as any other. This keeps D3's "all three" invariant literally true rathe
 carrying a silent exception.
 
 #### Amendment note — 2026-09-01: D2 is narrowed and widened at once, and the two compose here
+
+> **HALF WITHDRAWN 2026-09-02 (FRE-1357).** D2 has two axes and this note amended both. **The
+> narrowing stands** — ADR-0098 Amendment A §A6's provenance-terminus rule on the **authorship** axis
+> is live, is being implemented under FRE-1347, and nothing here disturbs it. **The widening is
+> withdrawn** — ADR-0139 D2/D3/D7 on the **invocation** axis, under
+> [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md): arbitrary-code tools keep the
+> categorical exclusion stated in the third bullet above, there is no `MODEL_AUTHORED_CODE_TOOLS`
+> split, no `OBSERVED` tier for tool results (it survives only for D4 attachments), and no
+> invocation-composition check. **`OBSERVED` and `OBSERVATION` are not introduced by this note.**
+> The widening paragraphs below are retained as record and are not normative. One change does follow
+> for this contract: `mcp_esql`'s single parameter is a model-authored query language, so under
+> ADR-0140 T4's classification test it is **compose-capable and inadmissible** — the case ADR-0139's
+> withdrawn check was covering.
 
 D2 acquired **two independent amendments, drafted without reference to each other**. ADR-0098
 Amendment A §A6 obliges this record explicitly ("this amends ADR-0138 D2, and must be recorded

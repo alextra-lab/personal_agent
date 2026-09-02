@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 
 from personal_agent.config import settings
+from personal_agent.linear_labels import AGENT_AUTHORED_LABEL, AGENT_AUTHORED_LABEL_COLOR
 from personal_agent.security import EgressBlockedError, create_guarded_http_client
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.executor import ToolExecutionError
@@ -25,9 +26,7 @@ _LINEAR_URL = "https://api.linear.app/graphql"
 
 _TEAM_NAME = "FrenchForest"
 _NEEDS_APPROVAL_STATE = "Needs Approval"
-_AGENT_FILED_LABEL = "agent-filed"
 _PERSONAL_AGENT_LABEL = "PersonalAgent"
-_AGENT_FILED_COLOR = "#6B7280"  # neutral gray for auto-filed issues
 
 # Module-level ID cache — avoids repeated API round-trips within a process lifetime.
 _team_id_cache: str | None = None
@@ -459,8 +458,8 @@ async def create_linear_issue_executor(
     personal_agent_label_id = _require_personal_agent_label_id()
     agent_filed_label_id = await _get_label_id(
         team_id,
-        _AGENT_FILED_LABEL,
-        auto_create_color=_AGENT_FILED_COLOR,
+        AGENT_AUTHORED_LABEL,
+        auto_create_color=AGENT_AUTHORED_LABEL_COLOR,
         trace_id=trace_id,
     )
 

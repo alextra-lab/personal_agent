@@ -23,10 +23,11 @@ All variables use the `AGENT_` prefix (see `AppConfig` in `src/personal_agent/co
 | `AGENT_PROMOTION_PIPELINE_ENABLED` | Weekly promotion of promotable CL entries to Linear (default `true`). |
 | `AGENT_FEEDBACK_POLLING_ENABLED` | Daily poll of Linear for label changes (default `true`). |
 | `AGENT_FEEDBACK_POLLING_HOUR_UTC` | Hour (0–23 UTC) for the daily feedback job (default `7`). |
-| `AGENT_ISSUE_BUDGET_THRESHOLD` | Skip promotion when non-archived issues exceed this count (default `200`). |
+| `AGENT_SESHAT_OPEN_TICKET_CAP` | Skip promotion at or above this many open tickets **Seshat itself created** (default `10`, FRE-1354). |
+| `AGENT_PROMOTION_MIN_SEEN_COUNT` | Corroboration bar a reinforced proposal must reach to stay promotable (default `3`). |
 | `AGENT_PROMOTION_INITIAL_CAP` | Max new issues per promotion run (default `5`). |
 | `AGENT_LINEAR_TEAM_NAME` | Linear team name (default `FrenchForest`). |
-| `AGENT_LINEAR_PROMOTION_PROJECT` | Project name for new issues (default `2.3 Homeostasis & Feedback`). |
+| `AGENT_LINEAR_PROMOTION_PROJECT` | Project name for new issues (default `Linear Async Feedback Channel`). Must exist — promotion refuses loudly otherwise. |
 | `AGENT_FEEDBACK_SUPPRESSION_DAYS` | How long rejections suppress similar fingerprints (default `30`). |
 | `AGENT_FEEDBACK_MAX_REEVALUATIONS` | Cap on Deepen / Too Vague rounds per issue (default `2`). |
 | `AGENT_FEEDBACK_DEFER_REVISIT_DAYS` | Defer window placeholder (default `90`). |

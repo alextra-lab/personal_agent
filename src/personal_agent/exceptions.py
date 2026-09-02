@@ -94,3 +94,25 @@ class AttachmentUnsupportedError(ValueError):
     supported raster type nor a known non-raster type. Always raised with a
     message naming the unsupported modality, surfaced to the user verbatim.
     """
+
+
+class LinearProjectNotFoundError(ValueError):
+    """Raised when a configured Linear project name does not exist on the team.
+
+    FRE-1354 AC-4: ``settings.linear_promotion_project`` defaulted to a project
+    (``"2.3 Homeostasis & Feedback"``) that no longer existed, and issue creation
+    logged a warning and filed the issue with no project at all. A silent fallback
+    hides the misconfiguration for as long as nobody reads the log, so the
+    promotion path now fails loudly instead.
+    """
+
+    def __init__(self, project: str, team: str) -> None:
+        """Initialize the error.
+
+        Args:
+            project: The configured project name that did not resolve.
+            team: The Linear team searched.
+        """
+        self.project = project
+        self.team = team
+        super().__init__(f"Linear project {project!r} does not exist on team {team!r}.")

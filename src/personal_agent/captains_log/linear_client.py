@@ -13,6 +13,8 @@ from typing import Any
 import httpx
 
 from personal_agent.config import settings
+from personal_agent.exceptions import LinearProjectNotFoundError
+from personal_agent.linear_labels import AGENT_AUTHORED_LABEL, AGENT_AUTHORED_LABEL_COLOR
 from personal_agent.security import EgressBlockedError, create_guarded_http_client
 from personal_agent.telemetry import get_logger
 
@@ -335,6 +337,23 @@ class LinearClient:
 
     # ── Public operations ─────────────────────────────────────────────────
 
+    async def resolve_project_id(self, team: str, project_name: str) -> str | None:
+        """Resolve a Linear project name to its id (FRE-1354).
+
+        Public counterpart of ``_project_id`` so callers can validate a configured
+        project **before** creating anything, rather than discovering it is missing
+        one issue at a time.
+
+        Args:
+            team: Team name.
+            project_name: Project display name (case-insensitive).
+
+        Returns:
+            The project id, or ``None`` when the team has no project of that name.
+        """
+        team_id = await self._team_id(team)
+        return await self._project_id(team_id, project_name)
+
     async def create_issue(
         self,
         title: str,
@@ -356,15 +375,31 @@ class LinearClient:
             priority: 1=Urgent, 2=High, 3=Normal, 4=Low.
             labels: Label display names to apply.
             state: Workflow state name (e.g. ``Needs Approval``).
-            project: Project name; skipped silently if not found.
+            project: Project name. Empty string means "no project"; a non-empty name
+                that does not resolve is an error, not a silent omission.
             trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
 
         Returns:
             Human issue identifier (e.g. ``FF-123``) or None on failure.
+
+        Raises:
+            LinearProjectNotFoundError: ``project`` is non-empty and names a project
+                the team does not have (FRE-1354 AC-4).
         """
         team_id = await self._team_id(team)
         state_id = await self._state_id(team_id, state)
-        label_ids = [await self._label_id(team_id, name) for name in labels]
+        label_ids = [
+            await self._label_id(
+                team_id,
+                name,
+                # The marker the ticket cap counts must never fail to attach: an
+                # unlabelled issue would be invisible to the cap (FRE-1354).
+                auto_create_color=(
+                    AGENT_AUTHORED_LABEL_COLOR if name == AGENT_AUTHORED_LABEL else None
+                ),
+            )
+            for name in labels
+        ]
 
         issue_input: dict[str, Any] = {
             "teamId": team_id,
@@ -377,10 +412,12 @@ class LinearClient:
 
         if project:
             project_id = await self._project_id(team_id, project)
-            if project_id:
-                issue_input["projectId"] = project_id
-            else:
-                log.warning("linear_project_not_found", project=project, trace_id=trace_id)
+            if not project_id:
+                # FRE-1354 AC-4: filing project-less on an unknown name is a silent
+                # fallback that hides a misconfiguration indefinitely. Fail loudly.
+                log.error("linear_project_not_found", project=project, trace_id=trace_id)
+                raise LinearProjectNotFoundError(project, team)
+            issue_input["projectId"] = project_id
 
         data = await self._call(
             """
@@ -435,7 +472,8 @@ class LinearClient:
 
         Args:
             **filters: Supported keys: ``team`` (name), ``label`` (name),
-                ``query`` (title search), ``state`` (name), ``updatedAt``
+                ``query`` (title search), ``descriptionQuery`` (description
+                search — use this for fingerprints), ``state`` (name), ``updatedAt``
                 (ISO 8601 duration like ``-P3D``), ``includeArchived``,
                 ``limit``, ``orderBy``, ``cursor``.
 
@@ -455,6 +493,13 @@ class LinearClient:
         query = filters.pop("query", None)
         if query:
             gql_filter["title"] = {"containsIgnoreCase": query}
+
+        # FRE-1354: fingerprints live in the issue DESCRIPTION, never the title, so
+        # passing one as `query` searched the wrong field and matched nothing — every
+        # fingerprint dedup lookup silently returned [] and took the create branch.
+        description_query = filters.pop("descriptionQuery", None)
+        if description_query:
+            gql_filter["description"] = {"containsIgnoreCase": description_query}
 
         state_name = filters.pop("state", None)
         if state_name:
@@ -512,18 +557,25 @@ class LinearClient:
         nodes = issues_data.get("nodes") or []
         return [_normalize_issue_node(n) for n in nodes if isinstance(n, dict)]
 
-    async def count_open_issues(
+    async def count_open_agent_issues(
         self, team: str, page_limit: int = 250, *, trace_id: str | None = None
     ) -> int:
-        """Count open (non-terminal) issues for a team (paginated).
+        """Count open Linear issues that Seshat itself created (FRE-1354).
 
-        FRE-598: the promotion budget gate (ADR-0040) measures backpressure —
-        "is there already too much *open* work?". A plain non-archived count is
-        the wrong metric: Linear does not archive Done/Canceled issues while
-        their project stays open, so completed work inflates the count
-        indefinitely and can wedge the gate shut. This counts only issues whose
-        workflow-state type is non-terminal (excludes
-        ``completed``/``canceled``/``duplicate``) via ``state.type.nin``.
+        This is the population the self-created ticket cap governs. It replaces
+        ``count_open_issues``, which counted *every* non-terminal team issue — 259
+        against a threshold of 200 on 2026-09-01 — and so throttled promotion on
+        volume Seshat did not produce: 81 ``Backlog`` notes and the entire human
+        queue. Backpressure on the thing actually being generated is the point.
+
+        Two filters, both load-bearing:
+
+        * ``state.type.nin`` excludes ``completed``/``canceled``/``duplicate``
+          (FRE-598 — Linear leaves Done/Canceled issues non-archived while their
+          project is open, which would inflate the count indefinitely).
+        * ``labels.some.name`` restricts to
+          :data:`~personal_agent.linear_labels.AGENT_AUTHORED_LABEL`, which both
+          creation paths apply, so the count cannot leak through the other path.
 
         Args:
             team: Team name.
@@ -531,7 +583,7 @@ class LinearClient:
             trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
 
         Returns:
-            Open issue count (capped at 10 000).
+            Open agent-authored issue count (capped at 10 000).
         """
         total = 0
         cursor: str | None = None
@@ -540,6 +592,7 @@ class LinearClient:
                 "filter": {
                     "team": {"name": {"eq": team}},
                     "state": {"type": {"nin": list(_TERMINAL_STATE_TYPES)}},
+                    "labels": {"some": {"name": {"in": [AGENT_AUTHORED_LABEL]}}},
                 },
                 "first": page_limit,
                 "orderBy": "updatedAt",

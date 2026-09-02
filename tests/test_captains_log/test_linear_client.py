@@ -17,6 +17,7 @@ from personal_agent.captains_log.linear_client import (
     extract_issue_identifier_from_description,
     extract_linear_identifier,
 )
+from personal_agent.linear_labels import AGENT_AUTHORED_LABEL
 
 # ── Helpers & fixtures ────────────────────────────────────────────────────────
 
@@ -449,11 +450,11 @@ class TestListIssues:
         assert result == []
 
 
-# ── count_open_issues ─────────────────────────────────────────────────────────
+# ── count_open_agent_issues ───────────────────────────────────────────────────
 
 
-class TestCountOpenIssues:
-    """Test the count_open_issues operation (FRE-598: open-work backpressure metric)."""
+class TestCountOpenAgentIssues:
+    """count_open_agent_issues — the population the FRE-1354 ticket cap governs."""
 
     @pytest.mark.asyncio
     async def test_count_single_page(self) -> None:
@@ -468,7 +469,7 @@ class TestCountOpenIssues:
             }
         )
         with _make_httpx_patch([resp]):
-            count = await client.count_open_issues("FrenchForest")
+            count = await client.count_open_agent_issues("FrenchForest")
         assert count == 3
 
     @pytest.mark.asyncio
@@ -492,17 +493,23 @@ class TestCountOpenIssues:
             }
         )
         with _make_httpx_patch([page1, page2]):
-            count = await client.count_open_issues("FrenchForest", page_limit=2)
+            count = await client.count_open_agent_issues("FrenchForest", page_limit=2)
         assert count == 3
 
     @pytest.mark.asyncio
-    async def test_filter_excludes_terminal_state_types(self) -> None:
-        """The GraphQL filter scopes to the team and excludes terminal state types.
+    async def test_filter_excludes_terminal_state_types_and_scopes_to_the_marker(
+        self,
+    ) -> None:
+        """The filter scopes to the team, excludes terminal states, AND to the marker.
 
         FRE-598: Linear does not archive Done/Canceled issues while their project
-        stays open, so a "non-archived" count is dominated by terminal work. The
-        open-work backpressure metric must exclude ``completed``/``canceled``/
-        ``duplicate`` state types via ``state.type.nin``.
+        stays open, so a "non-archived" count is dominated by terminal work — hence
+        ``state.type.nin``.
+
+        FRE-1354 AC-5: the label clause is the half that makes this the *right*
+        population. Without it the count is every non-terminal team issue (259 on
+        2026-09-01, against a bar of 200), throttling Seshat on the human backlog
+        and 81 Backlog notes it never created.
         """
         client = LinearClient()
         captured: dict[str, Any] = {}
@@ -512,11 +519,12 @@ class TestCountOpenIssues:
             return {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}
 
         with patch.object(client, "_call", side_effect=_capture):
-            await client.count_open_issues("FrenchForest")
+            await client.count_open_agent_issues("FrenchForest")
 
         filt = captured["variables"]["filter"]
         assert filt["team"] == {"name": {"eq": "FrenchForest"}}
         assert filt["state"] == {"type": {"nin": ["completed", "canceled", "duplicate"]}}
+        assert filt["labels"] == {"some": {"name": {"in": [AGENT_AUTHORED_LABEL]}}}
 
 
 # ── update_issue ──────────────────────────────────────────────────────────────

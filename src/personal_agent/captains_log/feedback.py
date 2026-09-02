@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 import re
 from dataclasses import dataclass
@@ -344,10 +345,12 @@ async def handle_duplicate(event: FeedbackEvent, client: LinearClient) -> None:
     fp = extract_issue_identifier_from_description(desc)
     original_id: str | None = None
     if fp:
+        # FRE-1354: `query=` is a TITLE filter and the fingerprint only appears in
+        # the description, so this lookup matched nothing — the same defect as the
+        # promotion dedup, in the duplicate handler.
         others = await client.list_issues(
             team=settings.linear_team_name,
-            label="Improvement",
-            query=fp,
+            descriptionQuery=fp,
             includeArchived=False,
             limit=25,
         )
@@ -474,14 +477,17 @@ class FeedbackPoller:
             )
         _save_poller_state(self._state_path, state)
 
-        # Daily budget log (open-issue count)
+        # Daily budget log — Seshat's own open tickets against the cap (FRE-1354).
+        # Warns at 80% of the cap; the old `threshold - 20` goes negative at a cap
+        # of 10 and would have warned on every single poll.
         try:
-            n = await self._client.count_open_issues(settings.linear_team_name)
-            if n > settings.issue_budget_threshold - 20:
+            n = await self._client.count_open_agent_issues(settings.linear_team_name)
+            cap = settings.seshat_open_ticket_cap
+            if n >= math.ceil(cap * 0.8):
                 log.warning(
                     "issue_budget_warning",
                     current_count=n,
-                    threshold=settings.issue_budget_threshold,
+                    threshold=cap,
                 )
         except Exception as exc:
             log.debug("feedback_budget_probe_failed", error=str(exc))

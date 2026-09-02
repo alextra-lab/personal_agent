@@ -588,17 +588,17 @@ class TestPromotionPipelineRun:
 
     @pytest.mark.asyncio
     async def test_issue_budget_pauses_promotion(self, tmp_path: pathlib.Path) -> None:
-        """ADR-0040: when non-archived Linear count exceeds threshold, skip creating issues."""
+        """FRE-1354: at the self-created ticket cap, promotion creates nothing."""
         log_dir = tmp_path / "captains_log"
         log_dir.mkdir()
         _write_entry(log_dir)
 
         mock_create = AsyncMock(return_value="FF-1")
         lc = MagicMock()
-        lc.count_open_issues = AsyncMock(return_value=201)
+        lc.count_open_agent_issues = AsyncMock(return_value=10)
         lc.list_issues = AsyncMock(return_value=[])
 
-        with patch.object(promotion_module.settings, "issue_budget_threshold", 200):
+        with patch.object(promotion_module.settings, "seshat_open_ticket_cap", 10):
             pipeline = PromotionPipeline(
                 log_dir=log_dir,
                 criteria=PromotionCriteria(min_seen_count=3, min_age_days=7),
@@ -623,14 +623,14 @@ class TestPromotionPipelineRun:
 
         mock_create = AsyncMock(return_value="FF-1")
         lc = MagicMock()
-        lc.count_open_issues = AsyncMock(return_value=201)
+        lc.count_open_agent_issues = AsyncMock(return_value=10)
         lc.list_issues = AsyncMock(return_value=[])
 
         es_handler = MagicMock()
         es_handler._connected = True
         es_handler.es_logger.index_document = AsyncMock(return_value="doc-id")
 
-        with patch.object(promotion_module.settings, "issue_budget_threshold", 200):
+        with patch.object(promotion_module.settings, "seshat_open_ticket_cap", 10):
             pipeline = PromotionPipeline(
                 log_dir=log_dir,
                 criteria=PromotionCriteria(min_seen_count=3, min_age_days=7),
@@ -646,8 +646,8 @@ class TestPromotionPipelineRun:
         assert index_name.startswith("agent-captains-funnel-events-")
         doc = args[1] if len(args) > 1 else kwargs["document"]
         assert doc["event_type"] == "throttled_budget"
-        assert doc["current_count"] == 201
-        assert doc["threshold"] == 200
+        assert doc["current_count"] == 10
+        assert doc["threshold"] == 10
         assert "@timestamp" in doc
 
     @pytest.mark.asyncio
@@ -661,14 +661,14 @@ class TestPromotionPipelineRun:
 
         mock_create = AsyncMock(return_value="FF-1")
         lc = MagicMock()
-        lc.count_open_issues = AsyncMock(return_value=10)
+        lc.count_open_agent_issues = AsyncMock(return_value=4)
         lc.list_issues = AsyncMock(return_value=[])
 
         es_handler = MagicMock()
         es_handler._connected = True
         es_handler.es_logger.index_document = AsyncMock(return_value="doc-id")
 
-        with patch.object(promotion_module.settings, "issue_budget_threshold", 200):
+        with patch.object(promotion_module.settings, "seshat_open_ticket_cap", 10):
             pipeline = PromotionPipeline(
                 log_dir=log_dir,
                 criteria=PromotionCriteria(min_seen_count=3, min_age_days=7),
@@ -692,7 +692,7 @@ class TestPromotionPipelineRun:
         mock_create = AsyncMock(side_effect=AssertionError("save_issue should not be called"))
 
         lc = MagicMock()
-        lc.count_open_issues = AsyncMock(return_value=50)
+        lc.count_open_agent_issues = AsyncMock(return_value=4)
         lc.list_issues = AsyncMock(
             return_value=[
                 {
@@ -832,7 +832,7 @@ class TestAdr0105BidirectionalLinkage:
         fp = data["proposed_change"]["fingerprint"]
 
         lc = MagicMock()
-        lc.count_open_issues = AsyncMock(return_value=50)
+        lc.count_open_agent_issues = AsyncMock(return_value=4)
         lc.list_issues = AsyncMock(
             return_value=[
                 {

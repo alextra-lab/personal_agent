@@ -1792,14 +1792,27 @@ class AppConfig(BaseSettings):
         ge=7,
         description="Days before revisiting a Deferred proposal (future archive hook)",
     )
-    issue_budget_threshold: int = Field(
-        default=200,
-        ge=50,
-        le=250,
+    seshat_open_ticket_cap: int = Field(
+        default=10,
+        ge=1,
+        le=100,
         description=(
-            "Pause promotion when open (non-terminal) Linear issues exceed this count. "
-            "FRE-598: counts open work only — Done/Canceled issues stay non-archived "
-            "while their project is open, so a raw non-archived count would wedge the gate."
+            "Max open Linear tickets Seshat itself may have outstanding (FRE-1354). "
+            "Replaces issue_budget_threshold, which counted ALL non-terminal team "
+            "issues (259 against a 200 bar) and so throttled Seshat on volume it did "
+            "not produce. Counts only issues carrying AGENT_AUTHORED_LABEL — both "
+            "creation paths apply it. Promotion refuses at or above this count, and "
+            "fails closed when the count cannot be read."
+        ),
+    )
+    promotion_min_seen_count: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Corroboration bar shared by promotion admission and read-before-emit "
+            "retention (FRE-1354). A reinforced proposal at or above this count keeps "
+            "its proposed_change and can promote; below it the proposal is erased as "
+            "before. One number so the two bars cannot drift apart."
         ),
     )
     promotion_initial_cap: int = Field(
@@ -1812,8 +1825,14 @@ class AppConfig(BaseSettings):
         description="Linear team name for promotion and feedback (ADR-0040)",
     )
     linear_promotion_project: str = Field(
-        default="2.3 Homeostasis & Feedback",
-        description="Linear project name for promoted improvement issues",
+        default="Linear Async Feedback Channel",
+        description=(
+            "Linear project name for promoted improvement issues. FRE-1354: the "
+            "previous default ('2.3 Homeostasis & Feedback') named a project that does "
+            "not exist on the team, and creation silently filed project-less. The "
+            "promotion pipeline now resolves this name up front and refuses the run "
+            "loudly when it does not resolve."
+        ),
     )
 
     # Outcome ingestion + realized-value signal (ADR-0105 D7 / FRE-717)

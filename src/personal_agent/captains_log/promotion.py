@@ -12,6 +12,7 @@ BrainstemScheduler (weekly by default).
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 from collections.abc import Callable, Coroutine
 from datetime import datetime, timezone
@@ -30,6 +31,7 @@ from personal_agent.captains_log.models import (
     ProposalSource,
 )
 from personal_agent.config import settings
+from personal_agent.linear_labels import AGENT_AUTHORED_LABEL
 from personal_agent.sysgraph import SysgraphRepository
 from personal_agent.sysgraph.repository import ProposalRecord
 from personal_agent.telemetry import get_logger
@@ -68,7 +70,13 @@ class PromotionCriteria(BaseModel):
     """Configurable criteria for promoting a proposal to Linear."""
 
     min_seen_count: int = Field(
-        default=3, ge=1, description="Minimum times the proposal was observed"
+        default_factory=lambda: settings.promotion_min_seen_count,
+        ge=1,
+        description=(
+            "Minimum times the proposal was observed. Defaults from "
+            "settings.promotion_min_seen_count so this bar and the one read-before-emit "
+            "retains a reinforced proposal at are the same number (FRE-1354)."
+        ),
     )
     min_age_days: int = Field(default=7, ge=0, description="Minimum days since first_seen")
     max_existing_linear_issues: int = Field(
@@ -325,34 +333,18 @@ class PromotionPipeline:
             log.info("promotion_pipeline_all_suppressed")
             return []
 
+        create_capacity = self.criteria.max_existing_linear_issues
         if self._create_issue_fn is not None and self._linear_client is not None:
-            try:
-                count = await self._linear_client.count_open_issues(settings.linear_team_name)
-                if count > settings.issue_budget_threshold:
-                    log.warning(
-                        "issue_budget_promotion_paused",
-                        current_count=count,
-                        threshold=settings.issue_budget_threshold,
-                    )
-                    await self._emit_throttle_event(count, settings.issue_budget_threshold)
-                    return []
-                if count > settings.issue_budget_threshold - 20:
-                    log.warning(
-                        "issue_budget_warning",
-                        current_count=count,
-                        threshold=settings.issue_budget_threshold,
-                    )
-            except Exception as budget_exc:
-                log.warning(
-                    "promotion_budget_check_failed",
-                    error=str(budget_exc),
-                    exc_info=True,
-                )
+            headroom = await self._ticket_cap_headroom()
+            if headroom is None:
+                return []
+            create_capacity = min(create_capacity, headroom)
+            if not await self._promotion_project_is_valid():
+                return []
 
-        capped = entries[: self.criteria.max_existing_linear_issues]
         promoted: list[dict[str, str]] = []
 
-        for entry in capped:
+        for entry in entries:
             try:
                 fp = (
                     entry.proposed_change.fingerprint
@@ -377,11 +369,18 @@ class PromotionPipeline:
                             linear_issue_id=existing_id,
                             trace_id=_trace_id_from_entry(entry),
                         )
+                        # Linking creates no ticket, so it must not consume creation
+                        # capacity — otherwise a link ahead of a genuinely new
+                        # candidate takes the last slot and starves it every run.
                         await self._finalize_promotion(entry, existing_id, promoted)
                         continue
 
+                if create_capacity <= 0:
+                    continue
+
                 linear_id = await self._create_linear_issue(entry)
                 if linear_id:
+                    create_capacity -= 1
                     await self._finalize_promotion(entry, linear_id, promoted)
             except Exception as exc:
                 log.warning(
@@ -401,6 +400,98 @@ class PromotionPipeline:
         await self._publish_promotion_events(promoted, entries)
 
         return promoted
+
+    async def _ticket_cap_headroom(self) -> int | None:
+        """Remaining room under the self-created ticket cap (FRE-1354, AC-5).
+
+        The owner's rule is "don't let Seshat create more than 10 self-help
+        tickets", so the gate counts **Seshat's own open tickets** — not the whole
+        team backlog, which is what wedged the previous gate shut at 259/200 on
+        volume Seshat did not produce.
+
+        Fails **closed**, unlike the budget check it replaces: if the count cannot
+        be read there is no evidence the cap is respected, and a governance cap that
+        opens on error is not a cap.
+
+        Returns:
+            Remaining headroom (>= 1), or ``None`` when promotion must not proceed —
+            already at the cap, or the count is unreadable. Both refusals are
+            visible; see :meth:`_emit_funnel_event`.
+        """
+        assert self._linear_client is not None
+        cap = settings.seshat_open_ticket_cap
+        try:
+            count = await self._linear_client.count_open_agent_issues(settings.linear_team_name)
+        except Exception as exc:
+            log.warning(
+                "throttled_budget",
+                reason="seshat_ticket_count_unreadable",
+                error=str(exc),
+                threshold=cap,
+                exc_info=True,
+            )
+            await self._emit_funnel_event("throttled_budget", -1, cap)
+            return None
+
+        if count >= cap:
+            # Event NAME, not a payload field: `event_type` in agent-logs is derived
+            # from the structlog event name, and a payload key of that name would
+            # overwrite it (the FRE-1066 defect). The committed funnel dashboard
+            # panel queries es-agent-logs for event_type:"throttled_budget".
+            log.warning(
+                "throttled_budget",
+                reason="seshat_open_ticket_cap_reached",
+                current_count=count,
+                threshold=cap,
+            )
+            await self._emit_funnel_event("throttled_budget", count, cap)
+            return None
+
+        if count >= math.ceil(cap * 0.8):
+            log.warning(
+                "issue_budget_warning",
+                current_count=count,
+                threshold=cap,
+            )
+        return cap - count
+
+    async def _promotion_project_is_valid(self) -> bool:
+        """Resolve the configured promotion project before creating anything (AC-4).
+
+        ``settings.linear_promotion_project`` named a project that did not exist, and
+        creation silently filed project-less. Validating up front means one visible
+        refusal instead of a stream of mis-filed tickets.
+
+        Returns:
+            ``True`` when no project is configured or the name resolves; ``False``
+            when it is configured but absent (the run is refused).
+        """
+        assert self._linear_client is not None
+        project = settings.linear_promotion_project
+        if not project:
+            return True
+        try:
+            project_id = await self._linear_client.resolve_project_id(
+                settings.linear_team_name, project
+            )
+        except Exception as exc:
+            log.warning(
+                "promotion_project_lookup_failed",
+                project=project,
+                error=str(exc),
+                exc_info=True,
+            )
+            return True  # a lookup outage is not evidence of misconfiguration
+        if project_id:
+            return True
+        log.error(
+            "misconfigured_project",
+            reason="linear_promotion_project_not_found",
+            project=project,
+            team=settings.linear_team_name,
+        )
+        await self._emit_funnel_event("misconfigured_project", 0, 0)
+        return False
 
     async def _publish_promotion_events(
         self,
@@ -526,10 +617,15 @@ class PromotionPipeline:
         if self._linear_client is None:
             return None
         fpl = fingerprint.lower().strip()
+        # FRE-1354: this searched `query=` — a TITLE filter — for a fingerprint that
+        # only ever appears in the description, so it matched nothing and every
+        # promotion took the create branch. That is why 2026-06-26 filed nine tickets
+        # for one idea. No label filter either: the historical tombstones carry only
+        # `Improvement`, newer ones also carry the agent marker, and the fingerprint
+        # is specific enough on its own.
         issues = await self._linear_client.list_issues(
             team=settings.linear_team_name,
-            label="Improvement",
-            query=fingerprint,
+            descriptionQuery=fingerprint,
             includeArchived=False,
             limit=50,
         )
@@ -576,7 +672,10 @@ class PromotionPipeline:
                 settings.linear_team_name,
                 description,
                 priority,
-                ["PersonalAgent", "Improvement"],
+                # AGENT_AUTHORED_LABEL is the counted marker (AC-6); "Improvement" is
+                # retained for continuity with ADR-0030 and the historical tickets,
+                # but it is never the counting predicate.
+                ["PersonalAgent", "Improvement", AGENT_AUTHORED_LABEL],
                 "Needs Approval",
                 settings.linear_promotion_project,
             )
@@ -602,19 +701,30 @@ class PromotionPipeline:
             )
             return None
 
-    def _mark_promoted(self, entry: CaptainLogEntry, linear_issue_id: str) -> None:
+    def _mark_promoted(self, entry: CaptainLogEntry, linear_issue_id: str) -> bool:
         """Update the on-disk JSON file to APPROVED with the Linear issue ID.
+
+        The return value is load-bearing (FRE-1354). This status write is what stops
+        an already-promoted entry from being rescanned: the scan rejects anything not
+        ``AWAITING_APPROVAL``. When the write fails, the entry stays awaiting and
+        re-promotes on every subsequent run — the one genuinely uncontained re-fire
+        loop — so a swallowed failure must not be reported as a promotion.
 
         Args:
             entry: The entry that was promoted.
             linear_issue_id: The Linear issue identifier.
+
+        Returns:
+            ``True`` when at least one file was marked APPROVED, ``False`` otherwise.
         """
+        marked = False
         for json_file in self.log_dir.glob(f"{entry.entry_id}-*.json"):
             try:
                 data = json.loads(json_file.read_text(encoding="utf-8"))
                 data["status"] = CaptainLogStatus.APPROVED.value
                 data["linear_issue_id"] = linear_issue_id
                 json_file.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+                marked = True
                 log.info(
                     "promotion_entry_marked_approved",
                     entry_id=entry.entry_id,
@@ -629,6 +739,15 @@ class PromotionPipeline:
                     error=str(exc),
                     trace_id=_trace_id_from_entry(entry),
                 )
+        if not marked:
+            log.error(
+                "promotion_entry_not_marked_approved",
+                entry_id=entry.entry_id,
+                linear_issue_id=linear_issue_id,
+                reason="entry_would_re_promote_every_run",
+                trace_id=_trace_id_from_entry(entry),
+            )
+        return marked
 
     async def _finalize_promotion(
         self,
@@ -649,7 +768,11 @@ class PromotionPipeline:
             promoted: The running list of promoted {entry_id, linear_issue_id}
                 dicts this call appends to.
         """
-        self._mark_promoted(entry, linear_issue_id)
+        if not self._mark_promoted(entry, linear_issue_id):
+            # Not counted as promoted: the entry is still AWAITING_APPROVAL and will
+            # be rescanned. Self-healing, because the fingerprint lookup now works —
+            # the next run links to this same issue rather than filing a duplicate.
+            return
         promoted.append({"entry_id": entry.entry_id, "linear_issue_id": linear_issue_id})
         await self._record_sysgraph_linkage(entry, linear_issue_id)
         await self._stamp_reflection_linkage(entry.entry_id, linear_issue_id)
@@ -703,17 +826,19 @@ class PromotionPipeline:
                 trace_id=_trace_id_from_entry(entry),
             )
 
-    async def _emit_throttle_event(self, current_count: int, threshold: int) -> None:
-        """Emit the ADR-0040 budget throttle as a queryable funnel-state event, best-effort.
+    async def _emit_funnel_event(self, event_type: str, current_count: int, threshold: int) -> None:
+        """Emit a pipeline-level refusal as a queryable funnel-state event, best-effort.
 
-        ADR-0105 D6: the throttle must be a first-class visible funnel state, not
-        only the existing ``log.warning``. Writes to a small purpose-built index
-        rather than the proposal-shaped ``agent-captains-reflections-*`` since this
-        is a pipeline-level event, not tied to any single proposal document.
+        ADR-0105 D6: a refusal must be a first-class visible funnel state, not only a
+        ``log.warning``. Writes to a small purpose-built index rather than the
+        proposal-shaped ``agent-captains-reflections-*`` since this is a
+        pipeline-level event, not tied to any single proposal document.
 
         Args:
-            current_count: Open-issue count that tripped the threshold.
-            threshold: The configured ``issue_budget_threshold``.
+            event_type: ``throttled_budget`` (the self-created ticket cap) or
+                ``misconfigured_project`` (FRE-1354 AC-4).
+            current_count: Count that tripped the refusal; ``-1`` when unreadable.
+            threshold: The configured cap.
         """
         from personal_agent.captains_log.manager import CaptainLogManager
 
@@ -727,7 +852,7 @@ class PromotionPipeline:
                 index_name,
                 {
                     "@timestamp": now.isoformat(),
-                    "event_type": "throttled_budget",
+                    "event_type": event_type,
                     "current_count": current_count,
                     "threshold": threshold,
                 },
@@ -735,6 +860,7 @@ class PromotionPipeline:
         except Exception as exc:
             log.warning(
                 "promotion_throttle_event_emit_failed",
+                event_type=event_type,
                 current_count=current_count,
                 threshold=threshold,
                 error=str(exc),

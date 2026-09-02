@@ -11,6 +11,7 @@ reranker, no laptop/Mac-GPU dependency on this path).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 
 import asyncpg  # type: ignore[import-untyped]
@@ -32,10 +33,19 @@ class ReadBeforeEmitDecision(str, Enum):
 
 @dataclass(frozen=True)
 class ReadBeforeEmitResult:
-    """Decision plus the affected proposal id (when any)."""
+    """Decision, the affected proposal id, and the canonical row's corroboration.
+
+    ``seen_count``/``fingerprint``/``first_seen`` are populated on the ``REINFORCED``
+    branch only and describe the row this sighting was absorbed into (FRE-1354).
+    :mod:`personal_agent.captains_log.corroboration` turns them into the keep-or-drop
+    decision every producer shares.
+    """
 
     decision: ReadBeforeEmitDecision
     proposal_id: object | None = None
+    seen_count: int | None = None
+    fingerprint: str | None = None
+    first_seen: datetime | None = None
 
 
 async def check_before_emit(
@@ -93,6 +103,13 @@ async def check_before_emit(
         category=category,
         scope=scope,
         proposal_id=str(result.proposal_id) if result.proposal_id else None,
+        seen_count=result.seen_count,
         trace_id=trace_id,
     )
-    return ReadBeforeEmitResult(decision=decision, proposal_id=result.proposal_id)
+    return ReadBeforeEmitResult(
+        decision=decision,
+        proposal_id=result.proposal_id,
+        seen_count=result.seen_count,
+        fingerprint=result.fingerprint,
+        first_seen=result.first_seen,
+    )

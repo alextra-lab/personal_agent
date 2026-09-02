@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from statistics import mean, median, pstdev
 
+from personal_agent.captains_log.corroboration import stamp_corroboration, suppresses_proposal
 from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.captains_log.models import (
     CaptainLogEntry,
@@ -24,6 +25,7 @@ from personal_agent.captains_log.models import (
     ProposedChange,
 )
 from personal_agent.captains_log.suppression import feedback_history_dir
+from personal_agent.config import settings
 from personal_agent.insights.fingerprints import (
     cost_fingerprint as _cost_fingerprint,
 )
@@ -731,16 +733,28 @@ class InsightsEngine:
                     scope=scope.value,
                 ),
             )
-            if read_before_emit.decision in (
-                ReadBeforeEmitDecision.DECIDED_SKIP,
-                ReadBeforeEmitDecision.REINFORCED,
+            if suppresses_proposal(
+                read_before_emit, min_seen_count=settings.promotion_min_seen_count
             ):
                 log.info(
                     "insights_proposal_suppressed_by_read_before_emit",
                     insight_type=insight.insight_type,
                     decision=read_before_emit.decision.value,
+                    seen_count=read_before_emit.seen_count,
                 )
                 continue
+
+            # FRE-1354: a reinforcement above the promotion bar survives, carrying the
+            # canonical row's corroboration. This is the path the live seen_count=167
+            # proposal takes — it is STATISTICAL_DETECTOR-sourced, not reflection.
+            if read_before_emit.decision is ReadBeforeEmitDecision.REINFORCED:
+                proposed_change = stamp_corroboration(proposed_change, read_before_emit)
+                log.info(
+                    "insights_proposal_corroborated_for_promotion",
+                    insight_type=insight.insight_type,
+                    seen_count=read_before_emit.seen_count,
+                    fingerprint=read_before_emit.fingerprint,
+                )
 
             proposals.append(
                 CaptainLogEntry(

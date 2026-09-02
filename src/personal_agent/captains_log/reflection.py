@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, cast
 
+from personal_agent.captains_log.corroboration import stamp_corroboration, suppresses_proposal
 from personal_agent.captains_log.dedup import compute_proposal_fingerprint
 from personal_agent.captains_log.metrics_extraction import (
     extract_metrics_from_summary,
@@ -720,9 +721,15 @@ async def _apply_read_before_emit(
     """ADR-0105 D9/FRE-721: suppress `entry.proposed_change` for a decided/awaiting equivalent.
 
     Mutates `entry` in place — sets `proposed_change` to `None` when an equivalent
-    idea is already decided or still awaiting (the rationale/metrics still flow
-    through, "at most an annotation" per AC-9). No-op when the entry carries no
-    proposal, or its category/scope don't resolve to known enums.
+    idea is already decided or still awaiting *below the promotion bar* (the
+    rationale/metrics still flow through, "at most an annotation" per AC-9). No-op
+    when the entry carries no proposal, or its category/scope don't resolve to known
+    enums.
+
+    FRE-1354: a reinforcement at or above ``settings.promotion_min_seen_count`` is
+    kept and stamped with the canonical row's corroboration instead. Erasing it was
+    what made the most corroborated proposal in the system the one that could never
+    promote — see :mod:`personal_agent.captains_log.corroboration`.
 
     Args:
         entry: The reflection entry about to be returned to the caller.
@@ -752,13 +759,24 @@ async def _apply_read_before_emit(
         ),
         trace_id=trace_id,
     )
-    if result.decision in (ReadBeforeEmitDecision.DECIDED_SKIP, ReadBeforeEmitDecision.REINFORCED):
+    if suppresses_proposal(result, min_seen_count=settings.promotion_min_seen_count):
         log.info(
             "reflection_proposal_suppressed_by_read_before_emit",
             decision=result.decision.value,
+            seen_count=result.seen_count,
             trace_id=trace_id,
         )
         entry.proposed_change = None
+        return
+
+    if result.decision is ReadBeforeEmitDecision.REINFORCED:
+        entry.proposed_change = stamp_corroboration(pc, result)
+        log.info(
+            "reflection_proposal_corroborated_for_promotion",
+            seen_count=result.seen_count,
+            fingerprint=result.fingerprint,
+            trace_id=trace_id,
+        )
 
 
 def _summarize_telemetry(

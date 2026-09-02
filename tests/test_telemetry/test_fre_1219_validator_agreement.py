@@ -127,7 +127,7 @@ class TestRemovalSites:
             from personal_agent.captains_log.feedback import _PollerState
 
             mock_load.return_value = _PollerState()
-            poller._client.count_open_issues = AsyncMock(return_value=0)
+            poller._client.count_open_agent_issues = AsyncMock(return_value=0)
             await poller.process_feedback([event])
 
         events = [

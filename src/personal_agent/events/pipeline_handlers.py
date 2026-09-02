@@ -7,7 +7,7 @@ lazily so the module loads cheaply and stays testable with lightweight mocks.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from personal_agent.captains_log.models import ChangeScope
 from personal_agent.events.models import (
@@ -23,6 +23,10 @@ from personal_agent.events.models import (
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from personal_agent.captains_log.models import CaptainLogEntry
+    from personal_agent.sysgraph.dedup import ReadBeforeEmitResult
 
 
 def _default_elasticsearch_async_client() -> Any | None:
@@ -46,7 +50,7 @@ def _default_elasticsearch_async_client() -> Any | None:
         return None
 
 
-async def _read_before_emit_suppresses(
+async def _read_before_emit_decision(
     *,
     source: Literal["statistical_detector", "reflection"],
     category: str,
@@ -56,7 +60,7 @@ async def _read_before_emit_suppresses(
     why: str | None,
     how: str | None,
     trace_id: str | None,
-) -> bool:
+) -> "ReadBeforeEmitResult":
     """ADR-0105 D9/FRE-721 read-before-emit for the direct event->CONFIG_PROPOSAL handlers.
 
     These handlers (error-pattern, compaction-quality, graph-quality, staleness)
@@ -67,13 +71,14 @@ async def _read_before_emit_suppresses(
     best-effort pattern — never blocks or fails the calling handler.
 
     Returns:
-        ``True`` when the caller should skip ``manager.save_entry(entry)`` entirely
-        (an equivalent already-decided or still-awaiting idea absorbed this
-        detection); ``False`` otherwise (generate-new or a degraded/unwired read).
+        The read-before-emit outcome. Callers pass it to
+        :func:`~personal_agent.captains_log.corroboration.suppresses_proposal` to decide
+        whether to skip ``manager.save_entry(entry)``, and to ``stamp_corroboration``
+        when a reinforcement survives (FRE-1354).
     """
     from personal_agent.config.settings import get_settings
     from personal_agent.sysgraph import SysgraphRepository
-    from personal_agent.sysgraph.dedup import ReadBeforeEmitDecision, check_before_emit
+    from personal_agent.sysgraph.dedup import check_before_emit
     from personal_agent.sysgraph.repository import ProposalRecord
 
     _settings = get_settings()
@@ -111,10 +116,58 @@ async def _read_before_emit_suppresses(
         if sysgraph_repo is not None:
             await sysgraph_repo.disconnect()
 
-    return result.decision in (
-        ReadBeforeEmitDecision.DECIDED_SKIP,
-        ReadBeforeEmitDecision.REINFORCED,
+    return result
+
+
+async def _read_before_emit_suppresses_entry(
+    entry: "CaptainLogEntry",
+    *,
+    source: Literal["statistical_detector", "reflection"],
+    category: str,
+    scope: str,
+    fingerprint: str,
+    trace_id: str | None,
+) -> bool:
+    """Apply the shared corroboration rule to a detector's entry (FRE-1354).
+
+    Mutates ``entry.proposed_change`` in place when a reinforcement survives, so the
+    saved entry carries the canonical row's ``seen_count``/``fingerprint``/
+    ``first_seen`` and can reach promotion.
+
+    Args:
+        entry: The entry the detector is about to save.
+        source: Proposal source discriminator (ADR-0105 D1).
+        category: Proposal category.
+        scope: Proposal scope — D9's fallback facet.
+        fingerprint: This sighting's content hash.
+        trace_id: Originating request trace_id for log correlation.
+
+    Returns:
+        ``True`` when the caller should skip ``manager.save_entry(entry)``.
+    """
+    from personal_agent.captains_log.corroboration import (
+        stamp_corroboration,
+        suppresses_proposal,
     )
+    from personal_agent.config.settings import get_settings
+    from personal_agent.sysgraph.dedup import ReadBeforeEmitDecision
+
+    pc = entry.proposed_change
+    result = await _read_before_emit_decision(
+        source=source,
+        category=category,
+        scope=scope,
+        fingerprint=fingerprint,
+        what=pc.what if pc else "",
+        why=pc.why if pc else None,
+        how=pc.how if pc else None,
+        trace_id=trace_id,
+    )
+    if suppresses_proposal(result, min_seen_count=get_settings().promotion_min_seen_count):
+        return True
+    if result.decision is ReadBeforeEmitDecision.REINFORCED and pc is not None:
+        entry.proposed_change = stamp_corroboration(pc, result)
+    return False
 
 
 def build_consolidation_insights_handler(
@@ -642,14 +695,12 @@ def build_error_pattern_captain_log_handler(manager: Any | None = None) -> Any:
             potential_implementation=None,
         )
 
-        if await _read_before_emit_suppresses(
+        if await _read_before_emit_suppresses_entry(
+            entry,
             source=ProposalSource.STATISTICAL_DETECTOR.value,
             category=ChangeCategory.RELIABILITY.value,
             scope=scope.value,
             fingerprint=event.fingerprint,
-            what=entry.proposed_change.what if entry.proposed_change else "",
-            why=entry.proposed_change.why if entry.proposed_change else None,
-            how=entry.proposed_change.how if entry.proposed_change else None,
             trace_id=event.trace_id,
         ):
             log.info(
@@ -781,14 +832,12 @@ def build_compaction_quality_captain_log_handler(manager: Any | None = None) -> 
             potential_implementation=None,
         )
 
-        if await _read_before_emit_suppresses(
+        if await _read_before_emit_suppresses_entry(
+            entry,
             source=ProposalSource.STATISTICAL_DETECTOR.value,
             category=ChangeCategory.KNOWLEDGE_QUALITY.value,
             scope=ChangeScope.ORCHESTRATOR.value,
             fingerprint=event.fingerprint,
-            what=entry.proposed_change.what if entry.proposed_change else "",
-            why=entry.proposed_change.why if entry.proposed_change else None,
-            how=entry.proposed_change.how if entry.proposed_change else None,
             trace_id=event.trace_id,
         ):
             log.info(
@@ -924,14 +973,12 @@ async def _handle_graph_quality_anomaly(
         potential_implementation=None,
     )
 
-    suppressed = await _read_before_emit_suppresses(
+    suppressed = await _read_before_emit_suppresses_entry(
+        entry,
         source=ProposalSource.STATISTICAL_DETECTOR.value,
         category=category.value,
         scope=ChangeScope.SECOND_BRAIN.value,
         fingerprint=event.fingerprint,
-        what=entry.proposed_change.what if entry.proposed_change else "",
-        why=entry.proposed_change.why if entry.proposed_change else None,
-        how=entry.proposed_change.how if entry.proposed_change else None,
         trace_id=event.trace_id,
     )
     if suppressed:
@@ -1072,14 +1119,12 @@ async def _handle_staleness_reviewed(
         potential_implementation=None,
     )
 
-    if await _read_before_emit_suppresses(
+    if await _read_before_emit_suppresses_entry(
+        entry,
         source=ProposalSource.STATISTICAL_DETECTOR.value,
         category=ChangeCategory.KNOWLEDGE_QUALITY.value,
         scope=ChangeScope.SECOND_BRAIN.value,
         fingerprint=event.fingerprint,
-        what=entry.proposed_change.what if entry.proposed_change else "",
-        why=entry.proposed_change.why if entry.proposed_change else None,
-        how=entry.proposed_change.how if entry.proposed_change else None,
         trace_id=event.trace_id,
     ):
         log.info(

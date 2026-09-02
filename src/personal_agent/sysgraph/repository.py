@@ -73,10 +73,20 @@ _ReadBeforeEmitDecision = Literal["decided_skip", "reinforced", "generate_new"]
 
 @dataclass(frozen=True)
 class ReadBeforeEmitResult:
-    """Outcome of a generation-time read-before-emit check (ADR-0105 D9/D10)."""
+    """Outcome of a generation-time read-before-emit check (ADR-0105 D9/D10).
+
+    The corroboration fields are populated on the ``reinforced`` branch only, and
+    describe the **canonical row** the sighting was absorbed into — not the sighting
+    itself (FRE-1354). Producers need them to decide whether an absorbed proposal is
+    corroborated enough to stay promotable, and to stamp the group's stable identity
+    onto the entry so every sighting maps to one ticket.
+    """
 
     decision: _ReadBeforeEmitDecision
     proposal_id: UUID | None
+    seen_count: int | None = None
+    fingerprint: str | None = None
+    first_seen: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -200,16 +210,20 @@ ON CONFLICT (source, category) DO UPDATE
 _ADVISORY_LOCK_QUERY = "SELECT pg_advisory_xact_lock(hashtext($1));"
 
 _FIND_AWAITING_PROPOSAL_QUERY = """
-SELECT id, fingerprint, seen_count
+SELECT id, fingerprint, seen_count, created_at
 FROM sysgraph.proposal
 WHERE source = $1 AND category = $2 AND scope IS NOT DISTINCT FROM $3
 ORDER BY created_at DESC
 LIMIT 1;
 """
 
+# RETURNING the post-increment count rather than computing `existing + 1` in Python:
+# the UPDATE is the authority, and under the advisory lock its result is the value
+# the caller must report (FRE-1354).
 _REINFORCE_PROPOSAL_QUERY = """
 UPDATE sysgraph.proposal SET seen_count = seen_count + 1, updated_at = NOW()
-WHERE id = $1;
+WHERE id = $1
+RETURNING seen_count;
 """
 
 _GENERATION_TIME_UPSERT_PROPOSAL = """
@@ -652,8 +666,14 @@ class SysgraphRepository:
 
             existing = await conn.fetchrow(_FIND_AWAITING_PROPOSAL_QUERY, source, category, scope)
             if existing is not None:
-                await conn.execute(_REINFORCE_PROPOSAL_QUERY, existing["id"])
-                return ReadBeforeEmitResult(decision="reinforced", proposal_id=existing["id"])
+                reinforced_count = await conn.fetchval(_REINFORCE_PROPOSAL_QUERY, existing["id"])
+                return ReadBeforeEmitResult(
+                    decision="reinforced",
+                    proposal_id=existing["id"],
+                    seen_count=reinforced_count,
+                    fingerprint=existing["fingerprint"],
+                    first_seen=existing["created_at"],
+                )
 
             new_id = await conn.fetchval(
                 _GENERATION_TIME_UPSERT_PROPOSAL,
